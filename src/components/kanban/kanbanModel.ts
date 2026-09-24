@@ -11,6 +11,7 @@ import { latestAttempt, stageAttempts, stageChipState, stageFailEdgeRoundsUsed, 
 import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
+import { workingSince } from "@/components/workingSince";
 
 import { pastAttempts, stageViews, type PastAttempt, type StageView } from "./pipelineGraph";
 import { placeholderTitle } from "./placeholderTitle";
@@ -139,7 +140,15 @@ export interface KanbanCard {
   /** Nothing on it: no conversation, no active pipeline, nothing owed. */
   idle: boolean;
   updatedAtMs: number;
+  /** Newest agent work of anything the card holds, epoch ms: its conversations
+      and mirrors, every attempt of its pipelines, its review decks; 0 when
+      none is known. */
   lastAgentWorkAtMs: number;
+  /** Null unless work is in flight on the card right now: a member
+      conversation working, or a stage of a pipeline that is not paused
+      running, reviewing or committing. Then when the newest of that work
+      started, epoch ms, or 0 when no start is known. */
+  workingSinceMs: number | null;
   searchText: string;
   /** The task's colour label, when it names one this build knows. */
   color: TaskColor | null;
@@ -352,10 +361,26 @@ function referenceIdentity(reference: { conversationId: string | null; path: str
   return reference.conversationId ?? reference.path;
 }
 
-/** Columns keep their status; display order follows actual agent execution. */
+/**
+ * The order of a column, the Not-on-a-task list and the phone's columns alike.
+ *
+ * Cards with work in flight come first, the one whose work started last on
+ * top. A start moves only when a turn or a stage attempt starts or ends, so
+ * the working cards keep their places while their agents stream. Then the
+ * newest agent work, then the newest edit of the task, then the id.
+ */
 export function compareCards(a: KanbanCard, b: KanbanCard): number {
+  if ((a.workingSinceMs === null) !== (b.workingSinceMs === null)) return a.workingSinceMs === null ? 1 : -1;
+  if (a.workingSinceMs !== null && b.workingSinceMs !== null) return b.workingSinceMs - a.workingSinceMs || a.id.localeCompare(b.id);
   return b.lastAgentWorkAtMs - a.lastAgentWorkAtMs
+    || b.updatedAtMs - a.updatedAtMs
     || a.id.localeCompare(b.id);
+}
+
+/** When a working member's current work started: the anchor its working timer
+    counts from, else the start of its session. */
+function memberStartMs(file: FileEntry): number {
+  return workingSince(file) ?? parseMs(file.sessionStartedAt);
 }
 
 export function cardMatches(card: KanbanCard, query: string): boolean {
@@ -612,6 +637,14 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     reasons.sort(byNeedAge);
     cleared.sort((a, b) => b.at - a.at || a.need.key.localeCompare(b.need.key));
     const working = members.filter((member) => member.working).length;
+    /* Work in flight and when its newest part started: a working member's
+       turn, or the attempt of a stage running in a lane that is not paused. */
+    const inFlight = summaries.flatMap((summary) => (summary.pipeline.state === "paused" ? [] : summary.chips
+      .filter((chip) => IN_FLIGHT_STAGES.has(chip.state))
+      .map((chip) => parseMs(latestAttempt(summary.pipeline, chip.stage.id)?.startedAt))));
+    const workingSinceMs = working > 0 || inFlight.length > 0
+      ? Math.max(0, ...inFlight, ...members.filter((member) => member.working).map((member) => memberStartMs(member.file)))
+      : null;
     const needsYou = reasons.length > 0;
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
@@ -682,7 +715,9 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       lastAgentWorkAtMs: Math.max(reviewerWorkAt(band.flow),
         ...band.members.filter(member => member.kind === "deck").map(member => reviewerWorkAt(flowsByDeck.get(member.key))),
         ...[...members, ...mirrors].map(member => member.file.lastAgentWorkAt ?? 0).filter(Number.isFinite),
-        ...[...identities].map(id => workByIdentity.get(id) ?? 0)),
+        ...[...identities].map(id => workByIdentity.get(id) ?? 0),
+        ...summaries.map(summary => pipelineWorkAt(summary.pipeline))),
+      workingSinceMs,
       searchText: [title, description, ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
         .join("\n")
         .toLowerCase(),

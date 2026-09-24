@@ -1,0 +1,37 @@
+{
+  "readings": {
+    "desktop-1440-en": [
+      "t-order-tint",
+      "t-order-maint",
+      "t-order-research",
+      "t-order-review",
+      "t-order-yesterday",
+      "t-order-notes"
+    ],
+    "phone-390-en": [
+      "t-order-tint",
+      "t-order-maint",
+      "t-order-research",
+      "t-order-review",
+      "t-order-yesterday",
+      "t-order-notes"
+    ],
+    "desktop-1440-uk": [
+      "t-order-tint",
+      "t-order-maint",
+      "t-order-research",
+      "t-order-review",
+      "t-order-yesterday",
+      "t-order-notes"
+    ],
+    "phone-390-uk": [
+      "t-order-tint",
+      "t-order-maint",
+      "t-order-research",
+      "t-order-review",
+      "t-order-yesterday",
+      "t-order-notes"
+    ]
+  },
+  "failures": []
+}

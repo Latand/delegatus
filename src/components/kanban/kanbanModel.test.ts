@@ -173,6 +173,126 @@ test("columns sort by agent work, ignore metadata, and put unknown work last wit
   expect(model([task("other", "blocked", [files[2]!.path])], files).columns.blocked.cards[0]?.task?.id).toBe("other");
 });
 
+const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+
+/* A lane with its build stage running, and the attempt that runs it. */
+function buildingLane(id: string, taskId: string, attempt: { conversationId?: string | null; agentPath?: string | null; startedAt: string }): Pipeline {
+  return {
+    id,
+    task: `Lane ${id}`,
+    project: "fixture",
+    state: "running",
+    taskIds: [taskId],
+    cursor: { stageId: "build", state: "running", input: null, activatedBy: null },
+    stages: [
+      { id: "build", kind: "run", prompt: "", next: "review", effectiveRole: {} },
+      { id: "review", kind: "run", prompt: "", next: null, effectiveRole: {} },
+    ],
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "running", activatedBy: null, conversationId: null, agentPath: null, launchId: null, sessionId: null, paneId: null, flowId: null, effectiveRole: {}, output: null, verdict: null, error: null, completedAt: null, ...attempt }] }],
+    createdAt: iso(NOW - 3600),
+  } as unknown as Pipeline;
+}
+
+/* The operator's report of 2026-09-24, as the live board had it: in Assigned,
+   the card whose build stage was running sat last. The stage's conversation
+   was live on its host's own turn evidence, and its row had neither a turn
+   boundary nor an agent-work stamp yet, so the card counted no agent work at
+   all and fell below a card whose agents had been quiet for minutes. The
+   field values are the board's; the ids and titles are invented. */
+test("a card whose stage agent is working comes first even while its row carries no agent-work stamp", () => {
+  const building = file(301, {
+    activity: "live", activityReason: "turn_evidence_working", proc: "running", pid: 4_301, mtime: NOW - 114,
+    authoritativeTurn: { state: "unknown", source: "empty", terminalAt: null },
+  });
+  const maintaining = file(302, {
+    activity: "live", activityReason: "turn_evidence_working", proc: "running", pid: 4_302, mtime: NOW - 117,
+    authoritativeTurn: { state: "busy", source: "lifecycle", terminalAt: null }, lastAgentWorkAt: (NOW - 119) * 1000,
+  });
+  const reviewed = file(303, {
+    activity: "recent", mtime: NOW - 400, lastAgentWorkAt: (NOW - 408) * 1000,
+    lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: (NOW - 408) * 1000 },
+  });
+  const tasks = [
+    task("icons", "assigned", [], { updatedAt: iso(NOW - 122) }),
+    task("maintenance", "assigned", [maintaining.path], { updatedAt: iso(NOW - 446) }),
+    task("viewer", "assigned", [reviewed.path], { updatedAt: iso(NOW - 1765) }),
+  ];
+  const lane = buildingLane("pipeline-icons", "icons", { conversationId: building.conversationId, agentPath: building.path, startedAt: iso(NOW - 1800) });
+  const cards = model(tasks, [building, maintaining, reviewed], { pipelines: [lane] }).columns.assigned.cards;
+  expect(cards.map((card) => card.task!.id)).toEqual(["icons", "maintenance", "viewer"]);
+
+  /* The card knows its agent is working and has no agent work on record: the
+     start of the running attempt is what places it among the working cards. */
+  const icons = cards[0]!;
+  expect(icons.working).toBe(1);
+  expect(icons.lastAgentWorkAtMs).toBe(0);
+  expect(icons.workingSinceMs).toBe((NOW - 1800) * 1000);
+});
+
+test("working cards come first, then the newest agent work, then the newest task edit", () => {
+  /* In a long tool call: its last record is older than the finished card's. */
+  const working = file(311, { activity: "live", lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 240) * 1000, mtime: NOW - 240 });
+  const finished = file(312, { activity: "recent", lastTurn: { startedAt: (NOW - 400) * 1000, endedAt: (NOW - 60) * 1000 }, lastAgentWorkAt: (NOW - 60) * 1000, mtime: NOW - 60 });
+  const earlier = file(313, { lastAgentWorkAt: (NOW - 7200) * 1000, mtime: NOW - 7200 });
+  const tasks = [
+    /* Edited a moment ago, and nothing has worked on it. */
+    task("idle-b", "assigned", [], { updatedAt: iso(NOW - 10) }),
+    task("idle-a", "assigned", [], { updatedAt: iso(NOW - 3000) }),
+    task("earlier", "assigned", [earlier.path], { updatedAt: iso(NOW - 20) }),
+    task("finished", "assigned", [finished.path], { updatedAt: iso(NOW - 9000) }),
+    task("working", "assigned", [working.path], { updatedAt: iso(NOW - 9500) }),
+  ];
+  const order = model(tasks, [working, finished, earlier]).columns.assigned.cards.map((card) => card.task!.id);
+  expect(order).toEqual(["working", "finished", "earlier", "idle-b", "idle-a"]);
+  /* The order does not depend on the order the tasks were read in. */
+  expect(model([...tasks].reverse(), [earlier, finished, working]).columns.assigned.cards.map((card) => card.task!.id)).toEqual(order);
+});
+
+test("streaming work keeps the working cards in place; a new turn moves its card up and a finished one steps down", () => {
+  const since = (startedAgo: number) => ({ startedAt: (NOW - startedAgo) * 1000, endedAt: null });
+  const first = file(321, { activity: "live", lastTurn: since(300), lastAgentWorkAt: (NOW - 50) * 1000 });
+  const second = file(322, { activity: "live", lastTurn: since(100), lastAgentWorkAt: (NOW - 40) * 1000 });
+  const idle = file(323, { lastAgentWorkAt: (NOW - 30) * 1000 });
+  const tasks = [task("first", "assigned", [first.path]), task("second", "assigned", [second.path]), task("idle", "assigned", [idle.path])];
+  const order = (files: FileEntry[]) => model(tasks, files).columns.assigned.cards.map((card) => card.task!.id);
+
+  /* The turn that started last is on top, whatever the latest record says. */
+  expect(order([first, second, idle])).toEqual(["second", "first", "idle"]);
+  /* Both agents keep writing; the older turn writes last. Nobody moves. */
+  const streamed = { ...first, lastAgentWorkAt: (NOW - 1) * 1000, mtime: NOW - 1 };
+  expect(order([streamed, { ...second, lastAgentWorkAt: (NOW - 3) * 1000, mtime: NOW - 3 }, idle])).toEqual(["second", "first", "idle"]);
+  /* The first agent's turn ends and a new one starts: it is the newest work now. */
+  expect(order([{ ...streamed, lastTurn: since(2) }, second, idle])).toEqual(["first", "second", "idle"]);
+  /* The second agent's turn ends: its card leaves the working cards and heads the rest. */
+  const ended = { ...second, activity: "recent" as const, lastTurn: { startedAt: (NOW - 100) * 1000, endedAt: (NOW - 20) * 1000 }, lastAgentWorkAt: (NOW - 20) * 1000 };
+  expect(order([first, ended, idle])).toEqual(["first", "second", "idle"]);
+});
+
+test("a stage in flight puts its card among the working ones, and a paused lane's does not", () => {
+  const quiet = file(331, { lastAgentWorkAt: (NOW - 30) * 1000 });
+  const tasks = [task("quiet", "assigned", [quiet.path]), task("staged", "assigned")];
+  const lane = buildingLane("pipeline-staged", "staged", { startedAt: iso(NOW - 600) });
+  const order = (pipelines: Pipeline[]) => model(tasks, [quiet], { pipelines }).columns.assigned.cards.map((card) => card.task!.id);
+  expect(order([lane])).toEqual(["staged", "quiet"]);
+  expect(order([{ ...lane, state: "paused", pausedState: "running" } as Pipeline])).toEqual(["quiet", "staged"]);
+});
+
+test("a card's agent work counts every attempt of its lanes, including a stage conversation the board draws nowhere", () => {
+  const stage = file(341, { lastAgentWorkAt: (NOW - 30) * 1000 });
+  const member = file(342, { lastAgentWorkAt: (NOW - 600) * 1000 });
+  const tasks = [task("member", "assigned", [member.path]), task("laned", "assigned")];
+  const finished = { ...buildingLane("pipeline-laned", "laned", { conversationId: stage.conversationId, agentPath: stage.path, startedAt: iso(NOW - 900) }), state: "completed", cursor: null } as unknown as Pipeline;
+  finished.runs[0]!.attempts[0]!.state = "passed";
+  const projection = projectTaskWorkflows([...tasks], [finished], [], [stage, member]);
+  /* Only the member's conversation is laid out; the stage's is not on the board. */
+  const bands = buildTaskBands(layout([member]), { tasks, projection, untitled: "Untitled task" });
+  const built = buildKanbanModel({ bands, tasks, pipelines: [finished], projection, files: [stage, member], now: NOW });
+  const laned = built.columns.assigned.cards.find((card) => card.task!.id === "laned")!;
+  expect(built.columns.assigned.cards.map((card) => card.task!.id)).toEqual(["laned", "member"]);
+  expect(laned.lastAgentWorkAtMs).toBe((NOW - 30) * 1000);
+  expect(laned.workingSinceMs).toBeNull();
+});
+
 test("search narrows what is shown and never what is counted", () => {
   const tasks = [task("alpha", "inbox"), task("beta", "inbox"), task("gamma", "done")];
   const result = model(tasks, [], { query: "BETA" });
