@@ -7,6 +7,14 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Removed
+- The systemd install path. Docker is the only install: the legacy tmux
+  supervisor unit (`deploy/systemd/agent-log-viewer-legacy-tmux.service`), its
+  installer and its session bootstrap script are gone, with the docs that
+  described them. When a retired unit file is still in
+  `~/.config/systemd/user`, `delegatus` prints how to stop and remove it and
+  how to install with Docker, then starts as usual.
+
 ## [1.3.0] — 2026-09-23
 
 ### Added
