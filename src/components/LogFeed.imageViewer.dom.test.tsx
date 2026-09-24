@@ -25,7 +25,12 @@ Object.assign(globalThis, {
   ResizeObserver: class { observe() {} disconnect() {} unobserve() {} },
 });
 const previousFetch = globalThis.fetch;
-globalThis.fetch = (async () => new Response("{}", { status: 404 })) as unknown as typeof fetch;
+/* What the provenance read answers for the conversation under test; every
+   other request finds nothing. */
+let provenance: Record<string, unknown> | null = null;
+globalThis.fetch = (async (input: RequestInfo | URL) => provenance && String(input).startsWith("/api/log/provenance")
+  ? Response.json(provenance)
+  : new Response("{}", { status: 404 })) as unknown as typeof fetch;
 const { LogFeed } = await import("./LogFeed");
 const { setLogFeedDependenciesForTests } = await import("./logFeedDependencies");
 
@@ -96,6 +101,7 @@ afterEach(async () => {
   for (const host of hosts.splice(0)) host.remove();
   tails.clear();
   renders = 0;
+  provenance = null;
   setLogFeedDependenciesForTests(null);
   document.body.replaceChildren();
   await dom.happyDOM.abort();
@@ -249,6 +255,109 @@ test("every copy opens at its own place, in bold, a table, a picture row, a tool
   expect(opened.map(([place, alt]) => `${place} ${alt}`)).toEqual([
     "1 / 9 one", "2 / 9 two", "3 / 9 three", "4 / 9 four", "5 / 9 five", "8 / 9 six", "9 / 9 seven", "6 / 9 image", "7 / 9 image",
   ]);
+});
+
+/* Two answers around rows whose pictures the feed draws only after reading
+   more than the row: `x` before them, `y` after them. */
+const X = "/api/image?path=%2Fwork%2Fx.png";
+const around = (...rows: string[]) => [answer("a-x", 1, "First ![x](/work/x.png)"), ...rows, answer("a-y", 9, "Then ![y](/work/y.png)")];
+const sdkDelivery = (uuid: string, text: string) => line({ type: "user", uuid, timestamp: at(2), promptSource: "sdk",
+  sessionId: "fixture-delivered", message: { role: "user", content: text } });
+/* The pictures a feed draws, by alt; the product's own mark is no picture. */
+const drawn = (host: Element) => [...host.querySelectorAll("[data-log-feed-scroller] img:not([data-brand-mark])")].map((img) => img.getAttribute("alt"));
+
+/* Opens `x`, walks right to the end, and names each stop by place and alt. */
+async function walkFromX(host: Element): Promise<string[]> {
+  await open(host, X);
+  const stops = [`${position()} ${shown().getAttribute("alt")}`];
+  while (step("next")) {
+    press(document.body, "ArrowRight");
+    stops.push(`${position()} ${shown().getAttribute("alt")}`);
+  }
+  press(document.body, "Escape");
+  return stops;
+}
+
+test("a delivered message the provenance read gives back to the operator is walked in its place", async () => {
+  /* A structured Claude delivery parses as a system row; the feed draws it as
+     the operator's bubble, pictures and all, once the provenance read names
+     its author. */
+  const MOCK = "/api/image?path=%2Fwork%2Fmock.png";
+  provenance = { messages: { "sdk-delivered-1": { origin: "operator" } } };
+  const [host] = await mount([{ path: "/fixture/delivered", lines: around(sdkDelivery("sdk-delivered-1", "compare with ![mock](/work/mock.png)")) }]);
+  expect(host!.querySelector("[data-user-bubble]")?.textContent).toContain("compare with");
+  expect(thumb(host!, MOCK)).not.toBeNull();
+
+  expect(await walkFromX(host!)).toEqual(["1 / 3 x", "2 / 3 mock", "3 / 3 y"]);
+  await open(host!, MOCK);
+  expect(position()).toBe("2 / 3");
+});
+
+test("a review card's pictures are walked in the order the card draws them, each copy at its own place", async () => {
+  const SAME = "/api/image?path=%2Fwork%2Fsame.png";
+  const review = [
+    "VERDICT: REQUEST_CHANGES",
+    "The header overlaps ![summary](/work/same.png)",
+    "1. P1 the button is cut off, per [the spec](/work/spec.md): ![title](/work/same.png)",
+    "2. P2 the footer drifts ![shot](/work/shot.png)",
+  ].join("\n");
+  const [host] = await mount([{ path: "/fixture/review", lines: around(line({ type: "user", uuid: "u-review", timestamp: at(2), message: { role: "user", content:
+    `<teammate-message teammate_id="reviewer" summary="Round one">${review}</teammate-message>` } })) }]);
+  /* The summary, the first finding's title and its details, then the second
+     finding's details: a title drops the first link it holds. */
+  expect(drawn(host!)).toEqual(["x", "summary", "title", "title", "shot", "y"]);
+
+  expect(await walkFromX(host!)).toEqual(["1 / 6 x", "2 / 6 summary", "3 / 6 title", "4 / 6 title", "5 / 6 shot", "6 / 6 y"]);
+  const opened: (string | null)[] = [];
+  for (const copy of host!.querySelectorAll(`[data-log-feed-scroller] img[src="${SAME}"]`)) {
+    fire(copy, clickAt(0, 0));
+    await wait();
+    opened.push(position());
+    press(document.body, "Escape");
+  }
+  expect(opened).toEqual(["2 / 6", "3 / 6", "4 / 6"]);
+});
+
+test("a delivered mandate is walked section by section, in the order its card draws them", async () => {
+  const SAME = "/api/image?path=%2Fwork%2Fsame.png";
+  provenance = { messages: { "sdk-mandate-1": { origin: "operator", mandate: { kind: "custom" } } } };
+  const mandate = [
+    "# Mandate", "Keep to ![rule](/work/rule.png)",
+    "## Handoff from your predecessor", "Stopped at ![handoff](/work/same.png)",
+    "## Initial status", "Report like ![status](/work/same.png)",
+  ].join("\n");
+  const [host] = await mount([{ path: "/fixture/mandate", lines: around(sdkDelivery("sdk-mandate-1", mandate)) }]);
+  /* Both sections mount their text once opened; the list holds their pictures
+     before that. */
+  expect(drawn(host!)).toEqual(["x", "y"]);
+  expect(await walkFromX(host!)).toEqual(["1 / 5 x", "2 / 5 rule", "3 / 5 status", "4 / 5 handoff", "5 / 5 y"]);
+
+  for (const section of host!.querySelectorAll<HTMLDetailsElement>("[data-mandate-card] details")) {
+    section.open = true;
+    fire(section, new dom.Event("toggle") as unknown as Event);
+  }
+  expect(drawn(host!)).toEqual(["x", "rule", "status", "handoff", "y"]);
+  const opened: (string | null)[] = [];
+  for (const copy of host!.querySelectorAll(`[data-log-feed-scroller] img[src="${SAME}"]`)) {
+    fire(copy, clickAt(0, 0));
+    await wait();
+    opened.push(`${position()} ${shown().getAttribute("alt")}`);
+    press(document.body, "Escape");
+  }
+  expect(opened).toEqual(["3 / 5 status", "4 / 5 handoff"]);
+});
+
+test("a teammate's handshake is walked by the prose its card draws, never its summary or raw JSON", async () => {
+  const plan = JSON.stringify({ type: "plan_approval_response", approve: false, feedback: "Redo it like ![plan](/work/plan.png)" });
+  const unknown = JSON.stringify({ type: "custom_ping", note: "![raw](/work/raw.png)" });
+  const teammate = (uuid: string, summary: string, body: string) => line({ type: "user", uuid, timestamp: at(2), message: { role: "user", content:
+    `<teammate-message teammate_id="lead" summary="${summary}">${body}</teammate-message>` } });
+  const [host] = await mount([{ path: "/fixture/protocol", lines: around(
+    teammate("u-plan", "Plan ![summary](/work/summary.png)", plan),
+    teammate("u-ping", "Ping", unknown),
+  ) }]);
+  expect(drawn(host!)).toEqual(["x", "plan", "y"]);
+  expect(await walkFromX(host!)).toEqual(["1 / 3 x", "2 / 3 plan", "3 / 3 y"]);
 });
 
 test("a click on the dimmed area around the picture closes the viewer, and a click on the picture does not", async () => {

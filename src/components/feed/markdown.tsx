@@ -253,6 +253,17 @@ export function mdImages(text: string): { alt: string; src: string }[] {
   return found;
 }
 
+/* Where each of a row's texts starts counting its pictures, for a row that
+   draws several texts one after another. */
+export function mdImageStarts(texts: readonly string[]): number[] {
+  let next = 0;
+  return texts.map((text) => {
+    const first = next;
+    next += mdImages(text).length;
+    return first;
+  });
+}
+
 /* A run of image-only lines flows as a wrapping thumbnail row (a contact sheet
    of screenshots reads far better side by side than stacked). */
 export function MdImageRow({ images }: { images: { alt: string; src: string; at?: number }[] }) {

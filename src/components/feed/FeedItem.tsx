@@ -51,8 +51,11 @@ import { McpCallCard } from "../runtime/McpCallCard";
  * the text, an agent relay that repeats the mandate's bytes carries no such
  * record and stays the relay it is, and an operator who pastes them by hand
  * keeps their own bubble.
+ *
+ * The image viewer reads each row through this too, so it steps through the
+ * pictures of the row as drawn (#2144).
  */
-function resolveDeliveredItem(item: Item, provenance: ProvenanceLookup): Item {
+export function resolveDeliveredItem(item: Item, provenance: ProvenanceLookup): Item {
   if (item.structuredUserRef && (item.kind === "user" || item.kind === "tmsg")) {
     const resolved = provenance.forItem(item);
     if (resolved?.origin === "agent") return internalCard(item.ts, item.text, resolved.senderRole);

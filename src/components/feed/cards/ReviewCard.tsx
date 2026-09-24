@@ -6,7 +6,7 @@ import { EngineMark } from "@/components/EngineMark";
 
 import { Ban, ChevronRight, CircleCheck, MessageCircle } from "../../icons";
 import { hhmm } from "../../utils";
-import { md, mdBlocks } from "../markdown";
+import { md, mdBlocks, mdImageStarts } from "../markdown";
 import { tr } from "../parse";
 import { FileRef } from "./shared";
 
@@ -34,9 +34,23 @@ function VerdictLabel({ verdict }: { verdict: ReviewCardItem["verdict"] }) {
   );
 }
 
+const FINDINGS_SHOWN = 12;
+
+/** The markdown a review card draws, in the order it draws it: the summary,
+    then each shown finding's title and its details, empty when it has none. */
+export function reviewTexts(item: ReviewCardItem): string[] {
+  return [
+    item.summary.join("\n"),
+    ...item.findings.slice(0, FINDINGS_SHOWN).flatMap((finding) => [finding.title, finding.body !== finding.title ? finding.body : ""]),
+  ];
+}
+
 export function ReviewCard({ item }: { item: ReviewCardItem }) {
   const findingCount = item.findings.length;
-  const visibleFindings = item.findings.slice(0, 12);
+  const visibleFindings = item.findings.slice(0, FINDINGS_SHOWN);
+  /* Where each finding's title and details start among the card's pictures,
+     so a picture the card shows twice opens at the copy that was clicked. */
+  const [, ...starts] = mdImageStarts(reviewTexts(item));
   return (
     <div className="my-3 ml-9 overflow-hidden rounded-surface border border-codex/20 bg-card">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
@@ -74,11 +88,11 @@ export function ReviewCard({ item }: { item: ReviewCardItem }) {
                   </span>
                   {finding.file ? <FileRef file={finding.file} line={finding.line} /> : null}
                 </div>
-                <div className="mt-1.5 whitespace-pre-wrap break-words text-[13px]">{md(finding.title)}</div>
+                <div className="mt-1.5 whitespace-pre-wrap break-words text-[13px]">{md(finding.title, { next: starts[2 * idx]! })}</div>
                 {finding.body && finding.body !== finding.title ? (
                   <details className="mt-1 text-[12px] text-muted">
                     <summary className="cursor-pointer list-none font-semibold text-accent">details</summary>
-                    <div className="mt-1 whitespace-pre-wrap break-words">{mdBlocks(finding.body)}</div>
+                    <div className="mt-1 whitespace-pre-wrap break-words">{mdBlocks(finding.body, starts[2 * idx + 1])}</div>
                   </details>
                 ) : null}
               </div>

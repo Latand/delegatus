@@ -691,7 +691,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const answerFor = useMemo(() => createSpeakableAnswerResolver(feed.items), [feed.items, memoryKey, tailPath]);
   /* The image viewer steps through this conversation's pictures, all of them
      and in feed order, read from the records when it opens (#2144). */
-  const gallery = useConversationGallery(feed.items);
+  const gallery = useConversationGallery(feed.items, provenanceLookup);
 
   /* Lazy raw-record provenance: a tool card resolves its source line(s) from
      the retained window, client-side, with no server round-trip. A line that
