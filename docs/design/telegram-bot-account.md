@@ -384,7 +384,9 @@ answer: { chat: string, chatId: string, messageIds: number[], sentAt: string,
   of a row still `pending` (the Viewer died mid-send) answers `send_uncertain`,
   non-retryable, because Telegram has no idempotency key and the bot does not
   receive its own messages to check. Posting twice into a team group is the
-  worse failure. A key whose earlier attempt failed with nothing posted may be
+  worse failure. A send Telegram did not answer in time is the same case: the
+  row stays `pending` and the call answers `send_uncertain`, because the post
+  may have gone out. A key whose earlier attempt failed with nothing posted may be
   claimed again; one that posted some parts before failing answers
   `send_partial` with the posted message ids, and so does the failure itself,
   so the caller sends only the rest.
