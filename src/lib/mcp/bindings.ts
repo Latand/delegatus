@@ -97,7 +97,7 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
-import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
+import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
@@ -1555,6 +1555,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     ? dependencies.readPipelineRecord(pipelineId)
     : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
   const beforeFields = fieldValues(before);
+  if (action === "retry-stage") retryStageLaunch(request, before ?? null);
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
   const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
@@ -1568,6 +1569,8 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     if (result.legacyReviewPreview) throw new McpToolRefusal(message, { legacyReviewPreview: result.legacyReviewPreview });
     if (action === "publish" || action === "takeover") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
+    /* A stale guard names what moved, so the caller re-reads before retrying. */
+    if (result.code === "STAGE_CHANGED") throw new McpToolRefusal(message, { code: result.code, field: result.field, status: result.status });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
@@ -1625,6 +1628,27 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       ...(result.legacyReviewConversion.reverted ? { reverted: result.legacyReviewConversion.reverted } : {}),
     }, replayed: result.replayed } : {}),
   });
+}
+
+/**
+ * The stage a retry-stage names (#1845). The engine reads a request carrying
+ * stageId as an explicit launch-receipt retry: it then needs that attempt's
+ * launchId beside it and accepts only a receipt that settled failed or
+ * conflicted, which refuses every stage whose agent started and then failed or
+ * parked. A stageId without a launchId therefore becomes the guard the engine
+ * reads as "retry the stage you wait on": expectedStageId, and expectedAttempt
+ * from the record this call saw, so a stage or attempt that moved on before
+ * the write is refused with STAGE_CHANGED. A launchId the caller names is
+ * passed through unchanged, for the engine to judge as a receipt retry.
+ */
+function retryStageLaunch(request: Record<string, unknown>, pipeline: Pipeline | null): void {
+  if (typeof request.stageId !== "string" || request.launchId !== undefined || !pipeline) return;
+  if (request.expectedStageId !== undefined && request.expectedStageId !== request.stageId) {
+    throw new McpToolRefusal(`retry-stage names stage ${request.stageId} and expectedStageId ${String(request.expectedStageId)}; name one stage`, { code: "STAGE_CHANGED", field: "expectedStageId", status: 400 });
+  }
+  request.expectedStageId = request.stageId;
+  if (request.expectedAttempt === undefined) request.expectedAttempt = latestOperationalStageAttempt(pipeline, request.stageId)?.n ?? 0;
+  delete request.stageId;
 }
 
 async function pipelineDismissal(pipelineId: string, action: "dismiss" | "undismiss", args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {

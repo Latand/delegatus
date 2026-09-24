@@ -7,6 +7,7 @@ import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { admissionSnapshot } from "./groupHide";
 import { readTaskIconInput } from "./taskIcon";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
+import { applyLineEdits, LINE_EDIT_KEYS, type LineEdits } from "@/lib/lineEdits";
 import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
 import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
@@ -80,6 +81,15 @@ export interface PatchTaskInput {
       empty string clears it. Omitted leaves it exactly as stored, so an update
       carrying only `details` never touches `text` and the reverse. */
   details?: unknown;
+  /** One-line edits to the stored `details` (#1845), applied in the order
+      replaceLine, removeLine, appendLine against the value this write reads
+      under the task store's lock, so a one-line change never resends the
+      field and never loses a concurrent edit to another line. A prefix that
+      matches more or fewer than one line is refused and nothing is stored.
+      Not combined with `details`. */
+  replaceLine?: unknown;
+  removeLine?: unknown;
+  appendLine?: unknown;
   status?: unknown;
   placement?: unknown;
   pos?: unknown;
@@ -442,6 +452,21 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     const details = normalizeDetails(input.details);
     if (!details.ok) return details;
     patch.details = details.details;
+  }
+  const lineEditKeys = LINE_EDIT_KEYS.filter((key) => Object.hasOwn(input, key) && input[key] !== undefined);
+  if (lineEditKeys.length > 0) {
+    if (Object.hasOwn(input, "details")) {
+      return { ok: false, error: "send either details or line edits (replaceLine, removeLine, appendLine), not both", status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+    }
+    const edits = Object.fromEntries(lineEditKeys.map((key) => [key, input[key]])) as LineEdits;
+    const edited = applyLineEdits(task.details, edits, "the details");
+    if (!edited.ok) return { ok: false, error: edited.error, status: 400, code: "TASK_INVALID_FIELD", field: edited.field };
+    /* Stored as edited: trimming the whole field, as a whole-field write does,
+       would strip the indent of the line an edit uncovers at the top. */
+    if (edited.value !== null && edited.value.length > TASK_DETAILS_LIMIT) {
+      return { ok: false, error: `Task details must be no longer than ${TASK_DETAILS_LIMIT} characters`, status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+    }
+    patch.details = edited.value ?? undefined;
   }
   if (Object.hasOwn(input, "status")) {
     const status = normalizeStatus(input.status);

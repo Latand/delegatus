@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { LINE_EDIT_KEYS } from "@/lib/lineEdits";
 import { deleteTask, patchTask, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
+import { taskRevision } from "@/lib/tasks/revision";
 import { mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -17,10 +19,15 @@ type TaskRouteContext = {
   params: Promise<{ id: string }>;
 };
 
+/** What a line edit to `details` answers (#1845): the task's new revision and
+    the length of the field, never the field, which the caller did not send.
+    Clamp notes and resolved links still travel, as they do on any other edit. */
+type LineEditAnswer = { ok: true; taskId: string; revision: string; detailsLength: number; updatedAt: string; workLinks?: ResolvedWorkLinks; notes?: string[] };
+
 export async function PATCH(
   req: NextRequest,
   ctx: TaskRouteContext,
-): Promise<NextResponse<{ ok: true; task: BoardTask; workLinks?: ResolvedWorkLinks; notes?: string[] } | ApiError>> {
+): Promise<NextResponse<{ ok: true; task: BoardTask; workLinks?: ResolvedWorkLinks; notes?: string[] } | LineEditAnswer | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -48,7 +55,11 @@ export async function PATCH(
   }
   /* #2059: the card redraws its links from this answer, not the next poll. */
   const links = Object.hasOwn(body, "attachLinks") || Object.hasOwn(body, "detachLinks") ? taskWorkLinks(result.task, loadPipelines()) : null;
-  return NextResponse.json({ ok: true, task: result.task, ...(links ? { workLinks: links } : {}), ...(result.notes ? { notes: result.notes } : {}) });
+  const extras = { ...(links ? { workLinks: links } : {}), ...(result.notes ? { notes: result.notes } : {}) };
+  if (LINE_EDIT_KEYS.some((key) => Object.hasOwn(body, key))) {
+    return NextResponse.json({ ok: true, taskId: result.task.id, revision: taskRevision(result.task), detailsLength: result.task.details?.length ?? 0, updatedAt: result.task.updatedAt, ...extras });
+  }
+  return NextResponse.json({ ok: true, task: result.task, ...extras });
 }
 
 export async function DELETE(_req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true } | ApiError>> {

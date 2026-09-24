@@ -14,13 +14,40 @@ import type { ApiError } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<NextResponse<{ tasks: TaskPipelineReadModel[] } | ApiError>> {
+/** The query parameters GET reads. */
+const LIST_PARAMETERS = new Set(["project", "status"]);
+const TASK_STATUSES = new Set<string>(["inbox", "assigned", "blocked", "done"]);
+
+/**
+ * With no query, every task, as it always answered: the Viewer's own callers
+ * pass none. `project` keeps one project's tasks and `status` (repeated or
+ * comma-separated) the tasks in those states (#1845 defect A). Before this
+ * every query parameter was ignored, so `?project=<a project with none>`
+ * answered all 1.7 MB of every project's tasks rather than nothing. A
+ * parameter this route does not read, or a status that is none, is refused.
+ */
+export async function GET(req: NextRequest): Promise<NextResponse<{ tasks: TaskPipelineReadModel[] } | ApiError>> {
+  const params = req.nextUrl.searchParams;
+  const unknown = [...new Set(params.keys())].filter((key) => !LIST_PARAMETERS.has(key));
+  if (unknown.length > 0) {
+    return NextResponse.json({
+      error: `unsupported query parameter${unknown.length > 1 ? "s" : ""} ${unknown.join(", ")}; this route reads ${[...LIST_PARAMETERS].join(", ")}`,
+    }, { status: 400 });
+  }
+  const projects = new Set(params.getAll("project"));
+  const statuses = new Set(params.getAll("status").flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean));
+  const badStatus = [...statuses].filter((status) => !TASK_STATUSES.has(status));
+  if (badStatus.length > 0) {
+    return NextResponse.json({ error: `unknown task status ${badStatus.join(", ")}; a status is one of ${[...TASK_STATUSES].join(", ")}` }, { status: 400 });
+  }
   try {
     /* Deliberately no migration here. This route serves the task LIST, which
        shows every task whatever its board flag, so it has nothing to migrate
        for — and a GET that writes surprises every caller. The board reads its
        tasks through /api/files, and that is where the one-time migration runs. */
-    return NextResponse.json({ tasks: projectTaskPipelineIds(loadTasks(), loadPipelines()) });
+    const tasks = loadTasks().filter((task) => (projects.size === 0 || projects.has(task.project))
+      && (statuses.size === 0 || statuses.has(task.status)));
+    return NextResponse.json({ tasks: projectTaskPipelineIds(tasks, loadPipelines()) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "task read model unavailable" }, { status: 500 });
   }
