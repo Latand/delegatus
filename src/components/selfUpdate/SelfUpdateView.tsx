@@ -272,7 +272,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     </ol>
   );
 
-  if (update.state === "idle" || (update.state !== "running" && freshTarget)) {
+  if (update.state === "idle" || (update.state === "done" && freshTarget) || (managed && update.state === "failed" && freshTarget)) {
     if (!s.available || s.check.state !== "update-available") {
       const copy = s.check.state === "up-to-date"
         ? t(managed ? "selfUpdate.update.nothingToDeploy" : "selfUpdate.update.nothingToBuild", { sha: s.installed.short, branch })
@@ -331,6 +331,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     );
   }
   const failed = update.steps.find((step) => step.state === "failed") ?? update.steps[0]!;
+  const remoteMoved = !managed && failed.failure?.kind === "remote-moved";
   const failedName = stepName(failed.name, t);
   const cause = stepFailureText(failed, t);
   const copy = managed
@@ -340,14 +341,16 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     <section data-section="update" data-update="failed" className={`${CARD} ${EDGE.danger}`}>
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
         {heading(t("selfUpdate.update.to", { target }))}
-        <div className="flex justify-end max-sm:w-full">
-          <Button
+        <div className="flex flex-wrap justify-end gap-2 max-sm:w-full">
+          {freshTarget ? <Button action="update-checked" tone="primary" label={t("selfUpdate.update.checkedTarget", { target: freshTarget.short })} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} /> : null}
+          {remoteMoved && !freshTarget ? <Button action="check-failed" tone="primary" label={t("selfUpdate.update.checkAgain")} onClick={actions.check} disabled={s.busy !== null || s.check.state === "checking" || state.pending.has("check")} /> : null}
+          {!remoteMoved ? <Button
             action="retry"
-            tone="primary"
+            tone={freshTarget ? "secondary" : "primary"}
             label={managed ? t("selfUpdate.update.deployAgain") : t("selfUpdate.update.retryFrom", { step: failedName })}
             onClick={actions.retry}
             disabled={s.busy !== null || state.pending.has("update")}
-          />
+          /> : null}
         </div>
       </div>
       <div data-outcome="failed" className="flex flex-col gap-1 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger">

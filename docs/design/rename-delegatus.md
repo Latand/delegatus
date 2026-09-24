@@ -461,7 +461,7 @@ one pass over the environment at boot, so nothing pushes for removal.
 | MCP client names | `"agent-log-viewer"` in `src/lib/telegram/connector.ts:155`, `src/lib/telegram/reportSources.ts:377`; Codex app-server `clientInfo.name` in `src/lib/accounts/codexAppServer.ts:279` |
 | Skills | `.claude/skills/live-log-viewer-orchestration` (named in 6 files), `.claude/skills/llv-conveyor` (named in 7 files) |
 | Docker | compose `name: agent-log-viewer`; images `agent-log-viewer:node22` (3 references), `:deploy-<rev>-<key>` (`src/runtime-host/deploymentArtifacts.ts:13`), `:staging-<rev>` (`stagingContainer.ts:50`), `:hostboot-<rev>` (`scripts/bootstrap-runtime-host.ts:187`); containers `llv-runtime-host-<rev>-<gen>` (`hostSuccessor.ts:99`), `llv-deploy-<key>` (`deploymentArtifacts.ts:9`), `llv-staging-viewer`, `llv-staging-runtime-host` |
-| systemd (legacy) | `deploy/systemd/agent-log-viewer-legacy-tmux.service` |
+| systemd (legacy) | retired; the CLI's migration notice names the old unit files (`docs/docker.md`, "Moving off the systemd install") |
 | Browser storage | 25 distinct `llv:*` / `llvAgent*` / `llv_auth` key literals in non-test `src/` |
 | External ids | WakaTime entities `agent-log-viewer/<engine>/…` (`src/lib/wakatime/sync.ts:331`) |
 | Canonical remote | `package.json:82` and the 4 script defaults listed in §2.3 |
