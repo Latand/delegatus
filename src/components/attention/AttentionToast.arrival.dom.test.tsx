@@ -35,23 +35,13 @@ afterAll(async () => {
 
 const { ARRIVAL_COLLAPSE_MS, AttentionToast } = await import("./AttentionToast");
 const { createMobileNav, MobileNavContext } = await import("@/components/mobile/mobileNav");
+const { fakeHistory } = await import("@/components/mobile/mobileNavTestHistory");
 type FileEntry = import("@/lib/types").FileEntry;
 type MobileNav = ReturnType<typeof createMobileNav>;
 
 /** A same-document history the nav store can push into. */
 function browserNav(): MobileNav {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=atlas" }];
-  let index = 0;
-  return createMobileNav({
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index > 0) index -= 1; },
-    },
-    href: () => entries[index]!.url,
-    onPopstate: () => () => {},
-  });
+  return createMobileNav(fakeHistory("http://localhost/#p=atlas").host);
 }
 
 let root: Root | null = null;

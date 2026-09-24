@@ -46,7 +46,7 @@ mock.module("@/hooks/useConversationCatalog", () => ({
 
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
 const { MobileSheet } = await import("@/components/mobile/MobileSheet");
-const { getMobileNav, topScreen } = await import("@/components/mobile/mobileNav");
+const { getMobileNav, resetMobileNavForTests, topScreen } = await import("@/components/mobile/mobileNav");
 const { receipts } = await import("@/components/mobile/MobileReceipt");
 type MobileShellHost = NonNullable<React.ComponentProps<typeof ProjectDashboard>["mobileShell"]>;
 
@@ -172,7 +172,7 @@ beforeEach(() => {
   dom.sessionStorage.clear();
   dom.localStorage.clear();
   dom.location.hash = "#p=" + encodeURIComponent(PROJECT);
-  getMobileNav().home();
+  resetMobileNavForTests();
   receipts.dismiss();
 });
 afterEach(async () => {

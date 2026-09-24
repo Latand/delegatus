@@ -37,6 +37,16 @@ test("recognizedFragment knows every fragment key the app speaks — and refuses
   }
 });
 
+test("a phone screen's own link is the phone's to open: the desktop still names it unknown (#2105)", () => {
+  for (const screen of ["#task=t-1", "#pipeline=lane-1", "#pipelines", "#accounts"]) {
+    expect(recognizedFragment(screen, { phone: true })).toBeTrue();
+    expect(recognizedFragment(screen)).toBeFalse();
+  }
+  for (const unknown of ["#task=", "#pipeline=", "#pipelinesx", "#garbage"]) {
+    expect(recognizedFragment(unknown, { phone: true })).toBeFalse();
+  }
+});
+
 test("a resolved capped-out catalog open remains pinned after its hash intent clears", () => {
   const path = "/sessions/capped-out.jsonl";
   const pending = parseConversationHash(`#f=${encodeURIComponent(path)}`);

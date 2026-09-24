@@ -63,6 +63,7 @@ mock.module("@/hooks/useLogTail", () => ({
 const { MobileFocusView } = await import("./MobileFocusView");
 const { MobileSeatCard } = await import("./MobileSeatCard");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
+const { fakeHistory } = await import("./mobileNavTestHistory");
 const { resetOrchestratorSeatCacheForTests } = await import("../orchestrator/useOrchestratorSeat");
 
 const { resetOrchestratorIncumbentCacheForTests } = await import("../orchestrator/useOrchestratorIncumbent");
@@ -150,21 +151,7 @@ const seat = (over: Record<string, unknown> = {}) => ({
    test: the navigation store says WHICH sheet is open (§3.3), and the card
    reads it from the context the app provides. */
 function navHost() {
-  let state: unknown = null;
-  const listeners = new Set<(next: unknown) => void>();
-  return {
-    history: {
-      get state() { return state; },
-      pushState(next: unknown) { state = next; },
-      replaceState(next: unknown) { state = next; },
-      back() { for (const listener of [...listeners]) listener(state); },
-    },
-    href: () => "http://localhost/",
-    onPopstate(listener: (next: unknown) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
+  return fakeHistory("http://localhost/").host;
 }
 
 /*

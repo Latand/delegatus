@@ -261,7 +261,8 @@ const OVERVIEW_SCENE = new URLSearchParams(location.search).has("overview");
 const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE;
 const kanbanFiles: FileEntry[] = [];
 const kanbanLinks: { pipelines: Record<string, unknown>; tasks: Record<string, unknown> } = { pipelines: {}, tasks: {} };
-const kanbanRole = (roleId: string) => ({ roleId, access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: null });
+/* A resolved role names its engine, as a stored one does. */
+const kanbanRole = (roleId: string) => ({ roleId, engine: "claude", access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: null });
 const idOf = (path: string) => `conversation_${(path.split("/").pop() ?? "").replace(".jsonl", "")}`;
 let kanbanSeq = 0;
 /** A conversation on the board: working for `ago` seconds, or settled `ago` seconds back. */
@@ -299,7 +300,9 @@ function kanbanLane(id: string, title: string, taskIds: string[], state: Pipelin
   }
   return {
     id, task: title, taskIds, project: PROJECT, repoDir: "/repo", worktreeDir: `/repo-${id}`, branch: `lane/${id}`, baseBranch: "main", baseRef: "main", lastPassedCommit: "",
-    stages: stages.map((spec, index) => ({ id: spec.id, kind: "run", effectiveRole: kanbanRole(spec.role ?? "builder"), next: stages[index + 1]?.id ?? null, ...(spec.onFail ? { onFail: spec.onFail } : {}) })),
+    /* Every stage carries a prompt, as a stored one does: the phone's stage
+       settings (a stage not run yet) edit it (#2105's reload walk opens them). */
+    stages: stages.map((spec, index) => ({ id: spec.id, kind: "run", prompt: "", effectiveRole: kanbanRole(spec.role ?? "builder"), next: stages[index + 1]?.id ?? null, ...(spec.onFail ? { onFail: spec.onFail } : {}) })),
     runs, cursor, state, pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null, createdAt: iso(14_400), closedAt: state === "completed" ? iso(1_200) : null,
     ...over,
   } as unknown as Pipeline;
@@ -441,10 +444,18 @@ if (KANBAN) {
     "Hidden tray lists closed conversations", "Stage names are display names", "Review heads line on the card", "Findings ranked by severity",
     "Empty columns say where the work is",
   ];
+  const donePaths: string[] = [];
   doneTitles.forEach((title, index) => {
     const path = kanbanConversation(title, "settled", 3_600 * (index + 2));
+    donePaths.push(path);
     kanbanTasks.push(kanbanTask(`t-done-${index}`, "done", title, { assignments: [kanbanAssign(path)], updatedAt: iso(3_600 * (index + 2)) }));
   });
+  /* #2105 (`?rounds=1`): the asking conversation is the second round of a
+     chain, so its ⋯ names the round before it and opens it. */
+  if (new URLSearchParams(location.search).has("rounds")) {
+    const tail = kanbanFiles.find((entry) => entry.path === asker) as unknown as { continues?: unknown };
+    tail.continues = { conversationId: idOf(donePaths[0]!), path: donePaths[0]!, round: 2 };
+  }
   /* The live seat: the card above the tabs, never a card in a column. */
   kanbanConversation("Orchestrator", "settled", 300);
 }
