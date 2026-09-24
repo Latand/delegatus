@@ -297,11 +297,40 @@ test("a send Telegram did not answer in time stays uncertain and is never posted
   expect(again.code).toBe("send_uncertain");
   expect(transport.callsOf("sendMessage")).toHaveLength(1);
 
-  /* Unreachable means nothing went out, so the same key may try again. */
-  transport.script("sendMessage", unreachable("network_failed"));
-  expect((await refusal(() => service.send({ conversationId: "conversation_writer", clientRequestId: "req-down", chat: "team-reports", text: "down" }))).code).toBe("network_failed");
+  /* A connection that never opened sent nothing, so the same key may try
+     again, and so may a refusal Telegram answered. */
+  transport.script("sendMessage", unreachable("unreachable"));
+  const down = await refusal(() => service.send({ conversationId: "conversation_writer", clientRequestId: "req-down", chat: "team-reports", text: "down" }));
+  expect(down.code).toBe("network_failed");
+  expect(down.retryable).toBe(true);
+  expect(down.message).toContain("nothing was sent");
+  transport.script("sendMessage", refused(500, "Internal Server Error"));
+  expect((await refusal(() => service.send({ conversationId: "conversation_writer", clientRequestId: "req-down", chat: "team-reports", text: "down" }))).code).toBe("telegram_failed");
   transport.script("sendMessage", ok({ message_id: 62, date: T0 + 102 }));
   expect(await service.send({ conversationId: "conversation_writer", clientRequestId: "req-down", chat: "team-reports", text: "down" })).toMatchObject({ messageIds: [62], alreadySent: false });
+});
+
+test("a connection that fails during a send is uncertain too: it may have been posted, and its key never posts again", async () => {
+  await allowedTeam();
+  transport.script("sendMessage", unreachable("network_failed"));
+  const cut = await refusal(() => service.send({ conversationId: "conversation_writer", clientRequestId: "req-cut", chat: "team-reports", text: "cut" }));
+  expect(cut.code).toBe("send_uncertain");
+  expect(cut.retryable).toBe(false);
+  expect(cut.message).toContain("connection to Telegram failed");
+  expect(cut.message).toContain("may already be posted");
+  const again = await refusal(() => service.send({ conversationId: "conversation_writer", clientRequestId: "req-cut", chat: "team-reports", text: "cut" }));
+  expect(again.code).toBe("send_uncertain");
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+
+  /* A later part cut the same way reports the parts that did go out and
+     says the rest may or may not have. */
+  let id = 80;
+  let calls = 0;
+  transport.handlers.sendMessage = () => (calls++ === 0 ? ok({ message_id: id++, date: T0 }) : unreachable("network_failed"));
+  const partial = await refusal(() => service.send({ conversationId: "conversation_writer", clientRequestId: "req-cut-2", chat: "team-reports", text: `${"x".repeat(3000)}\n\n${"y".repeat(3000)}` }));
+  expect(partial.code).toBe("send_partial");
+  expect(partial.extra.sentMessageIds).toEqual([80]);
+  expect(partial.message).toContain("may or may not have been posted");
 });
 
 test("long plain text is split into at most four parts; only the first replies; html is never split", async () => {

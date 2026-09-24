@@ -25,7 +25,7 @@ export function refused(status: number, description: string, parameters: { retry
   };
 }
 
-export function unreachable(kind: "network_failed" | "timed_out" = "network_failed"): BotCallResult<never> {
+export function unreachable(kind: "unreachable" | "network_failed" | "timed_out" = "network_failed"): BotCallResult<never> {
   return { ok: false, kind, status: null, description: null, retryAfterSeconds: null, migrateToChatId: null };
 }
 

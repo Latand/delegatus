@@ -167,6 +167,10 @@ test("aliases are lowercase and unique, and clearing one turns posting off", () 
   expect(store.resolveChat("TEAM-reports")).toMatchObject({ chatId: String(TEAM.id), alias: "team-reports", postAllowed: true });
   expect(store.setChatSettings(String(OLD_GROUP.id), { alias: "team-reports", postAllowed: true })).toBe("alias_taken");
   expect(store.setChatSettings(String(OLD_GROUP.id), { alias: "no spaces", postAllowed: true })).toBe("alias_invalid");
+  /* Digits alone would read as a chat id, and capture the chat that has it. */
+  expect(store.setChatSettings(String(OLD_GROUP.id), { alias: "700000303", postAllowed: true })).toBe("alias_invalid");
+  expect(store.setChatSettings(String(OLD_GROUP.id), { alias: "2026", postAllowed: false })).toBe("alias_invalid");
+  expect(store.setChatSettings(String(OLD_GROUP.id), { alias: "q3-2026", postAllowed: false })).toBe("ok");
   expect(store.setChatSettings("-42", { alias: "ghost", postAllowed: true })).toBe("chat_unknown");
   expect(store.setChatSettings(String(TEAM.id), { alias: "", postAllowed: true })).toBe("ok");
   expect(store.chat(String(TEAM.id))).toMatchObject({ alias: null, postAllowed: false });

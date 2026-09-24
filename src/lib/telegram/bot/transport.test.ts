@@ -58,6 +58,20 @@ test("a fetch rejection that quotes the request URL comes back as a bare code", 
   expect(JSON.stringify(result)).not.toContain(TOKEN_TAIL);
 });
 
+test("a connection refused or a name that never resolved is unreachable; a connection cut later may have carried the request", async () => {
+  /* The codes Bun raises, read from a closed port, an unresolvable name and
+     a server that dropped the socket after reading the request. */
+  const throwing = (code: string) => createBotApiTransport(TOKEN, async (url) => {
+    throw Object.assign(new Error(`request to ${url} failed`), { code });
+  });
+  for (const code of ["ConnectionRefused", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]) {
+    expect(await throwing(code).call("sendMessage", {})).toMatchObject({ ok: false, kind: "unreachable" });
+  }
+  for (const code of ["ECONNRESET", "EPIPE", "ETIMEDOUT"]) {
+    expect(await throwing(code).call("sendMessage", {})).toMatchObject({ ok: false, kind: "network_failed" });
+  }
+});
+
 test("a request that outlives its timeout is timed_out, and an outer abort ends it too", async () => {
   const hanging = (_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
     init.signal?.addEventListener("abort", () => reject(new Error(`aborted https://api.telegram.org/bot${TOKEN}/getUpdates`)));

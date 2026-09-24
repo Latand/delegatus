@@ -73,11 +73,13 @@ export function botIdFromToken(token: string): string {
   return token.slice(0, token.indexOf(":"));
 }
 
-/** How agents name a chat. Lowercase so two spellings can never be two chats. */
+/** How agents name a chat. Lowercase so two spellings can never be two chats,
+    and never digits alone: a chat is also named by its numeric id, and an alias
+    that looked like one would capture another chat's id. */
 const CHAT_ALIAS = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
 export function validChatAlias(value: unknown): value is string {
-  return typeof value === "string" && CHAT_ALIAS.test(value);
+  return typeof value === "string" && CHAT_ALIAS.test(value) && !/^\d+$/.test(value);
 }
 
 /** A suggestion built from the chat's title (`Team Reports!` → `team-reports`). */

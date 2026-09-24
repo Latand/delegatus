@@ -166,6 +166,8 @@ const evidence = {
   /* Every reconfigure the runtime pill sends, so a re-tap of the tier the
      conversation already runs on can be shown to send nothing (#1795). */
   runtimeRequests: [] as Array<Record<string, unknown>>,
+  /* Every chat save the Telegram bot panel sent. */
+  botPosts: [] as Array<Record<string, unknown>>,
   /* Every account select, the one path that moves the next message. */
   accountSelects: [] as Array<{ engine: string; body: unknown }>,
   pipelinePatches: [] as Array<{ id: string; action: string }>,
@@ -547,7 +549,18 @@ const botChat = (over: Record<string, unknown>) => ({
   alias: null, postAllowed: false, postable: false, seesAllMessages: false, readdToApply: false,
   lastMessageAt: iso(600), lastPostAt: null, lastPostBy: null, storedMessages: 12, ...over,
 });
-const telegramBot = BOT_SCENE === "chats" || BOT_SCENE === "webhook"
+/* `typed`: one group whose title suggests no alias, so the field shows. */
+const telegramBot = BOT_SCENE === "typed"
+  ? {
+    connected: true,
+    bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
+    receiving: "polling",
+    lastUpdateAt: iso(120),
+    lastCheckedAt: iso(60),
+    chats: [botChat({ chatId: "-1000000000505", title: "Реліз", type: "group" })],
+    limits: [],
+  }
+  : BOT_SCENE === "chats" || BOT_SCENE === "webhook"
   ? {
     connected: true,
     bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
@@ -776,6 +789,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
      account not connected, and the bot in the state `?bot=` names. */
   if (url.pathname === "/api/telegram") {
     return json({ telegram: { phase: "disconnected", login: null, identity: null, credentialRef: null, lastHealthCheckAt: null, error: null, credentialsConfigured: true } });
+  }
+  if (url.pathname === "/api/telegram/bot" && method === "POST") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    evidence.botPosts.push(body);
+    const row = (telegramBot.chats as Array<Record<string, unknown>>).find((entry) => entry.chatId === body.chatId);
+    if (body.action === "chat" && row) {
+      const alias = typeof body.alias === "string" && body.alias !== "" ? body.alias : null;
+      Object.assign(row, { alias, postAllowed: alias !== null && body.postAllowed === true, postable: alias !== null && body.postAllowed === true });
+    }
+    return json({ bot: telegramBot });
   }
   if (url.pathname === "/api/telegram/bot") return json({ bot: telegramBot });
   return json({}, 404);

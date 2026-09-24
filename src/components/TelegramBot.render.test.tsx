@@ -72,21 +72,28 @@ test("disconnected: a password-type token field with no value, Connect, and the 
   expect(html).not.toContain("Remove bot");
 });
 
-test("connected with mixed chats: name, receiving state, per-chat alias and switch, inactive chats grouped", () => {
+test("connected with mixed chats: name, receiving state, one compact row per chat, inactive chats grouped", () => {
   const html = render(connected());
   expect(html).toContain("Report Bot");
   expect(html).toContain("@report_test_bot");
-  expect(html).toContain("Receiving messages");
-  expect(html).toContain("Privacy mode on");
+  /* Polling is the green dot, and words only for a reader. */
+  expect(html).toMatch(/<p role="status" class="sr-only">Receiving messages<\/p>/);
   expect(html).toContain("Team Reports");
+  /* The alias field only where posting is on. */
   expect(html).toContain('value="team-reports"');
-  expect(html).toContain('role="switch" aria-checked="true"');
-  expect(html).toContain('role="switch" aria-checked="false"');
-  expect(html).toContain("Set an alias to allow posting");
+  expect(html.match(/<input type="text"/g)).toHaveLength(1);
+  expect(html).toContain('role="switch" aria-checked="true" aria-label="Agents may post: Team Reports"');
+  expect(html).toContain('role="switch" aria-checked="false" aria-label="Agents may post: Person A"');
+  /* Every title here suggests an alias, so no row asks for one. */
+  expect(html).not.toContain("Set an alias to allow posting");
   expect(html).toContain("Weekly report writer");
   expect(html).toContain("topics");
   expect(html).toContain("No longer a member (1)");
-  expect(html).toContain("Sees only mentions and replies");
+  /* A visibility line only where a group differs from the bot-wide state,
+     with its reason; the bot-wide state sits in the collapsed note. */
+  expect(html).toContain("Sees all messages: admin here");
+  expect(html.match(/Sees all messages/g)).toHaveLength(1);
+  expect(html.indexOf("Privacy mode on")).toBeGreaterThan(html.indexOf("What a bot can see"));
   expect(html).toContain("Remove bot");
   expect(html).toContain("/revoke");
   /* No token field once connected and healthy. */
@@ -104,6 +111,23 @@ test("a rejected token asks for a new one in place", () => {
   expect(html).toContain("Telegram rejected the token");
   expect(html).toContain("Bot token from @BotFather");
   expect(html).not.toMatch(/<input[^>]*type="password"[^>]*value=/);
+});
+
+test("a chat whose title suggests no alias shows the field while off and says it needs one", () => {
+  const html = render(connected({ chats: [chat({ chatId: "-1000000000505", title: "Реліз", type: "group" })] }));
+  expect(html).toContain('aria-label="Alias agents use: Реліз"');
+  expect(html).toContain("Set an alias to allow posting");
+  expect(html).toMatch(/role="switch" aria-checked="false" aria-label="Agents may post: Реліз" disabled=""/);
+});
+
+test("with privacy mode off, a group that still needs the bot re-added says so, and the rest say nothing", () => {
+  const html = render(connected({
+    bot: { name: "Report Bot", username: "report_test_bot", canReadAllGroupMessages: true, canJoinGroups: true },
+    chats: [chat({ seesAllMessages: true }), chat({ chatId: "-1000000000202", title: "Lounge", readdToApply: true })],
+  }));
+  expect(html).toContain("Re-add the bot to this group");
+  expect(html).not.toContain("admin here");
+  expect(html).toContain("Privacy mode off");
 });
 
 test("an empty chat list explains how a chat appears", () => {

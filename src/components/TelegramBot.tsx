@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 
 import type { TelegramBotState } from "@/hooks/useTelegramBot";
 import { type TFunction, useLocale } from "@/lib/i18n";
-import { suggestChatAlias, type TelegramBotChatView, type TelegramBotReceiving } from "@/lib/telegram/bot/contracts";
+import { suggestChatAlias, type TelegramBotChatView, type TelegramBotReceiving, validChatAlias } from "@/lib/telegram/bot/contracts";
 
 import { Trash2 } from "./icons";
 import { ActionButton, ConfirmingAction } from "./TelegramControls";
@@ -53,28 +53,76 @@ function formatTime(iso: string | null): string | null {
 
 const inputClass = "h-11 min-w-0 rounded-[8px] border border-border bg-canvas px-2 text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8";
 
-function ChatRow({ chat, busy, onSave }: { chat: TelegramBotChatView; busy: boolean; onSave: (chatId: string, alias: string, postAllowed: boolean) => void }) {
+/**
+ * One chat: title, type chip and the posting switch on one line. Switching on
+ * a chat with no alias adopts the one suggested from its title, so allowing a
+ * chat is one tap. The alias field appears once posting is on, to rename, or
+ * while off when the title suggests nothing.
+ */
+function ChatRow({ chat, botSeesAll, busy, onSave }: { chat: TelegramBotChatView; botSeesAll: boolean; busy: boolean; onSave: (chatId: string, alias: string, postAllowed: boolean) => void }) {
   const { t } = useLocale();
-  const [alias, setAlias] = useState(chat.alias ?? "");
-  const draft = alias.trim().toLowerCase();
   const saved = chat.alias ?? "";
+  const [alias, setAlias] = useState(saved);
+  /* A save that came back renames the field (the render-time reset). */
+  const [shownSaved, setShownSaved] = useState(saved);
+  if (shownSaved !== saved) {
+    setShownSaved(saved);
+    setAlias(saved);
+  }
+  /* Set from the switch's pointerdown, which comes before the field's blur:
+     that blur leaves the save to the switch, whose one request carries the
+     field. A blur save first would disable the switch mid-tap. */
+  const switching = useRef(false);
+  const draft = alias.trim().toLowerCase();
+  const suggestion = suggestChatAlias(chat.title);
+  const posting = chat.postAllowed && saved !== "";
+  const adopt = draft || suggestion;
+  const showField = chat.member && (posting || suggestion === "");
   const lastPost = formatTime(chat.lastPostAt);
   const lastPostBy = chat.lastPostBy
     ? "unidentified" in chat.lastPostBy ? t("telegram.bot.unidentified") : chat.lastPostBy.title ?? chat.lastPostBy.conversationId
     : null;
-  const posting = chat.postAllowed && saved !== "";
+  /* Only what differs from the bot-wide privacy state, with its reason. */
+  const group = chat.type === "group" || chat.type === "supergroup";
+  const visibility = !chat.member || !group ? null
+    : chat.readdToApply ? t("telegram.bot.readd")
+    : chat.seesAllMessages && !botSeesAll ? t("telegram.bot.seesAllAdmin")
+    : null;
+  const toggle = () => {
+    if (posting) onSave(chat.chatId, validChatAlias(draft) ? draft : saved, false);
+    else if (adopt !== "") onSave(chat.chatId, adopt, true);
+  };
   return (
-    <li className={`flex flex-col gap-1.5 rounded-[9px] border border-border px-2 py-1.5 ${chat.member ? "" : "opacity-60"}`}>
-      <div className="flex min-w-0 flex-wrap items-center gap-1">
-        <span className="min-w-0 max-w-full truncate text-[11.5px] font-semibold text-primary">{chat.title}</span>
-        <span className="shrink-0 rounded-full bg-sunken px-1.5 py-px text-[9.5px] font-semibold text-muted">{t(`telegram.bot.type.${chat.type}` as Key)}</span>
-        {chat.isForum ? <span className="shrink-0 rounded-full bg-sunken px-1.5 py-px text-[9.5px] font-semibold text-muted">{t("telegram.bot.forum")}</span> : null}
+    <li className={`flex flex-col gap-1 rounded-[9px] border border-border py-0.5 pl-2 pr-0.5 ${chat.member ? "" : "opacity-60"}`}>
+      <div className="flex min-w-0 items-center gap-1">
+        <div className="flex min-h-[44px] min-w-0 flex-1 items-center gap-1 sm:min-h-[28px]">
+          <span className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{chat.title}</span>
+          <span className="shrink-0 rounded-full bg-sunken px-1.5 py-px text-[9.5px] font-semibold text-muted">{t(`telegram.bot.type.${chat.type}` as Key)}</span>
+          {chat.isForum ? <span className="shrink-0 rounded-full bg-sunken px-1.5 py-px text-[9.5px] font-semibold text-muted">{t("telegram.bot.forum")}</span> : null}
+        </div>
+        {chat.member ? (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={posting}
+            aria-label={`${t("telegram.bot.mayPost")}: ${chat.title}`}
+            disabled={busy || (!posting && adopt === "")}
+            onPointerDown={() => { switching.current = true; }}
+            onClick={toggle}
+            className="inline-flex h-11 w-12 shrink-0 items-center justify-center rounded-[7px] disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-7 sm:w-11"
+          >
+            <span
+              aria-hidden
+              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${posting ? "bg-accent" : "bg-sunken shadow-[inset_0_0_0_1.5px_var(--color-border)]"}`}
+            >
+              <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${posting ? "translate-x-[18px]" : "translate-x-0.5"}`} />
+            </span>
+          </button>
+        ) : null}
       </div>
-      <p className="text-[10px] leading-snug text-muted">
-        {chat.readdToApply ? t("telegram.bot.readd") : chat.seesAllMessages ? t("telegram.bot.seesAll") : t("telegram.bot.seesMentions")}
-      </p>
-      {chat.member ? (
-        <>
+      {showField ? (
+        <label className="flex min-w-0 items-center gap-1.5 pr-1.5">
+          <span className="shrink-0 text-[10px] font-semibold text-muted">{t("telegram.bot.aliasShort")}</span>
           <input
             type="text"
             value={alias}
@@ -83,39 +131,27 @@ function ChatRow({ chat, busy, onSave }: { chat: TelegramBotChatView; busy: bool
             spellCheck={false}
             maxLength={32}
             aria-label={`${t("telegram.bot.aliasLabel")}: ${chat.title}`}
-            placeholder={suggestChatAlias(chat.title) || t("telegram.bot.aliasLabel")}
+            placeholder={suggestion || t("telegram.bot.aliasLabel")}
             onChange={(event) => setAlias(event.target.value)}
+            onFocus={() => { switching.current = false; }}
             onKeyDown={(event) => {
               if (event.key === "Enter") event.currentTarget.blur();
             }}
             onBlur={() => {
-              if (draft !== saved) onSave(chat.chatId, draft, draft !== "" && chat.postAllowed);
+              const toSwitch = switching.current;
+              switching.current = false;
+              /* A rename of a chat agents already post to; a chat that is off
+                 takes its alias from the switch. */
+              if (!toSwitch && posting && draft !== saved) onSave(chat.chatId, draft, true);
             }}
-            className={`${inputClass} w-full font-mono`}
+            className={`${inputClass} w-full flex-1 font-mono`}
           />
-          {/* One target for the whole row: the track alone is too small to
-              tap on a phone. */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={posting}
-            disabled={busy || draft === ""}
-            onClick={() => onSave(chat.chatId, draft, !posting)}
-            className="flex min-h-[44px] w-full items-center gap-2 rounded-[7px] text-left disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-          >
-            <span
-              aria-hidden
-              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${posting ? "bg-accent" : "bg-sunken shadow-[inset_0_0_0_1.5px_var(--color-border)]"}`}
-            >
-              <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${posting ? "translate-x-[18px]" : "translate-x-0.5"}`} />
-            </span>
-            <span className="min-w-0 flex-1 text-[11px] font-semibold text-primary">{t("telegram.bot.mayPost")}</span>
-          </button>
-          {draft === "" ? <p className="text-[10px] leading-snug text-muted">{t("telegram.bot.aliasHint")}</p> : null}
-        </>
+        </label>
       ) : null}
+      {showField && !posting && draft === "" ? <p className="pr-1.5 text-[10px] leading-snug text-muted">{t("telegram.bot.aliasHint")}</p> : null}
+      {visibility ? <p className="pr-1.5 text-[10px] leading-snug text-muted">{visibility}</p> : null}
       {lastPost && lastPostBy ? (
-        <p className="min-w-0 truncate text-[9.5px] font-semibold text-secondary">{t("telegram.bot.lastPost", { time: lastPost, by: lastPostBy })}</p>
+        <p className="min-w-0 truncate pb-1 pr-1.5 text-[9.5px] font-semibold text-secondary">{t("telegram.bot.lastPost", { time: lastPost, by: lastPostBy })}</p>
       ) : null}
     </li>
   );
@@ -165,6 +201,7 @@ export function TelegramBotSection({ state }: { state: TelegramBotState }) {
   const receiving = status?.receiving ?? "stopped";
   const active = status?.chats.filter((chat) => chat.member) ?? [];
   const inactive = status?.chats.filter((chat) => !chat.member) ?? [];
+  const botSeesAll = status?.bot?.canReadAllGroupMessages === true;
   const save = (chatId: string, alias: string, postAllowed: boolean) => void state.setChat(chatId, alias, postAllowed);
 
   return (
@@ -196,30 +233,31 @@ export function TelegramBotSection({ state }: { state: TelegramBotState }) {
             <span className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{status?.bot?.name}</span>
             {status?.bot?.username ? <span className="min-w-0 truncate font-mono text-[10px] text-muted">@{status.bot.username}</span> : null}
           </div>
-          <p role="status" className={`text-[10.5px] font-semibold leading-snug ${receiving === "polling" ? "text-secondary" : receiving === "token_rejected" ? "text-danger" : "text-warning"}`}>
+          {/* While polling, the green dot says it; anything else is spelled out. */}
+          <p role="status" className={receiving === "polling" ? "sr-only" : `text-[10.5px] font-semibold leading-snug ${receiving === "token_rejected" ? "text-danger" : "text-warning"}`}>
             {t(receivingKey(receiving))}
-          </p>
-          <p className="text-[10px] leading-snug text-muted">
-            {status?.bot?.canReadAllGroupMessages ? t("telegram.bot.privacyOff") : t("telegram.bot.privacyOn")}
           </p>
 
           {receiving === "token_rejected" ? (
             <TokenForm busy={busy} onConnect={(token) => void state.connect(token)} />
           ) : null}
 
-          <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.chats")}</h4>
+          <div className="flex min-w-0 items-baseline justify-between gap-2 pr-1">
+            <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.chats")}</h4>
+            {active.length ? <span className="min-w-0 truncate text-[9.5px] font-semibold text-muted">{t("telegram.bot.mayPost")}</span> : null}
+          </div>
           {active.length === 0 ? (
             <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.noChats", { username: status?.bot?.username ?? "bot" })}</p>
           ) : (
-            <ul className="flex flex-col gap-1.5">
-              {active.map((chat) => <ChatRow key={`${chat.chatId}:${chat.alias ?? ""}`} chat={chat} busy={busy} onSave={save} />)}
+            <ul className="flex flex-col gap-1">
+              {active.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy} onSave={save} />)}
             </ul>
           )}
           {inactive.length ? (
             <details className="text-[10.5px]">
               <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-muted sm:min-h-[28px]">{t("telegram.bot.inactive", { count: inactive.length })}</summary>
-              <ul className="mt-1 flex flex-col gap-1.5">
-                {inactive.map((chat) => <ChatRow key={`${chat.chatId}:${chat.alias ?? ""}`} chat={chat} busy={busy} onSave={save} />)}
+              <ul className="mt-1 flex flex-col gap-1">
+                {inactive.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy} onSave={save} />)}
               </ul>
             </details>
           ) : null}
@@ -229,6 +267,7 @@ export function TelegramBotSection({ state }: { state: TelegramBotState }) {
       <details className="text-[10.5px]">
         <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-muted sm:min-h-[28px]">{t("telegram.bot.limitsTitle")}</summary>
         <ul className="mt-1 flex list-disc flex-col gap-1 pl-4 leading-snug text-muted">
+          {connected ? <li>{botSeesAll ? t("telegram.bot.privacyOff") : t("telegram.bot.privacyOn")}</li> : null}
           <li>{t("telegram.bot.limit1")}</li>
           <li>{t("telegram.bot.limit2")}</li>
           <li>{t("telegram.bot.limit3")}</li>

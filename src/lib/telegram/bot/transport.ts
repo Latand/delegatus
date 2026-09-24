@@ -19,8 +19,15 @@ import { validBotToken } from "./contracts";
  */
 
 /** Why a call did not produce a result. `http` is Telegram's own refusal and
-    carries its status; the other two never reached an answer. */
-export type BotCallFailureKind = "http" | "network_failed" | "timed_out";
+    carries its status; the other three never reached an answer. `unreachable`
+    is the one that proves nothing left the machine (the connection was
+    refused or the name did not resolve); after `network_failed` or
+    `timed_out` the request may have reached Telegram. */
+export type BotCallFailureKind = "http" | "unreachable" | "network_failed" | "timed_out";
+
+/* Errors raised before a connection exists, so before any byte of the request
+   was written. Anything else may have happened after the request left. */
+const NOT_SENT_CODES = new Set(["ConnectionRefused", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]);
 
 export type BotCallResult<T = unknown> =
   | { ok: true; result: T }
@@ -95,9 +102,12 @@ export function createBotApiTransport(token: string, fetchImpl: FetchLike = (inp
         signal: controller.signal,
       });
       body = await response.json().catch(() => null);
-    } catch {
-      /* Whatever was thrown may quote the request URL. It is dropped whole. */
-      return failure(timedOut ? "timed_out" : "network_failed");
+    } catch (error) {
+      /* Whatever was thrown may quote the request URL. It is dropped whole;
+         only its code is read. */
+      if (timedOut) return failure("timed_out");
+      const code = (error as { code?: unknown } | null)?.code;
+      return failure(typeof code === "string" && NOT_SENT_CODES.has(code) ? "unreachable" : "network_failed");
     } finally {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);

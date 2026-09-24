@@ -163,7 +163,9 @@ export function splitMessageText(text: string, format: "plain" | "html"): string
 /** Telegram's refusal of a send, as one of our codes. */
 function sendFailure(result: Extract<BotCallResult, { ok: false }>, chat: ChatRow): TelegramBotError {
   const detail = result.description ? ` (Telegram: ${result.description})` : "";
-  if (result.kind === "network_failed") return new TelegramBotError("network_failed", "Telegram could not be reached; nothing is known to have been posted");
+  if (result.kind === "unreachable") return new TelegramBotError("network_failed", "Telegram could not be reached, so nothing was sent");
+  /* A connection that failed after it opened may have carried the post. */
+  if (result.kind === "network_failed") return new TelegramBotError("network_failed", "the connection to Telegram failed; the message may or may not have been posted");
   if (result.kind === "timed_out") return new TelegramBotError("timed_out", "Telegram did not answer in time; the message may or may not have been posted");
   if (result.status === 429) {
     return new TelegramBotError("rate_limited", `Telegram is rate-limiting this bot; retry after ${result.retryAfterSeconds ?? 1} s${detail}`, { retryAfterSeconds: result.retryAfterSeconds ?? 1 });
@@ -278,7 +280,7 @@ export class TelegramBotService {
       if (me.kind === "http" && (me.status === 401 || me.status === 404)) {
         throw new TelegramBotError("token_rejected", "Telegram rejected this token; copy it again from @BotFather");
       }
-      if (me.kind === "network_failed") throw new TelegramBotError("network_failed", "Telegram could not be reached");
+      if (me.kind === "network_failed" || me.kind === "unreachable") throw new TelegramBotError("network_failed", "Telegram could not be reached");
       if (me.kind === "timed_out") throw new TelegramBotError("timed_out", "Telegram did not answer in time");
       throw new TelegramBotError("telegram_failed", "Telegram could not check this token");
     }
@@ -368,7 +370,7 @@ export class TelegramBotService {
       postAllowed: postAllowed === true,
     });
     if (outcome === "chat_unknown") throw new TelegramBotError("chat_unknown", "no such chat");
-    if (outcome === "alias_invalid") throw new TelegramBotError("alias_invalid", "an alias is 1–32 lowercase letters, digits, - or _, starting with a letter or digit");
+    if (outcome === "alias_invalid") throw new TelegramBotError("alias_invalid", "an alias is 1–32 lowercase letters, digits, - or _, starting with a letter or digit, and not digits alone");
     if (outcome === "alias_taken") throw new TelegramBotError("alias_taken", "another chat already has that alias");
     return this.status();
   }
@@ -661,10 +663,11 @@ export class TelegramBotService {
           store.failSend(callerKey, clientRequestId, "send_partial", sent.map((message) => message.messageId));
           throw new TelegramBotError("send_partial", `parts 1–${sent.length} of ${parts.length} were posted (message ids ${sent.map((message) => message.messageId).join(", ")}); the rest failed: ${error.message}. Send only the remaining text, under a new clientRequestId`, { sentMessageIds: sent.map((message) => message.messageId) });
         }
-        if (result.kind === "timed_out") {
+        if (result.kind === "timed_out" || result.kind === "network_failed") {
           /* Telegram may have posted it. The row stays pending, so a retry
              under this key answers send_uncertain instead of posting twice. */
-          throw new TelegramBotError("send_uncertain", "Telegram did not answer in time, so the message may already be posted and the bot cannot check; send again under a new clientRequestId only if a duplicate is acceptable");
+          const why = result.kind === "timed_out" ? "Telegram did not answer in time" : "the connection to Telegram failed mid-request";
+          throw new TelegramBotError("send_uncertain", `${why}, so the message may already be posted and the bot cannot check; send again under a new clientRequestId only if a duplicate is acceptable`);
         }
         store.failSend(callerKey, clientRequestId, error.code, []);
         throw error;

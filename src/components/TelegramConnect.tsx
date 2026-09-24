@@ -175,7 +175,8 @@ export function TelegramPanel({ state, reports, bot, onClose }: { state: Telegra
 
   return (
     <>
-      {/* Mobile-only backdrop absorbing the outside tap (AccountsPanel). */}
+      {/* Mobile-only scrim absorbing the outside tap (AccountsPanel), dimmed
+          like the phone's other sheets so the screen beneath reads as behind. */}
       <button
         type="button"
         aria-hidden
@@ -185,14 +186,15 @@ export function TelegramPanel({ state, reports, bot, onClose }: { state: Telegra
           event.stopPropagation();
           onClose();
         }}
-        className={`fixed inset-0 ${Z.modal} cursor-default sm:hidden`}
+        className={`fixed inset-0 ${Z.modal} cursor-default bg-black/40 sm:hidden`}
+        data-telegram-scrim
       />
       <div
         role="dialog"
         aria-label={t("telegram.title")}
         aria-busy={busy}
         onKeyDown={(event) => handleOverlayEscape(event, onClose)}
-        className={`fixed bottom-3 left-1/2 ${Z.modal} flex max-h-[min(560px,calc(100vh-24px))] w-[min(320px,calc(100vw-16px))] -translate-x-1/2 flex-col overflow-y-auto overscroll-contain rounded-[14px] border border-border bg-card shadow-2 sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0`}
+        className={`fixed inset-x-0 bottom-0 ${Z.modal} flex max-h-[88dvh] w-full flex-col overflow-y-auto overscroll-contain rounded-t-[16px] border-t border-border bg-card pb-[env(safe-area-inset-bottom)] shadow-2 sm:absolute sm:inset-x-auto sm:bottom-1 sm:left-full sm:ml-2 sm:max-h-[min(560px,calc(100vh-24px))] sm:w-[320px] sm:rounded-[14px] sm:border sm:pb-0`}
       >
         <header className="flex items-center gap-2 border-b border-border px-3 py-2">
           <Send className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--color-accent)" }} aria-hidden />

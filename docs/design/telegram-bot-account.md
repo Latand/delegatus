@@ -154,7 +154,8 @@ requirement's "existing credential file pattern" option is the one that exists.
 - **The URL is the leak.** The Bot API puts the token in the request path, so
   a fetch rejection, a `Response.url` or a logged request would carry it. The
   production transport catches every fetch failure and returns only a code
-  (`network_failed`, `timed_out`). It never logs a URL or rethrows an error
+  (`unreachable`, `network_failed`, `timed_out`), reading nothing of the error
+  but its `code`. It never logs a URL or rethrows an error
   object. It passes Telegram's `description` through with every occurrence of
   the token replaced by `[token]` and cut to 300 characters. Descriptions do
   not contain the token; the replacement guards a future vendor change.
@@ -281,8 +282,12 @@ immediately.
   bot there once (for example `/start@<botname>`).
 - **Posting is allowed only when the operator has set `post_allowed` *and* an
   alias.** The alias is how agents name the chat. It is lowercase, 1–32
-  characters, `[a-z0-9][a-z0-9_-]*`, and unique. The panel suggests one from the
-  title (for example `team-reports`).
+  characters, `[a-z0-9][a-z0-9_-]*`, never digits alone, and unique. Digits
+  alone are refused because a chat is also named by its numeric id and the
+  alias is resolved first: an alias `700000303` would capture the private chat
+  whose id that is. Switching posting on for a chat with no alias adopts the
+  one the panel suggests from the title (for example `team-reports`), so
+  allowing a chat is one tap; a title that yields no suggestion asks for one.
 - **Only the operator edits the allowlist.** `POST /api/telegram/bot` passes
   `rejectCrossOrigin` and then `requireOperatorAuthority`. A caller presenting
   an agent capability gets 403, so an agent cannot widen its own reach. No MCP tool writes the allowlist.
@@ -364,6 +369,16 @@ answer: { chat: string, chatId: string, messageIds: number[], sentAt: string,
           alreadySent: boolean /* true when this clientRequestId had already posted */ }
 ```
 
+- **A refusal carries its own code at the top of the MCP answer.** The
+  answer is `{ ok: false, code, retryable, error, details }` with the bot's
+  code (`chat_not_allowed`, `send_uncertain`, `rate_limited`, …) as `code`,
+  and `retryable` true only for `rate_limited`, `network_failed`, `timed_out`
+  and `telegram_failed`, which is whether a retry under a new
+  `clientRequestId` may help. `details` repeats both and adds
+  `retryAfterSeconds` or, for `send_partial`, `sentMessageIds`. A generic
+  `tool_failed` with `retryable: true` would invite a retry under a new key
+  after `send_uncertain`, which is the double post this design exists to
+  prevent.
 - **Allowlist refusal** comes before any network call, as a non-retryable
   failure with a code and a sentence: `chat_unknown` ("no chat named X; list
   them with telegram_bot_chats"), `chat_not_allowed` ("the operator has not
@@ -384,9 +399,9 @@ answer: { chat: string, chatId: string, messageIds: number[], sentAt: string,
   of a row still `pending` (the Viewer died mid-send) answers `send_uncertain`,
   non-retryable, because Telegram has no idempotency key and the bot does not
   receive its own messages to check. Posting twice into a team group is the
-  worse failure. A send Telegram did not answer in time is the same case: the
-  row stays `pending` and the call answers `send_uncertain`, because the post
-  may have gone out. A key whose earlier attempt failed with nothing posted may be
+  worse failure. A send Telegram did not answer in time, or whose connection
+  failed after it opened, is the same case: the row stays `pending` and the call answers
+  `send_uncertain`, because the post may have gone out. A key whose earlier attempt failed with nothing posted may be
   claimed again; one that posted some parts before failing answers
   `send_partial` with the posted message ids, and so does the failure itself,
   so the caller sends only the rest.
@@ -401,8 +416,14 @@ answer: { chat: string, chatId: string, messageIds: number[], sentAt: string,
   bot was blocked, removed, or never messaged by that user; this is where "a
   bot cannot start a chat with a user who never wrote to it" surfaces); 429 →
   `rate_limited`, retryable, with `retryAfterSeconds`; a `migrate_to_chat_id`
-  response moves the chat row and retries once; network → `network_failed`,
-  retryable.
+  response moves the chat row and retries once. The transport tells two
+  network failures apart by the error's code. A connection that never opened
+  (`ConnectionRefused`, `ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`: a closed
+  port or a name that did not resolve) sent nothing, so the send answers
+  `network_failed`, retryable, and the same key may try again. Any other
+  connection failure (`ECONNRESET` from a socket cut after the request was
+  written, for one) is treated like a timeout: the request may have reached
+  Telegram, so the row stays `pending` and the call answers `send_uncertain`.
 - The sent message is stored as an `out` row, so `telegram_bot_messages` shows
   the conversation both ways. The bot does not receive its own messages as
   updates.
@@ -476,23 +497,31 @@ string unchanged. That is the one visible change to the personal side.
   elsewhere: Delegatus can post but not read", "Telegram rejected the token:
   paste a new one"), Refresh, and Remove. Remove confirms inline: two taps, no
   modal.
-- **Chats list:** one row per chat with the title, a type chip, the
-  visibility line ("Sees all messages" / "Sees only mentions and replies:
-  privacy mode is on"), an alias input and an "Agents may post" switch. The
-  switch is disabled until an alias is set, and the row says so. Below: the
-  last post time and the posting conversation's title. A collapsed "No longer
-  a member (n)" group holds left and kicked chats.
-- **Limits:** the three sentences, as one collapsed "What a bot can see" note,
-  plus the mention-the-bot hint when the list is empty.
+- **Chats list:** one compact row per chat: the title, a type chip and the
+  "Agents may post" switch, under a list header that names the switch column.
+  Turning the switch on adopts the suggested alias when the chat has none, so
+  it is one tap. The alias field appears only once posting is on, prefilled,
+  to rename; a chat whose title yields no suggestion shows the field while
+  off and says an alias is needed. The switch carries whatever the field
+  holds, and pressing it never lets the field's own save on blur race it. A
+  visibility line appears only when a group differs from the bot-wide state,
+  with its reason ("Sees all messages: admin here", or "re-add the bot to
+  apply"). The last post time and the posting conversation's title follow
+  when there is one. A collapsed "No longer a member (n)" group holds left and
+  kicked chats.
+- **Limits:** the bot-wide privacy state ("Privacy mode on: …") and the three
+  sentences, as one collapsed "What a bot can see" note, plus the
+  mention-the-bot hint when the list is empty. The receiving state is spelled
+  out only when it is not "Receiving messages"; while polling, the green dot
+  says it.
 - **On the phone** the rail footer is not drawn, so neither Telegram account
   was reachable there. The phone's Accounts screen (menu › Accounts) now ends
-  with the same `TelegramFooterRow`, and the panel opens as its existing
-  bottom sheet.
-- The panel keeps its current geometry: `w-[min(320px,calc(100vw-16px))]`,
-  fixed to the bottom on phone and anchored beside the footer on desktop,
-  `max-h` with inner scroll. Chat rows stack vertically (title and chips, then
-  alias and switch), so nothing sits side by side below 320 px. Targets are at
-  least 44 px on phone, as the existing buttons are.
+  with the same `TelegramFooterRow`, and the panel opens as a full-width
+  bottom sheet over a scrim, so nothing of the Accounts list shows beside it.
+- On desktop the panel keeps its geometry: 320 px wide, anchored beside the
+  footer, `max-h` with inner scroll. On the phone it spans the width and is at
+  most 85 % of the viewport tall. Targets are at least 44 px on phone, as the
+  existing buttons are.
 - Strings live in `src/lib/i18n/en.ts` and `uk.ts` under `telegram.bot.*`.
 
 ## Limits surfaced honestly
@@ -568,7 +597,8 @@ and replays scripted answers, with no network and a temp `LLV_STATE_DIR`:
 - `bot/transport.test.ts`: **token never serialised.** `JSON.stringify` and
   `util.inspect` of the transport show no token. A fake `fetch` that rejects
   with an error whose message contains the full request URL yields only
-  `network_failed`. A description echoing the token comes back with `[token]`
+  a failure kind: `unreachable` for the codes of a connection that never
+  opened, `network_failed` for any other. A description echoing the token comes back with `[token]`
   in its place. The token file is 0600 and a symlinked file is refused.
 - `bot/store.test.ts`: **intake and paging.** Messages, edits, channel posts,
   `my_chat_member` (added, promoted, kicked), group→supergroup migration
@@ -579,7 +609,9 @@ and replays scripted answers, with no network and a temp `LLV_STATE_DIR`:
   allowed, left chat; no transport call in any of them); **send attribution**
   (the conversation id from the resolver lands on `sends`, the `out` message
   and the chat; an unidentified caller is recorded as such); replay of a `sent`
-  key does not re-post; a `pending` key answers `send_uncertain`; the 4-part
+  key does not re-post; a `pending` key answers `send_uncertain`, and so do a
+  timed-out send and one whose connection was cut, while an unreachable
+  Telegram answers a retryable `network_failed` and frees the key; the 4-part
   split; 403, 429 and migrate mapping; the `receiving` state machine (409
   webhook vs. other reader, 401 stop); `remove` aborts the poller and deletes
   both files; the same-bot token replacement keeps the chats.
@@ -588,9 +620,21 @@ and replays scripted answers, with no network and a temp `LLV_STATE_DIR`:
   gets 403 on `chat` and `connect`.
 - `src/lib/mcp/schemaParity.test.ts` and `server.test.ts`: the three tools are
   in the published surface; every existing assertion stays.
+- `src/lib/mcp/telegramBot.test.ts`: the tools reach only the agent route; a
+  send through `createMcpToolService` and the real dispatch, against a
+  stand-in Viewer answering through the route's own failure writer, answers
+  `send_uncertain`, `chat_not_allowed` and `bot_not_in_chat` with
+  `retryable: false` at the top, `rate_limited` with `retryable: true` and its
+  wait, and `send_partial` with its `sentMessageIds`.
 - `TelegramBot.render.test.tsx`: disconnected, connected with mixed chats,
   `webhook_elsewhere`, and `token_rejected`, rendered to static markup;
-  the input carries no value attribute.
+  the input carries no value attribute; a title with no suggestion shows the
+  field; a visibility line only where a group differs.
+- `TelegramBot.dom.test.tsx`: the switch in a mounted section. One tap allows
+  an unaliased chat under its suggested alias; an alias typed into a chat that
+  suggests none, then the switch, is one save; a rename of an allowed chat
+  then switching it off is one save carrying both (red when the switch's
+  pointerdown guard is removed).
 
 Verification before the PR:
 
@@ -607,8 +651,13 @@ Verification before the PR:
   states, from fixture data with invented bot and chat names. It writes PNGs
   to `$LLV_TELEGRAM_BOT_OUT` (the review copy went to
   `~/Pictures/delegatus-review/telegram-bot/`) and records overflow, clipped
-  controls, overlapping ink and phone targets under 44 px in
-  `evidence/telegram-bot/panel.json`.
+  controls, overlapping ink (clipped by overflow boxes, so an ellipsis or an
+  sr-only line is not ink), phone targets under 44 px, and on the phone a
+  sheet narrower than the screen or without a scrim, in
+  `evidence/telegram-bot/panel.json`. A second case taps the switch in three
+  rows (typed alias, suggested alias, rename then off) by touch at 390 and by
+  mouse at 1440, and requires the switch's new state after exactly one POST,
+  in `evidence/telegram-bot/switch.json`.
 
 ## Validation against the requirement
 

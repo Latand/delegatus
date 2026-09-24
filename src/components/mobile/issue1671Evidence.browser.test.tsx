@@ -2189,8 +2189,9 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  *
  * Frames go to `$LLV_TELEGRAM_BOT_OUT` (default `.artifacts/telegram-bot`),
  * readings to `evidence/telegram-bot/panel.json`. A case fails on horizontal
- * overflow, a control cut by the panel's edge, two text boxes overlapping, or
- * a phone target under 44 px.
+ * overflow, a control cut by the panel's edge, two text boxes overlapping, a
+ * phone target under 44 px, or, on the phone, a sheet narrower than the screen
+ * or with no scrim behind it.
  */
 const BOT_OUT = path.resolve(process.env.LLV_TELEGRAM_BOT_OUT ?? ".artifacts/telegram-bot");
 const BOT_EVIDENCE = path.resolve("evidence/telegram-bot");
@@ -2204,6 +2205,12 @@ async function readTelegramPanel(page: Page, phone: boolean) {
     const failures: string[] = [];
     if (dialog.scrollWidth > dialog.clientWidth + 1) failures.push(`horizontal overflow ${dialog.scrollWidth} > ${dialog.clientWidth}`);
     if (box.left < -0.5 || box.right > window.innerWidth + 0.5) failures.push(`panel leaves the viewport: ${box.left}..${box.right}`);
+    /* On the phone the sheet spans the screen over a dimming scrim, so none
+       of the Accounts list shows beside it. */
+    const scrim = document.querySelector<HTMLElement>("[data-telegram-scrim]");
+    const scrimColor = scrim ? getComputedStyle(scrim).backgroundColor : null;
+    if (isPhone && (box.left > 0.5 || box.right < window.innerWidth - 0.5)) failures.push(`the sheet leaves the screen's sides uncovered: ${box.left}..${box.right} of ${window.innerWidth}`);
+    if (isPhone && (!scrimColor || scrimColor === "rgba(0, 0, 0, 0)" || scrimColor === "transparent")) failures.push(`no scrim behind the sheet (${scrimColor})`);
     const controls = [...dialog.querySelectorAll<HTMLElement>("button, input, summary")]
       .filter((element) => element.getClientRects().length > 0 && !(element.closest("details:not([open])") && !element.closest("summary")));
     for (const control of controls) {
@@ -2220,10 +2227,26 @@ async function readTelegramPanel(page: Page, phone: boolean) {
     };
     const leaves = [...dialog.querySelectorAll<HTMLElement>("span, p, label, h3, h4, summary, li")]
       .filter((element) => element.childElementCount === 0 && (element.textContent ?? "").trim() !== "" && element.getClientRects().length > 0 && !hidden(element));
+    /* A range's rects run past an ellipsis and out of a clipped box
+       (a truncated title, an sr-only line); the part a box with overflow
+       other than visible cuts off is not ink. */
+    const clipOf = (element: HTMLElement) => {
+      let clip = { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
+      for (let node: HTMLElement | null = element; node && node !== dialog; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+        const r = node.getBoundingClientRect();
+        clip = { left: Math.max(clip.left, r.left), top: Math.max(clip.top, r.top), right: Math.min(clip.right, r.right), bottom: Math.min(clip.bottom, r.bottom) };
+      }
+      return clip;
+    };
     const inkOf = (element: HTMLElement) => {
       const range = document.createRange();
       range.selectNodeContents(element);
-      return [...range.getClientRects()];
+      const clip = clipOf(element);
+      return [...range.getClientRects()]
+        .map((r) => ({ left: Math.max(r.left, clip.left), top: Math.max(r.top, clip.top), right: Math.min(r.right, clip.right), bottom: Math.min(r.bottom, clip.bottom) }))
+        .filter((r) => r.right - r.left > 1 && r.bottom - r.top > 1);
     };
     const inks = leaves.map((element) => ({ element, rects: inkOf(element) }));
     let overlaps = 0;
@@ -2240,6 +2263,8 @@ async function readTelegramPanel(page: Page, phone: boolean) {
     }
     return {
       panel: { left: box.left, top: box.top, width: box.width, height: box.height, scrollHeight: dialog.scrollHeight },
+      scrim: scrimColor,
+      botSectionHeight: dialog.querySelector('section[aria-label="Bot"]')?.getBoundingClientRect().height ?? null,
       controls: controls.length,
       textLeaves: leaves.length,
       overlaps,
@@ -2314,6 +2339,73 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
   fs.writeFileSync(path.join(BOT_EVIDENCE, "panel.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * The chat row's posting switch: one tap allows a chat with no alias under
+ * the one its title suggests; an alias typed into a chat that suggests none
+ * rides with the tap on the switch; and a rename of an allowed chat followed
+ * by switching it off is one save. The field's blur between them used to
+ * save first, disable the switch, and swallow the tap. Each case must end on
+ * the switch's new state after exactly one POST, by touch on the phone and by
+ * mouse on the desktop:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "telegram bot switch"
+ */
+browserTest("telegram bot switch: one tap allows a chat, and a typed alias rides with the tap", async () => {
+  fs.mkdirSync(BOT_OUT, { recursive: true });
+  fs.mkdirSync(BOT_EVIDENCE, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const surfaces = [
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
+    { name: "desktop-1440", viewport: { width: 1_440, height: 900 }, phone: false },
+  ];
+  const steps = [
+    { scene: "typed", title: "Реліз", fill: "release", expect: { chatId: "-1000000000505", alias: "release", postAllowed: true } },
+    { scene: "chats", title: "Person A", fill: null, expect: { chatId: "700000303", alias: "person-a", postAllowed: true } },
+    { scene: "chats", title: "Team Reports", fill: "team-weekly", expect: { chatId: "-1000000000101", alias: "team-weekly", postAllowed: false } },
+  ] as const;
+  try {
+    for (const surface of surfaces) {
+      for (const step of steps) {
+        const key = `${surface.name}-${step.scene}-${step.expect.alias}`;
+        const context = await browser.newContext({ viewport: surface.viewport, colorScheme: "light", deviceScaleFactor: 2, ...(surface.phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          const page = await context.newPage();
+          await page.goto(`${base}/?bot=${step.scene}`);
+          await openTelegramPanel(page, surface.phone);
+          const field = page.locator(`input[aria-label="Alias agents use: ${step.title}"]`);
+          const toggle = page.locator(`[role="switch"][aria-label="Agents may post: ${step.title}"]`);
+          if (step.fill !== null) await field.fill(step.fill);
+          if (surface.phone) await toggle.tap();
+          else await toggle.click();
+          const wanted = String(step.expect.postAllowed);
+          await page.waitForFunction(({ title, value }) => document.querySelector(`[role="switch"][aria-label="Agents may post: ${title}"]`)?.getAttribute("aria-checked") === value, { title: step.title, value: wanted }, { timeout: 5_000 })
+            .catch(() => failures.push(`${key}: the switch did not end ${wanted}`));
+          await pause(page, 300);
+          const posts = await page.evaluate(() => structuredClone((window as unknown as { evidence: { botPosts: Array<Record<string, unknown>> } }).evidence.botPosts));
+          const checked = await toggle.getAttribute("aria-checked");
+          const expected = { action: "chat", ...step.expect };
+          if (posts.length !== 1 || JSON.stringify(posts[0]) !== JSON.stringify(expected)) {
+            failures.push(`${key}: expected exactly one POST ${JSON.stringify(expected)}, saw ${JSON.stringify(posts)}`);
+          }
+          await page.screenshot({ path: path.join(BOT_OUT, `${key}-after-tap.png`) });
+          results.push({ key, surface: surface.name, scene: step.scene, title: step.title, filled: step.fill, checked, posts });
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(BOT_EVIDENCE, "switch.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
 
 /*
  * docs/design/needs-attention.md — why a phone card needs the operator, its

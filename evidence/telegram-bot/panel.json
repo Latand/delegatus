@@ -10,12 +10,14 @@
       "scene": "none",
       "top": {
         "panel": {
-          "left": 35,
-          "top": 392.5,
-          "width": 320,
-          "height": 439.5,
+          "left": 0,
+          "top": 405.5,
+          "width": 390,
+          "height": 438.5,
           "scrollHeight": 438
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 217.125,
         "controls": 5,
         "textLeaves": 9,
         "overlaps": 0,
@@ -23,12 +25,14 @@
       },
       "end": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 594
+          "left": 0,
+          "top": 278,
+          "width": 390,
+          "height": 566,
+          "scrollHeight": 565
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 344.625,
         "controls": 5,
         "textLeaves": 12,
         "overlaps": 0,
@@ -45,27 +49,31 @@
       "scene": "chats",
       "top": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1100
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 743
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 522.375,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1311
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 943
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 722.3125,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -80,27 +88,31 @@
       "scene": "webhook",
       "top": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1114
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 765
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 544.8125,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1326
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 965
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 744.75,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -115,12 +127,14 @@
       "scene": "none",
       "top": {
         "panel": {
-          "left": 35,
-          "top": 392.5,
-          "width": 320,
-          "height": 439.5,
+          "left": 0,
+          "top": 405.5,
+          "width": 390,
+          "height": 438.5,
           "scrollHeight": 438
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 217.125,
         "controls": 5,
         "textLeaves": 9,
         "overlaps": 0,
@@ -128,12 +142,14 @@
       },
       "end": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 594
+          "left": 0,
+          "top": 278,
+          "width": 390,
+          "height": 566,
+          "scrollHeight": 565
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 344.625,
         "controls": 5,
         "textLeaves": 12,
         "overlaps": 0,
@@ -150,27 +166,31 @@
       "scene": "chats",
       "top": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1100
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 743
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 522.375,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1311
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 943
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 722.3125,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -185,27 +205,31 @@
       "scene": "webhook",
       "top": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1114
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 765
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 544.8125,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
-          "left": 35,
-          "top": 272,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1326
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 965
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 744.75,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -220,12 +244,14 @@
       "scene": "none",
       "top": {
         "panel": {
-          "left": 55,
-          "top": 480.5,
-          "width": 320,
-          "height": 439.5,
+          "left": 0,
+          "top": 493.5,
+          "width": 430,
+          "height": 438.5,
           "scrollHeight": 438
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 217.125,
         "controls": 5,
         "textLeaves": 9,
         "overlaps": 0,
@@ -233,12 +259,14 @@
       },
       "end": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 594
+          "left": 0,
+          "top": 380.4375,
+          "width": 430,
+          "height": 551.5625,
+          "scrollHeight": 551
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 330.1875,
         "controls": 5,
         "textLeaves": 12,
         "overlaps": 0,
@@ -255,27 +283,31 @@
       "scene": "chats",
       "top": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1100
+          "left": 0,
+          "top": 201.3125,
+          "width": 430,
+          "height": 730.6875,
+          "scrollHeight": 730
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 509.3125,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1311
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 915
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 694.8125,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -290,27 +322,31 @@
       "scene": "webhook",
       "top": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1114
+          "left": 0,
+          "top": 178.875,
+          "width": 430,
+          "height": 753.125,
+          "scrollHeight": 752
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 531.75,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1326
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 938
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 717.25,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -325,12 +361,14 @@
       "scene": "none",
       "top": {
         "panel": {
-          "left": 55,
-          "top": 480.5,
-          "width": 320,
-          "height": 439.5,
+          "left": 0,
+          "top": 493.5,
+          "width": 430,
+          "height": 438.5,
           "scrollHeight": 438
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 217.125,
         "controls": 5,
         "textLeaves": 9,
         "overlaps": 0,
@@ -338,12 +376,14 @@
       },
       "end": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 594
+          "left": 0,
+          "top": 380.4375,
+          "width": 430,
+          "height": 551.5625,
+          "scrollHeight": 551
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 330.1875,
         "controls": 5,
         "textLeaves": 12,
         "overlaps": 0,
@@ -360,27 +400,31 @@
       "scene": "chats",
       "top": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1100
+          "left": 0,
+          "top": 201.3125,
+          "width": 430,
+          "height": 730.6875,
+          "scrollHeight": 730
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 509.3125,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1311
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 915
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 694.8125,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -395,27 +439,31 @@
       "scene": "webhook",
       "top": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1114
+          "left": 0,
+          "top": 178.875,
+          "width": 430,
+          "height": 753.125,
+          "scrollHeight": 752
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 531.75,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
-          "left": 55,
-          "top": 360,
-          "width": 320,
-          "height": 560,
-          "scrollHeight": 1326
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 938
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 717.25,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -436,6 +484,8 @@
           "height": 361.5,
           "scrollHeight": 360
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 177.125,
         "controls": 5,
         "textLeaves": 9,
         "overlaps": 0,
@@ -449,6 +499,8 @@
           "height": 517.875,
           "scrollHeight": 516
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 333.5,
         "controls": 5,
         "textLeaves": 12,
         "overlaps": 0,
@@ -469,10 +521,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 930
+          "scrollHeight": 597
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 414.375,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
@@ -482,10 +536,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 1141
+          "scrollHeight": 824
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 641.625,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -504,10 +560,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 944
+          "scrollHeight": 634
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 451.25,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
@@ -517,10 +575,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 1156
+          "scrollHeight": 861
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 678.5,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -541,6 +601,8 @@
           "height": 361.5,
           "scrollHeight": 360
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 177.125,
         "controls": 5,
         "textLeaves": 9,
         "overlaps": 0,
@@ -554,6 +616,8 @@
           "height": 517.875,
           "scrollHeight": 516
         },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 333.5,
         "controls": 5,
         "textLeaves": 12,
         "overlaps": 0,
@@ -574,10 +638,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 930
+          "scrollHeight": 597
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 414.375,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
@@ -587,10 +653,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 1141
+          "scrollHeight": 824
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 641.625,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }
@@ -609,10 +677,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 944
+          "scrollHeight": 634
         },
-        "controls": 12,
-        "textLeaves": 31,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 451.25,
+        "controls": 10,
+        "textLeaves": 25,
         "overlaps": 0,
         "failures": []
       },
@@ -622,10 +692,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 1156
+          "scrollHeight": 861
         },
-        "controls": 12,
-        "textLeaves": 37,
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 678.5,
+        "controls": 10,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }

@@ -544,6 +544,8 @@ async function dispatchViewerControl(
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
+      ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
+      ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
     });
   }
   return result;
@@ -3191,6 +3193,20 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
  * choosing where to launch no longer reads three HTTP routes for it. A read of
  * the durable observations only; it never asks a provider.
  */
+function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+  const engine = text(args.engine);
+  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
+  const accountId = text(args.accountId);
+  const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
+  const accounts = accountLimitRows({
+    ...source,
+    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" } : {}),
+    ...(accountId ? { accountId } : {}),
+  });
+  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
+  return redactPayload({ count: accounts.length, accounts });
+}
+
 /*
  * The Telegram bot account (docs/design/telegram-bot-account.md, Decision 6).
  * The Viewer is the only process that holds the bot token, so all three tools
@@ -3224,33 +3240,21 @@ async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependen
     ...(args.silent === true ? { silent: true } : {}),
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     /* The route's refusal names its code; which codes a new key may retry is
-       the bot's own vocabulary, and Telegram's wait rides in the sentence. */
+       the bot's own vocabulary. Telegram's wait and the ids a partial send
+       posted ride along as fields. */
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
-      const wait = /retry after (\d+) s/.exec(error.message);
+      const { retryAfterSeconds, sentMessageIds } = error.details;
       throw new McpToolRefusal(error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
-        ...(wait ? { retryAfterSeconds: Number(wait[1]) } : {}),
+        ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+        ...(Array.isArray(sentMessageIds) ? { sentMessageIds } : {}),
       });
     }
     throw error;
   });
   return redactPayload(result);
-}
-
-function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  const engine = text(args.engine);
-  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
-  const accountId = text(args.accountId);
-  const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
-  const accounts = accountLimitRows({
-    ...source,
-    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" } : {}),
-    ...(accountId ? { accountId } : {}),
-  });
-  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
-  return redactPayload({ count: accounts.length, accounts });
 }
 
 /** create_orchestrator: atomically create, designate and deliver the ONE

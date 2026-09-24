@@ -2823,6 +2823,12 @@ export function createMcpToolService(
           const taskCode = (typedTool === "create_task" || typedTool === "update_task")
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
             && error.details.code.startsWith("TASK_") ? error.details.code : null;
+          /* A Telegram bot refusal answers with the bot's own code and its own
+             retryable: a generic retryable tool_failed after send_uncertain
+             would invite the double post the bot refuses to risk. */
+          const botRefusal = typedTool === "telegram_bot_send" && error instanceof McpToolRefusal
+            && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
+            ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an
           // uncertain dispatch as unknown. Cache that answer under the original
@@ -2837,9 +2843,9 @@ export function createMcpToolService(
             : failure(
             typedTool,
             requestId,
-            taskCode ?? "tool_failed",
+            taskCode ?? botRefusal?.code ?? "tool_failed",
             error instanceof Error ? error.message : String(error),
-            taskCode === null,
+            botRefusal ? botRefusal.retryable : taskCode === null,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
@@ -3044,7 +3050,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Post a message through the operator's Telegram bot into a chat the operator allowlisted — for example a report into a team group. `chat` is the alias (or chat id) from telegram_bot_chats.",
     "`format` is plain (default) or html (Telegram's HTML subset: b, i, u, s, code, pre, a, blockquote, tg-spoiler). Plain text over 4096 characters is split into up to 4 messages; html over 4096 is refused. `replyToMessageId` replies to a message in that chat, `topicId` posts into a forum topic, `silent` sends without a notification.",
     "The post is attributed in Delegatus to your conversation, resolved server-side. A chat outside the allowlist is refused before anything is sent (chat_not_allowed, bot_not_in_chat, chat_unknown, bot_not_connected); Telegram's own refusals come back as forbidden (blocked, removed, or a user who never wrote to the bot), format_invalid, or rate_limited with retryAfterSeconds.",
-    "Idempotent by clientRequestId: a repeat answers the first post's message ids; a repeat of a send that never finished answers send_uncertain instead of posting twice.",
+    "A refusal answers ok:false with the bot's code as `code` and `retryable` saying whether a retry under a NEW clientRequestId may help (true only for rate_limited, network_failed, timed_out, telegram_failed); send_partial adds `details.sentMessageIds`.",
+    "Idempotent by clientRequestId: a repeat answers the first post's message ids; a repeat of a send that never finished, or one whose connection was cut or timed out, answers send_uncertain (not retryable) instead of posting twice.",
   ].join(" "),
   telegram_bot_messages: [
     "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
