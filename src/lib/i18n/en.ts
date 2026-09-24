@@ -3590,6 +3590,7 @@ export const en = {
   "workLinks.more": "+{count}",
   "workLinks.moreAria": "{count} more links",
   "workLinks.attach": "Attach PR or issue…",
+  "workLinks.attachPipeline": "Attach PR or issue to the pipeline…",
   "workLinks.attachButton": "Attach",
   "workLinks.placeholder": "#2059 or URL",
   "workLinks.inputAria": "Pull request or issue to attach",

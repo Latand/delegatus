@@ -278,7 +278,7 @@ test("the lane row's head opens Stages; the pipeline actions are a group in the 
   const start = labels.findIndex(([label]) => label === "Expand stages");
   expect(labels.slice(start, start + 6)).toEqual([
     ["Expand stages", false, null],
-    ["Attach PR or issue…", false, null],
+    ["Attach PR or issue to the pipeline…", false, null],
     ["Pause", false, "The pipeline does not advance until you resume it."],
     ["Retry a stage", true, "Only while the pipeline waits on a stage for a decision"],
     ["Skip a stage", true, "Only while the pipeline waits on a stage for a decision"],

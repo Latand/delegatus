@@ -879,9 +879,10 @@
   .kb .card:hover .tools .icon-btn.hide, .kb .card:focus-within .tools .icon-btn.hide { opacity: 1; }
   /* A still board is a column of titles, not a grid of icons: the fold and ⋯
      controls stay in place, quiet, and come up to full strength when the card
-     is hovered or holds focus. */
-  .kb .card .tools .icon-btn:not(.hide) { opacity: 0.35; transition: opacity var(--motion-fast); }
-  .kb .card:hover .tools .icon-btn:not(.hide), .kb .card:focus-within .tools .icon-btn:not(.hide) { opacity: 1; }
+     is hovered or holds focus. The seat lock is a mark, not a control, and
+     keeps its strength. */
+  .kb .card .tools .icon-btn:not(.hide):not(.lock) { opacity: 0.35; transition: opacity var(--motion-fast); }
+  .kb .card:hover .tools .icon-btn:not(.hide):not(.lock), .kb .card:focus-within .tools .icon-btn:not(.hide):not(.lock) { opacity: 1; }
 }
 .kb .card .editor { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
 .kb .card .edit { width: 100%; border: 1px solid var(--color-accent); border-radius: 6px; padding: 1px 4px; margin-left: -4px; background: var(--surface-card); color: var(--color-primary); resize: none; line-height: 18px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent); }

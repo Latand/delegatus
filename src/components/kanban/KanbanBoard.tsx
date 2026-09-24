@@ -1157,7 +1157,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     /* One ⋯ per card: each lane's actions are a group here, headed by the
        lane's title when the card holds more than one. */
     const laneGroups = card.pipelines.flatMap((entry): KanbanMenuItem[] => {
-      const lane = pipelineMenu({ kind: "pipeline", cardId: card.id, pipelineId: entry.pipeline.id });
+      const lane = pipelineMenu({ kind: "pipeline", cardId: card.id, pipelineId: entry.pipeline.id }, true);
       if (!lane) return [];
       const head = card.pipelines.length > 1 ? pipelineTitle(t, entry.pipeline) : t("kanban.pipelineAct.menu");
       return [{ type: "sep" }, { type: "head", label: head }, ...lane.items.filter((entryItem) => entryItem.type !== "head")];
@@ -1197,11 +1197,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
     },
   });
   /* #2059: the attach form opens where the menu was, over the same anchor. */
-  const linksItem = (target: WorkLinkTarget): KanbanMenuItem => {
+  const linksItem = (target: WorkLinkTarget, label = t("workLinks.attach")): KanbanMenuItem => {
     const anchor = menu.open?.anchor;
     return {
       type: "item",
-      label: t("workLinks.attach"),
+      label,
       keepFocus: true,
       disabled: !anchor,
       onSelect: () => { if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "links", target } })); },
@@ -1211,6 +1211,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const refusalWhy = (option: PipelineActionOption): string | null => (option.refusal ? t(`kanban.pipelineAct.refusal.${option.refusal}`) : null);
   const pipelineMenu = (
     value: { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" },
+    inCardMenu = false,
   ): { label: string; items: KanbanMenuItem[] } | null => {
     const card = cardsById.get(value.cardId) ?? cards.find((candidate) => candidate.pipelines.some((entry) => entry.pipeline.id === value.pipelineId));
     const summary = card?.pipelines.find((entry) => entry.pipeline.id === value.pipelineId);
@@ -1277,7 +1278,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       items: [
         { type: "head", label: t("kanban.pipelineAct.menu") },
         { type: "item", label: t("kanban.stages.expandTitle"), keepFocus: true, onSelect: () => openSheet(card.id, pipeline) },
-        linksItem({ kind: "pipeline", id: pipeline.id }),
+        /* In the card's ⋯ the task's own Attach sits a few rows up, so the lane's names what it attaches to. */
+        linksItem({ kind: "pipeline", id: pipeline.id }, inCardMenu ? t("workLinks.attachPipeline") : undefined),
         item(pauseOrResume, t(`kanban.pipelineAct.label.${pauseOrResume.action}`, { title, stage: "" }), pauseOrResume.action === "pause" ? t("kanban.pipelineAct.pauseWhy") : null),
         item(retry, decision ? t("kanban.pipelineAct.retryStage", { stage: decision }) : t("kanban.pipelineAct.retryAny"), t("kanban.pipelineAct.retryWhy")),
         item(skip, decision ? t("kanban.pipelineAct.skipStage", { stage: decision }) : t("kanban.pipelineAct.skipAny"), t("kanban.pipelineAct.skipWhy")),

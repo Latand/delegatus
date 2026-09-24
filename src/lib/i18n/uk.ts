@@ -3489,6 +3489,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "workLinks.more": "+{count}",
   "workLinks.moreAria": "Ще посилань: {count}",
   "workLinks.attach": "Прикріпити PR або issue…",
+  "workLinks.attachPipeline": "Прикріпити PR або issue до конвеєра…",
   "workLinks.attachButton": "Прикріпити",
   "workLinks.placeholder": "#2059 або URL",
   "workLinks.inputAria": "Pull request або issue для прикріплення",
