@@ -491,9 +491,33 @@ test("buildSubagentTrays reads its clock in epoch seconds, the unit `mtime` and 
   expect(tray.hottest).toBe("running");
 });
 
-test("buildSubagentTrays promotes a stalled live child inside the attention TTL (seconds, not milliseconds)", () => {
+test("buildSubagentTrays promotes a child whose ask is inside its TTL (seconds, not milliseconds)", () => {
   /* Feeding this clock milliseconds put every child hours past the attention
-     TTL, so an interrupted agent could never surface out of the tray. */
+     TTL, so an agent waiting on the operator could never surface out of the
+     tray. */
+  const now = 1_800_000_000;
+  const parent = entry({ path: "/parent", conversationId: "parent", activity: "live" });
+  const asking = child({
+    path: "/asking",
+    conversationId: "asking",
+    parentId: "parent",
+    parent: parent.path,
+    activity: "live",
+    proc: "running",
+    mtime: now - 600,
+    bridgeAsk: { id: "ask-1", at: new Date((now - 600) * 1000).toISOString() },
+  });
+  const projection = buildSubagentTrays(baseInput([parent, asking], ["parent"], {
+    foldedEngineChildIds: new Set(["asking"]),
+    now: epochSeconds(now),
+  }));
+  expect(projection.promotedPaths).toEqual(new Set(["/asking"]));
+  expect(projection.foldedPaths.size).toBe(0);
+});
+
+test("buildSubagentTrays keeps a stalled live child folded: a quiet turn asks nothing", () => {
+  /* docs/design/needs-attention.md §3, reason 7: the promotion follows the
+     reason model, and a stall is no longer a reason. */
   const now = 1_800_000_000;
   const parent = entry({ path: "/parent", conversationId: "parent", activity: "live" });
   const stalled = child({
@@ -509,6 +533,5 @@ test("buildSubagentTrays promotes a stalled live child inside the attention TTL 
     foldedEngineChildIds: new Set(["stalled"]),
     now: epochSeconds(now),
   }));
-  expect(projection.promotedPaths).toEqual(new Set(["/stalled"]));
-  expect(projection.foldedPaths.size).toBe(0);
+  expect(projection.promotedPaths.size).toBe(0);
 });

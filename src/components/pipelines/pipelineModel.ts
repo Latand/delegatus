@@ -140,7 +140,10 @@ export function pipelineStateLabel(t: TFunction, state: PipelineState): string {
 }
 
 export const PIPELINE_BUSY_STATES: ReadonlySet<PipelineState> = new Set(["provisioning", "running"]);
-export const PIPELINE_ATTENTION_STATES: ReadonlySet<PipelineState> = new Set(["needs_decision", "needs_review", "paused"]);
+/** A lane that asks the operator for something. A paused lane is not one:
+    someone paused it on purpose, and nothing is asked
+    (docs/design/needs-attention.md §3, reason 10). */
+export const PIPELINE_ATTENTION_STATES: ReadonlySet<PipelineState> = new Set(["needs_decision", "needs_review"]);
 
 /** The line a needs_review lane carries on every card (#1938): the last
     verdict, the head it judged, and the current head nobody reviewed. */
@@ -165,11 +168,6 @@ export function pipelineReviewHeads(t: TFunction, source: Pick<Pipeline, "review
 export function pipelineCursorActive(pipeline: Pipeline): boolean {
   if (PIPELINE_BUSY_STATES.has(pipeline.state)) return true;
   return pipeline.state === "paused" && pipeline.pausedState !== null && PIPELINE_BUSY_STATES.has(pipeline.pausedState);
-}
-
-/** Does this pipeline still need the operator's eyes? Drives rail/project badges. */
-export function pipelineNeedsAttention(pipeline: Pipeline): boolean {
-  return pipeline.state !== "closed" && PIPELINE_ATTENTION_STATES.has(pipeline.state);
 }
 
 /* ── Stage chip state matrix (§3 of the #93 design) ─────────────────────── */

@@ -4,8 +4,11 @@ import { BRIDGE_ASK_TTL_SECONDS } from "@/lib/bridge/types";
 import { translate, type TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
-import { attentionId, buildAttentionQueue, STALLED_ATTENTION_TTL } from "../attention";
-import { decisionLine } from "./decision";
+import type { Pipeline } from "@/lib/pipelines/types";
+
+import { attentionId, attentionReason, buildAttentionQueue } from "../attention";
+import { clearedByText, decisionLine, needLabel } from "./decision";
+import type { NeedReason } from "./needReason";
 
 /*
  * The ONE decision line (issue #1167).
@@ -60,7 +63,7 @@ function question(overrides: Record<string, unknown> = {}): FileEntry["pendingQu
 }
 
 /** The line as an English surface renders it, on the queue's own clock. */
-const line = (entry: FileEntry, now: number = NOW) => decisionLine(t, "en", entry, now);
+const line = (entry: FileEntry, now: number = NOW) => decisionLine(t, entry, now);
 
 function membership(role: string): NonNullable<FileEntry["durableLineage"]>["memberships"][number] {
   return {
@@ -107,11 +110,17 @@ describe("the decision behind a wait is named, never merely announced", () => {
     expect(line(plan)).toBe("plan approval");
   });
 
-  test("a rate-limited agent says until when, and drops the clock when the engine never reported one", () => {
+  /* docs/design/needs-attention.md §3, reason 4: the wall lifts on its own
+     clock, so it is named on the row and never as a decision. */
+  test("a rate-limited agent owes the operator nothing, so the line names nothing", () => {
     const until = file({ rateLimit: { source: "account", accountId: "primary", window: "session", resetAt: Date.parse("2026-08-25T14:30:00.000Z") / 1000 } });
-    expect(line(until)).toMatch(/^rate-limited until \d\d:\d\d$/);
-    const unknown = file({ rateLimit: { source: "pane", accountId: null, window: null, resetAt: null } });
-    expect(line(unknown)).toBe("rate-limited");
+    expect(line(until)).toBeNull();
+  });
+
+  test("a message owed for half an hour is named, and not before", () => {
+    const owed = (minutes: number) => file({ stuckDelivery: { since: new Date((NOW - minutes * 60) * 1000).toISOString(), attempts: 1, state: "held" } });
+    expect(line(owed(29))).toBeNull();
+    expect(line(owed(30))).toBe("message delivery");
   });
 
   test("every terminal prompt is «permission prompt» — the screen names the options, not the decision", () => {
@@ -125,8 +134,14 @@ describe("the decision behind a wait is named, never merely announced", () => {
     }
   });
 
-  test("an interrupted agent keeps the interrupted wording", () => {
-    expect(line(file({ activity: "stalled", proc: "running" }))).toBe("interrupted or awaiting permission");
+  test("an interrupted agent is not a decision (reason 7): its row says stalled", () => {
+    expect(line(file({ activity: "stalled", proc: "running" }))).toBeNull();
+  });
+
+  test("a dismissed wait is not named", () => {
+    const asked = file({ pendingQuestion: question(), attentionDismissal: { at: "2026-08-25T10:05:00.000Z", by: { kind: "operator" } } });
+    expect(attentionReason(asked, NOW)?.dismissal).not.toBeNull();
+    expect(line(asked)).toBeNull();
   });
 
   test("a conversation carrying no signal at all names nothing", () => {
@@ -147,22 +162,11 @@ describe("only a wait the queue counts is a wait the line will name", () => {
     expect(line(abandoned)).toBeNull();
   });
 
-  test("an interrupted transcript past the stalled TTL is dead context, not a pending prompt", () => {
-    const expired = file({ activity: "stalled", proc: "running", mtime: NOW - STALLED_ATTENTION_TTL - 1 });
-    expect(attentionId(expired, NOW)).toBeNull();
-    expect(line(expired)).toBeNull();
-
-    /* The far side of the same boundary still counts, and still gets named. */
-    const fresh = file({ activity: "stalled", proc: "running", mtime: NOW - STALLED_ATTENTION_TTL + 1 });
-    expect(line(fresh)).toBe("interrupted or awaiting permission");
-  });
-
   test("every file the queue counts is a file the line can name, and no other file is", () => {
     const counted = [
       file({ pendingQuestion: question() }),
-      file({ rateLimit: { source: "pane", accountId: null, window: null, resetAt: null } }),
       file({ waitingInput: { since: NOW - 60, screenTail: "> 1. Yes", target: "llv:0.0", menu: null } }),
-      file({ activity: "stalled", proc: "running" }),
+      file({ stuckDelivery: { since: new Date((NOW - 3_600) * 1000).toISOString(), attempts: 2, state: "held" } }),
     ];
     for (const entry of counted) {
       expect(attentionId(entry, NOW)).not.toBeNull();
@@ -172,7 +176,8 @@ describe("only a wait the queue counts is a wait the line will name", () => {
     const uncounted = [
       file(),
       file({ activity: "stalled", proc: "done" }),
-      file({ activity: "stalled", proc: "running", mtime: NOW - STALLED_ATTENTION_TTL - 60 }),
+      file({ activity: "stalled", proc: "running" }),
+      file({ rateLimit: { source: "pane", accountId: null, window: null, resetAt: null } }),
     ];
     for (const entry of uncounted) {
       expect(buildAttentionQueue([entry], NOW)).toHaveLength(0);
@@ -185,7 +190,7 @@ describe("the role label rides along when the conversation's evidence names one"
   test("a durable role is appended, localized, after the decision", () => {
     const builder = file({ pendingQuestion: question(), durableLineage: lineage({ role: "builder" }) });
     expect(line(builder)).toBe("Hero frame · Builder");
-    expect(decisionLine(tUk, "uk", builder, NOW)).toBe("Hero frame · Білдер");
+    expect(decisionLine(tUk, builder, NOW)).toBe("Hero frame · Білдер");
   });
 
   test("an unknown role id still attributes the wait rather than dropping it", () => {
@@ -203,7 +208,7 @@ describe("the role label rides along when the conversation's evidence names one"
   test("a membership-only agent is attributed by its container seat", () => {
     const staged = file({ pendingQuestion: question(), durableLineage: lineage({ role: null, memberships: [membership("builder")] }) });
     expect(line(staged)).toBe("Hero frame · Builder");
-    expect(decisionLine(tUk, "uk", staged, NOW)).toBe("Hero frame · Білдер");
+    expect(decisionLine(tUk, staged, NOW)).toBe("Hero frame · Білдер");
   });
 
   test("the newest seat wins, and the conversation's own role outranks every seat", () => {
@@ -235,18 +240,19 @@ describe("the role label rides along when the conversation's evidence names one"
 });
 
 describe("the naming follows the queue's own precedence, so one wait is never two things", () => {
-  test("every signal precedence step matches attentionId's, question over rate limit over terminal over stalled", () => {
+  test("every signal precedence step matches attentionId's, question over terminal over an owed message", () => {
     const all = file({
       pendingQuestion: question(),
       rateLimit: { source: "account", accountId: "primary", window: "session", resetAt: null },
       waitingInput: { since: NOW - 60, screenTail: "> 1. Yes", target: "llv:0.0", menu: null },
+      stuckDelivery: { since: new Date((NOW - 3_600) * 1000).toISOString(), attempts: 2, state: "held" },
       activity: "stalled",
       proc: "running",
     });
     expect(line(all)).toBe("Hero frame");
-    expect(line(file({ ...all, pendingQuestion: null }))).toBe("rate-limited");
-    expect(line(file({ ...all, pendingQuestion: null, rateLimit: null }))).toBe("permission prompt");
-    expect(line(file({ ...all, pendingQuestion: null, rateLimit: null, waitingInput: null }))).toBe("interrupted or awaiting permission");
+    expect(line(file({ ...all, pendingQuestion: null }))).toBe("permission prompt");
+    expect(line(file({ ...all, pendingQuestion: null, waitingInput: null }))).toBe("message delivery");
+    expect(line(file({ ...all, pendingQuestion: null, waitingInput: null, stuckDelivery: undefined }))).toBeNull();
   });
 });
 
@@ -272,5 +278,45 @@ describe("an escalated bridge ask names the decision, and stops naming it when i
 
   test("nothing else is disturbed: a seat with no ask keeps its historical wording", () => {
     expect(line(file({ pendingQuestion: question() }))).toBe("Hero frame");
+  });
+});
+
+/* docs/design/needs-attention.md §4: one label function for the desktop foot,
+   the phone chip and a member tile's title. */
+describe("a card's reason is named in its own words", () => {
+  const lane = (state: Pipeline["state"]): Pipeline => ({
+    id: "lane-1",
+    state,
+    stages: [{ id: "review", kind: "run", effectiveRole: { roleId: "reviewer", engine: "claude", model: "opus", effort: "high", access: "read-only", promptScaffold: null } }],
+    runs: [],
+    cursor: { stageId: "review", state: "needs_decision", input: null, activatedBy: null },
+  } as unknown as Pipeline);
+  const conversationNeed = (entry: FileEntry): NeedReason => {
+    const reason = attentionReason(entry, NOW)!;
+    return { subject: "conversation", kind: reason.kind, key: reason.id, file: entry, reason, since: reason.raisedAt };
+  };
+
+  test("a conversation's reason, with its role", () => {
+    expect(needLabel(t, conversationNeed(file({ pendingQuestion: question(), durableLineage: lineage({ role: "builder" }) })))).toBe("Hero frame · Builder");
+    expect(needLabel(t, conversationNeed(file({ pendingQuestion: question({ kind: "plan" }) })))).toBe("plan approval");
+    expect(needLabel(t, conversationNeed(file({ bridgeAsk: { id: "ask-1", at: new Date((NOW - 60) * 1000).toISOString() } })))).toBe("needs a decision");
+    expect(needLabel(t, conversationNeed(file({ stuckDelivery: { since: new Date((NOW - 3_600) * 1000).toISOString(), attempts: 1, state: "held" } })))).toBe("message not delivered");
+    expect(needLabel(tUk, conversationNeed(file({ stuckDelivery: { since: new Date((NOW - 3_600) * 1000).toISOString(), attempts: 1, state: "held" } })))).toBe("повідомлення не доставлено");
+  });
+
+  test("a lane's reason names the stage it stopped on", () => {
+    const decision: NeedReason = { subject: "pipeline", kind: "lane-decision", key: "pipeline:lane-1", pipeline: lane("needs_decision"), stageId: "review", since: NOW };
+    expect(needLabel(t, decision)).toBe("needs a decision · review");
+    const review: NeedReason = { ...decision, kind: "lane-review", pipeline: lane("needs_review") };
+    expect(needLabel(t, review)).toBe("review budget spent · review");
+    expect(needLabel(t, { ...decision, stageId: null })).toBe("needs a decision");
+  });
+
+  test("who cleared a card is said in the operator's words", () => {
+    expect(clearedByText(t, { kind: "operator", surface: "phone" })).toBe("you");
+    expect(clearedByText(t, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" })).toBe("orchestrator");
+    expect(clearedByText(t, { kind: "gateway", conversationId: null, role: null })).toBe("your assistant");
+    expect(clearedByText(t, { kind: "agent", conversationId: "conversation_w", role: "builder" })).toBe("Builder");
+    expect(clearedByText(tUk, { kind: "operator" })).toBe("ви");
   });
 });

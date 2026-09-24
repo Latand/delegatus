@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import type { AttentionCallerAuthority } from "@/lib/attention/callerAuthority";
 import { answerAttentionRequest, awaitAttentionArrival, raiseAttentionRequest } from "@/lib/attention/service";
 import { readAttentionFile } from "@/lib/attention/store";
@@ -38,6 +39,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   resetPresenceForTest();
+  /* The process-wide registry is opened on the first test's state directory;
+     each test deletes its own, so the next one must reopen it. */
+  closeAgentRegistryForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -208,10 +212,7 @@ test("the record never passes through an actionable pending or offered state", a
   expect(observed).not.toContain("offered");
 });
 
-test("with no eligible active view the call fails explicitly and asks nothing durable", async () => {
-  /* Nobody at a desk: only a phone (chat-only, cannot move a board). */
-  upsertPresence(openView({ viewSessionId: "view-phone", deviceId: "device-phone", device: { kind: "mobile", browser: "safari" } }));
-
+test("with no view open at all the call fails explicitly and asks nothing durable", async () => {
   const result = await service().callTool("request_attention", ask()) as McpToolResult;
 
   expect(result.ok).toBe(false);
@@ -219,6 +220,31 @@ test("with no eligible active view the call fails explicitly and asks nothing du
   /* No record: there is no device that could ever answer it, and a durable
      pending ask would be exactly the silent state this contract removes. */
   expect(readAttentionFile().requests).toEqual([]);
+});
+
+/* docs/design/needs-attention.md §6: nobody at a desk and a phone open. The
+   phone is never moved; the request reaches it as a quiet notice, and the call
+   answers at once rather than waiting for an arrival that could only time out. */
+test("with only a phone open the request is a notice: recorded, directed nowhere, answered at once", async () => {
+  upsertPresence(openView({ viewSessionId: "view-phone", deviceId: "device-phone", device: { kind: "mobile", browser: "safari" }, mode: "mobile-focus", viewport: { width: 390, height: 844, dpr: 3 } }));
+
+  const started = Date.now();
+  const result = await service().callTool("request_attention", ask()) as HandoffResult & { delivered?: string };
+
+  expect(result.ok).toBe(true);
+  expect(result.delivered).toBe("notice");
+  expect(result.handoff).toBeNull();
+  expect(Date.now() - started).toBeLessThan(1_500);
+  const stored = readAttentionFile().requests;
+  expect(stored).toHaveLength(1);
+  expect(stored[0]).toMatchObject({ delivery: "notice", state: "pending", offeredTo: [], operationKey: requestAttentionOperationKey("handoff-1") });
+  expect(stored[0]!.directedSessionId).toBeUndefined();
+  expect(stored[0]!.acknowledgedBy).toBeUndefined();
+
+  /* A replay of the same operation answers the same notice. */
+  const again = await service().callTool("request_attention", ask()) as HandoffResult & { delivered?: string };
+  expect(again).toMatchObject({ ok: true, delivered: "notice", attentionId: result.attentionId });
+  expect(readAttentionFile().requests).toHaveLength(1);
 });
 
 test("a background device receives no competing offer; the active one is chosen", async () => {
@@ -406,7 +432,7 @@ test("a phone-width desktop window cannot win selection while a real desktop is 
   /* The narrow window interacted LAST — the tiebreak it would win if width
      did not disqualify it. Its host renders the mobile layout, which never
      mounts an executor, so directing it would move nothing. */
-  upsertPresence(openView({ viewSessionId: "narrow", deviceId: "device-narrow", viewport: { width: 700, height: 900, dpr: 2 } }), Date.now());
+  upsertPresence(openView({ viewSessionId: "narrow", deviceId: "device-narrow", viewport: { width: 600, height: 900, dpr: 2 } }), Date.now());
   const browser = browserStandIn("device-wide");
   try {
     const result = await service().callTool("request_attention", ask()) as HandoffResult;
@@ -419,10 +445,20 @@ test("a phone-width desktop window cannot win selection while a real desktop is 
   }
 });
 
-test("a phone-width desktop window alone is an explicit NO_ACTIVE_VIEW, not a handoff nothing executes", async () => {
-  upsertPresence(openView({ viewport: { width: 700, height: 900, dpr: 2 } }));
-  const result = await service().callTool("request_attention", ask()) as HandoffResult;
+test("a phone-width desktop window alone gets a notice, never a handoff nothing executes", async () => {
+  /* It draws the phone layout, so it is treated as the phone it looks like. */
+  upsertPresence(openView({ viewport: { width: 700, height: 500, dpr: 2 } }));
+  const result = await service().callTool("request_attention", ask()) as HandoffResult & { delivered?: string };
 
+  expect(result.ok).toBe(true);
+  expect(result.delivered).toBe("notice");
+  expect(readAttentionFile().requests[0]).toMatchObject({ delivery: "notice", offeredTo: [] });
+  expect(readAttentionFile().requests[0]!.directedSessionId).toBeUndefined();
+});
+
+test("a hidden phone is no view: the call is an explicit NO_ACTIVE_VIEW", async () => {
+  upsertPresence(openView({ viewSessionId: "view-phone", deviceId: "device-phone", device: { kind: "mobile", browser: "safari" }, visibility: "hidden" }));
+  const result = await service().callTool("request_attention", ask()) as HandoffResult;
   expect(result.ok).toBe(false);
   expect((result as { details?: { code?: string } }).details?.code).toBe("NO_ACTIVE_VIEW");
   expect(readAttentionFile().requests).toHaveLength(0);

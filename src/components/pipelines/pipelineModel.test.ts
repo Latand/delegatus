@@ -30,7 +30,6 @@ import {
   stageFailEdgeRoundsUsed,
   pipelineBoardStripPath,
   pipelineCursorActive,
-  pipelineNeedsAttention,
   pipelineLinkedTasks,
   replaceCompactPipelineEphemeral,
   pipelineStripByPath,
@@ -1170,11 +1169,10 @@ test("every stage-chip state carries a distinct, non-empty glyph (AC4/AC8)", () 
   expect(new Set(glyphs).size).toBe(glyphs.length);
 });
 
-test("pipelineNeedsAttention flags parked and paused while a closed pipeline clears it", () => {
-  expect(pipelineNeedsAttention(pipeline({ state: "needs_decision" }))).toBe(true);
-  expect(pipelineNeedsAttention(pipeline({ state: "paused" }))).toBe(true);
-  expect(pipelineNeedsAttention(pipeline({ state: "running" }))).toBe(false);
-  expect(pipelineNeedsAttention(pipeline({ state: "closed" }))).toBe(false);
+test("a paused lane asks nothing of the operator; a parked one does", () => {
+  expect(PIPELINE_ATTENTION_STATES.has("needs_decision")).toBe(true);
+  expect(PIPELINE_ATTENTION_STATES.has("paused")).toBe(false);
+  expect(PIPELINE_ATTENTION_STATES.has("running")).toBe(false);
 });
 
 describe("pipelineBoardStripPath (§2.2 board strip anchor)", () => {

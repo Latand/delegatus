@@ -38,6 +38,7 @@ mock.module("@/hooks/useRuntime", () => ({
 const { MobilePipelinesScreen, mobilePipelinesModel } = await import("./MobilePipelinesScreen");
 const { createPendingPipelineActs } = await import("./MobilePipelineScreen");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
+const { fakeHistory } = await import("./mobileNavTestHistory");
 const { receipts } = await import("./MobileReceipt");
 
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
@@ -63,18 +64,7 @@ beforeEach(() => { dom.document.body.replaceChildren(); roots = []; receipts.dis
 afterEach(() => { for (const root of roots) flushSync(() => root.unmount()); roots = []; receipts.dismiss(); });
 
 function nav() {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=atlas" }];
-  let index = 0;
-  return createMobileNav({
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index > 0) index -= 1; },
-    },
-    href: () => entries[index]!.url,
-    onPopstate: () => () => {},
-  });
+  return createMobileNav(fakeHistory("http://localhost/#p=atlas").host);
 }
 
 function mount(node: React.ReactNode): HTMLElement {

@@ -25,6 +25,7 @@ import { MAX_FLOW_NOTE_LENGTH, closeFlow, createFlowFromRequest, isRecoverableLe
 import { lastAssistantMessage, readFindingsFile } from "@/lib/flows/findings";
 import { loadFlows } from "@/lib/flows/store";
 import type { CreateFlowRequest, Flow, FlowEngine, RoleConfig } from "@/lib/flows/types";
+import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
@@ -73,6 +74,7 @@ import {
   MIN_STARTED_PIPELINE_STAGES,
 } from "./limits";
 import * as legacyReview from "./legacyReviewDefinition";
+import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
 import { pipelineDeliveryGuidance, renderDecisionInput, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
@@ -2181,6 +2183,10 @@ function advancePipeline(pipeline: Pipeline, stage: PipelineStage, ports: Pipeli
     pipeline.stateDetail = detail;
     pipeline.pausedState = null;
     pipeline.closedAt = ports.now();
+    /* A reap that settled while this final stage still ran never saw its host,
+       and a completed pipeline with a settled reap leaves the controller index,
+       so completion reopens it until a round has probed every attempt (#1728). */
+    if (pipeline.terminalReap?.settledAt) pipeline.terminalReap = { ...pipeline.terminalReap, rounds: 0, settledAt: null };
     return;
   }
   pipeline.cursor = {
@@ -6546,6 +6552,9 @@ export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field">
   replayed?: boolean;
   /** attach-link and detach-link (#2059): the request changed nothing. */
   unchanged?: boolean;
+  /** A dismissal that named the lane as a card drew it found it moved since:
+      nothing was stamped (docs/design/needs-attention.md §5). */
+  moved?: boolean;
 };
 
 type WorkLinkErrorCode = "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT";
@@ -7558,15 +7567,8 @@ export async function patchPipeline(
         summary: `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}`,
       });
     } else if (req.action === "dismiss" || req.action === "undismiss") {
-      /* #1671: the phone board's Hide. It only says whether the lane stands in
-         the board's queue; nothing about the lane itself moves, so no host is
-         touched and the controller is not woken. A draft is never on the board
-         and a closed lane is gone from it already, so neither has a row to
-         hide or bring back. */
-      if (pipeline.state === "draft" || pipeline.state === "closed") {
-        return { error: `a ${pipeline.state} pipeline has no board row to ${req.action === "dismiss" ? "hide" : "show"}`, status: 409 };
-      }
-      pipeline.dismissedAt = req.action === "dismiss" ? pipeline.dismissedAt ?? ports.now() : null;
+      const refused = applyPipelineDismissal(pipeline, req.action === "dismiss", dismissedByActor(actor), ports.now());
+      if (refused) return refused;
     } else if (req.action === "delete") {
       if (pipeline.closeTeardown) {
         if (pipeline.closeReport?.status !== "settled" || pipeline.closeReport.stillRunning.length || pipeline.closeReport.unconfirmed.length) {
@@ -7656,6 +7658,61 @@ export async function patchPipeline(
   /* The lock is gone: ask the sweep to read what the new links name. */
   for (const repository of linkRepositories) nudgeForgeSweep(repository);
   return patched;
+}
+
+/**
+ * Stamp or clear a lane's dismissal (#1671, docs/design/needs-attention.md §5).
+ *
+ * It only says whether the lane stands in the board's queue; nothing about the
+ * lane itself moves, so no host is touched and the controller is not woken. A
+ * dismissal stamps NOW every time, so a lane that parked again after an
+ * earlier one is cleared for the decision it waits on today, and it records
+ * who cleared it. A draft is never on the board and a closed lane is gone from
+ * it already, so neither has a row to clear or bring back. Whether the lane
+ * moved since a card drew it is the caller's check, made under this lock.
+ */
+function applyPipelineDismissal(pipeline: Pipeline, dismiss: boolean, by: DismissedBy, now: string): PipelinePatchResult | null {
+  if (pipeline.state === "draft" || pipeline.state === "closed") {
+    return { error: `a ${pipeline.state} pipeline has no board row to ${dismiss ? "hide" : "show"}`, status: 409 };
+  }
+  if (dismiss) {
+    pipeline.dismissedAt = now;
+    pipeline.dismissedBy = by;
+  } else {
+    pipeline.dismissedAt = null;
+    delete pipeline.dismissedBy;
+  }
+  return null;
+}
+
+/** The attribution a `dismiss` sent through `pipeline_action` or the pipeline
+    route carries: the operator, or the server-attributed agent. */
+function dismissedByActor(actor: PauseResumeActor | null): DismissedBy {
+  if (!actor || actor.kind === "operator") return { kind: "operator" };
+  return { kind: "agent", conversationId: actor.conversationId, role: actor.role };
+}
+
+/** The dismissal service's write (`@/lib/attention/dismissals`): the same
+    stamp as the `dismiss`/`undismiss` actions, with the attribution the
+    service derived. `drawnMovedAt` is the movement the operator's card drew
+    the lane at; a lane that moved since answers `moved` and keeps asking, so
+    a click on a stale card cannot clear a decision nobody has seen. */
+export async function setPipelineDismissal(
+  id: string,
+  dismiss: boolean,
+  by: DismissedBy,
+  ports: PipelinePorts = defaultPipelinePorts(),
+  drawnMovedAt?: number | null,
+): Promise<PipelinePatchResult> {
+  return withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
+    const pipeline = pipelines.find((item) => item.id === id);
+    if (!pipeline) return { error: "pipeline not found", status: 404 };
+    if (dismiss && laneMovedSince(pipeline, drawnMovedAt)) return { pipeline, moved: true };
+    const refused = applyPipelineDismissal(pipeline, dismiss, by, ports.now());
+    if (refused) return refused;
+    persist();
+    return { pipeline };
+  });
 }
 
 /** A run attempt whose own turn is under way, so its conversation can still

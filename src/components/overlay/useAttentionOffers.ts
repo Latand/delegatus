@@ -5,9 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { playCue } from "@/lib/audio/app";
 import type { AttentionEvent } from "@/lib/attention/machine";
 import type { DeviceAttentionView } from "@/lib/attention/service";
-import type { AttentionRequestV1, AttentionState, FocusResolutionKind, ReturnPoint } from "@/lib/attention/types";
+import type { AttentionNotice, AttentionRequestV1, AttentionState, FocusResolutionKind, ReturnPoint } from "@/lib/attention/types";
 import { MAX_ECHOED_IDS } from "@/lib/attention/targetRecords";
 import { applyPipelineSnapshot, applyTaskSnapshot, revertPipelineSnapshot } from "@/hooks/useFiles";
+import { publishNotices } from "@/components/attention/phoneNotices";
 
 /**
  * The client half of #688's ask-accept-decline-return loop.
@@ -340,8 +341,11 @@ export function useAttentionOffers({
       try {
         const response = await call(`/api/attention?records=only${echoQuery(appliedRecords.current)}`);
         if (!response.ok) return;
-        const body = await response.json() as Pick<DeviceAttentionView, "records">;
+        const body = await response.json() as Pick<DeviceAttentionView, "records"> & { notices?: AttentionNotice[] };
         noteWithdrawals(applyPushedRecords(body.records ?? null, appliedRecords.current));
+        /* The root agent's recent requests, as the phone's quiet notices
+           (docs/design/needs-attention.md §6): read, never answered. */
+        publishNotices(Array.isArray(body.notices) ? body.notices : []);
       } catch {
         /* Unreachable: the next tick asks again. */
       }

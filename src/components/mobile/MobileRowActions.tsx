@@ -1,13 +1,14 @@
 "use client";
 
-import { CircleX, EyeOff } from "lucide-react";
+import { Check, CircleX } from "lucide-react";
 
 import { X } from "@/components/icons";
+import type { DismissalSubjectRequest, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { useLocale } from "@/lib/i18n";
-import type { Pipeline } from "@/lib/pipelines/types";
+import { drawnLaneMovement } from "@/lib/pipelines/laneMovement";
 
-import { patchPipeline } from "../pipelines/pipelineModel";
-import { dismissStamp, pipelineHiddenFromBoard, type MobileBoardConversation, type MobileBoardPipelineRow } from "./mobileBoardModel";
+import { sendDismissal } from "../attention/dismissalOverlay";
+import type { MobileBoardConversation, MobileBoardPipelineRow } from "./mobileBoardModel";
 import { pendingPipelineActs, type PendingPipelineActs } from "./MobilePipelineScreen";
 import { showReceipt } from "./MobileReceipt";
 import { MobileSheet } from "./MobileSheet";
@@ -21,10 +22,13 @@ import { ROW_ACTION_TONE, type MobileRowAction } from "./MobileSwipeRow";
  * Only what the product really supports, labelled by its effect, acting on
  * the tap with a receipt that carries the inverse (README §2 rule 9):
  *
+ *   - a conversation that needs the operator: Dismiss, the needs-you
+ *     dismissal (docs/design/needs-attention.md §5). It stops flagging the
+ *     reason the row drew until something newer asks; Undo brings it back.
  *   - a conversation: Close card, the board's own close. It hides the card;
  *     the agent keeps running and the transcript stays. Reopen undoes it.
- *   - a pipeline waiting on a decision: Hide, the reversible `dismiss`. The
- *     lane is untouched; Restore runs `undismiss`. And Close lane, the
+ *   - a pipeline waiting on a decision: Dismiss, the same dismissal, which
+ *     leaves the lane untouched; Undo brings it back. And Close lane, the
  *     engine's `close`, held for the receipt's window exactly as the pipeline
  *     screen holds it, because the engine has no way back from it: Restore
  *     cancels it before anything is sent.
@@ -34,29 +38,29 @@ import { ROW_ACTION_TONE, type MobileRowAction } from "./MobileSwipeRow";
  */
 
 /**
- * Hide a lane for the decision it waits on now (#1671). The engine keeps the
- * instant of a lane's first Hide through every later `dismiss`, so a lane that
- * parked again after an earlier Hide would answer a second Hide with that old
- * instant and come straight back. Such a lane has its old Hide cleared first.
- * Both requests carry the hidden record, so the row stays gone between them:
- * the `undismiss` echo and the `dismiss` record apply in the same task, and no
- * frame is painted in between. A refusal of either puts the lane back and
- * returns why.
+ * Dismiss what a row needs the operator for, with the receipt's Undo
+ * (docs/design/needs-attention.md §5). The row leaves the queue on the tap;
+ * a refusal puts it back and says why. The engine stamps a lane's dismissal
+ * with the instant it is made, so a lane that parked again after an earlier
+ * one is cleared for the decision it waits on now; one that parked again
+ * after the row was drawn is not cleared at all, and the row says so.
  */
-async function hidePipeline(pipeline: Pipeline): Promise<string | null> {
-  const hidden = { ...pipeline, dismissedAt: dismissStamp(pipeline) };
-  if (pipeline.dismissedAt && !pipelineHiddenFromBoard(pipeline)) {
-    const fail = await patchPipeline(pipeline.id, "undismiss", undefined, hidden);
-    if (fail) return fail;
-  }
-  return patchPipeline(pipeline.id, "dismiss", undefined, hidden);
+function dismissRow(subject: DismissalSubjectRequest, text: string, failed: (error: string) => string, changed: string): void {
+  const target: DismissalTarget = subject;
+  showReceipt(text, { kind: "undo", run: () => void sendDismissal(target, [subject], { undo: true, surface: "phone" }) });
+  void sendDismissal(target, [subject], { surface: "phone" }).then((result) => {
+    if (!result.ok) showReceipt(failed(result.error), null, { error: true });
+    else if (result.outcome.changed?.length) showReceipt(changed, null);
+  });
 }
 
 /** What an action needs of its row: a conversation's path and title, or a
     lane and its task. A board row carries both, and so does a row of the
-    phone's columns (#2072 slice 4) that no task owns. */
+    phone's columns (#2072 slice 4) that no task owns. A conversation that
+    needs the operator also names the reason it drew, which is what its
+    Dismiss clears. */
 export type MobileRowActionTarget =
-  | { kind: "conversation"; row: Pick<MobileBoardConversation, "path" | "title"> }
+  | { kind: "conversation"; row: Pick<MobileBoardConversation, "path" | "title"> & { conversationId?: string | null; reasonId?: string | null } }
   | { kind: "pipeline"; row: Pick<MobileBoardPipelineRow, "pipeline" | "task"> };
 
 export interface MobileBoardRowActionPorts {
@@ -72,8 +76,17 @@ export function useMobileBoardRowActions({ closeCard, reopenCard, acts = pending
   const { t } = useLocale();
   return (ref: MobileRowActionTarget): MobileRowAction[] => {
     if (ref.kind === "conversation") {
-      const { path, title } = ref.row;
-      return [{
+      const { path, title, conversationId, reasonId } = ref.row;
+      const subject: DismissalSubjectRequest = { kind: "conversation", ...(conversationId ? { conversationId } : {}), path, reasonId: reasonId ?? null };
+      return [...(reasonId ? [{
+        key: "dismiss",
+        label: t("needs.dismiss"),
+        name: t("needs.dismiss"),
+        hint: t("needs.dismissRowHint"),
+        icon: <Check className="h-4 w-4" aria-hidden />,
+        tone: "accent" as const,
+        run: () => dismissRow(subject, t("needs.dismissedReceipt", { title }), (error) => t("needs.dismissFailed", { title, error }), t("needs.changedReceipt", { title })),
+      }] : []), {
         key: "close",
         label: t("mobile2.board.swipeClose"),
         name: t("mobile2.chat.menuClose"),
@@ -89,24 +102,15 @@ export function useMobileBoardRowActions({ closeCard, reopenCard, acts = pending
     const { pipeline, task } = ref.row;
     return [
       {
-        key: "hide",
-        label: t("mobile2.board.swipeHide"),
-        name: t("mobile2.board.hidePipeline"),
-        hint: t("mobile2.board.hidePipelineHint"),
-        icon: <EyeOff className="h-4 w-4" aria-hidden />,
+        key: "dismiss",
+        label: t("needs.dismiss"),
+        name: t("needs.dismiss"),
+        hint: t("needs.dismissRowHint"),
+        icon: <Check className="h-4 w-4" aria-hidden />,
         tone: "accent",
         run: () => {
-          /* The optimistic record leaves the queue before the request goes:
-             the row, the bar's badge and the queue sheet all read it. A refusal
-             puts the record back and says why. */
-          void hidePipeline(pipeline).then((fail) => { if (fail) showReceipt(fail); });
-          showReceipt(t("mobile2.board.pipelineHidden", { task }), {
-            kind: "restore",
-            run: () => {
-              void patchPipeline(pipeline.id, "undismiss", undefined, { ...pipeline, dismissedAt: null })
-                .then((fail) => { if (fail) showReceipt(fail); });
-            },
-          });
+          const subject: DismissalSubjectRequest = { kind: "pipeline", pipelineId: pipeline.id, laneMovedAt: drawnLaneMovement(pipeline) };
+          dismissRow(subject, t("needs.dismissedReceipt", { title: task }), (error) => t("needs.dismissFailed", { title: task, error }), t("needs.changedReceipt", { title: task }));
         },
       },
       {

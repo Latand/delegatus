@@ -23,3 +23,22 @@ export function laneMovedAt(pipeline: Pipeline): number {
   }
   return latest;
 }
+
+/**
+ * The movement a surface drew a lane at, as it travels with a dismissal:
+ * `laneMovedAt`, or null for a lane that never ran a round.
+ */
+export function drawnLaneMovement(pipeline: Pipeline): number | null {
+  const moved = laneMovedAt(pipeline);
+  return Number.isFinite(moved) ? moved : null;
+}
+
+/**
+ * Whether the lane moved after a surface drew it at `drawn`
+ * (docs/design/needs-attention.md §5): a dismissal from that surface would
+ * clear a decision nobody saw. A caller that did not say what it drew (an
+ * agent) clears the lane as it stands, so `undefined` never counts as moved.
+ */
+export function laneMovedSince(pipeline: Pipeline, drawn: number | null | undefined): boolean {
+  return drawn !== undefined && laneMovedAt(pipeline) > (drawn ?? Number.NEGATIVE_INFINITY);
+}

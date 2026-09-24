@@ -75,6 +75,10 @@ export function bannerKind(enabled: boolean, connection: ConnectionState, hasArr
     it owns (the project switcher, the attention queue). */
 export interface MobileShellHost {
   attentionCount: number;
+  /** An agent's request_attention the operator has not seen yet: the ⚠ badge
+      carries an accent dot, and shows the dot alone when nothing else needs
+      the operator (docs/design/needs-attention.md §6). Nothing moves. */
+  noticeDot?: boolean;
   /** The arrival banner for the slot, or null. Runtime states outrank it. */
   arrival: ReactNode;
   /** The sheet for a name the host owns; null for one it does not. */
@@ -227,7 +231,9 @@ export function MobileShell({
   const claim = useCallback((next: boolean) => setClaimed(next), []);
   const effectiveHost = host ?? outer?.host ?? null;
   const close = () => nav.closeSheet();
-  const attention = (effectiveHost?.attentionCount ?? 0) > 0;
+  const attentionCount = effectiveHost?.attentionCount ?? 0;
+  const noticeDot = effectiveHost?.noticeDot === true;
+  const attention = attentionCount > 0 || noticeDot;
   const showSearch = Boolean(onOpenSearch);
   const sheet = !claimed && state.sheet
     ? (renderSheet?.(state.sheet, close) ?? outer?.renderSheet?.(state.sheet, close) ?? effectiveHost?.renderSheet(state.sheet, close) ?? null)
@@ -285,17 +291,23 @@ export function MobileShell({
             <button
               type="button"
               data-mobile2-open="attention"
-              data-mobile2-attention-count={effectiveHost?.attentionCount}
-              aria-label={t("mobile2.bar.attention", { count: effectiveHost?.attentionCount ?? 0 })}
+              data-mobile2-attention-count={attentionCount}
+              data-mobile2-notice={noticeDot ? "" : undefined}
+              aria-label={[attentionCount ? t("mobile2.bar.attention", { count: attentionCount }) : null, noticeDot ? t("notices.dot") : null].filter(Boolean).join(", ")}
               aria-haspopup="dialog"
               aria-expanded={state.sheet === "attention"}
-              className="flex h-11 shrink-0 items-center px-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="flex h-11 min-w-11 shrink-0 items-center justify-center px-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               onClick={() => nav.openSheet("attention")}
             >
-              <span className="inline-flex h-7 items-center gap-1 rounded-full border border-warning/45 bg-warning-soft px-2.5 text-ui font-bold tabular-nums text-warning">
-                <TriangleAlert className="h-[13px] w-[13px]" aria-hidden />
-                {effectiveHost?.attentionCount}
-              </span>
+              {attentionCount ? (
+                <span className="relative inline-flex h-7 items-center gap-1 rounded-full border border-warning/45 bg-warning-soft px-2.5 text-ui font-bold tabular-nums text-warning">
+                  <TriangleAlert className="h-[13px] w-[13px]" aria-hidden />
+                  {attentionCount}
+                  {noticeDot ? <span data-mobile2-notice-dot aria-hidden className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent ring-2 ring-canvas" /> : null}
+                </span>
+              ) : (
+                <span data-mobile2-notice-dot aria-hidden className="h-2.5 w-2.5 rounded-full bg-accent" />
+              )}
             </button>
           ) : null}
           {showSearch ? (

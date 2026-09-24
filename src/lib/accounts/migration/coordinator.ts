@@ -22,6 +22,7 @@ import {
   transferBoardPathPlacements as transferDurableBoardPathPlacements,
 } from "@/lib/board/store";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
+import { tryConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { procBackend } from "@/lib/proc";
 import { listFiles } from "@/lib/scanner";
 import { recordTranscriptComposerRelease, transcriptTurnResult, type TranscriptTurnResult } from "@/lib/scanner/activity";
@@ -32,6 +33,7 @@ import { durableSemanticTitle } from "@/lib/title";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { isStructuredDeliveryControllerUnavailable } from "@/lib/runtime/structuredDeliveryController";
 
+import { requestAccountMigrationTick } from "./controllerSignal";
 import {
   emptyLaunchProfile,
   migrationSuccessorLaunchProfile,
@@ -60,7 +62,9 @@ export interface MigrationPreview {
 }
 
 export interface HeldDeliveryPort {
-  deliver(input: { delivery: HeldDelivery; path: string; clientMessageId: string }): Promise<"delivered" | "failed" | "delivery-uncertain" | "held">;
+  /* `lease` is the drain's hold on the conversation's actuation section: a delivery that must claim again inside it
+     passes the lease on rather than waiting for a section it already holds. */
+  deliver(input: { delivery: HeldDelivery; path: string; clientMessageId: string; lease?: ActuationLease }): Promise<"delivered" | "failed" | "delivery-uncertain" | "held">;
   reconcileUncertain?(input: { delivery: HeldDelivery; path: string; clientMessageId: string }): Promise<"delivered" | "failed" | "delivery-uncertain" | "held">;
 }
 
@@ -1019,21 +1023,28 @@ export async function drainHeldDeliveries(
       registry.recordDeliveryOutcome(item.id, "failed", "request-local delivery requires client retry");
       return;
     }
-    const claimed = reconciling ? item : registry.beginDeliveryAttempt(item.id, current.id);
-    if (!claimed) return;
-    const clientMessageId = claimed.clientMessageId ?? `migration:${claimed.id}`;
-    try {
-      const input = { delivery: claimed, path: current.path, clientMessageId };
-      const outcome = reconciling
-        ? await delivery.reconcileUncertain!(input)
-        : await delivery.deliver(input);
-      if (outcome === "held") {
-        if (!reconciling) registry.requeueUnactuatedDelivery(claimed.id);
+    /* #1709: a claim and its delivery run in the conversation's actuation section, like every other actuator's.
+       A send holding the section is not waited for here, so one slow send never delays this pass for other
+       conversations: this delivery is left for the tick requested when the section frees. A later delivery of the
+       same conversation cannot go first meanwhile, because its claim is refused while this one is assigned. */
+    const attempt = await tryConversationActuation(conversationId, async (lease) => {
+      const claimed = reconciling ? item : registry.beginDeliveryAttempt(item.id, current.id);
+      if (!claimed) return;
+      const clientMessageId = claimed.clientMessageId ?? `migration:${claimed.id}`;
+      try {
+        const input = { delivery: claimed, path: current.path, clientMessageId, lease };
+        const outcome = reconciling
+          ? await delivery.reconcileUncertain!(input)
+          : await delivery.deliver(input);
+        if (outcome === "held") {
+          if (!reconciling) registry.requeueUnactuatedDelivery(claimed.id);
+        }
+        else registry.recordDeliveryOutcome(claimed.id, outcome, outcome === "failed" ? "delivery failed and remains recoverable" : null);
+      } catch {
+        registry.recordDeliveryOutcome(claimed.id, "delivery-uncertain", "delivery result is uncertain and remains recoverable");
       }
-      else registry.recordDeliveryOutcome(claimed.id, outcome, outcome === "failed" ? "delivery failed and remains recoverable" : null);
-    } catch {
-      registry.recordDeliveryOutcome(claimed.id, "delivery-uncertain", "delivery result is uncertain and remains recoverable");
-    }
+    });
+    if (!attempt.acquired) void attempt.released.then(() => requestAccountMigrationTick());
   });
 }
 
@@ -1052,32 +1063,51 @@ export async function reconcileMigrations(
   });
   const pendingDeliveries = new Set<ViewerConversationId>();
   const uncertainDeliveries = new Set<ViewerConversationId>();
+  const currentlyAssignedDeliveries = new Set<ViewerConversationId>();
   await forEachCooperatively(Object.values(before.heldDeliveries), (item) => {
     if (item.state !== "delivered" && item.state !== "failed"
       && (item.state !== "delivery-uncertain" || delivery.reconcileUncertain)) {
       const id = registry.canonicalConversationId(item.conversationId);
       pendingDeliveries.add(id);
       if (item.state === "delivery-uncertain") uncertainDeliveries.add(id);
+      if (item.state === "assigned" && item.generationId === before.conversations[id]?.generations.at(-1)?.id) {
+        currentlyAssignedDeliveries.add(id);
+      }
     }
   });
+  /* #1709: a parked switch leaves the conversation on its current generation, where sends are assigned and
+     claimed in admission order. An assigned reservation no sender went on to claim would hold back every later
+     send until the switch left the phase, so this pass delivers what is assigned to that generation, in order.
+     Nothing uncertain is replayed: uncertain rows only reconcile. */
+  const drainParkedSwitch = async (parked: RegistryConversation) => {
+    const currentGeneration = parked.generations.at(-1)?.id;
+    if (registry.pendingDeliveries(parked.id).some((item) => item.state === "assigned" && item.generationId === currentGeneration)) {
+      await drainHeldDeliveries(parked.id, delivery, registry);
+    }
+  };
   await forEachCooperatively(Object.values(before.conversations), async (snapshotConversation) => {
     // A keyed delivery read may assemble grant provenance across the registry.
     // Inventory already tells us which conversations need that read (#1983).
     const hasDelivery = pendingDeliveries.has(snapshotConversation.id);
-    // A failed migration needs an explicit retry. Only reconciliation of an
-    // uncertain prior actuation can make progress while it remains parked.
+    // A failed migration needs an explicit retry. While it remains parked, only
+    // reconciliation of an uncertain prior actuation and delivery of what is
+    // assigned to the current generation (#1709) can make progress; held
+    // residue stays parked without a read.
     if (snapshotConversation.migration?.phase === "failed-recoverable"
-      && !uncertainDeliveries.has(snapshotConversation.id)) return;
+      && !uncertainDeliveries.has(snapshotConversation.id)
+      && !currentlyAssignedDeliveries.has(snapshotConversation.id)) return;
     const activeMigration = snapshotConversation.migration !== null
       && !terminalMigrationPhase(snapshotConversation.migration.phase);
     if (!hasDelivery && !activeMigration) return;
     let conversation = registry.conversation(snapshotConversation.id) ?? snapshotConversation;
+    let drained = false;
     if (conversation.migration
       && conversation.migration.phase !== "committed"
       && conversation.migration.phase !== "rolled-back"
       && delivery.reconcileUncertain
       && registry.pendingDeliveries(conversation.id).some((item) => item.state === "delivery-uncertain")) {
       await drainHeldDeliveries(conversation.id, delivery, registry);
+      drained = true;
       conversation = registry.conversation(conversation.id) ?? conversation;
     }
     if (!conversation.migration) {
@@ -1123,7 +1153,10 @@ export async function reconcileMigrations(
       }
       return;
     }
-    if (conversation.migration.phase === "failed-recoverable") return;
+    if (conversation.migration.phase === "failed-recoverable") {
+      if (!drained) await drainParkedSwitch(conversation);
+      return;
+    }
     const migration = conversation.migration;
     const source = conversation.generations.find((generation) => generation.id === migration.sourceGenerationId)
       ?? conversation.generations.at(-1);
@@ -1138,6 +1171,7 @@ export async function reconcileMigrations(
         || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
       await drainHeldDeliveries(advanced.id, delivery, registry);
     }
+    if (!drained && advanced.migration?.phase === "failed-recoverable") await drainParkedSwitch(advanced);
   });
   await yieldToRuntime();
   const after = registry.readOnlySnapshot();

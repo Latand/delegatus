@@ -61,3 +61,39 @@ test("resource freshness reports the existing collector failure without another 
   expect((result.freshness as { ageMs: number }).ageMs).toBeGreaterThan(0);
   expect(reads).toBe(1);
 });
+
+test("rows a failed collection fell back on are marked stale one by one, beside the Viewer's own section (#2110, #1817)", async () => {
+  const capturedAt = new Date().toISOString();
+  const sessionsCapturedAt = "2026-09-20T10:39:02.100Z";
+  const row = { target: "structured:codex:lane", panePid: 35_566, kind: "structured" as const, path: null, engine: "codex" as const,
+    title: "orchestrator", project: null, activity: "idle" as const, lastActiveAt: "2026-09-20T08:59:43.999Z", cwd: null,
+    rssBytes: 1, swapBytes: 0, procCount: 1 };
+  const viewer = { actionable: false as const, capturedAt, rssBytes: 3, swapBytes: 0, procCount: 2, processes: [
+    { pid: 10, role: "server" as const, name: "next", rssBytes: 2, swapBytes: 0, procCount: 1 },
+    { pid: 11, role: "worker" as const, name: "filesResponse.worker", rssBytes: 1, swapBytes: 0, procCount: 1 },
+  ] };
+  const read = (sessionsStale: boolean): ResourcesRead => ({
+    payload: { system: { ramTotal: 10, ramAvailable: 5, swapTotal: 2, swapUsed: 1, capturedAt }, sessions: [row], sessionsCapturedAt, sessionsStale, viewer },
+    diagnostic: { status: sessionsStale ? "failed" : "complete", cache: { status: sessionsStale ? "durable" : "miss" },
+      ...(sessionsStale ? { degradedReason: "collector-crash" as const } : {}), fresh: true,
+      durationMs: 5, phases: { systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0 },
+      generation: 1, startedAt: capturedAt, completedAt: capturedAt, collectorId: "fixture" },
+  });
+  let stale = true;
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    readResources: () => { throw new Error("second collection"); },
+    readResourcesWithDiagnostic: async () => read(stale),
+  } as never);
+
+  const fallback = await bindings.resources({ clientRequestId: "stale", fresh: true }) as Record<string, unknown>;
+  expect(fallback.freshness).toMatchObject({ capturedAtScope: "system", sessionsCapturedAt, sessionsStale: true,
+    refreshSucceeded: false, cache: "durable", reason: "collector-crash" });
+  expect((fallback.freshness as { sessionsAgeMs: number }).sessionsAgeMs).toBeGreaterThan(3 * 86_400_000);
+  expect(fallback.sessions).toEqual([{ ...row, stale: true, capturedAt: sessionsCapturedAt }]);
+  expect(fallback.viewer).toEqual(viewer);
+
+  stale = false;
+  const current = await bindings.resources({ clientRequestId: "current", fresh: true }) as Record<string, unknown>;
+  expect(current.freshness).toMatchObject({ sessionsStale: false, refreshSucceeded: true, cache: "miss" });
+  expect(current.sessions).toEqual([row]);
+});

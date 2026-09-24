@@ -19,7 +19,7 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
-const { gatherSeatTickInput: gatherProduction, repoDirForProject, runtimeWakeState, seatTickProjects, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { gatherSeatTickInput: gatherProduction, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
 const { SEND_UNVERIFIED_REASON } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
@@ -172,6 +172,7 @@ function sources(over: {
   /** The liveness plane's verdict for a child, by id (#1465). */
   childRows?: Record<string, AgentLivenessRecord>;
   seatConversationId?: string;
+  retirementJournal?: SeatTickSources["retirementJournal"];
   now?: number;
 }): SeatTickSources {
   return {
@@ -209,6 +210,7 @@ function sources(over: {
     lifecycleJournal: () => journal(over.events ?? []),
     latestDeployment: () => over.latestDeployment ?? ({ state: "unreadable", error: "no ledger" }) as never,
     retirementReport: () => null,
+    ...(over.retirementJournal ? { retirementJournal: over.retirementJournal } : {}),
     settings: () => over.settings ?? defaultSeatTickSettings(PROJECT),
     openPullRequests: async (options) => {
       over.pullRequestCalls?.push(options);
@@ -590,6 +592,73 @@ test("the deployment signal reports the latest deployment, and stays silent when
   /* A deployment still running is not an outcome to report at all. */
   const running = await gather({ latestDeployment: deployment({ phase: "promoting", terminal: false }) });
   expect(running.signals).toEqual([]);
+});
+
+/* ------------------------------------------------------------------------- *
+ * #1818: a retirement sweep that retires nothing while one clause refuses.
+ * ------------------------------------------------------------------------- */
+
+function retirementSweeps(count: number, refusedByClause: Record<string, number>, retiredAt: number | null = null) {
+  return Array.from({ length: count }, (_, index) => ({
+    finishedAt: new Date(NOW - (count - index) * 5 * 60_000).toISOString(),
+    retired: index === retiredAt ? 1 : 0,
+    refusedByClause,
+  }));
+}
+
+test("a window that retires nothing while one clause refuses past the threshold names that clause", async () => {
+  const sinceCalls: number[] = [];
+  const stalled = await gather({
+    retirementJournal: (sinceMs) => {
+      sinceCalls.push(sinceMs);
+      return { covered: true, sweeps: retirementSweeps(288, { "seat-free": 1, "process-identity": 7 }) };
+    },
+  });
+  expect(sinceCalls).toEqual([NOW - RETIREMENT_STALL_WINDOW_MS]);
+  expect(stalled.signals).toEqual([{
+    id: "host-retirement-stalled",
+    label: "host retirement: nothing retired in 288 sweeps over 24h while process-identity refused 2016 times",
+  }]);
+
+  /* One retirement anywhere in the window is a sweep doing its job. */
+  const retiring = await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(288, { "process-identity": 7 }, 100) }) });
+  expect(retiring.signals).toEqual([]);
+  /* A journal that begins inside the window cannot say nothing retired across it. */
+  const young = await gather({ retirementJournal: () => ({ covered: false, sweeps: retirementSweeps(288, { "process-identity": 7 }) }) });
+  expect(young.signals).toEqual([]);
+  /* Refusals spread thin, or few, are a quiet machine. */
+  const quiet = await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(288, { "seat-free": 3, "turn-settled": 3 }) }) });
+  expect(quiet.signals).toEqual([]);
+});
+
+test("the stall threshold is strict and picks the clause with the most refusals", () => {
+  const window = { covered: true, sweeps: retirementSweeps(10, { "transcript-idle": 50, "handoff-queue-drained": 100 }) };
+  expect(stalledRetirementClause(window, 1000)).toBeNull();
+  expect(stalledRetirementClause(window, 999)).toEqual({ clause: "handoff-queue-drained", refusals: 1000, sweeps: 10 });
+  expect(stalledRetirementClause({ covered: true, sweeps: [] }, 0)).toBeNull();
+});
+
+test("the journal window reads through rotation and stops at the first sweep older than the window", () => {
+  const dir = fs.mkdtempSync(path.join(SANDBOX, "retirement-journal-"));
+  const file = path.join(dir, "host-retirement-journal.ndjson");
+  const line = (at: number, retired: number, refusedByClause: Record<string, number>) => JSON.stringify({
+    version: 1, startedAt: new Date(at - 1_000).toISOString(), finishedAt: new Date(at).toISOString(), idleHours: 6,
+    evaluated: 9, deferred: 0, standDown: null, retired: Array.from({ length: retired }, () => ({ key: "k" })), failed: [],
+    reclaimed: { processes: 0, rssBytes: 0, swapBytes: 0 }, refusedByClause, undeterminedByClause: {},
+  });
+  const since = NOW - RETIREMENT_STALL_WINDOW_MS;
+  fs.writeFileSync(`${file}.1`, [line(since - 60_000, 1, { "seat-free": 1 }), line(since + 60_000, 0, { "seat-free": 2 })].join("\n") + "\n");
+  fs.writeFileSync(file, [line(since + 120_000, 0, { "seat-free": 3 }), "{\"torn", line(NOW, 0, { "seat-free": 4 })].join("\n") + "\n");
+
+  const window = readRetirementJournalWindow(file, since);
+  expect(window.covered).toBe(true);
+  expect(window.sweeps.map((sweep) => sweep.refusedByClause["seat-free"])).toEqual([2, 3, 4]);
+  expect(window.sweeps.every((sweep) => sweep.retired === 0)).toBe(true);
+
+  /* Without the rotated copy the journal starts inside the window. */
+  fs.rmSync(`${file}.1`);
+  expect(readRetirementJournalWindow(file, since)).toMatchObject({ covered: false });
+  expect(readRetirementJournalWindow(path.join(dir, "absent.ndjson"), since)).toEqual({ covered: false, sweeps: [] });
 });
 
 /* ------------------------------------------------------------------------- *

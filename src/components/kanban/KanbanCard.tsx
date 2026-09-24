@@ -13,7 +13,9 @@ import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
-import { pipelineNeedsYou, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
+import type { PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
+import { clearedLine, needLabel } from "@/components/attention/decision";
+import type { NeedReason } from "@/components/attention/needReason";
 
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
@@ -22,7 +24,7 @@ import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLi
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
-import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
+import { CheckGlyph, ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
 import { PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
@@ -45,7 +47,12 @@ import type { PipelineActionKind } from "./stagesModel";
    is an outline with no fill, and a conversation is a row. What the old
    activity line said moved to where it belongs: "needs you" to the amber edge
    and the lane's own state word, the working and conversation counts to the
-   footer, and the stages still waiting to their dashed pills. */
+   footer, and the stages still waiting to their dashed pills.
+
+   Why the card needs the operator is named at its foot (docs/design/
+   needs-attention.md §4): the oldest reason, "+N" for the rest, and a Dismiss
+   control that clears them all until something new asks. A cleared card says
+   who cleared it, and that line is its Undo. */
 
 /** Pipelines that have ended: the rows a card folds away once it holds many. */
 const ENDED_PIPELINE_STATES: ReadonlySet<string> = new Set(["completed", "closed"]);
@@ -122,6 +129,8 @@ function memberRole(t: TFunction, member: KanbanMember): string {
 const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { member: KanbanMember; workspace: boolean; onOpen: (file: FileEntry) => void }) {
   const { t } = useLocale();
   const role = memberRole(t, member);
+  /* A tile that needs the operator names why in its title. */
+  const reason = member.needsYou && member.need ? needLabel(t, member.need) : undefined;
   /* A stage's tile sets its attempt apart as a muted suffix that survives the
      name's truncation, and names the role preset only in its tooltip (#1865). */
   const place = member.stage ? stageAttemptPlace(member.stage.pipeline, member.stage.stage.id, member.file) : null;
@@ -136,6 +145,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
       role="listitem"
       className={`tile${workspace ? "" : " fill"}${member.working ? " working" : ""}${member.needsYou ? " needs" : ""}`}
       data-member={member.file.path}
+      title={reason}
       aria-label={t("kanban.openMember", { role, state })}
       onClick={() => onOpen(member.file)}
     >
@@ -219,7 +229,21 @@ export interface KanbanCardProps {
   /** A lane row's answer in place: skip or retry the stage it stopped on,
       close it, or give its review one more round (#2072). */
   onAnswer?: (cardId: string, title: string, pipeline: Pipeline, answer: PipelineAnswer) => void;
+  /** Dismiss: stop flagging every reason the card draws until something new
+      asks (docs/design/needs-attention.md §5). Absent, the foot only names
+      the reasons. */
+  onDismiss?: (card: KanbanCardModel) => void;
+  /** Bring back what was dismissed on this card. */
+  onUndoDismiss?: (card: KanbanCardModel) => void;
 }
+
+/** The foot's reason: the oldest one's label, and how many more there are. */
+function reasonsText(t: TFunction, reasons: readonly NeedReason[]): string {
+  const first = needLabel(t, reasons[0]!);
+  return reasons.length > 1 ? `${first} ${t("needs.more", { count: reasons.length - 1 })}` : first;
+}
+
+
 
 /** Links a lane row on the card already draws, taken off the task's own row,
     so every link appears once on screen (variant B). What stays is what no
@@ -261,21 +285,47 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      the tile's place. */
   const stageReaders = readerKeys.filter((key) => !tileKeys.has(key));
   const openTiles = new Set(readerKeys.filter((key) => tileKeys.has(key)));
-  const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", card.needsYou ? t("kanban.activityNeeds") : "", collapsed ? t("kanban.collapsed") : ""]
+  const reasons = card.needsYou ? reasonsText(t, card.reasons) : "";
+  const cleared = !card.needsYou ? card.cleared[0] ?? null : null;
+  const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : ""]
     .filter(Boolean)
     .join(", ");
-  /* The card's one status hue is its edge (§3.4): red while a member is
-     stalled, amber while it owes the operator an answer, the lane's own amber
-     state word saying which. */
-  const laneNeedsYou = card.pipelines.some((summary) => pipelineNeedsYou(summary.pipeline));
-  const stalled = card.members.some((member) => member.state === "stalled");
-  const attention = stalled ? "stalled" : laneNeedsYou || card.needsYou ? "needs" : undefined;
-  /* What is happening now, never a status, at the foot of the card: who is
-     working, how many conversations it holds or that nothing is on it, and
-     "needs you" only when no lane row already says it. */
+  /* The card's one status hue is its edge (§3.4): amber while it owes the
+     operator an answer, which the foot names. A stalled member keeps its red
+     state word on its tile and no longer colours the card. */
+  const attention = card.needsYou ? "needs" : undefined;
+  const onDismiss = props.onDismiss;
+  const onUndoDismiss = props.onUndoDismiss;
+  /* What is happening now, never a status, at the foot of the card: why it
+     needs the operator (or who cleared it), who is working, and how many
+     conversations it holds or that nothing is on it. */
   const footMeta = (
     <>
-      {card.needsYou && !laneNeedsYou ? <span className="foot-meta needs" data-foot-needs="">{t("kanban.activityNeeds")}</span> : null}
+      {card.needsYou ? (
+        <span className="foot-meta needs" data-foot-needs={card.reasons.length} title={card.reasons.map((need) => needLabel(t, need)).join("\n")}>
+          <span className="clamp">{reasons}</span>
+        </span>
+      ) : null}
+      {card.needsYou && onDismiss ? (
+        <button
+          type="button"
+          className="icon-btn dismiss"
+          data-dismiss={card.id}
+          aria-label={t("needs.dismissAria", { title })}
+          title={t("needs.dismissHint")}
+          onClick={() => onDismiss(card)}
+        >
+          <CheckGlyph />
+        </button>
+      ) : null}
+      {cleared ? (
+        <span className="foot-meta cleared" data-foot-cleared={cleared.by.kind}>{clearedLine(t, cleared, nowMs / 1000)}</span>
+      ) : null}
+      {cleared && onUndoDismiss ? (
+        <button type="button" className="undo" data-undo-dismiss={card.id} aria-label={t("needs.undoAria", { title })} onClick={() => onUndoDismiss(card)}>
+          {t("needs.undo")}
+        </button>
+      ) : null}
       {card.working ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
       {card.conversations
         ? <span className="foot-meta num" data-foot-conversations={card.conversations}>{t("kanban.activityConversations", { count: card.conversations })}</span>
