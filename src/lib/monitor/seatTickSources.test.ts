@@ -598,11 +598,17 @@ test("the deployment signal reports the latest deployment, and stays silent when
  * #1818: a retirement sweep that retires nothing while one clause refuses.
  * ------------------------------------------------------------------------- */
 
-function retirementSweeps(count: number, refusedByClause: Record<string, number>, retiredAt: number | null = null) {
+function retirementSweeps(
+  count: number,
+  refusedByClause: Record<string, number>,
+  retiredAt: number | null = null,
+  refusedByFlag: Record<string, number> = {},
+) {
   return Array.from({ length: count }, (_, index) => ({
     finishedAt: new Date(NOW - (count - index) * 5 * 60_000).toISOString(),
     retired: index === retiredAt ? 1 : 0,
     refusedByClause,
+    refusedByFlag,
   }));
 }
 
@@ -634,25 +640,59 @@ test("a window that retires nothing while one clause refuses past the threshold 
 test("the stall threshold is strict and picks the clause with the most refusals", () => {
   const window = { covered: true, sweeps: retirementSweeps(10, { "transcript-idle": 50, "handoff-queue-drained": 100 }) };
   expect(stalledRetirementClause(window, 1000)).toBeNull();
-  expect(stalledRetirementClause(window, 999)).toEqual({ clause: "handoff-queue-drained", refusals: 1000, sweeps: 10 });
+  expect(stalledRetirementClause(window, 999)).toEqual({ clause: "handoff-queue-drained", refusals: 1000, sweeps: 10, flags: [] });
   expect(stalledRetirementClause({ covered: true, sweeps: [] }, 0)).toBeNull();
+});
+
+test("a stall on no-active-flags names the flags that refused, most frequent first (#2137)", async () => {
+  /* The measured day: 274 sweeps, no retirement, and every no-active-flags
+     refusal was an idle Codex host carrying its three app-server
+     advertisements. The signal has to name them, since the clause alone sends
+     the reader into the code. */
+  const flags = { "native-queue": 5, "native-inject": 5, "native-turn-profile": 5, waitingOnApproval: 1 };
+  const stalled = await gather({
+    retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(274, { "no-active-flags": 6, "turn-settled": 3 }, null, flags) }),
+  });
+  expect(stalled.signals).toEqual([{
+    id: "host-retirement-stalled",
+    label: "host retirement: nothing retired in 274 sweeps over 24h while no-active-flags refused 1644 times"
+      + " (flags: native-inject 1370, native-queue 1370, native-turn-profile 1370, waitingOnApproval 274)",
+  }]);
+
+  /* A flood of names is counted past the first five rather than listed. */
+  const many = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`flag-${index}`, 8 - index]));
+  const flooded = stalledRetirementClause({ covered: true, sweeps: retirementSweeps(200, { "no-active-flags": 6 }, null, many) });
+  expect(flooded?.flags.map(([flag]) => flag)).toEqual(Object.keys(many));
+  const label = (await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(200, { "no-active-flags": 6 }, null, many) }) })).signals[0]?.label;
+  expect(label).toEndWith("(flags: flag-0 1600, flag-1 1400, flag-2 1200, flag-3 1000, flag-4 800, +3 more)");
+
+  /* Flags ride only on the clause that refused on them. */
+  const other = stalledRetirementClause({ covered: true, sweeps: retirementSweeps(200, { "seat-free": 6, "no-active-flags": 1 }, null, flags) });
+  expect(other).toMatchObject({ clause: "seat-free", flags: [] });
 });
 
 test("the journal window reads through rotation and stops at the first sweep older than the window", () => {
   const dir = fs.mkdtempSync(path.join(SANDBOX, "retirement-journal-"));
   const file = path.join(dir, "host-retirement-journal.ndjson");
-  const line = (at: number, retired: number, refusedByClause: Record<string, number>) => JSON.stringify({
+  const line = (at: number, retired: number, refusedByClause: Record<string, number>, refusedByFlag?: Record<string, number>) => JSON.stringify({
     version: 1, startedAt: new Date(at - 1_000).toISOString(), finishedAt: new Date(at).toISOString(), idleHours: 6,
     evaluated: 9, deferred: 0, standDown: null, retired: Array.from({ length: retired }, () => ({ key: "k" })), failed: [],
     reclaimed: { processes: 0, rssBytes: 0, swapBytes: 0 }, refusedByClause, undeterminedByClause: {},
+    ...(refusedByFlag ? { refusedByFlag } : {}),
   });
   const since = NOW - RETIREMENT_STALL_WINDOW_MS;
   fs.writeFileSync(`${file}.1`, [line(since - 60_000, 1, { "seat-free": 1 }), line(since + 60_000, 0, { "seat-free": 2 })].join("\n") + "\n");
-  fs.writeFileSync(file, [line(since + 120_000, 0, { "seat-free": 3 }), "{\"torn", line(NOW, 0, { "seat-free": 4 })].join("\n") + "\n");
+  fs.writeFileSync(file, [
+    line(since + 120_000, 0, { "seat-free": 3 }),
+    "{\"torn",
+    line(NOW, 0, { "seat-free": 4, "no-active-flags": 2 }, { "native-queue": 2, bogus: "2" as unknown as number }),
+  ].join("\n") + "\n");
 
   const window = readRetirementJournalWindow(file, since);
   expect(window.covered).toBe(true);
   expect(window.sweeps.map((sweep) => sweep.refusedByClause["seat-free"])).toEqual([2, 3, 4]);
+  /* A sweep journaled before the per-flag count reads as naming no flag. */
+  expect(window.sweeps.map((sweep) => sweep.refusedByFlag)).toEqual([{}, {}, { "native-queue": 2 }]);
   expect(window.sweeps.every((sweep) => sweep.retired === 0)).toBe(true);
 
   /* Without the rotated copy the journal starts inside the window. */
