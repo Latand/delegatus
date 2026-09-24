@@ -2,6 +2,8 @@
 
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
+import { Z } from "@/components/layers";
+
 /*
  * The marks the desktop activity page draws with
  * (docs/design/activity-dashboard-v2.md, "Colour"). Two hues carry the page:
@@ -136,7 +138,7 @@ export function Tooltip({ anchor, side, bounds, children, id }: {
       ref={ref}
       id={id}
       role="tooltip"
-      className="pointer-events-none fixed z-40 w-max max-w-[300px] rounded-[8px] border border-border bg-raised px-[11px] py-[9px] text-[12px] leading-[1.45] shadow-2"
+      className={`pointer-events-none fixed ${Z.tooltip} w-max max-w-[300px] rounded-[8px] border border-border bg-raised px-[11px] py-[9px] text-[12px] leading-[1.45] shadow-2`}
       style={place ? { left: place.left, top: place.top } : { left: -9999, top: -9999 }}
       data-activity-tooltip=""
     >

@@ -10,9 +10,10 @@ import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ActivityCountingDrawer } from "./ActivityCountingDrawer";
 import { ActivityDayChart } from "./ActivityDayChart";
 import { ActivityFigures } from "./ActivityFigures";
+import { ActivityProjectPicker, ActivityScopeChip } from "./ActivityProjectPicker";
 import { ActivityProjects } from "./ActivityProjects";
 import { ActivityRhythm } from "./ActivityRhythm";
-import { nothingRead, projectNames, rangeText, trustState } from "./format";
+import { listUnread, nothingRead, projectNames, rangeText, trustState } from "./format";
 import { MarkPatterns } from "./marks";
 import type { TipContext } from "./tips";
 
@@ -52,10 +53,13 @@ function Skeleton() {
   );
 }
 
-export function ActivityDesktop({ data, range, onRange, loading, failed, onRetry, locale, t }: {
+export function ActivityDesktop({ data, range, onRange, scope, onProject, loading, failed, onRetry, locale, t }: {
   data: ActivityResponse | null;
   range: RangeKey;
   onRange(next: RangeKey): void;
+  /** The project the whole page is scoped to, by key and name, or none. */
+  scope: { project: string; name: string } | null;
+  onProject(project: string | null): void;
   loading: boolean;
   failed: boolean;
   onRetry(): void;
@@ -66,7 +70,8 @@ export function ActivityDesktop({ data, range, onRange, loading, failed, onRetry
   const main = useRef<HTMLElement | null>(null);
   const names = useMemo(() => projectNames(data?.projects ?? [], t), [data, t]);
   const unread = data ? nothingRead(data) : false;
-  const context: TipContext | null = data ? { data, names, unread, locale, t } : null;
+  const rowsUnread = data ? listUnread(data) : false;
+  const context: TipContext | null = data ? { data, names, unread, listUnread: rowsUnread, locale, t } : null;
   const showRhythm = data?.range.key !== "today";
 
   return (
@@ -82,10 +87,12 @@ export function ActivityDesktop({ data, range, onRange, loading, failed, onRetry
             {t("activity.back")}
           </a>
           <div className="ml-1 flex min-w-0 items-baseline gap-2.5">
-            <h1 className="text-[17px] font-semibold tracking-[-0.01em] text-primary">{t("activity.title")}</h1>
+            <h1 className="shrink-0 text-[17px] font-semibold tracking-[-0.01em] text-primary">{t("activity.title")}</h1>
+            {scope ? <ActivityScopeChip name={scope.name} onClear={() => onProject(null)} t={t} /> : null}
             {data ? <span className="truncate text-[13px] text-muted" data-activity-range-label="">{rangeText(data, locale)}</span> : null}
           </div>
           <div className="flex-1" />
+          {data ? <ActivityProjectPicker data={data} names={names} selected={scope?.project ?? null} unread={rowsUnread} onSelect={onProject} locale={locale} t={t} /> : null}
           <div className="flex shrink-0 rounded-[8px] border border-border bg-card p-[2px]" role="tablist" aria-label={t("activity.rangeAria")}>
             {RANGES.map((key) => (
               <button
@@ -143,7 +150,7 @@ export function ActivityDesktop({ data, range, onRange, loading, failed, onRetry
               </div>
             </section>
             {showRhythm ? <div className="col-start-1 row-start-2"><ActivityRhythm context={context} /></div> : null}
-            <ActivityProjects key={data.range.key} context={context} span={showRhythm} />
+            <ActivityProjects key={data.range.key} context={context} span={showRhythm} selected={scope?.project ?? null} onSelect={onProject} />
           </div>
         ) : !failed ? <Skeleton /> : null}
       </div>

@@ -3,11 +3,12 @@
 import { Check, TriangleAlert, X } from "lucide-react";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 
-import { EXCLUSION_REASONS } from "@/lib/activity/method";
+import { Z } from "@/components/layers";
+import { EXCLUSION_REASONS, type Interval } from "@/lib/activity/method";
 import type { ActivityHostRow } from "@/lib/activity/report";
 import type { MessageKey } from "@/lib/i18n";
 
-import { agentHoursText, approxText, clockText, dateTimeText, datesText, dayLong, hostName } from "./format";
+import { agentHoursText, approxAtLeast, clockText, dateTimeText, datesText, dayLong, hostName, scopeHosts } from "./format";
 import type { TipContext } from "./tips";
 
 /*
@@ -59,14 +60,16 @@ export function ActivityCountingDrawer({ context, focusHosts, onClose }: { conte
   const todayDay = data.days.find((day) => day.start <= data.range.now && data.range.now < day.end);
   const span = (start: number, end: number) => `${clockText(start, locale, tz)}–${clockText(Math.min(end, data.range.now), locale, tz)}`;
   /** When a host was not read: the day runs, or today's hours. */
-  const when = (host: ActivityHostRow): string => {
-    const touched = data.days.filter((day) => host.unread.some((gap) => gap.start < day.end && gap.end > day.start)).map((day) => day.date);
+  const when = (unread: readonly Interval[]): string => {
+    const touched = data.days.filter((day) => unread.some((gap) => gap.start < day.end && gap.end > day.start)).map((day) => day.date);
     if (today || (touched.length === 1 && todayDay && touched[0] === todayDay.date)) {
-      const spans = host.unread.map((gap) => span(Math.max(gap.start, todayDay?.start ?? gap.start), gap.end)).join(", ");
+      const spans = unread.map((gap) => span(Math.max(gap.start, todayDay?.start ?? gap.start), gap.end)).join(", ");
       return t("activity.drawer.whenToday", { span: spans });
     }
     return t("activity.drawer.whenDays", { days: datesText(touched, data.days, locale, tz) });
   };
+  const same = (a: readonly Interval[], b: readonly Interval[]) => a.length === b.length && a.every((gap, index) => gap.start === b[index]!.start && gap.end === b[index]!.end);
+  const agentsUnread = (host: ActivityHostRow): readonly Interval[] => host.agentsUnread ?? [];
   const readTo = (host: ActivityHostRow): number | null => {
     let latest: number | null = null;
     for (const source of host.sources) for (const covered of source.covered) latest = Math.max(latest ?? 0, Math.min(covered.end, data.range.now));
@@ -88,10 +91,20 @@ export function ActivityCountingDrawer({ context, focusHosts, onClose }: { conte
     return t("activity.hosts.notConnected");
   };
 
-  const lowerFlags = data.coverage.hosts.filter((host) => host.unread.length).map((host) => {
-    const text = t("activity.drawer.flagLower", { host: hostName(host.host, data.coverage.hosts, t), when: when(host) });
-    return locale === "uk" ? capitalize(text) : text;
+  /* One row per host whose gap bears on the figures shown: your time, its
+     agents' time, or both when the same stretch misses both. */
+  const lowerFlags = scopeHosts(data).flatMap((host) => {
+    const name = hostName(host.host, data.coverage.hosts, t);
+    const agents = agentsUnread(host);
+    const texts = host.unread.length && agents.length && same(host.unread, agents)
+      ? [t("activity.drawer.flagBoth", { host: name, when: when(host.unread) })]
+      : [
+        ...(host.unread.length ? [t("activity.drawer.flagLower", { host: name, when: when(host.unread) })] : []),
+        ...(agents.length ? [t("activity.drawer.flagAgents", { host: name, when: when(agents) })] : []),
+      ];
+    return texts.map((text) => (locale === "uk" ? capitalize(text) : text));
   });
+  const agentsLower = !data.totals.agentCoverage.complete;
   const flagged = data.days.filter((day) => day.missingSource?.includes("agent-activity"));
   const missingFlags = flagged.length > 3
     ? [t("activity.drawer.flagMissingMany", { count: flagged.length, days: datesText(flagged.map((day) => day.date), data.days, locale, tz) })]
@@ -99,7 +112,7 @@ export function ActivityCountingDrawer({ context, focusHosts, onClose }: { conte
   const methodWindows = data.params.breakMin <= data.params.windowMin;
 
   return (
-    <div className="fixed inset-0 z-50" data-activity-drawer="">
+    <div className={`fixed inset-0 ${Z.modal}`} data-activity-drawer="">
       <button type="button" aria-label={t("activity.drawer.close")} tabIndex={-1} className="absolute inset-0 bg-primary/20" onClick={onClose} />
       <aside
         ref={panel}
@@ -130,15 +143,15 @@ export function ActivityCountingDrawer({ context, focusHosts, onClose }: { conte
           </div>
         ))}
         <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 pb-2 pt-1.5">
-          <b className="whitespace-nowrap text-right font-semibold tabular-nums text-primary">{approxText(data.totals.wallMs, t)}</b>
+          <b className="whitespace-nowrap text-right font-semibold tabular-nums text-primary">{approxAtLeast(data.totals.wallMs, agentsLower, t)}</b>
           <span>{t("activity.fig.wall")}</span>
-          <b className="whitespace-nowrap text-right font-semibold tabular-nums text-primary">{agentHoursText(data.totals.agentHoursMs, locale)}</b>
+          <b className="whitespace-nowrap text-right font-semibold tabular-nums text-primary">{agentsLower ? "≥ " : ""}{agentHoursText(data.totals.agentHoursMs, locale)}</b>
           <span>{t("activity.fig.agentHours")}</span>
         </div>
         <div ref={hostsRef} className="scroll-mt-4">
           {data.coverage.hosts.map((host) => (
-            <div key={host.host} className="grid grid-cols-[16px_minmax(0,1fr)] gap-2 border-t border-border py-2" data-activity-host={host.host} data-complete={host.complete ? "true" : "false"}>
-              {host.complete
+            <div key={host.host} className="grid grid-cols-[16px_minmax(0,1fr)] gap-2 border-t border-border py-2" data-activity-host={host.host} data-complete={host.complete ? "true" : "false"} data-agents-complete={agentsUnread(host).length ? "false" : "true"}>
+              {host.complete && !agentsUnread(host).length
                 ? <Check className="mt-0.5 h-3.5 w-3.5 text-success" aria-hidden />
                 : <TriangleAlert className="mt-0.5 h-3.5 w-3.5 text-warning" aria-hidden />}
               <div>
@@ -147,8 +160,9 @@ export function ActivityCountingDrawer({ context, focusHosts, onClose }: { conte
                 <br />
                 {sourcesText(host)}
                 {host.sources.some((source) => source.state === "read")
-                  ? <> · {host.unread.length ? t("activity.drawer.hostGap", { when: when(host) }) : t("activity.drawer.hostRead", { when: dateTimeText(readTo(host) ?? data.range.now, locale, tz) })}</>
+                  ? <> · {host.unread.length ? t("activity.drawer.hostGap", { when: when(host.unread) }) : t("activity.drawer.hostRead", { when: dateTimeText(readTo(host) ?? data.range.now, locale, tz) })}</>
                   : null}
+                {agentsUnread(host).length ? <> · {t("activity.drawer.agentsGap", { when: when(agentsUnread(host)) })}</> : null}
               </div>
             </div>
           ))}
