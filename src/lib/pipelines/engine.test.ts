@@ -3747,7 +3747,7 @@ function deployCutObligations(h: ReturnType<typeof harness>, name: string) {
     checkpoint: { lastEventKind: "tool_call", lastEventAt: null },
     seat: null,
   }).obligation;
-  return { store, record, restore: () => setAgentRegistryForTests(null) };
+  return { registry, store, record, restore: () => setAgentRegistryForTests(null) };
 }
 
 test("a stage turn a deploy cut stays open past the host grace while its continuation is owed (#1835)", async () => {
@@ -3783,6 +3783,53 @@ test("a stage turn a deploy cut stays open past the host grace while its continu
     h.advanceWallClock(5 * 60_000);
     await tickPipelines([], h.ports);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: HISTORICAL_VERDICT_MISS });
+  } finally {
+    cut.restore();
+  }
+});
+
+test("a continuation that arrived while its obligation still reads submitted starts the host grace from its arrival (#1835 review)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "submitted-cut");
+  try {
+    /* The registry stamps an arrival with the real time, so the stage runs
+       on a harness clock three minutes behind it: the cut is recorded at the
+       harness's now and the continuation arrives about three minutes later. */
+    h.advanceWallClock(Date.now() - 3 * 60_000 - Date.parse(h.ports.now()));
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const cutAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => cutAt;
+    const obligation = cut.record("conversation_stage_1", cutAt);
+
+    /* The successor's startup admits the continuation under the obligation's
+       id and records `submitted`, which is all the queue told it; the delivery
+       arrives in the registry and the obligation is left as it was. */
+    const registry = cut.registry;
+    const reservation = registry.holdDelivery(obligation.conversationId, "A Viewer deployment interrupted your turn", obligation.id);
+    cut.store.update(obligation.id, { state: "submitted", operationId: reservation.command.operationId, attempts: 1 });
+    const arrived = registry.recordDeliveryOutcome(reservation.id, "delivered");
+    const arrivedAt = Date.parse(arrived.deliveredAt!);
+    expect(cut.store.list()[0]).toMatchObject({ state: "submitted", resolvedAt: null });
+
+    /* A minute after the arrival the host is inside its grace, and the stage
+       no longer says it waits for a continuation. */
+    h.advanceWallClock(arrivedAt + 60_000 - Date.parse(h.ports.now()));
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    expect(loadPipelines()[0]!.stateDetail).not.toBe(DEPLOY_CUT_HOLD);
+
+    /* The resumed host is lost again: it is judged once its grace from the
+       arrival has passed, by whichever of the ordinary verdicts its paced
+       recovery checks reach first, well before the thirty-minute hold ends. */
+    for (let tick = 0; tick < 4 && loadPipelines()[0]!.runs[0]!.attempts[0]!.state === "running"; tick += 1) {
+      h.advanceWallClock(tick === 0 ? 3 * 60_000 : 30_000);
+      await tickPipelines([], h.ports);
+    }
+    const judged = loadPipelines()[0]!;
+    expect(["failed", "needs_decision"]).toContain(judged.runs[0]!.attempts[0]!.state);
+    expect(judged.stateDetail).not.toBe(DEPLOY_CUT_HOLD);
+    expect(Date.parse(h.ports.now()) - arrivedAt).toBeLessThanOrEqual(5 * 60_000);
   } finally {
     cut.restore();
   }
@@ -3965,14 +4012,11 @@ async function reviewParkedAfterRestart(h: ReturnType<typeof harness>) {
   return { pipeline, launchId: attempt.launchId! };
 }
 
-test.each([
-  { shape: "the stage the MCP tool names", request: () => ({ stageId: "review" }) },
-  { shape: "the completed launch the card names", request: (launchId: string) => ({ stageId: "review", launchId }) },
-])("a review cut by a restart retries from $shape (#1871)", async ({ request }) => {
+test("a review cut by a restart retries from the completed launch the card names (#1871)", async () => {
   const h = harness();
   const { pipeline, launchId } = await reviewParkedAfterRestart(h);
 
-  const retried = await patchPipeline(pipeline.id, { action: "retry-stage", ...request(launchId) }, h.ports);
+  const retried = await patchPipeline(pipeline.id, { action: "retry-stage", stageId: "review", launchId }, h.ports);
 
   expect(retried.error).toBeUndefined();
   expect(loadPipelines()[0]).toMatchObject({ state: "running", cursor: { stageId: "review", state: "pending" } });

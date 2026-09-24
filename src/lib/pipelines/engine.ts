@@ -33,7 +33,7 @@ import { conversationTurnLiveness, outstandingDeliverySince, type TurnLivenessDe
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
-import { interruptionObligationDirectory, interruptionObligationStore, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
+import { interruptionObligationDirectory, interruptionObligationStore, submittedContinuationOutcome, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
 import {
@@ -1196,7 +1196,17 @@ export function defaultPipelinePorts(
       /* The store lists oldest first, so the last match is the newest cut. */
       const cut = interruptions.filter((obligation) =>
         registry.canonicalConversationId(obligation.conversationId) === canonical).at(-1);
-      return cut ? { state: cut.state, recordedAt: cut.recordedAt, resolvedAt: cut.resolvedAt } : null;
+      if (!cut) return null;
+      /* The queue answers `submitted` on admission, and the store records the
+         arrival only on a later startup pass; the reservation the obligation's
+         id keys says when the continuation arrived. A reservation retention
+         already dropped proves nothing about this turn, so it keeps the hold. */
+      const outcome = cut.state === "submitted"
+        ? submittedContinuationOutcome(cut, snapshot(), (id) => registry.canonicalConversationId(id))
+        : null;
+      return outcome && !outcome.compacted
+        ? { state: outcome.state, recordedAt: cut.recordedAt, resolvedAt: outcome.at }
+        : { state: cut.state, recordedAt: cut.recordedAt, resolvedAt: cut.resolvedAt };
     },
     runtimeHostEpoch: async () => {
       const client = runtimeHostClient();
@@ -7462,14 +7472,7 @@ export async function patchPipeline(
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
       const recoveryReset = verdictRecoveryStageReset(pipeline, attempt, ports, "retry-stage");
       if (recoveryReset.kind === "refuse") return { error: recoveryReset.error, status: recoveryReset.status };
-      /* A stage named without a launch is the MCP tool's shape, which cannot
-         pass a launch id (#1871): it names the stage the caller means to
-         retry, and the retry is that stage's current attempt. */
-      if (req.stageId !== undefined && req.launchId === undefined) {
-        if (typeof req.stageId !== "string") return { error: "stageId must be a string", status: 400 };
-        if (stage?.id !== req.stageId) return { error: "the named stage is not the pipeline's current stage", status: 409 };
-      }
-      const explicitReceiptRetry = req.launchId !== undefined;
+      const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
       if (explicitReceiptRetry && (typeof req.stageId !== "string" || typeof req.launchId !== "string")) {
         return { error: "receipt retry requires both stageId and launchId", status: 400 };
       }

@@ -162,6 +162,26 @@ test("retry-stage by stage still retries a launch that failed, with or without i
   }
 });
 
+test("retry-stage naming the completed launch of a stage whose host was lost retries it (#1871)", async () => {
+  /* The card and get_pipeline both name the attempt's launch. Its launch
+     completed; a restart then lost the host before the stage reported, so the
+     stage ended on its own and the named launch says nothing more than that. */
+  const pipeline = parkedPipeline();
+  const latest = pipeline.runs.find((run) => run.stageId === "build")!.attempts.at(-1)!;
+  Object.assign(latest, { verdict: null, error: "historical attempt completed without a valid final JSON verdict" });
+  pipeline.stateDetail = latest.error;
+  savePipelines([pipeline]);
+  const p = await engineWithReceipts(receiptFor("completed"));
+  try {
+    const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build", launchId: LAUNCH });
+    expect(retried.raw).not.toContain("retry was cancelled");
+    expect(retried.isError).toBe(false);
+    expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
+  } finally {
+    await p.close();
+  }
+});
+
 test("retry-stage by stage is refused with STAGE_CHANGED when the lane waits on another stage or attempt", async () => {
   const pipeline = parkedPipeline();
   savePipelines([pipeline]);
