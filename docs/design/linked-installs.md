@@ -1,10 +1,13 @@
 # Linked installs: one Delegatus reads another, peer to peer
 
-Status: design, 2026-09-25. Read-only design stage; nothing here is built yet.
-Every code claim was checked against `origin/main` at `534edaf72`, which is
-PR #2159 (activity records itself) merged; every activity file cited below is
-on `main`. This branch's merge base is the older `46f47bec1`; the branch
-changes only this document, so the difference does not touch what is cited.
+Status: design, 2026-09-25, revised after review round 3. Read-only design
+stage; nothing here is built yet. Every code claim was checked against
+`origin/main` at `534edaf72` (PR #2159, activity records itself), and the
+round-3 revision re-checked the cited files at `959a77d9c`: `store.ts`,
+`pull.ts`, `hostSources.ts`, `sameOrigin.ts`, `proxy.ts` and
+`deploymentProxy.ts` are unchanged between the two. This branch's merge base
+is the older `46f47bec1`; the branch changes only this document, so the
+difference does not touch what is cited.
 
 ## Originating requirement
 
@@ -78,13 +81,13 @@ builds on that pull.
 
 | Piece | Where | What it gives this design |
 |---|---|---|
-| Own activity store | `src/lib/activity/store.ts` | `<state>/activity/records.sqlite` (0600, dir 0700). Rows keyed `(host, key)`; this host is `host = ''`. One counter `activity_meta.version` rises on every write of an input or a turn; `store_id` is a UUID minted with the file. `localRowsAfter(version, limit)` and `localTurnsAfter(version, limit)` already serve "everything written after a version". `upsertPulled` / `upsertPulledTurns` replace a row only when the sender's version is higher. `hostState` / `setHostState` hold each pulled host's `cursor` and `remoteStore`; `forgetHost` drops a pulled host. |
+| Own activity store | `src/lib/activity/store.ts` | `<state>/activity/records.sqlite` (0600, dir 0700). Rows keyed `(host, key)`; this host is `host = ''`. One counter `activity_meta.version` rises on every write of an input or a turn; `store_id` is a UUID minted with the file. `localRowsAfter(version, limit)` and `localTurnsAfter(version, limit)` already serve "everything written after a version". `upsertPulled` / `upsertPulledTurns` replace a row only when the sender's version is higher (`store.ts:461-476`), whoever sends it. `hostState` / `setHostState` hold each pulled host's `cursor`, `remoteStore` and read span in an `activity_hosts` row. `forgetHost` (`store.ts:499-505`) deletes a pulled host's inputs and turns and **keeps** its `activity_hosts` row: cursor, remote store id and covered span stay. That fits its one caller, the recreated-store restart in `pullHost`, which re-reads from 0 and overwrites the span at the end; it is wrong for deleting history (§2.6). |
 | ssh pull | `src/lib/activity/pull.ts` | `pullHost(store, host, config, transport)` pages by version cursor, detects a recreated remote store by `store_id` (or `latest < cursor`), takes each row whole or refuses the page (an unknown `type` fails `parseRemoteRow`, `pull.ts:300-306`, so the page is `malformed`), and takes the remote's read span only with the last page. The wire format is NDJSON: one `state` line (`v: 1`), then `input` / `turn` lines. Only the transport is ssh-specific (`sshTransport` at `pull.ts:129`, `REMOTE_READER`). |
 | Host list | `src/lib/activity/hostSources.ts` | `activity/hosts.json` (`{ v: 1, local, hosts: [{ id, label, projects, since, pull? }] }`) names expected hosts; `storeSource("pull", …)` turns a pulled host's `activity_hosts` row into coverage, `readAt`, `error`. Host ids match `/^[a-z0-9][a-z0-9._-]{0,62}$/` (`validHostId`, `humanInput.ts`). |
 | Schedule | `src/lib/activity/continuous.ts` | After each ingest pass, `startDuePulls` pulls every host whose interval passed, one at a time, beside the index queue. |
 | Hosts table | `src/components/activity/ActivityDashboard.tsx`, `HostsTable` | One row per expected host with a line per source: last read, last error (`unreachable`, `timeout`, `no-ingest`, `malformed`), "not connected". |
 | Access gate | `src/proxy.ts` | `LLV_TOKEN` unset: every request passes. Set: cookie `llv_auth`, `Authorization: Bearer`, or `?k=` link, compared with `tokensMatch` (`src/lib/authToken.ts`, sha256 + `timingSafeEqual`). `/api/artifact/frame/` is already exempt because it authorizes itself (`FRAME_PREFIX`, `proxy.ts:7`). |
-| Host pin | `src/lib/sameOrigin.ts` | `rejectCrossOrigin` / `rejectForeignHost` admit only a `Host` of `localhost`, `127.0.0.1`, `::1` or `LLV_TS_HOST` (`allowedHostNames`, `sameOrigin.ts:32`). Every browser route calls it. |
+| Host pin | `src/lib/sameOrigin.ts` | `rejectCrossOrigin` / `rejectForeignHost` admit only a `Host` of `localhost`, `127.0.0.1`, `::1` or `LLV_TS_HOST` (`allowedHostNames`, `sameOrigin.ts:32`). Not every route calls it: of 130 `route.ts` files, 79 call it directly, most of the rest reach it through a shared handler (spawn, runtime, conversation host, self-update, MCP), and 23 never do. Those 23 are nearly all reads, among them `/api/conversations`, `/api/files`, `/api/logs`, `/api/logs/stream`, `/api/timeline`, `/api/session`, `/api/search/transcripts` and `/api/accounts`; they answer any `Host`, and only `LLV_TOKEN` stands in front of them. |
 | Gateway | `src/runtime-host/deploymentProxy.ts` | The runtime host's stable port (8898, bound to `127.0.0.1`). With `viewer-gateway.json` `{ remoteEntryPort, localEntry: "trusted" }`, `serveViewerLocalEntry` replaces the `Authorization` header of any request whose `Host` is loopback (`isLoopbackHost`, `:209`; `vouchedCredential`, `:274-302`) with the release's own credential. The remote entry (`remoteEntryPort`, also loopback, 8897 in `docs/docker.md`) is a raw pipe where the Viewer's gate decides. Every other header is forwarded as is (`forwardedHeaders`). `src/runtime-host/viewerEntries.ts` records which ports were bound (`readViewerEntries`). |
 | Phone access | `src/lib/access/phoneAccess.ts`, `bin/tailscale.mjs` | Publishes the Viewer as `https://<machine>.<tailnet>.ts.net` through `tailscale serve`, turns `LLV_TOKEN` on, sets `LLV_TS_HOST` / `LLV_TS_URL` in the Viewer's environment and restores them at boot. `dockerTailnetEntry` (`phoneAccess.ts:137-154`) targets the remote entry, and the press refuses (`TRUSTED_ENTRY`, `:263`) to publish a stable port that is a trusted local entry. This is the pattern §3.1 reuses. |
 | Onboarding | `src/components/onboarding/OnboardingDialog.tsx`, `src/lib/onboarding/steps.ts` | Steps `engines, agents, phone, voice, tour, check`; a marker written before a new step reads it as "not visited". Re-entry rows live in `ProjectRail.tsx` and `menuEntries.tsx`. |
@@ -92,12 +95,17 @@ builds on that pull.
 
 Four facts found in the code shape the primary case:
 
-1. **A Delegatus behind a public domain answers 403 on every browser route
+1. **A Delegatus behind a public domain answers 403 on every pinned route
    today.** A reverse proxy that keeps the public `Host` delivers
-   `Host: delegatus.example.com`, which `rejectForeignHost` refuses. Nothing in
-   the repo declares a public host: there is no `LLV_PUBLIC_URL`, and
-   `x-forwarded-proto` is read only to mark a cookie `secure`. The public case
-   therefore needs a declared public address before any peer work (§3.1).
+   `Host: delegatus.example.com`, which the pin refuses: every write and most
+   reads (the board, pipelines, spawn) fail, while the 23 unpinned reads in
+   the table above answer. The UI is broken, and what does answer is guarded
+   by the access key alone. Nothing in the repo declares a public host: there
+   is no `LLV_PUBLIC_URL`, and `x-forwarded-proto` is read only to mark a
+   cookie `secure`. The public case therefore needs a declared public address
+   before any peer work (§3.1). Pinning the 23 reads is outside this design
+   (§14, item 11): the pin stops no direct caller (fact 4), and the key that
+   §3.1 requires for any saved address is what guards them.
 2. **The trusted local entry vouches for any request that says it is local.**
    `vouchedCredential` decides on the `Host` header alone. `docs/docker.md`
    recommends trusting the local entry, and agents on the Docker shape need it
@@ -166,8 +174,9 @@ mutual pairing is deferred (§11).
                   ──► 200 {grant:{id, token, scopes}, install:B,
                            storeId, feeds}
                                      A refuses if storeId is its own store
-                                     or a live link's; takes over a removed
-                                     or revoked host with that store (§4.4);
+                                     or a live link's; if it is a removed or
+                                     revoked host's, A asks its operator
+                                     before continuing that host (§4.4);
                                      stores the link (token 0600) and pulls
                                      at once
 ```
@@ -239,11 +248,17 @@ anonymously: there is no public "hello", version or install id.
 **The pairing probe.** B's own self-check (§3.1) often cannot reach B's
 public name, and then it can only say `unverified`. A reaches B from outside
 by definition, so A runs the spoof test for it, just before pairing. A sends
-`POST /api/peer/v1/pair/probe {"id":"<code id>"}` three times, with `Host`
-set to `127.0.0.1`, `localhost` and `[::1]` (every name `isLoopbackHost`
-vouches for, `deploymentProxy.ts:209-219`; a proxy may route each one
-differently), each over a connection aimed at B's checked address with SNI
-set to B's name. B's route answers `vouched: true` when the request carries
+`POST /api/peer/v1/pair/probe {"id":"<code id>"}` once per **loopback probe
+name**, each over a connection aimed at B's checked address with SNI set to
+B's name. The set follows what `isLoopbackHost` vouches for
+(`deploymentProxy.ts:206-220`): it strips any port and lowercases before
+comparing with `localhost`, `127.0.0.1` and `::1`, so `LOCALHOST:8898` is
+vouched as surely as `localhost`, while a proxy may route each spelling
+differently. The seven probes are `127.0.0.1`, `localhost`, `[::1]`, the
+same three with the port of B's public URL appended (`127.0.0.1:443`), and
+`LOCALHOST`. The set lives in one exported constant beside
+`isLoopbackHost`, and a test holds it against that function, so the probes
+and the gateway cannot drift apart. B's route answers `vouched: true` when the request carries
 `Authorization: Bearer` equal to the gate key: the probe sent none, so only
 the gateway can have added it. On `vouched: true`, B burns the code and
 records its self-check state as `open-to-internet` (which disables "Allow a
@@ -288,34 +303,65 @@ which is when the code should die.
   list too." B's row keeps showing "last used", so a stale grant is visible.
 - **Rows already read from B** on removal: "Remove and keep its history" (the
   host stays on /activity as "no longer linked, read up to …") or "Remove and
-  delete its history" (`forgetHost`). Until slice 3 adds the choice, removal
-  keeps the history (§13).
+  delete its history". Until slice 3 adds the choice, removal keeps the
+  history (§13). A kept host keeps a greyed row in Settings with "Continue
+  its history" and "Delete its history".
+- **Deleting history drops the host whole.** `forgetHost` alone would leave
+  the `activity_hosts` row behind (§1): /activity would read the old span as
+  covered and empty, which is a silent gap, and a later link under the same
+  id would resume from the old cursor and never read B's rows below it
+  (`pullHost` starts at `held?.cursor`, `pull.ts:262-289`). Slice 3 adds one
+  store method, `dropHost(host)`, which deletes the host's inputs, turns and
+  its `activity_hosts` row in one `store.transaction`. With no row,
+  `storeSource` answers `pending` (`hostSources.ts:279`), so the span shows
+  as unknown, and a later link under that id reads from 0 (§4.4). The
+  recreated-store restart keeps calling `forgetHost`, whose kept row it
+  needs.
 - **Connecting again** to a B whose host is still on A, removed with its
-  history kept or `revoked`, continues that host: the new link takes the old
-  host id and cursor and reads on from where the old one stopped, so no row
-  is doubled and nothing is refused (§4.4). A revoked link is replaced in
-  place: its row offers "Connect again", which opens the connect form with
-  the host's name filled in; a successful pairing swaps in the new grant id,
-  token and install id and clears `revoked`. The name typed in the form
-  becomes the label; the host id stays the old one, and the form says
-  "Continues the history of {name}".
+  history kept or `revoked`, is an explicit operator choice made on **that
+  host's own row**: "Connect again" on a revoked row, "Continue its history"
+  on a kept one. The row opens the connect form headed "Continue the history
+  of {name}", naming the old host, its old address and the time it was read
+  up to. When B's pair answer carries the same `storeId` the host holds, the
+  new link takes the old host id and cursor and reads on from where the old
+  one stopped, so no row is doubled (§4.4); a revoked link is replaced in
+  place (new grant id, token and install id; `revoked` cleared). When the
+  `storeId` differs, the address is not that install (or its store was
+  recreated): nothing is taken over, and the form offers to save the link
+  under a new id, leaving the old host as it was.
+- **The generic connect form never takes a host over by itself.** Store and
+  install ids are public (§2.7), so a peer can answer `/pair` with another
+  host's `storeId`. When the generic form (Settings, onboarding, /activity)
+  meets a `storeId` that a removed or revoked host holds, A saves nothing yet
+  and asks: "This install says it is {name}, last read at {old address} up
+  to {time}. Continue {name}, or start fresh under a new id?" The link waits
+  in `peers.json` as `awaiting-choice`, never pulled; "Cancel", or no answer
+  within 10 minutes, deletes it and B's grant (`DELETE /grant`). "Start
+  fresh" saves the link under the typed name and leaves the old host inert:
+  it keeps its rows and span and gets no new rows, and it gives up its
+  `remoteStore` claim so the per-page same-install check (§4.4) does not
+  refuse the new host. The dialog says the cost: "If this is the same
+  machine, its earlier activity counts twice until you delete {name}'s
+  history."
 
 ### 2.7 Threat model (read and push grants)
 
 | Threat | What happens | Mitigation |
 |---|---|---|
-| Internet caller sends `Host: 127.0.0.1` through B's proxy | if the proxy reaches a trusted local entry, the gateway vouches for it as the operator: full board and spawn | a public address is refused unless it maps to a non-vouching entry; the self-check sends exactly this request and fails loudly when it is vouched (§3.1); when the self-check cannot reach B's own name, A's pairing probe sends it from outside and burns the code (§2.5) |
+| Internet caller sends `Host: 127.0.0.1` through B's proxy | if the proxy reaches a trusted local entry, the gateway vouches for it as the operator: full board and spawn | a public address is refused unless it maps to a non-vouching entry, and `needs-remote-entry` is re-evaluated at boot and on every Settings read, so a gateway changed after the save disables links (§3.1); the self-check sends exactly this request, in every spelling `isLoopbackHost` accepts, and fails loudly when it is vouched (§3.1); when the self-check cannot reach B's own name, A's pairing probe sends it from outside and burns the code (§2.5); as a second layer the trusted entry stops vouching for a request carrying `Forwarded`, `X-Forwarded-For` or `X-Real-IP` (§3.1) |
 | Any caller reaches B while B's access key is off (a LAN proxy, a public proxy, an ssh tunnel on A) | B's gate lets every request through and the Host pin admits `Host: 127.0.0.1`: board and spawn for everyone on that path | the key is checked where it is used (§3.1): no non-loopback address is saved or admitted, no code is minted and no check reports `ok` while it is off; turning phone access off keeps it while links need it |
 | Token at rest on B | B holds hashes only | a copy of B's state yields no usable token |
 | Token at rest on A | plain text in `<state>/links/peers.json` (0600, dir 0700, like `records.sqlite` and `service.env`) | readable by A's operator uid, root, the Viewer container, and every agent Delegatus runs on A as that uid. A keyring is not used: the Docker install has no Secret Service. Blast radius below. |
 | Stolen read token | the thief reads B's activity feed (fields in §5) until revoked | read-only scope; no write, no transcript, no spawn; B shows per grant "last used" and request counts (today, last 7 days), so a second reader shows as a doubled count; revoke on B. B does not show a caller address: behind a same-box proxy every request arrives from `127.0.0.1`, and `X-Forwarded-For` is caller-written (§11). |
 | Stolen push token | the thief writes invented rows into A's store under that host | per-grant daily row and byte budget and a total row cap per linked host (§4.6); A shows the stop; revoke on A |
+| Stolen push token used to erase | each POST with a fresh `storeId` would make A forget the host and start again from 0, so a thief could wipe A's genuine copy of B over and over | one automatic reset per push grant per 7 days (§4.6); a second is held, erases nothing, and the host row asks A's operator to accept the new history or revoke. The one reset the budget allows replaces the copy with whatever the thief sends, which is the same power the token already gives to write invented rows; the row says when it happened. |
 | Transport sniffing | HTTPS: nothing. LAN http: the code, the token and every page are readable on that network | plain HTTP only to loopback and RFC 1918 / link-local addresses (§3.2) with a visible warning; `100.64/10` is not among them; dispatch grants refuse plain HTTP outright (§10.3) |
 | Replay | a replayed feed read returns the same or newer rows, which the thief could read with the token anyway; a replayed pair hits a burned code (`410`); a replayed push page is refused by its base check (§4.6) | HTTPS; single-use codes |
 | Code guessing | 50-bit secret, 20 attempts per code, 5 per minute | §2.5 |
-| Peer lies about its host id | nothing to lie with: A files B's rows under the host id **A** chose at pairing, never one B sends | rows can never land under `''` (A's own) or another peer's id; `pullHost` writes only under its `host` argument |
+| Peer lies about its host id | nothing to lie with: A files B's rows under the host id **A** chose at pairing, never one B sends | rows can never land under `''` (A's own) or another *live* peer's id; `pullHost` writes only under its `host` argument |
+| Peer claims another install's `storeId` or `installId` | both ids are **public**: every holder of a read grant on X sees X's `storeId` and `install` on each `state` line (§4.1, §5.1), so any of them can answer `/pair` with them. Were A to continue a kept or revoked host X on a `storeId` match alone, the impostor would inherit X's host id and cursor and, through the version-greater upsert (`store.ts:461-476`), overwrite X's rows with rows of its own using X's public keys | a matching id is never proof of identity. Continuing a host is operator trust, made explicit: it happens only from that host's own row, or after a confirmation in the generic form naming the old host, its old address and its read span (§2.6). A live host's id is never taken; a claim on one is refused `same-install`. |
 | Peer sends forged or hostile data | B could invent activity; that is inside the trust the pairing grants | every row validated by `parseRemoteRow` / `parseRemoteTurn` (whole page or nothing), 64 MB answer cap, 90 s timeout, no redirects followed, the per-host row cap (§4.6) |
-| Address now answers as another install | `install` differs from the one recorded at pairing | refused, error `install-changed`, nothing stored |
+| Address now answers as another install | `install` differs from the one recorded at pairing | refused, error `install-changed`, nothing stored. This catches an accident (a reinstall, a re-pointed name); it proves nothing against a peer that copies a public `installId` |
 | DNS rebinding of A's check | a name resolves to a private address at check and a public one at connect | A resolves once and connects to the address it checked, sending the name in `Host` / SNI |
 | A is itself compromised | the attacker gets A's links (read tokens) | a link's reach is the scopes B granted; read scopes are read-only |
 
@@ -414,7 +460,31 @@ install"):
 - **Other refusals when saving:**
   - a public address while `publicEntry()` is none (`needs-remote-entry`);
   - an `http://` address that is not loopback or private (`http-public`, §3.2).
-- **"Check this address"** runs a reach probe and three spoof probes from B
+- **`needs-remote-entry` is a standing state, not a save-time check.** The
+  gateway file changes without the address being saved again: an operator
+  who sets `localEntry: "trusted"` or drops `remoteEntryPort` after saving
+  leaves a public address in front of a port that vouches. So the state is
+  evaluated from the saved address and `publicEntry()` (re-read from the
+  gateway and entries files each time) at boot, on every `GET /api/links`
+  (each Settings read), before each code is minted and in every "Check".
+  While it holds, Settings shows it as a red line with the fix, "Allow a
+  connection" is disabled, minting is refused and the check reports it
+  without probing. The Host pin is left alone: a spoofed request carries a
+  loopback `Host`, which admitting or refusing the public name does not
+  touch.
+- **The trusted entry stops vouching for a proxied request.** A request a
+  reverse proxy relays usually carries a header naming the client:
+  `Forwarded`, `X-Forwarded-For` or `X-Real-IP`, which Caddy's and Traefik's
+  proxies add by default and nginx adds when configured to. A local MCP
+  client or CLI talking to 8898 sends none of them. Slice 1 makes
+  `vouchedCredential` (`deploymentProxy.ts:274-287`) return `null` when a
+  loopback-`Host` request carries any of the three; such a request then
+  meets the Viewer's gate like any stranger. This is a second layer and is
+  never counted as the proof: a proxy that adds none of them is still
+  vouched for, which is what the spoof probes detect. The cost is a local
+  tool that sends one of these headers to 8898 on purpose; it now has to
+  present the key.
+- **"Check this address"** runs a reach probe and seven spoof probes from B
   to its own public URL, each with a fresh one-time nonce in
   `X-Delegatus-Self`, all over `node:https`
   with the connection and SNI aimed at the public name:
@@ -424,18 +494,18 @@ install"):
      carries an `Authorization: Bearer` equal to the gate key. The probe sends
      no `Authorization`, so a credential on it can only have been added by the
      gateway.
-  2. **Spoof:** the same request three times, with `Host` set to
-     `127.0.0.1`, `localhost` and `[::1]` (all three are loopback to
-     `isLoopbackHost`, `deploymentProxy.ts:209-219`, and a proxy may route
-     each name differently). Each passes when the proxy refuses it (`421`,
-     `444`, `404` from another site, a closed connection) or when it arrives
-     with `vouched: false`. One arriving with `vouched: true` fails the check.
+  2. **Spoof:** the same request once per loopback probe name, the seven
+     spellings of §2.5 (every one is loopback to `isLoopbackHost`, which
+     ignores case and port, and a proxy may route each differently). Each
+     passes when the proxy refuses it (`421`, `444`, `404` from another
+     site, a closed connection) or when it arrives with `vouched: false`.
+     One arriving with `vouched: true` fails the check.
 
   Outcomes shown:
   - "Turn on the access key first" (`needs-access-key`): the key is off, so
     nothing is probed; every port a stranger can reach is open (§1, fact 4);
   - "Reachable at this address" (and the date checked): the key is on, probe
-    1 answered with the public host and `vouched: false`, and all three spoof
+    1 answered with the public host and `vouched: false`, and all seven spoof
     probes passed;
   - **"Anyone on the internet can use this board as you"** (`open-to-internet`,
     red): a spoof probe arrived vouched, or probe 1 did. "Allow a
@@ -599,13 +669,17 @@ when the store cannot be read.
     | nothing | saves the link under the host id typed in the form |
     | A's own `activity_meta.store_id` | refuses, `same-install` "This is this install" |
     | a host with a **live** link: an active or failing link, a push grant, or a `hosts.json` `pull` entry | refuses, `same-install` "already linked as {name}" |
-    | a host whose link was removed with its history kept, or whose link is `revoked` | **takes that host over**: the new link gets the old host id, and the host's `cursor`, `remoteStore` and kinds stay as they are, so the first pull reads on from the old cursor. A revoked link is replaced in place (§2.6). |
+    | a host whose link was removed with its history kept, or whose link is `revoked`, and the pairing started from **that host's row** ("Connect again", "Continue its history") | **takes that host over**, the choice the operator already made on the row: the new link gets the old host id, and the host's `cursor`, `remoteStore` and kinds stay as they are, so the first pull reads on from the old cursor. A revoked link is replaced in place (§2.6). |
+    | the same, but the pairing started from the **generic** form | saves nothing yet and asks (§2.6): "Continue {name}" takes over as in the row above; "Start fresh under a new id" saves under the typed id and leaves the old host inert, its `remoteStore` released |
+    | nothing, because that host's history was **deleted** | there is no `activity_hosts` row left to match (`dropHost`, §2.6), so this is the first row: the link is saved under the typed id, and a host id that had been used before starts from cursor 0 and reads B whole |
 
     A takeover writes no row and resets nothing: the rows already under that
     host id are B's rows, and the cursor is B's version, which the same store
     id says is still valid. If B's store changed meanwhile, the id would not
     match and there is no takeover; if B's store rolled back under the same
-    id, the existing `latest < cursor` rule re-reads it whole.
+    id, the existing `latest < cursor` rule re-reads it whole. The store id
+    is only evidence that the operator's choice was a sensible one; it is
+    public (§2.7), so it never decides a takeover on its own.
   - **On every page**, inside `pullHost` and before anything is written, for
     every transport: when the page's `storeId` equals a different host's
     `remoteStore`, the page is refused with `same-install` and nothing is
@@ -614,7 +688,8 @@ when the store cannot be read.
     `hosts.json` entry written by hand, or B's store copied to another box.
     For a hand-written entry whose twin is only kept history, the message
     names the fix ("rename this entry to {name} to continue its history, or
-    delete that history").
+    delete that history"). An inert host (its `remoteStore` released by
+    "Start fresh") is no twin, and a deleted one has no row to compare.
 
 ### 4.5 Versions, row kinds and backpressure
 
@@ -633,7 +708,9 @@ when the store cannot be read.
     upgraded and asks for more, or B upgraded and now serves a kind A already
     asked for), A reads that host from `after=0` once more, **without**
     `forgetHost`: the keyed upsert leaves known rows unchanged and adds the
-    rows of the new kind written before either side learned it;
+    rows of the new kind written before either side learned it. A writes the
+    new set and cursor 0 in one transaction, so a re-read cut short resumes
+    instead of being forgotten; push follows the same rule (§4.6);
   - a row whose `type` is outside the requested set is B misbehaving and fails
     the page (`malformed`), as `pull.ts:300-306` does today.
   A full re-read is the whole history, about 15 MB (`activity-dashboard.md`),
@@ -656,7 +733,10 @@ when the store cannot be read.
 For B that A cannot reach. Paired the same way with the direction reversed: A
 mints the code with "It will send its activity here" and names the host;
 B connects with A's address and the code, and the pair answer tells B this
-grant is `activity:push`, with the kinds A reads.
+grant is `activity:push`, with the kinds A reads. The code's host is a new
+id, unless A's operator minted it from a kept host's row ("Continue its
+history"); a pushed `storeId` that a kept host holds is otherwise met with
+the same confirmation as in the connect form (§2.6), shown on A.
 
 ```
 GET  /api/peer/v1/push/activity   → {"v":1,"host":"laptop","cursor":81234,"storeId":"<uuid>"|null,
@@ -682,6 +762,33 @@ POST /api/peer/v1/push/activity?after=81234&storeId=<uuid>
   `latest` below A's cursor with the same id) makes A forget the host, record
   the new `storeId` with cursor 0, and answer `409 {cursor:0, storeId:<new>}`.
   The rows in that POST are never applied; B's next POST from `after=0` is.
+- **Resets are budgeted per grant.** A store is recreated rarely (its file
+  deleted, a restore from backup), so one automatic reset per push grant per
+  7 days covers every honest case. A second reset inside the window is
+  **held**: A forgets nothing, keeps the old `storeId` and cursor, answers
+  `409 {"v":1,"error":"reset-held","cursor":<held>,"storeId":<held>}`, and
+  the host row on A says "{name} started a new history again; receiving
+  paused until you accept it", with "Accept the new history" (one reset
+  then runs) and "Revoke". B shows the same state on its "Sends to" row and
+  pauses pushing. Without the budget, a stolen push token could erase A's
+  copy of B with every POST (§2.7). The row also records the last reset:
+  "History restarted on {date}".
+- **Row kinds are negotiated for push as for pulls (§4.5).** B reads the
+  kinds A reads from `GET` (`types`), serves the ones it knows, and names
+  the served set in each page's `state.types`. A stores that set per push
+  host, in the same `activity_hosts` column the pull uses. When a POST's
+  `state.types` differs from the stored set (A upgraded and now reads
+  `turn`, or B upgraded and now serves a kind A already asked for), rows of
+  the new kind written before that moment lie below A's cursor, and a push
+  that continued from the cursor would never send them. So A applies none of
+  that POST, **does not** call `forgetHost`, records the new set, sets the
+  host's cursor to 0 and answers `409 {"v":1,"cursor":0,"storeId":<held>}`.
+  B re-reads from `after=0`; the base check now admits `after=0` because it
+  equals A's cursor, and the version-greater upsert leaves every known row
+  unchanged while it adds the rows of the new kind. The held `storeId` is
+  unchanged, so this is not a reset and does not count against the reset
+  budget. A kind change costs one full history (about 30 000 rows, 15 MB)
+  against the daily budget, which it fits.
 - **The same-install check** (§4.4) applies to the pushed `storeId`.
 - Rows go under the host id bound to the grant on A, never a name B sends.
 - **Volume bounds.** A push grant has a budget per day (default 50 000 rows
@@ -751,7 +858,8 @@ aggregate report at `/api/activity` (times, durations, project keys and
 names, role and stage ids; no text) goes to whoever passes A's gate: anyone
 once `LLV_TOKEN` is off, including other local accounts on a shared box.
 There is no retention limit today; rows stay until the link is removed with
-"delete its history", bounded by the per-host cap (§4.6).
+"delete its history" (which drops the host's rows and its read state
+together, §2.6), bounded by the per-host cap (§4.6).
 
 ## 6. Answer: can the current ssh pull leak data?
 
@@ -770,11 +878,15 @@ login. Nothing from A's own activity is sent.
 With a `ProxyJump` in the operator's ssh config, the jump host relays only
 ciphertext. stderr is discarded.
 
-**What runs on B:** the reader, as the operator's ssh user, with
-`$HOME/.bun/bin/bun` or the `bun` on that user's PATH. It opens only
-`activity/records.sqlite`, read-only, and writes nothing. Anyone who controls
-that user's home or PATH on B controls that binary, but they already control
-B's data.
+**What runs on B:** the reader, as the operator's ssh user, with the Bun
+named by the host's `pull.bun` in `activity/hosts.json` when one is set
+(`config.bun`, quoted into the command, `pull.ts:132`), otherwise
+`$HOME/.bun/bin/bun`, otherwise the `bun` on that user's PATH
+(`pull.ts:133`). It opens only `activity/records.sqlite`, read-only, and
+writes nothing. Anyone who controls that user's home or PATH on B (or the
+file at a configured `pull.bun` path) controls that binary, but they already
+control B's data. A `pull.bun` path also appears on B's process list with
+the numbers above.
 
 **Wrong host:** `sshTransport` (`pull.ts:129-141`) passes `-o BatchMode=yes`,
 `ConnectTimeout`, `ServerAliveInterval` and `ServerAliveCountMax`, and nothing
@@ -846,12 +958,36 @@ The protocol generalizes by feed name, scope and envelope, without a redesign:
 ## 8. UI
 
 One component, `LinkConnectForm`, is the connect form everywhere. Props:
-`{ suggestedName?: string; onLinked(link) }`. It holds the address, the code,
-the name A files the host under (prefilled from B's label after pairing, or
-from `suggestedName`), and (from slice 3) a disclosure "Connect over ssh
-instead" (an ssh alias). It posts to `POST /api/links/peers` or `POST
-/api/links/peers/ssh` and renders the §8.4 errors under the field they
-concern.
+`{ suggestedName?: string; continueHost?: string; onLinked(link) }`. It holds
+the address, the code, the name A files the host under (prefilled from B's
+label after pairing, or from `suggestedName`), and (from slice 3) a
+disclosure "Connect over ssh instead" (an ssh alias). It posts to `POST
+/api/links/peers` or `POST /api/links/peers/ssh` and renders the §8.4 errors
+under the field they concern.
+
+`continueHost` is set only by a host's own row ("Connect again", "Continue
+its history"). The form is then headed "Continue the history of {name}"
+with the old address and "read up to {time}" beneath, and prefills the old
+address. Without it (Settings, onboarding, /activity), a pair answer whose
+`storeId` a kept or revoked host holds turns the form into the confirmation
+step of §2.6:
+
+```
+┌ This install says it is laptop ──────────────────┐
+│ laptop was last read at https://laptop.example.net│
+│ up to 12 Sep, 18:40. You connected to             │
+│ https://laptop-new.example.net.                   │
+│                                                   │
+│ Continue laptop only if this is the same machine: │
+│ it will add to and may change laptop's history.   │
+│                                                   │
+│ [Cancel]   [Start fresh under a new id]           │
+│                             [Continue laptop]     │
+└───────────────────────────────────────────────────┘
+```
+
+A different address from the old one is spelled out, as above; the same
+address reads "at the same address as before".
 
 ### 8.1 Settings → Linked installs
 
@@ -888,6 +1024,10 @@ design adds only this section.
 │ ├───────────────────────────────────────────────────────────────┤ │
 │ │ old-vps · ssh  alias old-vps · set in hosts.json              │ │
 │ │ Last read 2 min ago · caught up                               │ │
+│ ├───────────────────────────────────────────────────────────────┤ │
+│ │ vps-1 · no longer linked · read up to 12 Sep                  │ │
+│ │ was https://vps-1.example.net                                 │ │
+│ │               [Continue its history] [Delete its history]     │ │
 │ └───────────────────────────────────────────────────────────────┘ │
 │                                                                   │
 │ Can read this install                                             │
@@ -909,6 +1049,13 @@ design adds only this section.
   Actions: Read now, Rename (the display label only; the host id is fixed),
   Remove (with the keep or delete history choice from slice 3, §2.6); a
   `revoked` link shows "Connect again" instead of Read now (§2.6).
+- **Kept-history rows** (greyed): name, "no longer linked · read up to
+  {date}", the old address. Actions: "Continue its history" (the form with
+  `continueHost`, §8) and, from slice 3, "Delete its history" (`dropHost`).
+  These two rows, "Connect again" and "Continue its history", are the only
+  places a takeover is offered without the confirmation step.
+- **`needs-remote-entry`** renders on the "This install" block as a red line
+  whenever it holds (§3.1), whether or not the address was just saved.
 - **Grant row fields:** name, scopes, created, last used, requests today and
   in 7 days. Action: Revoke.
 - **"Allow a connection"** opens:
@@ -973,7 +1120,11 @@ On success the step shows "Connected: {name}. Its activity appears on
   files rows under the host the table already expects.
 - Below the table, "Add a machine" opens the same dialog.
 - A link removed with its history kept reads "No longer linked · read up to
-  {date}".
+  {date}", with "Manage" leading to its Settings row, where "Continue its
+  history" lives; the hosts table itself never offers a takeover.
+- A host still expected (a `hosts.json` entry) whose history was deleted has
+  no read state left, so its line reads
+  "History deleted here; this time is unknown" and its span is hatched.
 
 ```
 Host          Read                                              Excluded
@@ -1000,7 +1151,12 @@ vps-2         Not connected                    [Connect this machine]
 | `install-changed` | That address now answers as a different install. Nothing was read. If it was reinstalled, remove this link and connect again. | За цією адресою тепер інша інсталяція. Нічого не прочитано. Якщо її перевстановили, видаліть цей зв'язок і під'єднайтеся знову. |
 | `same-install` (live link) | This is the same install as {name}, which is already linked. Nothing was stored. | Це та сама інсталяція, що й {name}, вона вже під'єднана. Нічого не збережено. |
 | `same-install` (`hosts.json` entry, twin is kept history) | This is the same install as {name}, whose history is kept here. Rename this entry to {name} to continue that history, or delete that history first. | Це та сама інсталяція, що й {name}, чия історія тут збережена. Перейменуйте цей запис на {name}, щоб продовжити ту історію, або спершу видаліть її. |
-| takeover (not an error) | Continues the history of {name}. | Продовжує історію {name}. |
+| takeover from the host's row (not an error) | Continues the history of {name}, last read at {address} up to {time}. | Продовжує історію {name}, востаннє прочитану за адресою {address} до {time}. |
+| `continue-mismatch` (row flow, other `storeId`) | This address does not hold {name}'s history: it is another install, or its records were recreated. Nothing of {name} was changed. Save it under a new name, or cancel. | За цією адресою немає історії {name}: це інша інсталяція, або її записи створено заново. Нічого з {name} не змінено. Збережіть її під новою назвою або скасуйте. |
+| `confirm-continue` (generic form, `storeId` of a kept host) | This install says it is {name}, last read at {address} up to {time}. Continue {name} only if this is the same machine: it will add to and may change {name}'s history. | Ця інсталяція називає себе {name}, яку востаннє прочитано за адресою {address} до {time}. Продовжуйте {name}, лише якщо це та сама машина: вона доповнить і може змінити історію {name}. |
+| start fresh, cost line | If this is the same machine, its earlier activity counts twice until you delete {name}'s history. | Якщо це та сама машина, її попередня активність рахуватиметься двічі, доки ви не видалите історію {name}. |
+| deleted history, span | History of {name} was deleted here; that time shows as unknown. | Історію {name} тут видалено; цей час показано як невідомий. |
+| `reset-held` | {name} started a new history again; receiving is paused until you accept it. Accepting replaces what was received from it. | {name} знову почав нову історію; приймання призупинено, доки ви її не приймете. Прийняття замінить отримане від нього. |
 | `same-install` (own store) | This is this install. There is nothing to link. | Це ця сама інсталяція. Під'єднувати нічого. |
 | `no-ingest` | {name} has not recorded any activity yet. Update it to a version that records activity. | {name} ще не записав жодної активності. Оновіть його до версії, що записує активність. |
 | `malformed` | {name} sent data this install could not read. Nothing from that answer was stored. | {name} надіслав дані, які ця інсталяція не змогла прочитати. З цієї відповіді нічого не збережено. |
@@ -1008,7 +1164,7 @@ vps-2         Not connected                    [Connect this machine]
 | `quota` (total) | {name} reached its size limit here; nothing more is received from it. Remove its history or the link. | {name} досяг ліміту розміру тут; від нього більше нічого не приймається. Видаліть його історію або зв'язок. |
 | LAN warning | Plain http on a local network: anyone on this network can read what is sent. | Звичайний http у локальній мережі: будь-хто в цій мережі може прочитати те, що передається. |
 | `needs-access-key` | The access key is off, so anyone who can reach this install can open this board as you. Turn on the access key before giving it an address or letting another machine connect. | Ключ доступу вимкнено, тож будь-хто, хто може достукатися до цієї інсталяції, відкриє цю дошку від вашого імені. Увімкніть ключ доступу, перш ніж давати їй адресу чи дозволяти під'єднання іншої машини. |
-| `needs-remote-entry` | This install trusts every request that arrives on port {port} from this machine, so a public proxy cannot point there. Add a remote entry port, or stop trusting the local entry, then save again. | Ця інсталяція довіряє кожному запиту, що надходить на порт {port} з цієї машини, тож публічний проксі не можна спрямовувати туди. Додайте порт віддаленого входу або вимкніть довіру до локального входу, потім збережіть знову. |
+| `needs-remote-entry` | This install trusts every request that arrives on port {port} from this machine, so a public proxy cannot point there. Connections are disabled until you add a remote entry port or stop trusting the local entry. | Ця інсталяція довіряє кожному запиту, що надходить на порт {port} з цієї машини, тож публічний проксі не можна спрямовувати туди. Під'єднання вимкнено, доки ви не додасте порт віддаленого входу або не вимкнете довіру до локального входу. |
 | `open-to-internet` | Anyone on the internet can use this board as you: a request that claims to be local passed through your proxy and was trusted. Point the proxy at 127.0.0.1:{port} instead. Connections are disabled until the check passes. | Будь-хто в інтернеті може користуватися цією дошкою від вашого імені: запит, що видає себе за локальний, пройшов через ваш проксі й отримав довіру. Спрямуйте проксі на 127.0.0.1:{port}. Під'єднання вимкнено, доки перевірка не пройде. |
 | `peer-open` (on A) | {address} is open to the internet: a request that claimed to be local reached it as its owner. Nothing was sent, and the code was cancelled there. Its owner must point the proxy at the port shown in its Settings, then make a new code. | {address} відкрита в інтернет: запит, що видавав себе за локальний, дістався до неї як до власника. Нічого не надіслано, а код там скасовано. Її власник має спрямувати проксі на порт, указаний у її налаштуваннях, і створити новий код. |
 | `host-rewritten` | Your proxy replaces the address it was called at. Keep the Host header in the proxy and point it at 127.0.0.1:{port}. | Ваш проксі підміняє адресу, за якою до нього звернулися. Збережіть заголовок Host у проксі та спрямуйте його на 127.0.0.1:{port}. |
@@ -1029,10 +1185,15 @@ POST   /api/links/access-key          → {on: true}   (the key phone access use
 POST   /api/links/codes               {scopes: ["activity:read"] | ["activity:push"], hostName?}
                                       → {id, code, expiresAt} | {code: "needs-access-key" | "open-to-internet" | …}
 DELETE /api/links/codes/<id>
-POST   /api/links/peers               {url, code, name}         → link | {code: <§8.4 code>}
+POST   /api/links/peers               {url, code, name, continueHost?}
+                                      → link | {code: <§8.4 code>}
+                                        | {confirm: {pendingId, host, label, address, readUpTo}}
+POST   /api/links/peers/<pendingId>/choice   {choice: "continue" | "fresh" | "cancel"} → link | {}
+POST   /api/links/hosts/<host>/accept-reset  (push, after reset-held; §4.6)
 POST   /api/links/peers/ssh           {alias, name}             → link
 POST   /api/links/peers/<id>/read     → the pull result
-DELETE /api/links/peers/<id>?history=keep|delete
+DELETE /api/links/peers/<id>?history=keep|delete   (delete = dropHost, §2.6)
+DELETE /api/links/hosts/<host>        a kept host's history (dropHost)
 DELETE /api/links/grants/<id>
 ```
 
@@ -1041,7 +1202,8 @@ Peer routes (§2.5 guard): `POST /pair`, `POST /pair/probe`, `GET /info`, `GET /
 `/api/peer/v1/`.
 
 Files, all under `<state>/links/`, 0600 in a 0700 directory, written
-atomically: `self.json`, `peers.json` (links, tokens), `grants.json` (grant
+atomically: `self.json`, `peers.json` (links, tokens, and links in
+`awaiting-choice` until the operator answers, §2.6), `grants.json` (grant
 hashes, request counts, code ids and hashes). They are created on the first
 operator action, never at startup, so no `assertStateStartupMutation` step is
 involved; the Viewer (owner `viewer`) is the only writer. The boot gate
@@ -1188,6 +1350,8 @@ continue unless B's operator chooses "Revoke and stop its runs".
 | Retention limits on pulled rows beyond the per-host cap | the store is about 15 MB for a full history (`activity-dashboard.md` measurement) |
 | Answering a remote run's decision from A | a write over the link; B's board answers it in the first cut |
 | Other feeds (conversations, tasks, liveness) | extension path in §7; built only when a slice needs them |
+| Keeping a push host's old copy until a reset's new history is read to its end | an eraser can send an empty history that ends at once, so a shadow copy stops nothing the reset budget does not already stop (§4.6), and it doubles the store for every honest reset |
+| Proving an install's identity with a key pair instead of public ids | continuing a host is an operator choice made on that host's row or confirmed in the form (§2.6); signed identity comes back with request signing (above) |
 | Moving `activity/hosts.json` into the links store | both are read; a migration would be a startup mutation for no user-visible gain |
 
 ## 12. Validation against the requirement
@@ -1198,8 +1362,8 @@ continue unless B's operator chooses "Revoke and stop its runs".
 | later metadata (conversations, tasks, agent state) | §7, §10.1 |
 | no ssh needed, no server of ours, no central user database | §2, §3, §5.2; ssh stays one transport (§3.3) |
 | pull over an HTTP endpoint, configured by the user | §4.1; configured in the UI only (§8) |
-| no duplicates | keyed upsert (§4.2); the same install under two host ids refused on every page, and a reconnect continues the old host instead (§4.4) |
-| no silent gaps | version cursor (§4.2); kinds negotiated so no row sits below a cursor unread (§4.5); push pages carry their base (§4.6); unreachable time shown as unknown (§3.4) |
+| no duplicates | keyed upsert (§4.2); the same install under two host ids refused on every page; a reconnect continues the old host when the operator chooses it on that host's row or confirms it in the form, and "start fresh" states the double count it causes (§2.6, §4.4) |
+| no silent gaps | version cursor (§4.2); kinds negotiated for pulls (§4.5) and for push, where a kind change rewinds the push cursor to 0 without forgetting rows (§4.6), so no row sits below a cursor unread; push pages carry their base (§4.6); deleted history drops the host's read state too, so its span reads unknown and a reconnect reads from 0 (§2.6, §4.4); unreachable time shown as unknown (§3.4) |
 | resumable | cursor committed with each page (§4.2, §4.6) |
 | public HTTPS domain first; http refused for public addresses | §3.1, §3.2 |
 | endpoints closed without a token; uniform 401; rate-limited pairing | §2.4, §2.5; the access key is required wherever the install is reachable, and the proxy cannot turn a stranger into the operator, checked from inside (§3.1) and from the pairing peer (§2.5) |
@@ -1229,12 +1393,27 @@ the access key"; refusals `needs-access-key`, `needs-remote-entry`,
 `http-public`; `publicEntry()` shared with phone access
 (`dockerTailnetEntry`); the `/api/peer/v1/self-check` route with its nonce and
 the §2.5 `401` for anything else (the `/api/peer/` proxy exemption lands here,
-with only this route behind it); the two-probe check; the Settings dialog with
-the "This install" section only; en and uk strings for its states.
+with only this route behind it); the reach and spoof check with the loopback
+probe names beside `isLoopbackHost`; `needs-remote-entry` as a standing state
+(§3.1); `vouchedCredential` refusing to vouch for a loopback-`Host` request
+that carries `Forwarded`, `X-Forwarded-For` or `X-Real-IP`; the Settings
+dialog with the "This install" section only; en and uk strings for its
+states. Slice 1 does not add the Host pin to the 23 routes that skip it
+(§1, fact 1; §14, item 11).
 
 Acceptance:
-- a Viewer with a saved public address serves its browser routes at that
-  `Host`; without one, the same `Host` is still refused;
+- a Viewer with a saved public address serves its **pinned** routes (among
+  them `/api/pipelines`, `/api/spawn` and `/api/board`) at that `Host`;
+  without one, the same `Host` is still refused there. The unpinned reads
+  (§1) answer any `Host` before and after, and with `LLV_TOKEN` on they
+  refuse a caller without the key either way;
+- a public address saved while the entry was safe, followed by the gateway
+  file switching to a trusted local entry with no remote entry, reads
+  `needs-remote-entry` on the next Settings read and after a restart, and
+  minting is refused, with no save in between;
+- a loopback-`Host` request carrying `X-Forwarded-For`, `X-Real-IP` or
+  `Forwarded` through a trusted local entry reaches the Viewer without the
+  vouched `Authorization`; the same request without them is still vouched;
 - no non-loopback address can be saved while `LLV_TOKEN` is off: saving
   `http://192.168.x.y:port` with the key off is refused `needs-access-key`,
   as is a public `https://` address; a public address cannot be saved while
@@ -1247,12 +1426,14 @@ Acceptance:
   or minted), or refuses to start when no key can be put in place; turning
   phone access off on a loopback CLI install keeps the key while an address
   is saved;
-- behind a stand-in proxy that passes the client's `Host` through, requests
-  sent with `Host` `127.0.0.1`, `localhost` and `[::1]` through the proxy
-  aimed at the remote entry reach the Viewer **unvouched**, and the check
-  reports `ok`;
+- behind a stand-in proxy that passes the client's `Host` through and adds
+  no forwarding header, requests sent with each loopback probe name (§2.5,
+  bare, with a port and in upper case) through the proxy aimed at the
+  remote entry reach the Viewer **unvouched**, and the check reports `ok`;
 - the same proxy aimed at a trusted local entry makes the check report
-  `open-to-internet` (the red path is exercised beside the green one);
+  `open-to-internet` (the red path is exercised beside the green one), and
+  so does a probe name that only a case- or port-normalizing gateway
+  vouches for (`LOCALHOST`, `127.0.0.1:443`);
 - a proxy that rewrites `Host` to loopback reports `host-rewritten`; a
   public URL the server cannot reach reports `unverified` and does not block
   saving.
@@ -1267,16 +1448,21 @@ gateway file, port `0`) and a stand-in pass-through proxy in front of it,
 once on each entry, asserting the `vouched` flag the route reports and that
 the probe's custom `Host` arrives as sent with the connection aimed elsewhere
 (this proves the `node:https` `servername` + `headers.host` split under the
-pinned Bun); `src/proxy.test.ts` for the exemption; the Settings section
-rendered at 390 px and desktop.
+pinned Bun); `deploymentProxy.test.ts` for the three forwarding headers and
+for the probe-name constant held against `isLoopbackHost`; the standing
+`needs-remote-entry` state from a gateway file rewritten after the save;
+`src/proxy.test.ts` for the exemption; the Settings section rendered at
+390 px and desktop.
 
 ### Slice 2 — pair and pull activity over HTTPS, managed in Settings
 
 Scope: `peers.json` / `grants.json`; codes with public id (refused while the
 key is off), the pairing probe, pairing, grants,
 revoke on B, remove on A (keeps history: the host shows "No longer linked ·
-read up to {date}"; the delete choice arrives in slice 3); reconnecting takes
-over a removed or revoked host (§4.4), with "Connect again" on a revoked row; the §2.5 guard and
+read up to {date}"; the delete choice arrives in slice 3); continuing a
+removed or revoked host only from its own row ("Connect again", "Continue
+its history") or after the generic form's confirmation, with the
+`awaiting-choice` link and its 10-minute expiry (§2.6, §4.4); the §2.5 guard and
 per-code rate limit; URL policy; `GET /activity` with `types` and `GET
 /info`; an HTTP transport for `pullHost` (the transport interface becomes
 "fetch one page → NDJSON text"; ssh keeps shipping the reader); the served
@@ -1295,10 +1481,20 @@ Acceptance:
   self-probe forced to `unverified`, pairing is refused: A's probe arrives
   vouched, A shows `peer-open`, B's code is burned and B shows
   `open-to-internet`; the same proxy in front of the remote entry pairs;
-- a link removed with its history kept, then paired again to the same B:
-  rows continue under the old host id from the old cursor, with no
-  duplicates and no refusal; the same after B revokes and A uses "Connect
-  again"; a second live link to the same B is still refused `same-install`;
+- a link removed with its history kept, then paired again to the same B
+  from its row ("Continue its history"): rows continue under the old host id
+  from the old cursor, with no duplicates and no refusal; the same after B
+  revokes and A uses "Connect again". Both take over with no further
+  question;
+- the **generic** form never takes a host over without confirmation: a
+  second install that answers `/pair` with the `storeId` and `install` of
+  a kept host X gets the confirmation naming X, X's old address and its read
+  span, and until the operator chooses, X's rows, cursor and `remoteStore`
+  are byte-for-byte unchanged and nothing is pulled. "Start fresh" files the
+  new rows under the new id and leaves X's rows as they were; "Cancel" and
+  the 10-minute expiry delete the pending link and the grant on B; a row
+  flow whose answer carries another `storeId` takes nothing over;
+- a second live link to the same B is still refused `same-install`;
 - wrong secret → `code-rejected` and the open code shows one wrong attempt; a
   request naming no open code changes no counter; a probe naming no open
   code gets the uniform `401` and costs no attempt; the 6th failure on a code
@@ -1326,7 +1522,10 @@ untouched while replacing `Authorization`; end-to-end: two installs, pull
 across three pages with `limit=2`, a replayed page changes nothing, a
 recreated store on B is re-read whole, `install` change refused, the same
 store under two host ids refused in both orders; the takeover table of
-§4.4 row by row, including a pull whose cursor was mid-history at removal;
+§4.4 row by row, including a pull whose cursor was mid-history at removal,
+and an impostor that replays a kept host's public `storeId`, `install` and
+row keys with higher versions: through the generic form it changes no row
+of that host without the confirmation;
 the pairing probe against both entries of a real gateway
 (`serveViewerLocalEntry`, port `0`) behind the stand-in proxy, once per
 loopback name; **kind negotiation**: an A
@@ -1340,19 +1539,29 @@ Scope: onboarding step `machines`; "Connect this machine" and "Add a machine"
 on the hosts table; linked-source lines and "Manage"; "Connect over ssh
 instead" writing an ssh link; hosts.json ssh entries listed as "set in
 hosts.json"; the ssh hardening flags (§6); clock offset and skew-corrected
-caught-up test; "Read now"; remove with keep or delete history.
+caught-up test; "Read now"; remove with keep or delete history, and
+"Delete its history" on a kept row, both through the new store method
+`dropHost` (§2.6).
 
 Acceptance: the one `LinkConnectForm` renders in all three places (asserted by
 a DOM test mounting each entry point); a not-connected host row links with
 its own id prefilled; a peer 7 minutes ahead shows the offset and is not
 reported behind; a marker from before the step lands on it once; an ssh link
 made in the UI pulls exactly like a hosts.json entry, and one made for a B
-whose HTTPS link was removed with its history kept continues that host; `sshTransport` passes
+whose HTTPS link was removed with its history kept continues that host
+only through that host's row or the confirmation; `sshTransport` passes
 `StrictHostKeyChecking=yes`, `ForwardAgent=no` and `ClearAllForwardings=yes`;
-remove with delete leaves no rows for that host.
+remove with delete leaves no rows **and no `activity_hosts` row** for that
+host, so /activity shows its span as unknown, not as covered and empty;
+connecting again under the same host id afterwards holds every row B has,
+including those below the cursor the deleted host had reached.
 
 Tests: onboarding DOM test for the new step and marker compatibility;
-`hostSources` tests for links as hosts and for skew in `storeSource`;
+`hostSources` tests for links as hosts, for skew in `storeSource` and for
+`pending` after `dropHost`; a `store.test.ts` case that `dropHost` removes
+inputs, turns and the host row in one transaction and still refuses `''`;
+an end-to-end pull that deletes a mid-history host and re-links it under
+the same id;
 `pull.test.ts` for the ssh argument list; dashboard DOM test for the row
 states; rendered evidence at 390 px and desktop for the step, the hosts table
 and the dialog.
@@ -1367,13 +1576,19 @@ Acceptance: a B with no inbound route keeps A's /activity current; a resent
 page changes nothing; a POST whose `after` is not A's cursor is refused `409`
 and stores nothing; two senders pushing from the same cursor: one applies,
 the other gets `409` and resumes without gaps or doubles; a POST carrying a
-new `storeId` resets A's copy once and stores none of its own rows; B's
-restart mid-push resumes; a push over the daily budget gets `quota`, stores
-nothing, and A shows the pause; a push without a push grant gets the uniform
-`401`.
+new `storeId` resets A's copy once and stores none of its own rows; a
+second new `storeId` within 7 days is `reset-held`, erases nothing, and
+resets only after A's operator accepts it; B's restart mid-push resumes; a
+push over the daily budget gets `quota`, stores nothing, and A shows the
+pause; a push without a push grant gets the uniform `401`. **Kind
+negotiation**: B pushes `input` only to the end, then A (or B) upgrades so
+`turn` is read and served; the next POST gets `409 {cursor:0, storeId:<held>}`
+with nothing forgotten, and after B re-pushes from 0 A holds every turn
+written before the upgrade, with input rows unchanged and no reset counted.
 
 Tests: end-to-end with B pushing to A (isolated), dropped answers and
 resends, a stale-base POST after a reset, concurrent senders, the reset POST,
+the reset budget and `reset-held` under fake timers, the push kind change,
 the budget and cap under fake timers, `429` handling.
 
 ### Slice 5 — projects and boards from linked installs (later phase)
@@ -1456,3 +1671,15 @@ Decided by the operator (the design picks a default in each case):
 10. **Where Settings lives.** No Settings surface exists; the default is a new
     dialog opened from the rail menu and the phone menu, with Linked installs
     as its first section.
+
+Noticed on `main` while checking this design, outside its scope:
+
+11. **23 routes skip the Host pin** (§1). They are nearly all reads
+    (`/api/conversations`, `/api/files`, `/api/logs`, `/api/timeline`,
+    `/api/session`, `/api/search/transcripts`, `/api/accounts`, …). With
+    `LLV_TOKEN` off on a loopback install, a page on a DNS name rebound to
+    `127.0.0.1` can read them from the operator's own browser, which is the
+    attack `rejectCrossOrigin` names in its comment (`sameOrigin.ts:49-52`).
+    Links do not change this: every link needs the key (§3.1), and the key
+    stops the rebound page. It deserves its own issue, pinning them through
+    the proxy or one route wrapper.
