@@ -1190,6 +1190,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "lightbox.zoomOut": "Зменшити",
   "lightbox.resetZoom": "Скинути масштаб",
   "lightbox.zoomIn": "Збільшити",
+  "lightbox.previous": "Попереднє зображення",
+  "lightbox.next": "Наступне зображення",
 
   "preview.dialogTitle": "{name} — перегляд документа",
   "preview.close": "Закрити перегляд",

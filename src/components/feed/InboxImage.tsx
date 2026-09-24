@@ -10,6 +10,8 @@ import { Lightbox } from "./Lightbox";
 type View = "chip" | "thumb" | "full";
 type Gone = "deleted" | "missing";
 
+export const inboxImageSrc = (name: string) => `/api/inbox?name=${encodeURIComponent(name)}`;
+
 /**
  * Attachment card for an image the composer stored in the viewer inbox dir
  * and delivered to the agent as a file path. The transcript only carries the
@@ -31,7 +33,7 @@ export function InboxImageCard({ name, path }: { name: string; path: string }) {
     return () => window.clearTimeout(timer);
   }, [confirming]);
 
-  const src = `/api/inbox?name=${encodeURIComponent(name)}`;
+  const src = inboxImageSrc(name);
 
   const remove = async () => {
     setDeleting(true);

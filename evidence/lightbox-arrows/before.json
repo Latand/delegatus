@@ -1,0 +1,2087 @@
+{
+  "commit": "77a97449e778b0aa8d855a9351ed756634c6b362",
+  "pictures": 26,
+  "networkPictures": 21,
+  "desktop-dense": {
+    "requests": {
+      "feed": 17,
+      "open": 0,
+      "walkingLeft": 0,
+      "walkingBack": 0,
+      "total": 17,
+      "distinctUrls": 17,
+      "fetchedTwice": 0
+    },
+    "feedPictures": [
+      1,
+      5,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15,
+      16,
+      17,
+      19,
+      20,
+      21,
+      22,
+      24,
+      25,
+      26
+    ],
+    "openPictures": [],
+    "walk": [
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      }
+    ],
+    "opened": {
+      "open": true,
+      "position": null,
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": null,
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "midGallery": {
+      "open": true,
+      "position": null,
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": null,
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "backdrop": {
+      "afterPictureClick": true,
+      "afterPan": true,
+      "afterBackdrop": true,
+      "afterEscape": false
+    },
+    "log": [
+      {
+        "phase": "feed",
+        "picture": 1,
+        "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 9,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 11,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 12,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 14,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 16,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 17,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 19,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 21,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 22,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 24,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 26,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      }
+    ]
+  },
+  "desktop-spread": {
+    "requests": {
+      "feed": 7,
+      "open": 0,
+      "walkingLeft": 0,
+      "walkingBack": 0,
+      "total": 7,
+      "distinctUrls": 7,
+      "fetchedTwice": 0
+    },
+    "feedPictures": [
+      1,
+      5,
+      10,
+      15,
+      20,
+      25,
+      26
+    ],
+    "openPictures": [],
+    "walk": [
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      }
+    ],
+    "opened": {
+      "open": true,
+      "position": null,
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": null,
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "midGallery": {
+      "open": true,
+      "position": null,
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": null,
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "backdrop": null,
+    "log": [
+      {
+        "phase": "feed",
+        "picture": 1,
+        "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 26,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      }
+    ]
+  },
+  "phone-dense": {
+    "requests": {
+      "feed": 17,
+      "open": 0,
+      "walkingLeft": 0,
+      "walkingBack": 0,
+      "total": 17,
+      "distinctUrls": 17,
+      "fetchedTwice": 0
+    },
+    "feedPictures": [
+      1,
+      5,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15,
+      16,
+      17,
+      19,
+      20,
+      21,
+      22,
+      24,
+      25,
+      26
+    ],
+    "openPictures": [],
+    "walk": [
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      }
+    ],
+    "opened": {
+      "open": true,
+      "position": null,
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 0,
+        "y": 324,
+        "w": 390,
+        "h": 244
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 390,
+        "h": 797
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": null,
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 390,
+        "h": 844
+      }
+    },
+    "midGallery": {
+      "open": true,
+      "position": null,
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 0,
+        "y": 324,
+        "w": 390,
+        "h": 244
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 390,
+        "h": 797
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": null,
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 390,
+        "h": 844
+      }
+    },
+    "backdrop": {
+      "afterPictureClick": true,
+      "afterPan": null,
+      "afterBackdrop": true,
+      "afterEscape": false
+    },
+    "log": [
+      {
+        "phase": "feed",
+        "picture": 1,
+        "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 9,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 11,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 12,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 14,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 16,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 17,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 19,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 21,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 22,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 24,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 26,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      }
+    ]
+  },
+  "phone-spread": {
+    "requests": {
+      "feed": 7,
+      "open": 0,
+      "walkingLeft": 0,
+      "walkingBack": 0,
+      "total": 7,
+      "distinctUrls": 7,
+      "fetchedTwice": 0
+    },
+    "feedPictures": [
+      1,
+      5,
+      10,
+      15,
+      20,
+      25,
+      26
+    ],
+    "openPictures": [],
+    "walk": [
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      },
+      {
+        "position": null,
+        "loaded": true,
+        "mounted": 1,
+        "requested": []
+      }
+    ],
+    "opened": {
+      "open": true,
+      "position": null,
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 0,
+        "y": 324,
+        "w": 390,
+        "h": 244
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 390,
+        "h": 797
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": null,
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 390,
+        "h": 844
+      }
+    },
+    "midGallery": {
+      "open": true,
+      "position": null,
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 0,
+        "y": 324,
+        "w": 390,
+        "h": 244
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 390,
+        "h": 797
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": null,
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 390,
+        "h": 844
+      }
+    },
+    "backdrop": null,
+    "log": [
+      {
+        "phase": "feed",
+        "picture": 1,
+        "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 26,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      }
+    ]
+  },
+  "failures": [
+    "desktop-dense: the viewer opened at «null»",
+    "desktop-dense: at the last picture the edge buttons are {\"previous\":null,\"next\":null}",
+    "desktop-dense: ← to 25 shows «null»",
+    "desktop-dense: at 25 the viewer holds 1 pictures",
+    "desktop-dense: ← to 24 shows «null»",
+    "desktop-dense: at 24 the viewer holds 1 pictures",
+    "desktop-dense: ← to 23 shows «null»",
+    "desktop-dense: at 23 the viewer holds 1 pictures",
+    "desktop-dense: ← to 22 shows «null»",
+    "desktop-dense: at 22 the viewer holds 1 pictures",
+    "desktop-dense: ← to 21 shows «null»",
+    "desktop-dense: at 21 the viewer holds 1 pictures",
+    "desktop-dense: ← to 20 shows «null»",
+    "desktop-dense: at 20 the viewer holds 1 pictures",
+    "desktop-dense: ← to 19 shows «null»",
+    "desktop-dense: at 19 the viewer holds 1 pictures",
+    "desktop-dense: ← to 18 shows «null»",
+    "desktop-dense: at 18 the viewer holds 1 pictures",
+    "desktop-dense: ← to 17 shows «null»",
+    "desktop-dense: at 17 the viewer holds 1 pictures",
+    "desktop-dense: ← to 16 shows «null»",
+    "desktop-dense: at 16 the viewer holds 1 pictures",
+    "desktop-dense: ← to 15 shows «null»",
+    "desktop-dense: at 15 the viewer holds 1 pictures",
+    "desktop-dense: ← to 14 shows «null»",
+    "desktop-dense: at 14 the viewer holds 1 pictures",
+    "desktop-dense: ← to 13 shows «null»",
+    "desktop-dense: at 13 the viewer holds 1 pictures",
+    "desktop-dense: ← to 12 shows «null»",
+    "desktop-dense: at 12 the viewer holds 1 pictures",
+    "desktop-dense: ← to 11 shows «null»",
+    "desktop-dense: at 11 the viewer holds 1 pictures",
+    "desktop-dense: ← to 10 shows «null»",
+    "desktop-dense: at 10 the viewer holds 1 pictures",
+    "desktop-dense: ← to 9 shows «null»",
+    "desktop-dense: at 9 the viewer holds 1 pictures",
+    "desktop-dense: ← to 8 shows «null»",
+    "desktop-dense: at 8 the viewer holds 1 pictures",
+    "desktop-dense: ← to 7 shows «null»",
+    "desktop-dense: at 7 the viewer holds 1 pictures",
+    "desktop-dense: ← to 6 shows «null»",
+    "desktop-dense: at 6 the viewer holds 1 pictures",
+    "desktop-dense: ← to 5 shows «null»",
+    "desktop-dense: at 5 the viewer holds 1 pictures",
+    "desktop-dense: ← to 4 shows «null»",
+    "desktop-dense: at 4 the viewer holds 1 pictures",
+    "desktop-dense: ← to 3 shows «null»",
+    "desktop-dense: at 3 the viewer holds 1 pictures",
+    "desktop-dense: ← to 2 shows «null»",
+    "desktop-dense: at 2 the viewer holds 1 pictures",
+    "desktop-dense: ← to 1 shows «null»",
+    "desktop-dense: at 1 the viewer holds 1 pictures",
+    "desktop-dense: ← at the first picture shows «null»",
+    "desktop-dense: → at the last picture shows «null»",
+    "desktop-dense: mid-gallery the edge buttons are {\"previous\":null,\"next\":null}",
+    "desktop-dense: the previous button sits at null",
+    "desktop-dense: the next button sits at null",
+    "desktop-dense: a click on the backdrop left the viewer open",
+    "desktop-spread: the viewer opened at «null»",
+    "desktop-spread: at the last picture the edge buttons are {\"previous\":null,\"next\":null}",
+    "desktop-spread: ← to 25 shows «null»",
+    "desktop-spread: at 25 the viewer holds 1 pictures",
+    "desktop-spread: ← to 24 shows «null»",
+    "desktop-spread: at 24 the viewer holds 1 pictures",
+    "desktop-spread: ← to 23 shows «null»",
+    "desktop-spread: at 23 the viewer holds 1 pictures",
+    "desktop-spread: ← to 22 shows «null»",
+    "desktop-spread: at 22 the viewer holds 1 pictures",
+    "desktop-spread: ← to 21 shows «null»",
+    "desktop-spread: at 21 the viewer holds 1 pictures",
+    "desktop-spread: ← to 20 shows «null»",
+    "desktop-spread: at 20 the viewer holds 1 pictures",
+    "desktop-spread: ← to 19 shows «null»",
+    "desktop-spread: at 19 the viewer holds 1 pictures",
+    "desktop-spread: ← to 18 shows «null»",
+    "desktop-spread: at 18 the viewer holds 1 pictures",
+    "desktop-spread: ← to 17 shows «null»",
+    "desktop-spread: at 17 the viewer holds 1 pictures",
+    "desktop-spread: ← to 16 shows «null»",
+    "desktop-spread: at 16 the viewer holds 1 pictures",
+    "desktop-spread: ← to 15 shows «null»",
+    "desktop-spread: at 15 the viewer holds 1 pictures",
+    "desktop-spread: ← to 14 shows «null»",
+    "desktop-spread: at 14 the viewer holds 1 pictures",
+    "desktop-spread: ← to 13 shows «null»",
+    "desktop-spread: at 13 the viewer holds 1 pictures",
+    "desktop-spread: ← to 12 shows «null»",
+    "desktop-spread: at 12 the viewer holds 1 pictures",
+    "desktop-spread: ← to 11 shows «null»",
+    "desktop-spread: at 11 the viewer holds 1 pictures",
+    "desktop-spread: ← to 10 shows «null»",
+    "desktop-spread: at 10 the viewer holds 1 pictures",
+    "desktop-spread: ← to 9 shows «null»",
+    "desktop-spread: at 9 the viewer holds 1 pictures",
+    "desktop-spread: ← to 8 shows «null»",
+    "desktop-spread: at 8 the viewer holds 1 pictures",
+    "desktop-spread: ← to 7 shows «null»",
+    "desktop-spread: at 7 the viewer holds 1 pictures",
+    "desktop-spread: ← to 6 shows «null»",
+    "desktop-spread: at 6 the viewer holds 1 pictures",
+    "desktop-spread: ← to 5 shows «null»",
+    "desktop-spread: at 5 the viewer holds 1 pictures",
+    "desktop-spread: ← to 4 shows «null»",
+    "desktop-spread: at 4 the viewer holds 1 pictures",
+    "desktop-spread: ← to 3 shows «null»",
+    "desktop-spread: at 3 the viewer holds 1 pictures",
+    "desktop-spread: ← to 2 shows «null»",
+    "desktop-spread: at 2 the viewer holds 1 pictures",
+    "desktop-spread: ← to 1 shows «null»",
+    "desktop-spread: at 1 the viewer holds 1 pictures",
+    "desktop-spread: ← at the first picture shows «null»",
+    "desktop-spread: → at the last picture shows «null»",
+    "desktop-spread: mid-gallery the edge buttons are {\"previous\":null,\"next\":null}",
+    "desktop-spread: the previous button sits at null",
+    "desktop-spread: the next button sits at null",
+    "phone-dense: the viewer opened at «null»",
+    "phone-dense: at the last picture the edge buttons are {\"previous\":null,\"next\":null}",
+    "phone-dense: ← to 25 shows «null»",
+    "phone-dense: at 25 the viewer holds 1 pictures",
+    "phone-dense: ← to 24 shows «null»",
+    "phone-dense: at 24 the viewer holds 1 pictures",
+    "phone-dense: ← to 23 shows «null»",
+    "phone-dense: at 23 the viewer holds 1 pictures",
+    "phone-dense: ← to 22 shows «null»",
+    "phone-dense: at 22 the viewer holds 1 pictures",
+    "phone-dense: ← to 21 shows «null»",
+    "phone-dense: at 21 the viewer holds 1 pictures",
+    "phone-dense: ← to 20 shows «null»",
+    "phone-dense: at 20 the viewer holds 1 pictures",
+    "phone-dense: ← to 19 shows «null»",
+    "phone-dense: at 19 the viewer holds 1 pictures",
+    "phone-dense: ← to 18 shows «null»",
+    "phone-dense: at 18 the viewer holds 1 pictures",
+    "phone-dense: ← to 17 shows «null»",
+    "phone-dense: at 17 the viewer holds 1 pictures",
+    "phone-dense: ← to 16 shows «null»",
+    "phone-dense: at 16 the viewer holds 1 pictures",
+    "phone-dense: ← to 15 shows «null»",
+    "phone-dense: at 15 the viewer holds 1 pictures",
+    "phone-dense: ← to 14 shows «null»",
+    "phone-dense: at 14 the viewer holds 1 pictures",
+    "phone-dense: ← to 13 shows «null»",
+    "phone-dense: at 13 the viewer holds 1 pictures",
+    "phone-dense: ← to 12 shows «null»",
+    "phone-dense: at 12 the viewer holds 1 pictures",
+    "phone-dense: ← to 11 shows «null»",
+    "phone-dense: at 11 the viewer holds 1 pictures",
+    "phone-dense: ← to 10 shows «null»",
+    "phone-dense: at 10 the viewer holds 1 pictures",
+    "phone-dense: ← to 9 shows «null»",
+    "phone-dense: at 9 the viewer holds 1 pictures",
+    "phone-dense: ← to 8 shows «null»",
+    "phone-dense: at 8 the viewer holds 1 pictures",
+    "phone-dense: ← to 7 shows «null»",
+    "phone-dense: at 7 the viewer holds 1 pictures",
+    "phone-dense: ← to 6 shows «null»",
+    "phone-dense: at 6 the viewer holds 1 pictures",
+    "phone-dense: ← to 5 shows «null»",
+    "phone-dense: at 5 the viewer holds 1 pictures",
+    "phone-dense: ← to 4 shows «null»",
+    "phone-dense: at 4 the viewer holds 1 pictures",
+    "phone-dense: ← to 3 shows «null»",
+    "phone-dense: at 3 the viewer holds 1 pictures",
+    "phone-dense: ← to 2 shows «null»",
+    "phone-dense: at 2 the viewer holds 1 pictures",
+    "phone-dense: ← to 1 shows «null»",
+    "phone-dense: at 1 the viewer holds 1 pictures",
+    "phone-dense: ← at the first picture shows «null»",
+    "phone-dense: → at the last picture shows «null»",
+    "phone-dense: mid-gallery the edge buttons are {\"previous\":null,\"next\":null}",
+    "phone-dense: the previous button sits at null",
+    "phone-dense: the previous button is undefined×undefinedpx",
+    "phone-dense: the next button sits at null",
+    "phone-dense: the next button is undefined×undefinedpx",
+    "phone-dense: a tap on the backdrop left the viewer open",
+    "phone-spread: the viewer opened at «null»",
+    "phone-spread: at the last picture the edge buttons are {\"previous\":null,\"next\":null}",
+    "phone-spread: ← to 25 shows «null»",
+    "phone-spread: at 25 the viewer holds 1 pictures",
+    "phone-spread: ← to 24 shows «null»",
+    "phone-spread: at 24 the viewer holds 1 pictures",
+    "phone-spread: ← to 23 shows «null»",
+    "phone-spread: at 23 the viewer holds 1 pictures",
+    "phone-spread: ← to 22 shows «null»",
+    "phone-spread: at 22 the viewer holds 1 pictures",
+    "phone-spread: ← to 21 shows «null»",
+    "phone-spread: at 21 the viewer holds 1 pictures",
+    "phone-spread: ← to 20 shows «null»",
+    "phone-spread: at 20 the viewer holds 1 pictures",
+    "phone-spread: ← to 19 shows «null»",
+    "phone-spread: at 19 the viewer holds 1 pictures",
+    "phone-spread: ← to 18 shows «null»",
+    "phone-spread: at 18 the viewer holds 1 pictures",
+    "phone-spread: ← to 17 shows «null»",
+    "phone-spread: at 17 the viewer holds 1 pictures",
+    "phone-spread: ← to 16 shows «null»",
+    "phone-spread: at 16 the viewer holds 1 pictures",
+    "phone-spread: ← to 15 shows «null»",
+    "phone-spread: at 15 the viewer holds 1 pictures",
+    "phone-spread: ← to 14 shows «null»",
+    "phone-spread: at 14 the viewer holds 1 pictures",
+    "phone-spread: ← to 13 shows «null»",
+    "phone-spread: at 13 the viewer holds 1 pictures",
+    "phone-spread: ← to 12 shows «null»",
+    "phone-spread: at 12 the viewer holds 1 pictures",
+    "phone-spread: ← to 11 shows «null»",
+    "phone-spread: at 11 the viewer holds 1 pictures",
+    "phone-spread: ← to 10 shows «null»",
+    "phone-spread: at 10 the viewer holds 1 pictures",
+    "phone-spread: ← to 9 shows «null»",
+    "phone-spread: at 9 the viewer holds 1 pictures",
+    "phone-spread: ← to 8 shows «null»",
+    "phone-spread: at 8 the viewer holds 1 pictures",
+    "phone-spread: ← to 7 shows «null»",
+    "phone-spread: at 7 the viewer holds 1 pictures",
+    "phone-spread: ← to 6 shows «null»",
+    "phone-spread: at 6 the viewer holds 1 pictures",
+    "phone-spread: ← to 5 shows «null»",
+    "phone-spread: at 5 the viewer holds 1 pictures",
+    "phone-spread: ← to 4 shows «null»",
+    "phone-spread: at 4 the viewer holds 1 pictures",
+    "phone-spread: ← to 3 shows «null»",
+    "phone-spread: at 3 the viewer holds 1 pictures",
+    "phone-spread: ← to 2 shows «null»",
+    "phone-spread: at 2 the viewer holds 1 pictures",
+    "phone-spread: ← to 1 shows «null»",
+    "phone-spread: at 1 the viewer holds 1 pictures",
+    "phone-spread: ← at the first picture shows «null»",
+    "phone-spread: → at the last picture shows «null»",
+    "phone-spread: mid-gallery the edge buttons are {\"previous\":null,\"next\":null}",
+    "phone-spread: the previous button sits at null",
+    "phone-spread: the previous button is undefined×undefinedpx",
+    "phone-spread: the next button sits at null",
+    "phone-spread: the next button is undefined×undefinedpx"
+  ]
+}

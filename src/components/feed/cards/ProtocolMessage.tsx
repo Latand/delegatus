@@ -66,6 +66,14 @@ function ProtocolMeta({ payload }: { payload: ProtocolPayload }) {
   );
 }
 
+/** The markdown a protocol body draws: a known handshake's reason or
+    feedback. An unknown payload shows only its JSON. */
+export function protocolProse(payload: ProtocolPayload): string | undefined {
+  const type = asProtocolString(payload.type);
+  if (!type || !PROTOCOL_TYPE_META[type]) return undefined;
+  return asProtocolString(payload.reason) ?? asProtocolString(payload.feedback);
+}
+
 export function ProtocolMessageBody({ payload }: { payload: ProtocolPayload }) {
   const type = asProtocolString(payload.type);
   const meta = type ? PROTOCOL_TYPE_META[type] : undefined;
@@ -83,7 +91,7 @@ export function ProtocolMessageBody({ payload }: { payload: ProtocolPayload }) {
     );
   }
   const approve = typeof payload.approve === "boolean" ? payload.approve : undefined;
-  const prose = asProtocolString(payload.reason) ?? asProtocolString(payload.feedback);
+  const prose = protocolProse(payload);
   return (
     <div className="text-[13px]">
       <div className="flex flex-wrap items-center gap-2">
