@@ -4,6 +4,7 @@ import { ChevronRight, Crown, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
+import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
 import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
 import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { useAgentChimes } from "@/hooks/useAgentChimes";
@@ -926,6 +927,24 @@ function ViewerApp() {
   useEffect(() => {
     linkResolveRef.current = { allFiles, conversationAliases, launchRoutes };
   }, [allFiles, conversationAliases, launchRoutes]);
+  /* On the phone every in-app conversation link opens through the store
+     (#2105), whether or not the tab knows its target yet: a known one opens in
+     place, and one beyond the payload goes to the resolver as a pinned intent,
+     the way a search result does — never through a hash of its own, which
+     would be a history entry the store did not write (a sheet closed by the
+     same tap would stay under it). */
+  const openConversationIntent = useCallback((intent: ConversationHash) => {
+    const known = linkResolveRef.current;
+    const hit = resolveConversationTarget(known.allFiles, intent, known.conversationAliases, known.launchRoutes);
+    if (hit) {
+      openLinkedFile(hit);
+      return;
+    }
+    setStaleFocusNotice(false);
+    dispatchCatalogPin({ kind: "release" });
+    setFocusRequest(null);
+    setPendingHash(intent);
+  }, [openLinkedFile]);
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -937,6 +956,11 @@ function ViewerApp() {
       const windowTarget = anchor.getAttribute("target");
       if (windowTarget && windowTarget !== "_self") return;
       const intent = parseConversationHash(href);
+      if (phoneRef.current.mobile && (intent.conversationId || intent.filePath)) {
+        event.preventDefault();
+        openConversationIntent(intent);
+        return;
+      }
       const known = linkResolveRef.current;
       const hit = resolveConversationTarget(known.allFiles, intent, known.conversationAliases, known.launchRoutes);
       if (!hit) return;
@@ -945,7 +969,50 @@ function ViewerApp() {
     };
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
-  }, [openLinkedFile]);
+  }, [openLinkedFile, openConversationIntent]);
+  /* A component that navigates by the app's own fragment (a menu row, a
+     banner, a project's archive) asks through `navigateToFragment`; on the
+     phone that is served here, so the store writes the one entry (#2105). */
+  useEffect(() => {
+    if (!isMobile) return;
+    return setFragmentNavigator((hash) => {
+      const intent = parseConversationHash(hash);
+      if (intent.conversationId || intent.filePath) {
+        openConversationIntent(intent);
+        return true;
+      }
+      if (intent.project) {
+        selectProject(intent.project);
+        return true;
+      }
+      return false;
+    });
+  }, [isMobile, openConversationIntent, selectProject]);
+  /* A notification the operator tapped (#2105): the service worker hands its
+     link to the tab (`public/question-push-sw.js`), which opens it as any
+     in-app link — one entry over the place the operator was — and says so;
+     a tab that does not answer is navigated by the worker instead. */
+  useEffect(() => {
+    const worker = typeof navigator !== "undefined" ? navigator.serviceWorker : undefined;
+    if (!worker) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; url?: unknown } | null;
+      if (data?.type !== NOTIFICATION_OPEN_MESSAGE || typeof data.url !== "string") return;
+      let url: URL;
+      try {
+        url = new URL(data.url, location.href);
+      } catch {
+        return;
+      }
+      if (url.origin !== location.origin || url.pathname !== location.pathname || !url.hash) return;
+      navigateToFragment(url.hash);
+      event.ports[0]?.postMessage("taken");
+    };
+    worker.addEventListener("message", onMessage);
+    /* A listener alone does not open the page's message queue. */
+    worker.startMessages();
+    return () => worker.removeEventListener("message", onMessage);
+  }, []);
 
   /* Reveal a card without going to it. `requestFocus` above both materializes
      the node and arms the board's glide; a focus handoff wants only the first,

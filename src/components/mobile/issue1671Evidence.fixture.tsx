@@ -441,10 +441,18 @@ if (KANBAN) {
     "Hidden tray lists closed conversations", "Stage names are display names", "Review heads line on the card", "Findings ranked by severity",
     "Empty columns say where the work is",
   ];
+  const donePaths: string[] = [];
   doneTitles.forEach((title, index) => {
     const path = kanbanConversation(title, "settled", 3_600 * (index + 2));
+    donePaths.push(path);
     kanbanTasks.push(kanbanTask(`t-done-${index}`, "done", title, { assignments: [kanbanAssign(path)], updatedAt: iso(3_600 * (index + 2)) }));
   });
+  /* #2105 (`?rounds=1`): the asking conversation is the second round of a
+     chain, so its ⋯ names the round before it and opens it. */
+  if (new URLSearchParams(location.search).has("rounds")) {
+    const tail = kanbanFiles.find((entry) => entry.path === asker) as unknown as { continues?: unknown };
+    tail.continues = { conversationId: idOf(donePaths[0]!), path: donePaths[0]!, round: 2 };
+  }
   /* The live seat: the card above the tabs, never a card in a column. */
   kanbanConversation("Orchestrator", "settled", 300);
 }

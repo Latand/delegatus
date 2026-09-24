@@ -71,6 +71,7 @@ import { useTaskMutations } from "./kanban/useTaskMutations";
 import { topScreen, useMobileNav, useMobileNavStore, type MobileScreen, type MobileSheetName } from "./mobile/mobileNav";
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
+import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
@@ -253,7 +254,7 @@ export function boardFirstPaintReady(scanLoaded: boolean, boardLoaded: boolean):
 /* Kept outside the component: the React Compiler's immutability check flags
    direct global mutation (location.hash = ...) inside a component body. */
 function gotoProject(project: string) {
-  location.hash = "#p=" + encodeURIComponent(project);
+  navigateToFragment("#p=" + encodeURIComponent(project));
 }
 
 /** A desktop view: the Board (the kanban, #1695) or Conversations (the list). The phone keeps its own views. */
@@ -1543,7 +1544,7 @@ function ProjectDashboardView({
          the shell's resolver switches the project and focuses the card, and the
          entry this assignment pushes gets typed in place by that resolver — one
          deliberate gesture, one Back/Forward entry (issue #866). */
-      location.hash = formatConversationHash(file);
+      navigateToFragment(formatConversationHash(file));
       return;
     }
     /* Every same-project branch below is a deliberate card focus: record the
@@ -2048,7 +2049,7 @@ function ProjectDashboardView({
           mobileNav.closeSheet();
           onArchive(project);
           showReceipt(t("mobile2.menu.archived"), { kind: "restore", run: () => onUnarchive(project) });
-          window.location.hash = "#p=" + encodeURIComponent(OVERVIEW);
+          navigateToFragment("#p=" + encodeURIComponent(OVERVIEW));
         },
       });
     }

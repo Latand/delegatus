@@ -2193,8 +2193,11 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  *   sheets    the same path with a sheet opened at each step and closed by
  *             Back, which stays on the screen; a sheet closed by its × leaves
  *             no entry behind
- *   deeplink  a link that lands through the hash and an in-app link, each
- *             from the task screen: Back returns to the task
+ *   deeplink  a link that lands through the hash, an in-app link and a
+ *             tapped notification's hand-off, each from the task screen:
+ *             Back returns to the task
+ *   predecessor  a ⋯ row that opens the round before this conversation
+ *             takes the menu's entry; one Back returns under it, no menu
  *   reload    a reload on the task, the pipeline and the conversation keeps
  *             the screen, and Back still goes where it went before
  *   overview-reload  the same reloads over the phone's Overview, where each
@@ -2396,7 +2399,47 @@ browserTest("#2105: Back and the phone's screen history follow the path the oper
         anchor.click();
       }, id), { screen: "chat", id, sheet: null });
       await back("message-link-back", { screen: "task", id: "t-long", sheet: null });
+      /* A tapped notification: the service worker hands its link to the tab
+         (the message `public/question-push-sw.js` sends), and the tab opens it
+         as one entry and answers, so the worker does not navigate it too. */
+      let taken = false;
+      await step("notification", async () => {
+        taken = await page.evaluate((conversation) => new Promise<boolean>((resolve) => {
+          const channel = new MessageChannel();
+          channel.port1.onmessage = () => resolve(true);
+          setTimeout(() => resolve(false), 2_000);
+          navigator.serviceWorker.dispatchEvent(new MessageEvent("message", {
+            data: { type: "delegatus:open-url", url: "/#c=" + encodeURIComponent(conversation) + "#question" },
+            ports: [channel.port2],
+          }));
+        }), id);
+      }, { screen: "chat", id, sheet: null });
+      if (!taken) failures.push("deeplink: the tab did not answer the notification's hand-off");
+      await back("notification-back", { screen: "task", id: "t-long", sheet: null });
       await back("back-to-board", { screen: "board", sheet: null });
+    });
+
+    /* A ⋯ row that opens another conversation (the round before this one)
+       takes the menu's entry: one Back returns to the conversation the menu
+       was opened over, with no menu. */
+    await walk("predecessor", async ({ page, step, back, fail }) => {
+      await step("board", async () => {
+        await page.goto(`${fixtureBase}/?kanban=1&rounds=1#p=atlas`);
+        await boardShown(page);
+        await page.locator('[data-phone-kanban-tab="inbox"]').click();
+        await page.waitForSelector('[data-phone-card="task:t-systemd"]', { timeout: 10_000 });
+      }, { screen: "board", sheet: null });
+      await step("task", () => page.locator('[data-phone-card="task:t-systemd"]').click(), { screen: "task", id: "t-systemd", sheet: null });
+      const agent = conversationOf(await page.locator("[data-phone-task-agent]").first().getAttribute("data-phone-task-agent"));
+      await step("conversation", () => page.locator("[data-phone-task-agent] button").first().click(), { screen: "chat", id: agent, sheet: null });
+      await step("menu", () => page.locator('[data-mobile2-open="menu"]').first().click(), { screen: "chat", id: agent, sheet: "menu" });
+      const length = await page.evaluate(() => history.length);
+      const round = await page.locator('[data-mobile2-menu-row="predecessor"]').getAttribute("data-continues-conversation");
+      await step("round-before", () => page.locator('[data-mobile2-menu-row="predecessor"]').click(), { screen: "chat", id: round ?? undefined, sheet: null });
+      const after = await page.evaluate(() => history.length);
+      if (after !== length) fail(`opening the round from the menu left the history at ${after} entries, ${length} with the menu open`);
+      await back("round-back", { screen: "chat", id: agent, sheet: null });
+      await back("back-to-task", { screen: "task", id: "t-systemd", sheet: null });
     });
 
     await walk("reload", async ({ page, step, back }) => {

@@ -736,6 +736,40 @@
         },
         {
           "n": 7,
+          "label": "notification",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-32",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 8,
+          "label": "notification-back",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-long",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 9,
           "label": "back-to-board",
           "want": {
             "screen": "board",
@@ -748,6 +782,129 @@
             "column": "assigned",
             "hash": "#p=atlas",
             "historyLength": 4
+          }
+        }
+      ]
+    },
+    {
+      "walk": "predecessor",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "inbox",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-systemd",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-systemd",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-systemd",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "conversation",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-35",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 4,
+          "label": "menu",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": "menu",
+            "column": null,
+            "hash": "#c=conversation_kanban-35",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 5,
+          "label": "round-before",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-41",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-41",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-41",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 6,
+          "label": "round-back",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-35",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 7,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-systemd",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-systemd",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-systemd",
+            "historyLength": 5
           }
         }
       ]

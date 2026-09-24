@@ -371,6 +371,129 @@
       ]
     },
     {
+      "walk": "predecessor",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "inbox",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-systemd",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-systemd",
+            "sheet": null,
+            "column": null,
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "conversation",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-35",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 4,
+          "label": "menu",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": "menu",
+            "column": null,
+            "hash": "#c=conversation_kanban-35",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 5,
+          "label": "round-before",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-41",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-41",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-41",
+            "historyLength": 6
+          }
+        },
+        {
+          "n": 6,
+          "label": "round-back",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-35",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "inbox",
+            "hash": "#c=conversation_kanban-41",
+            "historyLength": 6
+          }
+        },
+        {
+          "n": 7,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-systemd",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "inbox",
+            "hash": "#c=conversation_kanban-41",
+            "historyLength": 6
+          }
+        }
+      ]
+    },
+    {
       "walk": "reload",
       "steps": [
         {
@@ -768,6 +891,9 @@
     "sheets: threw click: Timeout 30000ms exceeded.",
     "deeplink: step 4 (hash-link-back) wanted {\"screen\":\"task\",\"id\":\"t-long\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"assigned\",\"hash\":\"#c=conversation_kanban-32\",\"historyLength\":5}",
     "deeplink: threw evaluate: TypeError: Cannot read properties of null (reading 'prepend')",
+    "predecessor: opening the round from the menu left the history at 6 entries, 4 with the menu open",
+    "predecessor: step 6 (round-back) wanted {\"screen\":\"chat\",\"id\":\"conversation_kanban-35\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"inbox\",\"hash\":\"#c=conversation_kanban-41\",\"historyLength\":6}",
+    "predecessor: step 7 (back-to-task) wanted {\"screen\":\"task\",\"id\":\"t-systemd\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"inbox\",\"hash\":\"#c=conversation_kanban-41\",\"historyLength\":6}",
     "reload: step 3 (task-reload) wanted {\"screen\":\"task\",\"id\":\"t-many\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"assigned\",\"hash\":\"#p=atlas\",\"historyLength\":3}",
     "reload: threw click: Timeout 30000ms exceeded.",
     "overview-reload: step 3 (task-reload) wanted {\"screen\":\"task\",\"id\":\"t-favicon\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"assigned\",\"hash\":\"\",\"historyLength\":3}",
