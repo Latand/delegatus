@@ -1,5 +1,5 @@
 {
-  "commit": "1bd0c7aa71462e85458480b309afa5cc457af93e",
+  "commit": "90c11c784dd5119628c02718fc77107cdadacade",
   "pictures": 26,
   "networkPictures": 21,
   "desktop-dense": {
@@ -71,103 +71,103 @@
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 4,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 5,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 6,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 7,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 8,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 9,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 10,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 11,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 12,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 13,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 14,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 15,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 16,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 17,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 18,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 19,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 20,
+        "mounted": 3,
         "requested": [
           7
         ]
@@ -175,7 +175,7 @@
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 21,
+        "mounted": 3,
         "requested": [
           6
         ]
@@ -183,13 +183,13 @@
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 22,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 23,
+        "mounted": 3,
         "requested": [
           4
         ]
@@ -197,13 +197,13 @@
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 24,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 25,
+        "mounted": 3,
         "requested": [
           2
         ]
@@ -211,175 +211,175 @@
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "25 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       }
     ],
@@ -437,20 +437,7 @@
       "mounted": [
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
-        "data:(51990 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png",
-        "/api/inbox?name=img-15-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png",
-        "data:(56606 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png",
-        "/api/inbox?name=img-20-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png",
-        "data:(58010 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png",
-        "/api/inbox?name=img-25-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+        "data:(51990 chars)"
       ],
       "previous": {
         "x": 8,
@@ -645,13 +632,13 @@
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 4,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 5,
+        "mounted": 3,
         "requested": [
           22
         ]
@@ -659,7 +646,7 @@
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 6,
+        "mounted": 3,
         "requested": [
           21
         ]
@@ -667,13 +654,13 @@
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 7,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 8,
+        "mounted": 3,
         "requested": [
           19
         ]
@@ -681,13 +668,13 @@
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 9,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 10,
+        "mounted": 3,
         "requested": [
           17
         ]
@@ -695,7 +682,7 @@
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 11,
+        "mounted": 3,
         "requested": [
           16
         ]
@@ -703,13 +690,13 @@
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 12,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 13,
+        "mounted": 3,
         "requested": [
           14
         ]
@@ -717,13 +704,13 @@
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 14,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 15,
+        "mounted": 3,
         "requested": [
           12
         ]
@@ -731,7 +718,7 @@
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 16,
+        "mounted": 3,
         "requested": [
           11
         ]
@@ -739,13 +726,13 @@
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 17,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 18,
+        "mounted": 3,
         "requested": [
           9
         ]
@@ -753,13 +740,13 @@
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 19,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 20,
+        "mounted": 3,
         "requested": [
           7
         ]
@@ -767,7 +754,7 @@
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 21,
+        "mounted": 3,
         "requested": [
           6
         ]
@@ -775,13 +762,13 @@
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 22,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 23,
+        "mounted": 3,
         "requested": [
           4
         ]
@@ -789,13 +776,13 @@
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 24,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 25,
+        "mounted": 3,
         "requested": [
           2
         ]
@@ -803,175 +790,175 @@
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "25 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       }
     ],
@@ -1029,20 +1016,7 @@
       "mounted": [
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
-        "data:(51990 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png",
-        "/api/inbox?name=img-15-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png",
-        "data:(56606 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png",
-        "/api/inbox?name=img-20-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png",
-        "data:(58010 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png",
-        "/api/inbox?name=img-25-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+        "data:(51990 chars)"
       ],
       "previous": {
         "x": 8,
@@ -1176,10 +1150,10 @@
       "feed": 1,
       "open": 1,
       "walkingLeft": 19,
-      "walkingBack": 0,
-      "total": 21,
+      "walkingBack": 18,
+      "total": 39,
       "distinctUrls": 21,
-      "fetchedTwice": 0
+      "fetchedTwice": 18
     },
     "feedPictures": [
       26
@@ -1203,13 +1177,13 @@
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 4,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 5,
+        "mounted": 3,
         "requested": [
           22
         ]
@@ -1217,7 +1191,7 @@
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 6,
+        "mounted": 3,
         "requested": [
           21
         ]
@@ -1225,7 +1199,7 @@
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 7,
+        "mounted": 3,
         "requested": [
           20
         ]
@@ -1233,7 +1207,7 @@
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 8,
+        "mounted": 3,
         "requested": [
           19
         ]
@@ -1241,13 +1215,13 @@
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 9,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 10,
+        "mounted": 3,
         "requested": [
           17
         ]
@@ -1255,7 +1229,7 @@
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 11,
+        "mounted": 3,
         "requested": [
           16
         ]
@@ -1263,7 +1237,7 @@
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 12,
+        "mounted": 3,
         "requested": [
           15
         ]
@@ -1271,7 +1245,7 @@
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 13,
+        "mounted": 3,
         "requested": [
           14
         ]
@@ -1279,13 +1253,13 @@
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 14,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 15,
+        "mounted": 3,
         "requested": [
           12
         ]
@@ -1293,7 +1267,7 @@
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 16,
+        "mounted": 3,
         "requested": [
           11
         ]
@@ -1301,7 +1275,7 @@
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 17,
+        "mounted": 3,
         "requested": [
           10
         ]
@@ -1309,7 +1283,7 @@
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 18,
+        "mounted": 3,
         "requested": [
           9
         ]
@@ -1317,13 +1291,13 @@
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 19,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 20,
+        "mounted": 3,
         "requested": [
           7
         ]
@@ -1331,7 +1305,7 @@
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 21,
+        "mounted": 3,
         "requested": [
           6
         ]
@@ -1339,7 +1313,7 @@
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 22,
+        "mounted": 3,
         "requested": [
           5
         ]
@@ -1347,7 +1321,7 @@
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 23,
+        "mounted": 3,
         "requested": [
           4
         ]
@@ -1355,13 +1329,13 @@
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 24,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 25,
+        "mounted": 3,
         "requested": [
           2
         ]
@@ -1369,7 +1343,7 @@
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": [
           1
         ]
@@ -1377,169 +1351,205 @@
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          4
+        ]
       },
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          5
+        ]
       },
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          6
+        ]
       },
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          7
+        ]
       },
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          9
+        ]
       },
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          10
+        ]
       },
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          11
+        ]
       },
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          12
+        ]
       },
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          14
+        ]
       },
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          15
+        ]
       },
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          16
+        ]
       },
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          17
+        ]
       },
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          19
+        ]
       },
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          20
+        ]
       },
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          21
+        ]
       },
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          22
+        ]
       },
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          24
+        ]
       },
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 26,
-        "requested": []
+        "mounted": 3,
+        "requested": [
+          25
+        ]
       },
       {
         "position": "25 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       }
     ],
@@ -1597,20 +1607,7 @@
       "mounted": [
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
-        "data:(51990 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png",
-        "/api/inbox?name=img-15-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png",
-        "data:(56606 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png",
-        "/api/inbox?name=img-20-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png",
-        "data:(58010 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png",
-        "/api/inbox?name=img-25-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+        "data:(51990 chars)"
       ],
       "previous": {
         "x": 8,
@@ -1736,6 +1733,96 @@
         "phase": "left-to-2",
         "picture": 1,
         "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "right-to-3",
+        "picture": 4,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-4.png"
+      },
+      {
+        "phase": "right-to-4",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "right-to-5",
+        "picture": 6,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-6.png"
+      },
+      {
+        "phase": "right-to-6",
+        "picture": 7,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-7.png"
+      },
+      {
+        "phase": "right-to-8",
+        "picture": 9,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png"
+      },
+      {
+        "phase": "right-to-9",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "right-to-10",
+        "picture": 11,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png"
+      },
+      {
+        "phase": "right-to-11",
+        "picture": 12,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png"
+      },
+      {
+        "phase": "right-to-13",
+        "picture": 14,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png"
+      },
+      {
+        "phase": "right-to-14",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "right-to-15",
+        "picture": 16,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png"
+      },
+      {
+        "phase": "right-to-16",
+        "picture": 17,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png"
+      },
+      {
+        "phase": "right-to-18",
+        "picture": 19,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png"
+      },
+      {
+        "phase": "right-to-19",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "right-to-20",
+        "picture": 21,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png"
+      },
+      {
+        "phase": "right-to-21",
+        "picture": 22,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png"
+      },
+      {
+        "phase": "right-to-23",
+        "picture": 24,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png"
+      },
+      {
+        "phase": "right-to-24",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
       }
     ]
   },
@@ -1808,103 +1895,103 @@
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 4,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 5,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 6,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 7,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 8,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 9,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 10,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 11,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 12,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 13,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 14,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 15,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 16,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 17,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 18,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 19,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 20,
+        "mounted": 3,
         "requested": [
           7
         ]
@@ -1912,7 +1999,7 @@
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 21,
+        "mounted": 3,
         "requested": [
           6
         ]
@@ -1920,13 +2007,13 @@
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 22,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 23,
+        "mounted": 3,
         "requested": [
           4
         ]
@@ -1934,13 +2021,13 @@
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 24,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 25,
+        "mounted": 3,
         "requested": [
           2
         ]
@@ -1948,175 +2035,175 @@
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "25 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       }
     ],
@@ -2174,20 +2261,7 @@
       "mounted": [
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
-        "data:(51990 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png",
-        "/api/inbox?name=img-15-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png",
-        "data:(56606 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png",
-        "/api/inbox?name=img-20-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png",
-        "data:(58010 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png",
-        "/api/inbox?name=img-25-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+        "data:(51990 chars)"
       ],
       "previous": {
         "x": 8,
@@ -2382,13 +2456,13 @@
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 4,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 5,
+        "mounted": 3,
         "requested": [
           22
         ]
@@ -2396,7 +2470,7 @@
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 6,
+        "mounted": 3,
         "requested": [
           21
         ]
@@ -2404,13 +2478,13 @@
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 7,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 8,
+        "mounted": 3,
         "requested": [
           19
         ]
@@ -2418,13 +2492,13 @@
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 9,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 10,
+        "mounted": 3,
         "requested": [
           17
         ]
@@ -2432,7 +2506,7 @@
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 11,
+        "mounted": 3,
         "requested": [
           16
         ]
@@ -2440,13 +2514,13 @@
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 12,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 13,
+        "mounted": 3,
         "requested": [
           14
         ]
@@ -2454,13 +2528,13 @@
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 14,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 15,
+        "mounted": 3,
         "requested": [
           12
         ]
@@ -2468,7 +2542,7 @@
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 16,
+        "mounted": 3,
         "requested": [
           11
         ]
@@ -2476,13 +2550,13 @@
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 17,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 18,
+        "mounted": 3,
         "requested": [
           9
         ]
@@ -2490,13 +2564,13 @@
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 19,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 20,
+        "mounted": 3,
         "requested": [
           7
         ]
@@ -2504,7 +2578,7 @@
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 21,
+        "mounted": 3,
         "requested": [
           6
         ]
@@ -2512,13 +2586,13 @@
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 22,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 23,
+        "mounted": 3,
         "requested": [
           4
         ]
@@ -2526,13 +2600,13 @@
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 24,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 25,
+        "mounted": 3,
         "requested": [
           2
         ]
@@ -2540,175 +2614,175 @@
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "1 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "2 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "3 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "4 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "5 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "6 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "7 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "8 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "9 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "10 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "11 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "12 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "13 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "14 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "15 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "16 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "17 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "18 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "19 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "20 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "21 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "22 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "23 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "24 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "25 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 3,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       },
       {
         "position": "26 / 26",
         "loaded": true,
-        "mounted": 26,
+        "mounted": 2,
         "requested": []
       }
     ],
@@ -2766,20 +2840,7 @@
       "mounted": [
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
         "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
-        "data:(51990 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png",
-        "/api/inbox?name=img-15-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png",
-        "data:(56606 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png",
-        "/api/inbox?name=img-20-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png",
-        "data:(58010 chars)",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png",
-        "/api/inbox?name=img-25-redesign.png",
-        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+        "data:(51990 chars)"
       ],
       "previous": {
         "x": 8,
@@ -2908,5 +2969,8 @@
       }
     ]
   },
-  "failures": []
+  "failures": [
+    "desktop-unmounted: walking back over reached pictures made 18 image requests",
+    "desktop-unmounted: fetched more than once: [[\"/api/inbox?name=img-25-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png\",2],[\"/api/inbox?name=img-20-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png\",2],[\"/api/inbox?name=img-15-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png\",2],[\"/api/inbox?name=img-10-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-7.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-6.png\",2],[\"/api/inbox?name=img-05-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-4.png\",2]]"
+  ]
 }
