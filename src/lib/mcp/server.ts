@@ -2949,6 +2949,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Update a durable board task.",
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
     "`refine` writes only the human part, as it always has.",
+    "To change one line of `details`, send `replaceLine`, `removeLine` or `appendLine` instead of the whole field; the answer carries detailsLength and the revision, never the field.",
     "`icon` sets the card's lucide icon; give one to a task that has none.",
   ].join(" "),
   create_pipeline: [
@@ -3298,7 +3299,18 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     expectedRevision: z.string().min(1).optional().describe("Required for pos or placement updates: copy the opaque revision from get_task or list_tasks."),
     text: z.string().optional().describe("The HUMAN part: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context does not belong here; pass it as details."),
     details: z.string().nullable().optional()
-      .describe("Agent-facing context (#1834): a string sets or replaces it, null or an empty string clears it. Its own field, so an update carrying only details leaves text byte for byte and the reverse. Read the current value with get_task first, since list_tasks truncates it and a write replaces the whole field rather than appending."),
+      .describe("Agent-facing context (#1834): a string sets or replaces it, null or an empty string clears it. Its own field, so an update carrying only details leaves text byte for byte and the reverse. Read the current value with get_task first, since list_tasks truncates it and a write replaces the whole field rather than appending. To change one line, send replaceLine, removeLine or appendLine instead."),
+    replaceLine: z.object({
+      prefix: z.string().min(1).optional().describe("Replace the one details line starting with this text (leading spaces ignored). More or fewer than one match is refused and nothing is stored."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
+      text: z.string().describe("The new line."),
+    }).optional().describe("Replace one line of the stored details without resending the rest."),
+    removeLine: z.object({
+      prefix: z.string().min(1).optional().describe("Remove the one details line starting with this text (leading spaces ignored)."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
+    }).optional().describe("Remove one line of the stored details."),
+    appendLine: z.string().min(1).optional()
+      .describe("Append one line to the stored details. Edits apply in the order replaceLine, removeLine, appendLine, atomically against the details stored at the write and under the details limit; not combined with details."),
     status: z.enum(["inbox", "assigned", "blocked", "done"]).optional(),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Pinned retains existing pos when omitted; unplaced removes pos. Placement updates require expectedProject and expectedRevision."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
@@ -3348,6 +3360,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     pipelineId: entityIdSchema,
     /* #774: was `z.string().min(1)` while the route admitted a fixed set. */
     action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review (#1938): the creator or operator resumes a needs_review pipeline, whose spent review budget left an unreviewed head, by adding addRounds review rounds; the review stage then runs on the current head. Requires addRounds and expectedRevision from get_pipeline. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
+    stageId: z.string().min(1).optional().describe("The stage a graph edit, a legacy-review conversion or a retry-stage names. retry-stage: the stage the pipeline waits on, retried whatever ended its attempt; without launchId it is sent as expectedStageId with that stage's current attempt as expectedAttempt, so a stage or attempt that moved on is refused with STAGE_CHANGED."),
+    launchId: z.string().min(1).optional().describe("retry-stage only, optional, and only for an attempt whose launch failed: the launchId get_pipeline with stageId answers for it, sent with stageId. The engine then retries only a failed or conflicted launch receipt, so omit it for an agent that started and then failed or parked. A launch that is no longer the current attempt's is refused."),
     answer: z.string().min(1).max(12_000).optional(),
     addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("continue-review only: review rounds to add to the spent fail edge. Each fail but the last loops to the fix stage; the last hands its findings to one fix, then parks in needs_review again if that fix writes a new head."),
     reviewLimit: z.number().int().optional().describe("preview/convert-legacy-review only: the finite review count the converted reviewer gets, 1–9. It runs that many times when every review fails, the final review included; the default is the limit recorded on the stage's review flow."),
