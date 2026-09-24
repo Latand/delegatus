@@ -26,14 +26,14 @@ import { useLocale } from "@/lib/i18n";
 import type { AttentionNotice } from "@/lib/attention/types";
 import type { FileEntry } from "@/lib/types";
 
-import { advanceAttentionCycle, attentionExpiries, attentionId, buildAttentionQueue, type AttentionItem } from "./attention";
+import { advanceAttentionCycle, attentionExpiries, attentionId, type AttentionItem } from "./attention";
 import { AttentionHost } from "./attention/AttentionHost";
 import { useDismissalOverlay } from "./attention/dismissalOverlay";
 import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
-import { AttentionIsland, AttentionQueueRow } from "./attention/AttentionIsland";
+import { AttentionIsland, AttentionLaneRow, AttentionQueueRow } from "./attention/AttentionIsland";
 import { AttentionToast } from "./attention/AttentionToast";
-import { buildMobileAttentionQueue } from "./attention/attentionQueue";
+import { attentionEntryProject, buildNeedsYouQueue, laneFocusPath, type MobileAttentionEntry } from "./attention/attentionQueue";
 import { MobileAttentionSheet, type MobileNoticeRow } from "./attention/MobileAttentionSheet";
 import { roleNameById } from "./builderCopy";
 import { purgeLegacyOperatorCredential } from "./operatorCredential";
@@ -48,11 +48,10 @@ import { expandKanbanSeat } from "./kanban/kanbanSeatStore";
 import { ConnectionPill } from "./ConnectionPill";
 import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows";
 import { KeepAwakeProvider } from "./KeepAwakeControl";
-import { needsDecisionPipelineRows } from "./mobile/mobileBoardModel";
 import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { getMobileNav, readMobileNavEntry, screenKey, standsOnOwnUrl, topScreen, useMobileNavStore, type MobileNavConfig, type MobileScreen } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
-import { overviewLiftProject, overviewPipelineRows, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
+import { overviewLiftProject, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
 import { onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
@@ -832,7 +831,16 @@ function ViewerApp() {
      projection does not move when a report merely gets old, so without this
      tick an expired item would sit in the badge until an unrelated change. */
   const [clock, setClock] = useState(() => Date.now() / 1000);
-  const queue = useMemo(() => buildAttentionQueue(files, clock), [files, clock]);
+  /* A lane closed from the board is gone from its queue from the tap until its
+     close is answered (#1671), so the badge stops counting it on the same tap
+     that took the row away. */
+  const closingPipelines = useClosingPipelines();
+  /* The lanes parked on the operator ride in the same list as the
+     conversations (#2129): the island's number, its popover and its «Next ›»,
+     and the phone's ⚠ badge, all read `needsYou`, so the header counts the
+     lanes the cards and the columns already mark, and a lane dismissed on its
+     card leaves every count at once. */
+  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines), [files, pipelines, clock, closingPipelines]);
   useEffect(() => {
     const expiries = attentionExpiries(files).filter((at) => at > clock);
     if (!expiries.length) return;
@@ -854,8 +862,8 @@ function ViewerApp() {
   );
 
   useEffect(() => {
-    document.title = queue.length ? `(${queue.length}) ${PRODUCT_NAME}` : PRODUCT_NAME;
-  }, [queue.length]);
+    document.title = needsYou.length ? `(${needsYou.length}) ${PRODUCT_NAME}` : PRODUCT_NAME;
+  }, [needsYou.length]);
 
   useEffect(() => {
     if (!queueOpen) return;
@@ -885,10 +893,10 @@ function ViewerApp() {
     if (isMobile) setAttentionFilter(false);
   }, [isMobile]);
   useEffect(() => {
-    if (queue.length) return;
+    if (needsYou.length) return;
     setQueueOpen(false);
     setAttentionFilter(false);
-  }, [queue.length]);
+  }, [needsYou.length]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const cancelPendingIntent = useCallback(() => setPendingHash(null), []);
@@ -1095,17 +1103,20 @@ function ViewerApp() {
   /* Membership key first, Set second: polls rebuild the queue array, but the
      set identity only moves when membership does, so the memoized node layers
      never re-render for an unchanged filter (D6). */
-  const attentionKey = useMemo(() => queue.map((item) => item.file.path).sort().join("\n"), [queue]);
+  const attentionKey = useMemo(
+    () => needsYou.flatMap((entry) => (entry.kind === "conversation" ? [entry.item.file.path] : [])).sort().join("\n"),
+    [needsYou],
+  );
   const attentionPaths = useMemo<ReadonlySet<string> | null>(
     () => (attentionFilter ? new Set(attentionKey.split("\n").filter(Boolean)) : null),
     [attentionFilter, attentionKey],
   );
 
-  /* N never leaves the current project (D4): the same items and order
-     buildAttentionQueue(files, now, project) yields, taken off the global memo. */
-  const projectQueue = useMemo(
-    () => (project === OVERVIEW ? [] : queue.filter((item) => item.project === project)),
-    [queue, project],
+  /* N never leaves the current project (D4): the same items and order the
+     global list holds, conversations and lanes, taken off its memo. */
+  const projectEntries = useMemo(
+    () => (project === OVERVIEW ? [] : needsYou.filter((entry) => attentionEntryProject(entry) === project)),
+    [needsYou, project],
   );
 
   /* The phone's ONE queue (mobile v2 §4.1, §4.6): the bar's badge counts it,
@@ -1113,27 +1124,16 @@ function ViewerApp() {
      It is SCOPED to the project behind the badge — the board under the bar
      shows one project, so counting every project's rows made the badge promise
      items that screen could not reach. The all-projects screen has no project
-     behind the badge, so there the list stays the whole queue.
+     behind the badge, so there the list stays the whole queue, and on the
+     phone's Overview the columns pin every project's parked lanes (#2098), so
+     the badge is the sum of the tabs' ⚠ marks.
 
      Pipelines waiting on a decision are queue items like any other (§4.6), and
      they come from the same pure answer the board's Needs-you section renders
      (`needsDecisionPipelineRows`), so the count, the sheet and the rows under
-     it cannot disagree. */
-  const shellQueue = project === OVERVIEW ? queue : projectQueue;
-  /* A lane closed from the board is gone from its queue from the tap until its
-     close is answered (#1671), so the badge stops counting it on the same tap
-     that took the row away. */
-  const closingPipelines = useClosingPipelines();
-  /* On the phone's Overview the columns pin every project's parked lanes
-     (#2098), so the badge and the sheet carry them too: one list, and the
-     badge is the sum of the tabs' ⚠ marks. */
-  const shellPipelineRows = useMemo(
-    () => (!isMobile ? [] : project === OVERVIEW ? overviewPipelineRows(pipelines, clock, closingPipelines) : needsDecisionPipelineRows(pipelines, project, clock, closingPipelines)),
-    [pipelines, project, clock, isMobile, closingPipelines],
-  );
-  /* Joined into the ONE list the badge counts, the sheet lists and its
-     «Next ›» walks (lane 8, `attentionQueue.ts`). */
-  const shellEntries = useMemo(() => buildMobileAttentionQueue(shellQueue, shellPipelineRows), [shellQueue, shellPipelineRows]);
+     it cannot disagree. It is a slice of the desktop island's list, so the
+     phone and the desktop cannot disagree either (#2129). */
+  const shellEntries = project === OVERVIEW ? needsYou : projectEntries;
   const shellQueueCount = shellEntries.length;
   /* An agent's request_attention on the phone (docs/design/needs-attention.md
      §6): a dot on the ⚠ badge and a row in its sheet, never a move. Each row
@@ -1155,6 +1155,28 @@ function ViewerApp() {
     return { notice, target: title, by };
   }), [phoneNotices.notices, allFiles, pipelines, tasks, t]);
 
+  /* Where a desktop queue entry opens, switching the project first when it
+     lives in another one: a conversation in its reader, and a lane on the
+     card that holds it (#2129), which the board finds by the lane's own key
+     as it does for a pipeline link. A lane has no conversation to type the
+     history entry after, so a switch writes the project's own entry and Back
+     returns to the board the operator left. */
+  const openAttentionEntry = useCallback(
+    (entry: MobileAttentionEntry) => {
+      if (entry.kind === "conversation") {
+        if (entry.item.project !== project) applyProject(entry.item.project);
+        requestFocus(entry.item.file.path);
+        return;
+      }
+      const lane = entry.row.pipeline;
+      setPendingHash(null);
+      if (lane.project !== project) selectProject(lane.project);
+      focusNonceRef.current += 1;
+      setFocusRequest({ path: laneFocusPath(lane.id), nonce: focusNonceRef.current, catalog: false });
+    },
+    [project, applyProject, selectProject, requestFocus],
+  );
+
   useEffect(() => {
     /* N and F are desktop keys (D4/D6): the phone layout renders without the
        scheme dimming channel, and a hardware keyboard there must never drive
@@ -1171,12 +1193,12 @@ function ViewerApp() {
       if (typing(event.target)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "n" || event.key === "N") {
-        const next = advanceAttentionCycle(cycleRef, projectQueue, event.shiftKey ? -1 : 1);
+        const next = advanceAttentionCycle(cycleRef, projectEntries, event.shiftKey ? -1 : 1);
         if (!next) return;
         event.preventDefault();
-        requestFocus(next.file.path);
+        openAttentionEntry(next);
       } else if (event.key === "f" || event.key === "F") {
-        if (!queue.length) return;
+        if (!needsYou.length) return;
         event.preventDefault();
         setAttentionFilter((value) => !value);
       } else if (event.key === "b" || event.key === "B") {
@@ -1194,7 +1216,7 @@ function ViewerApp() {
     };
     window.addEventListener("keydown", onDown);
     return () => window.removeEventListener("keydown", onDown);
-  }, [isMobile, projectQueue, queue.length, requestFocus, openSearch, toggleRail]);
+  }, [isMobile, projectEntries, needsYou.length, openAttentionEntry, openSearch, toggleRail]);
 
   /* A popover click is a deliberate act, so unlike the N hotkey it may switch
      the project; the focus hand-off glides the board to the node. */
@@ -1210,6 +1232,21 @@ function ViewerApp() {
     [project, applyProject, requestFocus],
   );
 
+  /* A popover row that names a lane: the same deliberate act as a
+     conversation's row, landing on the lane's card. */
+  const jumpToEntry = useCallback(
+    (entry: MobileAttentionEntry) => {
+      if (entry.kind === "conversation") {
+        jumpToItem(entry.item);
+        return;
+      }
+      setQueueOpen(false);
+      cycleRef.current = entry.id;
+      openAttentionEntry(entry);
+    },
+    [jumpToItem, openAttentionEntry],
+  );
+
   /* The island's visible Next (issue #963): a deliberate act like a popover
      click, so it advances over the GLOBAL queue and may switch the project —
      the same hand-off `jumpToItem` performs. It moves the SAME cycle pointer
@@ -1217,12 +1254,10 @@ function ViewerApp() {
      so the button and the shortcut always continue one sequence. */
   const advanceGlobalAttention = useCallback(
     (dir: 1 | -1) => {
-      const next = advanceAttentionCycle(cycleRef, queue, dir);
-      if (!next) return;
-      if (next.project !== project) applyProject(next.project);
-      requestFocus(next.file.path);
+      const next = advanceAttentionCycle(cycleRef, needsYou, dir);
+      if (next) openAttentionEntry(next);
     },
-    [queue, project, applyProject, requestFocus],
+    [needsYou, openAttentionEntry],
   );
 
   /* A crowned row in the popover focuses its conversation, switching project
@@ -1265,7 +1300,7 @@ function ViewerApp() {
   const attentionBadge = (
     <div ref={queueRef} className="pointer-events-auto relative">
       <AttentionIsland
-        count={queue.length}
+        count={needsYou.length}
         queueOpen={queueOpen}
         filterActive={attentionFilter}
         onToggleQueue={() => setQueueOpen((value) => !value)}
@@ -1315,9 +1350,11 @@ function ViewerApp() {
           <div className="px-2.5 pb-1 pt-1.5 text-label font-semibold text-secondary">
             {t("attention.popoverTitle")}
           </div>
-          {queue.map((item) => (
-            <AttentionQueueRow key={item.id} item={item} onOpen={() => jumpToItem(item)} />
-          ))}
+          {needsYou.map((entry) => (entry.kind === "conversation" ? (
+            <AttentionQueueRow key={entry.id} item={entry.item} onOpen={() => jumpToEntry(entry)} />
+          ) : (
+            <AttentionLaneRow key={entry.id} row={entry.row} projectName={projectDisplayNames[entry.row.pipeline.project]} onOpen={() => jumpToEntry(entry)} />
+          )))}
         </div>
       ) : null}
     </div>

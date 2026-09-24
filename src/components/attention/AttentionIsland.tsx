@@ -2,15 +2,18 @@
 
 import { ChevronRight, Filter } from "lucide-react";
 
-import { projectDisplayName } from "@/lib/displayNames";
+import { projectDisplayName, projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
+import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardModel";
 
 import type { AttentionItem } from "../attention";
 import { cleanTitle, fmtAge } from "../utils";
-import { decisionLine } from "./decision";
+import { decisionLine, needLabel } from "./decision";
+import { laneNeed } from "./needReason";
 
 interface Props {
-  /** buildAttentionQueue's length, passed in so every surface shows one number. */
+  /** `buildNeedsYouQueue`'s length (conversations and parked lanes), passed in
+      so every surface shows one number. */
   count: number;
   queueOpen: boolean;
   filterActive: boolean;
@@ -135,6 +138,39 @@ export function AttentionQueueRow({ item, onOpen }: { item: AttentionItem; onOpe
         className="w-full truncate text-[11px] text-muted"
       >
         {decisionLine(t, item.file) ?? t("attention.decisionQuestion")}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * A lane parked on the operator, as a row of the same popover (#2129): the
+ * lane's task, its project, how long it has waited, and the reason in the
+ * words its card uses (`needLabel`), so the row and the card cannot name one
+ * decision two ways. Opening it lands on the card that holds the lane.
+ */
+export function AttentionLaneRow({ row, projectName, onOpen }: { row: MobileBoardPipelineRow; projectName?: string; onOpen: () => void }) {
+  const { t } = useLocale();
+  const need = laneNeed(row.pipeline)?.need ?? null;
+  const project = projectTitle(row.pipeline.project, projectName);
+  return (
+    <button
+      type="button"
+      data-attention-lane={row.id}
+      className="flex w-full min-w-0 flex-col gap-0.5 rounded-[8px] px-2.5 py-2 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      onClick={onOpen}
+    >
+      <span className="flex w-full min-w-0 items-center gap-1.5">
+        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{row.task}</span>
+        {project ? (
+          <span className="shrink-0 rounded-full border border-border bg-canvas px-1.5 text-[10px] font-semibold text-muted" title={row.pipeline.project}>
+            {project}
+          </span>
+        ) : null}
+        {need ? <span className="shrink-0 text-[10.5px] text-muted">{fmtAge(need.since)}</span> : null}
+      </span>
+      <span data-attention-decision className="w-full truncate text-[11px] text-muted">
+        {need ? needLabel(t, need) : t("needs.laneDecision")}
       </span>
     </button>
   );

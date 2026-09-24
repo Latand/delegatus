@@ -56,6 +56,7 @@ import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
 import { MobileKanban } from "./mobile/MobileKanban";
 import { useMobileBoardRowActions } from "./mobile/MobileRowActions";
 import { attentionKey } from "./mobile/phoneKanbanModel";
+import { laneFocusId } from "./attention/attentionQueue";
 import { MobileFocusView } from "./mobile/MobileFocusView";
 import { MobileHostSheet } from "./mobile/MobileHostSheet";
 import { MobileSeatCard } from "./mobile/MobileSeatCard";
@@ -1171,6 +1172,14 @@ function ProjectDashboardView({
      coupled — an armed-but-unconsumed edge is the sticky path back. */
   useEffect(() => {
     if (!focusRequest) return;
+    /* A lane the needs-you queue names (#2129): the card that holds it, the
+       way a pipeline link reveals it, once this project's pipelines carry it. */
+    const lane = laneFocusId(focusRequest.path);
+    if (lane) {
+      if (!pipelines.some((pipeline) => pipeline.id === lane && pipeline.project === project) || !focusEdge.current.consume(focusRequest)) return;
+      revealPipeline(lane);
+      return;
+    }
     const placeable = pendingFocusTarget(focusRequest.path, files) !== null
       || compactPipelinePaths.has(focusRequest.path);
     if (!placeable || !focusEdge.current.consume(focusRequest)) return;
@@ -1184,7 +1193,7 @@ function ProjectDashboardView({
     setEphemeral((prev) => compactPipelinePaths.has(path)
       ? replaceCompactPipelineEphemeral(prev, path, pipelines, deckFlows, files)
       : prev.includes(path) ? prev : [...prev, path]);
-  }, [focusRequest, compactPipelinePaths, pipelines, deckFlows, files]);
+  }, [focusRequest, compactPipelinePaths, pipelines, deckFlows, files, project]);
 
   /* Placement with no navigation: the same materialization as above, minus the
      line that arms `pendingFocusRef`. That ref is what the next effect turns
