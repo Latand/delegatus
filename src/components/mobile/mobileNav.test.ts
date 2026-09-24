@@ -338,6 +338,44 @@ describe("traversals", () => {
     expect(topScreen(nav.getState())).toEqual({ kind: "task", id: "t1" });
   });
 
+  /* A link that never opened leaves the tab on an entry the store did not
+     write, with the screen it was taken from still drawn. ‹ from there goes to
+     the screen under that one, however the browser placed the link's entry:
+     above the screen (a push) or in its place (a replacement). */
+  test("‹ on a link that never opened, pushed above the task, passes through it to the board", async () => {
+    const { nav, b } = phone();
+    nav.push({ kind: "task", id: "t1" });
+    b.navigate("#c=c-never.jsonl");
+    expect(topScreen(nav.getState())).toEqual({ kind: "task", id: "t1" });
+    const landings: string[] = [];
+    b.host.onPopstate((state, event) => { landings.push(nav.land(state, event).kind); });
+    nav.back();
+    expect(kinds(nav)).toEqual(["board"]);
+    await settle();
+    expect(b.index()).toBe(0);
+    expect(kinds(nav)).toEqual(["board"]);
+    /* One entry passed through, one landed on (this history lands inside
+       the call, so the second is heard first). */
+    expect([...landings].sort()).toEqual(["passing", "phone"]);
+    /* The history agrees: the next Back leaves nothing drawn behind. */
+    b.forward();
+    expect(topScreen(nav.getState())).toEqual({ kind: "task", id: "t1" });
+  });
+
+  test("‹ on a link that took the task's entry lands on the board in one pop", async () => {
+    const { nav, b } = phone();
+    nav.push({ kind: "task", id: "t1" });
+    /* The link replaced the entry the task stood on. */
+    b.host.history.replaceState(null, "", "#c=c-never.jsonl");
+    b.deliver(null);
+    expect(topScreen(nav.getState())).toEqual({ kind: "task", id: "t1" });
+    nav.back();
+    await settle();
+    expect(b.index()).toBe(0);
+    expect(kinds(nav)).toEqual(["board"]);
+    expect(b.hash()).toBe("#p=atlas");
+  });
+
   test("a project link the store did not write is that project's board", () => {
     const { nav, b } = phone();
     nav.push({ kind: "task", id: "t1" });
@@ -406,6 +444,19 @@ describe("a pop that lands late", () => {
     b.forward();
     await after(250);
     expect(nav.getState().sheet).toBe("menu");
+  });
+
+  test("‹ through a link's entry that never opened reaches the board when each landing comes late", async () => {
+    const { nav, b } = slow(30);
+    nav.push({ kind: "task", id: "t1" });
+    b.navigate("#c=c-never.jsonl");
+    nav.back();
+    await after(150);
+    expect(b.index()).toBe(0);
+    expect(kinds(nav)).toEqual(["board"]);
+    /* Writes after it go above the board. */
+    nav.push({ kind: "pipelines" });
+    expect(b.index()).toBe(1);
   });
 
   test("with nothing under the entry to pop to, the entry is made to say what the screen shows", async () => {
