@@ -15,7 +15,7 @@ import { MESSAGE_ACTION } from "./actionStyles";
 import { SelectedContextBadge } from "../SelectedContextBadge";
 import { CopyButton } from "./CopyButton";
 import { InboxImageCard } from "./InboxImage";
-import { md, mdBlocks } from "./markdown";
+import { md, mdBlocks, mdImages } from "./markdown";
 import { UserMessageRow } from "./UserMessageRow";
 import { useMessageProvenance, type ProvenanceLookup } from "./messageProvenance";
 import { tr, type Item } from "./parse";
@@ -242,6 +242,8 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
   if (item.kind === "tmsg") {
     const protocol = parseProtocolPayload(item.text);
     const long = item.text.length > 420 || item.text.split("\n").length > 6;
+    /* The row draws the summary's pictures before the text's. */
+    const first = mdImages(item.summary).length;
     return (
       <div className={`my-3 ${indent}overflow-hidden rounded-surface border border-accent/25 bg-accent-soft shadow-1`}>
         <div className="flex items-center gap-2 px-3.5 pt-2">
@@ -287,10 +289,10 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
                       {tr("common.collapse")} <ChevronUp className="h-3 w-3" aria-hidden />
                     </span>
                   </summary>
-                  {mdBlocks(item.text)}
+                  {mdBlocks(item.text, first)}
                 </details>
               ) : (
-                <div className="mt-0.5 whitespace-pre-wrap break-words text-[13px]">{mdBlocks(item.text)}</div>
+                <div className="mt-0.5 whitespace-pre-wrap break-words text-[13px]">{mdBlocks(item.text, first)}</div>
               )}
             </>
           )}

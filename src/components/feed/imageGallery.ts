@@ -47,9 +47,10 @@ function itemImages(item: Item): GalleryImage[] {
 
 /** Every picture a conversation's feed draws, in feed order, read from the
     feed's records rather than the page: a picture above the rendered window
-    or off screen is in the list all the same. */
+    or off screen is in the list all the same. Each carries its place among
+    its row's pictures, the place the card that draws it names. */
 export function conversationImages(entries: readonly FeedEntry[]): GalleryImage[] {
-  return entries.flatMap(({ item }) => itemImages(item));
+  return entries.flatMap(({ item }) => itemImages(item).map((image, at) => ({ ...image, at })));
 }
 
 /** The gallery a LogFeed hands its viewers: one stable reader over the latest

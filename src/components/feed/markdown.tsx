@@ -203,8 +203,9 @@ function imageSrc(raw: string, scope: MdDocumentScope | null): string {
 }
 
 /* Inline embedded image: a capped thumbnail that opens the full-size lightbox
-   on click, and quietly degrades to a plain link if the bytes never load. */
-function MdImage({ alt, src }: { alt: string; src: string }) {
+   on click, and quietly degrades to a plain link if the bytes never load.
+   `at` is its place among the pictures its feed row draws. */
+function MdImage({ alt, src, at }: { alt: string; src: string; at?: number }) {
   const [full, setFull] = useState(false);
   const [failed, setFailed] = useState(false);
   const resolved = imageSrc(src, useContext(MdDocumentContext));
@@ -221,10 +222,14 @@ function MdImage({ alt, src }: { alt: string; src: string }) {
         onError={() => setFailed(true)}
         className="my-1 max-h-[240px] max-w-full cursor-zoom-in rounded-[10px] border border-border align-top"
       />
-      {full ? <Lightbox src={resolved} alt={alt} caption={alt || undefined} onClose={() => setFull(false)} /> : null}
+      {full ? <Lightbox src={resolved} alt={alt} caption={alt || undefined} at={at} onClose={() => setFull(false)} /> : null}
     </>
   );
 }
+
+/* Counts the pictures a text draws as it draws them, so each one knows its
+   place when a row shows the same picture twice. */
+type Drawn = { next: number };
 
 /* The pictures `mdBlocks` draws for a feed text, in the order it draws them
    and with the source each one loads from, read without rendering: fenced
@@ -250,17 +255,17 @@ export function mdImages(text: string): { alt: string; src: string }[] {
 
 /* A run of image-only lines flows as a wrapping thumbnail row (a contact sheet
    of screenshots reads far better side by side than stacked). */
-export function MdImageRow({ images }: { images: { alt: string; src: string }[] }) {
+export function MdImageRow({ images }: { images: { alt: string; src: string; at?: number }[] }) {
   return (
     <div className="my-1.5 flex flex-wrap items-start gap-2">
       {images.map((image, i) => (
-        <MdImage key={i} alt={image.alt} src={image.src} />
+        <MdImage key={i} alt={image.alt} src={image.src} at={image.at} />
       ))}
     </div>
   );
 }
 
-export function md(text: string): ReactNode {
+export function md(text: string, drawn: Drawn = { next: 0 }): ReactNode {
   const parts = text.split(MD_INLINE_RE);
   return parts.map((part, i) => {
     if (!part) return null;
@@ -272,9 +277,9 @@ export function md(text: string): ReactNode {
        release note — renders as a bold LINK instead of literal brackets. The
        body cannot contain another `**` (the alternative is `[^*]+`), so this
        recurses exactly once. */
-    if (part.startsWith("**") && part.endsWith("**")) return <b key={i}>{md(part.slice(2, -2))}</b>;
+    if (part.startsWith("**") && part.endsWith("**")) return <b key={i}>{md(part.slice(2, -2), drawn)}</b>;
     const image = part.match(IMAGE_PART_RE);
-    if (image) return <MdImage key={i} alt={image[1]} src={image[2]} />;
+    if (image) return <MdImage key={i} alt={image[1]} src={image[2]} at={drawn.next++} />;
     const linked = part.match(LINK_PART_RE);
     if (linked) {
       return <Anchor key={i} href={linked[2]} label={linked[1]} />;
@@ -305,7 +310,8 @@ function DocumentCell({ children }: { children: ReactNode }) {
   return <div className="w-max max-w-[36ch]">{children}</div>;
 }
 
-export function MdTable({ rows, document = false }: { rows: string[]; document?: boolean }) {
+export function MdTable({ rows, document = false, first = 0 }: { rows: string[]; document?: boolean; first?: number }) {
+  const drawn = { next: first };
   const parsed = rows.map((row) =>
     row
       .trim()
@@ -325,7 +331,7 @@ export function MdTable({ rows, document = false }: { rows: string[]; document?:
             <tr>
               {head.map((cell, i) => (
                 <th key={i} className="border border-border bg-sunken px-2.5 py-1 text-left font-semibold">
-                  {document ? <DocumentCell>{md(cell)}</DocumentCell> : md(cell)}
+                  {document ? <DocumentCell>{md(cell, drawn)}</DocumentCell> : md(cell, drawn)}
                 </th>
               ))}
             </tr>
@@ -336,7 +342,7 @@ export function MdTable({ rows, document = false }: { rows: string[]; document?:
             <tr key={i}>
               {row.map((cell, j) => (
                 <td key={j} className="border border-border px-2.5 py-1 align-top">
-                  {document ? <DocumentCell>{md(cell)}</DocumentCell> : md(cell)}
+                  {document ? <DocumentCell>{md(cell, drawn)}</DocumentCell> : md(cell, drawn)}
                 </td>
               ))}
             </tr>
@@ -359,12 +365,12 @@ function fenceLang(line: string): string | null {
 
 /* One line that is not part of a multi-line block: a styled heading or
    blockquote, otherwise the inline pass. */
-function lineNode(line: string, key: number | string): ReactNode {
+function lineNode(line: string, key: number | string, drawn?: Drawn): ReactNode {
   const heading = line.match(/^#{1,6}\s+(.*)$/);
   if (heading) {
     return (
       <span key={key} className="text-[14px] font-bold">
-        {md(heading[1])}
+        {md(heading[1], drawn)}
       </span>
     );
   }
@@ -372,21 +378,23 @@ function lineNode(line: string, key: number | string): ReactNode {
   if (quote) {
     return (
       <span key={key} className="border-l-2 border-border pl-2 text-muted">
-        {md(quote[1])}
+        {md(quote[1], drawn)}
       </span>
     );
   }
-  return <Fragment key={key}>{md(line)}</Fragment>;
+  return <Fragment key={key}>{md(line, drawn)}</Fragment>;
 }
 
 /* Block-level pass for whole prose messages rendered inside whitespace-pre-wrap:
    newlines survive as text; tables group into real <table>, headings and
    blockquotes are styled per line, everything else goes through the inline pass.
    This is the settled rendering — the one a transcript row shows and the one
-   the streaming machine below has to arrive at exactly. */
-export function mdBlocks(text: string): ReactNode {
+   the streaming machine below has to arrive at exactly. `first` counts the
+   pictures the row drew before this text. */
+export function mdBlocks(text: string, first = 0): ReactNode {
   const lines = text.split("\n");
   const out: ReactNode[] = [];
+  const drawn = { next: first };
   let i = 0;
   while (i < lines.length) {
     if (FENCE_OPEN_RE.test(lines[i])) {
@@ -405,16 +413,17 @@ export function mdBlocks(text: string): ReactNode {
       while (i < lines.length && TABLE_ROW_RE.test(lines[i])) i++;
       /* The table div is a block element: the pending newline would add an empty row. */
       if (out[out.length - 1] === "\n") out.pop();
-      out.push(<MdTable key={`t${start}`} rows={lines.slice(start, i)} />);
+      out.push(<MdTable key={`t${start}`} rows={lines.slice(start, i)} first={drawn.next} />);
+      drawn.next += mdImages(lines.slice(start, i).join("\n")).length;
       continue;
     }
     if (IMAGE_LINE_RE.test(lines[i])) {
       const start = i;
-      const images: { alt: string; src: string }[] = [];
+      const images: { alt: string; src: string; at: number }[] = [];
       while (i < lines.length) {
         const m = lines[i].match(IMAGE_LINE_RE);
         if (!m) break;
-        images.push({ alt: m[1], src: m[2] });
+        images.push({ alt: m[1], src: m[2], at: drawn.next++ });
         i++;
       }
       /* The row is a block element: drop the pending newline before it. */
@@ -422,7 +431,7 @@ export function mdBlocks(text: string): ReactNode {
       out.push(<MdImageRow key={`i${start}`} images={images} />);
       continue;
     }
-    out.push(lineNode(lines[i], i));
+    out.push(lineNode(lines[i], i, drawn));
     i++;
     if (i < lines.length) out.push("\n");
   }

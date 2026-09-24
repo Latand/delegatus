@@ -1,7 +1,7 @@
 "use client";
 
 import { Minus, Plus } from "lucide-react";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { ChevronLeft, ChevronRight, X } from "@/components/icons";
@@ -13,16 +13,19 @@ interface Props {
   src: string;
   alt: string;
   caption?: string;
+  /** The picture's place among the pictures its feed row draws. */
+  at?: number;
   onClose: () => void;
 }
 
 /** A picture the viewer can step to: where its bytes load from, the words it
-    shows for it, and the feed row that draws it. */
+    shows for it, the feed row that draws it and its place in that row. */
 export interface GalleryImage {
   src: string;
   alt: string;
   caption?: string;
   owner?: unknown;
+  at?: number;
 }
 
 /* The pictures of the conversation a viewer was opened from, in feed order.
@@ -32,8 +35,8 @@ export interface GalleryImage {
 const GalleryContext = createContext<(() => readonly GalleryImage[]) | null>(null);
 export const ImageGalleryProvider = GalleryContext.Provider;
 
-/* The feed row a picture is drawn in, so a picture the conversation shows
-   twice opens at the occurrence that was clicked. */
+/* The feed row a picture is drawn in. With the picture's place in that row,
+   a picture the conversation shows twice opens at the copy that was clicked. */
 const OwnerContext = createContext<unknown>(null);
 export const GalleryOwnerProvider = OwnerContext.Provider;
 
@@ -47,7 +50,9 @@ const CLICK_SLOP = 6;
    preview) is shown on its own. The card that opened the viewer names its own
    picture best, since it may know the loaded size. */
 function openAt(images: readonly GalleryImage[], opened: GalleryImage, owner: unknown) {
-  let start = images.findIndex((image) => image.owner === owner && image.src === opened.src);
+  const inRow = (image: GalleryImage) => image.owner === owner && image.src === opened.src;
+  let start = opened.at === undefined ? -1 : images.findIndex((image) => inRow(image) && image.at === opened.at);
+  if (start < 0) start = images.findIndex(inRow);
   if (start < 0) start = images.findIndex((image) => image.src === opened.src);
   if (start < 0) return { images: [opened], start: 0 };
   return { images: images.map((image, at) => (at === start ? { ...image, alt: opened.alt, caption: opened.caption } : image)), start };
@@ -61,13 +66,13 @@ function openAt(images: readonly GalleryImage[], opened: GalleryImage, owner: un
  * neighbours hidden, so each loads once and is on screen the moment it is
  * reached.
  */
-export function Lightbox({ src, alt, caption, onClose }: Props) {
+export function Lightbox({ src, alt, caption, at, onClose }: Props) {
   const { t } = useLocale();
   const gallery = useContext(GalleryContext);
   const owner = useContext(OwnerContext);
   /* Read once, when the viewer opens: the list holds still under the operator
      while a live feed keeps growing. */
-  const [{ images, start }] = useState(() => openAt(gallery?.() ?? [], { src, alt, caption }, owner));
+  const [{ images, start }] = useState(() => openAt(gallery?.() ?? [], { src, alt, caption, at }, owner));
   const [index, setIndex] = useState(start);
   const [scale, setScale] = useState(1);
   const [tx, setTx] = useState(0);
@@ -77,6 +82,18 @@ export function Lightbox({ src, alt, caption, onClose }: Props) {
   const press = useRef<{ x: number; y: number; backdrop: boolean } | null>(null);
 
   useOverlayEscape(onClose);
+
+  const reset = useCallback(() => {
+    setScale(1);
+    setTx(0);
+    setTy(0);
+  }, []);
+
+  /* Every move, by key or by button, starts the next picture unzoomed. */
+  const show = useCallback((next: number) => {
+    setIndex(next);
+    reset();
+  }, [reset]);
 
   useEffect(() => {
     const prevOverflow = document.body.style.overflow;
@@ -97,15 +114,11 @@ export function Lightbox({ src, alt, caption, onClose }: Props) {
       event.preventDefault();
       event.stopPropagation();
       const next = index + (event.key === "ArrowRight" ? 1 : -1);
-      if (next < 0 || next >= images.length) return;
-      setIndex(next);
-      setScale(1);
-      setTx(0);
-      setTy(0);
+      if (next >= 0 && next < images.length) show(next);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [index, images.length]);
+  }, [index, images.length, show]);
 
   const clamp = (value: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
   const zoomBy = (factor: number, cx = 0, cy = 0) => {
@@ -115,17 +128,6 @@ export function Lightbox({ src, alt, caption, onClose }: Props) {
     setScale(next);
     setTx(cx - (cx - tx) * ratio);
     setTy(cy - (cy - ty) * ratio);
-  };
-
-  const reset = () => {
-    setScale(1);
-    setTx(0);
-    setTy(0);
-  };
-
-  const show = (next: number) => {
-    setIndex(next);
-    reset();
   };
 
   const image = images[index]!;

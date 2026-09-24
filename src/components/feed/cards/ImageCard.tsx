@@ -68,7 +68,7 @@ export function imageCardText(source: ImageSource, natural: { w: number; h: numb
  * shows that picture from the transcript's own bytes, so a pill there would
  * only flash and vanish.
  */
-export function ImageCard({ inset = false, quietOutsideRoots = false, ...source }: ImageSource & { inset?: boolean; quietOutsideRoots?: boolean }) {
+export function ImageCard({ inset = false, quietOutsideRoots = false, at, ...source }: ImageSource & { inset?: boolean; quietOutsideRoots?: boolean; at?: number }) {
   const [view, setView] = useState<ImageView>("thumb");
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [failure, setFailure] = useState<ImageFailure | null>(null);
@@ -141,7 +141,7 @@ export function ImageCard({ inset = false, quietOutsideRoots = false, ...source 
         </button>
       </div>
       {view === "full" ? (
-        <Lightbox src={src} alt={label} caption={caption || name} onClose={() => setView("thumb")} />
+        <Lightbox src={src} alt={label} caption={caption || name} at={at} onClose={() => setView("thumb")} />
       ) : null}
     </div>
   );

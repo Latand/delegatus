@@ -252,7 +252,7 @@ export function ToolImages({ event }: { event: ToolEvent }) {
   if (!images.length) return null;
   return (
     <div data-tool-images className="flex min-w-0 max-w-full flex-wrap items-start gap-x-2 pl-[22px]">
-      {images.map((image, index) => <ImageCard key={`${image.path ?? "inline"}:${index}`} {...image} inset />)}
+      {images.map((image, index) => <ImageCard key={`${image.path ?? "inline"}:${index}`} {...image} at={index} inset />)}
     </div>
   );
 }

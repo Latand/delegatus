@@ -182,6 +182,73 @@ test("the edge buttons step like the arrows, and every move resets zoom and pan"
 
   tap(step("previous")!, 40, 450);
   expect([position(), shown().getAttribute("src")]).toEqual(["4 / 6", INBOX]);
+
+  /* The arrows reset the same way, after a zoom and after a pan. */
+  const zoomed = () => [shown().getAttribute("style"), viewer()!.querySelector('[aria-label="Reset zoom"]')!.textContent];
+  fire(zoomIn, clickAt(0, 0));
+  expect(zoomed()).toEqual(["transform: translate(0px, 0px) scale(1.4);", "140%"]);
+  press(document.body, "ArrowRight");
+  expect([position(), ...zoomed()]).toEqual(["5 / 6", "transform: translate(0px, 0px) scale(1);", "100%"]);
+  const area = shown().parentElement!;
+  fire(shown(), pointer("pointerdown", 720, 450));
+  fire(area, pointer("pointermove", 760, 480));
+  fire(area, pointer("pointerup", 760, 480));
+  fire(zoomIn, clickAt(0, 0));
+  expect(zoomed()).toEqual(["transform: translate(56px, 42px) scale(1.4);", "140%"]);
+  press(document.body, "ArrowLeft");
+  expect([position(), ...zoomed()]).toEqual(["4 / 6", "transform: translate(0px, 0px) scale(1);", "100%"]);
+});
+
+test("a picture an answer shows twice opens at the copy that was clicked", async () => {
+  const SAME = "/api/image?path=%2Fwork%2Fsame.png";
+  const [host] = await mount([{ path: "/fixture/repeat", lines: [
+    answer("a-repeat", 1, "First ![a](/work/same.png) then ![b](/work/other.png) and again ![c](/work/same.png)"),
+  ] }]);
+  const copies = () => [...host!.querySelectorAll(`[data-log-feed-scroller] img[src="${SAME}"]`)];
+  expect(copies()).toHaveLength(2);
+
+  fire(copies()[1]!, clickAt(0, 0));
+  await wait();
+  expect([position(), viewer()!.getAttribute("aria-label")]).toEqual(["3 / 3", "c"]);
+  press(document.body, "ArrowRight");
+  expect([position(), shown().getAttribute("alt")]).toEqual(["3 / 3", "c"]);
+  expect(step("next")).toBeNull();
+  press(document.body, "ArrowLeft");
+  expect([position(), shown().getAttribute("alt")]).toEqual(["2 / 3", "b"]);
+  press(document.body, "Escape");
+
+  fire(copies()[0]!, clickAt(0, 0));
+  await wait();
+  expect([position(), viewer()!.getAttribute("aria-label")]).toEqual(["1 / 3", "a"]);
+});
+
+test("every copy opens at its own place, in bold, a table, a picture row, a tool's output and a teammate's summary", async () => {
+  const SAME = "/api/image?path=%2Fwork%2Fsame.png";
+  const frame = { type: "image", source: { type: "base64", media_type: "image/jpeg", data: FRAME.split(",")[1] } };
+  const [host] = await mount([{ path: "/fixture/copies", lines: [
+    answer("a-copies", 1, "Inline ![one](/work/same.png) and **bold ![two](/work/same.png)**\n| shot | note |\n|---|---|\n| ![three](/work/same.png) | cell |\n![four](/work/same.png)\n![five](/work/same.png)"),
+    line({ type: "assistant", uuid: "a-frames", timestamp: at(2), message: { role: "assistant", content: [
+      { type: "tool_use", id: "toolu_frames", name: "Read", input: { file_path: "/work/frames.jpg" } },
+    ] } }),
+    line({ type: "user", uuid: "r-frames", timestamp: at(3), message: { role: "user", content: [
+      { type: "tool_result", tool_use_id: "toolu_frames", content: [frame, frame] },
+    ] } }),
+    line({ type: "user", uuid: "u-teammate", timestamp: at(4), message: { role: "user", content:
+      '<teammate-message teammate_id="lead" summary="See ![six](/work/same.png)">and again ![seven](/work/same.png)</teammate-message>' } }),
+  ] }]);
+  const opened: (string | null)[][] = [];
+  for (const src of [SAME, FRAME]) {
+    const copies = [...host!.querySelectorAll(`[data-log-feed-scroller] img[src="${src}"]`)];
+    for (const copy of copies) {
+      fire(copy, clickAt(0, 0));
+      await wait();
+      opened.push([position(), shown().getAttribute("alt")]);
+      press(document.body, "Escape");
+    }
+  }
+  expect(opened.map(([place, alt]) => `${place} ${alt}`)).toEqual([
+    "1 / 9 one", "2 / 9 two", "3 / 9 three", "4 / 9 four", "5 / 9 five", "8 / 9 six", "9 / 9 seven", "6 / 9 image", "7 / 9 image",
+  ]);
 });
 
 test("a click on the dimmed area around the picture closes the viewer, and a click on the picture does not", async () => {
