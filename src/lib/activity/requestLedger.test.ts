@@ -65,7 +65,7 @@ describe("recording operator requests", () => {
       kind: "answer",
       idempotencyKey: "question:toolu_secret_id",
       conversationId: "conversation_0123456789abcdef",
-      path: "/home/someone/.claude/projects/x/session.jsonl",
+      path: "/home/user/.claude/projects/x/session.jsonl",
       fallbackEntry: { project: "harbor", cwd: null },
     }, deps());
     const file = fs.readdirSync(path.join(root, "activity"))[0]!;
