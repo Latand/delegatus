@@ -7938,3 +7938,87 @@ describe("old cards list only the launches that did not start, folded behind one
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+describe("board order: working cards first, then recently worked, then idle", () => {
+  /* The `board-order` scenario: the Assigned column the operator reported on
+     2026-09-24, where the card whose build stage was running sat at the very
+     bottom. Its stage conversation is live and its row carries no agent-work
+     stamp yet; beside it, a direct worker and a research lane at work, a card
+     whose agent finished seven minutes ago, one that finished yesterday, and
+     a task nobody worked on that was edited a minute ago. On the desktop at
+     1440×900 and on the phone at 390×844, the column reads working cards
+     first, then the recent ones, then the idle one. Frames go to
+     BOARD_ORDER_PNG_DIR, each taken before any gate is read, so the same case
+     renders the "before" frames on a tree without the change. */
+  const EXPECTED = ["t-order-tint", "t-order-maint", "t-order-research", "t-order-review", "t-order-yesterday", "t-order-notes"];
+
+  browserTest("the Assigned column puts working cards on top on the desktop and the phone", async () => {
+    const pngDir = process.env.BOARD_ORDER_PNG_DIR ?? "/var/tmp/llv-board-order-evidence";
+    const out = path.resolve(".artifacts/board-order");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=board-order`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, "light", lang);
+          try {
+            await page.waitForSelector(card("t-order-tint"), { timeout: 30_000 });
+            /* The seat folded, so the columns have the window's height. */
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.waitForTimeout(800);
+            await page.screenshot({ path: path.join(pngDir, `${label}-board.png`) });
+            const column = page.locator('[data-kanban-board] .column[data-status="assigned"]');
+            await column.screenshot({ path: path.join(pngDir, `${label}-assigned.png`) });
+            /* The column's end, where the working card sat. */
+            await page.locator('[data-kanban-board] .col-body[data-status="assigned"]').evaluate((body) => { body.scrollTop = body.scrollHeight; });
+            await page.waitForTimeout(300);
+            await column.screenshot({ path: path.join(pngDir, `${label}-assigned-end.png`) });
+            const order = await page.evaluate(() => [...document.querySelectorAll('[data-kanban-board] .column[data-status="assigned"] .card')]
+              .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, "")));
+            readings[label] = order;
+            if (JSON.stringify(order) !== JSON.stringify(EXPECTED)) failures.push(`${label}: Assigned reads ${JSON.stringify(order)}`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForSelector('[data-phone-kanban-column="assigned"] [data-phone-card="task:t-order-tint"]', { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            await page.screenshot({ path: path.join(pngDir, `${label}-assigned.png`) });
+            await page.locator('[data-phone-kanban-column="assigned"]').evaluate((body) => { body.scrollTop = body.scrollHeight; });
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}-assigned-end.png`) });
+            const order = await page.evaluate(() => [...document.querySelectorAll('[data-phone-kanban-column="assigned"] [data-phone-card]')]
+              .map((element) => (element.getAttribute("data-phone-card") ?? "").replace(/^task:/, "")));
+            readings[label] = order;
+            if (JSON.stringify(order) !== JSON.stringify(EXPECTED)) failures.push(`${label}: Assigned reads ${JSON.stringify(order)}`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/board-order", { recursive: true });
+    fs.writeFileSync("evidence/board-order/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});

@@ -124,6 +124,24 @@ test("each column counts exactly what the desktop column counts, and holds the s
   expect(phone.columns.inbox.unlinked.map((item) => item.kind)).toEqual(["conversation"]);
 });
 
+test("a phone column orders its cards as the desktop column does: working, then recently worked, then idle", () => {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  /* In a long tool call: its last record is older than the finished card's. */
+  const busy = working(21, { lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 240) * 1000, mtime: NOW - 240 } as Partial<FileEntry>);
+  const finished = file(22, { activity: "recent", lastTurn: { startedAt: (NOW - 400) * 1000, endedAt: (NOW - 60) * 1000 }, lastAgentWorkAt: (NOW - 60) * 1000, mtime: NOW - 60 } as Partial<FileEntry>);
+  const tasks = [
+    task("idle-b", "assigned", [], { updatedAt: iso(NOW - 10) }),
+    task("idle-a", "assigned", [], { updatedAt: iso(NOW - 3000) }),
+    task("finished", "assigned", [finished.path], { updatedAt: iso(NOW - 9000) }),
+    task("busy", "assigned", [busy.path], { updatedAt: iso(NOW - 9500) }),
+  ];
+  const model = desktop(tasks, [busy, finished]);
+  const phone = buildPhoneKanban({ model, now: NOW });
+  expect(phone.columns.assigned.pinned).toEqual([]);
+  expect(keys(phone.columns.assigned.cards)).toEqual(["busy", "finished", "idle-b", "idle-a"]);
+  expect(keys(phone.columns.assigned.cards)).toEqual(model.columns.assigned.cards.map((card) => card.task!.id));
+});
+
 test("what needs the operator comes first, in the attention queue's order, task cards and Not on a task rows alike", () => {
   /* Conversation 1 asked first (oldest), 4 next, 3 last; 6 asks on no task. */
   const files = [asking(1, 3_000), file(2), asking(3, 600), asking(4, 1_800), working(5), asking(6, 2_400)];
