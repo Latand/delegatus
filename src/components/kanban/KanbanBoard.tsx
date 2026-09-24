@@ -44,7 +44,7 @@ import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLi
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
 import { cardDismissal } from "./cardDismissal";
 import { drawnTasks, useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
-import { assignmentRefFor, browserAssignmentPorts, dismissUnstartedLaunch, type AssignmentPorts } from "./kanbanAssignments";
+import { assignmentRefFor, browserAssignmentPorts, dismissUnstartedLaunch, dismissUnstartedLaunches, type AssignmentPorts } from "./kanbanAssignments";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
@@ -578,13 +578,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
     void element.offsetWidth;
     element.classList.add("flash");
   }, []);
-  /* A launch that never produced a transcript: dismissing it marks its row
-     failed on the server, and the refreshed tasks take the row away. A refusal
-     (it did start after all) flashes the card. */
-  const dismissLaunch = useCallback((card: KanbanCardModel, launch: { launchId: string | null; conversationId: string | null }) => {
-    if (!card.task) return;
-    void dismissUnstartedLaunch(card.task.id, launch).then((answer) => {
-      if (!answer.ok) flash(card.id);
+  /* Launches that did not start, one row's or all of them: dismissing marks
+     each row failed on the server, and the refreshed tasks take the rows
+     away. A refusal (one did start after all) flashes the card. */
+  const dismissLaunch = useCallback((card: KanbanCardModel, launches: readonly { launchId: string | null; conversationId: string | null }[]) => {
+    if (!card.task || !launches.length) return;
+    const answer = launches.length === 1 ? dismissUnstartedLaunch(card.task.id, launches[0]!) : dismissUnstartedLaunches(card.task.id, launches);
+    void answer.then((result) => {
+      if (!result.ok) flash(card.id);
     });
   }, [flash]);
   const previousRects = useRef(new Map<string, { rect: DOMRect; status: string | undefined }>());
