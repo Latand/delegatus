@@ -45,9 +45,9 @@ import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows"
 import { KeepAwakeProvider } from "./KeepAwakeControl";
 import { needsDecisionPipelineRows } from "./mobile/mobileBoardModel";
 import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
-import { getMobileNav, landResolvedConversation, useMobileNavStore } from "./mobile/mobileNav";
+import { BOARD, getMobileNav, landResolvedConversation, MOBILE_NAV_STATE_KEY, readMobileNavEntry, useMobileNavStore } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
-import { overviewLiftKey, overviewLiftScreenOf, overviewPipelineRows, overviewScreenProject } from "./mobile/overviewPhone";
+import { overviewLiftProject, overviewPipelineRows, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
 import { onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
@@ -215,13 +215,14 @@ function ViewerApp() {
   /* The phone's Overview is a board under a stack (#2098): a card opens its
      task, its pipeline or its conversation as a screen over it, and that
      screen is drawn by its own project's dashboard while the Overview stays
-     the Viewer's project, so ‹ lands back on the Overview's columns. The first
-     screen above the board names the project; a poll that briefly misses it
-     keeps the project it named last, for the same screen. */
+     the Viewer's project, so ‹ lands back on the Overview's columns. The
+     screen on top names the project (or the one under it does, for a screen
+     that names none); a poll that briefly misses it keeps the project it
+     named last, for the same stack. */
   const mobileNav = useMobileNavStore();
-  const stackedKey = useSyncExternalStore(mobileNav.subscribe, () => overviewLiftKey(mobileNav.getState().stack), () => null);
+  const stackedKey = useSyncExternalStore(mobileNav.subscribe, () => overviewStackKey(mobileNav.getState().stack), () => null);
   const liftKey = isMobile && project === OVERVIEW ? stackedKey : null;
-  const liftFound = overviewScreenProject(overviewLiftScreenOf(liftKey), { tasks, pipelines, files: allFiles });
+  const liftFound = overviewLiftProject(overviewStackScreens(liftKey), { tasks, pipelines, files: allFiles });
   const liftFoundProject = liftFound ? canonicalClientProject(liftFound, projectAliases) : null;
   const [liftMemo, setLiftMemo] = useState<{ key: string; project: string } | null>(null);
   if (liftKey && liftFoundProject && (liftMemo?.key !== liftKey || liftMemo.project !== liftFoundProject)) {
@@ -231,6 +232,20 @@ function ViewerApp() {
   /* The project the dashboard draws: the Viewer's own, or the one a screen
      over the phone's Overview belongs to. */
   const dashboardProject = liftedProject ?? project;
+  /* Whether a history replay lands on a screen of the phone's Overview: the
+     Overview is the Viewer's project and the entry is one the phone's stack
+     wrote above its board. Such a replay (Forward, a reload, the hash the
+     entry carries) re-opens the conversation over the Overview and keeps the
+     Overview the project, where any other replay selects the conversation's
+     own project. Read from listeners, so it is kept in a ref. */
+  const overviewPhoneRef = useRef(false);
+  useEffect(() => {
+    overviewPhoneRef.current = isMobile && project === OVERVIEW;
+  }, [isMobile, project]);
+  const keepsOverview = useCallback(
+    (state: unknown) => overviewPhoneRef.current && (readMobileNavEntry(state)?.screen.kind ?? "board") !== "board",
+    [],
+  );
   const dashboardFilesRef = useRef<{ project: string; files: FileEntry[] } | null>(null);
   const dashboardFiles = useMemo(() => {
     if (dashboardProject === OVERVIEW) return [];
@@ -401,9 +416,12 @@ function ViewerApp() {
       setStaleFocusNotice(false);
       dispatchCatalogPin({ kind: "release" });
       setFocusRequest(null);
-      /* Cross-project entries select the stored project first, then resolve. */
-      setProject(entry.project);
-      localStorage.setItem(PROJECT_KEY, entry.project);
+      /* Cross-project entries select the stored project first, then resolve.
+         A conversation over the phone's Overview replays over it (#2098). */
+      if (!keepsOverview(event.state)) {
+        setProject(entry.project);
+        localStorage.setItem(PROJECT_KEY, entry.project);
+      }
       const intent: ConversationHash = entry.conversationId
         ? { conversationId: entry.conversationId, filePath: null, project: entry.project }
         : { conversationId: null, filePath: entry.path, project: entry.project };
@@ -426,7 +444,7 @@ function ViewerApp() {
       window.removeEventListener("popstate", onPop);
       if (staleTimerRef.current !== null) window.clearTimeout(staleTimerRef.current);
     };
-  }, []);
+  }, [keepsOverview]);
 
   useEffect(() => {
     if (!unknownFragmentNotice) return;
@@ -533,10 +551,49 @@ function ViewerApp() {
     [applyProject],
   );
 
+  /* A conversation opened over the phone's Overview (#2098): a card's row,
+     its sheet's «Open first agent», the ⚠ sheet, an arrival, and a replay of
+     one of those. It is a SCREEN pushed onto the stack the operator is on,
+     full screen and never inside a card, and its own project's dashboard
+     draws it (see `liftedProject`), so ‹ lands on the screen under it and in
+     the end on the Overview. The screen goes on first; the focus record then
+     re-types that entry in place, as a stage conversation's does, so the
+     conversation keeps its link without a second entry under it. The focus
+     request is what puts the conversation on its project's board for the
+     screen to show. */
+  const openOverOverview = useCallback((file: FileEntry, { catalog = false }: { catalog?: boolean } = {}) => {
+    const nav = mobileNav;
+    const stack = nav.getState().stack;
+    const onTop = stack[stack.length - 1];
+    if (onTop?.kind !== "chat" || onTop.id !== file.path) {
+      /* The board alone under an entry that names a conversation is a reload
+         on one: that entry becomes the Overview's own, so ‹ from the screen
+         pushed over it lands on the board and not on a replay of it. */
+      if (stack.length === 1 && parseFocusHistoryState(window.history.state)) {
+        window.history.replaceState({ [MOBILE_NAV_STATE_KEY]: { d: 1, screen: BOARD } }, "", location.pathname + location.search);
+      }
+      nav.push({ kind: "chat", id: file.path });
+    }
+    setPendingHash(null);
+    setStaleFocusNotice(false);
+    recordFocusNavigation(file, projectKey(file), { restore: true });
+    nav.stamp();
+    focusNonceRef.current += 1;
+    setFocusRequest({ path: file.path, nonce: focusNonceRef.current, catalog });
+  }, [mobileNav]);
+
   /* Full-catalog list/search rows can sit beyond the scheme window. Their path
      stays pinned for the displayed conversation so recurring polls preserve
      the node after the transient hash intent resolves. */
   const openPinnedFile = useCallback((file: FileEntry, hydrated = false) => {
+    /* The resolver replaying a conversation over the phone's Overview keeps
+       the Overview: the conversation is a screen on its stack. */
+    if (hydrated && keepsOverview(window.history.state)) {
+      setStaleFocusNotice(false);
+      dispatchCatalogPin({ kind: "resolve", path: file.path, conversationId: file.conversationId });
+      openOverOverview(file, { catalog: true });
+      return;
+    }
     const key = projectKey(file);
     /* A resolution landing is the third exit for the not-found notice: the
        viewer is now showing a conversation, so the failure claim is over. */
@@ -555,7 +612,7 @@ function ViewerApp() {
        phone the shell goes home under it, unless the replay landed on an entry
        the phone's own stack wrote (#2072 slice 5, `landResolvedConversation`). */
     landResolvedConversation(getMobileNav(), hydrated, window.history.state, () => recordFocusNavigation(file, key, { restore: hydrated }));
-  }, []);
+  }, [keepsOverview, openOverOverview]);
 
   const openCatalogFile = useCallback((file: FileEntry) => {
     openPinnedFile(file);
@@ -737,32 +794,6 @@ function ViewerApp() {
     setFocusRequest({ path, nonce: focusNonceRef.current, catalog: false });
   }, []);
 
-  /* A conversation opened over the phone's Overview (#2098): a card's row,
-     its sheet's «Open first agent», the ⚠ sheet, an arrival. It is a SCREEN
-     on the Overview's stack, full screen and never inside a card, and its own
-     project's dashboard draws it (see `liftedProject`). The screen goes on
-     first; the focus record then re-types that entry in place, as a stage
-     conversation's does, so the conversation keeps its link without a second
-     entry under it, and ‹ lands on the Overview. The focus request is what
-     puts the conversation on its project's board for the screen to show. */
-  const openOverOverview = useCallback((file: FileEntry) => {
-    const nav = mobileNav;
-    const top = nav.getState().stack;
-    const onTop = top[top.length - 1];
-    if (onTop?.kind !== "chat" || onTop.id !== file.path) {
-      /* From a screen already over the Overview (the ⚠ sheet over another
-         conversation), the new one replaces that stack: one project's
-         dashboard draws what is over the Overview. */
-      if (top.length > 1) nav.home();
-      nav.push({ kind: "chat", id: file.path });
-    }
-    setPendingHash(null);
-    setStaleFocusNotice(false);
-    recordFocusNavigation(file, projectKey(file), { restore: true });
-    nav.stamp();
-    focusNonceRef.current += 1;
-    setFocusRequest({ path: file.path, nonce: focusNonceRef.current, catalog: false });
-  }, [mobileNav]);
   /* A focus request outlives the screen it was for; the next dashboard to
      mount over the Overview must not replay it. */
   useEffect(() => {
@@ -1152,10 +1183,9 @@ function ViewerApp() {
               } : jumpToItem}
               onOpenPipeline={(row) => {
                 close();
-                /* Over the Overview, one project's dashboard draws what is
-                   stacked above it: a lane of another project replaces that
-                   stack, as a conversation does in `openOverOverview`. */
-                if (project === OVERVIEW && mobileNav.getState().stack.length > 1) mobileNav.home();
+                /* Over the Overview a lane of any project goes on top of the
+                   screen the operator is on and its own project's dashboard
+                   draws it; ‹ comes back to that screen. */
                 mobileNav.push({ kind: "pipeline", id: row.id });
               }}
               onClose={close}

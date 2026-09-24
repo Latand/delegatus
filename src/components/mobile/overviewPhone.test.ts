@@ -5,7 +5,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { BOARD } from "./mobileNav";
-import { overviewAttention, overviewLiftKey, overviewLiftScreen, overviewLiftScreenOf, overviewScreenProject } from "./overviewPhone";
+import { overviewAttention, overviewLiftProject, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./overviewPhone";
 import { attentionKey } from "./phoneKanbanModel";
 
 /* #2098: which project a screen over the phone's Overview belongs to, and
@@ -33,22 +33,25 @@ const LOOKUP = {
   files: [file("/sessions/mesh.jsonl", "mesh")],
 };
 
-test("the screen the Overview pushed names its project; what its dashboard pushed above it does not", () => {
-  expect(overviewLiftScreen([BOARD])).toBeNull();
-  expect(overviewLiftScreen([BOARD, { kind: "accounts" }])).toBeNull();
-  const stack = [BOARD, { kind: "task" as const, id: "t-ledger" }, { kind: "chat" as const, id: "/sessions/mesh.jsonl" }];
-  expect(overviewLiftScreen(stack)).toEqual({ kind: "task", id: "t-ledger" });
-  expect(overviewScreenProject(overviewLiftScreen(stack), LOOKUP)).toBe("ledger");
-  /* The key a reader subscribes to round-trips, a path with colons in it included. */
-  expect(overviewLiftScreenOf(overviewLiftKey(stack))).toEqual({ kind: "task", id: "t-ledger" });
-  expect(overviewLiftScreenOf(overviewLiftKey([BOARD, { kind: "chat", id: "/sessions/a:b.jsonl" }]))).toEqual({ kind: "chat", id: "/sessions/a:b.jsonl" });
-  expect(overviewLiftKey([BOARD])).toBeNull();
+test("the top of the stack names the project that draws it; a screen that names none belongs to the one under it", () => {
+  expect(overviewStackKey([BOARD])).toBeNull();
+  const task = { kind: "task" as const, id: "t-ledger" };
+  const lane = { kind: "pipeline" as const, id: "p-mesh" };
+  const draft = { kind: "chat" as const, id: "draft::d-1" };
+  /* The key a reader subscribes to round-trips, a path with a colon in it included. */
+  const stack = [BOARD, task, { kind: "chat" as const, id: "/sessions/a:b.jsonl" }, { kind: "accounts" as const }];
+  expect(overviewStackScreens(overviewStackKey(stack))).toEqual(stack.slice(1));
 
-  expect(overviewScreenProject({ kind: "pipeline", id: "p-mesh" }, LOOKUP)).toBe("mesh");
-  expect(overviewScreenProject({ kind: "chat", id: "/sessions/mesh.jsonl" }, LOOKUP)).toBe("mesh");
+  expect(overviewLiftProject(overviewStackScreens(overviewStackKey([BOARD, task])), LOOKUP)).toBe("ledger");
+  /* A lane of another project opened from the ledger task: the lane's own. */
+  expect(overviewLiftProject([task, lane], LOOKUP)).toBe("mesh");
+  /* An agent draft and the accounts screen name nothing: the task under them does. */
+  expect(overviewLiftProject([task, draft, { kind: "accounts" }], LOOKUP)).toBe("ledger");
+  expect(overviewLiftProject([{ kind: "chat", id: "/sessions/mesh.jsonl" }], LOOKUP)).toBe("mesh");
   /* What the payload no longer carries names nothing. */
-  expect(overviewScreenProject({ kind: "task", id: "t-gone" }, LOOKUP)).toBeNull();
-  expect(overviewScreenProject(null, LOOKUP)).toBeNull();
+  expect(overviewLiftProject([{ kind: "task", id: "t-gone" }], LOOKUP)).toBeNull();
+  expect(overviewLiftProject([], LOOKUP)).toBeNull();
+  expect(overviewScreenProject(BOARD, LOOKUP)).toBeNull();
 });
 
 test("the Overview pins in the queue's order over every project: conversations, then lanes parked on the operator", () => {

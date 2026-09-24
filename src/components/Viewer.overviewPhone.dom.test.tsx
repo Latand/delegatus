@@ -462,13 +462,109 @@ test("the Overview's ⚠ counts what its tabs mark, and a lane in its sheet open
   await back(host);
   await until(() => Boolean(host.querySelector("[data-phone-kanban]")));
 
-  /* From the mesh task's screen, another project's dashboard. */
+  /* From the mesh task's screen, another project's dashboard: the lane goes
+     on top, drawn by its own project's, and ‹ pops back to the mesh task. */
   await tap(host.querySelector('[data-phone-kanban-tab="blocked"]'));
   await tap(cardTitled(host, "Unblock the mesh migration"));
   await until(() => Boolean(host.querySelector('[data-mobile2-screen="task"][data-mobile2-task="t-mesh"]')));
   await tap(host.querySelector('[data-mobile2-open="attention"]'));
   await tap(laneRow());
   await until(() => Boolean(pipelineScreen()));
-  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "pipeline", id: LANE }]);
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "task", id: "t-mesh" }, { kind: "pipeline", id: LANE }]);
   expect(host.querySelector("[data-mobile2-task]")).toBeNull();
+  await back(host);
+  await until(() => Boolean(host.querySelector('[data-mobile2-screen="task"][data-mobile2-task="t-mesh"]')));
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "task", id: "t-mesh" }]);
+  await back(host);
+  await until(() => Boolean(host.querySelector("[data-phone-kanban]")));
+  expect(host.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active")).toBe("blocked");
 });
+
+/* A screen drawn over the Overview opens conversations of its own: the task
+   screen's agent rows. The Overview stays the Viewer's project through it:
+   the ⚠ still counts every project, nothing stores the conversation's project
+   as the one to reopen, and a lane of another project still opens over it.
+   ‹ walks back through each screen to the Overview. */
+test("a conversation opened from a task screen over the Overview keeps the Overview's scope, and ‹ walks back through the stack", async () => {
+  const host = await mountOverview();
+  const badge = () => host.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count");
+  await until(() => badge() === "2");
+  await tap(host.querySelector('[data-phone-kanban-tab="blocked"]'));
+  await tap(cardTitled(host, "Unblock the mesh migration"));
+  await until(() => Boolean(host.querySelector('[data-mobile2-screen="task"][data-mobile2-task="t-mesh"]')));
+  expect(badge()).toBe("2");
+
+  await tap(host.querySelector(`[data-phone-task-agent="${MESH_PLANNER}"] button`));
+  await until(() => Boolean(conversationScreen(host, MESH_PLANNER)));
+  /* Past the hash the entry now carries, and its replay. */
+  await act(async () => { await Bun.sleep(120); });
+  expect(conversationScreen(host, MESH_PLANNER)).not.toBeNull();
+  expect(badge()).toBe("2");
+  expect(dom.localStorage.getItem("llvProject")).not.toBe(MESH);
+  expect(inlineConversation(host)).toBeFalsy();
+
+  await tap(host.querySelector('[data-mobile2-open="attention"]'));
+  await tap(dom.document.querySelector(`[data-attention-row="${LANE}"]`) as unknown as HTMLElement);
+  await until(() => Boolean(host.querySelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${LANE}"]`)));
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "task", id: "t-mesh" }, { kind: "chat", id: MESH_PLANNER }, { kind: "pipeline", id: LANE }]);
+
+  await back(host);
+  await until(() => Boolean(conversationScreen(host, MESH_PLANNER)));
+  await back(host);
+  await until(() => Boolean(host.querySelector('[data-mobile2-screen="task"][data-mobile2-task="t-mesh"]')));
+  await back(host);
+  await until(() => Boolean(host.querySelector("[data-phone-kanban]")));
+  expect(badge()).toBe("2");
+  expect(dom.localStorage.getItem("llvProject")).not.toBe(MESH);
+});
+
+/* Forward, and a reload, replay the entry a conversation over the Overview
+   wrote. Both land it over the Overview again: the Overview's board stays
+   under it and the Overview stays the project. */
+test("Forward and a reload bring a conversation back over the Overview", async () => {
+  const host = await mountOverview();
+  const badge = () => host.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count");
+  await tap(host.querySelector('[data-phone-kanban-tab="inbox"]'));
+  await tap(cardTitled(host, "Sweep the stale mesh caches"));
+  await until(() => Boolean(conversationScreen(host, MESH_LOOSE)));
+  await back(host);
+  await until(() => Boolean(host.querySelector("[data-phone-kanban]")));
+
+  /* Forward. */
+  await act(async () => {
+    dom.history.forward();
+    await Bun.sleep(15);
+    window.dispatchEvent(new dom.PopStateEvent("popstate", { state: dom.history.state }) as unknown as Event);
+    await Bun.sleep(15);
+  });
+  await until(() => Boolean(conversationScreen(host, MESH_LOOSE)));
+  await act(async () => { await Bun.sleep(120); });
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "chat", id: MESH_LOOSE }]);
+  expect(badge()).toBe("2");
+  expect(dom.localStorage.getItem("llvProject")).not.toBe(MESH);
+
+  /* A reload on it: a fresh Viewer and a fresh stack over the same entry. */
+  const entry = dom.history.state;
+  expect(dom.location.hash).toContain("#c=");
+  await act(async () => { mounted!.unmount(); });
+  mounted = null;
+  getMobileNav().home();
+  dom.history.replaceState(entry, "", dom.location.href);
+  dom.document.body.replaceChildren();
+  const again = dom.document.createElement("div");
+  dom.document.body.append(again);
+  const root = createRoot(again as unknown as HTMLElement);
+  mounted = root;
+  await act(async () => { root.render(<Viewer />); });
+  await until(() => Boolean(conversationScreen(again as unknown as HTMLElement, MESH_LOOSE)));
+  await act(async () => { await Bun.sleep(120); });
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "chat", id: MESH_LOOSE }]);
+  expect(dom.localStorage.getItem("llvProject")).not.toBe(MESH);
+  /* ‹ lands on the Overview's board, not on a replay of the conversation. */
+  await back(again as unknown as HTMLElement);
+  await until(() => Boolean(again.querySelector("[data-phone-kanban]")));
+  await act(async () => { await Bun.sleep(120); });
+  expect(again.querySelector("[data-phone-kanban]")).not.toBeNull();
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }]);
+});
+

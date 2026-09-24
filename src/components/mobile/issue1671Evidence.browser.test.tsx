@@ -2101,6 +2101,21 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
         if (task.crossingControls.length) taskFail(`controls crossing: ${JSON.stringify(task.crossingControls)}`);
         if (task.inkOverlaps.length) taskFail(`text over text: ${JSON.stringify(task.inkOverlaps.slice(0, 6))}`);
         if (task.inkOnControls.length) taskFail(`text over a control: ${JSON.stringify(task.inkOnControls.slice(0, 6))}`);
+        /* The task's agent row opens its conversation over the Overview, and
+           the Overview stays the scope: the same ⚠, nothing stored as the
+           project to reopen. */
+        const scope = () => page.evaluate(() => ({
+          badge: document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? null,
+          stored: localStorage.getItem("llvProject"),
+        }));
+        const beforeAgent = await scope();
+        await page.locator("[data-phone-task-agent] button").first().click();
+        await page.waitForSelector('[data-mobile2-screen="chat"]', { timeout: 10_000 });
+        await pause(page, 900);
+        const afterAgent = await scope();
+        if (afterAgent.badge !== beforeAgent.badge || afterAgent.stored !== "__overview__") taskFail(`an agent row changed the scope: ${JSON.stringify({ beforeAgent, afterAgent })}`);
+        await page.locator("[data-mobile2-back]").first().click();
+        await page.waitForSelector('[data-mobile2-task="t-favicon"] [data-phone-task-body="t-favicon"]', { timeout: 10_000 });
         await page.locator("[data-mobile2-back]").first().click();
         await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 10_000 });
         const backOn = await page.evaluate(() => document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active"));
@@ -2136,7 +2151,7 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
         await page.screenshot({ path: path.join(OVERVIEW_OUT, `overview-${key}-hidden.png`) });
         if (hidden.join(",") !== "t-seat,t-quota") failures.push(`${key} hidden: the sheet lists ${hidden.join(",")}`);
         if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
-        results.push({ key, viewport, lang, task, backOn, conversation, hidden });
+        results.push({ key, viewport, lang, task, agentScope: { beforeAgent, afterAgent }, backOn, conversation, hidden });
         await page.close();
       } finally {
         await context.close();

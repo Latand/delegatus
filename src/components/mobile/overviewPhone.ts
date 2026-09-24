@@ -17,8 +17,8 @@ import { attentionKey } from "./phoneKanbanModel";
  * conversation), while the Overview stays the board at the bottom of the
  * stack, so ‹ comes back to it at the column and offset it left.
  *
- * Nothing is stored for that: the first screen above the board names its own
- * project, through the one payload the Viewer already polls.
+ * Nothing is stored for that: the screen on top names its own project (or
+ * the one under it does), through the one payload the Viewer already polls.
  */
 
 export interface OverviewScreenLookup {
@@ -27,29 +27,39 @@ export interface OverviewScreenLookup {
   files: readonly FileEntry[];
 }
 
-/** The first screen above the Overview's board: the one the Overview pushed.
-    Every screen above it was pushed by that project's own dashboard. */
-export function overviewLiftScreen(stack: readonly MobileScreen[]): MobileScreen | null {
-  const screen = stack[1];
-  return screen && (screen.kind === "task" || screen.kind === "pipeline" || screen.kind === "chat") ? screen : null;
+/** The screens stacked above the Overview's board, as one comparable
+    string, so a reader re-renders when a screen is pushed or popped and never
+    for a sheet. Null while the board is alone. */
+export function overviewStackKey(stack: readonly MobileScreen[]): string | null {
+  return stack.length > 1 ? stack.slice(1).map(screenKey).join("\n") : null;
 }
 
-/** The first screen above the board, as one comparable string, so a reader
-    re-renders when that screen changes and never for a sheet or a screen
-    pushed above it. */
-export function overviewLiftKey(stack: readonly MobileScreen[]): string | null {
-  const screen = overviewLiftScreen(stack);
-  return screen ? screenKey(screen) : null;
+const SCREEN_KINDS: ReadonlySet<string> = new Set(["board", "chat", "task", "pipelines", "pipeline", "accounts"]);
+
+/** The screens `overviewStackKey` named, bottom first. */
+export function overviewStackScreens(key: string | null): MobileScreen[] {
+  if (!key) return [];
+  return key.split("\n").flatMap((line) => {
+    const at = line.indexOf(":");
+    const kind = at < 0 ? line : line.slice(0, at);
+    if (!SCREEN_KINDS.has(kind)) return [];
+    return [(at < 0 ? { kind } : { kind, id: line.slice(at + 1) }) as MobileScreen];
+  });
 }
 
-/** The screen `overviewLiftKey` named. */
-export function overviewLiftScreenOf(key: string | null): MobileScreen | null {
-  if (!key) return null;
-  const at = key.indexOf(":");
-  if (at <= 0) return null;
-  const kind = key.slice(0, at);
-  const id = key.slice(at + 1);
-  return kind === "task" || kind === "pipeline" || kind === "chat" ? { kind, id } : null;
+/** The project whose dashboard draws the top of a stack over the Overview:
+    the topmost screen that names one. A task, a lane and a conversation name
+    their own project; a screen that names none (the accounts screen, a
+    pipelines list, an agent draft) belongs to the screen under it. Screens
+    of different projects can stack (a lane of one project opened from
+    another's task), and each is drawn by its own project's dashboard, so ‹
+    pops one screen at a time, the way the browser's history does. */
+export function overviewLiftProject(screens: readonly MobileScreen[], lookup: OverviewScreenLookup): string | null {
+  for (let index = screens.length - 1; index >= 0; index -= 1) {
+    const project = overviewScreenProject(screens[index]!, lookup);
+    if (project) return project;
+  }
+  return null;
 }
 
 /** The project the screen belongs to, or null when the payload does not name
