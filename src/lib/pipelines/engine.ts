@@ -34,6 +34,7 @@ import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeli
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { interruptionObligationDirectory, interruptionObligationStore, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
+import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
 import {
   describeStructuredHostOwnerGeneration,
@@ -85,6 +86,7 @@ import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
@@ -3533,10 +3535,13 @@ async function tickRunStage(
   /* A turn a deploy cut is the deploy's, not the stage's (#1835): while the
      successor still owes it its continuation the attempt stays open, and once
      the continuation arrived the host is judged from that moment. Positive
-     evidence below still settles it; nothing below may fail it. */
-  const deployCut = reportedUnavailableAt > 0 ? deployCutOf(attempt, ports) : null;
+     evidence below still settles it; nothing below may fail it or ask for a
+     verdict. The hold does not wait for the host to read unavailable: the
+     successor re-hosts the conversation before it delivers, and the turn it
+     re-hosted ends in whatever the cut left behind. */
+  const deployCut = deployCutOf(attempt, ports);
   const heldForDeployCut = deployCutHoldsAttempt(deployCut, ports);
-  const unavailableAt = deployCut?.state === "delivered" && deployCut.resolvedAt
+  const unavailableAt = reportedUnavailableAt > 0 && deployCut?.state === "delivered" && deployCut.resolvedAt
     ? Math.max(reportedUnavailableAt, unixMs(deployCut.resolvedAt))
     : reportedUnavailableAt;
   const hostUnavailablePastGrace = !heldForDeployCut
@@ -5148,6 +5153,13 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     const legacy = unclaimedPipelinePublications();
     for (const pipeline of legacy) await admitExistingPipelineDelivery(pipeline, ports);
     if (legacy.length === 16) followUp = true;
+    /* Creates the store refused during a handover (#1835), stored before
+       provisioning so they provision on this same pass. */
+    try {
+      if ((await admitQueuedPipelineCreations()).length) followUp = true;
+    } catch (error) {
+      console.error("[pipelines] queued pipeline creations could not be admitted", error);
+    }
     /* Before the lease, never under it (#1799). */
     const provisioned = await provisionPendingPipelines(ports);
     // Reconcile only this owner's reservation, with the existing kernel fence.
@@ -5835,6 +5847,10 @@ export type PipelineMutationResult = {
   violations?: PipelineValidationViolation[];
   /** Set by the close action: what its host teardown stopped and preserved. */
   close?: PipelineCloseReport;
+  /** The create was queued, not stored: the store refused it before admission
+      and the serving release's controller stores `pipeline` on its next pass
+      (#1835). */
+  queued?: { reason: string; queuedAt: string };
 };
 
 type PipelineCreatorLineage = {
@@ -5874,6 +5890,10 @@ type CreatePipelineOptions = {
   ensureTask?: BoardTask;
   spawnParams?: TaskPipelineSpawnParams;
   allowOperatorDraftWithoutLineage?: boolean;
+  /** A create the store refuses before admission — the release handoff's
+      write fence, or a lease held past the bounded wait — is queued for the
+      serving release's controller instead of refused (#1835). */
+  queueWhenBusy?: boolean;
 };
 
 function taskSpawnCreatorLineage(
@@ -6096,7 +6116,14 @@ export async function createPipelineFromRequest(
   if (!options.ensureTask) {
     const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, loadTasks());
     if (taskLinkError) return { error: taskLinkError, status: 400 };
-    const created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison);
+    let created: Pipeline;
+    try {
+      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison);
+    } catch (error) {
+      if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
+      const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
+      return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}) };
+    }
     return engineWarnings.length ? { pipeline: created, warnings: engineWarnings } : { pipeline: created };
   }
   return withPipelineMutation((pipelines, persist) => {

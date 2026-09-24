@@ -3788,6 +3788,42 @@ test("a stage turn a deploy cut stays open past the host grace while its continu
   }
 });
 
+test("a re-hosted stage whose deploy cut is still owed gets no verdict request ahead of its continuation (#1835 review)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "rehosted-cut");
+  try {
+    await runningStructuredStage(h);
+    /* The successor adopted the host: it reports hosted and idle, and the
+       durable turn ends in the no-response record written after the cut. */
+    h.setConversationActive(false);
+    h.ports.conversationHostUnavailableSince = async () => null;
+    const asked: string[] = [];
+    h.ports.resumeSeveredTurn = async (input) => {
+      asked.push(input.clientMessageId);
+      return true;
+    };
+    const cutAt = h.ports.now();
+    cut.record("conversation_stage_1", cutAt);
+    h.advanceWallClock(60_000);
+    h.durableTurns.set("/codex/stage-1.jsonl", {
+      turn: "terminal",
+      message: { text: "turn aborted", ts: Date.parse(h.ports.now()) },
+    });
+    h.advanceWallClock(60_000);
+
+    await tickPipelines([], h.ports);
+
+    const held = loadPipelines()[0]!;
+    expect(asked).toEqual([]);
+    expect(held).toMatchObject({ state: "running", stateDetail: DEPLOY_CUT_HOLD });
+    expect(held.runs[0]!.attempts[0]).toMatchObject({ state: "running", completedAt: null, error: null });
+    expect(held.runs[0]!.attempts[0]!.verdictRequest).toBeUndefined();
+    expect(held.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
+  } finally {
+    cut.restore();
+  }
+});
+
 test("a held deploy cut still settles on the stage's own verdict, and an owed cut stops holding past its bound (#1835)", async () => {
   const h = harness();
   const cut = deployCutObligations(h, "bounded-cut");

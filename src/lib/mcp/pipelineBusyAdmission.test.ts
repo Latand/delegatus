@@ -27,7 +27,8 @@ fs.mkdirSync(path.join(process.env.LLV_CODEX_HOME, "sessions"), { recursive: tru
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { loadPipelines, withPipelineMutation } = await import("@/lib/pipelines/store");
-const { getPipelines } = await import("@/lib/pipelines/engine");
+const { getPipelines, tickPipelines } = await import("@/lib/pipelines/engine");
+const { publishHotStateAuthority } = await import("@/lib/state/hotStateAuthority");
 const { isoNow } = await import("@/lib/tasks/helpers");
 const { mutateTasks } = await import("@/lib/tasks/store");
 const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
@@ -156,35 +157,28 @@ test("two creates racing on the registry lock both succeed under their own ids",
   expect(firstId).not.toBe(secondId);
 });
 
-test("a create refused as busy runs again under the same id and creates exactly one pipeline", async () => {
+test("a create that meets a held lease is queued under its id and stored exactly once (#1766, #1835)", async () => {
   process.env.LLV_PIPELINE_LOCK_WAIT_MS = "200";
   const releaseLease = await holdRegistryLease();
   const clientRequestId = `busy-then-retry-${crypto.randomUUID()}`;
-  const task = "busy refusal is not a receipt";
+  const task = "busy refusal is queued";
 
-  const refused = await service.callTool("create_pipeline", createArgs(clientRequestId, task));
-  expect(refused.ok).toBe(false);
-  if (!refused.ok) {
-    expect(refused.retryable).toBe(true);
-    expect(refused.replayed).toBe(false);
-    expect(refused.details?.outcome).toBe("not-executed");
-    expect(refused.details?.nextAction).toBe("retry-same-key");
-  }
-  /* Nothing was admitted, and nothing was remembered under the key. */
+  const queued = await service.callTool("create_pipeline", createArgs(clientRequestId, task));
+  expect(queued).toMatchObject({ ok: true, replayed: false, queued: true });
+  const pipelineId = queued.ok ? String(queued.pipelineId) : "";
+  /* Nothing is stored while the lease is held. */
   expect(pipelinesNamed(task)).toEqual([]);
-  expect(receipts.lookup(`create_pipeline:${clientRequestId}`)).toBeNull();
 
   await releaseLease();
+  /* A retry under the same id answers the same queued pipeline. */
   const retried = await service.callTool("create_pipeline", createArgs(clientRequestId, task));
-  expect(retried.ok).toBe(true);
-  expect(retried.replayed).toBe(false);
-  expect(pipelinesNamed(task)).toHaveLength(1);
+  expect(retried).toMatchObject({ ok: true, replayed: true, pipelineId });
 
-  /* And the id is spent again the moment a create really happens. */
-  const replayed = await service.callTool("create_pipeline", createArgs(clientRequestId, task));
-  expect(replayed.ok).toBe(true);
-  expect(replayed.replayed).toBe(true);
-  expect(pipelinesNamed(task)).toHaveLength(1);
+  /* The controller's next pass stores it, and a second pass stores nothing more. */
+  await tickPipelines([]);
+  expect(pipelinesNamed(task)).toEqual([pipelineId]);
+  await tickPipelines([]);
+  expect(pipelinesNamed(task)).toEqual([pipelineId]);
 });
 
 test("a completed create still replays its receipt under the same id", async () => {
@@ -222,16 +216,18 @@ test("the bounded wait for the lock cannot hang a request", async () => {
   process.env.LLV_PIPELINE_LOCK_WAIT_MS = "300";
   const releaseLease = await holdRegistryLease();
   const startedAt = Date.now();
-  const refused = await service.callTool("create_pipeline", createArgs(`bounded-${crypto.randomUUID()}`, "bounded wait"));
+  const answered = await service.callTool("create_pipeline", createArgs(`bounded-${crypto.randomUUID()}`, "bounded wait"));
   const elapsed = Date.now() - startedAt;
   await releaseLease();
 
-  expect(refused.ok).toBe(false);
   /* It waited for the lock rather than refusing on contact, and it answered
      rather than holding the request open while the lease stayed taken. */
   expect(elapsed).toBeGreaterThanOrEqual(300);
   expect(elapsed).toBeLessThan(10_000);
+  expect(answered).toMatchObject({ ok: true, queued: true });
   expect(pipelinesNamed("bounded wait")).toEqual([]);
+  await tickPipelines([]);
+  expect(pipelinesNamed("bounded wait")).toHaveLength(1);
 });
 
 test("a pipeline_action refused on the lock keeps its id too", async () => {
@@ -303,4 +299,43 @@ test("a link-task refused on the task lock keeps its id too", async () => {
   const retried = await linkService.callTool("link_task_to_pipeline", args);
   expect(retried.ok).toBe(true);
   expect(retried.replayed).toBe(false);
+});
+
+test("a create during a deploy's write fence is queued and stored by the release that can write (#1835)", async () => {
+  delete process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  const stateDir = process.env.LLV_STATE_DIR!;
+  const revision = "e".repeat(40);
+  const previousPort = process.env.PORT;
+  delete process.env.PORT;
+  /* A live installation's pipeline store exists before any deploy fences it. */
+  loadPipelines();
+  /* The handoff as the deploy adapter publishes it: a release target, and
+     the authority fencing every hot-state writer until the successor is
+     ready. */
+  fs.writeFileSync(path.join(stateDir, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:1", revision }));
+  publishHotStateAuthority(stateDir, "fencing", revision);
+  const clientRequestId = `fenced-${crypto.randomUUID()}`;
+  const task = "created during the handover";
+  try {
+    const queued = await service.callTool("create_pipeline", createArgs(clientRequestId, task));
+    expect(queued).toMatchObject({ ok: true, queued: true, queuedBecause: "hot state writes are fenced during release handoff" });
+    const pipelineId = queued.ok ? String(queued.pipelineId) : "";
+    expect(pipelinesNamed(task)).toEqual([]);
+
+    /* The successor activates, and its controller's next pass stores it. */
+    publishHotStateAuthority(stateDir, "sqlite", revision, { activationReadyAt: new Date().toISOString() });
+    await tickPipelines([]);
+
+    expect(pipelinesNamed(task)).toEqual([pipelineId]);
+    expect(loadPipelines().find((pipeline) => pipeline.id === pipelineId)).toMatchObject({
+      srcPath: caller.path,
+      creationRequest: { key: `create_pipeline:${clientRequestId}` },
+    });
+    /* A retry under the same id answers the stored pipeline. */
+    expect(await service.callTool("create_pipeline", createArgs(clientRequestId, task))).toMatchObject({ ok: true, pipelineId });
+  } finally {
+    fs.rmSync(path.join(stateDir, "viewer-release.json"), { force: true });
+    fs.rmSync(path.join(stateDir, "hot-state-authority.json"), { force: true });
+    if (previousPort !== undefined) process.env.PORT = previousPort;
+  }
 });
