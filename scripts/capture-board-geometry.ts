@@ -4673,7 +4673,9 @@ async function activityMain(): Promise<void> {
     must(rowYou !== "" && scoped.hero.replace(/\s/g, "").includes(rowYou.replace(/\s/g, "")), `one project: the hero "${scoped.hero}" is not the row's "${rowYou}"`);
     must(scoped.agents.startsWith("≥"), `one project: its agents, missing the stage host, read "${scoped.agents}"`);
     must(scoped.chip?.state === "lower", `one project: the chip reads ${scoped.chip?.state}`);
-    must(scoped.projects.length === allProjects.projects.length, `one project: the list holds ${scoped.projects.length} rows, not ${allProjects.projects.length}`);
+    /* The chosen row opens, so rows may fold into "+ N more": shown and folded hold every project. */
+    const listed = (reading: ActivityReading) => reading.projects.length + Number(/\d+/.exec(reading.foldedMore ?? "")?.[0] ?? 0);
+    must(listed(scoped) === listed(allProjects), `one project: the list holds ${listed(scoped)} projects, not ${listed(allProjects)}`);
     const picker = await capture("desktop-project-picker", "range=7d", { act: async (page) => { await page.click("[data-activity-picker-trigger]"); await page.waitForSelector("[data-activity-picker=open]"); } });
     must((picker.pickerOptions ?? 0) >= ACTIVITY_REPOS.length, `picker: ${picker.pickerOptions} options`);
     const scopedUk = await capture("desktop-project-selected-uk", `range=7d&project=${encodeURIComponent(orchard)}`, { lang: "uk" });
@@ -4681,17 +4683,22 @@ async function activityMain(): Promise<void> {
     const phoneScoped = await capture("phone-project-selected", `range=7d&view=projects&project=${encodeURIComponent(orchard)}`, { phone: true });
     must(phoneScoped.layout === "narrow" && phoneScoped.scope === "orchard-client" && phoneScoped.tiles === 4, `phone, one project: ${phoneScoped.layout} layout, chip ${phoneScoped.scope}, ${phoneScoped.tiles} tiles`);
 
-    /* Today with the stage host unread from 09:00 to 12:00. */
-    writeStage([
-      { name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start },
-      { name: "today-morning", from: days[TODAY]!.start, until: clock(TODAY, "09:00") },
-      { name: "today-afternoon", from: clock(TODAY, "12:00"), until: endOfToday },
-    ]);
-    const gap = await capture("desktop-today-gap", "range=today");
-    must(gap.chip?.state === "lower", `today with a gap: the chip reads ${gap.chip?.state}`);
-    await capture("desktop-today-gap-uk", "range=today", { lang: "uk" });
-    const gapHour = await capture("desktop-today-gap-hover", "range=today", { act: async (page) => { await page.hover(`[data-activity-pair="${clock(TODAY, "10:00")}"] rect[tabindex]`); } });
-    must(gapHour.tooltip?.text.includes("not read (Stage host)") === true, `today with a gap: the 10:00 tooltip reads ${gapHour.tooltip?.text}`);
+    /* Today with the stage host unread from 09:00 to 12:00: only once those
+       hours have passed, since an hour still to come draws nothing. */
+    if (clock(TODAY, "12:00") <= now) {
+      writeStage([
+        { name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start },
+        { name: "today-morning", from: days[TODAY]!.start, until: clock(TODAY, "09:00") },
+        { name: "today-afternoon", from: clock(TODAY, "12:00"), until: endOfToday },
+      ]);
+      const gap = await capture("desktop-today-gap", "range=today");
+      must(gap.chip?.state === "lower", `today with a gap: the chip reads ${gap.chip?.state}`);
+      await capture("desktop-today-gap-uk", "range=today", { lang: "uk" });
+      const gapHour = await capture("desktop-today-gap-hover", "range=today", { act: async (page) => { await page.hover(`[data-activity-pair="${clock(TODAY, "10:00")}"] rect[tabindex]`); } });
+      must(gapHour.tooltip?.text.includes("not read (Stage host)") === true, `today with a gap: the 10:00 tooltip reads ${gapHour.tooltip?.text}`);
+    } else {
+      report.todayGap = "not captured: today's 09:00-12:00 is still to come in the capture's zone";
+    }
 
     /* None of your input read, agent time still read. */
     fs.rmSync(activityDir, { recursive: true, force: true });
@@ -4714,7 +4721,10 @@ async function activityMain(): Promise<void> {
     server = startServer(port);
     await waitForServer(baseUrl, server);
     const empty = await capture("desktop-empty", "range=7d");
-    must(empty.chip?.state === "none" && empty.hero.includes("Unknown"), `empty: chip ${empty.chip?.state}, hero ${empty.hero}`);
+    /* This host's ingest reads it from its first pass on, so an empty home is
+       read for a few minutes of the range: the chip says a lower bound once
+       that pass has run, and your time still reads Unknown. */
+    must(empty.chip?.state !== "ok" && empty.hero.includes("Unknown") && !/\b0 h\b/.test(empty.hero), `empty: chip ${empty.chip?.state}, hero ${empty.hero}`);
     must(empty.caps.every((cap) => cap.text === "?"), `empty: caps ${JSON.stringify(empty.caps)}`);
     await capture("desktop-empty-uk", "range=7d", { lang: "uk" });
     const emptyPhone = await capture("phone-empty", "range=30d&view=days", { phone: true });
