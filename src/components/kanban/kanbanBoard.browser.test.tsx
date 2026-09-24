@@ -8073,7 +8073,9 @@ describe("interface polish round 2: press and open/close motion, the status menu
    *     the sheet fades in;
    *   - a card draws no status pill; S on a focused card opens the status menu at
    *     the card's ⋯; the fold and the ⋯ rest at 35 % and come up on hover and on
-   *     focus;
+   *     focus, while the seat's lock, a status mark with no action, keeps its
+   *     full strength (the rule it escaped, put back, fades it: the red path); the
+   *     card's ⋯ names the task's Attach and each lane's apart;
    *   - below a desktop width (1024 px) the Stages sheet's head puts the lane's
    *     controls on a line of their own inside the sheet, and from there up the
    *     head holds one row with the title readable.
@@ -8271,10 +8273,60 @@ describe("interface polish round 2: press and open/close motion, the status menu
           }, more);
           await page.screenshot({ path: path.join(OUT, "status-menu-from-s.png") });
           await page.keyboard.press("Escape");
-          readings.card = { pills, opacity: { rest, hovered, focused }, placed };
+          /* The seat's lock keeps its strength at rest, and under the rule it escaped it fades
+             with the tools. The fixture's seat card is not drawn today (#2165), so the lock is
+             the one KanbanCard draws, placed in this card's tools beside its ⋯. */
+          await page.mouse.move(2, 2);
+          const lockOpacity = () => page.evaluate((selector) => {
+            const tools = document.querySelector<HTMLElement>(`${selector} [data-menu]`)!.parentElement!;
+            let lock = tools.querySelector<HTMLElement>("[data-lock]");
+            if (!lock) {
+              lock = document.createElement("span");
+              lock.className = "icon-btn lock";
+              lock.setAttribute("role", "img");
+              lock.setAttribute("data-lock", "");
+              tools.prepend(lock);
+            }
+            return getComputedStyle(lock).opacity;
+          }, card("t-verify-a"));
+          await page.waitForTimeout(300);
+          const lockRest = await lockOpacity();
+          const oldRule = await page.addStyleTag({ content: "@media (hover: hover) and (pointer: fine) { .kb .card .tools .icon-btn:not(.hide) { opacity: 0.35; transition: none; } }" });
+          await page.waitForTimeout(100);
+          const lockUnderOldRule = await lockOpacity();
+          await oldRule.evaluate((element) => (element as unknown as HTMLElement).remove());
+          readings.card = { pills, opacity: { rest, hovered, focused }, placed, lock: { rest: lockRest, underOldRule: lockUnderOldRule } };
+          if (lockRest !== "1") failures.push(`the seat's lock fades at rest: ${lockRest}`);
+          if (lockUnderOldRule !== "0.35") failures.push(`the lock's check cannot go red: under the old rule it read ${lockUnderOldRule}`);
           if (rest !== "0.35" || hovered !== "1" || focused !== "1") failures.push(`quiet card tools: ${JSON.stringify({ rest, hovered, focused })}`);
           if (placed.gapX > 8 || placed.gapY > 16 || placed.radios !== 4) failures.push(`S opened the status menu away from the card's ⋯: ${JSON.stringify(placed)}`);
           if (pageErrors.length) failures.push(`card: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* The card's ⋯ on a card with a lane: the task's Attach once, then one per lane that names the pipeline. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en");
+        try {
+          await page.waitForSelector(`${card("t-upload")} .pblock`, { state: "attached", timeout: 20_000 });
+          await page.evaluate(() => document.querySelector<HTMLElement>('[data-seat-collapse][aria-expanded="true"]')?.click());
+          await page.waitForTimeout(600);
+          /* A toast may stand over the ⋯, so no pointer. */
+          await page.locator(`${card("t-upload")} [data-menu]`).evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
+          await page.waitForSelector('.menu[aria-label^="Actions for"]', { timeout: 5_000 });
+          const attach = await page.evaluate((selector) => ({
+            lanes: document.querySelectorAll(`${selector} .pblock`).length,
+            labels: [...document.querySelectorAll<HTMLElement>('.menu [role^="menuitem"] .lbl')].map((label) => label.firstChild?.textContent ?? "").filter((label) => label.startsWith("Attach PR or issue")),
+          }), card("t-upload"));
+          await page.waitForTimeout(400);
+          await page.screenshot({ path: path.join(OUT, "card-menu-attach.png") });
+          await page.keyboard.press("Escape");
+          readings.attach = attach;
+          const expected = ["Attach PR or issue…", ...Array.from({ length: attach.lanes }, () => "Attach PR or issue to the pipeline…")];
+          if (!attach.lanes || JSON.stringify(attach.labels) !== JSON.stringify(expected)) failures.push(`the card's ⋯ Attach labels: ${JSON.stringify(attach)}`);
+          if (pageErrors.length) failures.push(`attach: page errors ${pageErrors.join(" | ")}`);
         } finally {
           await context.close();
         }

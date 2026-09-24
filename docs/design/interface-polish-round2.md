@@ -327,11 +327,16 @@ asked for it.
 - **04.** A pipeline on no task has no card menu, so its lane keeps its own ⋯
   and its head row. The patch would have left it with no way to its actions.
   The card's menu also keys its items by position, because each lane repeats
-  "Expand stages", "Pause" and the rest.
+  "Expand stages", "Pause" and the rest. In that menu the task's own "Attach
+  PR or issue…" sits a few rows above each lane's, so the lane's reads "Attach
+  PR or issue to the pipeline…" (uk: "…до конвеєра…"). A task-less lane's own
+  ⋯ has only the one and keeps the short label.
 - **05.** The pill is gone from the card's markup, and `kanban.statusAria`
   went with it. The patch had only hidden it with CSS. After a move, focus
   lands on the moved card, so `[`, `]`, S and M keep working. S opens the
-  status menu at the card's ⋯.
+  status menu at the card's ⋯. The quiet rule leaves out the seat's lock, a
+  status mark with no action that sits among the tools, so it keeps its full
+  strength at rest.
 - **06.** The ghost copy control keeps a transparent 1 px border, because the
   22 px fine-pointer size the gutters are cut to counts it. The outbox's
   pending spinner holds the same slot until the message is confirmed. It takes
@@ -379,7 +384,9 @@ Critique-2 noted that this half was left undone and not deferred. It is built:
   the card's ⋯; a move from the ⋯ writes with the guard and focus follows the
   card. `OverviewBoard.kanban.dom` reads "Move to" from the ⋯.
 - `KanbanStages.dom`: the lane's actions are a group in the card's ⋯, and the
-  lane draws no ⋯. With the graph shown there is no chip strip and a node
+  lane draws no ⋯. `workLinks.dom`: a lane's attach form opens from its
+  group in the card's ⋯, and that menu lists the task's Attach once and each
+  lane's under the lane's title. With the graph shown there is no chip strip and a node
   reaches a folded pane; with it hidden the chips return. The lane's controls
   sit in the head, the column heads draw no identity, and a waiting stage has
   no sub-line, composer or note, with the new status words.
@@ -401,7 +408,11 @@ Critique-2 noted that this half was left undone and not deferred. It is built:
   "interface polish round 2" case, run in Chrome. It covers the press near
   the edge with its red path, reduced motion, Past attempts by height and its
   mid-way reversal, the sheet's entrance, the status menu at the ⋯, the quiet
-  tools on hover and focus, and the sheet head at 640, 820 and 1100 px.
+  tools on hover and focus, and the sheet head at 640, 820 and 1100 px. It
+  also reads the seat's lock at full strength at rest, and at 35 % once the
+  rule it escaped is put back (its red path). It reads the two Attach labels
+  in a card's ⋯ as well. The fixture's seat card is not drawn today (#2165),
+  so the lock is the one `KanbanCard` draws, placed in a real card's tools.
   Readings are in `evidence/interface-polish/readings.json`. The driver's
   older cases that read the pill, the lane's ⋯, the chip strip, the draft
   composer and the pane-head identity are updated to the new markup.
@@ -410,7 +421,9 @@ Critique-2 noted that this half was left undone and not deferred. It is built:
 
 Everything is in `~/Pictures/delegatus-review/interface-polish/build/`. The
 "before" frames come from main at the branch point, the "after" frames from
-the branch head. Both are production builds (`bun run build`, isolated config
+the branch head. After the review round they were re-captured at the new
+head. Main's one commit since (#2159) changes only the activity page, which
+no pair shows, so the before frames stand. Both are production builds (`bun run build`, isolated config
 and state roots) served over the same seeded demo home by round 2's capture
 driver, which is a scratch script and not committed. Each `NN` pair shows its
 change's primary screen with every change applied, so pairs that share a
@@ -427,10 +440,14 @@ board, 06, 07 and 08 the phone conversation. Every pair was opened and read.
   before, and over about 120 ms after.
 - The after frames match round 2's after, with one difference: main's board
   order (#2156) now puts the card whose stage is running first in Assigned.
+  The re-captured head frames differ from the first build's only in clock
+  text and live timers, a few hundred pixels per frame. The renamed lane
+  attach and the lock appear on no seeded screen. The browser case reads
+  both, and its `card-menu-attach.png` shows the menu.
 
 The browser case measured the motion in Chrome. Past attempts goes 22, 38,
 88, 121, 141, 155, … 185 px, one frame at a time; clicked again at 80 ms, it
 turns at 141 px and settles closed. The sheet's opacity runs 0, 0, 0.1, 0.41,
-0.82 … 1 over its first frames. Under reduced motion, both are whole in the
+0.61, 0.73 … 1 over its first frames. Under reduced motion, both are whole in the
 first frame and nothing scales.
 

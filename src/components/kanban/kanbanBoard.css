@@ -877,10 +877,10 @@
 @media (hover: hover) and (pointer: fine) {
   .kb .card .tools .icon-btn.hide { opacity: 0; transition: opacity var(--motion-fast); }
   .kb .card:hover .tools .icon-btn.hide, .kb .card:focus-within .tools .icon-btn.hide { opacity: 1; }
-  /* A still board is a column of titles, not a grid of icons: the fold and ⋯
+  /* A still board reads as a column of titles: the fold and ⋯
      controls stay in place, quiet, and come up to full strength when the card
-     is hovered or holds focus. The seat lock is a mark, not a control, and
-     keeps its strength. */
+     is hovered or holds focus. The seat lock is a status mark with no
+     action, so it keeps its full strength. */
   .kb .card .tools .icon-btn:not(.hide):not(.lock) { opacity: 0.35; transition: opacity var(--motion-fast); }
   .kb .card:hover .tools .icon-btn:not(.hide):not(.lock), .kb .card:focus-within .tools .icon-btn:not(.hide):not(.lock) { opacity: 1; }
 }
@@ -1018,8 +1018,8 @@
 .kb .card .history summary:hover { background: var(--surface-well); color: var(--color-secondary); }
 .kb .card .history summary .chev { width: 12px; height: 12px; transition: transform var(--motion-fast); }
 /* Where the content box can be styled, the column and its 4 px gap move into
-   it: Chrome animates the height of a block <details>'s content box and not a
-   flex one's (see the motion section below). */
+   it: Chrome animates the height of a <details> content box only while that
+   box is a block (see the motion section below). */
 @supports selector(::details-content) {
   .kb .card .history { display: block; }
   .kb .card .history::details-content { display: flex; flex-direction: column; gap: 4px; }
@@ -1178,7 +1178,7 @@
 .kb .draft-acts .btn { height: 28px; }
 .kb .bstatus { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-label); font-weight: 600; }
 .kb .bstatus svg { width: 12px; height: 12px; }
-/* An ordinary wait is not a warning: amber stays for what needs the operator. */
+/* An ordinary wait is muted; amber stays for what needs the operator. */
 .kb .bstatus.waiting { color: var(--color-muted); font-weight: 500; }
 .kb .bstatus.ended { color: var(--color-muted); }
 .kb .draft-note { margin: 0; font-size: var(--text-label); color: var(--color-muted); text-align: center; }
