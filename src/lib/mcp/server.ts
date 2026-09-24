@@ -2920,12 +2920,14 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Create a durable board task.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
+    "Set `icon` to the lucide icon name that says what the task is about (bug, smartphone, rocket, search-check), so the card reads at a glance.",
   ].join(" "),
   update_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Update a durable board task.",
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
     "`refine` writes only the human part, as it always has.",
+    "`icon` sets the card's lucide icon; give one to a task that has none.",
   ].join(" "),
   create_pipeline: [
     "Create a Delegatus pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
@@ -3238,6 +3240,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     attachments: z.array(z.unknown()).optional(),
     board: z.enum(["shown", "hidden"]).optional()
       .describe("Board membership of the new task's band (#1627). Omitted creates a task the board shows, and the per-project limit counts only those; hidden records the task off the board, which is how work is kept when the board is full. Either way the task keeps its row in the task list, and update_task moves it between the two."),
+    /* Unknown, so the command clamps what the schema would refuse (#2102). */
+    icon: z.unknown().optional()
+      .describe("A lucide icon name for the card (#2102), kebab-case: bug, smartphone, rocket, search-check, shield. Bug and lucide:bug mean the same. A name lucide does not have, or a value that is no name, is stored as no icon and the answer carries a note."),
   }).passthrough(),
   update_task: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3259,6 +3264,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Board membership of this task's band (#1614). hidden takes the band off the board and shown puts it back; the task itself is never removed, keeps its row in the task list and every assignment, and either direction is one write. It governs EMPTY tasks only — a task holding a durable agent association draws its band whatever this says."),
     color: z.enum(["none", ...TASK_COLORS]).optional()
       .describe("Colour label shown on the task's kanban card (#1695). none clears it."),
+    icon: z.unknown().optional()
+      .describe("A lucide icon name for the card (#2102), read like create_task's icon; none, null or an empty string clears it. Leaves updatedAt unchanged."),
     attachLinks: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
       .describe("PRs or issues to attach to the task's card by hand (#2059): \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com pull/issue URL, one or a list. A bare number means the task's repository. Attaching one already attached changes nothing. The card also shows every link its pipelines discover, so attach only what discovery cannot see. Leaves updatedAt unchanged."),
     detachLinks: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()

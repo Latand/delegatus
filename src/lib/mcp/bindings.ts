@@ -1397,7 +1397,7 @@ async function createBoardTask(args: McpToolArgs): Promise<McpToolPayload> {
     };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
-  return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay };
+  return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay, ...(result.notes ? { notes: result.notes } : {}) };
 }
 
 /**
@@ -1446,7 +1446,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
-  return taskAcknowledgement(result.task, args, changedFields);
+  return { ...taskAcknowledgement(result.task, args, changedFields), ...(result.notes ? { notes: result.notes } : {}) };
 }
 
 /**

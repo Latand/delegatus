@@ -237,6 +237,24 @@
 .kb .card .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; word-break: break-word; }
 .kb .card .title.pending { color: var(--color-muted); font-weight: 500; font-style: italic; }
 .kb .card .tools { display: flex; gap: 2px; flex-shrink: 0; margin-top: -4px; margin-right: -6px; }
+/* The task's icon (#2102) leads the title in a fixed box; the title keeps
+   `flex: 1`, so the icon never takes its room. Both sit on the title's first
+   baseline: a zero-width letter gives the icon box a baseline, and its content
+   box is one title line, so the glyph is level with the first line however
+   many lines the title wraps to, and never moves the title. The padding and
+   the matching negative margin only enlarge the target. The glyph sits on the
+   card's content edge, its box reaching into the padding. */
+.kb .card .head > .title { align-self: baseline; }
+.kb .card .task-icon {
+  flex-shrink: 0; align-self: baseline; box-sizing: border-box; width: 24px; height: 28px; padding: 5px 0; margin: -5px -2px -5px -4px;
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 6px;
+  font-size: var(--text-body); line-height: 18px;
+}
+.kb .card .task-icon::before { content: "\200b"; width: 0; overflow: hidden; }
+.kb .card button.task-icon:hover { background: var(--surface-well); }
+.kb .card button.task-icon:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* The picker sizes itself to its grid (`taskIcon.css`). */
+.kb .popover.icon-popover { width: auto; max-height: none; }
 .kb .icon-btn {
   width: var(--target); height: var(--target); flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--radius-control); color: var(--color-muted); transition: background var(--motion-fast), color var(--motion-fast);
@@ -484,6 +502,7 @@
   .kb .tabs-nav button, .kb .btn, .kb .pill, .kb .receipt .act, .kb .popover .row .show, .kb .refs .ref { min-height: 44px; }
   .kb .pill { height: 36px; padding: 0 12px; }
   .kb .tile, .kb .card .add { min-height: 44px; }
+  .kb .card button.task-icon { width: 36px; height: 44px; padding: 13px 0; margin: -13px -2px -13px -10px; }
   .kb .receipt .close { width: 44px; height: 44px; flex-shrink: 0; }
   .kb .menu [role="menuitem"], .kb .menu [role="menuitemradio"] { min-height: 44px; }
 }

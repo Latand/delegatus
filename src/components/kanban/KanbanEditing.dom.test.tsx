@@ -38,6 +38,7 @@ Object.assign(globalThis, {
 const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
 const { KanbanBoard } = await import("./KanbanBoard");
+const { resetTaskIconLoaderForTests } = await import("@/components/tasks/taskIconLoader");
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -473,6 +474,46 @@ test("colour comes from the card menu or C, shows at once, and is written on its
   expect(cardEl(view.host, "a")?.getAttribute("data-color")).toBe("none");
   await tick();
   expect((view.server.patches[1]!.body as { color: string }).color).toBe("none");
+});
+
+test("an icon leads the title and comes from the card's own icon, the card menu or I; it shows at once and is written on its own", async () => {
+  resetTaskIconLoaderForTests(async (names) => Object.fromEntries(names.map((name) => [name, [["path", { d: `M0 0 ${name}`, key: name }]]])));
+  const view = mount([task("a", "inbox", "Fix the crash"), task("b", "inbox", "Quiet evening", { icon: "rocket" })]);
+  const head = (id: string) => cardEl(view.host, id)!.querySelector(".head")!;
+  const shownIcon = (id: string) => head(id).querySelector("[data-task-icon]");
+  /* Before the title, in its own box: stored, else the title's suggestion. */
+  expect(head("a").firstElementChild?.classList.contains("task-icon")).toBe(true);
+  expect(head("a").firstElementChild?.nextElementSibling?.classList.contains("title")).toBe(true);
+  expect([shownIcon("a")?.getAttribute("data-task-icon"), shownIcon("a")?.getAttribute("data-icon-source")]).toEqual(["bug", "suggested"]);
+  expect([shownIcon("b")?.getAttribute("data-task-icon"), shownIcon("b")?.getAttribute("data-icon-source")]).toEqual(["rocket", "stored"]);
+  expect(head("a").querySelector("[data-icon-menu]")?.getAttribute("aria-label")).toBe("Change the icon of «Fix the crash»");
+
+  click(head("a").querySelector("[data-icon-menu]"));
+  const picker = view.host.querySelector(".popover.icon-popover [data-task-icon-picker]");
+  expect(picker).toBeTruthy();
+  expect(document.activeElement).toBe(picker!.querySelector("[data-task-icon-search]"));
+  /* The suggestion the card shows is offered first, marked, while nothing is stored. */
+  expect(picker!.querySelector("[data-icon-choice]")?.getAttribute("data-icon-choice")).toBe("bug");
+  expect(picker!.querySelector("[data-suggested]")?.getAttribute("data-icon-choice")).toBe("bug");
+  click(picker!.querySelector('[data-icon-choice="rocket"]'));
+  expect(view.host.querySelector(".icon-popover")).toBeNull();
+  expect([shownIcon("a")?.getAttribute("data-task-icon"), shownIcon("a")?.getAttribute("data-icon-source")]).toEqual(["rocket", "stored"]);
+  await tick();
+  expect(view.server.patches.map((patch) => patch.body)).toEqual([{ icon: "rocket", expectedProject: "fixture", expectedRevision: REV(1) }]);
+
+  /* I opens it from the keyboard; «No icon» clears it and the quiet default returns. */
+  cardEl(view.host, "b")!.focus();
+  key(cardEl(view.host, "b"), "i");
+  click(view.host.querySelector(".icon-popover [data-icon-choice-none]"));
+  expect([shownIcon("b")?.getAttribute("data-task-icon"), shownIcon("b")?.getAttribute("data-icon-source")]).toEqual(["circle-dashed", "default"]);
+  await tick();
+  expect(view.server.patches[1]!.body).toEqual({ icon: "none", expectedProject: "fixture", expectedRevision: REV(1) });
+
+  /* The card menu names it beside the colour. */
+  click(cardEl(view.host, "a")?.querySelector("[data-menu]"));
+  click(menuItem(view.host, "Icon…"));
+  await tick();
+  expect(view.host.querySelector(".icon-popover [data-icon-choice=\"rocket\"]")?.getAttribute("aria-pressed")).toBe("true");
 });
 
 test("the Hidden tray lists hidden groups, empty tasks and closed conversations, and each comes back from it", async () => {
