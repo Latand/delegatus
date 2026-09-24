@@ -484,6 +484,13 @@ function ViewerApp() {
          own listener gets): the place, and the project it was written on,
          which comes back with it — the Overview included (#2098, #2105). */
       const landing = phoneRef.current.mobile ? mobileNav.land(event.state, event) : null;
+      /* An entry a ‹ passes through on its way to the screen under the one
+         it left: nothing is drawn from it, so nothing of it replays, and its
+         own hashchange is skipped. */
+      if (landing?.kind === "passing") {
+        traversalFenceRef.current.arm(location.hash);
+        return;
+      }
       const phone = landing?.kind === "phone" ? landing : null;
       const phoneProject = phone?.entry.project ?? null;
       const projectMoved = phoneProject !== null && phoneProject !== phoneRef.current.project;

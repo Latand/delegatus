@@ -770,6 +770,56 @@
         },
         {
           "n": 9,
+          "label": "dead-link",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_never_opened",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 10,
+          "label": "dead-link-chevron",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 11,
+          "label": "forward-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-long",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 12,
           "label": "back-to-board",
           "want": {
             "screen": "board",
