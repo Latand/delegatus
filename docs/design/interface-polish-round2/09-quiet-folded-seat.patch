@@ -1,0 +1,35 @@
+diff --git a/src/components/kanban/kanbanBoard.css b/src/components/kanban/kanbanBoard.css
+index 6d9863e..72208ad 100644
+--- a/src/components/kanban/kanbanBoard.css
++++ b/src/components/kanban/kanbanBoard.css
+@@ -201,7 +201,11 @@
+ .kb .tabs-nav button[aria-selected="true"] { background: var(--color-accent-soft); color: var(--color-accent); border-color: transparent; }
+ .kb .tabs-nav .n { font-weight: 400; color: var(--color-muted); margin-left: 4px; }
+ .kb .tabs-nav button[aria-selected="true"] .n { color: inherit; }
+-.kb .tabs-nav.jump { padding: 10px 16px 0; }
++/* The jump tabs repeat the column heads, so they speak quietly: one light
++   segmented row instead of four bordered buttons. */
++.kb .tabs-nav.jump { padding: 6px 20px 0; gap: 2px; }
++.kb .tabs-nav.jump button { height: 28px; border-color: transparent; background: none; font-weight: 500; color: var(--color-muted); }
++.kb .tabs-nav.jump button:hover { background: var(--surface-well); color: var(--color-primary); }
+ /* The tab strip sits above the tabbed board, inset by the board's own side padding. */
+ .kb .scroll-wrap > .tabs-nav:not(.jump) { padding: 10px 24px; }
+ .kb .tabs-nav.jump button { flex: 0 0 auto; padding: 0 12px; }
+@@ -630,6 +634,17 @@
+ .kb .seat-head .icon-btn.seat-dock svg { width: 15px; height: 15px; }
+ /* Collapsed on top: one 40 px strip. */
+ .kb .seat.folded .seat-head { min-height: 40px; padding-top: 5px; padding-bottom: 5px; }
++/* Folded with nothing for the operator (no answer owed, no unread reply), the
++   strip is a quiet row on the board: no fill, no frame, no ribbon. The role
++   frame and its colour come back the moment it needs the operator or opens,
++   so accent and colour keep meaning "look here". */
++.kb .seat.folded:not(:has(.seat-title .state.needs, .seat-unread)),
++.kb .seat.folded:not(:has(.seat-title .state.needs, .seat-unread)) > [data-orchestrator-panel] { background: transparent; border-color: transparent; box-shadow: none; }
++:root[data-role-frame] .kb .seat.folded:not(:has(.seat-title .state.needs, .seat-unread))[data-role-host]::after,
++:root[data-role-frame] .kb .seat.folded:not(:has(.seat-title .state.needs, .seat-unread)) .role-mark { display: none; }
++.kb .seat.folded:not(:has(.seat-title .state.needs, .seat-unread)) { max-width: none; margin-top: 8px; }
++.kb .seat.folded:not(:has(.seat-title .state.needs, .seat-unread)) .seat-head { padding-left: 0; }
++.kb .seat.folded:not(:has(.seat-title .state.needs, .seat-unread)) .seat-head .icon-btn.seat-fold { border-color: transparent; background: none; }
+ .kb .seat .grow { flex: 1; }
+ /* The fold control (#1802): the operator must find it without hunting, so it
+    reads as a button with a word on it rather than a bare chevron, and it keeps

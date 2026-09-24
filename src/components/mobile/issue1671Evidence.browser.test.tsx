@@ -936,10 +936,12 @@ const readInk = (page: Page) => page.evaluate((): InkReading => {
   const feed = document.querySelector("[data-log-feed-scroller]")!;
   const feedBox = box(feed);
   const edge = feedBox.t + feed.clientTop;
-  /* The command's control sits in the command block, whose parent is the
-     card's readable body; the output's control is the body's other one. */
+  /* The command's control sits in the card's readable body (the sunken
+     well): in the command block for a mouse, and at the end of the meta row
+     over the command for a finger (#2148). The output's control is the
+     body's other one. */
   const command = document.querySelector('[aria-label="Copy command"]');
-  const body = command?.parentElement?.parentElement ?? null;
+  const body = command?.closest(".bg-sunken") ?? null;
   const output = body?.querySelector('[aria-label="Copy output"]') ?? null;
   const controls = [command, output].filter((element): element is Element => !!element);
   const under = body ? ink(body).filter((line) => line.seen && controls.some((control) => area(line.seen!, box(control)) > 0.25)).map((line) => line.text) : [];

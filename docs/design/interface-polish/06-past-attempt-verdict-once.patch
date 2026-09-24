@@ -1,0 +1,17 @@
+diff --git a/src/components/kanban/PipelineSection.tsx b/src/components/kanban/PipelineSection.tsx
+index d1b3248..6d71d29 100644
+--- a/src/components/kanban/PipelineSection.tsx
++++ b/src/components/kanban/PipelineSection.tsx
+@@ -621,7 +621,11 @@ export function pastAttemptLabel(t: TFunction, row: PastAttempt, stage: string):
+ export function pastAttemptState(t: TFunction, row: PastAttempt): string {
+   if (row.kind === "round") return t(`kanban.past.verdict.${row.state === "APPROVE" || row.state === "REQUEST_CHANGES" || row.state === "COMMENT" ? row.state : "open"}`);
+   const state = attemptStateLabel(t, row.state as never);
+-  return row.verdict ? `${state} · ${t(`kanban.past.stageVerdict.${row.verdict as "pass" | "fail" | "needs_decision"}`)}` : state;
++  /* "passed · pass" says one thing twice; the verdict is shown only when it
++     adds something the state does not (a pass on a stage that failed, a
++     decision request). */
++  const restates = (row.state === "passed" && row.verdict === "pass") || (row.state === "failed" && row.verdict === "fail");
++  return row.verdict && !restates ? `${state} · ${t(`kanban.past.stageVerdict.${row.verdict as "pass" | "fail" | "needs_decision"}`)}` : state;
+ }
+ 
+ /** The tone of that ending: "ok", "bad", or none. */

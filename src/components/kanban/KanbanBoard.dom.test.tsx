@@ -139,22 +139,52 @@ test("choosing a status moves the card at once, writes it with the guard, and of
     changed: () => {},
   };
   const { host } = mount([task("a", "inbox", "Write the release notes")], ports);
-  click(host.querySelector('.card[data-id="task:a"] .pill'));
+  /* The column names the status; the card's ⋯ opens with "Move to" first. */
+  click(host.querySelector('.card[data-id="task:a"] [data-menu]'));
+  expect(host.querySelector(".menu")?.textContent).toStartWith("Move to");
   const done = [...host.querySelectorAll('.menu [role="menuitemradio"]')].find((item) => item.textContent?.includes("Done"));
   click(done);
   expect(columnOf(host, "a")).toBe("done");
   expect(host.querySelector('.card[data-id="task:a"]')?.getAttribute("data-pending")).toBe("1");
   expect(receiptTexts(host)).toContain("Moved «Write the release notes» to Done");
   await tick();
-  /* Focus follows the card into its new column. */
+  /* Focus follows the card into its new column, on the card itself. */
   expect(document.activeElement?.closest(".column")?.getAttribute("data-status")).toBe("done");
-  expect(document.activeElement?.classList.contains("pill")).toBe(true);
+  expect(document.activeElement?.getAttribute("data-id")).toBe("task:a");
   expect(patches).toEqual([{ id: "a", body: { status: "done", expectedProject: "fixture", expectedRevision: REV(1) } }]);
   answer({ ok: true, task: task("a", "done", "Write the release notes", { revision: REV(2) }) });
   await tick();
   expect(columnOf(host, "a")).toBe("done");
   expect(host.querySelector('.card[data-id="task:a"]')?.getAttribute("data-pending")).toBe("0");
   expect([...host.querySelectorAll("[data-kanban-receipt] .act")].map((node) => node.textContent)).toContain("Undo");
+});
+
+test("a column names its cards' status, so a card draws no status pill; S opens the status menu from the card's ⋯ (#2148)", async () => {
+  const patches: unknown[] = [];
+  const ports: TaskMutationPorts = {
+    patch: async (id, body) => {
+      patches.push({ id, body });
+      return { ok: true, task: task("a", "blocked", "Repair old links", { revision: REV(2) }) };
+    },
+    read: async () => null,
+    changed: () => {},
+  };
+  const { host } = mount([task("a", "assigned", "Repair old links"), task("b", "done", "Merge the queue adapter")], ports);
+  expect(host.querySelectorAll(".card .pill")).toHaveLength(0);
+  /* The status is still said: by the column, and in the card's own name. */
+  const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
+  expect(card.getAttribute("aria-label")).toContain("Assigned");
+
+  card.focus();
+  flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event));
+  const menu = host.querySelector<HTMLElement>(".menu");
+  expect(menu?.getAttribute("aria-label")).toBe("Status of «Repair old links»");
+  expect([...menu!.querySelectorAll('[role="menuitemradio"]')].map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true", "false", "false"]);
+  click([...menu!.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent?.includes("Blocked")));
+  expect(columnOf(host, "a")).toBe("blocked");
+  await tick();
+  expect(patches).toEqual([{ id: "a", body: { status: "blocked", expectedProject: "fixture", expectedRevision: REV(1) } }]);
+  expect(document.activeElement?.getAttribute("data-id")).toBe("task:a");
 });
 
 test("a refused write returns the card to its column with an error receipt and Retry", async () => {
@@ -183,7 +213,7 @@ test("a status changed elsewhere puts the card where the server has it and offer
     changed: () => {},
   };
   const { host } = mount([task("a", "inbox", "Repair old links")], ports);
-  click(host.querySelector('.card[data-id="task:a"] .pill'));
+  click(host.querySelector('.card[data-id="task:a"] [data-menu]'));
   click([...host.querySelectorAll('.menu [role="menuitemradio"]')].find((item) => item.textContent?.includes("Assigned")));
   await tick();
   await tick();

@@ -231,10 +231,47 @@ for (const state of STATES) {
       root = null;
       dom.document.body.replaceChildren();
     }
-    /* A silent zero would make every assertion above vacuous. */
-    expect(checked, "code block + command block + output block each anchor one action").toBe(3);
+    /* A silent zero would make every assertion above vacuous. On a finger the
+       command's control ends its meta row instead (#2148), so only the code
+       block and the output anchor one there. */
+    expect(checked, state.coarse ? "code block + output block each anchor one action" : "code block + command block + output block each anchor one action").toBe(state.coarse ? 2 : 3);
   });
 }
+
+test("the command's one copy control: pinned in its gutter for a mouse, ending the meta row for a finger (#2148)", async () => {
+  const event = toolEvent({ command: "rg --files src", outputPreview: "src/index.ts", exitCode: 0 });
+  const commandCopies = (host: Element) => Array.from(host.querySelectorAll("button")).filter((button) => button.getAttribute("aria-label") === en("tools.copyCommand"));
+  const commandBlock = (host: Element) => Array.from(host.querySelectorAll("pre")).find((pre) => (pre.textContent ?? "").includes("rg --files src"))!;
+  for (const coarse of [false, true]) {
+    narrowViewport = coarse;
+    coarsePointer = coarse;
+    const host = mount(<ToolBody event={event} />);
+    const controls = commandCopies(host);
+    expect(controls, "exactly one control copies the command").toHaveLength(1);
+    const block = commandBlock(host);
+    if (coarse) {
+      /* It ends the row above the command and is the full 44 px target... */
+      const row = controls[0]!.closest("[data-command-copy]");
+      expect(row?.getAttribute("data-command-copy")).toBe("meta");
+      expect(resolveControlPx(controls[0]!)).toBe(ACTION_SIZE_COARSE_PX);
+      expect(block.contains(controls[0]!)).toBe(false);
+      /* ...so the command block is the height of its text: no reserved band,
+         no gutter. */
+      expect(classOf(block.parentElement!)).not.toMatch(/min-h-/);
+      expect(classOf(block)).not.toMatch(/(?:^|\s|:)pr-/);
+    } else {
+      expect(controls[0]!.closest("[data-command-copy]")).toBeNull();
+      expect(block.parentElement!.contains(controls[0]!)).toBe(true);
+      expect(classOf(controls[0]!)).toContain("absolute");
+    }
+    click(controls[0]!);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(copied.at(-1)).toBe("rg --files src");
+    flushSync(() => root!.unmount());
+    root = null;
+    dom.document.body.replaceChildren();
+  }
+});
 
 test("the 44px tap target is spent exactly where the input is a finger", () => {
   const sizes = new Map<boolean, number>();

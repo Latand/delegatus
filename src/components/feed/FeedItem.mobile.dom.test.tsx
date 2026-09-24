@@ -10,13 +10,15 @@ import { setLocale, translate } from "@/lib/i18n";
 
 import { FeedItem } from "./FeedItem";
 import { buildFeed, type Item, type ToolEvent } from "./parse";
+import { karaokeRoots } from "./ttsKaraoke";
 import type { FileEntry } from "@/lib/types";
 
 /*
  * Mobile v2 (#1439, lane 4; README §2.6, §4.2, §8 row 4): on the phone the
- * feed spends no column on avatars, message content reads at 15 px, and the
- * message header is a 44 px target of its own that sits above the prose
- * instead of over it. The desktop keeps every class it had.
+ * feed spends no column on avatars and message content reads at 15 px. A
+ * message reads content first (#2148): a one-line caption, the prose, then its
+ * 44 px controls in one row after the text, never over it. The desktop keeps
+ * its layout and sets prose at the reading measure.
  *
  * Phone-ness is the viewport query `useIsMobile` consults; the pointer axis is
  * held at fine so the copy control's own sizing does not enter the picture.
@@ -121,33 +123,37 @@ test("phone: an agent message has no avatar column and its content reads at 15 p
   expect(classOf(message)).not.toContain("flex");
   expect(classOf(message)).not.toContain("gap-2.5");
   /* The prose is the full width at the title size (15 px) and 1.45 leading. */
-  const body = host.querySelector("[data-tts-message]");
+  const body = host.querySelector("[data-mobile-message-header]")!.nextElementSibling;
   expect(classOf(body)).toContain("w-full");
   expect(classOf(body)).toContain("text-title");
   expect(classOf(body)).toContain("leading-[1.45]");
   expect(classOf(body)).not.toContain("flex-1");
-  /* The read-aloud anchors survive the layout change (#1022). */
-  expect(body!.getAttribute("data-tts-message")).toBe("claude:2026-09-02T13:43:00Z");
-  expect(host.querySelector("[data-tts-body]")).toBeTruthy();
+  /* The read-aloud anchors survive the layout change (#1022): the answer's
+     identity on the message, the rendered body inside it. */
+  expect(message!.getAttribute("data-tts-message")).toBe("claude:2026-09-02T13:43:00Z");
+  expect(body!.querySelector("[data-tts-body]")).toBeTruthy();
 });
 
-test("phone: the message header is a 44 px target above the prose, never over it", () => {
+test("phone: a message reads caption, text, then its controls; the controls' row follows the text and never covers it (#2148)", () => {
   setViewport("narrowPhone");
   const host = mount(<FeedItem item={prose()} speakText="The projection lives in one module." />);
   const message = host.querySelector('[data-mobile-message="agent"]')!;
   const header = host.querySelector("[data-mobile-message-header]")!;
-  /* 44 px tall, the whole width, and the first thing in the message. */
-  expect(classOf(header)).toContain("h-11");
+  const actions = host.querySelector("[data-mobile-message-actions]")!;
+  /* Three rows in reading order: the caption, the prose, the controls. */
+  expect([...message.children]).toEqual([header, header.nextElementSibling!, actions]);
+  const body = header.nextElementSibling!;
+  expect(body.querySelector("[data-tts-body]")).toBeTruthy();
+  /* The caption is one 20 px line with no control on it. */
+  expect(classOf(header)).toContain("h-5");
   expect(classOf(header)).toContain("w-full");
-  expect(message.firstElementChild).toBe(header);
-  /* The prose starts under it: next sibling, in flow, no negative margin
-     anywhere on the message that could pull the text up into the header. */
-  expect(header.nextElementSibling).toBe(host.querySelector("[data-tts-message]"));
-  for (const el of [message, header, host.querySelector("[data-tts-message]")!]) {
+  expect(header.querySelector("button")).toBeNull();
+  /* Nothing is pulled over the text: no negative margin or absolute position
+     on the message, the caption or the prose. */
+  for (const el of [message, header, body]) {
     expect(classOf(el)).not.toMatch(/(^|\s)-m[tby]?-/);
     expect(classOf(el)).not.toContain("absolute");
   }
-  /* No vertical margin of its own: the header's height is the gap. */
   expect(classOf(message)).not.toContain("my-3");
   /* The engine mark is the one avatar left: a 16 px glyph beside the name. */
   const glyph = header.querySelector('[data-engine-mark="claude"]');
@@ -157,22 +163,30 @@ test("phone: the message header is a 44 px target above the prose, never over it
   /* The phone's clock is HH:MM (README §5): no seconds anywhere on the line. */
   expect(header.textContent).toContain("13:43");
   expect(header.textContent).not.toMatch(/\d{2}:\d{2}:\d{2}/);
-  /* The message actions live in the header row: the copy control is there,
-     and the read-aloud control shares the same cluster once the speech
-     backend reports itself (it renders nothing without one, as here). */
-  const actions = header.querySelector(`button[aria-label="${en["feed.copyMd"]}"]`)!;
-  expect(actions).toBeTruthy();
-  expect(classOf(actions.parentElement)).toContain("ml-auto");
+  /* The controls' row is 44 px tall, after the text; the copy control is in
+     it, and the read-aloud control joins it once the speech backend reports
+     itself (it renders nothing without one, as here). */
+  expect(classOf(actions)).toContain("h-11");
+  const copy = actions.querySelector(`button[aria-label="${en["feed.copyMd"]}"]`)!;
+  expect(copy).toBeTruthy();
   expect(host.querySelector("[data-tts-trigger]")).toBeNull();
+  /* A control in that row still finds the text it reads: the read-aloud
+     anchor wraps the whole message. */
+  expect(karaokeRoots(copy)).toEqual([body.querySelector<HTMLElement>("[data-tts-body]")!]);
 });
 
-test("phone: the user keeps the bubble at 86% and 15 px", () => {
+test("phone: the user keeps the bubble at 86% and 15 px, and its copy control sits under it (#2148)", () => {
   setViewport("narrowPhone");
   const host = mount(<FeedItem item={user()} />);
   const bubble = host.querySelector(".bg-user")!;
   expect(classOf(bubble)).toContain("max-w-[86%]");
   expect(classOf(bubble)).toContain("text-title");
   expect(classOf(bubble)).not.toContain("max-w-[75%]");
+  /* Nothing floats beside the bubble; the control follows it. */
+  expect(bubble.parentElement!.querySelector("button")).toBeNull();
+  const actions = host.querySelector("[data-mobile-message-actions]")!;
+  expect(actions.previousElementSibling).toBe(bubble.parentElement);
+  expect(actions.querySelector(`button[aria-label="${en["feed.copyMd"]}"]`)).toBeTruthy();
 });
 
 test("phone: a lone tool call is one 44 px line with no chrome indent, and says when it runs", () => {
@@ -219,7 +233,7 @@ test("phone: internal relay cards drop the avatar-column indent too", () => {
   expect(classOf(host.firstElementChild)).not.toContain("ml-9");
 });
 
-test("desktop: every message keeps its avatar column, indent, 75% bubble and margins", () => {
+test("desktop: every message keeps its avatar column, indent and margins, and prose is set at the reading measure (#2148)", () => {
   setViewport("desktop");
   const host = mount(
     <>
@@ -234,8 +248,12 @@ test("desktop: every message keeps its avatar column, indent, 75% bubble and mar
   expect(host.querySelector("[data-mobile-tool-line]")).toBeNull();
   expect(host.querySelector(".bg-claude")).toBeTruthy();
   expect(classOf(host.querySelector(".group\\/msg"))).toContain("my-3 flex gap-2.5");
-  expect(classOf(host.querySelector("[data-tts-message]"))).toBe("min-w-0 flex-1 whitespace-pre-wrap break-words");
-  expect(classOf(host.querySelector(".bg-user"))).toContain("max-w-[75%]");
+  expect(classOf(host.querySelector("[data-tts-message]"))).toBe("min-w-0 flex-1 max-w-[68ch] whitespace-pre-wrap break-words");
+  /* The operator's bubble: three quarters of the reader, up to the measure,
+     with its copy control beside it as before. */
+  expect(classOf(host.querySelector(".bg-user"))).toContain("max-w-[min(75%,68ch)]");
+  expect(host.querySelector("[data-mobile-message-actions]")).toBeNull();
+  expect(host.querySelector(".bg-user")!.parentElement!.querySelector(`button[aria-label="${en["feed.copyMd"]}"]`)).toBeTruthy();
   expect(classOf(host.querySelector("details"))).toContain("ml-9");
   expect(classOf(host.querySelector(".bg-accent-soft"))).toContain("my-3 ml-9 overflow-hidden");
 });

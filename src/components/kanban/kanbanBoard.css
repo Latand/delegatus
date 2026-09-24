@@ -201,7 +201,11 @@
 .kb .tabs-nav button[aria-selected="true"] { background: var(--color-accent-soft); color: var(--color-accent); border-color: transparent; }
 .kb .tabs-nav .n { font-weight: 400; color: var(--color-muted); margin-left: 4px; }
 .kb .tabs-nav button[aria-selected="true"] .n { color: inherit; }
-.kb .tabs-nav.jump { padding: 10px 16px 0; }
+/* The jump tabs repeat the column heads, so they speak quietly: one light
+   segmented row instead of four bordered buttons. */
+.kb .tabs-nav.jump { padding: 6px 20px 0; gap: 2px; }
+.kb .tabs-nav.jump button { height: 28px; border-color: transparent; background: none; font-weight: 500; color: var(--color-muted); }
+.kb .tabs-nav.jump button:hover { background: var(--surface-well); color: var(--color-primary); }
 /* The tab strip sits above the tabbed board, inset by the board's own side padding. */
 .kb .scroll-wrap > .tabs-nav:not(.jump) { padding: 10px 24px; }
 .kb .tabs-nav.jump button { flex: 0 0 auto; padding: 0 12px; }
@@ -536,6 +540,39 @@
   .kb .card[data-pending="1"] .saving { opacity: 1; transform: none; }
 }
 
+/* ── Press and open/close (#2148; make-interfaces-feel-better #4, #12, #14, #19) ── */
+/* Only where motion is welcome: under reduced motion none of this exists, so
+   every press, disclosure and sheet keeps its state and loses only the move.
+   - A discrete button answers a press: 0.96 for as long as it is held,
+     springing back from wherever it got to. Cards, rows, tabs and chips stay
+     still, because they are hit many times a minute.
+   - Past attempts and "Added when it starts" open and close by height; a
+     second click mid-way reverses from where the box is.
+   - The Stages sheet rises 8 px and fades in, and its scrim fades. The sheet
+     unmounts on close, so the exit is instant.
+   A pressed button is 4 % smaller, so a press that began near its edge could
+   end past it and the click would land on what is behind. While it is held,
+   an invisible layer keeps its whole unpressed box: 2 % of each side plus the
+   border, measured inside the 0.96 scale, with a pixel to spare. */
+@media (prefers-reduced-motion: no-preference) {
+  .kb .btn { transition: border-color var(--motion-fast), background var(--motion-fast), scale var(--motion-fast) ease-out; }
+  .kb .card .add { transition: background var(--motion-fast), scale var(--motion-fast) ease-out; }
+  .kb .btn:active:not(:disabled), .kb .card .add:active { scale: 0.96; position: relative; }
+  .kb .btn:active:not(:disabled)::after, .kb .card .add:active::after { content: ""; position: absolute; inset: calc(-2.5% - 2px); }
+  .kb .card .history, .kb .draft-added { interpolate-size: allow-keywords; }
+  .kb .card .history::details-content, .kb .draft-added::details-content {
+    height: 0; overflow: clip;
+    transition: height var(--motion-base) var(--ease-standard), content-visibility var(--motion-base) allow-discrete;
+  }
+  .kb .card .history[open]::details-content, .kb .draft-added[open]::details-content { height: auto; }
+  .kb .gsheet-scrim { transition: opacity var(--motion-base) var(--ease-standard); }
+  .kb .gsheet { transition: translate var(--motion-slow) var(--ease-standard), opacity var(--motion-base) var(--ease-standard); }
+  @starting-style {
+    .kb .gsheet-scrim { opacity: 0; }
+    .kb .gsheet { translate: 0 8px; opacity: 0; }
+  }
+}
+
 /* ── How tall an expanded agent conversation is ──────────────────────────── */
 /* Two heights live here, on purpose apart:
    - the orchestrator seat sits above the board, so its default is 75% of the
@@ -630,6 +667,20 @@
 .kb .seat-head .icon-btn.seat-dock svg { width: 15px; height: 15px; }
 /* Collapsed on top: one 40 px strip. */
 .kb .seat.folded .seat-head { min-height: 40px; padding-top: 5px; padding-bottom: 5px; }
+/* Folded on top with nothing for the operator (no answer owed, no failure, no
+   unread reply), the strip is a quiet row on the board (#2148): no fill, no
+   frame, no ribbon, and it lines up with the board's edge. The role frame and
+   its colour come back the moment the seat needs the operator or opens, so
+   accent and colour keep meaning "look here". The labelled Unfold stays
+   (#1802), without its border. The side rail keeps its own frame. */
+.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)),
+.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) > [data-orchestrator-panel] { background: transparent; border-color: transparent; box-shadow: none; }
+:root[data-role-frame] .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread))[data-role-host]::after,
+:root[data-role-frame] .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .role-mark { display: none; }
+.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) { max-width: none; margin-top: 8px; }
+.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head { padding-left: 0; }
+.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head .icon-btn.seat-fold { border-color: transparent; background: none; }
+.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head .icon-btn.seat-fold:hover { background: var(--surface-well); color: var(--color-primary); }
 .kb .seat .grow { flex: 1; }
 /* The fold control (#1802): the operator must find it without hunting, so it
    reads as a button with a word on it rather than a bare chevron, and it keeps
@@ -826,6 +877,12 @@
 @media (hover: hover) and (pointer: fine) {
   .kb .card .tools .icon-btn.hide { opacity: 0; transition: opacity var(--motion-fast); }
   .kb .card:hover .tools .icon-btn.hide, .kb .card:focus-within .tools .icon-btn.hide { opacity: 1; }
+  /* A still board reads as a column of titles: the fold and ⋯
+     controls stay in place, quiet, and come up to full strength when the card
+     is hovered or holds focus. The seat lock is a status mark with no
+     action, so it keeps its full strength. */
+  .kb .card .tools .icon-btn:not(.hide):not(.lock) { opacity: 0.35; transition: opacity var(--motion-fast); }
+  .kb .card:hover .tools .icon-btn:not(.hide):not(.lock), .kb .card:focus-within .tools .icon-btn:not(.hide):not(.lock) { opacity: 1; }
 }
 .kb .card .editor { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
 .kb .card .edit { width: 100%; border: 1px solid var(--color-accent); border-radius: 6px; padding: 1px 4px; margin-left: -4px; background: var(--surface-card); color: var(--color-primary); resize: none; line-height: 18px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent); }
@@ -960,6 +1017,14 @@
 .kb .card .history summary::-webkit-details-marker { display: none; }
 .kb .card .history summary:hover { background: var(--surface-well); color: var(--color-secondary); }
 .kb .card .history summary .chev { width: 12px; height: 12px; transition: transform var(--motion-fast); }
+/* Where the content box can be styled, the column and its 4 px gap move into
+   it: Chrome animates the height of a <details> content box only while that
+   box is a block (see the motion section below). */
+@supports selector(::details-content) {
+  .kb .card .history { display: block; }
+  .kb .card .history::details-content { display: flex; flex-direction: column; gap: 4px; }
+  .kb .card .history > summary + * { margin-top: 4px; }
+}
 .kb .card .history[open] summary .chev { transform: rotate(90deg); }
 .kb .card .history summary .hl { white-space: nowrap; font-weight: 700; color: var(--color-secondary); }
 .kb .card .history summary .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1017,10 +1082,10 @@
 .kb .gs-graph { flex-shrink: 0; max-height: 34%; overflow: auto; padding: 10px 12px; border-bottom: 1px solid var(--border-default); background-color: var(--surface-canvas); background-image: radial-gradient(var(--kb-grid-dot) 1px, transparent 1px); background-size: 18px 18px; }
 .kb .gs-graph .pgraph-box { overflow: visible; margin: 0; padding: 0; }
 .kb .lane-bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px 0; flex-shrink: 0; }
-.kb .lane-bar .lane-count { font-size: var(--text-label); color: var(--color-muted); }
-.kb .lane-bar .grow { flex: 1; }
+/* In the sheet's head: no padding of its own, a hairline before the Graph toggle. */
+.kb .gsheet header .lane-bar { padding: 0 10px 0 0; margin-right: 2px; border-right: 1px solid var(--border-default); }
+.kb .gs-body > .lane { padding-top: 12px; }
 .kb .lane-bar .btn { height: 28px; white-space: nowrap; }
-.kb .lane-bar .pos { font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 .kb .chev.flip { transform: rotate(180deg); }
 .kb .lane { flex: 1; min-height: 0; display: flex; align-items: stretch; gap: 0; overflow-x: auto; overflow-y: hidden; padding: 8px 12px 12px; scroll-snap-type: x proximity; scroll-padding-left: 12px; scrollbar-width: thin; }
 .kb .lane:focus { outline: none; }
@@ -1035,6 +1100,9 @@
 .kb .pane.tone-review { border-top: 3px solid var(--color-info); }
 .kb .pane.tone-needs { border-top: 3px solid var(--color-warning); }
 .kb .pane.tone-bad { border-top: 3px solid var(--color-danger); }
+/* A running stage says so with its dot and word; the coloured top rule is
+   kept for what needs the operator or failed. */
+.kb .gsheet .pane:is(.tone-active, .tone-review) { border-top: 1px solid var(--border-default); }
 .kb .pane.tone-idle { background: color-mix(in srgb, var(--surface-card) 75%, var(--surface-canvas)); border-style: dashed; }
 .kb .pane.pane-flash { animation: kb-pane-flash 600ms var(--ease-standard) 2; }
 @keyframes kb-pane-flash { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 45%, transparent); border-color: var(--color-accent); } }
@@ -1110,7 +1178,8 @@
 .kb .draft-acts .btn { height: 28px; }
 .kb .bstatus { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-label); font-weight: 600; }
 .kb .bstatus svg { width: 12px; height: 12px; }
-.kb .bstatus.waiting { color: var(--color-warning); }
+/* An ordinary wait is muted; amber stays for what needs the operator. */
+.kb .bstatus.waiting { color: var(--color-muted); font-weight: 500; }
 .kb .bstatus.ended { color: var(--color-muted); }
 .kb .draft-note { margin: 0; font-size: var(--text-label); color: var(--color-muted); text-align: center; }
 .kb .bstatus.starting { color: var(--color-accent); }
@@ -1132,15 +1201,6 @@
 .kb .draft-notice .kept { flex: 1 1 100%; margin: 0; padding: 6px 8px; border-left: 2px solid var(--border-strong); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-secondary); max-height: 120px; overflow-y: auto; }
 .kb .draft-notice .acts { display: inline-flex; gap: 10px; }
 .kb .pane > .draft-notice { margin-top: 0; }
-.kb .composer2 { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
-.kb .composer2 .c-box { display: flex; align-items: flex-end; gap: 2px; padding: 3px 3px 3px 10px; border-radius: var(--radius-control); border: 1px solid var(--border-default); background: var(--surface-sunken); }
-.kb .composer2.disabled .c-box { opacity: 0.7; }
-.kb .composer2 .c-field { flex: 1; min-width: 0; min-height: 28px; max-height: 160px; resize: none; border: 0; outline: none; background: transparent; padding: 5px 0; font-size: var(--text-ui); line-height: 18px; color: var(--color-primary); }
-.kb .composer2 .c-field::placeholder { color: var(--color-muted); }
-.kb .composer2 .c-send { width: 30px; height: 30px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-control); background: var(--color-accent); color: #fff; }
-.kb .composer2 .c-send:disabled { background: var(--surface-well); color: var(--color-muted); }
-.kb .composer2 .c-send svg { width: 15px; height: 15px; }
-.kb .composer2 .c-status { margin: 0; font-size: var(--text-caption); color: var(--color-muted); }
 
 @container (max-width: 480px) {
   .kb .msg.user .bubble { max-width: 86%; }
@@ -1155,10 +1215,23 @@
   .kb .gs-graph { max-height: 42%; }
   .kb .lane .pane { --pane-w: calc(100vw - 56px); }
   .kb .lane .pane.folded { --pane-w: 56px; }
-  .kb .lane-bar .lane-count { display: none; }
   .kb .lane { scroll-snap-type: x mandatory; padding: 8px 10px 10px; }
   .kb .lane-conn { flex-basis: 8px; font-size: 0; }
   .kb .lane-bar .btn.quiet { padding: 0 8px; }
+}
+/* Below a desktop width the head cannot hold the title and the lane's
+   controls in one row (at 820 px the title kept 40 px), so the controls take
+   a line of their own, at its end (#2148). Everything else stays on the first
+   line: the title and the progress start from nothing and grow to at most
+   their own width, so they ellipsize rather than wrap, and the space left over
+   goes before the Graph toggle. */
+@media (max-width: 1023px) {
+  .kb .gsheet header { flex-wrap: wrap; }
+  .kb .gsheet header h2 { flex: 2 1 0; max-width: max-content; }
+  .kb .gsheet header .progress { flex: 1 1 0; max-width: max-content; }
+  .kb .gsheet header .grow { display: none; }
+  .kb .gsheet header .gtoggle { margin-left: auto; }
+  .kb .gsheet header .lane-bar { order: 10; flex-basis: 100%; justify-content: flex-end; padding-right: 0; margin-right: 0; border-right: 0; }
 }
 @media (pointer: coarse) {
   .kb .navchip { height: 44px; }

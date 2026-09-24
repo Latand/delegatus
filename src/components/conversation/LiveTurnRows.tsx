@@ -36,6 +36,7 @@ import { GlyphIcon } from "@/components/icons";
 import { ImageCard } from "@/components/feed/cards/ImageCard";
 import { StatusIcon } from "@/components/feed/cards/shared";
 import { StreamingMd } from "@/components/feed/markdown";
+import { READING_MEASURE } from "@/components/feed/measure";
 import { summarizeTool } from "@/components/feed/tools";
 
 /**
@@ -449,7 +450,7 @@ export function LiveTurnRows({ items }: { items: readonly RuntimeLiveTurnItem[] 
             key={key}
             data-live-turn
             data-live-turn-item-id={item.itemId ?? undefined}
-            className="my-2 ml-9 whitespace-pre-wrap [overflow-wrap:anywhere] text-ui text-primary"
+            className={`my-2 ml-9 ${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] text-ui text-primary`}
           >
             {item.omittedChars ? (
               <span data-live-turn-omitted-chars className="text-muted">

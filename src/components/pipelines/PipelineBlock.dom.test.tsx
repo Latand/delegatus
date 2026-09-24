@@ -218,7 +218,10 @@ test("the task row says its state once, drops a title the task already has, and 
   const links = { "p-search": { links: [], noPr: true } } as Record<string, ResolvedWorkLinks>;
   const same = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ state: "paused", pausedState: "running" } as Partial<Pipeline>))} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} />, links);
   expect(same.querySelector(".pb-title")).toBeNull();
-  expect(texts(same, ".pb-head .pstate-word")).toEqual(["paused"]);
+  /* With the task's own title and no ⋯ of its own, the chain is the head
+     (#2148): the state, the age and the way into the stages end its row. */
+  expect(same.querySelector(".pb-head")).toBeNull();
+  expect(texts(same, ".pb-chain > .pb-tail .pstate-word")).toEqual(["paused"]);
   expect(same.querySelector(".pb-chain > .pb-links [data-work-links-nopr]")?.textContent).toBe("no PR");
   /* Who runs a stage is in the pill's tooltip, not on the pill (#1743). */
   expect(same.querySelector(".pb-pill .pident, .pb-pill [data-effort-pills]")).toBeNull();
@@ -230,6 +233,34 @@ test("the task row says its state once, drops a title the task already has, and 
   expect(running.querySelector(".pstate-word")).toBeNull();
   /* No graph toggle, ⋯ or answer where the host passes nothing to do. */
   expect(running.querySelector("[data-graph-toggle], [data-pipeline-menu], [data-answer-action]")).toBeNull();
+});
+
+test("the stage chain is the lane's head where the card's ⋯ holds its actions; a lane with a ⋯ or a title of its own keeps its head row (#2148)", () => {
+  const opened: string[] = [];
+  const menus: string[] = [];
+  const summary = summarizePipeline(searchPipeline());
+  const chain = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} onToggleGraph={() => {}} onOpenStages={(pipeline) => opened.push(pipeline.id)} />);
+  expect(chain.querySelector(".pb-head")).toBeNull();
+  const row = chain.querySelector(".pb-chain")!;
+  /* One row: the pills, then the graph toggle and the age with its chevron,
+     which ends the row. */
+  expect([...row.children].map((child) => child.className)).toEqual(["pb-pills", "pb-tail"]);
+  expect([...row.querySelector(".pb-tail")!.children].map((child) => child.getAttribute("data-graph-toggle") !== null ? "graph" : child.getAttribute("data-open-stages") !== null ? "open" : child.className)).toEqual(["graph", "open"]);
+  expect(row.querySelector("[data-pipeline-menu]")).toBeNull();
+  click(row.querySelector("[data-open-stages]"));
+  expect(opened).toEqual(["p-search"]);
+
+  /* A pipeline on no task (no card ⋯) keeps its own ⋯, so it keeps the head row. */
+  const own = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} onMenu={(pipeline) => menus.push(pipeline.id)} />);
+  expect(own.querySelector(".pb-head [data-open-stages]")).toBeTruthy();
+  expect(own.querySelector(".pb-tail")).toBeNull();
+  click(own.querySelector(".pb-head [data-pipeline-menu]"));
+  expect(menus).toEqual(["p-search"]);
+
+  /* A lane titled apart from its task says the title in its own head row. */
+  const titled = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ task: "Keep the old index serving" }))} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} />);
+  expect(titled.querySelector(".pb-head .pb-title")?.textContent).toBe("Keep the old index serving");
+  expect(titled.querySelector(".pb-tail")).toBeNull();
 });
 
 test("the answer in place names the stage and attempt it saw, and waits while an action is on its way", () => {
