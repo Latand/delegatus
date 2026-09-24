@@ -28,7 +28,7 @@ import { showReceipt } from "./MobileReceipt";
 import type { MobileRowActionTarget } from "./MobileRowActions";
 import { MobileSheet } from "./MobileSheet";
 import { ROW_ACTION_TONE, type MobileRowAction } from "./MobileSwipeRow";
-import { useMobileNav, useMobileNavStore } from "./mobileNav";
+import { useMobileNav, useMobileNavStore, useSheetSelection } from "./mobileNav";
 import { buildPhoneKanban, columnEmpty, nearestWithWork, type PhoneCard, type PhoneColumn } from "./phoneKanbanModel";
 import { readPlace, usePhoneKanbanColumn, usePhoneKanbanDoneShown, writePlace } from "./phoneKanbanPlace";
 import { LONG_PRESS_MS, SWIPE_LOCK_PX } from "./swipeIntent";
@@ -815,10 +815,9 @@ export function MobileKanban(props: MobileKanbanProps) {
   };
   const sheetItem = navState.sheet === "card" && sheetFor ? itemsByKey.get(sheetFor) ?? null : null;
   /* The sheet goes with its card: a card that left the board (moved away by
-     another device, hidden) takes the sheet down rather than acting on it. */
-  useEffect(() => {
-    if (navState.sheet === "card" && sheetFor && !itemsByKey.has(sheetFor)) nav.closeSheet();
-  }, [navState.sheet, sheetFor, itemsByKey, nav]);
+     another device, hidden) takes the sheet down rather than acting on it, and
+     so does an entry that came back without its card (a reload, #2105). */
+  useSheetSelection("card", sheetItem !== null);
   const openSheet = (item: PhoneCard) => {
     if (!sheetRows(item).length) return;
     setSheetFor(item.key);

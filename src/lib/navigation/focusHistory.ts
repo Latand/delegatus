@@ -111,6 +111,33 @@ export function decideProjectAction(current: FocusHistoryEntry | null): FocusHis
   return current ? "push" : "replace";
 }
 
+/**
+ * Who writes the history instead of this module (#2105). While the phone
+ * layout is up, its navigation store owns every entry: a focus record types
+ * the conversation's own screen entry and never adds one under it, and a
+ * project selection is one board entry. The desktop registers no owner and
+ * keeps the table above exactly as it was.
+ */
+export interface FocusHistoryOwner {
+  /** A card focus: its typed state and the link it stands on. */
+  focus(entry: FocusHistoryEntry, state: { [FOCUS_HISTORY_STATE_KEY]: FocusHistoryEntry }, url: string): void;
+  /** A deliberate project selection landing on `url`. */
+  project(url: string): void;
+  /** A project renamed in place: the current typed state relabeled (null when
+      the entry carries none) and the URL its board stands on. */
+  retarget(project: string, state: { [FOCUS_HISTORY_STATE_KEY]: FocusHistoryEntry } | null, url: string): void;
+}
+
+let owner: FocusHistoryOwner | null = null;
+
+/** Hand history writes to `next` until the returned release runs. */
+export function setFocusHistoryOwner(next: FocusHistoryOwner): () => void {
+  owner = next;
+  return () => {
+    if (owner === next) owner = null;
+  };
+}
+
 /** The typed entry the tab is currently standing on, if any. */
 export function currentFocusEntry(): FocusHistoryEntry | null {
   if (typeof window === "undefined") return null;
@@ -138,6 +165,10 @@ export function recordFocusNavigation(
   /* Refuse to record what could not replay: an unbounded or empty identity. */
   if (parseFocusHistoryState({ [FOCUS_HISTORY_STATE_KEY]: entry }) === null) return;
   const hash = formatConversationHash({ conversationId: file.conversationId ?? undefined, path: file.path });
+  if (owner) {
+    owner.focus(entry, { [FOCUS_HISTORY_STATE_KEY]: entry }, hash);
+    return;
+  }
   write(decideFocusAction(currentFocusEntry(), entry, restore), { [FOCUS_HISTORY_STATE_KEY]: entry }, hash);
 }
 
@@ -145,6 +176,10 @@ export function recordFocusNavigation(
     replaying it is the hashchange path's job, exactly as before #866. */
 export function recordProjectNavigation(url: string): void {
   if (typeof window === "undefined") return;
+  if (owner) {
+    owner.project(url);
+    return;
+  }
   write(decideProjectAction(currentFocusEntry()), null, url);
 }
 
@@ -154,6 +189,10 @@ export function recordProjectNavigation(url: string): void {
 export function retargetRecordedProject(project: string, fallbackUrl: string): void {
   if (typeof window === "undefined") return;
   const current = currentFocusEntry();
+  if (owner) {
+    owner.retarget(project, current ? { [FOCUS_HISTORY_STATE_KEY]: { ...current, project } } : null, fallbackUrl);
+    return;
+  }
   if (current) {
     const entry: FocusHistoryEntry = { ...current, project };
     window.history.replaceState({ [FOCUS_HISTORY_STATE_KEY]: entry }, "", window.location.hash || window.location.pathname);
