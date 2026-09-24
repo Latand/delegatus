@@ -26,8 +26,8 @@ const TASK_STATUSES = new Set<string>(["inbox", "assigned", "blocked", "done"]);
  * answered all 1.7 MB of every project's tasks rather than nothing. A
  * parameter this route does not read, or a status that is none, is refused.
  */
-export async function GET(req?: NextRequest): Promise<NextResponse<{ tasks: TaskPipelineReadModel[] } | ApiError>> {
-  const params = req?.nextUrl.searchParams ?? new URLSearchParams();
+export async function GET(req: NextRequest): Promise<NextResponse<{ tasks: TaskPipelineReadModel[] } | ApiError>> {
+  const params = req.nextUrl.searchParams;
   const unknown = [...new Set(params.keys())].filter((key) => !LIST_PARAMETERS.has(key));
   if (unknown.length > 0) {
     return NextResponse.json({

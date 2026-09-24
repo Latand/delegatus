@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { NextRequest } from "next/server";
+
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -55,7 +57,7 @@ test("GET derives pipelineIds including closed history and filters stale task id
   saveTasks([task]);
   savePipelines([pipeline]);
 
-  const response = await (route as { GET(): Promise<Response> }).GET();
+  const response = await route.GET(new NextRequest("http://localhost/api/tasks"));
   const body = await response.json() as { tasks: Array<BoardTask & { pipelineIds: string[] }> };
 
   expect(body.tasks).toEqual([{ ...task, pipelineIds: [pipeline.id] }]);
