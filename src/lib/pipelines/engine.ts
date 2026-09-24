@@ -33,6 +33,7 @@ import { conversationTurnLiveness, outstandingDeliverySince, type TurnLivenessDe
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { interruptionObligationDirectory, interruptionObligationStore, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
 import { RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
 import {
   describeStructuredHostOwnerGeneration,
@@ -168,6 +169,10 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
   stagedTranscript?: string | null;
 };
 
+/** What the pipeline reads of a conversation's interruption obligation: the
+    continuation a Viewer release owes the turn it cut (#1835). */
+export type StageInterruption = Pick<InterruptionObligation, "state" | "recordedAt" | "resolvedAt">;
+
 export interface PipelinePorts {
   exec: ExecPort;
   /** Asynchronous Git used only by the provisioning pre-pass. */
@@ -237,6 +242,10 @@ export interface PipelinePorts {
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
+  /** The newest turn a Viewer release or restart cut for this conversation, as
+      its interruption obligation records it (#1835). Null when none was
+      recorded, which is the answer for every conversation no deploy cut. */
+  conversationInterruption?(conversationId: string): StageInterruption | null;
   /** The runtime host generation currently serving this process (#1747). It
       advances on every release succession, which replaces every engine process
       the previous generation hosted, so a change is the controller's only
@@ -958,6 +967,7 @@ export function defaultPipelinePorts(
   let adoptionCandidatesByPipeline: Map<string, PipelineAdoptionCandidate[]> | null = null;
   let materializationFence: ReturnType<typeof identityMaterializationFence> | null = null;
   let flowSnapshot: Flow[] | null = null;
+  let interruptions: InterruptionObligation[] | null = null;
   const snapshot = () => registrySnapshot ??= registry.readOnlySnapshot();
   const identityFence = () => materializationFence ??= identityMaterializationFence(snapshot());
   const flows = () => flowSnapshot ??= loadFlows();
@@ -1170,6 +1180,22 @@ export function defaultPipelinePorts(
         ? new Date(liveness.since).toISOString()
         : null;
     },
+    conversationInterruption: (conversationId) => {
+      if (!conversationId.startsWith("conversation_")) return null;
+      if (!interruptions) {
+        try {
+          interruptions = interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
+        } catch (error) {
+          console.error("[pipelines] interruption obligations are unreadable", error);
+          interruptions = [];
+        }
+      }
+      const canonical = registry.canonicalConversationId(conversationId as ViewerConversationId);
+      /* The store lists oldest first, so the last match is the newest cut. */
+      const cut = interruptions.filter((obligation) =>
+        registry.canonicalConversationId(obligation.conversationId) === canonical).at(-1);
+      return cut ? { state: cut.state, recordedAt: cut.recordedAt, resolvedAt: cut.resolvedAt } : null;
+    },
     runtimeHostEpoch: async () => {
       const client = runtimeHostClient();
       if (!client) return null;
@@ -1275,6 +1301,16 @@ const APPROVED_REMOTE_HEAD_WAIT = { budgetMs: 10 * 60_000, retryBaseMs: 15_000, 
     sixteen, so the cap only guards the record against a future longer budget. */
 const RETIRED_LAUNCH_LIMIT = 25;
 const DEAD_RUNNING_ATTEMPT_GRACE_MS = 3 * 60_000;
+/** How long a turn a deploy cut stays open while its continuation is owed or
+    on its way (#1835). A deploy runs about eight minutes and the successor's
+    startup delivers the continuation as soon as it adopts the host; past this
+    the host is judged by the ordinary grace again. */
+const DEPLOY_CUT_HOLD_MS = 30 * 60_000;
+const DEPLOY_CUT_HOLD_DETAIL = "a Viewer deployment cut this stage's turn; the stage stays open for the continuation the successor owes it";
+/** A read-only stage whose host was lost without a verdict runs again on the
+    same head this many times before the ordinary failure routing applies. */
+const HOST_LOST_READ_ONLY_RERUNS = 2;
+const HOST_LOST_READ_ONLY_RERUN = "the stage host was lost before it reported a verdict; the read-only stage runs again on the same head";
 const UNREGISTERED_STAGE_HOST_DIED_REASON = "the stage host died before its session registered";
 /** Attempt states that end a round; a pending cursor over one of these queues a
     fresh attempt on the next tick (tickRunStage/tickReviewStage). */
@@ -2600,6 +2636,61 @@ function rebindPipelineAttemptPaths(pipeline: Pipeline, ports: PipelinePorts): b
 }
 
 /**
+ * The Viewer release that cut this attempt's turn, when one did (#1835).
+ *
+ * The release records an interruption obligation before it releases the host,
+ * and the successor delivers the one continuation it names. Only a cut recorded
+ * after the attempt started is this attempt's; an older one belongs to an
+ * earlier turn of the conversation.
+ */
+function deployCutOf(attempt: PipelineStageAttempt, ports: PipelinePorts): StageInterruption | null {
+  if (attempt.paneId || !attempt.conversationId || !attempt.startedAt || !ports.conversationInterruption) return null;
+  const cut = ports.conversationInterruption(attempt.conversationId);
+  return cut && unixMs(cut.recordedAt) >= unixMs(attempt.startedAt) ? cut : null;
+}
+
+/** Whether the cut still owes this attempt its continuation. While it does, an
+    unavailable host is the deploy's doing and says nothing about the stage. */
+function deployCutHoldsAttempt(cut: StageInterruption | null, ports: PipelinePorts): boolean {
+  return cut !== null
+    && (cut.state === "owed" || cut.state === "submitted")
+    && unixMs(ports.now()) - unixMs(cut.recordedAt) < DEPLOY_CUT_HOLD_MS;
+}
+
+/**
+ * Re-runs a read-only stage whose host was lost before it reported (#1835).
+ *
+ * A review, critique or verify stage that never answered produced no finding,
+ * so its fail edge has nothing to route: firing it hands the builder an empty
+ * failure. The stage cannot have changed the worktree, so it simply runs again
+ * on the head it was bound to, as a fresh attempt with the same input. Bounded
+ * by consecutive host losses of the same stage; past that the ordinary routing
+ * applies, because a host that keeps dying is not a deploy.
+ */
+function rerunHostLostReadOnlyStage(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  ports: PipelinePorts,
+): boolean {
+  if (stage.kind !== "run" || attempt.effectiveRole.access !== "read-only") return false;
+  const attempts = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts ?? [];
+  let lost = 0;
+  for (const earlier of attempts.slice(0, attempts.indexOf(attempt)).reverse()) {
+    if (earlier.error !== HOST_LOST_READ_ONLY_RERUN) break;
+    lost += 1;
+  }
+  if (lost >= HOST_LOST_READ_ONLY_RERUNS) return false;
+  attempt.state = "failed";
+  attempt.completedAt = ports.now();
+  attempt.error = HOST_LOST_READ_ONLY_RERUN;
+  pipeline.state = "running";
+  pipeline.stateDetail = HOST_LOST_READ_ONLY_RERUN;
+  setCursorState(pipeline, stage.id, "pending");
+  return true;
+}
+
+/**
  * A turn a release succession cut, and the one continuation it is owed (#1747).
  *
  * A succession replaces every engine process the previous runtime-host
@@ -2722,6 +2813,11 @@ async function reconcileSeveredStageTurn(
   const nowMs = unixMs(ports.now());
   if (witness.resumedAt === undefined) {
     if (nowMs - unixMs(witness.sightedAt) < SEVERED_TURN_RESUME_SILENCE_MS) return "continue";
+    /* A cut the Viewer release recorded has its one continuation from the
+       successor's startup (#1835); a second one from here would compete with
+       it. Only a continuation that queue refused for good leaves this one. */
+    const releaseCut = deployCutOf(attempt, ports);
+    if (releaseCut && releaseCut.state !== "failed") return "continue";
     /* Stable across ticks and processes, so a replay cannot mint a second
        continuation even if this record never reaches disk. */
     const clientMessageId = `stage-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${epoch}`;
@@ -3433,9 +3529,26 @@ async function tickRunStage(
   const unavailableSince = !attempt.paneId && attempt.conversationId
     ? await ports.conversationHostUnavailableSince?.(attempt.conversationId)
     : null;
-  const unavailableAt = unavailableSince ? unixMs(unavailableSince) : 0;
-  const hostUnavailablePastGrace = unavailableAt > 0
+  const reportedUnavailableAt = unavailableSince ? unixMs(unavailableSince) : 0;
+  /* A turn a deploy cut is the deploy's, not the stage's (#1835): while the
+     successor still owes it its continuation the attempt stays open, and once
+     the continuation arrived the host is judged from that moment. Positive
+     evidence below still settles it; nothing below may fail it. */
+  const deployCut = reportedUnavailableAt > 0 ? deployCutOf(attempt, ports) : null;
+  const heldForDeployCut = deployCutHoldsAttempt(deployCut, ports);
+  const unavailableAt = deployCut?.state === "delivered" && deployCut.resolvedAt
+    ? Math.max(reportedUnavailableAt, unixMs(deployCut.resolvedAt))
+    : reportedUnavailableAt;
+  const hostUnavailablePastGrace = !heldForDeployCut
+    && unavailableAt > 0
     && unixMs(ports.now()) - unavailableAt >= DEAD_RUNNING_ATTEMPT_GRACE_MS;
+  if (heldForDeployCut && pipeline.stateDetail !== DEPLOY_CUT_HOLD_DETAIL) {
+    pipeline.stateDetail = DEPLOY_CUT_HOLD_DETAIL;
+    persist();
+  } else if (!heldForDeployCut && pipeline.stateDetail === DEPLOY_CUT_HOLD_DETAIL) {
+    pipeline.stateDetail = null;
+    persist();
+  }
   if (entry && structuredActive !== false && scanProjectsOpenTurn && !hostUnavailablePastGrace) return;
 
   if (!canSpendRecoveryCheck()) return;
@@ -3456,7 +3569,7 @@ async function tickRunStage(
       paneId: attempt.paneId,
       ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}),
     }, ports, durable);
-  if (unregisteredHostDeath && canSpendRecoveryCheck()) {
+  if (unregisteredHostDeath && !heldForDeployCut && canSpendRecoveryCheck()) {
     recordVerdictRecoveryMiss(pipeline, attempt, ports, unregisteredHostDeath, null);
     return;
   }
@@ -3485,6 +3598,7 @@ async function tickRunStage(
       settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
       return;
     }
+    if (heldForDeployCut) return;
     if (!hostUnavailablePastGrace) {
       /* The turn ended and its verdict cannot be read. Before the recovery
          checks start spending, ask the agent that is still holding the context
@@ -3523,6 +3637,7 @@ async function tickRunStage(
       return;
     }
     pipeline.stateDetail = null;
+    if (rerunHostLostReadOnlyStage(pipeline, stage, attempt, ports)) return;
     attempt.state = "failed";
     attempt.completedAt = ports.now();
     attempt.error = HISTORICAL_MISSING_STAGE_VERDICT;
@@ -3530,6 +3645,7 @@ async function tickRunStage(
     park(pipeline, HISTORICAL_MISSING_STAGE_VERDICT, attempt);
     return;
   }
+  if (heldForDeployCut) return;
   if (!entry) {
     /* A readable durable artifact means the disappearance is a projection loss,
        not an ended stage — wait for the scan or the terminal turn evidence. */
@@ -4633,7 +4749,11 @@ function isRuntimeHostUnavailableSpawnFailure(failure: string): boolean {
  * first message delivered), and the host is killed on that path, but the
  * worktree may hold its partial edits. `retry-stage` resets the worktree
  * before it re-dispatches; this path does not, so it refuses and the park
- * says which action to take. A read-only stage has nothing to reset.
+ * says which action to take. A read-only stage has nothing to reset, and
+ * neither has a read-write stage whose worktree is still clean at the lane's
+ * last passed commit: whatever the staged host ran left nothing a reset would
+ * remove, so a launch a deploy handover failed waits and relaunches under the
+ * successor like any other (#1835).
  */
 function deferRetiredLaunchRetry(
   pipeline: Pipeline,
@@ -4644,7 +4764,8 @@ function deferRetiredLaunchRetry(
   now: string,
   ports: PipelinePorts,
 ): "waiting" | "exhausted" | "settled" | "unsafe" | "delivered" {
-  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") return "unsafe";
+  if (receipt.staged === true && attempt.effectiveRole.access === "read-write"
+    && !worktreeAtLastPassedCommit(pipeline, ports)) return "unsafe";
   const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
   /* The only class whose failure may already have reached the agent (#1750).
      The transcript decides: an artifact the spawn layer named and never
@@ -4675,6 +4796,14 @@ function deferRetiredLaunchRetry(
   setCursorState(pipeline, stage.id, "pending");
   syncControllerWaitStateDetail(pipeline, attempt, failure);
   return "waiting";
+}
+
+/** A clean worktree on the lane's branch whose HEAD is the last passed commit:
+    exactly what retry-stage's reset would leave, so there is nothing to reset. */
+function worktreeAtLastPassedCommit(pipeline: Pipeline, ports: PipelinePorts): boolean {
+  if (!pipeline.lastPassedCommit) return false;
+  const head = currentPipelineBranchHead(pipeline, ports.exec);
+  return head.ok && head.sha === pipeline.lastPassedCommit;
 }
 
 function controllerFailureReason(failure: string): string {
@@ -6060,7 +6189,14 @@ function verdictRecoveryStageReset(
   ports: PipelinePorts,
   action: "retry-stage" | "skip-stage",
 ): VerdictRecoveryReset {
-  if (attempt?.verdictRecovery?.state !== "exhausted") return { kind: "clear" };
+  if (attempt?.verdictRecovery?.state !== "exhausted") {
+    /* #1871: however the stage ended — a deploy cut, a lost host, a verdict
+       that never came — a skip over a clean worktree whose HEAD is pushed is
+       the same finished stage by evidence, and resetting under it would move
+       the branch behind its own remote. */
+    const published = action === "skip-stage" ? publishedStageHead(pipeline, ports) : null;
+    return published ? { kind: "adopt", sha: published } : { kind: "clear" };
+  }
   const refusal = (reason: string, remedy = "Preserve the work or use close"): VerdictRecoveryReset => ({
     kind: "refuse",
     error: `automatic verdict recovery exhausted; retry-stage and skip-stage require a reset-safe worktree: ${reason}. ${remedy}`,
@@ -6078,6 +6214,17 @@ function verdictRecoveryStageReset(
     `the worktree HEAD ${local.sha} differs from the last-passed commit ${pipeline.lastPassedCommit}`,
     "Push the branch at that HEAD and skip-stage adopts it as the stage's result, or preserve the work and use close",
   );
+}
+
+/** The clean local HEAD when it has moved past the last passed commit and the
+    remote branch holds exactly it; null otherwise. The remote is read only
+    once the cheap local read found a moved head. */
+function publishedStageHead(pipeline: Pipeline, ports: PipelinePorts): string | null {
+  if (!pipeline.lastPassedCommit) return null;
+  const local = currentPipelineBranchHead(pipeline, ports.exec);
+  if (!local.ok || local.sha === pipeline.lastPassedCommit) return null;
+  const remote = currentPipelineRemoteBranchHead(pipeline, ports.exec);
+  return remote.ok && remote.sha === local.sha ? local.sha : null;
 }
 
 /** One line of the provider's own words, for the close report and the board. */
@@ -7288,7 +7435,14 @@ export async function patchPipeline(
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
       const recoveryReset = verdictRecoveryStageReset(pipeline, attempt, ports, "retry-stage");
       if (recoveryReset.kind === "refuse") return { error: recoveryReset.error, status: recoveryReset.status };
-      const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
+      /* A stage named without a launch is the MCP tool's shape, which cannot
+         pass a launch id (#1871): it names the stage the caller means to
+         retry, and the retry is that stage's current attempt. */
+      if (req.stageId !== undefined && req.launchId === undefined) {
+        if (typeof req.stageId !== "string") return { error: "stageId must be a string", status: 400 };
+        if (stage?.id !== req.stageId) return { error: "the named stage is not the pipeline's current stage", status: 409 };
+      }
+      const explicitReceiptRetry = req.launchId !== undefined;
       if (explicitReceiptRetry && (typeof req.stageId !== "string" || typeof req.launchId !== "string")) {
         return { error: "receipt retry requires both stageId and launchId", status: 400 };
       }
@@ -7312,6 +7466,18 @@ export async function patchPipeline(
         };
         if (receipt.state === "failed" || receipt.state === "conflicted") {
           return { conflict: null, claimRequired: true };
+        }
+        /* A launch that completed and whose stage then ended on its own —
+           a lost host, a verdict that never came — is a stage to retry, and
+           naming its launch says nothing more than that (#1871). */
+        if (
+          receipt.state === "completed"
+          && !settlementWasPending
+          && attempt !== null
+          && attempt.launchId === retryLaunchId
+          && !isStructuredSpawnPark(pipeline, attempt)
+        ) {
+          return { conflict: null, claimRequired: false };
         }
         if (
           explicitReceiptRetry
