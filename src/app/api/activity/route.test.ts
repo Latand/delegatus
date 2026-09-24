@@ -113,7 +113,8 @@ test("with this host's ingest caught up, its coverage is complete and no export 
   }
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "activity", "hosts"))).toBeFalse();
 
-  const response = await get("?range=today");
+  /* Seven days: the history read covers all of it at any hour of the day. */
+  const response = await get("?range=7d");
   const body = await response.json() as {
     coverage: { hosts: Array<{ host: string; complete: boolean; unread: unknown[]; sources: Array<{ source: string; state: string; readAt: number | null }> }> };
     totals: { humanMs: number; coverage: { complete: boolean } };
