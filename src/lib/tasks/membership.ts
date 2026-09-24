@@ -6,7 +6,7 @@ import type { FileEntry } from "@/lib/types";
 import { isoNow } from "./helpers";
 import { internalConversationKind } from "./internalConversations";
 import { mutateTasks } from "./store";
-import type { BoardTask, TaskAssignment, TaskOrigin } from "./types";
+import { UNTITLED_TASK_TEXT, type BoardTask, type TaskAssignment, type TaskOrigin } from "./types";
 
 /**
  * Canonical task membership (#1586, design slice A).
@@ -19,7 +19,7 @@ import type { BoardTask, TaskAssignment, TaskOrigin } from "./types";
  * descriptive: it grants no runtime authority and never starts an agent.
  */
 
-export const UNTITLED_TASK_TEXT = "Untitled task";
+export { UNTITLED_TASK_TEXT } from "./types";
 /** Newly refined titles stay short; longer imported text is kept as is. */
 export const PLACEHOLDER_TITLE_LIMIT = 80;
 

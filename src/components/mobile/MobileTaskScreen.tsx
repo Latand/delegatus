@@ -405,8 +405,10 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     onShown?.(shownKey ? shownKey.split("\n") : []);
   }, [shownKey, onShown]);
 
-  const title = task ? (card?.titlePending ? t("kanban.untitled") : textField(task.text, "title") || t("kanban.untitled")) : "";
-  const pendingTitle = Boolean(card?.titlePending || (task && !textField(task.text, "title")));
+  /* The card decides the name, borrowed title included: a placeholder no
+     agent will name reads the same here as on the board. */
+  const title = task ? (card?.titlePending ? t("kanban.untitled") : (card?.title || textField(task.text, "title")) || t("kanban.untitled")) : "";
+  const pendingTitle = card ? card.titlePending : Boolean(task && !textField(task.text, "title"));
   const description = task ? textField(task.text, "description") : "";
   const details = task?.details ?? "";
   const receiptTitle = cleanTitle(title, 48);
@@ -421,7 +423,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const startEdit = (field: EditField) => {
     if (!task) return;
     const base = field === "details" ? details : textField(task.text, field);
-    setEditing({ field, draft: field === "title" && pendingTitle ? "" : base, base, note: null });
+    setEditing({ field, draft: field === "title" ? (pendingTitle ? "" : title) : base, base, note: null });
     if (field === "details") setDetailsOpen(true);
   };
   const save = async (entry: Editing): Promise<void> => {

@@ -1,5 +1,8 @@
 export type TaskStatus = "inbox" | "assigned" | "blocked" | "done";
 
+/** The text of a placeholder task whose admission carried no title at all. */
+export const UNTITLED_TASK_TEXT = "Untitled task";
+
 /** How long a task's human `text` may be, server-enforced. */
 export const TASK_TEXT_LIMIT = 6000;
 /**

@@ -9,10 +9,10 @@ import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/component
 import { latestAttempt, stageAttempts, stageChipState, stageFailEdgeRoundsUsed, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
-import { taskTitle } from "@/components/tasks/taskModel";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
 
 import { pastAttempts, stageViews, type PastAttempt, type StageView } from "./pipelineGraph";
+import { placeholderTitle } from "./placeholderTitle";
 
 /**
  * The kanban board's projection (#1695 K1).
@@ -446,7 +446,10 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       : { hidden: false, resurfaced: null };
     const holdsSeat = Boolean(task && input.seat && seatAssignment(task.assignments, input.seat));
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
-    const title = band.title;
+    /* A placeholder no agent will name any more borrows its conversation's
+       title rather than staying «Untitled task» for good. */
+    const naming = task ? placeholderTitle({ task, members, mirrors, nowMs: now * 1000 }) : null;
+    const title = naming?.derived ?? band.title;
     const description = task ? descriptionOf(task.text) : "";
     /* Retain modification metadata separately from agent-work ordering. A
        band without a task has only its conversations to date it. */
@@ -482,7 +485,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       origin: band.origin,
       status,
       title,
-      titlePending: Boolean(task?.origin && task.origin.refinement === "pending") || (task ? !taskTitle(task.text) : false),
+      titlePending: naming?.pending ?? false,
       description,
       details: task?.details ?? "",
       members,

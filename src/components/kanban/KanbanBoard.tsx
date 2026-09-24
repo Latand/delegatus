@@ -708,7 +708,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     setIncomingEdits((current) => withEntry(current, card.id, undefined));
     setEditing((current) => withEntry(current, card.id, retained
       ? { field, draft: retained.draft, base: retained.base }
-      : { field, draft: field === "title" && card.titlePending ? "" : base, base }));
+      /* A borrowed title (a placeholder no agent will name) is where the
+         rename starts, so accepting it as shown makes it the task's own. */
+      : { field, draft: field === "title" ? (card.titlePending ? "" : card.title) : base, base }));
     if (field === "description" || field === "details") {
       setCollapsed((current) => {
         if (!current.has(card.id)) return current;

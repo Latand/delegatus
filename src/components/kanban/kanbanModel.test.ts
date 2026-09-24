@@ -197,6 +197,39 @@ test("the title is the first line of the text and the description the rest", () 
   expect(card.description).toBe("After the index rebuild the results page is empty.\nSecond line.");
 });
 
+test("a placeholder no agent will name borrows its conversation's cleaned title instead of staying untitled", () => {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const pending = (id: string, paths: string[], extra: Partial<BoardTask> = {}) =>
+    task(id, "assigned", paths, { text: "Untitled task", origin: { kind: "conversation", key: `origin-${id}`, refinement: "pending" }, ...extra });
+  const ended = file(1, { title: "**Fix** the `upload` retries after a timeout", activity: "idle", mtime: NOW - 3 * 3600 });
+  const running = file(2, { title: "Rebuild the search index", activity: "live", proc: "running", mtime: NOW - 5 });
+  const fresh = file(3, { title: "Draft the release notes", activity: "live", proc: "running", mtime: NOW - 5 });
+  const settled = file(4, { title: "Answer the API question", activity: "idle", mtime: NOW - 30 });
+  const tasks = [
+    /* Its conversation ended hours ago: the card reads its conversation's title. */
+    pending("ended", [ended.path]),
+    /* Still working, but past the bounded wait: the same. */
+    pending("slow", [running.path]),
+    /* Young and working: the agent may still name it. */
+    pending("young", [fresh.path], { createdAt: iso(NOW - 60) }),
+    /* Young, but its conversation already stopped: nothing will name it. */
+    pending("stopped", [settled.path], { createdAt: iso(NOW - 60) }),
+    /* A launch that never produced a transcript: its own admission title. */
+    pending("launch", [], { text: "Exercise legacy spawn fixture", origin: { kind: "launch", key: "launch-x", refinement: "pending" } }),
+  ];
+  const result = model(tasks, [ended, running, fresh, settled]);
+  const byId = new Map(KANBAN_STATUSES.flatMap((status) => result.columns[status].cards).map((card) => [card.task!.id, card] as const));
+  const shown = (id: string) => ({ title: byId.get(id)!.titlePending ? null : byId.get(id)!.title, pending: byId.get(id)!.titlePending });
+  expect(shown("ended")).toEqual({ title: "Fix the upload retries after a timeout", pending: false });
+  expect(shown("slow")).toEqual({ title: "Rebuild the search index", pending: false });
+  expect(shown("young")).toEqual({ title: null, pending: true });
+  expect(shown("stopped")).toEqual({ title: "Answer the API question", pending: false });
+  expect(shown("launch")).toEqual({ title: "Exercise legacy spawn fixture", pending: false });
+  /* A task somebody named keeps its own title, whatever its conversation says. */
+  const named = model([task("named", "assigned", [ended.path], { text: "Upload retries", origin: { kind: "conversation", key: "k", refinement: "titled" } })], [ended]);
+  expect(named.columns.assigned.cards[0]!.title).toBe("Upload retries");
+});
+
 function pipeline(): Pipeline {
   const attempt = (n: number, state: string, activatedBy: unknown = null) => ({ n, state, activatedBy, agentPath: null, conversationId: null, launchId: null, sessionId: null, paneId: null, flowId: null, effectiveRole: {}, output: null, verdict: null, error: null });
   return {
