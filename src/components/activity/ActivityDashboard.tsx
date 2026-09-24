@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, ChevronDown, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import type { HostReport } from "@/lib/activity/hostSources";
 import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES, type Coverage, type DayActivity, type RangeKey } from "@/lib/activity/method";
@@ -9,8 +9,12 @@ import type { ActivityHostRow, ActivityProjectRow, ActivityResponse } from "@/li
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { useLocale, type Locale, type MessageKey, type TFunction } from "@/lib/i18n";
 
+import { ActivityDesktop } from "./ActivityDesktop";
+
 /*
- * The activity dashboard (docs/design/activity-dashboard.md, "Page"). Two
+ * The activity dashboard. From 1024 px wide it draws the desktop page
+ * (ActivityDesktop, docs/design/activity-dashboard-v2.md); narrower, it draws
+ * the prototype's layout (docs/design/activity-dashboard.md, "Page"). Two
  * axes, each in its own hue and never added together: human time (accent) and
  * agent time (info), the agent part split into supervised (solid) and
  * unattended (hatched). Time an expected host was not read for is hatched
@@ -25,6 +29,19 @@ type ProjectSort = "human" | "agent";
 
 const RANGES: readonly RangeKey[] = ["today", "7d", "30d"];
 const REFRESH_MS = 60_000;
+const DESKTOP_QUERY = "(min-width: 1024px)";
+
+function subscribeDesktop(onChange: () => void) {
+  const query = window.matchMedia(DESKTOP_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+/** The desktop page applies from 1024 px wide. The server renders the
+    loading state either way, so it assumes the narrow one. */
+function useDesktop(): boolean {
+  return useSyncExternalStore(subscribeDesktop, () => window.matchMedia(DESKTOP_QUERY).matches, () => false);
+}
 
 const HATCH_UNATTENDED: CSSProperties = {
   backgroundColor: "var(--color-info-soft)",
@@ -601,6 +618,7 @@ function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; 
 
 export function ActivityDashboard({ initialRange, initialView }: { initialRange: RangeKey; initialView: ActivityView }) {
   const { t, locale } = useLocale();
+  const desktop = useDesktop();
   const [range, setRange] = useState<RangeKey>(initialRange);
   const [view, setView] = useState<ActivityView>(initialView);
   const [sort, setSort] = useState<ProjectSort>("human");
@@ -666,6 +684,21 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
   const incomplete = totals ? !totals.coverage.complete : false;
   const noAgentIndex = data !== null && data.coverage.agentIndex !== "ok";
   const roundingName = data ? t(data.params.rounding === "half-hour" ? "activity.rounding.halfHour" : "activity.rounding.clockHour") : "";
+
+  if (desktop) {
+    return (
+      <ActivityDesktop
+        data={data}
+        range={range}
+        onRange={(next) => { setRange(next); setExpanded(null); }}
+        loading={loading}
+        failed={failed}
+        onRetry={() => void load(range)}
+        locale={locale}
+        t={t}
+      />
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto bg-canvas" data-activity-page="">
