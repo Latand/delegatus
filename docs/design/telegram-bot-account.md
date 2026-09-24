@@ -1,6 +1,7 @@
 # Telegram bot account
 
-Status: design, one implementable slice. Grounded in `main` at `bfd58b846`; the
+Status: implemented as one slice (the notes below record where the build
+settled a detail the design left open). Grounded in `main` at `bfd58b846`; the
 20 commits `origin/main` had on top at writing time touch none of the files
 named here.
 
@@ -179,23 +180,28 @@ when a token file exists, so `bun run build` and route imports never touch it
 (#1905).
 
 ```sql
-bot      (singleton row) bot_id, name, username, can_read_all_group_messages,
-                         can_join_groups, connected_at, receiving, receiving_code,
+bot      (singleton row) name, username, can_read_all_group_messages,
+                         can_join_groups, read_all_since, connected_at, receiving,
                          last_update_at, last_checked_at
 chats    chat_id TEXT PK, type, title, username, is_forum, bot_status,
                          alias UNIQUE NULL, post_allowed INTEGER, first_seen_at,
-                         last_message_at, last_post_at, last_post_conversation_id
+                         last_message_at, last_post_at, last_post_conversation_id,
+                         last_post_unidentified
 messages chat_id, message_id, PRIMARY KEY (chat_id, message_id),
-                         direction ('in'|'out'), date, edited_at, from_id, from_name,
+                         direction ('in'|'out'), date, edited_at, from_name,
                          from_username, kind, text, reply_to_message_id, topic_id,
-                         sent_by_conversation_id NULL
+                         sent_by_conversation_id NULL, sent_by_unidentified
 sends    caller_key, client_request_id, PRIMARY KEY (caller_key, client_request_id),
                          state ('pending'|'sent'|'failed'), chat_id, message_ids,
-                         error_code, created_at
+                         parts, sent_at, error_code, created_at
 ```
 
 Chat ids are stored as decimal strings because Telegram ids are 64-bit. This
-matches `validTelegramAccountId` in `contracts.ts`.
+matches `validTelegramAccountId` in `contracts.ts`. The store keeps no Telegram
+user id and no bot id: a sender is a name and a username, and the bot id lives
+only in `bot-token.json`. `read_all_since` records when `getMe` first reported
+privacy mode off, which is what "re-add the bot to apply" compares a group's
+`first_seen_at` with.
 
 ## Decision 4 — update intake and retention
 
@@ -354,7 +360,8 @@ input: {
   silent?: boolean,                // → disable_notification
 }
 answer: { chat: string, chatId: string, messageIds: number[], sentAt: string,
-          attributedTo: { conversationId: string } | { unidentified: true }, parts: number }
+          attributedTo: { conversationId: string } | { unidentified: true }, parts: number,
+          alreadySent: boolean /* true when this clientRequestId had already posted */ }
 ```
 
 - **Allowlist refusal** comes before any network call, as a non-retryable
@@ -377,7 +384,10 @@ answer: { chat: string, chatId: string, messageIds: number[], sentAt: string,
   of a row still `pending` (the Viewer died mid-send) answers `send_uncertain`,
   non-retryable, because Telegram has no idempotency key and the bot does not
   receive its own messages to check. Posting twice into a team group is the
-  worse failure.
+  worse failure. A key whose earlier attempt failed with nothing posted may be
+  claimed again; one that posted some parts before failing answers
+  `send_partial` with the posted message ids, and so does the failure itself,
+  so the caller sends only the rest.
 - **Length.** Plain text over 4 096 characters is split at paragraph, then
   line, then character boundaries into at most 4 parts (16 384 characters), sent
   in order. Only the first part carries `replyToMessageId`; every part carries
@@ -472,6 +482,10 @@ string unchanged. That is the one visible change to the personal side.
   a member (n)" group holds left and kicked chats.
 - **Limits:** the three sentences, as one collapsed "What a bot can see" note,
   plus the mention-the-bot hint when the list is empty.
+- **On the phone** the rail footer is not drawn, so neither Telegram account
+  was reachable there. The phone's Accounts screen (menu › Accounts) now ends
+  with the same `TelegramFooterRow`, and the panel opens as its existing
+  bottom sheet.
 - The panel keeps its current geometry: `w-[min(320px,calc(100vw-16px))]`,
   fixed to the bottom on phone and anchored beside the footer on desktop,
   `max-h` with inner scroll. Chat rows stack vertically (title and chips, then
@@ -589,8 +603,10 @@ Verification before the PR:
   at 390×844 and 430×932 in light and dark, plus one desktop viewport
   (1440×900), for the disconnected, connected-with-chats and blocked-reading
   states, from fixture data with invented bot and chat names. It writes PNGs
-  to `~/Pictures/delegatus-review/telegram-bot/` and reports overflow, clipped
-  controls and overlap numerically.
+  to `$LLV_TELEGRAM_BOT_OUT` (the review copy went to
+  `~/Pictures/delegatus-review/telegram-bot/`) and records overflow, clipped
+  controls, overlapping ink and phone targets under 44 px in
+  `evidence/telegram-bot/panel.json`.
 
 ## Validation against the requirement
 

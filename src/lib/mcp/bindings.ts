@@ -175,6 +175,7 @@ import {
   type McpToolPayload,
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
+import { RETRYABLE_TELEGRAM_BOT_CODES, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 
 import {
   accountLimitRows,
@@ -3156,6 +3157,54 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
  * choosing where to launch no longer reads three HTTP routes for it. A read of
  * the durable observations only; it never asks a provider.
  */
+/*
+ * The Telegram bot account (docs/design/telegram-bot-account.md, Decision 6).
+ * The Viewer is the only process that holds the bot token, so all three tools
+ * reach it through the agent route; none of them carries the token or the
+ * bot's id either way. The send forwards the calling session's capability,
+ * which is how the route attributes the post to this conversation.
+ */
+async function telegramBotChats(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const query = new URLSearchParams({ op: "chats", ...(args.includeInactive === true ? { includeInactive: "1" } : {}) });
+  return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`));
+}
+
+async function telegramBotMessages(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const query = new URLSearchParams({ op: "messages", chat: required(args, "chat") });
+  for (const field of ["limit", "maxChars", "cursor", "since"] as const) {
+    const value = args[field];
+    if (typeof value === "number" || (typeof value === "string" && value !== "")) query.set(field, String(value));
+  }
+  return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`));
+}
+
+async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const result = await dispatchControl(control)("/api/telegram/bot/agent", {
+    op: "send",
+    clientRequestId: requestId(args),
+    chat: required(args, "chat"),
+    text: typeof args.text === "string" ? args.text : "",
+    ...(args.format === "html" || args.format === "plain" ? { format: args.format } : {}),
+    ...(typeof args.replyToMessageId === "number" ? { replyToMessageId: args.replyToMessageId } : {}),
+    ...(typeof args.topicId === "number" ? { topicId: args.topicId } : {}),
+    ...(args.silent === true ? { silent: true } : {}),
+  }, callerCapabilityHeaders()).catch((error: unknown) => {
+    /* The route's refusal names its code; which codes a new key may retry is
+       the bot's own vocabulary, and Telegram's wait rides in the sentence. */
+    if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
+      const code = error.details.code;
+      const wait = /retry after (\d+) s/.exec(error.message);
+      throw new McpToolRefusal(error.message, {
+        code,
+        retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(wait ? { retryAfterSeconds: Number(wait[1]) } : {}),
+      });
+    }
+    throw error;
+  });
+  return redactPayload(result);
+}
+
 function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const engine = text(args.engine);
   if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
@@ -5205,5 +5254,8 @@ export function viewerMcpBindings(
     create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
   };
 }

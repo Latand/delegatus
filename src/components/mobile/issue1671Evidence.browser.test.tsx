@@ -2177,3 +2177,140 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
   fs.writeFileSync(path.join(OVERVIEW_EVIDENCE, "overview.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * The Telegram bot account's setup panel (docs/design/telegram-bot-account.md)
+ * — not connected, connected with chats, and reading blocked by a webhook — on
+ * the phone (menu › Accounts › Telegram) at 390 and 430 in both schemes, and
+ * on the desktop from the rail footer at 1440:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "telegram bot"
+ *
+ * Frames go to `$LLV_TELEGRAM_BOT_OUT` (default `.artifacts/telegram-bot`),
+ * readings to `evidence/telegram-bot/panel.json`. A case fails on horizontal
+ * overflow, a control cut by the panel's edge, two text boxes overlapping, or
+ * a phone target under 44 px.
+ */
+const BOT_OUT = path.resolve(process.env.LLV_TELEGRAM_BOT_OUT ?? ".artifacts/telegram-bot");
+const BOT_EVIDENCE = path.resolve("evidence/telegram-bot");
+const BOT_SCENES = ["none", "chats", "webhook"] as const;
+
+async function readTelegramPanel(page: Page, phone: boolean) {
+  return page.evaluate((isPhone) => {
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Telegram"]');
+    if (!dialog) return null;
+    const box = dialog.getBoundingClientRect();
+    const failures: string[] = [];
+    if (dialog.scrollWidth > dialog.clientWidth + 1) failures.push(`horizontal overflow ${dialog.scrollWidth} > ${dialog.clientWidth}`);
+    if (box.left < -0.5 || box.right > window.innerWidth + 0.5) failures.push(`panel leaves the viewport: ${box.left}..${box.right}`);
+    const controls = [...dialog.querySelectorAll<HTMLElement>("button, input, summary")]
+      .filter((element) => element.getClientRects().length > 0 && !(element.closest("details:not([open])") && !element.closest("summary")));
+    for (const control of controls) {
+      const rect = control.getBoundingClientRect();
+      const name = control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40) ?? control.tagName;
+      if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5) failures.push(`control cut by the panel edge: ${name}`);
+      if (isPhone && rect.height < 43.5) failures.push(`phone target under 44 px: ${name} (${rect.height})`);
+    }
+    /* Ink, not boxes: the union of each text leaf's own line rects. */
+    /* A closed <details> keeps boxes for what it hides; that is not ink. */
+    const hidden = (element: Element) => {
+      const details = element.closest("details:not([open])");
+      return details !== null && !element.closest("summary");
+    };
+    const leaves = [...dialog.querySelectorAll<HTMLElement>("span, p, label, h3, h4, summary, li")]
+      .filter((element) => element.childElementCount === 0 && (element.textContent ?? "").trim() !== "" && element.getClientRects().length > 0 && !hidden(element));
+    const inkOf = (element: HTMLElement) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return [...range.getClientRects()];
+    };
+    const inks = leaves.map((element) => ({ element, rects: inkOf(element) }));
+    let overlaps = 0;
+    for (let a = 0; a < inks.length; a += 1) {
+      for (let b = a + 1; b < inks.length; b += 1) {
+        if (inks[a]!.element.contains(inks[b]!.element) || inks[b]!.element.contains(inks[a]!.element)) continue;
+        const hit = inks[a]!.rects.some((r1) => inks[b]!.rects.some((r2) =>
+          Math.min(r1.right, r2.right) - Math.max(r1.left, r2.left) > 1 && Math.min(r1.bottom, r2.bottom) - Math.max(r1.top, r2.top) > 1));
+        if (hit) {
+          overlaps += 1;
+          failures.push(`text overlaps: "${inks[a]!.element.textContent?.slice(0, 30)}" / "${inks[b]!.element.textContent?.slice(0, 30)}"`);
+        }
+      }
+    }
+    return {
+      panel: { left: box.left, top: box.top, width: box.width, height: box.height, scrollHeight: dialog.scrollHeight },
+      controls: controls.length,
+      textLeaves: leaves.length,
+      overlaps,
+      failures,
+    };
+  }, phone);
+}
+
+async function openTelegramPanel(page: Page, phone: boolean): Promise<void> {
+  if (phone) {
+    await page.locator('[data-mobile2-open="menu"]').first().click();
+    await page.locator('[data-mobile2-menu-row="accounts"]').click();
+    await page.waitForSelector("[data-mobile2-telegram] button", { timeout: 10_000 });
+    await page.locator("[data-mobile2-telegram] button").first().click();
+  } else {
+    const footer = page.locator("[data-rail-footer]").first();
+    await footer.waitFor({ timeout: 10_000 });
+    if (await footer.getAttribute("data-rail-footer") === "folded") await page.click("[data-rail-footer-toggle]");
+    await page.locator('button[aria-label="Telegram connection"]').click();
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Telegram"] section[aria-label="Bot"]', { timeout: 10_000 });
+  await pause(page, 500);
+}
+
+browserTest("telegram bot: the setup panel on the phone and the desktop holds its width, controls and ink", async () => {
+  fs.mkdirSync(BOT_OUT, { recursive: true });
+  fs.mkdirSync(BOT_EVIDENCE, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = [
+    ...VIEWPORTS.flatMap((viewport) => SCHEMES.map((scheme) => ({ viewport, scheme, phone: true }))),
+    { viewport: { width: 1_440, height: 900 }, scheme: "light" as const, phone: false },
+    { viewport: { width: 1_440, height: 900 }, scheme: "dark" as const, phone: false },
+  ];
+  try {
+    for (const { viewport, scheme, phone } of cases) {
+      for (const scene of BOT_SCENES) {
+        const key = `${phone ? "phone" : "desktop"}-${viewport.width}-${scheme}-${scene}`;
+        const context = await browser.newContext({ viewport, colorScheme: scheme, deviceScaleFactor: 2, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?bot=${scene}`);
+          await openTelegramPanel(page, phone);
+          const top = await readTelegramPanel(page, phone);
+          await page.screenshot({ path: path.join(BOT_OUT, `${key}.png`) });
+          /* The panel scrolls inside itself; the second frame is its end. */
+          await page.evaluate(() => {
+            const dialog = document.querySelector('[role="dialog"][aria-label="Telegram"]');
+            dialog?.querySelectorAll("details").forEach((details) => { (details as HTMLDetailsElement).open = true; });
+            dialog?.scrollTo({ top: dialog.scrollHeight });
+          });
+          await pause(page, 300);
+          const end = await readTelegramPanel(page, phone);
+          await page.screenshot({ path: path.join(BOT_OUT, `${key}-end.png`) });
+          if (!top || !end) failures.push(`${key}: the panel did not open`);
+          for (const reading of [top, end]) for (const failure of reading?.failures ?? []) failures.push(`${key}: ${failure}`);
+          if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+          results.push({ key, viewport, scheme, scene, top, end });
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(BOT_EVIDENCE, "panel.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

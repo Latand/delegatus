@@ -9,6 +9,7 @@ import { useRuntimeBusState } from "@/hooks/useRuntime";
 import { useLocale } from "@/lib/i18n";
 
 import { MobileAccountsPanel } from "../AccountsPanel";
+import { TelegramFooterRow } from "../TelegramConnect";
 import { MobileReceipt } from "./MobileReceipt";
 import { screenKey, topScreen, useMobileNav, useMobileNavStore, type MobileScreenKind, type MobileSheetName } from "./mobileNav";
 
@@ -376,6 +377,11 @@ export function MobileAccountsScreen({ host, renderSheet }: { host?: MobileShell
     <MobileShell screen="accounts" back title={<MobileBarTitle>{t("mobile2.accounts.title")}</MobileBarTitle>} host={host} renderSheet={renderSheet}>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain" data-mobile2-accounts>
         <MobileAccountsPanel />
+        {/* The Telegram accounts, personal and bot: on desktop the row sits in
+            the rail's footer, which the phone does not draw. */}
+        <div className="border-t border-border" data-mobile2-telegram>
+          <TelegramFooterRow />
+        </div>
       </div>
     </MobileShell>
   );

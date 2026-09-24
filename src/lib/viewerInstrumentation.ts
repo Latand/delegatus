@@ -92,6 +92,8 @@ interface CurrentReleaseControllerLoaders {
       nothing else. Production always passes it. */
   loadTelegramReportScheduler?: () => Promise<{ ensureTelegramReportScheduler: () => void }>;
   /** Optional for the same reason. */
+  loadTelegramBotPoller?: () => Promise<{ ensureTelegramBotPoller: () => void }>;
+  /** Optional for the same reason. */
   loadTelegramConnectorBoot?: () => Promise<{ provisionTelegramConnectorAtStartup: () => Promise<unknown> }>;
   /** Optional for the same reason. */
   loadStructuredHostRetirement?: () => Promise<{ startStructuredHostRetirement: () => void }>;
@@ -379,6 +381,7 @@ export async function startCurrentReleaseControllers(
     loadFlowPipelineController: () => import("@/lib/pipelines/controller"),
     loadAccountMigrationController: () => import("@/lib/accounts/migration/controller"),
     loadTelegramReportScheduler: () => import("@/lib/telegram/reportRunner"),
+    loadTelegramBotPoller: () => import("@/lib/telegram/bot/service"),
     loadTelegramConnectorBoot: () => import("@/lib/telegram/connectorBoot"),
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
@@ -411,6 +414,15 @@ export async function startCurrentReleaseControllers(
     telegram?.ensureTelegramReportScheduler();
   } catch (error) {
     console.error("[telegram report] scheduler start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* The Telegram bot's update poller (docs/design/telegram-bot-account.md)
+     reads for a connected bot in the release that owns traffic. It does
+     nothing without a stored token, and its failure stays its own. */
+  try {
+    const bot = await loaders.loadTelegramBotPoller?.();
+    bot?.ensureTelegramBotPoller();
+  } catch (error) {
+    console.error("[telegram bot] poller start failed", error instanceof Error ? error.name : "unknown");
   }
   /* Automatic structured host retirement (#747). It belongs to the release
      that owns traffic for a stronger reason than the others: ownership of a

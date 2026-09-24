@@ -1,0 +1,635 @@
+{
+  "results": [
+    {
+      "key": "phone-390-light-none",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "scene": "none",
+      "top": {
+        "panel": {
+          "left": 35,
+          "top": 392.5,
+          "width": 320,
+          "height": 439.5,
+          "scrollHeight": 438
+        },
+        "controls": 5,
+        "textLeaves": 9,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 594
+        },
+        "controls": 5,
+        "textLeaves": 12,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-chats",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "scene": "chats",
+      "top": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1100
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1311
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-webhook",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "scene": "webhook",
+      "top": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1114
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1326
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-dark-none",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "dark",
+      "scene": "none",
+      "top": {
+        "panel": {
+          "left": 35,
+          "top": 392.5,
+          "width": 320,
+          "height": 439.5,
+          "scrollHeight": 438
+        },
+        "controls": 5,
+        "textLeaves": 9,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 594
+        },
+        "controls": 5,
+        "textLeaves": 12,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-dark-chats",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "dark",
+      "scene": "chats",
+      "top": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1100
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1311
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-dark-webhook",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "dark",
+      "scene": "webhook",
+      "top": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1114
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 35,
+          "top": 272,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1326
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-light-none",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "light",
+      "scene": "none",
+      "top": {
+        "panel": {
+          "left": 55,
+          "top": 480.5,
+          "width": 320,
+          "height": 439.5,
+          "scrollHeight": 438
+        },
+        "controls": 5,
+        "textLeaves": 9,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 594
+        },
+        "controls": 5,
+        "textLeaves": 12,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-light-chats",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "light",
+      "scene": "chats",
+      "top": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1100
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1311
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-light-webhook",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "light",
+      "scene": "webhook",
+      "top": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1114
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1326
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-dark-none",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "dark",
+      "scene": "none",
+      "top": {
+        "panel": {
+          "left": 55,
+          "top": 480.5,
+          "width": 320,
+          "height": 439.5,
+          "scrollHeight": 438
+        },
+        "controls": 5,
+        "textLeaves": 9,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 594
+        },
+        "controls": 5,
+        "textLeaves": 12,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-dark-chats",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "dark",
+      "scene": "chats",
+      "top": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1100
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1311
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-dark-webhook",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "dark",
+      "scene": "webhook",
+      "top": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1114
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 55,
+          "top": 360,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1326
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-light-none",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "light",
+      "scene": "none",
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 534.5,
+          "width": 320,
+          "height": 361.5,
+          "scrollHeight": 360
+        },
+        "controls": 5,
+        "textLeaves": 9,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 378.125,
+          "width": 320,
+          "height": 517.875,
+          "scrollHeight": 516
+        },
+        "controls": 5,
+        "textLeaves": 12,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-light-chats",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "light",
+      "scene": "chats",
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 336,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 930
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 336,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1141
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-light-webhook",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "light",
+      "scene": "webhook",
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 336,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 944
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 336,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1156
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-dark-none",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "dark",
+      "scene": "none",
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 534.5,
+          "width": 320,
+          "height": 361.5,
+          "scrollHeight": 360
+        },
+        "controls": 5,
+        "textLeaves": 9,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 378.125,
+          "width": 320,
+          "height": 517.875,
+          "scrollHeight": 516
+        },
+        "controls": 5,
+        "textLeaves": 12,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-dark-chats",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "dark",
+      "scene": "chats",
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 336,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 930
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 336,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1141
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-dark-webhook",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "dark",
+      "scene": "webhook",
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 336,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 944
+        },
+        "controls": 12,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 336,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1156
+        },
+        "controls": 12,
+        "textLeaves": 37,
+        "overlaps": 0,
+        "failures": []
+      }
+    }
+  ],
+  "failures": []
+}
