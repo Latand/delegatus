@@ -677,9 +677,8 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
   const request = useRef(0);
 
   /* No zone is sent: days and hours follow the zone in the settings
-     (Europe/Kyiv unless changed), whatever zone this device is in. The
-     project's figures are the server's count for it, never the page's
-     arithmetic on the numbers it drew for every project. */
+     (Europe/Kyiv unless changed), whatever zone this device is in. A
+     project's figures are the server's own count for that project. */
   const load = useCallback(async (target: RangeKey, scope: string | null) => {
     const id = ++request.current;
     setLoading(true);

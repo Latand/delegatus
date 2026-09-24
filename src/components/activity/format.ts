@@ -224,7 +224,7 @@ export function listUnread(data: ActivityResponse): boolean {
 }
 
 /** Your time says nothing: nothing was read, or a host holding it was not
-    read and nothing counted (a lower bound of zero). Never shown as 0. */
+    read and nothing counted (a lower bound of zero). */
 export function youUnknown(data: ActivityResponse): boolean {
   return nothingRead(data) || (!data.totals.coverage.complete && data.totals.humanMs === 0);
 }

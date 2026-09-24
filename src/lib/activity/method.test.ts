@@ -716,7 +716,7 @@ describe("one project's view: the page filtered to a project", () => {
         });
         /* A is the only billable project, so its billable hours are the page's. */
         expect(view.totals.billableHours).toBe(project === "A" ? all.totals.billableHours : 0);
-        /* A flag is about the day, not a project: the view keeps it. */
+        /* A flag is a fact of the whole day: the view keeps it. */
         expect(view.days.map((day) => day.missingSource)).toEqual(all.days.map((day) => day.missingSource));
         expect(view.totals.missingSourceDays).toBe(all.totals.missingSourceDays);
         for (const day of view.days) {
@@ -748,12 +748,12 @@ describe("one project's view: the page filtered to a project", () => {
     expect(a.days.find((day) => day.date === "2026-09-23")!.hours[1]!.unreadHosts).toEqual(["stage"]);
     expect(b.totals.coverage).toEqual({ complete: true, missingHosts: [] });
     expect(b.days.find((day) => day.date === "2026-09-23")!.unknown).toEqual([]);
-    /* A's night run on Wednesday is unclear; B's time never is. */
+    /* A's night run on Wednesday is unclear; all of B's time was read. */
     expect(a.days.find((day) => day.date === "2026-09-23")!.unattendedUnreadMs).toBe(2 * HOUR);
     expect(b.days.find((day) => day.date === "2026-09-23")!.unattendedUnreadMs).toBe(0);
   });
 
-  test("a project with only agent time whose host was not read: its time is a zero that is not complete, never a clean zero", () => {
+  test("a project with only agent time whose host was not read: its time is a zero with incomplete coverage", () => {
     const view = activityReport({
       params: DEFAULTS, range: "7d", nowMs: NOW,
       anchors: [input("2026-09-22", "10:00", "harbor")],
@@ -767,7 +767,7 @@ describe("one project's view: the page filtered to a project", () => {
     expect(view.totals.coverage).toEqual({ complete: false, missingHosts: ["stage"] });
     expect(view.totals.wallMs).toBe(2 * HOUR);
     expect(view.days.every((day) => !day.coverage.complete)).toBe(true);
-    /* Its agents ran while its input was not read: unclear, never unattended. */
+    /* Its agents ran while its input was not read: all of it is unclear. */
     expect(view.totals.unattendedUnreadMs).toBe(2 * HOUR);
   });
 });

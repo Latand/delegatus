@@ -226,7 +226,7 @@ describe("the page filtered to one project", () => {
     expect($("[data-activity-scope-chip]")!.textContent).toBe("client-portal");
   });
 
-  test("a project with only agent time whose host was not read: You reads Unknown, never 0; its agent time is a lower bound", async () => {
+  test("a project with only agent time whose host was not read: You reads Unknown and its agent time is a lower bound", async () => {
     /* The stage host is listed and its pull never answered: nothing of the
        client project's input was read, and its agents there never arrived. */
     current = deps(source("pull", "pending", []), [input("2026-09-22", "09:02", HARBOR)], [run("c", CLIENT, "2026-09-23", "12:00", "14:00")]);

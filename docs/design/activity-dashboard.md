@@ -5,6 +5,7 @@
 - Prior work read: #473 (WakaTime integration), #763 and its landed Phase 0 (#767, #1017, #1623), the scanner activity model, the view presence heartbeat, the transcript search index
 - Revised by three operator corrections on 2026-09-24 (below). Where the first draft of this document and a correction disagree, the correction wins and the text here already follows it.
 - Extended the same day by "Activity records itself" (section [Continuous record](#continuous-record-no-export-required)): every host's operator input and agent turns are written into Delegatus's own store as transcripts are indexed, other hosts are pulled over ssh, and an export is no longer required for complete numbers.
+- Extended on 2026-09-25 by [One project's page](#one-projects-page): the whole page filtered to one project, agent time a host did not send read as a lower bound, and Codex subagent threads counted as their own agents.
 
 ## Originating requirement
 
@@ -253,6 +254,19 @@ splitting: every seat rotation's handoff digest runs in its own
 named `cwd`. A pure path recognizer now groups them under their container
 ("Handoff digests"), live or deleted. Two distinct projects that would still
 read the same name on the page take a short piece of their key.
+
+### Codex subagent threads
+
+A Codex subagent thread writes its own rollout, and the registry can name the
+parent's conversation for it. Keyed by that conversation, the thread's turns
+were unioned into the parent's, so work the two did side by side counted once
+and agent-hours ran low (about 3 h short for one project on one day). The
+ingest now keys a Codex session whose `session_meta` names a subagent source
+by the parent's conversation and the thread's own session
+(`turnOwnerConversation`, `src/lib/activity/ingest.ts`). It keeps the parent's
+project, role and pipeline stage. Agent-hours and the agent count rise;
+wall-clock stays the same. Turns already stored before this rule keep their old key.
+No production store had been written when it landed.
 
 ### Cost, measured on the operator's workstation
 
@@ -568,6 +582,7 @@ The page shows these in its "What is counted" panel, with a hosts table.
 | read for part of it (an old export, an export that started later) | lower bound | `≥` figure, hatched unknown stretch, tooltip naming the host |
 | this host with its ledger read and no export for the stretch | lower bound: Delegatus requests counted, terminal input unread | `≥` figure, and a warning under the host in the hosts table |
 | listed and never read | unknown | `Unknown`, "Not connected" in the hosts table, flagged workdays |
+| its agent turns not read: listed with a pull that never answered (`pending`, `no-ingest`, `unreachable`), or read by an export alone | agent figures of the projects it holds, and every total, are a lower bound | `≥ ≈` on the Agents figure, the rows and the day tooltip; "Lower bound" on the chip; the drawer and the hosts table name the host |
 | an export file for another host, or malformed | covers nothing | "unreadable" in the hosts table |
 
 ### By surface
@@ -592,6 +607,60 @@ The page shows these in its "What is counted" panel, with a hosts table.
 | Transcripts not indexed (OpenClaw, deleted) | missing agent time | named in the panel |
 | Registry misses | role and pipeline `unregistered` | a bucket in the breakdowns |
 | Inputs with no resolved project | kept | a `No project` row |
+
+## One project's page
+
+The operator's request on 2026-09-24, paraphrased: filter the page by each
+project to see how many hours went into it.
+
+### What the server counts
+
+`GET /api/activity?project=<key>` scopes `totals` and `days` to one project
+(`ReportInput.scope`, `projectView` in `src/lib/activity/method.ts`). The
+method runs over every input exactly as it does unscoped, and the view keeps
+the project's share of what it decided:
+
+| figure | the project's share |
+|---|---|
+| your minutes | its segments after one-minute-once, so a minute a later input to another project took stays there |
+| report hours | the clock hours it won (`clock-hour`), or its rounded day (`half-hour`) |
+| billable | its hours in the billable-only pass; 0 for a project not tagged billable |
+| requests | its inputs in the range |
+| agent split and agent-hours | its agents against its own episodes, unclear where a host holding it was not read |
+| coverage, both axes | the hosts that can hold it |
+| a day's flag (probable missing source) | kept: it is a fact of the day, and that day's input was not read for this project either |
+
+Each figure is therefore the number the project's row carries in the unscoped
+answer, which `report.test.ts` and `route.test.ts` check for every project and
+range, and `projects` still lists every project. An hour's weight goes to the
+project only when it won the hour, so the Rhythm cells of a day still add up to
+its report hours. An older key of a project names it. An empty, overlong or
+control-character key scopes nothing. The row with no project cannot be
+chosen. Each host row carries `inScope`: whether it can hold the project, so
+the Today bands, the drawer's flags and "nothing read" consider only those.
+
+### What the page shows
+
+- A click on a project's row scopes the page to it and opens the row; a
+  second click, or the chip beside the title, returns to every project.
+- The header's picker (`ActivityProjectPicker`) lists every project of the
+  range with your hours and agent time, filtered by name as you type, since
+  the list folds what does not fit into "+ N more".
+- The choice is `?project=`: a click is a history step Back undoes, the
+  range and view switches keep it, and a reload opens it.
+- Your time reads `Unknown` wherever it is zero and a host holding it was
+  not read, on every page and every figure.
+
+### Agent time a host did not send
+
+An agent turn reaches this Viewer only through a host's own record: this
+host's ingest (or the index before the ingest's first pass) and another
+host's pull. `HostCoverage.agents` holds what each host's turns were read
+for (`agentSpans`, `src/lib/activity/report.ts`), and `agentCoverage` sits
+beside `coverage` on the range, each day and each project. A host listed in
+`hosts.json` whose pull never answered, or that only an export reads, leaves
+every agent figure that misses it a lower bound: `≥ ≈` on the figure, the
+chip at "Lower bound", and the host named in the drawer and the hosts table.
 
 ## Privacy boundary
 
