@@ -68,7 +68,7 @@ test("the answer carries both axes and no path, title or message text", async ()
   expect(body.days).toHaveLength(7);
   expect(body.coverage.agentIndex).toBe("ok");
   expect(body.coverage.hosts.map((host) => [host.host, host.sources.map((source) => `${source.source}:${source.state}:${source.scope}`)]))
-    .toEqual([["local", ["ledger:read:delegatus", "transcripts:absent:all"]]]);
+    .toEqual([["local", ["ledger:read:delegatus", "ingest:absent:all"]]]);
   /* The ledger read Delegatus requests only; terminal input here had no export. */
   expect(body.coverage.hosts[0]!.complete).toBe(false);
   expect(body.coverage.hosts[0]!.unread).toHaveLength(1);
@@ -87,4 +87,44 @@ test("the answer carries both axes and no path, title or message text", async ()
   expect(harbor.byEngine).toEqual({ claude: 30 * 60_000 });
   expect(harbor.byRole).toEqual({ unregistered: 30 * 60_000 });
   for (const leaked of [SECRET_PROMPT, SECRET_REPLY, "quartz", transcript, "session-quartz", sandbox]) expect(text).not.toContain(leaked);
+});
+
+test("with this host's ingest caught up, its coverage is complete and no export exists", async () => {
+  const { ingestTranscripts } = await import("@/lib/activity/ingest");
+  const { ActivityStore } = await import("@/lib/activity/store");
+  const now = Date.now();
+  const stamp = (offsetMin: number) => new Date(now - offsetMin * 60_000).toISOString();
+  /* A terminal session begun eight days ago and still in use: the backfill
+     reads its history, and a prompt typed 20 minutes ago counts. */
+  const transcript = path.join(sandbox, "HOME", "session-terminal.jsonl");
+  const typed = (offsetMin: number, uuid: string) => ({ type: "user", timestamp: stamp(offsetMin), uuid, sessionId: "s", cwd: "/work/harbor", entrypoint: "cli", promptSource: "typed", message: { role: "user", content: `typed request ${uuid}` } });
+  fs.writeFileSync(transcript, [typed(8 * 24 * 60, "t-old"), typed(20, "t-new")].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const store = ActivityStore.open();
+  try {
+    const stat = fs.statSync(transcript);
+    await ingestTranscripts([{ path: transcript, engine: "claude", size: stat.size, mtimeMs: stat.mtimeMs }], {
+      complete: true,
+      listedAt: now,
+      store,
+      resolver: () => () => ({ project: "harbor", launch: null, registered: false }),
+    });
+  } finally {
+    store.close();
+  }
+  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "activity", "hosts"))).toBeFalse();
+
+  /* Seven days: the history read covers all of it at any hour of the day. */
+  const response = await get("?range=7d");
+  const body = await response.json() as {
+    coverage: { hosts: Array<{ host: string; complete: boolean; unread: unknown[]; sources: Array<{ source: string; state: string; readAt: number | null }> }> };
+    totals: { humanMs: number; coverage: { complete: boolean } };
+  };
+  const host = body.coverage.hosts[0]!;
+  expect(host.sources.map((source) => `${source.source}:${source.state}`)).toEqual(["ledger:read", "ingest:read"]);
+  expect(host.sources[1]!.readAt).not.toBeNull();
+  /* The pass just finished: caught up, so this host is read to now. */
+  expect(host.complete).toBeTrue();
+  expect(host.unread).toEqual([]);
+  expect(body.totals.coverage.complete).toBeTrue();
+  expect(body.totals.humanMs).toBeGreaterThan(0);
 });

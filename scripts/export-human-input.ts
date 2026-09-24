@@ -31,17 +31,14 @@ import "../src/lib/state/owner/tool";
 import fs from "node:fs";
 import path from "node:path";
 
-import { exportLines, validHostId, type TranscriptContext, type UserRecord } from "../src/lib/activity/humanInput";
+import { conversationResolver } from "../src/lib/activity/conversationResolver";
+import { exportLines, validHostId } from "../src/lib/activity/humanInput";
 import { METHOD_DEFAULTS, validTimeZone, zonedDate } from "../src/lib/activity/method";
-import { exportHumanInputs, listTranscriptFiles, type ConversationResolution, type TranscriptFacts } from "../src/lib/activity/transcriptExport";
+import { exportHumanInputs, listTranscriptFiles } from "../src/lib/activity/transcriptExport";
 import { claudeProjectRoots, sharedClaudeProjectsRoot } from "../src/lib/accounts/claude";
 import { codexSessionRoots } from "../src/lib/accounts/codex";
-import { agentRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "../src/lib/agent/registry";
-import { UNRESOLVED_PROJECT } from "../src/lib/projects/identity";
-import { claudeMessageProvenance } from "../src/lib/runtime/claudeMessageProvenance";
-import { submissionIdentities } from "../src/lib/runtime/submissionIdentity";
+import { agentRegistry, type RegistryFile } from "../src/lib/agent/registry";
 import { ROOTS } from "../src/lib/scanner/roots";
-import { resolveProjectAttribution } from "../src/lib/session/projectResolution";
 
 function fail(message: string): never {
   console.error(`export-human-input: ${message}`);
@@ -86,51 +83,7 @@ if (useRegistry) {
     console.error("export-human-input: the registry is not readable here; delivered messages count only when marked");
   }
 }
-const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
-
-/** The conversation's context from the host registry, otherwise its cwd. */
-function resolve(facts: TranscriptFacts): ConversationResolution {
-  const conversation = lookup?.conversationForPath(facts.path) ?? null;
-  const generation = conversation?.generations.at(-1);
-  let project: string | null = null;
-  try {
-    project = resolveProjectAttribution({
-      projectOwnership: conversation?.projectOwnership,
-      cwd: facts.cwd ?? generation?.launchProfile.cwd ?? undefined,
-      launchProfileProject: generation?.launchProfile.project,
-    }).project;
-  } catch {
-    project = null;
-  }
-  if (project === UNRESOLVED_PROJECT) project = null;
-  if (!conversation || !snapshot) return { project, launch: null, registered: false };
-  const pipeline = (snapshot.memberships[conversation.id] ?? []).some((membership) => membership.kind === "pipeline");
-  const delegated = Boolean(snapshot.lineageEdges[conversation.id]) || (conversation.delegationDepth ?? 0) >= 1;
-  let claude: ReturnType<typeof claudeMessageProvenance> | null = null;
-  let codex: Record<string, string> | null = null;
-  const deliveryOrigin: TranscriptContext["deliveryOrigin"] = (rec: UserRecord) => {
-    try {
-      if (rec.engine === "claude") {
-        claude ??= claudeMessageProvenance(facts.path);
-        const found = rec.messageId ? claude[rec.messageId] : undefined;
-        return found ? { origin: found.origin, ...(found.submissionId ? { idempotencyKey: found.submissionId } : {}) } : null;
-      }
-      if (!rec.markerOrigin) return null;
-      codex ??= submissionIdentities(facts.path);
-      const submission = rec.deliveryKey ? codex[rec.deliveryKey] : undefined;
-      return { origin: rec.markerOrigin, ...(submission ? { idempotencyKey: submission } : {}) };
-    } catch {
-      return null;
-    }
-  };
-  return {
-    project,
-    launch: pipeline ? "pipeline" : delegated ? "agent" : "operator",
-    registered: true,
-    conversation: conversation.id,
-    deliveryOrigin,
-  };
-}
+const resolve = conversationResolver(snapshot);
 
 const from = fromDay.start;
 const to = toDay ? toDay.end : now;

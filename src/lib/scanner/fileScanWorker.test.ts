@@ -106,6 +106,8 @@ test("a current incomplete worker scan schedules a non-deleting transcript feed"
 
   expect(feeds).toEqual([{
     complete: false,
+    /* When the worker began listing: nothing created after it is in the feed. */
+    listedAt: expect.any(Number),
     sources: [{
       path: transcript.path,
       project: transcript.project,
@@ -153,6 +155,8 @@ test("the production worker publishes Copilot catalog entries through the shared
 
   expect(feeds).toEqual([{
     complete: true,
+    /* When the worker began listing: nothing created after it is in the feed. */
+    listedAt: expect.any(Number),
     sources: [{
       path: transcript.path,
       project: transcript.project,

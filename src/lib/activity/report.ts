@@ -196,6 +196,19 @@ export async function activityResponse(
     totals: report.totals,
     days: report.days,
     billableConfigured: settings.billable.length > 0,
-    projects: report.projects.map((row) => ({ ...row, name: row.project === null ? null : names.get(row.project) ?? null })),
+    projects: distinctNames(report.projects.map((row) => ({ ...row, name: row.project === null ? null : names.get(row.project) ?? null }))),
   };
+}
+
+/** Rows are one per canonical project, so two rows that would read the same
+    name are two projects: each such name takes a short piece of its key, and
+    no name appears twice. */
+export function distinctNames<T extends { project: string | null; name: string | null }>(rows: readonly T[]): T[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) if (row.name) counts.set(row.name, (counts.get(row.name) ?? 0) + 1);
+  return rows.map((row) => {
+    if (!row.name || row.project === null || (counts.get(row.name) ?? 0) < 2) return row;
+    const suffix = row.project.replace(/^[a-z]+-/, "").slice(0, 6);
+    return { ...row, name: `${row.name} · ${suffix}` };
+  });
 }
