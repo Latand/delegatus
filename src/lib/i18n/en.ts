@@ -1236,6 +1236,8 @@ export const en = {
   "lightbox.zoomOut": "Zoom out",
   "lightbox.resetZoom": "Reset zoom",
   "lightbox.zoomIn": "Zoom in",
+  "lightbox.previous": "Previous image",
+  "lightbox.next": "Next image",
 
   // Artifact preview (issue #875)
   "preview.dialogTitle": "{name} — document preview",

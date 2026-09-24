@@ -8,7 +8,7 @@ import { hhmm } from "../../utils";
 import { MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
 import { mandateMessage } from "../mandateMessage";
-import { mdBlocks } from "../markdown";
+import { mdBlocks, mdImages } from "../markdown";
 import { tr, type MandateItem } from "../parse";
 
 /**
@@ -57,6 +57,7 @@ export function MandateCard({ item }: { item: MandateItem }) {
           <Section
             label={tr("mandateCard.handoff")}
             text={message.handoff}
+            first={mdImages(message.mandate).length}
             icon={<RotateCw className="h-3 w-3 shrink-0 text-muted" aria-hidden />}
             className="mt-1.5 border-t border-border pt-1.5"
           />
@@ -69,11 +70,14 @@ export function MandateCard({ item }: { item: MandateItem }) {
 function Section({
   label,
   text,
+  first = 0,
   icon,
   className = "",
 }: {
   label: string;
   text: string;
+  /** The pictures the card drew before this section's. */
+  first?: number;
   icon?: ReactNode;
   className?: string;
 }) {
@@ -91,7 +95,7 @@ function Section({
         <span>{label}</span>
       </summary>
       {mounted ? (
-        <div className="mt-1 whitespace-pre-wrap break-words border-t border-border pt-1.5">{mdBlocks(text)}</div>
+        <div className="mt-1 whitespace-pre-wrap break-words border-t border-border pt-1.5">{mdBlocks(text, first)}</div>
       ) : null}
     </details>
   );

@@ -1,0 +1,2976 @@
+{
+  "commit": "90c11c784dd5119628c02718fc77107cdadacade",
+  "pictures": 26,
+  "networkPictures": 21,
+  "desktop-dense": {
+    "requests": {
+      "feed": 17,
+      "open": 0,
+      "walkingLeft": 4,
+      "walkingBack": 0,
+      "total": 21,
+      "distinctUrls": 21,
+      "fetchedTwice": 0
+    },
+    "feedPictures": [
+      1,
+      5,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15,
+      16,
+      17,
+      19,
+      20,
+      21,
+      22,
+      24,
+      25,
+      26
+    ],
+    "heldByFeed": [
+      1,
+      2,
+      "inline",
+      4,
+      5,
+      6,
+      7,
+      "inline",
+      9,
+      10,
+      11,
+      12,
+      "inline",
+      14,
+      15,
+      16,
+      17,
+      "inline",
+      19,
+      20,
+      21,
+      22,
+      "inline",
+      24,
+      25,
+      26
+    ],
+    "collectedGarbageBeforeWalkingBack": null,
+    "openPictures": [],
+    "walk": [
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          7
+        ]
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          6
+        ]
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          4
+        ]
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          2
+        ]
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      }
+    ],
+    "opened": {
+      "open": true,
+      "position": "26 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/inbox?name=img-25-redesign.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 452,
+        "w": 44,
+        "h": 44
+      },
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "midGallery": {
+      "open": true,
+      "position": "12 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+        "data:(51990 chars)"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 452,
+        "w": 44,
+        "h": 44
+      },
+      "next": {
+        "x": 1388,
+        "y": 452,
+        "w": 44,
+        "h": 44
+      },
+      "caption": "Screen 12, settings panel",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "backdrop": {
+      "afterPictureClick": true,
+      "afterPan": true,
+      "afterBackdrop": false,
+      "afterEscape": false
+    },
+    "log": [
+      {
+        "phase": "feed",
+        "picture": 1,
+        "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 9,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 11,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 12,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 14,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 16,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 17,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 19,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 21,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 22,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 24,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 26,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      },
+      {
+        "phase": "left-to-8",
+        "picture": 7,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-7.png"
+      },
+      {
+        "phase": "left-to-7",
+        "picture": 6,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-6.png"
+      },
+      {
+        "phase": "left-to-5",
+        "picture": 4,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-4.png"
+      },
+      {
+        "phase": "left-to-3",
+        "picture": 2,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-2.png"
+      }
+    ]
+  },
+  "desktop-spread": {
+    "requests": {
+      "feed": 7,
+      "open": 0,
+      "walkingLeft": 14,
+      "walkingBack": 0,
+      "total": 21,
+      "distinctUrls": 21,
+      "fetchedTwice": 0
+    },
+    "feedPictures": [
+      1,
+      5,
+      10,
+      15,
+      20,
+      25,
+      26
+    ],
+    "heldByFeed": [
+      1,
+      2,
+      "inline",
+      4,
+      5,
+      6,
+      7,
+      "inline",
+      9,
+      10,
+      11,
+      12,
+      "inline",
+      14,
+      15,
+      16,
+      17,
+      "inline",
+      19,
+      20,
+      21,
+      22,
+      "inline",
+      24,
+      25,
+      26
+    ],
+    "collectedGarbageBeforeWalkingBack": null,
+    "openPictures": [],
+    "walk": [
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          24
+        ]
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          22
+        ]
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          21
+        ]
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          19
+        ]
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          17
+        ]
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          16
+        ]
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          14
+        ]
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          12
+        ]
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          11
+        ]
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          9
+        ]
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          7
+        ]
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          6
+        ]
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          4
+        ]
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          2
+        ]
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      }
+    ],
+    "opened": {
+      "open": true,
+      "position": "26 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/inbox?name=img-25-redesign.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 452,
+        "w": 44,
+        "h": 44
+      },
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "midGallery": {
+      "open": true,
+      "position": "12 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+        "data:(51990 chars)"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 452,
+        "w": 44,
+        "h": 44
+      },
+      "next": {
+        "x": 1388,
+        "y": 452,
+        "w": 44,
+        "h": 44
+      },
+      "caption": "Screen 12, settings panel",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "backdrop": null,
+    "log": [
+      {
+        "phase": "feed",
+        "picture": 1,
+        "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 26,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      },
+      {
+        "phase": "left-to-25",
+        "picture": 24,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png"
+      },
+      {
+        "phase": "left-to-23",
+        "picture": 22,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png"
+      },
+      {
+        "phase": "left-to-22",
+        "picture": 21,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png"
+      },
+      {
+        "phase": "left-to-20",
+        "picture": 19,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png"
+      },
+      {
+        "phase": "left-to-18",
+        "picture": 17,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png"
+      },
+      {
+        "phase": "left-to-17",
+        "picture": 16,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png"
+      },
+      {
+        "phase": "left-to-15",
+        "picture": 14,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png"
+      },
+      {
+        "phase": "left-to-13",
+        "picture": 12,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png"
+      },
+      {
+        "phase": "left-to-12",
+        "picture": 11,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png"
+      },
+      {
+        "phase": "left-to-10",
+        "picture": 9,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png"
+      },
+      {
+        "phase": "left-to-8",
+        "picture": 7,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-7.png"
+      },
+      {
+        "phase": "left-to-7",
+        "picture": 6,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-6.png"
+      },
+      {
+        "phase": "left-to-5",
+        "picture": 4,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-4.png"
+      },
+      {
+        "phase": "left-to-3",
+        "picture": 2,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-2.png"
+      }
+    ]
+  },
+  "desktop-unmounted": {
+    "requests": {
+      "feed": 1,
+      "open": 1,
+      "walkingLeft": 19,
+      "walkingBack": 18,
+      "total": 39,
+      "distinctUrls": 21,
+      "fetchedTwice": 18
+    },
+    "feedPictures": [
+      26
+    ],
+    "heldByFeed": [
+      26
+    ],
+    "collectedGarbageBeforeWalkingBack": true,
+    "openPictures": [
+      25
+    ],
+    "walk": [
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          24
+        ]
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          22
+        ]
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          21
+        ]
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          20
+        ]
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          19
+        ]
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          17
+        ]
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          16
+        ]
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          15
+        ]
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          14
+        ]
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          12
+        ]
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          11
+        ]
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          10
+        ]
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          9
+        ]
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          7
+        ]
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          6
+        ]
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          5
+        ]
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          4
+        ]
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          2
+        ]
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          1
+        ]
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          4
+        ]
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          5
+        ]
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          6
+        ]
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          7
+        ]
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          9
+        ]
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          10
+        ]
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          11
+        ]
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          12
+        ]
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          14
+        ]
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          15
+        ]
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          16
+        ]
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          17
+        ]
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          19
+        ]
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          20
+        ]
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          21
+        ]
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          22
+        ]
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          24
+        ]
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          25
+        ]
+      },
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      }
+    ],
+    "opened": {
+      "open": true,
+      "position": "26 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/inbox?name=img-25-redesign.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 452,
+        "w": 44,
+        "h": 44
+      },
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "midGallery": {
+      "open": true,
+      "position": "12 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+      "loaded": true,
+      "image": {
+        "x": 120,
+        "y": 99,
+        "w": 1200,
+        "h": 750
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 1440,
+        "h": 853
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+        "data:(51990 chars)"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 452,
+        "w": 44,
+        "h": 44
+      },
+      "next": {
+        "x": 1388,
+        "y": 452,
+        "w": 44,
+        "h": 44
+      },
+      "caption": "Screen 12, settings panel",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "backdrop": null,
+    "log": [
+      {
+        "phase": "feed",
+        "picture": 26,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      },
+      {
+        "phase": "open",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      },
+      {
+        "phase": "left-to-25",
+        "picture": 24,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png"
+      },
+      {
+        "phase": "left-to-23",
+        "picture": 22,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png"
+      },
+      {
+        "phase": "left-to-22",
+        "picture": 21,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png"
+      },
+      {
+        "phase": "left-to-21",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "left-to-20",
+        "picture": 19,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png"
+      },
+      {
+        "phase": "left-to-18",
+        "picture": 17,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png"
+      },
+      {
+        "phase": "left-to-17",
+        "picture": 16,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png"
+      },
+      {
+        "phase": "left-to-16",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "left-to-15",
+        "picture": 14,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png"
+      },
+      {
+        "phase": "left-to-13",
+        "picture": 12,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png"
+      },
+      {
+        "phase": "left-to-12",
+        "picture": 11,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png"
+      },
+      {
+        "phase": "left-to-11",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "left-to-10",
+        "picture": 9,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png"
+      },
+      {
+        "phase": "left-to-8",
+        "picture": 7,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-7.png"
+      },
+      {
+        "phase": "left-to-7",
+        "picture": 6,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-6.png"
+      },
+      {
+        "phase": "left-to-6",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "left-to-5",
+        "picture": 4,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-4.png"
+      },
+      {
+        "phase": "left-to-3",
+        "picture": 2,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-2.png"
+      },
+      {
+        "phase": "left-to-2",
+        "picture": 1,
+        "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "right-to-3",
+        "picture": 4,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-4.png"
+      },
+      {
+        "phase": "right-to-4",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "right-to-5",
+        "picture": 6,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-6.png"
+      },
+      {
+        "phase": "right-to-6",
+        "picture": 7,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-7.png"
+      },
+      {
+        "phase": "right-to-8",
+        "picture": 9,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png"
+      },
+      {
+        "phase": "right-to-9",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "right-to-10",
+        "picture": 11,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png"
+      },
+      {
+        "phase": "right-to-11",
+        "picture": 12,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png"
+      },
+      {
+        "phase": "right-to-13",
+        "picture": 14,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png"
+      },
+      {
+        "phase": "right-to-14",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "right-to-15",
+        "picture": 16,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png"
+      },
+      {
+        "phase": "right-to-16",
+        "picture": 17,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png"
+      },
+      {
+        "phase": "right-to-18",
+        "picture": 19,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png"
+      },
+      {
+        "phase": "right-to-19",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "right-to-20",
+        "picture": 21,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png"
+      },
+      {
+        "phase": "right-to-21",
+        "picture": 22,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png"
+      },
+      {
+        "phase": "right-to-23",
+        "picture": 24,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png"
+      },
+      {
+        "phase": "right-to-24",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      }
+    ]
+  },
+  "phone-dense": {
+    "requests": {
+      "feed": 17,
+      "open": 0,
+      "walkingLeft": 4,
+      "walkingBack": 0,
+      "total": 21,
+      "distinctUrls": 21,
+      "fetchedTwice": 0
+    },
+    "feedPictures": [
+      1,
+      5,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15,
+      16,
+      17,
+      19,
+      20,
+      21,
+      22,
+      24,
+      25,
+      26
+    ],
+    "heldByFeed": [
+      1,
+      2,
+      "inline",
+      4,
+      5,
+      6,
+      7,
+      "inline",
+      9,
+      10,
+      11,
+      12,
+      "inline",
+      14,
+      15,
+      16,
+      17,
+      "inline",
+      19,
+      20,
+      21,
+      22,
+      "inline",
+      24,
+      25,
+      26
+    ],
+    "collectedGarbageBeforeWalkingBack": null,
+    "openPictures": [],
+    "walk": [
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          7
+        ]
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          6
+        ]
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          4
+        ]
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          2
+        ]
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      }
+    ],
+    "opened": {
+      "open": true,
+      "position": "26 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 0,
+        "y": 324,
+        "w": 390,
+        "h": 244
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 390,
+        "h": 797
+      },
+      "mounted": [
+        "/api/inbox?name=img-25-redesign.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 424,
+        "w": 44,
+        "h": 44
+      },
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 390,
+        "h": 844
+      }
+    },
+    "midGallery": {
+      "open": true,
+      "position": "12 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+      "loaded": true,
+      "image": {
+        "x": 0,
+        "y": 324,
+        "w": 390,
+        "h": 244
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 390,
+        "h": 797
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+        "data:(51990 chars)"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 424,
+        "w": 44,
+        "h": 44
+      },
+      "next": {
+        "x": 338,
+        "y": 424,
+        "w": 44,
+        "h": 44
+      },
+      "caption": "Screen 12, settings panel",
+      "viewport": {
+        "w": 390,
+        "h": 844
+      }
+    },
+    "backdrop": {
+      "afterPictureClick": true,
+      "afterPan": null,
+      "afterBackdrop": false,
+      "afterEscape": false
+    },
+    "log": [
+      {
+        "phase": "feed",
+        "picture": 1,
+        "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 9,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 11,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 12,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 14,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 16,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 17,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 19,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 21,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 22,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 24,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 26,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      },
+      {
+        "phase": "left-to-8",
+        "picture": 7,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-7.png"
+      },
+      {
+        "phase": "left-to-7",
+        "picture": 6,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-6.png"
+      },
+      {
+        "phase": "left-to-5",
+        "picture": 4,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-4.png"
+      },
+      {
+        "phase": "left-to-3",
+        "picture": 2,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-2.png"
+      }
+    ]
+  },
+  "phone-spread": {
+    "requests": {
+      "feed": 7,
+      "open": 0,
+      "walkingLeft": 14,
+      "walkingBack": 0,
+      "total": 21,
+      "distinctUrls": 21,
+      "fetchedTwice": 0
+    },
+    "feedPictures": [
+      1,
+      5,
+      10,
+      15,
+      20,
+      25,
+      26
+    ],
+    "heldByFeed": [
+      1,
+      2,
+      "inline",
+      4,
+      5,
+      6,
+      7,
+      "inline",
+      9,
+      10,
+      11,
+      12,
+      "inline",
+      14,
+      15,
+      16,
+      17,
+      "inline",
+      19,
+      20,
+      21,
+      22,
+      "inline",
+      24,
+      25,
+      26
+    ],
+    "collectedGarbageBeforeWalkingBack": null,
+    "openPictures": [],
+    "walk": [
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          24
+        ]
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          22
+        ]
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          21
+        ]
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          19
+        ]
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          17
+        ]
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          16
+        ]
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          14
+        ]
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          12
+        ]
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          11
+        ]
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          9
+        ]
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          7
+        ]
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          6
+        ]
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          4
+        ]
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": [
+          2
+        ]
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "1 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "2 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "3 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "4 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "5 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "6 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "7 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "8 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "9 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "10 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "11 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "12 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "13 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "14 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "15 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "16 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "17 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "18 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "19 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "20 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "21 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "22 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "23 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "24 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "25 / 26",
+        "loaded": true,
+        "mounted": 3,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      },
+      {
+        "position": "26 / 26",
+        "loaded": true,
+        "mounted": 2,
+        "requested": []
+      }
+    ],
+    "opened": {
+      "open": true,
+      "position": "26 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png",
+      "loaded": true,
+      "image": {
+        "x": 0,
+        "y": 324,
+        "w": 390,
+        "h": 244
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 390,
+        "h": 797
+      },
+      "mounted": [
+        "/api/inbox?name=img-25-redesign.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 424,
+        "w": 44,
+        "h": 44
+      },
+      "next": null,
+      "caption": "Screen 26, profile card",
+      "viewport": {
+        "w": 390,
+        "h": 844
+      }
+    },
+    "midGallery": {
+      "open": true,
+      "position": "12 / 26",
+      "src": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+      "loaded": true,
+      "image": {
+        "x": 0,
+        "y": 324,
+        "w": 390,
+        "h": 244
+      },
+      "area": {
+        "x": 0,
+        "y": 47,
+        "w": 390,
+        "h": 797
+      },
+      "mounted": [
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png",
+        "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png",
+        "data:(51990 chars)"
+      ],
+      "previous": {
+        "x": 8,
+        "y": 424,
+        "w": 44,
+        "h": 44
+      },
+      "next": {
+        "x": 338,
+        "y": 424,
+        "w": 44,
+        "h": 44
+      },
+      "caption": "Screen 12, settings panel",
+      "viewport": {
+        "w": 390,
+        "h": 844
+      }
+    },
+    "backdrop": null,
+    "log": [
+      {
+        "phase": "feed",
+        "picture": 1,
+        "url": "/api/inbox?name=img-01-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 5,
+        "url": "/api/inbox?name=img-05-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 10,
+        "url": "/api/inbox?name=img-10-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 15,
+        "url": "/api/inbox?name=img-15-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 20,
+        "url": "/api/inbox?name=img-20-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 25,
+        "url": "/api/inbox?name=img-25-redesign.png"
+      },
+      {
+        "phase": "feed",
+        "picture": 26,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-26.png"
+      },
+      {
+        "phase": "left-to-25",
+        "picture": 24,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png"
+      },
+      {
+        "phase": "left-to-23",
+        "picture": 22,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png"
+      },
+      {
+        "phase": "left-to-22",
+        "picture": 21,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png"
+      },
+      {
+        "phase": "left-to-20",
+        "picture": 19,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png"
+      },
+      {
+        "phase": "left-to-18",
+        "picture": 17,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png"
+      },
+      {
+        "phase": "left-to-17",
+        "picture": 16,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png"
+      },
+      {
+        "phase": "left-to-15",
+        "picture": 14,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png"
+      },
+      {
+        "phase": "left-to-13",
+        "picture": 12,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png"
+      },
+      {
+        "phase": "left-to-12",
+        "picture": 11,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png"
+      },
+      {
+        "phase": "left-to-10",
+        "picture": 9,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png"
+      },
+      {
+        "phase": "left-to-8",
+        "picture": 7,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-7.png"
+      },
+      {
+        "phase": "left-to-7",
+        "picture": 6,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-6.png"
+      },
+      {
+        "phase": "left-to-5",
+        "picture": 4,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-4.png"
+      },
+      {
+        "phase": "left-to-3",
+        "picture": 2,
+        "url": "/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-2.png"
+      }
+    ]
+  },
+  "failures": [
+    "desktop-unmounted: walking back over reached pictures made 18 image requests",
+    "desktop-unmounted: fetched more than once: [[\"/api/inbox?name=img-25-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-24.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-22.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-21.png\",2],[\"/api/inbox?name=img-20-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-19.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-17.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-16.png\",2],[\"/api/inbox?name=img-15-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-14.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-12.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-11.png\",2],[\"/api/inbox?name=img-10-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-9.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-7.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-6.png\",2],[\"/api/inbox?name=img-05-redesign.png\",2],[\"/api/image?path=%24HOME%2FProjects%2Fharbor%2Fshots%2Fstep-4.png\",2]]"
+  ]
+}
