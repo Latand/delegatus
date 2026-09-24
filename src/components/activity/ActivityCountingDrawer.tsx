@@ -3,8 +3,8 @@
 import { Check, TriangleAlert, X } from "lucide-react";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 
-import { EXCLUSION_REASONS } from "@/lib/activity/method";
-import type { Interval } from "@/lib/activity/method";
+import { Z } from "@/components/layers";
+import { EXCLUSION_REASONS, type Interval } from "@/lib/activity/method";
 import type { ActivityHostRow } from "@/lib/activity/report";
 import type { MessageKey } from "@/lib/i18n";
 
@@ -112,7 +112,7 @@ export function ActivityCountingDrawer({ context, focusHosts, onClose }: { conte
   const methodWindows = data.params.breakMin <= data.params.windowMin;
 
   return (
-    <div className="fixed inset-0 z-50" data-activity-drawer="">
+    <div className={`fixed inset-0 ${Z.modal}`} data-activity-drawer="">
       <button type="button" aria-label={t("activity.drawer.close")} tabIndex={-1} className="absolute inset-0 bg-primary/20" onClick={onClose} />
       <aside
         ref={panel}
