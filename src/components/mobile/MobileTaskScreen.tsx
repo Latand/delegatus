@@ -33,7 +33,7 @@ import type { MobileRowActionTarget } from "./MobileRowActions";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { MobileSwipeRow, type MobileRowAction } from "./MobileSwipeRow";
-import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory } from "./mobileNav";
+import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory, useSheetSelection } from "./mobileNav";
 import { cardOfTask, usePhoneBoardModel, type PhoneBoardInput, type TaskMutations } from "./usePhoneBoard";
 
 /*
@@ -576,6 +576,10 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
 
   /* ── Sheets ───────────────────────────────────────────────────────────── */
   const laneSummary = laneFor ? lanes.find((summary) => summary.pipeline.id === laneFor) ?? null : null;
+  /* The lane's menu and the links sheet show what this screen chose to open
+     them on; an entry that came back without it closes (#2105). */
+  useSheetSelection("lane", laneSummary !== null);
+  useSheetSelection("links", linksFor !== null);
   const sheets: SheetRenderer = (name, close) => {
     if (name === "status") {
       return (

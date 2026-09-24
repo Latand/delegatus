@@ -367,6 +367,61 @@ describe("traversals", () => {
   });
 });
 
+describe("a pop that lands late", () => {
+  const after = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  function slow(lateMs: number) {
+    const b = fakeHistory("http://phone/#p=atlas", { lateMs, settleMs: 20 });
+    const nav = createMobileNav(b.host);
+    nav.configure(viewer());
+    nav.attach();
+    return { nav, b };
+  }
+
+  test("a landing after the first wait but inside the grace settles it, and the entry left is not rewritten", async () => {
+    const { nav, b } = slow(50);
+    nav.push({ kind: "task", id: "t1" });
+    nav.openSheet("menu");
+    nav.closeSheet();
+    await after(150);
+    expect(b.index()).toBe(1);
+    expect(readMobileNavEntry(b.entries()[2]!.state)?.sheet).toBe("menu");
+    expect(nav.getState().sheet).toBeNull();
+    /* A write after it goes where it should: above the task. */
+    nav.push({ kind: "pipeline", id: "p1" });
+    expect(b.index()).toBe(2);
+    expect(readMobileNavEntry(b.state())?.stack).toEqual([BOARD, { kind: "task", id: "t1" }, { kind: "pipeline", id: "p1" }]);
+  });
+
+  test("a landing later than the grace still only takes the tab where it was going", async () => {
+    const { nav, b } = slow(200);
+    nav.push({ kind: "task", id: "t1" });
+    nav.openSheet("menu");
+    nav.closeSheet();
+    await after(300);
+    expect(b.index()).toBe(1);
+    expect(readMobileNavEntry(b.entries()[2]!.state)?.sheet).toBe("menu");
+    expect(topScreen(nav.getState())).toEqual({ kind: "task", id: "t1" });
+    expect(nav.getState().sheet).toBeNull();
+    /* Forward finds what was left (this history lands it late too). */
+    b.forward();
+    await after(250);
+    expect(nav.getState().sheet).toBe("menu");
+  });
+
+  test("with nothing under the entry to pop to, the entry is made to say what the screen shows", async () => {
+    const b = fakeHistory("http://phone/#p=atlas", { settleMs: 20 });
+    b.host.history.replaceState({ [MOBILE_NAV_STATE_KEY]: { v: 2, stack: [BOARD], sheet: "menu", project: "atlas", at: "#p=atlas" } }, "", "http://phone/#p=atlas");
+    const nav = createMobileNav(b.host);
+    nav.configure(viewer());
+    nav.attach();
+    expect(nav.getState().sheet).toBe("menu");
+    nav.closeSheet();
+    await after(60);
+    expect(b.length()).toBe(1);
+    expect(readMobileNavEntry(b.state())?.sheet).toBeNull();
+  });
+});
+
 describe("a reload and a fresh tab", () => {
   test("a reload lands on the entry's own place, with the stack under it", () => {
     const { nav, b } = phone();

@@ -117,13 +117,13 @@ function Receipt() {
 
 interface Opened { tasks: string[]; conversations: string[]; pipelines: string[]; shown: string[][] }
 
-function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void }) {
+function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void; nav?: MobileNav }) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
   roots.push(root);
   const opened: Opened = { tasks: [], conversations: [], pipelines: [], shown: [] };
-  const { nav, pushes } = fakeNav();
+  const { nav, pushes } = input.nav ? { nav: input.nav, pushes: () => 0 } : fakeNav();
   const render = (tasks: BoardTask[]) => flushSync(() => root.render(
     <MobileNavContext.Provider value={nav}>
       <MobileKanban
@@ -286,6 +286,22 @@ test("a long-press opens the card's sheet; Move to moves the card at once with U
   expect(cardsIn(host, "done")).not.toContain("task:a2");
   expect(cardsIn(host, "assigned")).toContain("task:a2");
   expect(q(host, "[data-test-receipt]")!.textContent).toContain("the store is read-only");
+});
+
+test("a card sheet that comes back without its card (a reload, #2105) closes, and its entry goes with it", async () => {
+  const { files, tasks } = board();
+  /* The tab stands on the card sheet's entry, and nothing has chosen a card:
+     what a reload leaves behind. */
+  const history = fakeHistory("http://localhost/#p=fixture");
+  const nav = createMobileNav(history.host);
+  nav.openSheet("card");
+  expect(history.index()).toBe(1);
+  mount({ files, tasks, nav });
+  expect(nav.getState().sheet).toBeNull();
+  expect(q(dom.document.body as unknown as HTMLElement, "[data-phone-card-sheet]")).toBeNull();
+  await sleep(0);
+  expect(history.index()).toBe(0);
+  expect(history.state()).toMatchObject({ mobile2: { sheet: null } });
 });
 
 test("an empty column says so in the desktop's words and points to the nearest column with work", () => {

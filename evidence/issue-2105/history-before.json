@@ -549,6 +549,110 @@
       ]
     },
     {
+      "walk": "reload-sheets",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "card-sheet",
+          "want": {
+            "screen": "board",
+            "sheet": "card"
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": "card",
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 3,
+          "label": "card-sheet-reload",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 4,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 5,
+          "label": "lane-sheet",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "lane"
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "lane",
+            "column": null,
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 6,
+          "label": "lane-sheet-reload",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        }
+      ]
+    },
+    {
       "walk": "overview-reload",
       "steps": [
         {
@@ -896,6 +1000,8 @@
     "predecessor: step 7 (back-to-task) wanted {\"screen\":\"task\",\"id\":\"t-systemd\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"inbox\",\"hash\":\"#c=conversation_kanban-41\",\"historyLength\":6}",
     "reload: step 3 (task-reload) wanted {\"screen\":\"task\",\"id\":\"t-many\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"assigned\",\"hash\":\"#p=atlas\",\"historyLength\":3}",
     "reload: threw click: Timeout 30000ms exceeded.",
+    "reload-sheets: step 6 (lane-sheet-reload) wanted {\"screen\":\"task\",\"id\":\"t-many\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"assigned\",\"hash\":\"#p=atlas\",\"historyLength\":3}",
+    "reload-sheets: threw click: Timeout 30000ms exceeded.",
     "overview-reload: step 3 (task-reload) wanted {\"screen\":\"task\",\"id\":\"t-favicon\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"assigned\",\"hash\":\"\",\"historyLength\":3}",
     "overview-reload: threw click: Timeout 30000ms exceeded.",
     "link-project: a task link wrote 2 entries",

@@ -82,12 +82,14 @@ export function filesRequestPin(pendingHash: ConversationHash | null, retainedPa
 
 /** Every fragment key this app speaks, each with a payload: conversation
     (`#c=`), transcript path (`#f=`), project (`#p=`), artifact preview
-    (`#a=`, issue #884 — handled by ArtifactPreviewHost), a phone screen
-    (`#task=`, `#pipeline=`, `#pipelines`, `#accounts`, #2105) — plus the empty
-    hash. A pasted URL outside this set means nothing here; quietly landing
+    (`#a=`, issue #884 — handled by ArtifactPreviewHost) — plus the empty
+    hash, and while the phone layout is up a phone screen (`#task=`,
+    `#pipeline=`, `#pipelines`, `#accounts`, #2105), which only the phone
+    opens. A pasted URL outside this set means nothing here; quietly landing
     on the default view read as a broken deployment, so the shell says so. */
-export function recognizedFragment(hash: string): boolean {
-  return hash === "" || /^#(?:(?:c|f|p|a|task|pipeline)=.|(?:pipelines|accounts)$)/.test(hash);
+export function recognizedFragment(hash: string, { phone = false }: { phone?: boolean } = {}): boolean {
+  if (hash === "" || /^#(?:c|f|p|a)=./.test(hash)) return true;
+  return phone && /^#(?:(?:task|pipeline)=.|(?:pipelines|accounts)$)/.test(hash);
 }
 
 export type CatalogPinState = { path: string; hydrated: boolean; conversationId: string | null } | null;
@@ -391,7 +393,7 @@ function ViewerApp() {
   const [staleFocusNotice, setStaleFocusNotice] = useState(false);
   /* A pasted URL whose fragment the app cannot interpret (issue #884): name
      the failure instead of quietly showing the default view. */
-  const [unknownFragmentNotice, setUnknownFragmentNotice] = useState(() => !recognizedFragment(location.hash));
+  const [unknownFragmentNotice, setUnknownFragmentNotice] = useState(() => !recognizedFragment(location.hash, { phone: isMobile }));
   /* Mirrors for the popstate replay path, which must read the latest values
      from stable event listeners without re-registering them per poll. */
   const filesRef = useRef<FileEntry[]>([]);
@@ -463,7 +465,7 @@ function ViewerApp() {
         /* Back cleared the hash entirely: that entry was the overview. */
         else if (!location.hash) setProject(OVERVIEW);
       }
-      if (!recognizedFragment(location.hash)) setUnknownFragmentNotice(true);
+      if (!recognizedFragment(location.hash, { phone: phoneRef.current.mobile })) setUnknownFragmentNotice(true);
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);

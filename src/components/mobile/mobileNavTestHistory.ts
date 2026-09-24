@@ -8,7 +8,13 @@ import type { MobileNavHost } from "./mobileNav";
  * store's deferred work (a sheet's close) runs as a microtask unless the test
  * holds it with `hold` and runs it with `flush`.
  */
-export function fakeHistory(url = "http://localhost/#p=atlas", { hold = false }: { hold?: boolean } = {}) {
+export function fakeHistory(url = "http://localhost/#p=atlas", { hold = false, lateMs = 0, settleMs }: {
+  hold?: boolean;
+  /** A traversal lands this late, as on a busy main thread; zero lands inside the call. */
+  lateMs?: number;
+  /** How long the store waits for its own pop to land. */
+  settleMs?: number;
+} = {}) {
   const entries: { state: unknown; url: string }[] = [{ state: null, url }];
   let index = 0;
   let pushes = 0;
@@ -20,15 +26,22 @@ export function fakeHistory(url = "http://localhost/#p=atlas", { hold = false }:
   };
   const resolve = (next: string | undefined) => (next === undefined ? entries[index]!.url : new URL(next, entries[index]!.url).href);
   const go = (delta: number) => {
-    const to = index + delta;
-    if (delta === 0 || to < 0 || to >= entries.length) return;
-    index = to;
-    land();
+    const move = () => {
+      const to = index + delta;
+      if (delta === 0 || to < 0 || to >= entries.length) return;
+      index = to;
+      land();
+    };
+    if (lateMs > 0) setTimeout(move, lateMs);
+    else move();
   };
   const host: MobileNavHost = {
     history: {
       get state() {
         return entries[index]!.state;
+      },
+      get length() {
+        return entries.length;
       },
       pushState(state, _unused, next) {
         pushes += 1;
@@ -50,6 +63,7 @@ export function fakeHistory(url = "http://localhost/#p=atlas", { hold = false }:
       };
     },
     defer: hold ? (task) => { deferred.push(task); } : (task) => queueMicrotask(task),
+    ...(settleMs === undefined ? {} : { settleMs }),
   };
   return {
     host,

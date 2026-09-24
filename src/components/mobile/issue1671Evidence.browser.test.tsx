@@ -2200,6 +2200,9 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  *             takes the menu's entry; one Back returns under it, no menu
  *   reload    a reload on the task, the pipeline and the conversation keeps
  *             the screen, and Back still goes where it went before
+ *   reload-sheets  a reload with a card, lane or stage sheet open drops the
+ *             sheet and its entry, so one Back leaves the screen; the ⋯ menu,
+ *             which needs no choice, comes back and Back closes it
  *   overview-reload  the same reloads over the phone's Overview, where each
  *             screen is drawn by its own project: the screen waits for its
  *             data, and the history does not grow
@@ -2453,6 +2456,32 @@ browserTest("#2105: Back and the phone's screen history follow the path the oper
       await back("back-to-pipeline", { screen: "pipeline", id: "lane-many-review", sheet: null });
       await back("back-to-task", { screen: "task", id: "t-many", sheet: null });
       await back("back-to-board", { screen: "board", sheet: null });
+    });
+
+    /* A reload with a sheet open. A sheet that shows what its screen chose to
+       open it on (a card's actions, a lane's menu, a stage's settings) cannot
+       come back without that choice: it closes and takes its entry, so the
+       next Back leaves the screen. A sheet that needs no choice (⋯) comes
+       back, and Back closes it. */
+    const sheetEntry = (page: Page) => page.evaluate(() => (history.state as { mobile2?: { sheet?: string | null } } | null)?.mobile2?.sheet ?? null);
+    await walk("reload-sheets", async ({ page, step, back, fail }) => {
+      await step("board", async () => { await page.goto(board); await boardShown(page); }, { screen: "board", sheet: null });
+      await step("card-sheet", () => page.locator('[data-phone-card="task:t-many"]').click({ button: "right" }), { screen: "board", sheet: "card" });
+      await step("card-sheet-reload", () => page.reload(), { screen: "board", sheet: null });
+      if ((await sheetEntry(page)) !== null) fail(`after a reload the card sheet's entry is still the tab's: ${await sheetEntry(page)}`);
+      await step("task", () => page.locator('[data-phone-card="task:t-many"]').click(), { screen: "task", id: "t-many", sheet: null });
+      await step("lane-sheet", () => page.locator('[data-phone-task-lane="lane-many-pill"] [data-pipeline-menu]').click(), { screen: "task", id: "t-many", sheet: "lane" });
+      await step("lane-sheet-reload", () => page.reload(), { screen: "task", id: "t-many", sheet: null });
+      if ((await sheetEntry(page)) !== null) fail(`after a reload the lane sheet's entry is still the tab's: ${await sheetEntry(page)}`);
+      await step("pipeline", () => page.locator('[data-phone-task-lane="lane-many-pill"] [data-open-stages]').click(), { screen: "pipeline", id: "lane-many-pill", sheet: null });
+      await step("stage-sheet", () => page.locator("[data-stage-configure]").first().click(), { screen: "pipeline", id: "lane-many-pill", sheet: "stage" });
+      await step("stage-sheet-reload", () => page.reload(), { screen: "pipeline", id: "lane-many-pill", sheet: null });
+      if ((await sheetEntry(page)) !== null) fail(`after a reload the stage sheet's entry is still the tab's: ${await sheetEntry(page)}`);
+      await back("pipeline-back", { screen: "task", id: "t-many", sheet: null });
+      await step("menu", () => page.locator('[data-mobile2-open="menu"]').first().click(), { screen: "task", id: "t-many", sheet: "menu" });
+      await step("menu-reload", () => page.reload(), { screen: "task", id: "t-many", sheet: "menu" });
+      await back("menu-back", { screen: "task", id: "t-many", sheet: null });
+      await back("task-back", { screen: "board", sheet: null });
     });
 
     /* Over the Overview a screen is drawn by its own project's dashboard, and

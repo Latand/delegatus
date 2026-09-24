@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useLayoutEffect, useState, useSyncExternalStore, type RefObject } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useState, useSyncExternalStore, type RefObject } from "react";
 
 /*
  * The phone's navigation (docs/design/mobile-v2/README.md §3.3, #2105): ONE
@@ -219,6 +219,8 @@ export type MobileNavLanding =
     traversal events. Injected so the contract is testable without a window. */
 export interface MobileNavHistory {
   readonly state: unknown;
+  /** How many entries the tab's history holds; one means nothing to pop to. */
+  readonly length?: number;
   pushState(state: unknown, unused: string, url?: string): void;
   replaceState(state: unknown, unused: string, url?: string): void;
   go(delta: number): void;
@@ -438,13 +440,28 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
     pendingPops = 0;
     traversing = true;
     if (!detach && !hearing) hearing = host.onPopstate((landed, event) => nav.land(landed, event));
-    settleTimer = setTimeout(() => {
+    let grace = false;
+    const wait = (): void => {
+      if (!traversing) return;
       /* Nothing under the entry to pop to: the entry itself says what the
          screen shows instead. */
-      if (!traversing) return;
-      writeEntry("replace", { stack: state.stack, sheet: state.sheet, project: projectNow() });
+      if ((host.history.length ?? Number.POSITIVE_INFINITY) <= 1) {
+        writeEntry("replace", { stack: state.stack, sheet: state.sheet, project: projectNow() });
+        settle();
+        return;
+      }
+      /* The landing can still come (a busy main thread): wait longer, then
+         stop holding the writes that wait for it. The entry being left is
+         never rewritten, so a landing later still only takes the tab where it
+         was going, and Forward finds what was left. */
+      if (!grace) {
+        grace = true;
+        settleTimer = setTimeout(wait, settleMs * 4);
+        return;
+      }
       settle();
-    }, settleMs);
+    };
+    settleTimer = setTimeout(wait, settleMs);
     host.history.go(-steps);
   };
 
@@ -775,6 +792,22 @@ export function useMobileNavStore(): MobileNav {
 export function useMobileNav(): MobileNavState {
   const nav = useMobileNavStore();
   return useSyncExternalStore(nav.subscribe, nav.getState, () => INITIAL_MOBILE_NAV);
+}
+
+/**
+ * A sheet that shows a selection its owner holds in its own state — a card's
+ * actions, a stage's settings, a lane's menu. Its entry outlives that state: a
+ * reload restores the entry (#2105), and Forward reaches it after the screen
+ * remounted. With the selection gone the sheet would draw nothing while the
+ * shell still counted it open, and the operator's next Back would be spent on
+ * it; so the sheet closes, taking its entry with it.
+ */
+export function useSheetSelection(name: MobileSheetName, present: boolean): void {
+  const nav = useMobileNavStore();
+  const { sheet } = useMobileNav();
+  useEffect(() => {
+    if (sheet === name && !present) nav.closeSheet();
+  }, [nav, sheet, name, present]);
 }
 
 /** Where `screen` stands in `stack` (its topmost place), as the key its

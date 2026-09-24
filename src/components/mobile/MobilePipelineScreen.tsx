@@ -40,7 +40,7 @@ import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
-import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory } from "./mobileNav";
+import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory, useSheetSelection } from "./mobileNav";
 
 /*
  * One pipeline on the phone: the Stages view (#2072 slice 6,
@@ -411,6 +411,7 @@ export function MobilePipelineScreen({
   const configStage = navState.sheet === "stage" && configuring
     ? pipeline.stages.find((stage) => stage.id === configuring) ?? null
     : null;
+  useSheetSelection("stage", configStage !== null);
   /* The ⋯ sheet opens on the lane's own actions; its «Board menu» row turns
      it into the board's menu, and closing it resets the face. */
   const [menuFace, setMenuFace] = useState<"pipeline" | "board">("pipeline");

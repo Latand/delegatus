@@ -1082,6 +1082,245 @@
       ]
     },
     {
+      "walk": "reload-sheets",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "card-sheet",
+          "want": {
+            "screen": "board",
+            "sheet": "card"
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": "card",
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "card-sheet-reload",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 4,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 5,
+          "label": "lane-sheet",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "lane"
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "lane",
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 6,
+          "label": "lane-sheet-reload",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 7,
+          "label": "pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-pill",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-pill",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-pill",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 8,
+          "label": "stage-sheet",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-pill",
+            "sheet": "stage"
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-pill",
+            "sheet": "stage",
+            "column": null,
+            "hash": "#pipeline=lane-many-pill",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 9,
+          "label": "stage-sheet-reload",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-pill",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-pill",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-pill",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 10,
+          "label": "pipeline-back",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 11,
+          "label": "menu",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "menu",
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 12,
+          "label": "menu-reload",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "menu",
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 13,
+          "label": "menu-back",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 14,
+          "label": "task-back",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 4
+          }
+        }
+      ]
+    },
+    {
       "walk": "overview-reload",
       "steps": [
         {
