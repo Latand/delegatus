@@ -45,7 +45,7 @@ export interface GhostSettlementInput {
       however quiet the seat has been. */
   seatIdentities: ReadonlySet<string>;
   /** What is on disk behind an assignment's transcript path. */
-  transcript: (path: string) => GhostTranscript;
+  transcriptOf: (path: string) => GhostTranscript;
   nowMs: number;
   /** How long a conversation must have been quiet to count as ended. */
   idleMs: number;
@@ -102,7 +102,7 @@ function ended(task: BoardTask, input: GhostSettlementInput): boolean {
       const at = Date.parse(assignment.at);
       if (Number.isFinite(at) && at > quietSince) return false;
       if (!assignment.path || assignment.path.startsWith("spawn:")) return true;
-      const { mtimeMs } = input.transcript(assignment.path);
+      const { mtimeMs } = input.transcriptOf(assignment.path);
       return mtimeMs === null || mtimeMs <= quietSince;
     });
 }

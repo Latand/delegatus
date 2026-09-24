@@ -11,7 +11,7 @@ import { HANDOFF_DIGEST_TITLE_PREFIX, internalConversationKind, isProbePrompt } 
  */
 
 test("a rotation's handoff digest is recognised by the directory it runs in, live or deleted", () => {
-  expect(internalConversationKind({ cwd: "/home/operator/.config/agent-log-viewer/state/orchestrator/handoff-digests/seat7-rotate-to-8/cwd", title: "Digest", spawnOrigin: undefined })).toBe("handoff-digest");
+  expect(internalConversationKind({ cwd: "/srv/installation/.config/agent-log-viewer/state/orchestrator/handoff-digests/seat7-rotate-to-8/cwd", title: "Digest", spawnOrigin: undefined })).toBe("handoff-digest");
   expect(internalConversationKind({ cwd: "/data/delegatus/state/orchestrator/handoff-digests/request-1/cwd", title: "", spawnOrigin: undefined })).toBe("handoff-digest");
   /* A project that merely has an orchestrator folder is no digest. */
   expect(internalConversationKind({ cwd: "/work/app/src/orchestrator", title: "Fix the orchestrator panel", spawnOrigin: undefined })).toBeNull();

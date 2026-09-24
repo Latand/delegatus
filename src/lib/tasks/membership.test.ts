@@ -406,7 +406,7 @@ test("a child is planned only once its parent is covered, follows a parent plann
 });
 
 test("a rotation's handoff digest and a reply-with-ok probe mint no task; ordinary work beside them does", () => {
-  const digest = entry(901, { cwd: "/home/operator/.config/agent-log-viewer/state/orchestrator/handoff-digests/seat3-rotate-to-4/cwd", title: "You are compacting the rotation history of a project manager agent's mandate. Write a digest", root: "codex-sessions", engine: "codex", fmt: "codex" });
+  const digest = entry(901, { cwd: "/srv/installation/.config/agent-log-viewer/state/orchestrator/handoff-digests/seat3-rotate-to-4/cwd", title: "You are compacting the rotation history of a project manager agent's mandate. Write a digest", root: "codex-sessions", engine: "codex", fmt: "codex" });
   const probe = entry(902, { cwd: "/var/tmp/llv-probe", title: "Reply with exactly: ok" });
   const work = entry(903, { title: "Fix the flaky upload test" });
   const plans = planAdmissions([digest, probe, work], [], [], ADMISSION_BATCH, Date.parse(now));

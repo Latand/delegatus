@@ -60,7 +60,7 @@ function input(extra: Partial<GhostSettlementInput> = {}): GhostSettlementInput 
     tasks: backlog,
     pipelineTaskIds: new Set(["laned"]),
     seatIdentities: new Set(["conversation_seat"]),
-    transcript: (file) => ({ mtimeMs: file.endsWith("running.jsonl") ? NOW - 60_000 : NOW - 30 * HOUR }),
+    transcriptOf: (file) => ({ mtimeMs: file.endsWith("running.jsonl") ? NOW - 60_000 : NOW - 30 * HOUR }),
     nowMs: NOW,
     idleMs: 6 * HOUR,
     ...extra,
@@ -92,8 +92,8 @@ test("the backlog settles what nothing will name — ended conversations, helper
 test("applying marks tasks done and deletes none, and a task named since the plan is left alone", () => {
   const plan = planGhostSettlement(input());
   const renamed = backlog.map((entry) => (entry.id === "probe" ? { ...entry, text: "Check the account", origin: { ...entry.origin!, refinement: "titled" as const } } : entry));
-  const { pipelineTaskIds, seatIdentities, transcript, nowMs, idleMs } = input();
-  const outcome = applyGhostSettlement(renamed, plan, { pipelineTaskIds, seatIdentities, transcript, nowMs, idleMs }, "2026-09-24T12:00:00.000Z");
+  const { pipelineTaskIds, seatIdentities, transcriptOf, nowMs, idleMs } = input();
+  const outcome = applyGhostSettlement(renamed, plan, { pipelineTaskIds, seatIdentities, transcriptOf, nowMs, idleMs }, "2026-09-24T12:00:00.000Z");
   expect(outcome.tasks).toHaveLength(backlog.length);
   expect(outcome.settled).toEqual(["old-backfill", "fixture", "digest", "never-started", "retired-seat"]);
   expect(outcome.tasks.find((entry) => entry.id === "probe")!.status).toBe("assigned");

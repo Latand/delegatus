@@ -59,14 +59,14 @@ async function main(): Promise<void> {
   const seats = allSeatConversations();
   if (!seats) throw new Error("the orchestrator seat record could not be read; nothing was settled");
   const seatIdentities = new Set([...seats.conversationIds, ...seats.paths]);
-  const transcript = (file: string) => {
+  const transcriptOf = (file: string) => {
     try {
       return { mtimeMs: fs.statSync(file).mtimeMs };
     } catch {
       return { mtimeMs: null };
     }
   };
-  const input = { pipelineTaskIds, seatIdentities, transcript, nowMs: Date.now(), idleMs: options.idleHours * 3_600_000 };
+  const input = { pipelineTaskIds, seatIdentities, transcriptOf, nowMs: Date.now(), idleMs: options.idleHours * 3_600_000 };
   const plan = planGhostSettlement({ ...input, tasks: loadTasks() });
 
   let settled: string[] = [];
