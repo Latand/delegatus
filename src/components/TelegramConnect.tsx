@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Send } from "lucide-react";
 
+import { useTelegramBot, type TelegramBotState } from "@/hooks/useTelegramBot";
 import { useTelegramConnection, type TelegramConnectionState } from "@/hooks/useTelegramConnection";
 import { useTelegramReports, type TelegramReportsState } from "@/hooks/useTelegramReports";
 import { type TFunction, useLocale } from "@/lib/i18n";
@@ -11,6 +12,8 @@ import { handleOverlayEscape } from "@/lib/overlay";
 import type { TelegramErrorCode, TelegramPhase, TelegramStatusPayload } from "@/lib/telegram/contracts";
 
 import { Loader2, Trash2, X } from "./icons";
+import { TelegramBotSection } from "./TelegramBot";
+import { ActionButton, ConfirmingAction } from "./TelegramControls";
 import { TelegramReportsSection } from "./TelegramReports";
 import { Z } from "@/components/layers";
 
@@ -138,66 +141,7 @@ export function QrImage({ url, renderQr = renderQrDataUrl }: { url: string; rend
   return <img src={qr.dataUrl} alt={t("telegram.qrAlt")} className="mx-auto h-[200px] w-[200px] rounded-[8px] bg-white p-1" />;
 }
 
-function ActionButton({ label, onClick, disabled, tone = "neutral" }: { label: string; onClick: () => void; disabled?: boolean; tone?: "neutral" | "danger" }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border px-2.5 py-0.5 text-[11px] font-semibold disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px] ${
-        tone === "danger" ? "bg-canvas text-danger hover:bg-danger-soft" : "bg-canvas hover:bg-sunken"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-/** Inline destructive confirmation, the AccountRow removal pattern: arm on the
-    first press, execute only on an explicit confirm. */
-function ConfirmingAction({ label, prompt, onConfirm, disabled, icon }: { label: string; prompt: string; onConfirm: () => void; disabled?: boolean; icon?: React.ReactNode }) {
-  const { t } = useLocale();
-  const [arming, setArming] = useState(false);
-  if (!arming) {
-    return (
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setArming(true)}
-        className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-[6px] px-1.5 py-0.5 text-[10.5px] font-semibold text-muted hover:bg-danger-soft hover:text-danger disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-      >
-        {icon}
-        {label}
-      </button>
-    );
-  }
-  return (
-    <span className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
-      <span className="min-w-0 flex-1 text-right text-[10.5px] font-semibold leading-snug text-danger">{prompt}</span>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => {
-          setArming(false);
-          onConfirm();
-        }}
-        className="inline-flex min-h-[44px] shrink-0 items-center rounded-[6px] bg-danger px-2 py-0.5 text-[10.5px] font-semibold text-white hover:opacity-90 disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-      >
-        {t("telegram.confirmCta")}
-      </button>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setArming(false)}
-        className="inline-flex min-h-[44px] shrink-0 items-center rounded-[6px] px-2 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-      >
-        {t("telegram.confirmCancel")}
-      </button>
-    </span>
-  );
-}
-
-export function TelegramPanel({ state, reports, onClose }: { state: TelegramConnectionState; reports?: TelegramReportsState; onClose: () => void }) {
+export function TelegramPanel({ state, reports, bot, onClose }: { state: TelegramConnectionState; reports?: TelegramReportsState; bot?: TelegramBotState; onClose: () => void }) {
   const { t } = useLocale();
   const { status, busy, failure } = state;
   const phase = status?.phase ?? "disconnected";
@@ -231,7 +175,8 @@ export function TelegramPanel({ state, reports, onClose }: { state: TelegramConn
 
   return (
     <>
-      {/* Mobile-only backdrop absorbing the outside tap (AccountsPanel). */}
+      {/* Mobile-only scrim absorbing the outside tap (AccountsPanel), dimmed
+          like the phone's other sheets so the screen beneath reads as behind. */}
       <button
         type="button"
         aria-hidden
@@ -241,19 +186,19 @@ export function TelegramPanel({ state, reports, onClose }: { state: TelegramConn
           event.stopPropagation();
           onClose();
         }}
-        className={`fixed inset-0 ${Z.modal} cursor-default sm:hidden`}
+        className={`fixed inset-0 ${Z.modal} cursor-default bg-black/40 sm:hidden`}
+        data-telegram-scrim
       />
       <div
         role="dialog"
         aria-label={t("telegram.title")}
         aria-busy={busy}
         onKeyDown={(event) => handleOverlayEscape(event, onClose)}
-        className={`fixed bottom-3 left-1/2 ${Z.modal} flex max-h-[min(560px,calc(100vh-24px))] w-[min(320px,calc(100vw-16px))] -translate-x-1/2 flex-col overflow-y-auto overscroll-contain rounded-[14px] border border-border bg-card shadow-2 sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0`}
+        className={`fixed inset-x-0 bottom-0 ${Z.modal} flex max-h-[88dvh] w-full flex-col overflow-y-auto overscroll-contain rounded-t-[16px] border-t border-border bg-card pb-[env(safe-area-inset-bottom)] shadow-2 sm:absolute sm:inset-x-auto sm:bottom-1 sm:left-full sm:ml-2 sm:max-h-[min(560px,calc(100vh-24px))] sm:w-[320px] sm:rounded-[14px] sm:border sm:pb-0`}
       >
         <header className="flex items-center gap-2 border-b border-border px-3 py-2">
           <Send className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--color-accent)" }} aria-hidden />
           <span className="text-[12.5px] font-bold">{t("telegram.title")}</span>
-          <span className="truncate text-[9.5px] font-medium text-muted">{t("telegram.readOnlyNote")}</span>
           <button
             ref={closeRef}
             type="button"
@@ -268,6 +213,12 @@ export function TelegramPanel({ state, reports, onClose }: { state: TelegramConn
         <p className="sr-only" role="status" aria-live="polite">{announcement(status, t)}</p>
 
         <div className="flex flex-col gap-2 px-3 py-2.5">
+          {/* The read-only note describes the personal account only: the Bot
+              section below writes. */}
+          <div className="flex min-w-0 items-baseline gap-2">
+            <h3 className="shrink-0 text-[11.5px] font-bold text-primary">{t("telegram.personalTitle")}</h3>
+            <span className="min-w-0 truncate text-[9.5px] font-medium text-muted">{t("telegram.readOnlyNote")}</span>
+          </div>
           <div className="flex items-center gap-2">
             <span
               aria-hidden
@@ -450,6 +401,8 @@ export function TelegramPanel({ state, reports, onClose }: { state: TelegramConn
               </div>
             </div>
           ) : null}
+
+          {bot ? <TelegramBotSection state={bot} /> : null}
         </div>
       </div>
     </>
@@ -464,6 +417,9 @@ export function TelegramFooterRow() {
   /* Report state polls only while the panel is open — the footer row itself
      shows the connection, not the schedule. */
   const reports = useTelegramReports(open && state.status?.phase === "connected");
+  /* The bot is its own account: its section polls whenever the panel is
+     open, whatever the personal account's phase. */
+  const bot = useTelegramBot(open);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const phase = state.status?.phase ?? "disconnected";
@@ -513,7 +469,7 @@ export function TelegramFooterRow() {
           />
         </span>
       </button>
-      {open ? <TelegramPanel state={state} reports={reports} onClose={close} /> : null}
+      {open ? <TelegramPanel state={state} reports={reports} bot={bot} onClose={close} /> : null}
     </div>
   );
 }
