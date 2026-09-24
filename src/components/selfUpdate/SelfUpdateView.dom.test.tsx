@@ -234,6 +234,47 @@ describe("a running update", () => {
 });
 
 describe("a failed update", () => {
+  test("a moved remote offers a new check, then the checked commit beside its changelog", () => {
+    const moved = steps(["failed"], { 0: { failure: { kind: "remote-moved", expected: "a1b2c3d", fetched: "f7e6ce4" } } });
+    const failed = { ...idleUpdate(CHECKOUT_STEPS), state: "failed" as const, target: NEW, targetShort: NEW.slice(0, 7), steps: moved };
+    let el = render(snapshot({ ...available(), update: failed }));
+    expect(section(el, "update")?.getAttribute("data-update")).toBe("failed");
+    expect(button(el, "retry")).toBeNull();
+    expect(text(button(el, "check-failed"))).toBe("Check again");
+    click(button(el, "check-failed"));
+    expect(calls).toEqual(["check"]);
+
+    flushSync(() => root!.unmount());
+    el = render(snapshot({ ...available(), check: { ...available().check!, state: "checking" }, update: failed }));
+    expect(button(el, "check-failed")?.disabled).toBe(true);
+
+    flushSync(() => root!.unmount());
+    const newer = rev("f7e6ce4".padEnd(40, "1"), "1.2.4");
+    el = render(snapshot({ ...available(), available: newer, update: failed }));
+    expect(section(el, "update")?.getAttribute("data-update")).toBe("failed");
+    expect(text(button(el, "update-checked"))).toBe("Update to checked f7e6ce4");
+    expect(text(section(el, "changes"))).toContain("Board placements are stored");
+    click(button(el, "update-checked"));
+    expect(calls).toEqual(["check", "update"]);
+
+    flushSync(() => root!.unmount());
+    setLocale("uk");
+    el = render(snapshot({ ...available(), available: newer, update: failed }));
+    expect(text(button(el, "update-checked"))).toBe("Оновити до перевіреної версії f7e6ce4");
+  });
+
+  test("a failed build can retry its target or update to a newer checked commit", () => {
+    const failed = steps(["done", "done", "done", "failed"], { 3: { failure: { kind: "exit", code: 1 } } });
+    const newer = rev("f7e6ce4".padEnd(40, "1"), "1.2.4");
+    const el = render(snapshot({ ...available(), available: newer, update: { ...idleUpdate(CHECKOUT_STEPS), state: "failed", target: NEW, targetShort: NEW.slice(0, 7), steps: failed } }));
+    expect(section(el, "update")?.getAttribute("data-update")).toBe("failed");
+    expect(text(button(el, "retry"))).toBe("Retry from build");
+    expect(text(button(el, "update-checked"))).toBe("Update to checked f7e6ce4");
+    click(button(el, "retry"));
+    click(button(el, "update-checked"));
+    expect(calls).toEqual(["retry", "update"]);
+  });
+
   test("names the step, keeps the processes untouched, shows the error line and wraps the log", () => {
     const failedSteps = steps(["done", "done", "done", "failed"], { 3: { exitCode: 1, tail: ["Creating an optimized production build", "error: Type error: nope"] } });
     const el = render(snapshot({
