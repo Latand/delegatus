@@ -8,11 +8,12 @@ import {
 
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
-import { KANBAN_STATUSES } from "@/components/kanban/kanbanModel";
-import { TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
+import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/components/kanban/kanbanModel";
+import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { updateTask } from "@/components/tasks/taskApi";
 import { blockAgeSeconds } from "@/components/pipelines/pipelineBlockModel";
 import { pipelineStateLabel } from "@/components/pipelines/pipelineModel";
 import { humanizeDuration } from "@/components/turnDuration";
@@ -94,6 +95,18 @@ export interface MobileKanbanProps extends PhoneBoardInput {
   onShown?: (paths: readonly string[]) => void;
   /** Lanes whose close is on its way: a lane no task owns is gone on the tap. */
   closing?: readonly string[];
+  /** The name a card's project reads by. The Overview spans every project
+      (#2098), so each of its cards says whose it is; a project's own board
+      passes nothing. Null for a project with no readable name: a card never
+      shows a raw key. */
+  projectLabel?: (project: string) => string | null;
+  /** What an empty column says in place of its own copy, told whether another
+      column has work: the Overview's permanent narrowing to live work
+      (#1820), which no action undoes. */
+  emptyCopy?: ((status: TaskStatus, elsewhere: boolean) => { title: string; body: string }) | null;
+  /** How many tasks the board does not draw (hidden groups and empty tasks
+      taken off it), for the ⋯ menu's Hidden tasks row. */
+  onHiddenCount?: (count: number) => void;
 }
 
 function shortTitle(t: TFunction, item: PhoneCard): string {
@@ -309,10 +322,12 @@ function othersText(t: TFunction, item: PhoneCard): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
-function CardView({ item, now, onOpen, onLongPress }: {
+function CardView({ item, now, project, onOpen, onLongPress }: {
   item: PhoneCard;
   /** Epoch seconds. */
   now: number;
+  /** The card's project, on a board that spans several (#2098). */
+  project: string | null;
   onOpen: (() => void) | null;
   onLongPress: (() => void) | null;
 }) {
@@ -324,9 +339,16 @@ function CardView({ item, now, onOpen, onLongPress }: {
   /* One coloured edge at most: the need's hue, else the task's colour label. */
   const colour = !item.edge && card.color ? { boxShadow: `inset 3px 0 0 ${TASK_COLOR_HEX[card.color]}, var(--shadow-1)` } : undefined;
   const loose = item.kind === "conversation" || item.kind === "flow";
-  const label = t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title });
+  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), project].filter(Boolean).join(", ");
   const body = (
     <>
+      {project ? (
+        /* Passive text: the card is one button (#699), so the project is said
+           here and its board is one tap on the bar's title cell away. */
+        <span data-phone-card-project={item.card.project} className="-mb-0.5 min-w-0 truncate text-label font-semibold leading-tight text-muted">
+          {project}
+        </span>
+      ) : null}
       <span className="flex min-w-0 items-start gap-2">
         <span
           data-phone-card-title=""
@@ -394,9 +416,10 @@ function tabName(t: TFunction, column: PhoneColumn): string {
   ].filter(Boolean).join(", ");
 }
 
-function EmptyColumn({ column, columns, onJump, onNewTask, onTellOrchestrator }: {
+function EmptyColumn({ column, columns, copy, onJump, onNewTask, onTellOrchestrator }: {
   column: PhoneColumn;
   columns: Record<TaskStatus, PhoneColumn>;
+  copy?: MobileKanbanProps["emptyCopy"];
   onJump: (status: TaskStatus) => void;
   onNewTask?: () => void;
   onTellOrchestrator?: () => void;
@@ -405,6 +428,7 @@ function EmptyColumn({ column, columns, onJump, onNewTask, onTellOrchestrator }:
   const Icon = STATUS_ICON[column.status];
   const nearest = nearestWithWork(columns, column.status);
   const target = nearest ? columns[nearest] : null;
+  const said = copy?.(column.status, target !== null) ?? null;
   const action = column.status === "inbox" && onNewTask
     ? { label: t("mobile2.kanban.newTask"), run: onNewTask, icon: <Plus className="h-4 w-4" aria-hidden /> }
     : column.status === "assigned" && onTellOrchestrator
@@ -415,8 +439,8 @@ function EmptyColumn({ column, columns, onJump, onNewTask, onTellOrchestrator }:
       <span aria-hidden className="mb-1 grid h-12 w-12 place-items-center rounded-full bg-card text-muted shadow-1">
         <Icon className="h-[22px] w-[22px]" />
       </span>
-      <span className="text-title font-semibold text-primary">{t(`kanban.empty.${column.status}.title`)}</span>
-      <span className="max-w-[300px] text-body text-secondary">{t(`kanban.empty.${column.status}.body`)}</span>
+      <span className="text-title font-semibold text-primary">{said?.title ?? t(`kanban.empty.${column.status}.title`)}</span>
+      <span className="max-w-[300px] text-body text-secondary">{said?.body ?? t(`kanban.empty.${column.status}.body`)}</span>
       {action ? (
         <button
           type="button"
@@ -480,6 +504,92 @@ function CardSheet({ title, rows, onClose }: { title: string; rows: readonly She
             </span>
           </button>
         ))}
+      </div>
+    </MobileSheet>
+  );
+}
+
+/* ── Hidden tasks ───────────────────────────────────────────────────────── */
+
+/** How many hidden rows the sheet lists before «Show more». */
+const HIDDEN_WINDOW = 40;
+
+type HiddenRow =
+  | { kind: "group"; key: string; card: KanbanCardModel }
+  | { kind: "task"; key: string; task: BoardTask };
+
+/**
+ * What the board is not drawing (§3.2: ⋯ › Hidden tasks), the phone's form of
+ * the desktop's hidden tray: task groups hidden from a card's sheet or by an
+ * agent, then empty tasks taken off the board. Each row brings its task back
+ * with Show; nothing here stops, deletes or sends anything. The Overview's
+ * list spans every project, so it is windowed, and each row names its project
+ * there.
+ */
+function HiddenSheet({ rows, nowMs, projectLabel, onShowGroup, onShowTask, onClose }: {
+  rows: readonly HiddenRow[];
+  nowMs: number;
+  projectLabel?: (project: string) => string | null;
+  onShowGroup: (card: KanbanCardModel) => void;
+  onShowTask: (task: BoardTask) => void;
+  onClose: () => void;
+}) {
+  const { t } = useLocale();
+  const [shown, setShown] = useState(HIDDEN_WINDOW);
+  const visible = rows.slice(0, shown);
+  const more = rows.length - visible.length;
+  const titleOf = (text: string) => text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled");
+  return (
+    <MobileSheet name="hidden" title={`${t("kanban.hiddenTitle")} · ${rows.length}`} onClose={onClose}>
+      <div data-phone-hidden-sheet={rows.length} className="flex min-h-0 flex-col overflow-y-auto overscroll-y-contain py-1">
+        {visible.map((row) => {
+          const status = row.kind === "group" ? row.card.status : row.task.status;
+          const title = row.kind === "group" ? (row.card.titlePending ? t("kanban.untitled") : row.card.title) : titleOf(row.task.text);
+          const project = projectLabel?.(row.kind === "group" ? row.card.project : row.task.project) ?? null;
+          let meta: string;
+          if (row.kind === "group") {
+            const hide = row.card.task?.groupHidden;
+            const since = hide ? Date.parse(hide.at) : Number.NaN;
+            /* On the board's clock, with a unit, as a card says its ages. */
+            const age = Number.isFinite(since) ? (nowMs - since < 60_000 ? t("kanban.justNow") : cardAge(t, (nowMs - since) / 1000)) : "";
+            meta = [
+              row.card.working ? t("kanban.trayWorking", { count: row.card.working }) : null,
+              t("kanban.trayConversations", { count: row.card.conversations }),
+              hide ? t("kanban.trayGroupMeta", { who: t(hide.by === "agent" ? "kanban.hiddenBy.agent" : "kanban.hiddenBy.operator"), age }) : null,
+            ].filter(Boolean).join(" · ");
+          } else {
+            meta = t("kanban.offBoardMeta");
+          }
+          return (
+            <div key={row.key} data-phone-hidden-row={row.kind === "group" ? row.card.task?.id : row.task.id} className="flex min-h-14 items-center gap-3 px-4 py-2">
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="line-clamp-2 text-body font-semibold leading-[1.25] text-primary [overflow-wrap:anywhere]">{title}</span>
+                <span className="min-w-0 truncate text-label text-muted">
+                  {[project, statusLabel(t, status), meta].filter(Boolean).join(" · ")}
+                </span>
+              </span>
+              <button
+                type="button"
+                data-phone-hidden-show=""
+                className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card px-3.5 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                onClick={() => (row.kind === "group" ? onShowGroup(row.card) : onShowTask(row.task))}
+              >
+                {t("kanban.showOnBoard")}
+              </button>
+            </div>
+          );
+        })}
+        {more > 0 ? (
+          <button
+            type="button"
+            data-phone-hidden-more={more}
+            className="mx-4 my-1 inline-flex min-h-11 items-center justify-center rounded-[12px] bg-quiet text-ui font-semibold text-secondary ring-1 ring-inset ring-border active:bg-sunken"
+            onClick={() => setShown((count) => count + HIDDEN_WINDOW)}
+          >
+            {t("mobile2.kanban.showMore", { count: Math.min(HIDDEN_WINDOW, more) })}
+          </button>
+        ) : null}
+        <p className="px-4 pb-2 pt-1.5 text-label text-muted">{rows.length ? t("kanban.trayNote") : t("mobile2.kanban.hiddenNothing")}</p>
       </div>
     </MobileSheet>
   );
@@ -620,6 +730,33 @@ export function MobileKanban(props: MobileKanbanProps) {
     });
   }, [controller, t]);
 
+  /* ⋯ › Hidden tasks: the hidden groups, newest hide first, then the empty
+     tasks taken off the board. Show is the desktop tray's own write. */
+  const hiddenRows = useMemo<HiddenRow[]>(() => [
+    ...model.hiddenGroups.map((card) => ({ kind: "group" as const, key: card.id, card })),
+    ...model.offBoard.map((task) => ({ kind: "task" as const, key: `off:${task.id}`, task })),
+  ], [model]);
+  const onHiddenCount = props.onHiddenCount;
+  useEffect(() => {
+    onHiddenCount?.(hiddenRows.length);
+  }, [hiddenRows.length, onHiddenCount]);
+  const showGroup = useCallback((card: KanbanCardModel) => {
+    const raw = card.task ? tasksById.current.get(card.task.id) : undefined;
+    if (!raw) return;
+    const title = card.titlePending ? t("kanban.untitled") : card.title;
+    showReceipt(t("kanban.restoredReceipt", { title }));
+    void controller.edit(raw, { field: "hide", value: false }).then((outcome) => {
+      if (outcome.kind === "failed") showReceipt(t("kanban.showFailed", { title, error: outcome.error }), null, { error: true });
+    });
+  }, [controller, t]);
+  const showTask = useCallback((task: BoardTask) => {
+    const title = task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled");
+    void updateTask(task.id, { board: "shown" }).then((error) => {
+      if (error) showReceipt(t("kanban.showFailed", { title, error }), null, { error: true });
+      else showReceipt(t("kanban.shownReceipt", { title }));
+    });
+  }, [t]);
+
   const [sheetFor, setSheetFor] = useState<string | null>(null);
   const itemsByKey = useMemo(() => {
     const map = new Map<string, PhoneCard>();
@@ -700,8 +837,9 @@ export function MobileKanban(props: MobileKanbanProps) {
     const file = item.firstAgent;
     return file ? () => props.onOpenConversation(file) : null;
   };
+  const projectLabel = props.projectLabel;
   const cardOf = (item: PhoneCard) => (
-    <CardView key={item.key} item={item} now={now} onOpen={open(item)} onLongPress={() => openSheet(item)} />
+    <CardView key={item.key} item={item} now={now} project={projectLabel?.(item.card.project) ?? null} onOpen={open(item)} onLongPress={() => openSheet(item)} />
   );
 
   return (
@@ -763,7 +901,7 @@ export function MobileKanban(props: MobileKanbanProps) {
               onScroll={(event) => writePlace(project, { offsets: { [status]: event.currentTarget.scrollTop } })}
             >
               {columnEmpty(column) ? (
-                <EmptyColumn column={column} columns={phone.columns} onJump={choose} onNewTask={props.onNewTask} onTellOrchestrator={props.onTellOrchestrator} />
+                <EmptyColumn column={column} columns={phone.columns} copy={props.emptyCopy} onJump={choose} onNewTask={props.onNewTask} onTellOrchestrator={props.onTellOrchestrator} />
               ) : (
                 <div className="flex flex-col gap-2 px-3 pb-3 pt-2">
                   {column.pinned.map(cardOf)}
@@ -796,6 +934,16 @@ export function MobileKanban(props: MobileKanbanProps) {
         <CardSheet
           title={t("kanban.cardActions", { title: shortTitle(t, sheetItem) })}
           rows={sheetRows(sheetItem)}
+          onClose={() => nav.closeSheet()}
+        />
+      ) : null}
+      {navState.sheet === "hidden" ? (
+        <HiddenSheet
+          rows={hiddenRows}
+          nowMs={now * 1000}
+          projectLabel={projectLabel}
+          onShowGroup={showGroup}
+          onShowTask={showTask}
           onClose={() => nav.closeSheet()}
         />
       ) : null}

@@ -2626,6 +2626,9 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.kanban.moveTo": "Перемістити в «{column}»",
   "mobile2.kanban.moved": "Переміщено в «{column}»",
   "mobile2.kanban.openFirstAgent": "Відкрити першого агента",
+  "mobile2.kanban.hiddenNothing": "Нічого не приховано. Утримуйте картку, щоб приховати її.",
+  "mobile2.overview.workingNow": "Лише те, що в роботі",
+  "mobile2.overview.emptyColumn": "У колонці «{column}» агенти зараз не працюють.",
   /* The phone's task screen (#2072 slice 5, phone-kanban §3.5). */
   "mobile2.task.pipelines": { one: "{count} пайплайн", few: "{count} пайплайни", many: "{count} пайплайнів", other: "{count} пайплайна" },
   "mobile2.task.agents": "Агенти",

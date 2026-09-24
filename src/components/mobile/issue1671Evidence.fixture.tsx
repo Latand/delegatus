@@ -254,7 +254,11 @@ const tasks = TOOLCARD ? [{
    lane no task owns; Blocked is empty; Done holds more than its window. The
    orchestrator seat is live. Titles are public issue titles of this
    repository or invented; ages agree across the board. */
-const KANBAN = new URLSearchParams(location.search).has("kanban");
+/* #2098 (`?overview=1`): the same board seen from the Overview on the phone,
+   its tasks, lanes and conversations spread over three projects, each with a
+   display name the cards must show instead of its key. */
+const OVERVIEW_SCENE = new URLSearchParams(location.search).has("overview");
+const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE;
 const kanbanFiles: FileEntry[] = [];
 const kanbanLinks: { pipelines: Record<string, unknown>; tasks: Record<string, unknown> } = { pipelines: {}, tasks: {} };
 const kanbanRole = (roleId: string) => ({ roleId, access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: null });
@@ -446,6 +450,46 @@ if (KANBAN) {
 }
 const SEAT_PATH = kanbanFiles.find((entry) => entry.title === "Orchestrator")?.path ?? null;
 
+/* The Overview's projects: keys the way a repository resolves (opaque, read by
+   nobody; assembled so no hex run sits in the source), and the names the rail
+   shows. */
+const opaqueKey = (seed: string) => `repo-${seed.repeat(4)}`;
+const OVERVIEW_KEYS = { delegatus: opaqueKey("a1b2"), forge: opaqueKey("c3d4"), docs: opaqueKey("e5f6") };
+const OVERVIEW_NAMES: Record<string, string> = { [OVERVIEW_KEYS.delegatus]: "delegatus", [OVERVIEW_KEYS.forge]: "forge-api", [OVERVIEW_KEYS.docs]: "atlas-docs" };
+if (OVERVIEW_SCENE) {
+  const byTask: Record<string, string> = {
+    "t-data": OVERVIEW_KEYS.delegatus, "t-favicon": OVERVIEW_KEYS.delegatus, "t-kanban": OVERVIEW_KEYS.delegatus, "t-long": OVERVIEW_KEYS.delegatus, "t-systemd": OVERVIEW_KEYS.delegatus, "t-tray": OVERVIEW_KEYS.delegatus,
+    "t-copilot": OVERVIEW_KEYS.forge, "t-upload": OVERVIEW_KEYS.forge, "t-uk": OVERVIEW_KEYS.forge, "t-quota": OVERVIEW_KEYS.forge, "t-many": OVERVIEW_KEYS.forge,
+    "t-skeletons": OVERVIEW_KEYS.docs, "t-chips": OVERVIEW_KEYS.docs, "t-seat": OVERVIEW_KEYS.docs, "t-attention": OVERVIEW_KEYS.docs,
+  };
+  const keys = Object.values(OVERVIEW_KEYS);
+  const fileProject = new Map<string, string>();
+  kanbanTasks.forEach((row, index) => {
+    const entry = row as { id: string; project: string; assignments: Array<{ path: string }> };
+    entry.project = byTask[entry.id] ?? keys[index % keys.length]!;
+    for (const assignment of entry.assignments) fileProject.set(assignment.path, entry.project);
+  });
+  for (const pipeline of kanbanPipelines) {
+    pipeline.project = byTask[pipeline.taskIds?.[0] ?? ""] ?? OVERVIEW_KEYS.docs;
+    for (const run of pipeline.runs) {
+      for (const attempt of run.attempts as Array<{ agentPath?: string | null }>) if (attempt.agentPath) fileProject.set(attempt.agentPath, pipeline.project);
+    }
+  }
+  /* The stalled conversations no task owns, split between two projects, and
+     the running one with a feed, which the full-screen frame opens. */
+  let loose = 0;
+  for (const entry of kanbanFiles) {
+    (entry as { project: string }).project = fileProject.get(entry.path) ?? (loose++ % 2 ? OVERVIEW_KEYS.forge : OVERVIEW_KEYS.delegatus);
+  }
+  kanbanFiles.push({ ...files[0]!, project: OVERVIEW_KEYS.forge } as FileEntry);
+  /* What ⋯ › Hidden tasks lists: a finished group hidden an hour ago, and an
+     empty task taken off the board. */
+  for (const row of kanbanTasks as Array<Record<string, unknown>>) {
+    if (row.id === "t-seat") row.groupHidden = { at: iso(3_600), by: "operator", admitted: { conversationIds: [], paths: [] } };
+    if (row.id === "t-quota") row.board = "hidden";
+  }
+}
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -471,6 +515,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ task: row });
   }
   if (KANBAN && url.pathname === "/api/tasks" && method === "GET") return json({ tasks: kanbanTasks });
+  if (url.pathname === "/api/files" && OVERVIEW_SCENE) {
+    return json({
+      files: kanbanFiles, projectCatalog: Object.values(OVERVIEW_KEYS).map((project) => ({ project, conversations: kanbanFiles.filter((entry) => entry.project === project).length, smt: now - 20 })),
+      projectDisplayNames: OVERVIEW_NAMES, flows: [], pipelines: kanbanPipelines,
+      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" } },
+    });
+  }
   if (url.pathname === "/api/files" && KANBAN) {
     return json({
       files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length }], flows: [], pipelines: kanbanPipelines,
@@ -518,6 +569,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
+    /* The Overview's read of every project's seats (#1841). */
+    if (url.searchParams.get("scope") === "all") {
+      return json({ all: { conversationIds: SEAT_PATH ? [idOf(SEAT_PATH)] : [], paths: SEAT_PATH ? [SEAT_PATH] : [], previous: { conversationIds: [], paths: [] } } });
+    }
     if (KANBAN && SEAT_PATH) {
       return json({
         seat: {
@@ -605,6 +660,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return json({}, 404);
 }) as typeof fetch;
 
-localStorage.setItem("llvProject", PROJECT);
-if (!location.hash) location.hash = `#p=${PROJECT}`;
+if (OVERVIEW_SCENE) {
+  /* The Overview is the bare route with no project behind it. */
+  localStorage.setItem("llvProject", "__overview__");
+} else {
+  localStorage.setItem("llvProject", PROJECT);
+  if (!location.hash) location.hash = `#p=${PROJECT}`;
+}
 createRoot(document.getElementById("root")!).render(<Viewer />);

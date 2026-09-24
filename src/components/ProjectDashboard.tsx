@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, Columns3, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -1894,6 +1894,8 @@ function ProjectDashboardView({
   const mobileAttention = useMemo(() => (mobileAttentionKey ? mobileAttentionKey.split("\n") : []), [mobileAttentionKey]);
   /* The conversations the phone's visible column draws, for presence. */
   const [mobileKanbanShown, setMobileKanbanShown] = useState("");
+  /* What the phone's columns are not drawing, for ⋯ › Hidden tasks. */
+  const [mobileHiddenCount, setMobileHiddenCount] = useState(0);
   const reportMobileKanbanShown = useCallback((paths: readonly string[]) => setMobileKanbanShown(paths.join("\n")), []);
   /* The phone's board is the leaf when the scheme is this project's view and no
      conversation sits on top of the stack; the footer and the presence slice
@@ -2019,6 +2021,12 @@ function ProjectDashboardView({
          task's card, and the board's old «N pipelines» row is gone. */
       { kind: "row", key: "pipelines", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.board.pipelines"), go: "pipelines", onSelect: () => mobileNav.push({ kind: "pipelines" }) },
     ];
+    /* The groups hidden from the columns and the empty tasks taken off them
+       (§3.2), with Show; the columns draw the sheet, so the row is offered
+       where they are. */
+    if (mobileBoardLeaf && boardReady && mobileTop.kind === "board") {
+      entries.push({ kind: "row", key: "hidden", icon: <EyeOff className="h-[18px] w-[18px]" aria-hidden />, label: t("kanban.hiddenTitle"), trailing: mobileHiddenCount ? String(mobileHiddenCount) : undefined, opens: "hidden", onSelect: () => mobileNav.openSheet("hidden") });
+    }
     if (viewToggle) {
       /* The board's two faces (issue #613) stay one tap away here, as radio
          rows: the picture's «All conversations» is the catalog list, and the
@@ -2408,6 +2416,7 @@ function ProjectDashboardView({
                   onNewTask={() => openMobileTasks("new")}
                   onTellOrchestrator={tellOrchestrator}
                   onShown={reportMobileKanbanShown}
+                  onHiddenCount={setMobileHiddenCount}
                 />
               ) : projectView === "scheme" && schemeAvailable ? (
                 <MobileFocusView

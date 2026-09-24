@@ -71,7 +71,9 @@ export interface PhoneCard {
 
 export interface PhoneColumn {
   status: TaskStatus;
-  /** The desktop column's count: every task in it. */
+  /** The desktop column's count: every task it draws. A project's board draws
+      them all; the Overview narrows to the cards with live work (#2098), and
+      its tabs count what it draws. */
   count: number;
   /** Agents working on the column's cards (and, in Inbox, on its unlinked rows). */
   working: number;
@@ -211,8 +213,10 @@ export function buildPhoneKanban({ model, attention = [], doneShown = DONE_WINDO
   attention.forEach((key, index) => {
     if (!rank.has(key)) rank.set(key, index);
   });
-  /* Unlinked rows the phone can draw, in the desktop's order. */
-  const unlinked = model.unlinked.flatMap((card) => {
+  /* Unlinked rows the phone can draw, in the desktop's order. `unlinkedShown`
+     and each column's `shown` are what the model's narrowing keeps: every
+     card on a project's board, the ones with live work on the Overview. */
+  const unlinked = model.unlinkedShown.flatMap((card) => {
     const kind = kindOf(card);
     if (!kind || kind === "task") return [];
     /* A lane no task owns leaves with its close, as the queue's row did. */
@@ -224,7 +228,7 @@ export function buildPhoneKanban({ model, attention = [], doneShown = DONE_WINDO
     /* The desktop's order is the tie-break inside the pin: a need the queue
        does not rank keeps its place among the other unranked ones. */
     const candidates = [
-      ...column.cards.map((card) => ({ card, kind: "task" as const })),
+      ...column.shown.map((card) => ({ card, kind: "task" as const })),
       ...(status === "inbox" ? unlinked : []),
     ].map((entry, order) => ({ ...entry, order }));
     const pinned = candidates
@@ -232,13 +236,13 @@ export function buildPhoneKanban({ model, attention = [], doneShown = DONE_WINDO
       .map((entry) => ({ ...entry, at: askRank(entry.card, rank, closing) }))
       .sort((a, b) => a.at - b.at || a.order - b.order)
       .map((entry) => phoneCard(entry.card, entry.kind, rank, now, closing));
-    const rest = column.cards.filter((card) => !cardNeeds(card, closing));
+    const rest = column.shown.filter((card) => !cardNeeds(card, closing));
     const windowed = status === "done" ? rest.slice(0, Math.max(0, doneShown)) : rest;
     const loose = status === "inbox" ? unlinked.filter((entry) => !cardNeeds(entry.card, closing)) : [];
     const looseWorking = status === "inbox" ? unlinked.reduce((sum, entry) => sum + entry.card.working, 0) : 0;
     return [status, {
       status,
-      count: column.cards.length,
+      count: column.shown.length,
       working: column.working + looseWorking,
       needsYou: pinned.length,
       pinned,
