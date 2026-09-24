@@ -4,7 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
-import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import {
   captureProcessIdentity,
@@ -4116,6 +4116,9 @@ export class AgentRegistry {
     private readonly lockTiming: RegistryLockTiming = SYSTEM_LOCK_TIMING,
     storage: AgentRegistryStorageOptions = {},
   ) {
+    /* A registry a test run opens at the operator's own path — its JSON mirror
+       included, which never passes through the state database — is refused. */
+    assertNotOperatorStateUnderTest(path.dirname(path.resolve(filename)), "agent registry");
     /* Which store the PROCESS-WIDE registry opens is never guessed. A writer
        states its mode in the environment and publishes it; every other process
        — the MCP server above all, which Claude launches with an empty env —

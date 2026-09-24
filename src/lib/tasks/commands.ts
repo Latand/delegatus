@@ -8,7 +8,7 @@ import { admissionSnapshot } from "./groupHide";
 import { readTaskIconInput } from "./taskIcon";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
-import { TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
+import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
 /* The caps live beside the type, which a client component can import without
    pulling this module's node dependencies into the browser bundle. */
@@ -656,6 +656,35 @@ export function removeAssignment(existing: BoardTask[], id: string, handle: stri
   const replaced = replaceLostMemberships(tasks, task.project, removed, id, { now: () => now, ...deps });
   if (!replaced.ok) return replaced;
   return { ok: true, tasks: replaced.tasks, task: updated };
+}
+
+
+/**
+ * Dismiss a launch that never produced a transcript (the card's «launch did
+ * not start» row). Its assignment is marked failed rather than removed, so the
+ * record of the attempt stays and no replacement placeholder is minted. A
+ * placeholder task an agent launch created, still unnamed, with nothing else
+ * live on it and no pipeline is marked done: that is the whole of the ghost
+ * card. A task somebody named or a container's task keeps its status.
+ */
+export function dismissUnstartedLaunch(existing: BoardTask[], id: string, ref: AssignmentRef, now = isoNow(), options: { linkedPipeline?: boolean } = {}): TaskCommandResult {
+  const index = existing.findIndex((task) => task.id === id);
+  if (index < 0) return { ok: false, error: "task not found", status: 404 };
+  if (ref.launchId == null && ref.conversationId == null) return { ok: false, error: "launchId or conversationId is required", status: 400 };
+  const task = existing[index]!;
+  let matched = false;
+  const assignments = task.assignments.map((assignment) => {
+    if (assignment.state === "failed" || !assignmentMatchesRef(assignment, ref)) return assignment;
+    matched = true;
+    return { ...assignment, state: "failed" as const, error: LAUNCH_NOT_STARTED_ERROR, at: now };
+  });
+  if (!matched) return { ok: true, tasks: existing, task };
+  const placeholder = task.origin?.refinement === "pending" && (task.origin.kind === "launch" || task.origin.kind === "conversation");
+  const settled = placeholder && !options.linkedPipeline && task.status !== "done" && assignments.every((assignment) => assignment.state === "failed");
+  const updated: BoardTask = { ...task, assignments, ...(settled ? { status: "done" as const } : {}), updatedAt: now };
+  const tasks = existing.slice();
+  tasks[index] = updated;
+  return { ok: true, tasks, task: updated };
 }
 
 export interface AssignmentPatch {

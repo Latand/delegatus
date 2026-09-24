@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
 import { TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
+import { dismissUnstartedLaunch } from "@/components/kanban/kanbanAssignments";
 import { KANBAN_STATUSES, summarizePipeline, type KanbanPipeline } from "@/components/kanban/kanbanModel";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pipelinePorts";
@@ -18,6 +19,7 @@ import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
 import { WorkLinkRow, WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
+import { formatConversationHash } from "@/lib/accounts/identity";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
@@ -400,6 +402,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     }
     return list.sort((a, b) => agentRank(a.file, now) - agentRank(b.file, now) || agentAt(b.file) - agentAt(a.file));
   }, [card, task, files, now]);
+  const notLoadedRefs = card?.notLoadedRefs ?? [];
+  const unstarted = card?.unstarted ?? [];
   const asks = agents.filter(({ file }) => {
     const badge = mobileRowState(file, now).badge;
     return badge === "question" || badge === "plan";
@@ -410,8 +414,10 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     onShown?.(shownKey ? shownKey.split("\n") : []);
   }, [shownKey, onShown]);
 
-  const title = task ? (card?.titlePending ? t("kanban.untitled") : textField(task.text, "title") || t("kanban.untitled")) : "";
-  const pendingTitle = Boolean(card?.titlePending || (task && !textField(task.text, "title")));
+  /* The card decides the name, borrowed title included: a placeholder no
+     agent will name reads the same here as on the board. */
+  const title = task ? (card?.titlePending ? t("kanban.untitled") : (card?.title || textField(task.text, "title")) || t("kanban.untitled")) : "";
+  const pendingTitle = card ? card.titlePending : Boolean(task && !textField(task.text, "title"));
   const description = task ? textField(task.text, "description") : "";
   const details = task?.details ?? "";
   const receiptTitle = cleanTitle(title, 48);
@@ -426,7 +432,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const startEdit = (field: EditField) => {
     if (!task) return;
     const base = field === "details" ? details : textField(task.text, field);
-    setEditing({ field, draft: field === "title" && pendingTitle ? "" : base, base, note: null });
+    setEditing({ field, draft: field === "title" ? (pendingTitle ? "" : title) : base, base, note: null });
     if (field === "details") setDetailsOpen(true);
   };
   const save = async (entry: Editing): Promise<void> => {
@@ -857,7 +863,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
               <h2 className={`${SECTION} m-0`}>
                 {t("mobile2.task.agents")}
                 <Sep />
-                <span className="text-label font-semibold tabular-nums text-muted">{agents.length}</span>
+                <span className="text-label font-semibold tabular-nums text-muted">{agents.length + notLoadedRefs.length}</span>
               </h2>
               {agents.map((agent) => {
                 const rowTitle = agentTitle(agent);
@@ -893,7 +899,62 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                 </button>
               ))}
-              {!agents.length && !card?.drafts.length ? (
+              {/* A conversation the board did not load still opens, through its
+                  own transcript; the count on the card holds only these. */}
+              {notLoadedRefs.map((ref) => (
+                <button
+                  key={ref.key}
+                  type="button"
+                  data-phone-task-not-loaded={ref.key}
+                  className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
+                  onClick={() => { window.location.hash = formatConversationHash({ conversationId: ref.conversationId ?? undefined, path: ref.path }); }}
+                >
+                  <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("kanban.notLoadedOpen")}</span>
+                  <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
+                </button>
+              ))}
+              {/* A launch that never produced a transcript opens nothing: it
+                  says so, and can be dismissed. A failed one says so at once,
+                  with its error, and opens its launch view, where Retry lives. */}
+              {unstarted.map((launch) => (
+                <div
+                  key={launch.key}
+                  data-phone-task-unstarted={launch.key}
+                  data-phone-task-launch-failed={launch.failed ? launch.key : undefined}
+                  title={t(launch.failed ? "kanban.launchFailedHint" : "kanban.launchNotStartedHint")}
+                  className={`flex min-h-14 w-full flex-wrap items-center gap-x-2 rounded-[12px] border px-3 py-2 ${launch.failed ? "border-danger/40" : "border-dashed border-border"}`}
+                >
+                  <span className={`min-w-0 flex-1 truncate text-body ${launch.failed ? "font-semibold text-danger" : "text-muted"}`}>
+                    {t(launch.failed ? "kanban.launchFailed" : "kanban.launchNotStarted")}
+                  </span>
+                  {launch.failed ? (
+                    <button
+                      type="button"
+                      data-phone-launch-open={launch.key}
+                      aria-label={t("kanban.openFailedLaunchAria", { title })}
+                      className="min-h-11 shrink-0 rounded-[8px] px-3 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                      onClick={() => props.onOpenConversation(launch.failed!.file)}
+                    >
+                      {t("kanban.openFailedLaunch")}
+                    </button>
+                  ) : null}
+                  {launch.dismissable ? (
+                    <button
+                      type="button"
+                      data-phone-launch-dismiss={launch.key}
+                      aria-label={t("kanban.dismissLaunchAria", { title })}
+                      className="min-h-11 shrink-0 rounded-[8px] px-3 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                      onClick={() => { void dismissUnstartedLaunch(taskId, launch); }}
+                    >
+                      {t("kanban.dismissLaunch")}
+                    </button>
+                  ) : null}
+                  {launch.failed?.error ? (
+                    <p data-phone-launch-error={launch.key} className="m-0 line-clamp-2 basis-full break-words pb-1 text-ui text-secondary">{launch.failed.error}</p>
+                  ) : null}
+                </div>
+              ))}
+              {!agents.length && !notLoadedRefs.length && !unstarted.length && !card?.drafts.length ? (
                 <p className="m-0 px-1 text-ui text-muted">{t("mobile2.kanban.noAgents")}</p>
               ) : null}
             </section>

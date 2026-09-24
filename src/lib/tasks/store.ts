@@ -1,8 +1,10 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
 import {
   importLegacyCollection,
   lazyReconcileAllowed,
@@ -428,6 +430,8 @@ export function checkpointTaskRollbackMirrorForDemotion(filePath = TASKS_FILE): 
     only for a read before the import may run (an unpromoted release): the read
     then parses the legacy file without writing anything. */
 function taskCollection(filePath: string, purpose: "read" | "write"): SqliteStateCollection<TaskStateRow> | null {
+  /* A test run never reads or writes the operator's task store. */
+  assertNotOperatorStateUnderTest(path.dirname(path.resolve(filePath)), "task store");
   const database = legacyDatabasePath(filePath);
   if (taskCollections.has(database)) return taskCollections.get(database)!;
   if (!readStateImport(database, TASK_COLLECTION)) {

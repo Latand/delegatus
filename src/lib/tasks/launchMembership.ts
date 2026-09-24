@@ -36,6 +36,10 @@ export interface ReservedLaunch {
   launchDisplay?: { prompt: string } | null;
   origin?: { kind: string; container?: string; containerId?: string } | null;
   purpose?: string | null;
+  /** The launch's role. An orchestrator seat never names its own task, so its
+      task is created under the launch title (#1841 keeps the seat's notes
+      there, off the board). */
+  role?: string | null;
   /** Explicit task targets of a task-local launch (a band's «+ Agent», the
       dedicated task spawn route). All must exist; none is created. */
   taskIds?: readonly string[] | null;
@@ -96,7 +100,8 @@ export function launchMembershipInput(
     }
     return { project, origin: { kind: "flow", key: containerId }, title, identity, inherit: reviewed };
   }
-  return { project, origin: launchOrigin, title, identity, ...(reviewed.length ? { inherit: reviewed } : {}) };
+  const titled = launch.role === "orchestrator" ? { titled: true } : {};
+  return { project, origin: launchOrigin, title, identity, ...(reviewed.length ? { inherit: reviewed } : {}), ...titled };
 }
 
 export interface LaunchMembershipPorts {

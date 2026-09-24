@@ -12,6 +12,8 @@ import path from "node:path";
  *   bun src/lib/state/fixtures/stateOwnershipProbe.ts open-registry
  *   bun src/lib/state/fixtures/stateOwnershipProbe.ts resolve-then-disown
  *   bun src/lib/state/fixtures/stateOwnershipProbe.ts resolve-then-chdir
+ *   bun src/lib/state/fixtures/stateOwnershipProbe.ts write-task
+ *   bun src/lib/state/fixtures/stateOwnershipProbe.ts registry-at
  *
  * `resolve` prints the state directory it reached. `load-stores` additionally
  * walks the path the incident took: the instrumentation entry point, then a
@@ -63,6 +65,29 @@ async function main(): Promise<void> {
       afterChdir = error instanceof Error ? `refused: ${error.name}` : "refused";
     }
     console.log(JSON.stringify({ stateDirectory: first, afterChdir }));
+    return;
+  }
+
+  if (mode === "write-task") {
+    /* What the leaked reviewer fixture did (2026-09-23): a launch reserved
+       outside any task, whose membership the default task store records. */
+    const { commitTaskMembership } = await import("@/lib/tasks/membership");
+    const result = commitTaskMembership({
+      project: "dir-probe",
+      origin: { kind: "launch", key: "probe-launch" },
+      title: "Exercise legacy spawn fixture",
+      identity: { launchId: "probe-launch", conversationId: "conversation_probe" },
+    });
+    console.log(JSON.stringify({ stateDirectory: path.dirname(statePath("probe")), ok: result.ok }));
+    return;
+  }
+
+  if (mode === "registry-at") {
+    /* A registry handed the operator's path explicitly, never resolved. */
+    const { AgentRegistry } = await import("@/lib/agent/registry");
+    const registry = new AgentRegistry(process.env.PROBE_REGISTRY_FILE!, undefined, undefined, { sqliteMode: "off" });
+    registry.close();
+    console.log(JSON.stringify({ stateDirectory: path.dirname(process.env.PROBE_REGISTRY_FILE!) }));
     return;
   }
 
