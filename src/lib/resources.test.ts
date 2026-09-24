@@ -372,6 +372,11 @@ async function withResourceWorkerChunks<T>(
   }
 }
 
+/** A payload as a read serves it: the table stamped with its own capture. */
+function stamped(payload: ResourcesPayload, capturedAt: number, stale: boolean): ResourcesPayload {
+  return { ...payload, sessionsCapturedAt: new Date(capturedAt).toISOString(), sessionsStale: stale };
+}
+
 function workerTestReader(options: Parameters<typeof createResourcesReader>[4] = {}) {
   const payload: ResourcesPayload = { system: null, sessions: [] };
   const diagnostic = { fresh: true, status: "complete" as const, durationMs: 0, phases: {
@@ -2983,18 +2988,18 @@ describe("resource recurring reads", () => {
       systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
     } }), { inProcess: true });
 
-    expect((await reader.read()).payload).toEqual(cached);
+    expect((await reader.read()).payload).toEqual(stamped(cached, 0, false));
     now = 600_000;
-    expect((await reader.read()).payload).toEqual(cached);
+    expect((await reader.read()).payload).toEqual(stamped(cached, 0, false));
     await Promise.resolve();
     expect(builds).toBe(2);
-    expect((await reader.read()).payload).toEqual(cached);
+    expect((await reader.read()).payload).toEqual(stamped(cached, 0, false));
     expect(builds).toBe(2);
 
     const forced = reader.read(true);
     await new Promise<void>((resolve) => setImmediate(resolve));
     fresh.resolve(freshResult);
-    expect((await forced).payload).toEqual(freshResult);
+    expect((await forced).payload).toEqual(stamped(freshResult, 600_000, false));
     expect(builds).toBe(3);
   });
 
@@ -3019,13 +3024,14 @@ describe("resource recurring reads", () => {
 
     await reader.read();
     now = 600_000;
-    expect((await reader.read()).payload).toEqual(cached);
+    expect((await reader.read()).payload).toEqual(stamped(cached, 0, false));
     await new Promise<void>((resolve) => setImmediate(resolve));
     await Promise.resolve();
     expect(builds).toBe(2);
 
     const firstFailure = await reader.read();
-    expect(firstFailure.payload).toEqual(cached);
+    /* The cached rows are served, and marked as the earlier capture they are (#2110). */
+    expect(firstFailure.payload).toEqual(stamped(cached, 0, true));
     expect(firstFailure.diagnostic).toMatchObject({
       fresh: false,
       status: "failed",
@@ -3040,7 +3046,7 @@ describe("resource recurring reads", () => {
     expect(builds).toBe(3);
 
     const secondFailure = await reader.read();
-    expect(secondFailure.payload).toEqual(cached);
+    expect(secondFailure.payload).toEqual(stamped(cached, 0, true));
     expect(secondFailure.diagnostic).toMatchObject({
       fresh: false,
       status: "failed",
@@ -3056,7 +3062,7 @@ describe("resource recurring reads", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     await Promise.resolve();
     const healthy = await reader.read();
-    expect(healthy.payload).toEqual(recoveredPayload);
+    expect(healthy.payload).toEqual(stamped(recoveredPayload, 600_000, false));
     expect(healthy.diagnostic.status).toBe("complete");
     expect(healthy.diagnostic.degradedReason).toBeUndefined();
     expect(healthy.diagnostic.failure).toBeUndefined();

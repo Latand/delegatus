@@ -2635,6 +2635,12 @@ browserTest("#2105: Back and the phone's screen history follow the path the oper
       }, { screen: "chat", id, sheet: null });
       if (!taken) failures.push("deeplink: the tab did not answer the notification's hand-off");
       await back("notification-back", { screen: "task", id: "t-long", sheet: null });
+      /* A link whose conversation never opens leaves the task on screen over
+         an entry the store did not write; ‹ still lands on the board, and the
+         history agrees: Forward comes back to the task. */
+      await step("dead-link", () => page.evaluate(() => { location.hash = "#c=conversation_never_opened"; }), { screen: "task", id: "t-long", sheet: null });
+      await back("dead-link-chevron", { screen: "board", sheet: null }, "chevron");
+      await step("forward-to-task", () => page.goForward({ waitUntil: "commit" }).catch(() => null), { screen: "task", id: "t-long", sheet: null });
       await back("back-to-board", { screen: "board", sheet: null });
     });
 

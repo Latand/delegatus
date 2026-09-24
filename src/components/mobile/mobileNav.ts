@@ -79,6 +79,8 @@ const SHEETS: ReadonlySet<string> = new Set(SHEET_NAMES);
 const KEPT_SHEETS: ReadonlySet<MobileSheetName> = new Set(["tasks"]);
 /** A stack longer than any path an operator can walk is not one this store wrote. */
 const MAX_STACK = 64;
+/** How many entries a ‹ from a foreign entry may pass through on its way. */
+const MAX_PASSES = 8;
 
 /** A fresh copy of a screen, or null for anything that is not one. */
 function readScreen(value: unknown): MobileScreen | null {
@@ -210,10 +212,13 @@ export interface MobileNavMark {
   url: string;
 }
 
-/** What a traversal landed on, as the Viewer needs to know it. */
+/** What a traversal landed on, as the Viewer needs to know it. `passing`
+    is an entry a ‹ goes through on its way to the screen under the one it
+    left: nothing is drawn from it, and nothing replays. */
 export type MobileNavLanding =
   | { kind: "phone"; entry: MobileNavEntry; topChanged: boolean }
-  | { kind: "foreign" };
+  | { kind: "foreign" }
+  | { kind: "passing" };
 
 /** What the store needs from the browser: the same-document history and its
     traversal events. Injected so the contract is testable without a window. */
@@ -322,7 +327,13 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let waiting: Array<() => void> = [];
   let pendingMark: MobileNavMark | null = null;
-  let lastLanding: { event: object; result: MobileNavLanding } | null = null;
+  /* The screen a ‹ taken on a foreign entry is going to, and how many entries
+     it has passed through on the way (see `back`). */
+  let backTo: readonly MobileScreen[] | null = null;
+  let passes = 0;
+  /* What each traversal event landed on, so every reader of one event reads
+     the same answer, even when a pass-through lands the next inside it. */
+  const landings = new WeakMap<object, MobileNavLanding>();
   const memory = new Map<string, unknown>();
   /* Screens following the history (`attach`), and the listener they share. */
   let attached = 0;
@@ -413,6 +424,7 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
 
   const settle = (): void => {
     traversing = false;
+    backTo = null;
     if (settleTimer !== null) clearTimeout(settleTimer);
     settleTimer = null;
     if (hearing) {
@@ -424,22 +436,9 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
     for (const task of run) task();
   };
 
-  /** Ask the history for the pops owed. The browser lands asynchronously (a
-      test's history may land inside the call), so `traversing` is set first. */
-  const flush = (): void => {
-    flushQueued = false;
-    if (pendingPops === 0 || traversing) return;
-    /* A fragment navigation in the same gesture (a link inside the sheet) put
-       the tab on an entry this store did not write: the entries under it stay
-       where they are, and the landing is that navigation's own. */
-    if (!own()) {
-      pendingPops = 0;
-      return;
-    }
-    const steps = pendingPops;
-    pendingPops = 0;
-    traversing = true;
-    if (!detach && !hearing) hearing = host.onPopstate((landed, event) => nav.land(landed, event));
+  /** How long a pop this store asked for may take to land. */
+  const armSettle = (): void => {
+    if (settleTimer !== null) clearTimeout(settleTimer);
     let grace = false;
     const wait = (): void => {
       if (!traversing) return;
@@ -462,6 +461,26 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
       settle();
     };
     settleTimer = setTimeout(wait, settleMs);
+  };
+
+  /** Ask the history for the pops owed. The browser lands asynchronously (a
+      test's history may land inside the call), so `traversing` is set first. */
+  const flush = (): void => {
+    flushQueued = false;
+    if (pendingPops === 0 || traversing) return;
+    /* A fragment navigation in the same gesture (a link inside the sheet) put
+       the tab on an entry this store did not write: the entries under it stay
+       where they are, and the landing is that navigation's own. A ‹ taken on
+       such an entry is the one pop that goes through anyway. */
+    if (!own() && !backTo) {
+      pendingPops = 0;
+      return;
+    }
+    const steps = pendingPops;
+    pendingPops = 0;
+    traversing = true;
+    if (!detach && !hearing) hearing = host.onPopstate((landed, event) => nav.land(landed, event));
+    armSettle();
     host.history.go(-steps);
   };
 
@@ -559,6 +578,16 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
       if (later(() => nav.back())) return;
       if (state.stack.length > 1) {
         const current = own();
+        /* The tab stands on an entry no phone wrote: a link that never
+           opened, a notification the worker navigated itself. Whether that
+           navigation went above the screen on show or took its entry is not
+           known, so the pop goes one entry at a time until it lands on the
+           screen under this one — never short of it, never past it. */
+        if (!current && pendingPops === 0) {
+          backTo = state.stack.slice(0, -1);
+          passes = 0;
+          adopt = false;
+        }
         pendingPops += state.sheet && current?.sheet ? 2 : 1;
         set({ stack: state.stack.slice(0, -1), sheet: null, motion: "pop", bump: null });
         queueFlush();
@@ -636,7 +665,8 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
       if (state.bump) set({ bump: null });
     },
     land(landed, event) {
-      if (event && lastLanding?.event === event) return lastLanding.result;
+      const known = event ? landings.get(event) : undefined;
+      if (known) return known;
       const before = topScreen(state);
       const ours = traversing;
       /* A fragment navigation's event can arrive after the screen it opened
@@ -644,6 +674,15 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
          place then. */
       const entry = standsOnOwnUrl(landed, host.href()) ? readMobileNavEntry(landed) : own();
       let result: MobileNavLanding;
+      if (ours && backTo && entry && entry.stack.length > backTo.length && startsWith(entry.stack, backTo) && passes < MAX_PASSES) {
+        /* Still above the screen the ‹ is going to: one entry more. */
+        passes += 1;
+        result = { kind: "passing" };
+        if (event) landings.set(event, result);
+        armSettle();
+        host.history.go(-1);
+        return result;
+      }
       if (ours) {
         /* The pop this store asked for: the place it already shows is the
            one the entry says, and the writes that waited for it go now. */
@@ -684,7 +723,7 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
         }
         result = { kind: "foreign" };
       }
-      if (event) lastLanding = { event, result };
+      if (event) landings.set(event, result);
       return result;
     },
     remember(slot, value) {
