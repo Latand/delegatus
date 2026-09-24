@@ -12,6 +12,7 @@ import type { PatchBody, PatchResult, TaskMutationPorts } from "@/components/kan
 
 import { MobileKanban } from "./MobileKanban";
 import { createMobileNav, MobileNavContext, type MobileNav } from "./mobileNav";
+import { fakeHistory } from "./mobileNavTestHistory";
 import { receipts, useReceipt } from "./MobileReceipt";
 import { attentionKey } from "./phoneKanbanModel";
 import { resetPhoneKanbanPlaces } from "./phoneKanbanPlace";
@@ -104,20 +105,8 @@ function layout(files: readonly FileEntry[]): SchemeLayout {
 }
 
 function fakeNav(): { nav: MobileNav; pushes: () => number } {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=fixture" }];
-  let index = 0;
-  let pushes = 0;
-  const nav = createMobileNav({
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { pushes += 1; entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index > 0) index -= 1; },
-    },
-    href: () => entries[index]!.url,
-    onPopstate: () => () => {},
-  });
-  return { nav, pushes: () => pushes };
+  const history = fakeHistory("http://localhost/#p=fixture");
+  return { nav: createMobileNav(history.host), pushes: history.pushes };
 }
 
 /** The flow receipt the shell draws between the body and the dock. */
@@ -128,13 +117,13 @@ function Receipt() {
 
 interface Opened { tasks: string[]; conversations: string[]; pipelines: string[]; shown: string[][] }
 
-function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void }) {
+function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void; nav?: MobileNav }) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
   roots.push(root);
   const opened: Opened = { tasks: [], conversations: [], pipelines: [], shown: [] };
-  const { nav, pushes } = fakeNav();
+  const { nav, pushes } = input.nav ? { nav: input.nav, pushes: () => 0 } : fakeNav();
   const render = (tasks: BoardTask[]) => flushSync(() => root.render(
     <MobileNavContext.Provider value={nav}>
       <MobileKanban
@@ -297,6 +286,22 @@ test("a long-press opens the card's sheet; Move to moves the card at once with U
   expect(cardsIn(host, "done")).not.toContain("task:a2");
   expect(cardsIn(host, "assigned")).toContain("task:a2");
   expect(q(host, "[data-test-receipt]")!.textContent).toContain("the store is read-only");
+});
+
+test("a card sheet that comes back without its card (a reload, #2105) closes, and its entry goes with it", async () => {
+  const { files, tasks } = board();
+  /* The tab stands on the card sheet's entry, and nothing has chosen a card:
+     what a reload leaves behind. */
+  const history = fakeHistory("http://localhost/#p=fixture");
+  const nav = createMobileNav(history.host);
+  nav.openSheet("card");
+  expect(history.index()).toBe(1);
+  mount({ files, tasks, nav });
+  expect(nav.getState().sheet).toBeNull();
+  expect(q(dom.document.body as unknown as HTMLElement, "[data-phone-card-sheet]")).toBeNull();
+  await sleep(0);
+  expect(history.index()).toBe(0);
+  expect(history.state()).toMatchObject({ mobile2: { sheet: null } });
 });
 
 test("an empty column says so in the desktop's words and points to the nearest column with work", () => {

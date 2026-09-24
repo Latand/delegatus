@@ -35,7 +35,7 @@ import type { MobileRowActionTarget } from "./MobileRowActions";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { MobileSwipeRow, type MobileRowAction } from "./MobileSwipeRow";
-import { useMobileNav, useMobileNavStore } from "./mobileNav";
+import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory, useSheetSelection } from "./mobileNav";
 import { cardOfTask, usePhoneBoardModel, type PhoneBoardInput, type TaskMutations } from "./usePhoneBoard";
 
 /*
@@ -277,7 +277,8 @@ function AskCard({ file, now, onOpen }: { file: FileEntry; now: number; onOpen: 
 
 /** Earlier attempts and review rounds of the task's lanes, newest first,
     folded to one row (§3.5, 7). A row whose transcript is in the scan opens it. */
-function EarlierAttempts({ lanes, past, files, nowMs, onOpen }: {
+function EarlierAttempts({ taskId, lanes, past, files, nowMs, onOpen }: {
+  taskId: string;
   lanes: readonly KanbanPipeline[];
   past: NonNullable<ReturnType<typeof cardOfTask>>["past"];
   files: readonly FileEntry[];
@@ -285,7 +286,8 @@ function EarlierAttempts({ lanes, past, files, nowMs, onOpen }: {
   onOpen: (file: FileEntry) => void;
 }) {
   const { t } = useLocale();
-  const [open, setOpen] = useState(false);
+  /* Open or folded as the operator left it when Back returns here (#2105). */
+  const [open, setOpen] = useMobileScreenState({ kind: "task", id: taskId }, "earlier", false);
   const names = useMemo(() => new Map(lanes.map((lane) => [lane.pipeline.id, stageNames(t, lane.pipeline)] as const)), [lanes, t]);
   if (!past.length) return null;
   const age = (atMs: number) => (atMs ? humanizeDuration(blockAgeSeconds((nowMs - atMs) / 1000)) : "");
@@ -373,7 +375,9 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     .map((entry) => entry.summary), [lanes]);
   const live = ordered.filter((summary) => !pipelineEnded(summary.pipeline));
   const ended = ordered.filter((summary) => pipelineEnded(summary.pipeline));
-  const [endedOpen, setEndedOpen] = useState(false);
+  /* The finished lanes stay open or folded as the operator left them when
+     Back returns here (#2105). */
+  const [endedOpen, setEndedOpen] = useMobileScreenState({ kind: "task", id: taskId }, "ended", false);
 
   /* The task's conversations: its members and the ones it shares with
      another card, working first, then those that ask, then by recency. */
@@ -423,7 +427,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
      blur can all ask for the same edit, and only the first one writes. */
   const activeEdit = useRef<Editing | null>(null);
   activeEdit.current = editing;
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useMobileScreenState({ kind: "task", id: taskId }, "details", false);
   const startEdit = (field: EditField) => {
     if (!task) return;
     const base = field === "details" ? details : textField(task.text, field);
@@ -578,6 +582,10 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
 
   /* ── Sheets ───────────────────────────────────────────────────────────── */
   const laneSummary = laneFor ? lanes.find((summary) => summary.pipeline.id === laneFor) ?? null : null;
+  /* The lane's menu and the links sheet show what this screen chose to open
+     them on; an entry that came back without it closes (#2105). */
+  useSheetSelection("lane", laneSummary !== null);
+  useSheetSelection("links", linksFor !== null);
   const sheets: SheetRenderer = (name, close) => {
     if (name === "status") {
       return (
@@ -726,6 +734,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const body = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLDivElement>(null);
   const titleAway = useScrolledAway(heading, body);
+  /* Back to this task lands where the operator left it (#2105). */
+  useMobileScrollMemory(body, { kind: "task", id: taskId }, Boolean(task));
   const context = contextLine(t, status, agents.length, lanes.length);
   const barTitle = (
     <span className="flex min-w-0 flex-1 flex-col">
@@ -955,7 +965,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 ) : null}
               </section>
             ) : null)}
-            <EarlierAttempts lanes={lanes} past={card?.past ?? []} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
+            <EarlierAttempts taskId={taskId} lanes={lanes} past={card?.past ?? []} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
           </>
         )}
       </div>

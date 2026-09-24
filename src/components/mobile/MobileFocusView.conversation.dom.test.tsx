@@ -52,6 +52,7 @@ const { resetOrchestratorIncumbentCacheForTests } = await import("../orchestrato
 import type { MobileNav, MobileNavHost } from "./mobileNav";
 
 const { MobileNavContext, createMobileNav, topScreen } = await import("./mobileNav");
+const { fakeHistory } = await import("./mobileNavTestHistory");
 
 const dom = new Window({ url: "http://localhost/#p=demo" });
 const G = globalThis as Record<string, unknown>;
@@ -122,21 +123,9 @@ afterEach(async () => {
 });
 
 /** A model of the browser's same-document history, so a pop is a real pop. */
-function browser() {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=demo" }];
-  let index = 0;
-  let listener: ((state: unknown) => void) | null = null;
-  const host: MobileNavHost = {
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index === 0) return; index -= 1; listener?.(entries[index]!.state); },
-    },
-    href: () => entries[index]!.url,
-    onPopstate(next) { listener = next; return () => { listener = null; }; },
-  };
-  return { host, depth: () => entries.length };
+function browser(): { host: MobileNavHost; depth: () => number } {
+  const history = fakeHistory("http://localhost/#p=demo");
+  return { host: history.host, depth: history.length };
 }
 
 function entry(over: Partial<FileEntry> & Pick<FileEntry, "path" | "title">): FileEntry {
