@@ -76,7 +76,7 @@ function renderScaffold(template: string, params: RoleParamValues): string {
  */
 export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues): string {
   const frontendGuidance = definition.id === "builder" && params.domain === "frontend"
-    ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics, responsive behavior, and English/Ukrainian parity."
+    ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics, responsive behavior, and English/Ukrainian parity. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the issue does not ask for."
     : "";
   return renderScaffold(definition.promptScaffold, params) + frontendGuidance;
 }
