@@ -237,6 +237,40 @@ test("a rollback fence checkpoints before demotion and suppresses the later mirr
   expect(demotions).toEqual([true]);
 });
 
+test("a withdrawn fence the release acknowledged hands authority back once", async () => {
+  let fence: { schemaVersion: 1; epoch: number; mode: "fencing"; releaseRevision: string; updatedAt: string } | null = {
+    schemaVersion: 1,
+    epoch: 5,
+    mode: "fencing",
+    releaseRevision: "b".repeat(40),
+    updatedAt: "2026-09-19T00:00:00.000Z",
+  };
+  let withdrawn = 0;
+  const scheduled: Array<() => void> = [];
+  await activateViewerRuntimeWhenCurrent(
+    async () => undefined,
+    () => true,
+    {
+      pollMs: 1,
+      schedule: (callback) => { scheduled.push(callback); return { unref() {} }; },
+      fenceRequest: () => fence,
+      onFenceRequested: async () => undefined,
+      onFenceWithdrawn: async () => { withdrawn += 1; },
+    },
+  );
+  scheduled.shift()!();
+  await Bun.sleep(0);
+  expect(withdrawn).toBe(0);
+  // The deployment was cancelled: the adapter restored this release's authority.
+  fence = null;
+  scheduled.shift()!();
+  await Bun.sleep(0);
+  expect(withdrawn).toBe(1);
+  scheduled.shift()!();
+  await Bun.sleep(0);
+  expect(withdrawn).toBe(1);
+});
+
 test("a current release monitors rollback fences while activation is still pending", async () => {
   const scheduled: Array<() => void> = [];
   let rejectActivation!: (error: Error) => void;
@@ -778,7 +812,7 @@ test("structured-host startup retries an arbitrary recoverable adoption error", 
       },
     );
 
-    expect(logged).toEqual([["[structured hosts] startup adoption failed; retry scheduled", failure]]);
+    expect(logged).toEqual([["[structured hosts] startup adoption failed; retry scheduled", { category: "unknown-recoverable", attempt: 1, retryInMs: 5_000 }]]);
     expect(didStructuredHostStartupFail()).toBe(true);
     expect(scheduled).toHaveLength(1);
 
@@ -789,7 +823,7 @@ test("structured-host startup retries an arbitrary recoverable adoption error", 
     expect(attempts).toBe(2);
     expect(didStructuredHostStartupFail()).toBe(false);
     expect(logged).toEqual([
-      ["[structured hosts] startup adoption failed; retry scheduled", failure],
+      ["[structured hosts] startup adoption failed; retry scheduled", { category: "unknown-recoverable", attempt: 1, retryInMs: 5_000 }],
       ["[structured hosts] startup adoption recovered", { attempts: 2 }],
     ]);
   } finally {
@@ -850,7 +884,7 @@ test("structured-host startup self-heals after the runtime socket becomes ready"
     expect(attempts).toBe(1);
     expect(didStructuredHostStartupFail()).toBe(true);
     expect(scheduled).toHaveLength(1);
-    expect(scheduled[0]!.delayMs).toBe(100);
+    expect(scheduled[0]!.delayMs).toBe(5_000);
 
     scheduled.shift()!.callback();
     await Promise.resolve();
@@ -862,7 +896,7 @@ test("structured-host startup self-heals after the runtime socket becomes ready"
     expect(logged).toEqual([
       [
         "[structured hosts] startup adoption failed; retry scheduled",
-        expect.any(RuntimeHostUnavailableError),
+        { category: "runtime-host-unavailable", attempt: 1, retryInMs: 5_000 },
       ],
       ["[structured hosts] startup adoption recovered", { attempts: 2 }],
     ]);
@@ -911,15 +945,68 @@ test("structured-host startup uses bounded backoff with one pending retry", asyn
     expect(scheduled).toHaveLength(0);
     expect(didStructuredHostStartupFail()).toBe(false);
     expect(logged).toEqual([
-      [
+      ...[25, 50, 50, 50].map((retryInMs, index) => [
         "[structured hosts] startup adoption failed; retry scheduled",
-        expect.any(RuntimeHostUnavailableError),
-      ],
+        { category: "runtime-host-unavailable", attempt: index + 1, retryInMs },
+      ]),
       ["[structured hosts] startup adoption recovered", { attempts: 5 }],
     ]);
   } finally {
     markStructuredHostStartupReady();
   }
+});
+
+test("startup failures back off into minutes and every attempt logs only safe fields", async () => {
+  const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
+  const logged: unknown[][] = [];
+  let attempts = 0;
+  let elapsedMs = 0;
+  const attemptTimes: number[] = [];
+  await runStructuredHostStartup(async () => {
+    attempts += 1;
+    attemptTimes.push(elapsedMs);
+    if (attempts <= 9) throw new RuntimeHostUnavailableError("private response payload");
+  }, (...args) => { logged.push(args); }, {
+    random: () => 0.5,
+    schedule: (callback, delayMs) => { scheduled.push({ callback, delayMs }); return {}; },
+  });
+  const delays: number[] = [];
+  while (scheduled.length) {
+    const next = scheduled.shift()!;
+    delays.push(next.delayMs);
+    elapsedMs += next.delayMs;
+    next.callback();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+  expect(delays).toEqual([5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000, 300_000]);
+  expect(logged.slice(0, 9)).toEqual(delays.map((retryInMs, index) => [
+    "[structured hosts] startup adoption failed; retry scheduled",
+    { category: "runtime-host-unavailable", attempt: index + 1, retryInMs },
+  ]));
+  expect(JSON.stringify(logged)).not.toContain("private response payload");
+  expect(Math.max(...attemptTimes.map((start) => attemptTimes.filter((at) => at >= start && at < start + 60_000).length))).toBe(4);
+});
+
+test("startup ignores duplicate retry callbacks during adoption and after ready", async () => {
+  let retry!: () => void;
+  let finish!: () => void;
+  let attempts = 0;
+  const adopting = new Promise<void>((resolve) => { finish = resolve; });
+  await runStructuredHostStartup(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new RuntimeHostUnavailableError("runtime host is unavailable");
+    await adopting;
+  }, () => {}, { schedule: (callback) => { retry = callback; return {}; } });
+  retry();
+  retry();
+  expect(attempts).toBe(2);
+  finish();
+  await adopting;
+  await Promise.resolve();
+  retry();
+  expect(attempts).toBe(2);
+  expect(didStructuredHostStartupFail()).toBe(false);
 });
 
 test("structured-host startup applies bounded jitter to recoverable retries", async () => {
@@ -987,9 +1074,9 @@ test("unsupported structured runtime aborts server startup", async () => {
 
     expect(logged).toEqual([[
       "[structured hosts] startup adoption failed",
-      failure,
       {
         category: "configuration",
+        attempt: 1,
         action: "Correct the structured-host configuration and restart the Viewer.",
       },
     ]]);

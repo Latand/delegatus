@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
+import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/liveness";
 import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "@/lib/pipelines/listProjection";
@@ -38,6 +39,7 @@ import {
   MIN_SNAPSHOT_STRING_LENGTH, VIEW_RESOLUTIONS, VIEW_SCOPE_KINDS,
 } from "@/lib/view/types";
 
+import { runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
 import type { McpToolPolicy } from "./toolAllowlist";
 
 export const MCP_SERVER_NAME = "viewer";
@@ -83,6 +85,7 @@ export const MCP_TOOL_NAMES = [
   "rotate_orchestrator",
   "seat_tick_settings",
   "account_project_binding",
+  "account_limits",
 ] as const;
 
 export type McpToolName = typeof MCP_TOOL_NAMES[number];
@@ -159,6 +162,11 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
  * content-idempotent, so a retry after the board write converges without
  * another revision. Other conversation actions still require live runtime
  * ownership and remain outside interrupted recovery.
+ *
+ * Resolving a pipeline decision persists its request key, actor, answer and
+ * stage fences alongside the new attempt. Re-running that action either admits
+ * the answer once or returns the saved answer, including after a process exit
+ * between pipeline persistence and receipt completion.
  */
 const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolName>([
   "request_attention",
@@ -173,6 +181,7 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
 
 function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs): boolean {
   if (INTERRUPTED_RECOVERABLE_TOOLS.has(toolName)) return true;
+  if (toolName === "pipeline_action") return ["resolve-decision", "continue-review", "convert-legacy-review", "revert-legacy-review"].includes(String(args.action));
   if (toolName !== "conversation_action") return false;
   return args.action === "archive" || args.action === "unarchive";
 }
@@ -182,10 +191,14 @@ export type McpToolPayload = Record<string, unknown>;
 export interface McpToolCallContext {
   signal?: AbortSignal;
   deadlineAt?: number;
+  /** Numeric transport subphases, supplied by the service, never tool arguments. */
+  recordTiming?: (phase: "http", milliseconds: number) => void;
   /** #1490: the durable binding this call's dispatch must use. Present only on
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
   binding?: McpRequestBinding;
+  /** Persist a newly created orchestrator recipient before its first send. */
+  bindCreatedTarget?: (identity: string) => Promise<void>;
   /** #1490: written by the transport the moment the request may be on the
       wire. A failure raised while this still says `false` happened before any
       dispatch, which is the only way an error without an id proves that the
@@ -263,7 +276,10 @@ export function nativeWorkFromRequestMeta(meta: unknown): McpNativeWork | null {
 export interface McpDispatchTracker {
   attempted: boolean;
 }
-export type McpToolBinding = (args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>;
+export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
+  /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
+  authorizeReceipt?: (args: McpToolArgs) => void | Promise<void>;
+};
 export type McpToolBindings = Record<McpToolName, McpToolBinding>;
 
 export interface McpBoundedNumericArg {
@@ -544,7 +560,7 @@ export interface McpReceiptStore {
       recorded — is released; anything already settled is left exactly as it
       is. Optional so a minimal store keeps working: without it an unadmitted
       refusal is settled as before rather than silently stranding a claim. */
-  release?(key: string, digest: string): boolean | Promise<boolean>;
+  release?(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean | Promise<boolean>;
 }
 
 /**
@@ -559,6 +575,8 @@ export interface McpRecoveryReceiptStore extends McpReceiptStore {
   /** `claimed` → `dispatching`. False means the attempt was closed by someone
       else first, and the caller must not dispatch. */
   markDispatching(key: string, digest: string): boolean | Promise<boolean>;
+  /** Fill an absent orchestrator recipient once, under the original claim owner. */
+  bindCreatedTarget?(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean | Promise<boolean>;
   /** `claimed` → `not-executed`, writing the terminal result. False means the
       row is no longer merely claimed (it was dispatched, or already closed). */
   fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean | Promise<boolean>;
@@ -636,9 +654,10 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     this.receipts.set(key, { ...receipt, digest, result, stage: "settled" });
   }
 
-  release(key: string, digest: string): boolean {
+  release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.result || dispatchedReceipt(receipt)) return false;
+    if (!receipt || receipt.digest !== digest || receipt.result || (dispatchedReceipt(receipt)
+      && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
     this.receipts.delete(key);
     return true;
   }
@@ -652,6 +671,14 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     const receipt = this.receipts.get(key);
     if (!receipt || receipt.digest !== digest || receipt.stage !== "claimed" || receipt.result) return false;
     this.receipts.set(key, { ...receipt, stage: "dispatching" });
+    return true;
+  }
+
+  bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean {
+    const receipt = this.receipts.get(key);
+    const next = receipt?.digest === digest ? withCreatedTarget(receipt, binding, identity) : null;
+    if (!next) return false;
+    this.receipts.set(key, next);
     return true;
   }
 
@@ -670,6 +697,17 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     return settled.result;
   }
 
+}
+
+/** Only the original dispatch owner may fill the absent recipient. A later
+    seat rotation cannot replace a recipient already held by the receipt. */
+function withCreatedTarget(receipt: Receipt | undefined, binding: McpRequestBinding, identity: string): Receipt | null {
+  const held = receipt?.binding;
+  if (!receipt || receipt.stage !== "dispatching" || receipt.result || receipt.recoveryResult
+    || !held || held.toolName !== "send_message_to_orchestrator"
+    || held.target.identity !== null || !/^conversation_[A-Za-z0-9_-]{1,128}$/.test(identity)
+    || JSON.stringify(held) !== JSON.stringify(binding)) return null;
+  return { ...receipt, binding: { ...held, target: { ...held.target, identity } } };
 }
 
 type ReceiptFile = {
@@ -1401,11 +1439,12 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     });
   }
 
-  async release(key: string, digest: string): Promise<boolean> {
+  async release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): Promise<boolean> {
     return withFileLock(this.filePath, () => {
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (!receipt || receipt.digest !== digest || receipt.result || dispatchedReceipt(receipt)) return false;
+      if (!receipt || receipt.digest !== digest || receipt.result || (dispatchedReceipt(receipt)
+        && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
       delete state.mutationReceipts[key];
       delete state.readReceipts[key];
       writeReceiptFile(this.filePath, state);
@@ -1442,6 +1481,10 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
   markDispatching(key: string, digest: string): Promise<boolean> {
     return this.transition(key, digest, (receipt) =>
       receipt && receipt.stage === "claimed" && !receipt.result ? { ...receipt, stage: "dispatching" } : null);
+  }
+
+  bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): Promise<boolean> {
+    return this.transition(key, digest, (receipt) => withCreatedTarget(receipt, binding, identity));
   }
 
   fenceUndispatched(key: string, digest: string, result: McpToolResult): Promise<boolean> {
@@ -1502,14 +1545,19 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("SQLite MCP receipts require the Bun runtime");
-    this.db = new sqlite.Database(filename, { create: true, strict: true });
+    /* Bound to the file at its name: a receipt store the activation fallback
+       replaced is reopened (with its schema), never written through the moved
+       handle. The journal mode cannot change inside a transaction, so these
+       pragmas run before the schema transaction. */
+    this.db = openCurrentDatabase(filename, () => {
+      const db = new sqlite.Database(filename, { create: true, strict: true });
+      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA auto_vacuum = INCREMENTAL;");
+      return db;
+    }, { reopened: () => this.initializeSchema() });
     this.readReceiptCountCap = Math.max(1, Math.floor(options.readReceiptCountCap ?? FILE_RECEIPT_CAP));
     this.readReceiptByteCap = Math.max(1, Math.floor(options.readReceiptByteCap ?? SQLITE_READ_RECEIPT_BYTE_CAP));
     this.boundedPendingTtlMs = Math.max(1, Math.floor(options.boundedPendingTtlMs ?? SQLITE_BOUNDED_PENDING_TTL_MS));
     this.now = options.now ?? Date.now;
-    /* The journal mode cannot change inside a transaction, so these run
-       before the schema transaction below. */
-    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA auto_vacuum = INCREMENTAL;");
     this.initializeSchema();
     this.importLegacyFile(options.legacyFilePath);
     this.db.exec("BEGIN IMMEDIATE");
@@ -1578,17 +1626,17 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     }
   }
 
-  release(key: string, digest: string): boolean {
+  release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const receipt = this.db.query<Pick<StoredSqliteReceipt, "digest" | "result_json" | "recovery_result_json" | "stage">, [string]>(`
-        SELECT digest, result_json, recovery_result_json, stage
+      const receipt = this.db.query<Pick<StoredSqliteReceipt, "digest" | "result_json" | "recovery_result_json" | "stage" | "binding_json">, [string]>(`
+        SELECT digest, result_json, recovery_result_json, stage, binding_json
         FROM mcp_receipts
         WHERE receipt_key = ?
       `).get(key);
       const releasable = Boolean(receipt) && receipt!.digest === digest
         && receipt!.result_json === null && receipt!.recovery_result_json === null
-        && receipt!.stage !== "dispatching";
+        && (receipt!.stage !== "dispatching" || (!!unadmittedBinding && receipt!.binding_json === JSON.stringify(unadmittedBinding)));
       if (releasable) this.db.query<unknown, [string]>("DELETE FROM mcp_receipts WHERE receipt_key = ?").run(key);
       this.db.exec("COMMIT");
       return releasable;
@@ -1609,6 +1657,28 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       SET stage = 'dispatching'
       WHERE receipt_key = ? AND digest = ? AND stage = 'claimed' AND result_json IS NULL
     `).run(key, digest).changes === 1;
+  }
+
+  bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.selectRow(key);
+      const record = row ? this.recordOfRow(key, row) : null;
+      const next = record?.digest === digest ? withCreatedTarget({
+        digest, binding: record.binding ?? undefined, stage: record.stage ?? undefined,
+        result: record.result ?? undefined, recoveryResult: record.recoveryResult ?? undefined,
+      }, binding, identity) : null;
+      if (next) {
+        const bindingJson = JSON.stringify(next.binding);
+        this.db.query(`UPDATE mcp_receipts SET binding_json = ?, storage_bytes = ? WHERE receipt_key = ?`)
+          .run(bindingJson, this.storageBytes(key, digest, null, bindingJson), key);
+      }
+      this.db.exec("COMMIT");
+      return next !== null;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
   }
 
   fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean {
@@ -1881,7 +1951,7 @@ function stable(value: unknown): unknown {
     .map(([key, child]) => [key, stable(child)]));
 }
 
-function requestDigest(toolName: McpToolName, args: McpToolArgs): string {
+export function requestDigest(toolName: McpToolName, args: McpToolArgs): string {
   return crypto.createHash("sha256").update(JSON.stringify(stable({ toolName, args }))).digest("hex");
 }
 
@@ -1906,7 +1976,7 @@ export interface McpToolService {
 }
 
 type McpTimingOutcome = "success" | "failure" | "replay" | "conflict" | "pending" | "deadline" | "cancelled";
-type McpTimingPhase = "claim" | "binding" | "completion" | "serialization" | "serviceTotal" | "replay";
+type McpTimingPhase = "caller" | "http" | "claim" | "binding" | "completion" | "serialization" | "serviceTotal" | "replay";
 
 interface McpToolTimingSample {
   toolName: McpToolName;
@@ -1987,7 +2057,7 @@ const MCP_TIMING_OUTCOMES: McpTimingOutcome[] = [
   "success", "failure", "replay", "conflict", "pending", "deadline", "cancelled",
 ];
 const MCP_TIMING_PHASES: McpTimingPhase[] = [
-  "claim", "binding", "completion", "serialization", "serviceTotal", "replay",
+  "caller", "http", "claim", "binding", "completion", "serialization", "serviceTotal", "replay",
 ];
 
 function mutableToolTiming(): MutableToolTiming {
@@ -2216,6 +2286,20 @@ export function createMcpToolService(
       const effectiveArgs = normalized.args;
       const callStartedAt = performance.now();
       const phaseDurations: Partial<Record<McpTimingPhase, number>> = {};
+      context = { ...context, recordTiming: (phase, milliseconds) => {
+        phaseDurations[phase] = (phaseDurations[phase] ?? 0) + milliseconds;
+      } };
+      const permit = () => {
+        const startedAt = performance.now();
+        try { return policy?.permit(typedTool, effectiveArgs); }
+        finally { phaseDurations.caller = (phaseDurations.caller ?? 0) + performance.now() - startedAt; }
+      };
+      const measure = async <T>(phase: McpTimingPhase, run: () => T | Promise<T>): Promise<T> => {
+        const startedAt = performance.now();
+        try { return await run(); }
+        finally { phaseDurations[phase] = (phaseDurations[phase] ?? 0) + performance.now() - startedAt; }
+      };
+      try {
       const deadlineBudgetMs = context.deadlineAt === undefined
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
@@ -2244,7 +2328,7 @@ export function createMcpToolService(
          binding so caller authority is checked before replay, including after
          restart; an MCP-cache hit must never disclose another owner's receipt. */
       if (typedTool === "flow_action" && effectiveArgs.action === "agent-decision") {
-        const verdict = policy?.permit(typedTool, effectiveArgs);
+        const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
         try {
           const payload = await bindings[typedTool](effectiveArgs, context);
@@ -2262,9 +2346,15 @@ export function createMcpToolService(
          property of who is calling, not of the operation, so it must not burn the
          clientRequestId — the same call becomes legitimate the moment the operator
          grants the tool, and a spent receipt would answer it with a stale no. */
-      const verdict = policy?.permit(typedTool, effectiveArgs);
+      const verdict = permit();
       if (verdict && !verdict.allowed) {
         return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
+      }
+      try {
+        const authorize = bindings[typedTool].authorizeReceipt;
+        if (authorize) await authorize(effectiveArgs);
+      } catch (error) {
+        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
       }
 
       /* #1490: `recoveryOnly` decides only whether an absent claim may start
@@ -2296,6 +2386,7 @@ export function createMcpToolService(
            what may be disclosed, so it cannot be learned from the answer. A
            refusal here burns nothing — no claim exists yet. */
         let bound: McpRequestBindingInput;
+        const callerStartedAt = performance.now();
         try {
           bound = await tool.bind(digestArgs);
         } catch (error) {
@@ -2309,6 +2400,8 @@ export function createMcpToolService(
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
+        } finally {
+          phaseDurations.caller = (phaseDurations.caller ?? 0) + performance.now() - callerStartedAt;
         }
         const binding: McpRequestBinding = {
           version: 1,
@@ -2389,8 +2482,8 @@ export function createMcpToolService(
               recovered: true, outcome: "settled", evidence: "mcp-receipt", nextAction: "follow-disposition",
               ...(!previous.recovered ? {
                 original: previous,
-                state: typedTool === "send_message" ? "delivered" : "completed",
-                ...(typedTool === "send_message" ? { resend: "not-needed", duplicateRisk: false } : {}),
+                state: typedTool === "spawn_agent" ? "completed" : "delivered",
+                ...(["send_message", "send_message_to_orchestrator"].includes(typedTool) ? { resend: "not-needed", duplicateRisk: false } : {}),
               } : {}),
             } : {}),
             replayed: true,
@@ -2574,7 +2667,14 @@ export function createMcpToolService(
         let settled: McpToolResult;
         const dispatch: McpDispatchTracker = { attempted: false };
         try {
-          const payload = await bindings[typedTool](effectiveArgs, { ...context, binding, dispatch });
+          const payload = await bindings[typedTool](effectiveArgs, { ...context, binding, dispatch,
+            bindCreatedTarget: async (identity) => {
+              if (!store.bindCreatedTarget || !await store.bindCreatedTarget(key, digest, binding, identity)) {
+                throw new McpDispatchUncertainError("the created orchestrator recipient could not be durably bound; no message was dispatched");
+              }
+              binding.target = { ...binding.target, identity };
+            },
+          });
           settled = {
             ...payload,
             ...(normalized.clamped ? { clamped: normalized.clamped } : {}),
@@ -2586,6 +2686,11 @@ export function createMcpToolService(
           outcome = "success";
         } catch (error) {
           phaseDurations.binding = performance.now() - bindingStartedAt;
+          if (error instanceof McpUnadmittedRefusal && receipts.release) {
+            await receipts.release(key, digest, binding);
+            outcome = "failure";
+            return failure(typedTool, requestId, "tool_failed", error.message, true, false, error.details);
+          }
           if (error instanceof McpDispatchUncertainError) {
             /* The request may be on the server. Nothing is written: the row
                stays `dispatching`, which is exactly "unknown" — and every later
@@ -2661,9 +2766,7 @@ export function createMcpToolService(
       };
       const result = (async (): Promise<McpToolResult> => {
         if (recoverable && recoveryStore) return recoverableCall(recoverable, recoveryStore);
-        const claimStartedAt = performance.now();
-        const claim = await receipts.claim(key, digest, retention);
-        phaseDurations.claim = performance.now() - claimStartedAt;
+        const claim = await measure("claim", () => receipts.claim(key, digest, retention));
         if (claim.kind === "conflict") {
           outcome = "conflict";
           return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
@@ -2760,9 +2863,7 @@ export function createMcpToolService(
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
-        const completionStartedAt = performance.now();
-        await receipts.complete(key, digest, settled, retention);
-        phaseDurations.completion = performance.now() - completionStartedAt;
+        await measure("completion", () => receipts.complete(key, digest, settled, retention));
         return settled;
       })();
       inFlight.set(key, { digest, result });
@@ -2770,6 +2871,16 @@ export function createMcpToolService(
         return finish(await result, outcome, unfinishedAgeMs);
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
+      }
+      } finally {
+        const totalMs = performance.now() - callStartedAt;
+        if (totalMs >= 2_000) {
+          // Fixed vocabulary only: no keys, arguments, identities or error text.
+          // http is a subphase of binding; these wall times are not additive.
+          phaseDurations.serviceTotal = totalMs;
+          console.error(`[mcp slow] tool=${typedTool} ${MCP_TIMING_PHASES
+            .map(phase => `${phase}Ms=${Math.round(phaseDurations[phase] ?? 0)}`).join(" ")}`);
+        }
       }
     },
   };
@@ -2780,19 +2891,19 @@ export function createMcpToolService(
  * whose response can be lost after the server may already hold the request.
  */
 export const RECOVERY_CONTRACT_DESCRIPTION = [
-  "Recovery under the ORIGINAL `clientRequestId` (#1490): the claim is bound server-side to the calling conversation, its project, the canonical target and the exact downstream key BEFORE the one dispatch, and the request is sent exactly once — never re-POSTed after it may have reached the Viewer.",
+  "Recovery under the ORIGINAL `clientRequestId` (#1490): the claim is bound server-side to the calling conversation, its project, the canonical target and the exact downstream key BEFORE the one dispatch, and the request is sent exactly once — never re-POSTed after it may have reached Delegatus.",
   "Repeat the same call with the same arguments (with or without `recoveryOnly: true`) to learn what became of it. A fresh ordinary call claims and dispatches once; an existing claim is answered by READING the durable downstream record, never by dispatching again; `recoveryOnly: true` never claims an absent key or starts any work. Changed arguments under an existing key are an `idempotency_conflict`; another caller or project is refused without disclosure, and a caller whose identity the server cannot establish is refused (`caller_unidentified`) before anything is claimed or dispatched.",
   "The answer's `outcome` is closed: `accepted` (durably admitted, with its actual ids), `in-flight` (executing), `settled` (terminal, with the actual state and resend guidance), `not-executed` (the server proves dispatch never began and the attempt is permanently closed), or `unknown` (timeout, interrupted claim, an unreadable receipt record, unreadable or ambiguous evidence, or absence while execution is still possible). `nextAction` says what is permitted: on `unknown`, `accepted` and `in-flight` ONLY another lookup under the same key — `retryable` never means a new key may be used, and nothing is ever redelivered automatically. `message_receipt(operationId)` remains available for an accepted send.",
 ].join(" ");
 
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
-    "Create a Viewer-managed agent conversation and return its durable conversation and launch ids.",
+    "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
     "Pass `taskId` to admit the agent onto an existing board task (#1720), reviewers included. A launch that names none joins the tasks held by the parent it names (`parentConversationId`, `src` or `parent`) and by the conversation it `reviews`; naming neither, or when neither holds a task, it is given a placeholder task of its own — a duplicate card.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
   send_message: [
-    "Deliver a message to a Viewer conversation through its registered runtime host.",
+    "Deliver a message to a Delegatus conversation through its registered runtime host.",
     "A reclaimed conversation host is resumed after the instruction is durably reserved, and the delivery queue keeps that single operation through publication.",
     "The answer reports acceptance. `outcome` is `held`, `queued` or `delivering` until the delivery record settles, and `settled` says whether arrival is established. Hold `operationId` and ask `message_receipt` what became of it — never treat an unsettled outcome as terminal, and never re-send an unsettled operation, because a send whose fate is unknown can be delivered twice.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -2802,27 +2913,41 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`state` is `delivered`, `failed` or `in-flight`, read from the durable delivery record and reconciled against the delivery journal's current answer rather than from what the send call reported at the time. Asking is also what ENDS an accepted send that was dropped: `in-flight` means it is still progressing — the recipient may be mid-turn — and asking again later reaches `delivered` or `failed`.",
     "`resend` says what is safe to do next: `not-needed` (it arrived), `safe` (the record proves it never executed and it is fenced, so the same instruction may be sent again), or `verify-first` (`duplicateRisk` is true — delivery began, or nothing proves it did not, so check the recipient before sending again).",
     "A resend is a NEW `send_message` under a NEW `clientRequestId`: the settled operation is fenced, so repeating the original `clientRequestId` replays that settled answer instead of delivering anything.",
+    "`delivery: \"interrupt-then-turn-started\"` with `interruptedTurnId` means the recipient's engine cannot steer (Copilot), so your message interrupted its running turn and started the next one; it is present while that delivery is in flight and after it settles, and absent on every other send.",
   ].join(" "),
-  create_task: "Create a durable board task.",
-  update_task: "Update a durable board task.",
+  create_task: [
+    "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
+    "Create a durable board task.",
+    "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
+    "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
+    "Set `icon` to the lucide icon name that says what the task is about (bug, smartphone, rocket, search-check), so the card reads at a glance.",
+  ].join(" "),
+  update_task: [
+    "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
+    "Update a durable board task.",
+    "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
+    "`refine` writes only the human part, as it always has.",
+    "`icon` sets the card's lucide icon; give one to a task that has none.",
+  ].join(" "),
   create_pipeline: [
-    "Create a Viewer pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
+    "Create a Delegatus pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
     "`taskIds` binds the pipeline to existing board tasks in the same call (#1720): every stage launch reads that list and joins those tasks, and a pipeline created without it is given a placeholder task of its own.",
-    "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail`. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
+    "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail` ({to, maxRounds?, onExhausted?}). A spent fail edge hands its last findings to `to` once more and then follows the failing stage's pass edge without re-reviewing (`onExhausted: advance`, the default); `onExhausted: park` stops for the operator instead. The handoff happens once per stage; a later fail of the same stage parks. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
     "A review-loop stage reviews the session of the run stage that reaches it, so it must be pass-reachable from a run stage through `next` edges — array order alone reaches nothing. review-loop stages are always read-only, may not define `onFail`, and take their engine/model/effort from their role (the registry reviewer preset runs on Codex) unless the stage overrides them.",
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
     "A read-only stage may name repository-relative outputs. It can write those paths, while the controller refuses undeclared worktree changes and agent-created commits and records only the declared outputs.",
     "autoStart:false creates a draft the operator starts from the board; a draft that pins `baseBranch` must also pass `baseRef` (a draft is not provisioned, so the caller resolves the SHA).",
-    "`publication` defaults to internal: stages and reviews settle on the Viewer's own attempts, verdicts and exact local revisions, and nothing is pushed or read from GitHub while the pipeline runs. The one remote read is the time-bounded fetch of `origin/<baseBranch>` a pipeline created or started without `baseRef` needs, and the controller makes it AFTER this call is answered: the pipeline comes back in `provisioning` with its base unresolved, and a fetch that fails parks it with the reason. A pipeline pinned to `baseRef` never touches the network. Pass remote-branch only when the pipeline must publish its branch; reviews then launch and settle only on the published head.",
+    "`publication` defaults to internal: stages and reviews settle on Delegatus's own attempts, verdicts and exact local revisions, and nothing is pushed or read from GitHub while the pipeline runs. The one remote read is the time-bounded fetch of `origin/<baseBranch>` a pipeline created or started without `baseRef` needs, and the controller makes it AFTER this call is answered: the pipeline comes back in `provisioning` with its base unresolved, and a fetch that fails parks it with the reason. A pipeline pinned to `baseRef` never touches the network. Pass remote-branch only when the pipeline must publish its branch; reviews then launch and settle only on the published head.",
     "`src` is the creator's transcript path: a native ~/.claude/projects path is normalized to the shared Claude transcript store when the mirrored file exists there.",
+    "An accepted create answers an acknowledgement: `pipelineId`, `state`, `stateDetail`, `cursor`, `taskIds`, `branch`, each stage's `{id, engine, model, effort}`, `stageDigests` and `graphDigest`. It never echoes the spec, prompts or role scaffolds you sent; get_pipeline reads the full record.",
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
     "A refusal that happened before anything was admitted — the pipeline registry lock was never taken — does not consume the `clientRequestId` (#1766): it answers `retryable: true` with `outcome: not-executed` and `nextAction: retry-same-key`, and repeating the identical call under the SAME id runs the create instead of replaying the refusal. Every other refusal keeps its receipt, so a repeat replays it.",
   ].join(" "),
-  pipeline_action: "Apply a supported action to an existing pipeline. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
+  pipeline_action: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers an acknowledgement — pipelineId, state, cursor, closedAt, stageDigests and graphDigest — plus `close` for a close and `graphEdit` for a graph edit; get_pipeline reads the full record. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | park}; the last two apply to fail edges only, and a fail edge freezes once traversed. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Three fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], and a one-or-two-sentence summary.",
-    "Findings are returned and shown most severe first; pass cannot carry findings.",
+    "A successful acknowledgement carries the completion metadata and a bounded severity count; use get_pipeline with pipelineId and stageId to read the stored findings and summary. Pass cannot carry findings.",
     "A fixable defect is fail, however partial your confidence in the call is; needs_decision is for a choice only a human can make, and a needs_decision that carries findings on a stage with a fail edge is routed to that stage as a fail anyway.",
     "The server resolves the calling conversation to its own live attempt, so stageId is needed only when one conversation holds more than one live stage, and a conversation that holds no live attempt is refused.",
     "A review-loop stage is refused: its completion is the outcome of its review flow, which the server reads itself.",
@@ -2831,59 +2956,64 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "This call is the stage's only completion channel: a fenced JSON verdict in the final turn is the fallback, written only when this call returned an error or the tool is absent from the session, and when both exist this call wins.",
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
   ].join(" "),
-  link_task_to_pipeline: "Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
-  list_conversations: "List scanned Viewer conversations with durable ids and transcript paths.",
+  link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
+  list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
   search_transcripts: "Search indexed user and assistant message bodies across every scanned transcript store, both engines and all accounts. Ask it \"has this been solved before?\" at the start of a task and whenever a problem appears: several phrasings, project-scoped first, then unscoped. Returns newest messages first, with deterministic ties; duplicate bodies use their newest occurrence and undated messages use their indexed file time. Returns match snippets with speaker, timestamp, transcript path and byte offset. Pass nextCursor unchanged to continue the same ordering while new messages are indexed. Read the surrounding turns by passing a hit's transcriptPath (and its timestamp as since) to conversation_messages; byteOffset and lineNumber pin the exact line. project is optional, and empty pages include corpus statistics. Queries never read transcript files.",
   get_conversation: "Read a conversation summary and its recent messages and tools. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with a fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
-  deploy_exact_sha: "Deploy one full commit SHA of the Agent Log Viewer application that serves this MCP — never the calling project's code, which this tool cannot deploy at all. The Viewer project's designated orchestrator decides when to deploy and calls this directly; authority is the server-attributed designated seat, and nobody asks the operator for a confirmation, a phrase, or a SHA. Idempotent by clientRequestId; deployments serialize at the runtime host.",
-  get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit.",
-  board_snapshot: "Read a bounded, redacted snapshot of the Viewer board, durable placement, and the selected project's hidden conversation count.",
-  list_flows: "List durable implement-review flows.",
+  deploy_exact_sha: "Deploy one full commit SHA of the Delegatus application that serves this MCP — never the calling project's code, which this tool cannot deploy at all. The Delegatus project's designated orchestrator decides when to deploy and calls this directly; authority is the server-attributed designated seat, and nobody asks the operator for a confirmation, a phrase, or a SHA. Idempotent by clientRequestId; deployments serialize at the runtime host. An accepted deploy is recorded against the calling seat (wakeOnSettle:true), and the seat tick wakes that seat once when it reaches a terminal phase, listing the lanes the seat paused, so end the turn after the call.",
+  get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. With no option it returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
+  board_snapshot: "Read a bounded, redacted snapshot of the Delegatus board, durable placement, and the selected project's hidden conversation count.",
+  list_flows: "List durable implement-review flows newest-created first, compact by default, with a 24 KB row budget and cursor pagination. Rows include identity, state, revision, spec title/length and round count. omittedCount counts matching records outside this page; omittedRecordCount counts compacted records. Follow nextCursor with the same filters and a fresh clientRequestId until hasMore is false. full:true or compact:false returns complete records; get_flow(flowId) reads one full record. A single explicit full record can exceed the budget. Unknown states are ignored; limits clamp and invalid or mismatched cursors restart with cursorReset:true.",
   get_flow: "Read one implement-review flow by durable id.",
   flow_action: "Apply a supported action to an implement-review flow. agent-decision durably submits an owner decision for one exact revision, HEAD, round, turn and optional pipeline stage attempt. Use submit-review, continue-fixing, stop or completed with a reason. Accepted decisions await authoritative completion of that same turn. Replay the original clientRequestId to recover its receipt. completed records a comment outcome and never grants review approval.",
-  list_pipelines: "List durable pipelines as bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated.",
-  conversation_action: "Control or archive Viewer conversations. interrupt, kill, resume, compact, and dialog-key accept one conversation by id, transcript path, or selected-card reference. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
-  operator_snapshot: "Read the bounded, secret-redacted Viewer state currently visible to the operator.",
-  list_tasks: "List durable board tasks.",
-  get_task: "Read one durable board task.",
-  deployment_status: "Read Viewer deployment or runtime operation status, or list recent deployments.",
-  resources: "Read system and Viewer-owned agent resource usage.",
-  conversation_migration: "Reseat, retry, roll back or cancel a conversation account migration, or withdraw an account switch the queue has not claimed yet.",
-  agent_activity: "Read agent liveness: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls.",
+  list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
+  conversation_action: "Control or archive Delegatus conversations. interrupt, kill, resume, compact, and dialog-key accept one conversation by id, transcript path, or selected-card reference. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
+  operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
+  list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
+  get_task: "Read one durable board task, including the whole agent-facing `details`.",
+  deployment_status: "Read Delegatus deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Delegatus-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
+  resources: "Read system and Delegatus-owned agent resource usage. freshness reports requestedAt, system capturedAt, ageMs, cache source and refreshSucceeded from the existing collector diagnostic. A failed refresh can serve an older capture; null means no refresh outcome was established.",
+  conversation_migration: "Select an explicit account for a structured conversation, automatically reseat by quota, retry, roll back or cancel a migration, withdraw an unclaimed account switch, or send messages a failed switch held on the current account. Explicit selection uses the browser account picker's semantics and never substitutes another account.",
+  agent_activity: "Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline} and drops the transcript paths, host detail and the selection and timing reports.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
-    "Move the operator's one active Viewer to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were.",
+    "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were.",
     `Targets are typed and discriminated by \`kind\`, one shape per kind: ${FOCUS_TARGET_SHAPES.map((shape) => `${shape.kind} — ${shape.example}`).join("; ")}.`,
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
   ].join(" "),
   suggest_replies: [
-    "Offer the operator ready-made replies to your own message: 1\u20136 short drafts that render as pills under your latest turn in the dock and the board's conversation pane. Tapping one drops its text into their composer for editing \u2014 the Viewer never sends it, and nothing here decides anything.",
+    "Offer the operator ready-made replies to your own message: 1\u20136 short drafts that render as pills under your latest turn in the dock and the board's conversation pane. Tapping one drops its text into their composer for editing \u2014 Delegatus never sends it, and nothing here decides anything.",
     "Call it after every message that asks the operator something or proposes a course of action, with 2\u20134 short, distinct drafts written in the operator's own language. The set REPLACES whatever you offered last for that conversation, and the operator's next message clears it.",
     "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
     "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
   ].join(" "),
   bridge_report: "Append one bounded report to the durable bridge log for the voice gateway to relay. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session.",
   bridge_directive: "Relay the user's intent to the designated manager. The recipient and the delivery id are derived server-side, so a retry of the same root turn is one instruction, never two.",
-  get_orchestrator: "Read a project's designated orchestrator: designation, health and activity, model and prompt version, transcript size, message/tool/compaction counts, context usage against its model's configured window (clearly labelled when estimated), predecessor lineage, and a bounded rotation recommendation — STRONGLY_RECOMMEND_ROTATION once usage reaches the configured threshold. Words only: it never rotates, creates, or interrupts anything itself.",
+  get_orchestrator: "Read a project's designated orchestrator: designation, health and activity, model and prompt version, transcript size, message/tool/compaction counts, context usage against its model's configured window (clearly labelled when estimated), predecessor lineage, and a bounded rotation recommendation — STRONGLY_RECOMMEND_ROTATION once usage reaches the configured threshold. Compact by default: the seat record without its mandate and role table, and counts for intentHistory and lineage; full:true returns them whole. Words only: it never rotates, creates, or interrupts anything itself.",
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
-  send_message_to_orchestrator: "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first and then delivered to. Idempotent by clientRequestId. Like send_message, the answer reports acceptance rather than arrival: ask message_receipt what became of the operationId.",
+  send_message_to_orchestrator: [
+    "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. The recipient is frozen before the message dispatch; a later seat rotation never redirects recovery. The answer reports acceptance: ask message_receipt what became of the operationId.",
+    RECOVERY_CONTRACT_DESCRIPTION,
+  ].join(" "),
   seat_tick_settings: [
-    "Read — and change — one project's seat tick: whether the Viewer wakes that project's seat at all, how often, and what your own monitor prompt tells the wake to look at.",
+    "Read — and change — one project's seat tick: whether Delegatus wakes that project's seat at all, how often, and what your own monitor prompt tells the wake to look at.",
     "Called with no change fields it is a read. `project` defaults to your own, and naming another project's is allowed rather than refused; the answer says which of the two you did, and the record, the board card and the tick's journal all carry who changed whose tick.",
     "`enabled: false` stops every wake for that project until someone turns it back on — indefinitely, if that is the decision. `wakeIntervalMinutes` sets how often a wake may be sent (null restores the default hour); the tick cannot wake more often than it checks, so a value under the check interval simply means every check. `untilMinutes` is an optional expiry after which the setting lapses back to the default — omit it and the setting stands until it is changed.",
     "A `reason` in your own words is required whenever the settings leave the default, and it is what the board card shows: a tick that has gone quiet with nothing saying why cannot be told apart from a tick that broke. Restoring the default needs no reason.",
-    "`monitorPrompt` is your own additional prompt for this project's monitor, in your own words: it is appended to every later scheduler-fired wake beside the reasons and items the tick derives, never replacing them or the contract. Send a new `monitorPrompt` to replace it and `monitorPrompt: null` to clear it, and read the record back rather than trusting the echo. It is redacted before it is stored and refused, never cut, when it is over the limit the error names; the reply carries the stored note in full with `monitorPromptLength`, and a wake shows only a marked preview of a long note. It changes what a wake says and never whether or when one is sent, so a prompt on its own needs no reason and leaves the project on the default tick — and `untilMinutes` expires the on/off and cadence setting, not the prompt.",
+    "`monitorPrompt` is your own additional prompt for this project's monitor, in your own words: it is appended to every later scheduler-fired wake beside the reasons and items the tick derives, never replacing them or the contract. Send a new `monitorPrompt` to replace it and `monitorPrompt: null` to clear it; to change one line, send `replaceLine`, `removeLine` or `appendLine` instead of the whole note. It is redacted before it is stored and refused, never cut, when it is over the limit the error names. A write answers only `{changed, revision, changedFields, monitorPromptLength}` (plus `project` and `scope` when it changed another project's tick). A read carries `monitorPromptLength`, and `verbose: true` returns the stored note once, as `monitorPrompt`. A wake shows the note only when it changed since the last wake the seat received, and then as a marked preview of a long note. It changes what a wake says and never whether or when one is sent, so a prompt on its own needs no reason and leaves the project on the default tick — and `untilMinutes` expires the on/off and cadence setting, not the prompt.",
     "A project nobody has configured runs on the defaults, which are exactly the behaviour the tick has always had.",
+    "The answer carries each fact once: the reason under `effective` (and under `settings` only when an expiry has set the two apart), and a standing fence as the `fence` object. `verbose: true` adds the stored reason under `settings`, the `defaults` block, and `fenceDetail`, the fence restated as one sentence.",
   ].join(" "),
   account_project_binding: [
     "List, add and remove the bindings that decide which accounts a project's work may run on. `action` is list (the default), add or remove; add and remove need `engine`, `accountId` and `project`.",
-    "Every answer is a READ of the record: an add or a remove returns the bindings re-read from the store after the write, and a mutation the re-read does not show is refused rather than reported ok. Do not trust an echo — read `bindings` back.",
+    "Every answer is a READ of the record. A list answers the whole binding table. An add or a remove answers the row it changed — `engine`, `accountId`, `project`, `changed`, and `bound` re-read from the store after the write — with that project's allowed accounts for that engine; a mutation the re-read does not show is refused rather than reported ok.",
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
+  account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
   rotate_orchestrator: "Explicitly hand a project's orchestrator seat to a fresh successor: bounded handoff (predecessor transcript reference, open tasks, optional notes), atomic designation switch, manager-authority-only revocation of the predecessor, bidirectional lineage. Callable from any session, including the seat rotating itself; the answer and the durable record both name who triggered it. Never triggered automatically.",
 };
 
@@ -2901,7 +3031,7 @@ const selectedContextSchema = z.union([z.string().min(1), z.record(z.string(), z
   .describe("Selected-card reference from the operator's turn (the `ctx=` marker token, or the decoded object). Resolves the conversation through a bounded identity lookup — no operator_snapshot needed.");
 const conversationArchiveTargetSchema = z.object({
   conversationId: z.string().min(1).optional()
-    .describe("Durable Viewer conversation id. Archive and unarchive actions expand it to every registered generation path."),
+    .describe("Durable Delegatus conversation id. Archive and unarchive actions expand it to every registered generation path."),
   transcriptPath: z.string().min(1).optional()
     .describe("Exact board transcript path, including a spawn:<launchId> placeholder. Archive and unarchive actions preserve it and add every generation of the resolved conversation."),
 }).strict().refine((target) => Boolean(target.conversationId || target.transcriptPath), {
@@ -2914,7 +3044,7 @@ const replyDraftSchema = z.object({
   label: z.string().min(1).max(MAX_REPLY_LABEL_CHARS)
     .describe("What the pill says \u2014 a few words the operator reads at a glance."),
   text: z.string().min(1)
-    .describe(`The draft itself, in the operator's language. Lands in their composer, editable, never sent by the Viewer. At most ${MAX_REPLY_TEXT_BYTES} bytes.`),
+    .describe(`The draft itself, in the operator's language. Lands in their composer, editable, never sent by Delegatus. At most ${MAX_REPLY_TEXT_BYTES} bytes.`),
 }).strict();
 const entityIdSchema = z.string().min(1);
 const snapshotStringSchema = z.string()
@@ -2956,7 +3086,9 @@ const pipelineStageSchema = z.object({
   onFail: z.object({
     to: z.string().describe("Stage id this stage returns to on a fail verdict."),
     maxRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional()
-      .describe(`Rounds this fail loop may run before the pipeline parks (default ${DEFAULT_FAIL_EDGE_ROUNDS}).`),
+      .describe(`How many times this stage reviews before its budget is spent (default ${DEFAULT_FAIL_EDGE_ROUNDS}).`),
+    onExhausted: z.enum(["advance", "park"]).optional()
+      .describe("What a fail on the last round does. advance (default): the findings go to the fail target once more, and when that fix passes the pipeline follows THIS stage's pass edge without asking this stage again; the stage keeps its findings and is marked budget spent. So maxRounds 3 means at most 3 reviews and 4 runs of the fail target. park: stop for the operator instead, as before (one more review after maxRounds fail loops). The handoff happens once per stage: if this stage runs again later, because another stage's fail edge loops back through it, and fails again, it parks as budget exhausted. Nothing merges on its own either way."),
   }).nullable().optional()
     .describe("Fail successor for a run stage. A review-loop stage may not define one — it recovers through its own review flow."),
   role: z.object({
@@ -3065,7 +3197,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
        own named violation, so that schema leaves the entries to it. */
     taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()
       .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. An explicit id carries its own project, so an id from ANOTHER project is taken as given and binds the agent to that project's card — pass the id this project's board gave you. Omitting it, the launch joins every task held by the parent this call names (parentConversationId, src or parent — this tool never infers one from the caller) and by the conversation it reviews; when the call names neither, or neither holds a task, it is given a placeholder task of its own, which is a duplicate card. A reviewer that names a parent therefore joins that parent's card beside the reviewed work's, so pass taskId on reviewer spawns too — an explicit id wins over inheritance."),
-    engine: z.enum(["claude", "codex"]).optional(),
+    engine: z.enum(["claude", "codex", "copilot"]).optional()
+      .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; its account is named or the selected one (no automatic pick), model auto or an id the account offers, effort none…max."),
     model: z.string().optional(),
     effort: z.string().optional(),
     role: z.enum(ROLE_IDS).optional(),
@@ -3078,7 +3211,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     allowSubagents: z.boolean().optional(),
     mcpServers: z.array(z.string().regex(/^[^\s\u0000-\u001f\u007f]{1,128}$/u))
       .optional()
-      .describe("Per-spawn MCP server allowlist, resolved server-side. Only servers the Viewer may grant are accepted; any other name is refused outright, never silently trimmed. Viewer is always included. The grant is then decided by the new session's origin — a delegated launch, which every role-preset spawn is, receives the Viewer baseline whatever it lists here — so this can narrow the surface, never widen it."),
+      .describe("Per-spawn MCP server allowlist, resolved server-side. Only servers Delegatus may grant are accepted; any other name is refused outright, never silently trimmed. `viewer` is always included. The grant is then decided by the new session's origin — a delegated launch, which every role-preset spawn is, receives the Delegatus baseline whatever it lists here — so this can narrow the surface, never widen it."),
     images: z.array(z.unknown()).optional(),
     recoveryOnly: recoveryOnlySchema,
   }).passthrough(),
@@ -3095,8 +3228,11 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   create_task: z.object({
     clientRequestId: clientRequestIdSchema,
+    full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().min(1),
-    text: z.string().min(1),
+    text: z.string().min(1).describe("The HUMAN part of the card: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context belongs in details."),
+    details: z.string().optional()
+      .describe("Agent-facing context, kept off the human description (#1834): the prompt, the working notes, the ids, the rules, the state. Plain text, no markdown rendering, capped at 20000 characters, condensed to what an agent picking the task up actually needs. The card shows it behind one collapsed Details row; a blank value creates a task with no details."),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Omitted placement creates an unplaced task. Pinned requires pos; unplaced must omit pos."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
     dueAt: z.string().optional(),
@@ -3104,15 +3240,21 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     attachments: z.array(z.unknown()).optional(),
     board: z.enum(["shown", "hidden"]).optional()
       .describe("Board membership of the new task's band (#1627). Omitted creates a task the board shows, and the per-project limit counts only those; hidden records the task off the board, which is how work is kept when the board is full. Either way the task keeps its row in the task list, and update_task moves it between the two."),
+    /* Unknown, so the command clamps what the schema would refuse (#2102). */
+    icon: z.unknown().optional()
+      .describe("A lucide icon name for the card (#2102), kebab-case: bug, smartphone, rocket, search-check, shield. Bug and lucide:bug mean the same. A name lucide does not have, or a value that is no name, is stored as no icon and the answer carries a note."),
   }).passthrough(),
   update_task: z.object({
     clientRequestId: clientRequestIdSchema,
+    full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     taskId: entityIdSchema.optional().describe("Required for every update except refine; refine defaults to every pending task the calling conversation is linked to."),
     refine: z.object({ text: z.string().trim().min(1).max(600).describe("Short human title on the first line (3–10 words), then up to two concise sentences.") }).optional()
       .describe("First-action task naming: title the placeholder task your conversation is linked to, once. Replaying the same text returns the prior result; a task already named by the operator or an earlier refinement answers already-named and keeps its title."),
     expectedProject: z.string().min(1).optional().describe("Required for pos or placement updates: copy the current task project exactly."),
     expectedRevision: z.string().min(1).optional().describe("Required for pos or placement updates: copy the opaque revision from get_task or list_tasks."),
-    text: z.string().optional(),
+    text: z.string().optional().describe("The HUMAN part: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context does not belong here; pass it as details."),
+    details: z.string().nullable().optional()
+      .describe("Agent-facing context (#1834): a string sets or replaces it, null or an empty string clears it. Its own field, so an update carrying only details leaves text byte for byte and the reverse. Read the current value with get_task first, since list_tasks truncates it and a write replaces the whole field rather than appending."),
     status: z.enum(["inbox", "assigned", "blocked", "done"]).optional(),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Pinned retains existing pos when omitted; unplaced removes pos. Placement updates require expectedProject and expectedRevision."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
@@ -3122,11 +3264,26 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Board membership of this task's band (#1614). hidden takes the band off the board and shown puts it back; the task itself is never removed, keeps its row in the task list and every assignment, and either direction is one write. It governs EMPTY tasks only — a task holding a durable agent association draws its band whatever this says."),
     color: z.enum(["none", ...TASK_COLORS]).optional()
       .describe("Colour label shown on the task's kanban card (#1695). none clears it."),
+    icon: z.unknown().optional()
+      .describe("A lucide icon name for the card (#2102), read like create_task's icon; none, null or an empty string clears it. Leaves updatedAt unchanged."),
+    attachLinks: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
+      .describe("PRs or issues to attach to the task's card by hand (#2059): \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com pull/issue URL, one or a list. A bare number means the task's repository. Attaching one already attached changes nothing. The card also shows every link its pipelines discover, so attach only what discovery cannot see. Leaves updatedAt unchanged."),
+    detachLinks: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
+      .describe("PRs or issues to remove, in the same forms as attachLinks. Only links attached by hand are removed; a discovered one answers WORK_LINK_AUTO with its evidence."),
+    linkKind: z.enum(["pr", "issue"]).optional().describe("Whether attachLinks names pull requests or issues, when the number alone leaves it open."),
     hide: z.boolean().optional()
       .describe("Hide (true) or show (false) the task's whole group on the kanban board (#1695). Requires expectedProject and expectedRevision. Nothing is stopped, sent or changed besides the hide: conversations keep running and pipelines keep their state. The group comes back by itself when something newer needs the operator (a decision request, a newly linked conversation, a pipeline newly waiting on a decision). The task holding the project's orchestrator seat conversation cannot be hidden (TASK_HIDE_PROTECTED)."),
   }).passthrough(),
   create_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,
+    recoveryOnly: recoveryOnlySchema,
+    delivery: z.object({
+      branch: z.string().startsWith("refs/heads/"),
+      remote: z.string().optional(),
+      pr: z.number().int().positive().optional(),
+      rejectedHead: z.string().regex(/^[0-9a-f]{40}$/i).optional(),
+      comparison: z.boolean().optional(),
+    }).optional().describe("Delivery target, using the PR head repository remote and full branch. The canonical repository plus branch has one Delegatus publisher. A competing creation becomes an internal comparison lane and names its owner; host Git/gh tools remain unchanged."),
     task: z.string().min(1).describe("Board title for the pipeline."),
     taskIds: z.array(z.string()).optional()
       .describe("Board tasks this pipeline's work belongs to (#1720), recorded durably on the pipeline. EVERY stage launch — run, review-loop, retry, fail branch — reads this list at launch time and joins those tasks, so passing it in the create call is what keeps one product outcome on one card; a pipeline created without it is given a placeholder task of its own. Each id must name an existing task in the pipeline's project. pipeline_action \"link-task\" adds one afterwards, for the stages that have not started yet."),
@@ -3139,13 +3296,28 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     ),
     src: z.string().optional().describe("Creator transcript path (.jsonl) under the shared Claude transcript store or a Codex sessions root; a native ~/.claude/projects path is normalized to its shared-store mirror when that file exists."),
     autoStart: z.boolean().optional().describe("false creates a draft for the operator to start from the board."),
-    publication: z.enum(["internal", "remote-branch"]).optional().describe("internal (default): the Viewer's own state decides every stage and nothing is pushed or read from a remote while it runs; creation without baseRef leaves the base to the controller, fetched time-bounded after the call is answered. remote-branch: push every accepted revision and fence reviews on origin/<branch>."),
+    publication: z.enum(["internal", "remote-branch"]).optional().describe("internal (default): Delegatus's own state decides every stage and nothing is pushed or read from a remote while it runs; creation without baseRef leaves the base to the controller, fetched time-bounded after the call is answered. remote-branch: push every accepted revision and fence reviews on origin/<branch>."),
   }).passthrough(),
   pipeline_action: z.object({
     clientRequestId: clientRequestIdSchema,
+    full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     pipelineId: entityIdSchema,
     /* #774: was `z.string().min(1)` while the route admitted a fixed set. */
-    action: z.enum(PIPELINE_ACTIONS),
+    action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review (#1938): the creator or operator resumes a needs_review pipeline, whose spent review budget left an unreviewed head, by adding addRounds review rounds; the review stage then runs on the current head. Requires addRounds and expectedRevision from get_pipeline. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
+    answer: z.string().min(1).max(12_000).optional(),
+    addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("continue-review only: review rounds to add to the spent fail edge. Each fail but the last loops to the fix stage; the last hands its findings to one fix, then parks in needs_review again if that fix writes a new head."),
+    reviewLimit: z.number().int().optional().describe("preview/convert-legacy-review only: the finite review count the converted reviewer gets, 1–9. It runs that many times when every review fails, the final review included; the default is the limit recorded on the stage's review flow."),
+    implementerStageId: z.string().min(1).optional().describe("preview/convert-legacy-review only: the run stage whose role the fix stage copies, when more than one run passes into the review."),
+    expectedRevision: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    expectedStageId: z.string().min(1).optional(),
+    expectedAttempt: z.number().int().nonnegative().optional(),
+    expectedOwner: z.string().optional(),
+    expectedEpoch: z.number().int().positive().optional(),
+    reason: z.string().optional(),
+    acceptedSha: z.string().regex(/^[0-9a-f]{40}$/i).optional(),
+    link: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
+      .describe("attach-link and detach-link (#2059): a PR or issue as \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com URL, or a list. A bare number means the pipeline's delivery repository. Attach what discovery cannot see: the pipeline's lane and delivery branches, its delivery.pr and the PR its stages reported are found without it. Allowed in every state; detach removes only links attached by hand. The answer carries workLinks, the resolved links."),
+    kind: z.enum(["pr", "issue"]).optional().describe("attach-link only: whether link names a pull request or an issue, when the number alone leaves it open."),
   }).passthrough(),
   stage_report: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3165,13 +3337,17 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   link_task_to_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,
+    full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     taskId: entityIdSchema,
     pipelineId: entityIdSchema,
   }).passthrough(),
   list_conversations: z.object({
     clientRequestId: clientRequestIdSchema,
+    full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().optional(),
     query: z.string().optional(),
+    cursor: z.string().optional().describe("Opaque nextCursor from the previous page; pass the same project/query."),
+    compact: z.unknown().optional().describe("Compact titles by default; false retains the full title."),
     limit: boundedNumericInput("list_conversations", "limit"),
   }).passthrough(),
   search_transcripts: z.object({
@@ -3198,7 +3374,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   conversation_messages: z.object({
     clientRequestId: clientRequestIdSchema,
     conversationId: z.string().min(1).optional()
-      .describe("Durable Viewer conversation id. Supply this, transcriptPath, or selectedContext."),
+      .describe("Durable Delegatus conversation id. Supply this, transcriptPath, or selectedContext."),
     transcriptPath: z.string().min(1).optional()
       .describe("Transcript under a registered scanner root. Supply this, conversationId, or selectedContext."),
     selectedContext: selectedContextSchema,
@@ -3224,6 +3400,12 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   get_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,
     pipelineId: entityIdSchema,
+    stageId: z.string().min(1).optional()
+      .describe("Answer only this stage and one of its attempts: verdict, findings, summary, conversation, error. No prompts or transcripts."),
+    attempt: z.number().int().positive().optional()
+      .describe("With stageId: the attempt number to read. Defaults to the stage's latest attempt."),
+    compact: z.boolean().optional()
+      .describe("true: the list_pipelines compact row plus stageDigests and graphDigest."),
   }).passthrough(),
   board_snapshot: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3235,9 +3417,13 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   list_flows: z.object({
     clientRequestId: clientRequestIdSchema,
     project: z.string().optional(),
-    state: z.string().optional(),
+    state: z.unknown().optional().describe("A flow state or array of states. Unknown values are ignored."),
     includeClosed: z.boolean().optional(),
     limit: boundedNumericInput("list_flows", "limit"),
+    full: z.unknown().optional().describe("true returns complete records; defaults to compact rows."),
+    compact: z.boolean().optional().describe("Compact by default; false restores complete records."),
+    ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string)."),
+    cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters. Invalid cursors restart with cursorReset:true."),
   }).passthrough(),
   get_flow: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3261,15 +3447,23 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   list_pipelines: z.object({
     clientRequestId: clientRequestIdSchema,
+    full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().optional(),
-    state: z.string().optional(),
+    state: z.unknown().optional()
+      .describe("A pipeline state or array of states; open includes every state except completed and closed. Unknown values are ignored."),
     includeClosed: z.boolean().optional(),
     limit: boundedNumericInput("list_pipelines", "limit"),
+    compact: z.boolean().optional()
+      .describe("Compact by default; false restores the previous board-card projection. Each row is id, task (first line), state, cursor, stateDetail and per stage {id, latestAttempt: {n, state, verdict}}."),
+    cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters and a fresh clientRequestId. Invalid cursors restart with cursorReset:true."),
+    ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string). Unknown ids match no records."),
+    query: z.string().optional().describe("Case-insensitive substring in task text/title."),
+    updatedSince: z.unknown().optional().describe("Inclusive ISO timestamp. Invalid timestamps are ignored. Tasks use updatedAt; pipelines use createdAt."),
   }).passthrough(),
   conversation_action: z.object({
     clientRequestId: clientRequestIdSchema,
     conversationId: z.string().optional()
-      .describe("Durable Viewer conversation id. Archive and unarchive actions expand it to every registered generation path."),
+      .describe("Durable Delegatus conversation id. Archive and unarchive actions expand it to every registered generation path."),
     transcriptPath: z.string().optional()
       .describe("Exact transcript or spawn:<launchId> board path. Archive and unarchive actions preserve it and add every generation of the resolved conversation."),
     selectedContext: selectedContextSchema,
@@ -3307,20 +3501,35 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).strict(),
   list_tasks: z.object({
     clientRequestId: clientRequestIdSchema,
+    full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().optional(),
-    status: z.enum(["inbox", "assigned", "blocked", "done"]).optional(),
-    placement: z.enum(["pinned", "unplaced"]).optional(),
+    status: z.unknown().optional().describe("One status or an array: inbox, assigned, blocked, done. Unknown values are ignored."),
+    statuses: z.unknown().optional().describe("Alias for a status set; takes precedence over status."),
+    openOnly: z.unknown().optional().describe("true excludes done tasks."),
+    compact: z.unknown().optional().describe("Compact by default. false restores the previous projection with truncated details; full:true includes all details."),
+    placement: z.unknown().optional().describe("pinned or unplaced; unknown values are ignored."),
     limit: boundedNumericInput("list_tasks", "limit"),
+    cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters and a fresh clientRequestId. Invalid cursors restart with cursorReset:true."),
+    ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string). Unknown ids match no records."),
+    query: z.string().optional().describe("Case-insensitive substring in task text/title."),
+    updatedSince: z.unknown().optional().describe("Inclusive ISO timestamp. Invalid timestamps are ignored. Tasks use updatedAt; pipelines use createdAt."),
   }).passthrough(),
   get_task: z.object({
     clientRequestId: clientRequestIdSchema,
+    compact: z.unknown().optional().describe("true returns a compact task row; the default remains the complete record."),
     taskId: entityIdSchema,
   }).passthrough(),
   deployment_status: z.object({
     clientRequestId: clientRequestIdSchema,
+    kind: z.literal("host-retirement").optional().describe("Read the latest bounded host retirement observations for your project; omit for deployment status."),
+    callerLaunchId: z.string().min(1).max(256).optional().describe("Optional for host-retirement: resolved server-side from your session. An explicit launchId from your task assignment must belong to you. A designated seat needs no spawn receipt."),
+    project: z.string().min(1).max(256).optional().describe("Required for host-retirement; must match the authenticated caller's project."),
+    cursor: z.string().min(1).max(512).optional().describe("Opaque page cursor: host-retirement returns cursor; deployment lists return nextCursor. Pass unchanged with the same query and a fresh clientRequestId; stop when hasMore is false."),
     deploymentId: z.string().min(1).optional(),
     operationId: z.string().min(1).optional(),
     limit: boundedNumericInput("deployment_status", "limit"),
+    compact: z.boolean().optional()
+      .describe("true: each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}."),
   }).passthrough(),
   resources: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3329,20 +3538,26 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   conversation_migration: z.object({
     clientRequestId: clientRequestIdSchema,
     conversationId: z.string().min(1),
-    action: z.enum(["reseat", "retry", "rollback", "cancel", "withdraw"]).describe("cancel: a claimed switch still waiting for its turn, by expectedRevision; the migration is rolled back and the reconfigure that owned it never applies, and the same cancel again answers cancel: replayed. withdraw: a queued switch the queue has not claimed, by operationId; a claimed one is refused with code SWITCH_CLAIMED and expectedRevision, the revision to cancel it by once its migration exists (null before)."),
+    action: z.enum(["reseat", "select-account", "retry", "rollback", "cancel", "withdraw", "keep-current"]).describe("select-account: explicit browser account choice, requires accountId; preserves the current model and effort and records an out-of-pool choice with caller attribution. reseat: on a structured conversation, records the chosen account as the conversation's intended account (reseat: intended); it moves there when it is next engaged. keep-current: messages held by a failed account switch go out on the account the conversation runs on. cancel: a claimed switch still waiting for its turn, by expectedRevision; the migration is rolled back and the reconfigure that owned it never applies, and the same cancel again answers cancel: replayed. withdraw: a queued switch the queue has not claimed, by operationId; a claimed one is refused with code SWITCH_CLAIMED and expectedRevision, the revision to cancel it by once its migration exists (null before)."),
+    accountId: z.string().trim().min(1).optional().describe("select-account only: exact account to select. Never substituted. reseat remains automatic and refuses account fields."),
     expectedRevision: z.number().int().min(0).optional().describe("The migration's revision: required by retry, rollback and cancel."),
     operationId: z.string().min(1).optional().describe("withdraw: the queued reconfigure operation."),
     transcriptPath: z.string().optional(),
   }).passthrough(),
   agent_activity: z.object({
     clientRequestId: clientRequestIdSchema,
+    full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     conversationId: z.string().optional(),
     transcriptPath: z.string().optional(),
     project: z.string().optional(),
+    includeGone: z.unknown().optional().describe("true includes gone lifecycles and dead hosts even with liveOnly:true."),
     liveOnly: z.boolean().optional(),
+    cursor: z.string().optional().describe("Opaque nextCursor for remaining rows of the same observed page; use the same filters and options."),
     stallAfterMs: boundedNumericInput("agent_activity", "stallAfterMs")
       .describe("Silence under a live host that counts as a stall. A dead host over an open turn is always stalled."),
     limit: boundedNumericInput("agent_activity", "limit"),
+    compact: z.boolean().optional()
+      .describe("Compact by default; false retains full evidence fields. Each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}."),
   }).passthrough(),
   lifecycle_events: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3392,13 +3607,14 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   get_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
     project: z.string().min(1).describe("Project key whose designated orchestrator to report on."),
+    full: z.boolean().optional().describe("Compact by default: the seat without its mandate and role table, and counts for intentHistory and lineage. true returns every record whole."),
   }).passthrough(),
   create_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
     project: z.string().min(1).describe("Project key this orchestrator will own."),
-    conversationId: z.string().regex(/^conversation_/).optional().describe("Existing registered conversation to adopt. The Viewer validates its project, cwd, transcript, lifecycle, and operator authority before seating it."),
+    conversationId: z.string().regex(/^conversation_/).optional().describe("Existing registered conversation to adopt. Delegatus validates its project, cwd, transcript, lifecycle, and operator authority before seating it."),
     mandate: z.string().optional().describe("Edited mandate text; defaults to the approved versioned orchestrator prompt."),
-    cwd: z.string().optional().describe("Working directory; defaults to the Viewer's own checkout."),
+    cwd: z.string().optional().describe("Working directory; defaults to Delegatus's own checkout."),
     engine: z.enum(["claude", "codex"]).optional(),
     model: z.string().optional(),
     effort: z.string().optional(),
@@ -3406,6 +3622,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   send_message_to_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
+    recoveryOnly: recoveryOnlySchema,
     project: z.string().min(1).describe("Project whose selected orchestrator receives the message."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
   }).passthrough(),
@@ -3424,7 +3641,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   account_project_binding: z.object({
     clientRequestId: clientRequestIdSchema,
     action: z.enum(["list", "add", "remove"]).optional()
-      .describe("list (default) reads the record; add and remove change it and answer with the record read back."),
+      .describe("list (default) reads the whole record; add and remove change it and answer with the changed row read back."),
     engine: z.enum(["claude", "codex"]).optional()
       .describe("Engine the account belongs to. Required to add or remove."),
     accountId: z.string().trim().min(1).optional()
@@ -3434,6 +3651,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   seat_tick_settings: z.object({
     clientRequestId: clientRequestIdSchema,
+    full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().trim().min(1).optional()
       .describe("Project whose tick to read or change. Defaults to your own; another project's is allowed and is recorded as such."),
     enabled: z.boolean().optional()
@@ -3445,13 +3663,31 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     reason: z.string().trim().min(1).nullable().optional()
       .describe("Why, in your own words. Required whenever the settings leave the default; it is what the board card shows."),
     monitorPrompt: z.string().trim().min(1).nullable().optional()
-      .describe("Your own additional prompt for this project's monitor: what every later scheduler-fired wake should look at, appended to the reasons and items the tick derives. Send a new one to replace it, null to clear it. Redacted before it is stored; refused, not truncated, when over the limit. The reply carries the stored note in full plus monitorPromptLength. It never changes whether or when a wake is sent, and needs no reason."),
+      .describe("Your own additional prompt for this project's monitor: what every later scheduler-fired wake should look at, appended to the reasons and items the tick derives. Send a new one to replace it, null to clear it. Redacted before it is stored; refused, not truncated, when over the limit. It never changes whether or when a wake is sent, and needs no reason."),
+    replaceLine: z.object({
+      prefix: z.string().min(1).optional().describe("Replace the one note line starting with this text (leading spaces ignored). More or fewer than one match is refused."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
+      text: z.string().describe("The new line."),
+    }).optional().describe("Replace one line of the stored note without resending the rest."),
+    removeLine: z.object({
+      prefix: z.string().min(1).optional().describe("Remove the one note line starting with this text (leading spaces ignored)."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
+    }).optional().describe("Remove one line of the stored note."),
+    appendLine: z.string().min(1).optional()
+      .describe("Append one line to the stored note. Edits apply in the order replaceLine, removeLine, appendLine, under the monitorPrompt limit and redaction; not combined with monitorPrompt."),
+    verbose: z.boolean().optional()
+      .describe("true: return the stored note once, as monitorPrompt, with the full settings. Every answer carries monitorPromptLength."),
+  }).passthrough(),
+  account_limits: z.object({
+    clientRequestId: clientRequestIdSchema,
+    engine: z.enum(["claude", "codex", "copilot"]).optional().describe("Only this engine's accounts."),
+    accountId: z.string().trim().min(1).optional().describe("Only this account."),
   }).passthrough(),
 };
 
 export function createViewerMcpServer(service: McpToolService): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
-    instructions: "Use clientRequestId on every call. Reuse it only when replaying the same logical operation. Your conversation is already linked to a board task. If that task still carries its placeholder title, make your first Viewer action update_task with refine: { text } — a short human title (3–10 words) on the first line and at most two concise sentences, describing the work you were given. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry.",
+    instructions: "This server is Delegatus, registered under the MCP key `viewer`, so its tools are named mcp__viewer__*. List tasks newest-first with status sets, openOnly, ids or query and follow nextCursor. Lists are compact by default; full:true or get_task/get_pipeline/get_flow retrieves complete records. Writes acknowledge changedFields and revision. Use seat_tick_settings verbose:true to read the complete monitor note. Use clientRequestId on every call. Reuse it only when replaying the same logical operation. Your conversation is already linked to a board task. If that task still carries its placeholder title, make your first Delegatus action update_task with refine: { text } — a short human title (3–10 words) on the first line and at most two concise sentences, describing the work you were given. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.",
   });
   for (const toolName of MCP_TOOL_NAMES) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";
@@ -3477,13 +3713,24 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result, isError: true };
         }
       }
+      /* A call over the shared HTTP endpoint names its caller by the
+         capability the route authenticated; it runs as that caller so every
+         resolver reads the request's identity rather than this process's. */
+      const httpCaller = mcpHttpCallerFromAuthInfo((extra as { authInfo?: unknown }).authInfo);
       const timeoutMs = 30_000;
       const deadline = deadlineSignal(timeoutMs, {
-        signal: extra.signal,
+        /* Over stdio a client's cancel reaches `extra.signal`. Over the
+           stateless HTTP endpoint it arrives on a later POST, to another
+           server, so the route hands over a signal of its own for this call:
+           aborted by that cancel, or by the client walking away. */
+        signal: (() => {
+          const cancelled = httpCaller?.cancelSignal(extra.requestId) ?? null;
+          return cancelled ? AbortSignal.any([extra.signal, cancelled]) : extra.signal;
+        })(),
         reason: "MCP tool deadline exceeded",
       });
       try {
-        const result = await service.callTool(toolName, args as McpToolArgs, {
+        const call = () => service.callTool(toolName, args as McpToolArgs, {
           signal: deadline.signal,
           deadlineAt: Date.now() + timeoutMs,
           /* #1629: the SDK hands the request's own `_meta` through on `extra`,
@@ -3494,6 +3741,7 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
              conversation last pointed at. */
           nativeWork: nativeWorkFromRequestMeta((extra as { _meta?: unknown })._meta),
         });
+        const result = await (httpCaller ? runAsMcpHttpCaller({ capability: httpCaller.capability }, call) : call());
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
           structuredContent: result,
@@ -3507,19 +3755,39 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
   return server;
 }
 
-export async function startViewerMcpServer(): Promise<void> {
-  const { admittedMcpHealthProbe, MCP_HEALTH_PROBE_CAPABILITY_ENV } = await import("./healthProbeAdmission");
+/** The `authInfo.clientId` the HTTP route stamps on an authenticated request. */
+export const MCP_HTTP_CLIENT_ID = "llv-spawn-capability";
+
+/** The authenticated HTTP caller the route attached to this request, or null
+    for a request that did not come through it (every stdio call). */
+function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancelSignal: (requestId: unknown) => AbortSignal | null }) | null {
+  if (!authInfo || typeof authInfo !== "object") return null;
+  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown } };
+  if (clientId !== MCP_HTTP_CLIENT_ID || typeof token !== "string" || !token) return null;
+  const lookup = typeof extra?.cancelSignal === "function" ? extra.cancelSignal as (requestId: unknown) => unknown : null;
+  return {
+    capability: token,
+    cancelSignal: (requestId) => {
+      const signal = lookup?.(requestId);
+      return signal instanceof AbortSignal ? signal : null;
+    },
+  };
+}
+
+/**
+ * The production tool service: bindings, the shared SQLite receipt store every
+ * Viewer MCP server writes (so a clientRequestId replays the same way whichever
+ * process or transport it arrives on), the per-call policy, and recovery.
+ */
+export async function createProductionViewerMcpService(hostHealthProbe = false): Promise<McpToolService> {
   const {
     productionViewerControlDependencies,
     viewerMcpBindings,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
   } = await import("./bindings");
-  const healthProbeCapability = process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
-  delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
-  const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
-  const service = createMcpToolService(
+  return createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
@@ -3527,6 +3795,14 @@ export async function startViewerMcpServer(): Promise<void> {
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
   );
+}
+
+export async function startViewerMcpServer(): Promise<void> {
+  const { admittedMcpHealthProbe, MCP_HEALTH_PROBE_CAPABILITY_ENV } = await import("./healthProbeAdmission");
+  const healthProbeCapability = process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
+  delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
+  const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
+  const service = await createProductionViewerMcpService(hostHealthProbe);
   const server = createViewerMcpServer(service);
   const transport = new StdioServerTransport();
   await server.connect(transport);

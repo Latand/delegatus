@@ -8,8 +8,9 @@
  * cause, the full sentence and its remediation live behind expand/hover, and
  * dismissing the notice clears the group.
  *
- * Self-contained: the receipt stack is rendered directly, so nothing here mocks
- * a module, touches the runtime bus, or reads any state directory.
+ * The receipt stack is rendered directly. The held-switch regression derives
+ * its receipt through the production controller with an isolated journal and
+ * registry; the other cases provide presentation fixtures.
  */
 import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
@@ -18,6 +19,8 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import { setLocale, translate, type Locale } from "@/lib/i18n";
+
+import { migrationDeliveryFixture, failHeldSwitch } from "@/test-helpers/migrationDelivery";
 
 import type { RuntimeReceipt } from "./runtime/runtimeModel";
 
@@ -61,6 +64,25 @@ function receipt(overrides: Partial<RuntimeReceipt> & { operationId: string }): 
 /** Three failed retries of one message: same text, distinct attempts. */
 const threeRetries = (): RuntimeReceipt[] => [2, 1, 0].map((second) =>
   receipt({ operationId: `op-retry-${second}`, at: `2026-08-31T10:00:0${second}.000Z` }));
+
+test("a message failed behind an actual held account switch shows its reason and resend control", async () => {
+  const f = migrationDeliveryFixture();
+  try {
+    const { held, delivery, failed } = await failHeldSwitch(f);
+    expect(held.status).toBe("queued");
+    expect(failed.status).toBe("failed");
+    expect(failed.reason).toBe("account switch failed: target account requires authentication");
+    expect(f.host.ledger.writes).toHaveLength(0);
+    expect(f.registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "failed", error: failed.reason });
+    const mounted = mount({ receipts: [{ ...failed, revision: 1 }], onDismiss: () => {} });
+    try {
+      expect(mounted.summary().querySelector("[data-delivery-notice-retry]")).not.toBeNull();
+      click(mounted.summary());
+      expect(mounted.host.textContent).toContain(failed.reason!);
+      expect(mounted.host.querySelector(".animate-spin")).toBeNull();
+    } finally { mounted.cleanup(); }
+  } finally { await f.cleanup(); }
+});
 
 interface Mounted {
   host: HTMLElement;
@@ -226,10 +248,14 @@ test("#1362 dismissing the collapsed notice clears the whole group and leaves a 
   expect(clickAction(dismiss)).toBe(true);
   expect(batches).toEqual([["op-retry-2", "op-retry-1", "op-retry-0"]]);
 
+  /* With the failures dismissed nothing here needs a decision any more, and
+     since send-latency slice 3 a delivery that is merely still moving paints
+     nothing beside the composer: the message's own row carries it. The
+     dismissal did not touch that delivery — it is still pending, and still
+     rendered wherever its message is. */
   rerender(mounted, { receipts: [pending, ...threeRetries()], dismissed: new Set(batches.flat()), onDismiss: () => {} });
   expect(mounted.host.querySelector("details[data-delivery-notice]")).toBeNull();
-  expect(mounted.summary().querySelector("[data-receipt-pending-count]")).not.toBeNull();
-  expect(mounted.summary().textContent).toContain(translate("en", "runtime.receipt.summary", { count: 1 }));
+  expect(mounted.host.querySelector("[data-runtime-receipt-stack]")).toBeNull();
 
   rerender(mounted, { receipts: threeRetries(), dismissed: new Set(batches.flat()), onDismiss: () => {} });
   expect(mounted.host.textContent).toBe("");

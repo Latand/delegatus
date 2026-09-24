@@ -1,15 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { currentTailnetUrl, readPhoneAccess, viewerPortFor, type AccessResponse } from "@/lib/access/phoneAccess";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-interface AccessResponse {
-  /** Tailnet URL with the `?k=` access token, or null when --tailscale wasn't used. */
-  tailnetUrl: string | null;
-}
 
 // The proxy already gates every request (including this one) behind the same
 // token, so any caller that reaches this handler is already authorized to see
@@ -19,6 +15,6 @@ export async function GET(req: NextRequest): Promise<NextResponse<AccessResponse
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  const tailnetUrl = process.env.LLV_TS_URL;
-  return NextResponse.json({ tailnetUrl: tailnetUrl && tailnetUrl.length > 0 ? tailnetUrl : null });
+  const read = await readPhoneAccess(viewerPortFor(req.url));
+  return NextResponse.json({ tailnetUrl: currentTailnetUrl(), phone: read.phone, phoneError: read.error });
 }

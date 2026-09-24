@@ -1,3 +1,4 @@
+import { redactTranscriptText, SENSITIVE_RECORD_KEY, SENSITIVE_RECORD_TEXT } from "./toolRedaction";
 import {
   debugRaw,
   parseReview,
@@ -8,7 +9,7 @@ import {
 } from "@/lib/review";
 import { isClaudeProtocolUser, isClaudeSdkDeliveredUser } from "@/lib/claudeProtocolUser";
 import { getLocale, translate } from "@/lib/i18n";
-import { inboxImageExt, MAX_INBOX_IMAGE_BYTES } from "@/lib/imagePolicy";
+import { inboxImageExt, MAX_INBOX_IMAGE_BYTES, rasterImagePath } from "@/lib/imagePolicy";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import type { MandateDelivery, MessageOrigin } from "@/lib/runtime/messageOrigin";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
@@ -22,6 +23,7 @@ import { hhmm } from "../utils";
 import { decodeTerminalText } from "./ansi";
 import { elapsedDurationMs, timestampMilliseconds } from "./duration";
 import { diffFromApplyPatch, diffFromCodexFileChange, normalizeEdit, type DiffModel, type FileDiff } from "./diff";
+import { feedCopy, taskText } from "./toolMeaning";
 import { familyOf, summarizeTool, type ArgChip, type FeedEngine, type ToolFamily } from "./tools";
 
 /* Feed labels resolve against the active locale at build/render time; a locale
@@ -43,7 +45,17 @@ export type ToolBody = { type: "diff"; files: FileDiff[]; filesTruncated: boolea
     dimensions when the engine reported them. */
 export type ToolOutputBlock =
   | { type: "text"; text: string }
-  | { type: "image"; media: string; data: string; w?: number; h?: number; bytes?: number };
+  | ({ type: "image" } & ImageSource);
+
+/** Where a picture's bytes are (#2075): inline in the transcript line the
+    client already has, or a file on disk the card loads through the artifact
+    route. When a transcript carries both, the inline copy wins — it is what the
+    agent saw, and the file may have changed or gone since. Dimensions and size
+    are optional on either. */
+export type ImageSource = { w?: number; h?: number; bytes?: number } & (
+  | { media: string; data: string; path?: undefined }
+  | { path: string; media?: undefined; data?: undefined }
+);
 
 /** One inner operation of a `functions.exec` orchestration record. Per-call
     status and output are not in the transcript — the combined output attaches
@@ -109,6 +121,10 @@ export type ToolEvent = {
       preview keeps a text placeholder where each picture sits, so copy,
       speech and the phone's failure detail still read in order. */
   outputBlocks?: ToolOutputBlock[];
+  /** Literal paths a Codex code-mode `exec` passed to `tools.view_image`
+      (#2075). The live overlay's `view_image` rows for this call carry an
+      identity of their own, so the settled exec claims them by these paths. */
+  viewedPaths?: string[];
   /** Working directory recovered from the call args or a `cd … &&` prefix. */
   cwd?: string;
   /** Numeric exit code recovered from a `exited with code N` result line. */
@@ -250,13 +266,26 @@ export interface ReasoningMember {
   availability: "available" | "unavailable";
 }
 
-export type Item =
-  | { kind: "prose"; ts: unknown; text: string; engine: "codex" | "claude" | "openclaw"; sourceId?: string }
+/** What ended the turn, as far as the record says: an expired or rejected
+    sign-in the operator can act on, or any other provider failure. */
+export type TurnErrorReason = "auth" | "other";
+
+export type Item = (
+  | { kind: "prose"; ts: unknown; text: string; engine: FeedEngine; sourceId?: string }
   | { kind: "user"; ts: unknown; text: string; selectedContext?: SelectedContextRef }
   | MandateItem
   | VoiceTurnItem
   | { kind: "svc"; text: string }
   | { kind: "note"; text: string }
+  /* The turn ended on a provider failure instead of an answer (#1846
+     recurrence). Codex closes both with the same `task_complete` record, and
+     the completion note dropped its `error`, so a first turn that never ran
+     read as "Task completed" with nothing under it.
+     Nothing here is the provider's own text. `reason` chooses which
+     Viewer-authored explanation the row shows, `code` is null unless the
+     record's error code is one the Viewer recognizes by name, and `withheld`
+     records that the failure carried a message the row did not print. */
+  | { kind: "turn-error"; ts: unknown; reason: TurnErrorReason; code: string | null; withheld: boolean }
   | ToolEvent
   | CmdGroupItem
   | ReviewCardItem
@@ -265,7 +294,7 @@ export type Item =
   | Tmsg
   | { kind: "tnote"; text: string }
   | { kind: "think"; text: string; sourceId?: string; availability?: "available" | "unavailable"; members?: ReasoningMember[] }
-  | { kind: "image"; media: string; data: string; w?: number; h?: number; bytes?: number }
+  | ({ kind: "image" } & ImageSource)
   | { kind: "inbox-image"; name: string; path: string }
   | { kind: "blob"; bytes: number; text: string; sourceId?: string }
   /* `deliveredMessage` (#1117): set on a Claude user row that is a REAL message
@@ -274,7 +303,8 @@ export type Item =
      or an internal relay card. Without evidence it renders as this system row. */
   | { kind: "sysmsg"; label: string; text: string; deliveredMessage?: { engineMessageId: string | null; ts: unknown } }
   | { kind: "compact"; ts: unknown; trigger?: string; preTokens?: number; summary?: string }
-  | { kind: "raw"; text: string; err: boolean };
+  | { kind: "raw"; text: string; err: boolean }
+) & { structuredUserRef?: string };
 
 /** One rendered feed row: `key` is stable across incremental re-feeds, so a
     row keeps its DOM node (and its memoized render) while the tail grows. */
@@ -285,6 +315,18 @@ export interface FeedEntry {
   item: Item;
   /** Receipt-to-completion total attached to the response that closed a turn. */
   responseDurationMs?: number;
+  /**
+   * WHICH delivery wrote this row, as the record itself says (#1950 round 2):
+   * the `dedup` token on the Codex structured-user marker, carried unchanged
+   * from the transcript. Every row a structured user record produced carries
+   * it — the bubble AND the attachment cards beside it — so the feed can bind
+   * a whole record to the submission it came from without comparing text, and
+   * an attachment-only send is bindable even though it has no text at all.
+   *
+   * It is an identity, not a resolution: the token names an operation, and
+   * only the registry can say which submission that operation belonged to.
+   */
+  submissionDedup?: string;
 }
 
 export interface FeedSnapshot {
@@ -295,6 +337,7 @@ export interface FeedSnapshot {
 export interface FeedSessionConfig {
   engine: string;
   fmt: string;
+  cwd?: string | null;
   showSvc: boolean;
   /** Lowercased needle; empty string disables filtering. */
   lineFilter: string;
@@ -335,10 +378,10 @@ const TMSG_RE = /<(teammate-message|agent-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
 
 /* Inbox image paths the composer appends to a delivered message, one per line
    after the text (src/lib/tmux.ts buildImagePayload). The captured basename is
-   what /api/inbox accepts. Both inbox homes match: the current
-   agent-log-viewer/inbox and the legacy .claude/viewer-inbox that old
-   transcripts still reference. */
-const INBOX_PATH_RE = /\S*\/(?:agent-log-viewer\/inbox|\.claude\/viewer-inbox)\/([A-Za-z0-9._-]+\.(?:png|jpe?g|gif|webp))/gi;
+   what /api/inbox accepts. Every inbox home matches: delegatus/inbox (a new
+   install), agent-log-viewer/inbox (an install from before the rename) and the
+   legacy .claude/viewer-inbox that old transcripts still reference. */
+const INBOX_PATH_RE = /\S*\/(?:delegatus\/inbox|agent-log-viewer\/inbox|\.claude\/viewer-inbox)\/([A-Za-z0-9._-]+\.(?:png|jpe?g|gif|webp))/gi;
 
 interface InboxImageRef {
   name: string;
@@ -349,7 +392,7 @@ interface InboxImageRef {
    it; a path mentioned mid-sentence keeps its line verbatim and still gets a
    card, so prose around it never garbles. */
 function extractInboxImages(text: string): { cleaned: string; images: InboxImageRef[] } {
-  if (!text.includes("/.claude/viewer-inbox/") && !text.includes("/agent-log-viewer/inbox/")) return { cleaned: text, images: [] };
+  if (!text.includes("/.claude/viewer-inbox/") && !text.includes("/agent-log-viewer/inbox/") && !text.includes("/delegatus/inbox/")) return { cleaned: text, images: [] };
   const images: InboxImageRef[] = [];
   const seen = new Set<string>();
   const kept: string[] = [];
@@ -397,7 +440,47 @@ const OPENCLAW_SYNTHETIC_PROVIDER = "openclaw";
 function feedEngine(engine: string): FeedEngine {
   if (engine === "codex") return "codex";
   if (engine === "openclaw") return "openclaw";
+  if (engine === "copilot") return "copilot";
   return "claude";
+}
+
+/* Copilot CLI tool names mapped onto the feed's shared tool vocabulary, so a
+   Copilot card gets the same family, icon and summary as its Claude
+   counterpart. A tool the table does not know keeps its own name. Tool names
+   are CLI-version data (1.0.87 renamed `grep` to `rg`), so this only chooses
+   presentation and nothing depends on it. */
+const COPILOT_TOOL_NAMES: Readonly<Record<string, string>> = {
+  bash: "Bash",
+  view: "Read",
+  create: "Write",
+  edit: "Edit",
+  str_replace_editor: "Edit",
+  rg: "Grep",
+  grep: "Grep",
+  glob: "Glob",
+  web_fetch: "WebFetch",
+};
+
+/** A Copilot tool name as the feed presents it. Copilot names MCP tools
+    `<server>-<tool>`; `viewer-<tool>` is the Viewer MCP and reads as
+    `mcp__viewer__<tool>`, the Claude spelling, so one path presents both. */
+export function copilotFeedToolName(name: string): string {
+  if (name.startsWith("viewer-") && name.length > "viewer-".length) return `mcp__viewer__${name.slice("viewer-".length)}`;
+  return COPILOT_TOOL_NAMES[name] ?? name;
+}
+
+/** Copilot's argument names mapped onto the ones the shared summaries read. */
+function copilotToolArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (name === "view" || name === "create" || name === "edit" || name === "str_replace_editor") {
+    return {
+      ...args,
+      ...(args.path !== undefined && args.file_path === undefined ? { file_path: args.path } : {}),
+      ...(args.old_str !== undefined ? { old_string: args.old_str } : {}),
+      ...(args.new_str !== undefined ? { new_string: args.new_str } : {}),
+      ...(args.file_text !== undefined ? { content: args.file_text } : {}),
+    };
+  }
+  return args;
 }
 
 function rec(value: unknown): Record<string, unknown> {
@@ -465,7 +548,87 @@ function base64DecodedLength(base64: string): number {
   return Math.floor((base64.length * 3) / 4) - padding;
 }
 
-function codexImageFromDataUrl(value: string): Extract<Item, { kind: "image" }> | null {
+/**
+ * Error codes this row knows by name. Two things hang off recognition, and
+ * only recognized codes get either: which explanation the row shows, and
+ * whether the code itself is printed — the printed string is the constant
+ * below, never the bytes out of the record, so no payload glued behind a code
+ * can ride onto the screen inside it.
+ */
+const AUTH_TURN_ERROR_CODES = new Set([
+  "unauthorized",
+  "unauthenticated",
+  "auth_error",
+  "authentication_error",
+  "authentication_failed",
+  "invalid_credentials",
+  "token_expired",
+  "refresh_token_expired",
+  "login_required",
+]);
+/** Recognized and explicitly NOT a sign-in problem. An auth SERVICE being down
+    is the clearest of them: the operator's credentials are fine, and telling
+    them to sign in again would send them after the wrong thing. */
+const OTHER_TURN_ERROR_CODES = new Set([
+  "auth_service_unavailable",
+  "service_unavailable",
+  "usage_limit",
+  "usage_limit_exceeded",
+  "rate_limited",
+  "stream_error",
+  "server_error",
+  "internal_error",
+  "network_error",
+  "timeout",
+  "context_length_exceeded",
+  "cancelled",
+]);
+/** Prose that names an expired sign-in, read ONLY when the record carries no
+    code at all. A code that exists is the provider's own classification and
+    outranks anything its prose happens to mention. */
+const AUTH_MESSAGE_RE = /\b(?:unauthorized|refresh token has expired|sign ?in again|log ?out and sign in)\b/i;
+
+function turnErrorCodeKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+/**
+ * The provider failure a Codex turn-end record carries, or null when the turn
+ * simply ended. A clean completion has no `error` and no `codex_error_info` at
+ * all, so anything read here is a real failure — including the observed
+ * `unauthorized` first turn, which returned no assistant message whatsoever.
+ *
+ * **Nothing the provider wrote is returned for display.** A provider's error
+ * message is arbitrary prose that can quote the request it rejected — a JSON
+ * body, a header, a token in single quotes, escaped, or nested three levels
+ * down — and no set of patterns over arbitrary text can be trusted to have
+ * found every credential in it. So the row is keyed on values this parser
+ * RECOGNIZES and rendered from strings the Viewer itself authored. What the
+ * record said is still in the transcript record rows, under the same bounded,
+ * key-aware redaction every other raw record gets.
+ *
+ * `withheld` says a message existed and was not printed, so the row can be
+ * honest about the choice rather than silently dropping it.
+ */
+function codexTurnFailure(payload: Record<string, unknown>): Omit<Extract<Item, { kind: "turn-error" }>, "kind" | "ts"> | null {
+  const error = rec(payload.error);
+  const info = (textPart(payload.codex_error_info) || textPart(error.codex_error_info)).trim();
+  const message = (textPart(error.message) || textPart(payload.error) || (info ? textPart(payload.message) : "")).trim();
+  if (!info && !message) return null;
+  const key = turnErrorCodeKey(info);
+  /* A code the Viewer knows decides on its own. An unrecognized code may still
+     LEAD with a known one ("unauthorized <payload>"), which classifies the
+     failure without being printed. With no code at all, the prose is all there
+     is to go on. */
+  const leading = turnErrorCodeKey(info.split(/[\s,;(]/, 1)[0] ?? "");
+  const auth = AUTH_TURN_ERROR_CODES.has(key)
+    || (!OTHER_TURN_ERROR_CODES.has(key) && AUTH_TURN_ERROR_CODES.has(leading))
+    || (!info && AUTH_MESSAGE_RE.test(message));
+  const recognized = AUTH_TURN_ERROR_CODES.has(key) || OTHER_TURN_ERROR_CODES.has(key);
+  return { reason: auth ? "auth" : "other", code: recognized ? key : null, withheld: Boolean(message || info) };
+}
+
+function codexImageFromDataUrl(value: string): { kind: "image"; media: string; data: string } | null {
   const match = value.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/i);
   if (!match) return null;
   const media = match[1].toLowerCase();
@@ -480,6 +643,7 @@ function inboxImagesFromPath(path: string): Extract<Item, { kind: "inbox-image" 
 }
 
 interface CodexUserContent {
+  metadataRef?: string;
   text: string;
   attachments: Item[];
   structured: boolean;
@@ -491,6 +655,9 @@ interface CodexUserContent {
       an internal relay card; `operator` and records that predate the attribute
       keep the user bubble. */
   origin?: MessageOrigin | null;
+  /** The delivery's own identity on the marker (#1366), passed through to the
+      rows this record produces so they can be bound to their submission. */
+  deliveryDedup?: string;
 }
 
 /* Codex has added content-part variants over time. Keep the text path broad,
@@ -522,7 +689,9 @@ function normalizeCodexUserContent(content: unknown): CodexUserContent {
     if (type === "local-image" || type === "local_image" || type === "localImage") {
       const path = textPart(part.path) || textPart(part.local_path) || textPart(part.image_url) || textPart(part.url);
       const images = inboxImagesFromPath(path);
+      const onDisk = images.length ? null : rasterImagePath(path);
       if (images.length) attachments.push(...images);
+      else if (onDisk) attachments.push({ kind: "image", path: onDisk });
       else if (hasNonEmptyValue(part)) attachments.push({ kind: "note", text: codexAttachmentLabel(type) });
       continue;
     }
@@ -662,16 +831,6 @@ function toolOutputFailed(text: string): boolean {
 
 const RECORD_FIELD_MAX = 4_000;
 const RECORD_SUMMARY_MAX = 160;
-const SENSITIVE_RECORD_KEY = /(?:api.?key|access.?token|refresh.?token|authorization|bearer|secret|password|passwd|pwd|token)/i;
-const SENSITIVE_RECORD_TEXT = /(?:api|token|authorization|bearer|secret|password|passwd|pwd)/i;
-const JSON_SECRET_VALUE = /("(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)"\s*:\s*")[^"]*/gi;
-const INLINE_SECRET_VALUE = /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)\s*[:=]\s*["']?)[^\s"',}]+/gi;
-const BEARER_SECRET_VALUE = /(\bbearer\s+)[^\s"',}]+/gi;
-
-function redactTranscriptText(value: string): string {
-  const bearerSafe = value.replace(BEARER_SECRET_VALUE, "$1[redacted]");
-  return redactSecrets(bearerSafe).replace(JSON_SECRET_VALUE, "$1[redacted]").replace(INLINE_SECRET_VALUE, "$1[redacted]");
-}
 
 /* Future rollout records stay diagnosable without allowing a new payload to
    inject an unbounded string, ciphertext, image data, or credential into the
@@ -850,7 +1009,14 @@ function toolBucket(event: ToolEvent): string {
    is the exception: its countdown/reason card carries live state a folded
    header would hide, so it always stays a standalone card (issue #161). */
 function foldableTool(item: Item): item is ToolEvent {
-  return item.kind === "tool" && !item.wakeup && !item.mcp;
+  return item.kind === "tool" && !item.wakeup && !item.mcp && !hasImageBlock(item);
+}
+
+/** A tool row that shows a picture (#2075). It never folds into a command
+    group: a folded run shows one line, and the picture is the thing the
+    operator came to see. Its neighbours still fold around it. */
+export function hasImageBlock(event: ToolEvent): boolean {
+  return Boolean(event.outputBlocks?.some((block) => block.type === "image"));
 }
 
 /* Maps a `tools.<method>` orchestration call to a canonical tool name so the
@@ -878,6 +1044,11 @@ const ORCH_HELPERS = new Set(["text", "image", "generatedImage", "store", "notif
 const ORCH_CALL_RE = /\btools\.([A-Za-z_]\w*)\s*\(/g;
 const ORCH_HELPER_RE = /(?:^|[^.\w])(text|image|generatedImage|store|notify)\s*\(/g;
 const ORCH_MAX_CALLS = 16;
+// Correlation inspects more than the display preview: an ordinary patch can
+// exceed 8 KiB. Still bounded per record, with no transcript reads or eval.
+const EXEC_PAIR_SOURCE_MAX = 128 * 1024;
+/** Copilot picture assets kept for the completions that reference them (#2075). */
+const COPILOT_ASSET_LIMIT = 32;
 
 /* Reads a JS string/template literal that opens at `start` (its quote char) and
    returns the index of the matching close quote. Backslash escapes are skipped;
@@ -1128,6 +1299,24 @@ function batchCommands(fullInput: string): string[] {
   return commands;
 }
 
+/* The literal paths a code-mode exec hands to `tools.view_image` (#2075). A
+   path built at runtime (a loop variable, a template with `${…}`) is not
+   recoverable from the source and is skipped. */
+function viewedImagePathsOf(input: string): string[] {
+  if (!input.includes("view_image")) return [];
+  const paths: string[] = [];
+  const callPattern = new RegExp(ORCH_CALL_RE.source, "g");
+  let match: RegExpExecArray | null;
+  while ((match = callPattern.exec(input)) && paths.length < ORCH_MAX_CALLS) {
+    if (match[1] !== "view_image") continue;
+    const argsSrc = sliceCallArgs(input, match.index + match[0].length - 1);
+    const literal = resolveField(argsSrc, input, ["path"]) || positionalLiteral(argsSrc);
+    const path = literal.includes("${") ? null : rasterImagePath(decodeJsString(literal));
+    if (path && !paths.includes(path)) paths.push(path);
+  }
+  return paths;
+}
+
 /**
  * Recognizes a Codex `functions.exec` orchestration (a `custom_tool_call` whose
  * JS input drives `tools.*` operations) and turns it into a meaningful outer
@@ -1252,6 +1441,9 @@ interface StoredEntry {
   src: number;
   item: Item;
   responseDurationMs?: number;
+  /** The delivery identity on the record that produced this row; see
+      {@link FeedEntry.submissionDedup}. */
+  submissionDedup?: string;
 }
 
 interface CallRec {
@@ -1265,6 +1457,10 @@ interface PendingCodexUser {
   text: string;
   entrySeqs: number[];
   structured: boolean;
+  /** The delivery identity on the record that opened this row (#1366), when
+      it carried one. Two records that name DIFFERENT deliveries are two
+      messages however alike their words and their clocks are. */
+  dedup?: string;
   /** A later record of the same text at the same instant already replaced
       this row like for like (#1398): the message is real whatever its text
       looks like, and any further echo folds into the same row. */
@@ -1319,13 +1515,30 @@ function sameCodexTextAtTime(leftTs: unknown, leftText: unknown, rightTs: unknow
  */
 export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const { showSvc, lineFilter } = cfg;
-  const jsonl = cfg.fmt === "claude" || cfg.fmt === "codex" || cfg.fmt === "openclaw";
+  const jsonl = cfg.fmt === "claude" || cfg.fmt === "codex" || cfg.fmt === "openclaw" || cfg.fmt === "copilot";
 
   const entries: StoredEntry[] = [];
+  let conversationCwd = cfg.cwd ?? "";
   let reasoningBoundary = 0;
   let reasoningTurnId = "";
   const reasoningSeqs = new Map<string, number>();
   const calls = new Map<string, CallRec>();
+  // CLI 0.155 emits exec-* concrete operations between a wrapper and its result.
+  // No parent ID exists: only one unambiguous interval may claim children.
+  let execWindow: { id: string; remaining: string[]; seen: Set<string> } | null = null;
+  const pendingExecs = new Set<string>();
+  let execPairingOverflow = false;
+  const representedExecs = new Set<string>();
+  /* The file a Codex `view_image` call opened, by call id, from its
+     `view_image_tool_call` event (#2075). The output's inline picture wins;
+     the path is drawn only when the output carried none. */
+  const viewedImagePaths = new Map<string, string>();
+  /* Copilot writes a picture's bytes once, as a `session.binary_asset` record
+     ahead of the tool completion that references it by id (#2075). Bounded:
+     the completion follows its asset within a few records. */
+  const copilotAssets = new Map<string, { src: number; block: ToolOutputBlock }>();
+  const copilotViewPaths = new Map<string, string>();
+  const agentCalls = new Map<string, string>();
   const sessionOwners = new Map<string, SessionOwner>();
   const sessionIdentity = (value: unknown): { label?: string; owner: SessionOwner } | undefined => {
     const raw = rawSessionId(value);
@@ -1396,8 +1609,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const entryIndex = (seq: number): number => (entries.length ? seq - entries[0].seq : -1);
 
-  const push = (item: Item): number => {
-    entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item });
+  const push = (item: Item, submissionDedup?: string): number => {
+    entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item,
+      ...(submissionDedup ? { submissionDedup } : {}) });
     snapshot = null;
     return pushSeq++;
   };
@@ -1664,7 +1878,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       outputTruncated: false,
       ...(s.family === "shell" ? (() => {
         const cwd = cwdOf(args, command);
-        return { ...(cwd ? { cwd } : {}), ...(session?.label !== undefined ? { session: session.label } : {}) };
+        return { ...(cwd && cwd !== conversationCwd ? { cwd } : {}), ...(session?.label !== undefined ? { session: session.label } : {}) };
       })() : {}),
       ...(poll ? { poll: true } : {}),
       /* An edit/write card opens its structured diff inline by default — a
@@ -1758,10 +1972,24 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const emitCustomTool = (ts: unknown, name: string, input: string, callId?: string): ToolEvent => {
     const id = callId || "plain-" + pushSeq + "-" + String(ts ?? "");
     const orch = parseOrchestration(input);
+    const methods: string[] = [];
+    for (const match of input.slice(0, EXEC_PAIR_SOURCE_MAX).matchAll(new RegExp(ORCH_CALL_RE.source, "g"))) {
+      methods.push(match[1]);
+      if (methods.length > ORCH_MAX_CALLS) break;
+    }
+    if (name === "exec" || name === "functions.exec") {
+      // A full set disables pairing until a turn boundary; never guess after
+      // dropping an unresolved owner just to admit another wrapper.
+      if (pendingExecs.size < ORCH_MAX_CALLS) pendingExecs.add(id);
+      else execPairingOverflow = true;
+    }
+    execWindow = !execPairingOverflow && pendingExecs.size === 1 && pendingExecs.has(id) && methods.length > 0 && methods.length <= ORCH_MAX_CALLS
+      && input.length <= EXEC_PAIR_SOURCE_MAX ? { id, remaining: methods, seen: new Set() } : null;
     const direct = orch?.directInteractive;
     const base = newToolEvent({ ts, id, tool: direct?.tool ?? name, args: direct?.args ?? { input }, engine: "codex", diff: orch?.diff });
+    const viewedPaths = viewedImagePathsOf(input.slice(0, EXEC_PAIR_SOURCE_MAX));
     const event = orch
-      ? retainSessionOwner({ ...base, ...orch.overlay, ...(orch.body ? { orchestration: orch.body } : {}) }, sessionOwnership.get(base))
+      ? retainSessionOwner({ ...base, ...orch.overlay, ...(orch.body ? { orchestration: orch.body } : {}), ...(viewedPaths.length ? { viewedPaths } : {}) }, sessionOwnership.get(base))
       : base;
     registerCall(event);
     return event;
@@ -1877,10 +2105,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         : idleWait
           ? tr("tools.waitingSeconds", { n: Math.round(Number(wallSeconds)) })
           : "ok",
-      /* A result that carried a picture opens the card by default the way an
-         edit's diff does (issue #90): the chip is visible without a click and
-         decodes nothing until the operator opens it (#1498). */
-      open: prev.open || isErr || outputBlocks !== prev.outputBlocks,
+      /* A picture is drawn on the line itself, outside the body (#2075), so a
+         result that carried one no longer opens the body to show it. */
+      open: prev.open || isErr,
       srcResult: curSrc,
       outputPreview,
       outputTruncated,
@@ -1910,6 +2137,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   };
   const addOutput = (callId: string | undefined, output: string, err?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[]) => {
     if (!callId) return;
+    pendingExecs.delete(callId);
+    if (execWindow?.id === callId) {
+      if (!execWindow.remaining.length && execWindow.seen.size && !err && !/^\s*(?:Script (?:running|failed)|\w*Error:)/i.test(output)) {
+        representedExecs.add(callId);
+        snapshot = null;
+      }
+      execWindow = null;
+    }
     const tseq = tmsgSeqs.get(callId);
     if (tseq !== undefined) {
       /* The routing echo repeats the whole message body; keep only the delivery state. */
@@ -1925,8 +2160,31 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
       return;
     }
-    const event = attach(calls.get(callId), output, err, rawSession, resultTs, blocks);
+    const viewed = viewedImagePaths.get(callId);
+    const pictured = !viewed || err || blocks?.some((block) => block.type === "image")
+      ? blocks
+      : [...(output ? [{ type: "text" as const, text: output }] : []), { type: "image" as const, path: viewed }];
+    const event = attach(calls.get(callId), output, err, rawSession, resultTs, pictured);
     if (!event && output && showSvc) push({ kind: "svc", text: "output: " + redactSecrets(output).slice(0, 200) });
+  };
+  /* A `view_image_tool_call` event names the file the call with that id opened
+     (#2075). It is not a row of its own: when the output already landed
+     without a picture, the path joins it; otherwise the output reads it. */
+  const addViewedImagePath = (callId: string, path: string) => {
+    const call = calls.get(callId);
+    const picture = rasterImagePath(path);
+    if (!call || !picture) return;
+    viewedImagePaths.set(callId, picture);
+    const prev = call.event;
+    if (prev.status !== "ok" || hasImageBlock(prev)) return;
+    const carried: ToolOutputBlock[] = prev.outputBlocks ?? (prev.outputPreview ? [{ type: "text", text: prev.outputPreview }] : []);
+    const event: ToolEvent = { ...prev, outputBlocks: [...carried, { type: "image", path: picture }] };
+    call.event = event;
+    const idx = entryIndex(call.seq);
+    if (idx >= 0 && entries[idx]?.item.kind === "tool") {
+      entries[idx] = { ...entries[idx], item: event };
+      snapshot = null;
+    }
   };
   const addSvc = (text: string) => {
     if (showSvc) push({ kind: "svc", text: text.slice(0, 300) });
@@ -1938,6 +2196,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   };
   const addNote = (text: string) => {
     push({ kind: "note", text });
+  };
+  const addTurnError = (ts: unknown, failure: Omit<Extract<Item, { kind: "turn-error" }>, "kind" | "ts">) => {
+    push({ kind: "turn-error", ts, ...failure });
   };
   const addThink = (text: string, sourceId?: string) => {
     const normalized = text.trim();
@@ -2019,6 +2280,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const codexThreadArgs = (value: unknown): Record<string, unknown> => {
     if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
     if (value === undefined || value === null) return {};
+    if (typeof value === "string") {
+      try { const parsed = JSON.parse(value); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed; } catch { /* freeform input */ }
+    }
     return { input: typeof value === "string" ? value : JSON.stringify(value) };
   };
   const codexThreadPreview = (value: unknown): string => {
@@ -2080,6 +2344,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     args?: Record<string, unknown>;
     summary?: string;
     output?: unknown;
+    blocks?: ToolOutputBlock[];
   }): void => {
     const id = textPart(opts.item.id) || "plain-" + pushSeq + "-" + String(opts.timing.ts ?? "");
     const status = codexThreadToolStatus(opts.item, opts.lifecycle);
@@ -2093,7 +2358,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     });
     upsertCodexThreadTool({ ...base, status, statusLabel: codexThreadStatusLabel(status) });
     if (status !== "run") {
-      attach(calls.get(id), toolOutputText(opts.output), status === "err", undefined, opts.timing.endTs ?? opts.timing.ts);
+      attach(calls.get(id), toolOutputText(opts.output), status === "err", undefined, opts.timing.endTs ?? opts.timing.ts, opts.blocks);
     }
     const current = calls.get(id)?.event;
     if (!current) return;
@@ -2114,6 +2379,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   ): boolean => {
     const kind = codexThreadItemKind(item.type);
     const id = textPart(item.id) || "plain-" + pushSeq + "-" + String(timing.ts ?? "");
+    if (execWindow && id.startsWith("exec-") && !execWindow.seen.has(id)) {
+      const method = kind === "commandexecution" ? "exec_command" : kind === "filechange" ? "apply_patch"
+        : kind === "mcptoolcall" ? `mcp__${textPart(item.server)}__${textPart(item.tool)}`
+        : kind === "extension" && textPart(item.kind).startsWith("web.") ? "web__run" : "";
+      const index = execWindow.remaining.indexOf(method);
+      if (index >= 0) { execWindow.remaining.splice(index, 1); execWindow.seen.add(id); }
+      else if (method) execWindow = null; // extra operations: preserve the wrapper
+    }
     const toolKind = ["functioncalloutput", "commandexecution", "filechange", "mcptoolcall", "dynamictoolcall", "collabagenttoolcall", "websearch", "imageview", "imagegeneration", "extension"].includes(kind);
     // Use the renderer's tool families for every lifecycle/envelope form.
     // A completion can update an earlier slot without appending a tool row.
@@ -2164,21 +2437,20 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     if (kind === "mcptoolcall") {
       const server = textPart(item.server) || "mcp";
       const tool = textPart(item.tool) || "tool";
-      emitCodexThreadTool({ item, timing, lifecycle, tool: `mcp__${server}__${tool}`, args: codexThreadArgs(item.arguments), output: item.error ?? item.result });
+      emitCodexThreadTool({ item, timing, lifecycle, tool: `mcp__${server}__${tool}`, args: codexThreadArgs(item.arguments), output: item.error ?? rec(item.result).content ?? item.result });
       return true;
     }
     if (kind === "extension") {
-      const extensionKind = textPart(item.kind) || codexThreadPreview(item.kind);
-      const action = textPart(item.action) || codexThreadPreview(item.action);
-      const query = textPart(item.query) || codexThreadPreview(item.query);
-      emitCodexThreadTool({
-        item,
-        timing,
-        lifecycle,
-        tool: "Extension",
-        args: { kind: item.kind, action: item.action, query: item.query },
-        summary: [extensionKind, action, query].filter(Boolean).join(" · ") || "Extension",
-        output: codexThreadPreview(item.results),
+      const extensionKind = textPart(item.kind);
+      const action = textPart(rec(item.action).type) || textPart(item.action);
+      const query = textPart(item.query) || textPart(rec(item.action).query);
+      const web = extensionKind.startsWith("web.");
+      const tool = web ? (action === "search" ? "WebSearch" : "WebFetch") : extensionKind || feedCopy("Extension action", "Дія розширення");
+      const results = arr(item.results).slice(0, 40).map(result => [textPart(result.title), textPart(result.url), textPart(result.snippet)].filter(Boolean).join("\n")).filter(Boolean).join("\n\n");
+      emitCodexThreadTool({ item, timing, lifecycle, tool,
+        args: web ? { query, url: query } : { action, query },
+        summary: web ? undefined : [tool, action, query].filter(Boolean).join(" · "),
+        output: results || toolOutputText(item.results),
       });
       return true;
     }
@@ -2199,13 +2471,34 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return true;
     }
     if (kind === "collabagenttoolcall") {
-      const tool = textPart(item.tool) || "collabAgentToolCall";
-      const args = { prompt: item.prompt, model: item.model, reasoningEffort: item.reasoningEffort };
-      emitCodexThreadTool({ item, timing, lifecycle, tool, args, summary: `Collab · ${tool}`, output: { status: item.status, agents: item.agentsStates } });
+      const tool = textPart(item.tool) || "spawn_agent";
+      const args = { prompt: taskText(item.prompt), target: item.receiverThreadIds ?? item.receiver_thread_ids, model: item.model };
+      emitCodexThreadTool({ item, timing, lifecycle, tool: "spawn_agent", args,
+        summary: [tool, taskText(item.prompt), textPart(item.status)].filter(Boolean).join(" · "),
+        output: { status: item.status, agents: item.agentsStates ?? item.agents_states } });
       return true;
     }
     if (kind === "subagentactivity") {
-      addNote(["Sub-agent", textPart(item.kind)].filter(Boolean).join(" · "));
+      const agent = textPart(item.agent_path) || textPart(item.agent_thread_id);
+      const activity = textPart(item.kind);
+      const label = activity === "completed" ? feedCopy("completed", "завершено")
+        : activity === "started" ? feedCopy("started", "запущено")
+        : activity === "interacted" ? feedCopy("task sent", "завдання надіслано")
+        : activity === "failed" ? feedCopy("failed", "помилка") : activity;
+      const paired = calls.get(id) ?? calls.get(agentCalls.get(agent) ?? "");
+      if (paired && paired.event.family === "spawn") {
+        agentCalls.set(agent, paired.event.id);
+        const baseSummary = paired.event.summary.replace(/ · (completed|завершено|started|запущено|task sent|завдання надіслано|failed|помилка)$/, "");
+        upsertCodexThreadTool({ ...paired.event,
+          summary: redactSecrets(`${baseSummary} · ${label}`).slice(0, 240),
+          chips: [{ value: redactSecrets(agent).slice(0, 120) }],
+          ...(["completed", "failed"].includes(activity) ? { status: activity === "failed" ? "err" as const : "ok" as const, statusLabel: label, endTs: timing.endTs ?? timing.ts } : {}),
+        });
+      } else if (agent) {
+        emitCodexThreadTool({ item, timing, lifecycle, tool: "subagent_activity", args: { agent_path: agent },
+          summary: `${feedCopy("Agent", "Агент")} · ${agent} · ${label}`, output: "" });
+        agentCalls.set(agent, id);
+      }
       return true;
     }
     if (kind === "websearch") {
@@ -2213,8 +2506,12 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return true;
     }
     if (kind === "imageview") {
+      /* The item names the file and carries no bytes (#2075): the row draws
+         the file through the artifact route instead of printing its path. */
       const path = textPart(item.path);
-      emitCodexThreadTool({ item, timing, lifecycle, tool: "imageView", args: { path }, summary: ["imageView", path].filter(Boolean).join(" · "), output: path });
+      const picture = rasterImagePath(path);
+      emitCodexThreadTool({ item, timing, lifecycle, tool: "imageView", args: { path }, summary: ["imageView", path].filter(Boolean).join(" · "),
+        output: picture ? `[${tr("render.imageOutput")}]` : path, ...(picture ? { blocks: [{ type: "image", path: picture }] } : {}) });
       return true;
     }
     if (kind === "sleep") {
@@ -2245,9 +2542,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return true;
     }
     if (kind === "commandexecution") {
-      const command = Array.isArray(item.command)
-        ? item.command.filter((part): part is string => typeof part === "string").join(" ")
-        : textPart(item.command);
+      const argv = Array.isArray(item.command) ? item.command.filter((part): part is string => typeof part === "string") : [];
+      const command = argv.length === 3 && /(?:^|\/)(?:ba|z|da)?sh$/.test(argv[0]) && /^-[a-z]*c$/.test(argv[1])
+        ? argv[2] : argv.length ? argv.join(" ") : textPart(item.command);
       const base = newToolEvent({
         ts: timing.ts,
         id,
@@ -2351,7 +2648,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   });
   const emitCodexUserContent = (ts: unknown, content: CodexUserContent): PendingCodexUser => {
     const entrySeqs: number[] = [];
-    const emit = (item: Item) => entrySeqs.push(push(item));
+    /* Every row this ONE record produces carries the record's own delivery
+       identity — the bubble and the attachment cards alike. An image-only
+       send produces nothing but attachment rows, and they are the only thing
+       that can say which submission the picture arrived for. */
+    const emit = (item: Item) => entrySeqs.push(push(
+      content.metadataRef ? { ...item, structuredUserRef: content.metadataRef } : item,
+      content.deliveryDedup,
+    ));
     const { cleaned, images } = extractInboxImages(content.text);
     const voice = cleaned ? parseRealtimeDelegation(cleaned) : null;
     if (voice) emit({ kind: "voice", ts, ...voice });
@@ -2359,7 +2663,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     else if (cleaned) emit({ kind: "user", ts, text: cleaned, ...(content.selectedContext ? { selectedContext: content.selectedContext } : {}) });
     for (const image of images) emit({ kind: "inbox-image", name: image.name, path: image.path });
     for (const attachment of content.attachments) emit(attachment);
-    return { src: curSrc, ts, text: content.text, entrySeqs, structured: content.structured };
+    return { src: curSrc, ts, text: content.text, entrySeqs, structured: content.structured,
+      ...(content.deliveryDedup ? { dedup: content.deliveryDedup } : {}) };
   };
   const updateCodexPendingSource = (pending: PendingCodexUser, src: number) => {
     for (const seq of pending.entrySeqs) {
@@ -2407,13 +2712,28 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
      is its ECHO and replaces that row LIKE FOR LIKE: an internal relay stays
      the relay card (with the echo's timestamp), a user text stays the bubble —
      the echo must never re-author the message, and never opens a second row. */
+  /* One message can reach the rollout as several records, and only some of
+     them carry the marker: the identity the first sighting recorded stands
+     for the whole row group. */
+  const pendingDedup = (pending: PendingCodexUser): string | undefined => {
+    for (const seq of pending.entrySeqs) {
+      const idx = entryIndex(seq);
+      const dedup = idx >= 0 ? entries[idx]?.submissionDedup : undefined;
+      if (dedup) return dedup;
+    }
+    return undefined;
+  };
   const reconcileCodexUserEcho = (pending: PendingCodexUser, ts: unknown, decoded: CodexUserContent) => {
     const { cleaned, images } = extractInboxImages(decoded.text);
     if (cleaned) {
-      const internal = decoded.origin?.kind === "agent";
+      const previous = pending.entrySeqs.map((seq) => entries[entryIndex(seq)]?.item)
+        .find((item) => item?.kind === "user" || item?.kind === "tmsg");
+      const internal = decoded.origin?.kind === "agent" || (!decoded.origin && previous?.kind === "tmsg" && previous.internal);
       const echoItem: Item = internal
-        ? internalRelayItem(ts, cleaned, decoded.origin!)
+        ? internalRelayItem(ts, cleaned, decoded.origin ?? { kind: "agent", ...(previous?.kind === "tmsg" ? { role: previous.peer } : {}) })
         : { kind: "user", ts, text: cleaned };
+      const metadataRef = decoded.metadataRef ?? previous?.structuredUserRef;
+      if (metadataRef) echoItem.structuredUserRef = metadataRef;
       const matchSeq = pending.entrySeqs.find((seq) => {
         const idx = entryIndex(seq);
         const kind = idx >= 0 ? entries[idx]?.item.kind : undefined;
@@ -2421,9 +2741,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       });
       if (matchSeq !== undefined) {
         const idx = entryIndex(matchSeq);
-        entries[idx] = { ...entries[idx], item: echoItem };
+        entries[idx] = { ...entries[idx], item: echoItem,
+          ...(decoded.deliveryDedup ? { submissionDedup: decoded.deliveryDedup } : {}) };
       } else {
-        pending.entrySeqs.push(push(echoItem));
+        pending.entrySeqs.push(push(echoItem, decoded.deliveryDedup ?? pendingDedup(pending)));
       }
     }
     /* The provisional row already showed the message's inbox images; an echo
@@ -2433,13 +2754,22 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return idx >= 0 && entries[idx]?.item.kind === "inbox-image";
     });
     if (!illustrated) {
-      for (const image of images) pending.entrySeqs.push(push({ kind: "inbox-image", name: image.name, path: image.path }));
+      const dedup = decoded.deliveryDedup ?? pendingDedup(pending);
+      for (const image of images) pending.entrySeqs.push(push({ kind: "inbox-image", name: image.name, path: image.path }, dedup));
     }
     updateCodexPendingSource(pending, curSrc);
     pending.echoed = true;
   };
   const addCodexUserRecord = (ts: unknown, content: CodexUserContent) => {
-    const pending = pendingCodexUsers.find((candidate) => sameCodexTextAtTime(candidate.ts, candidate.text, ts, content.text));
+    /* Same words at the same instant used to be the whole test for "this is
+       the same message arriving again". It is not, once two sends of one text
+       can land a second apart: the delivery identity says which is which, and
+       where both records carry one and they disagree these are two messages
+       and each keeps its own row. Where either record carries none, nothing
+       has been said and the old test stands. */
+    const pending = pendingCodexUsers.find((candidate) =>
+      !(candidate.dedup && content.deliveryDedup && candidate.dedup !== content.deliveryDedup)
+      && sameCodexTextAtTime(candidate.ts, candidate.text, ts, content.text));
     if (pending) return reconcileCodexUserEcho(pending, ts, content);
     const emitted = emitCodexUserContent(ts, content);
     if (!emitted.entrySeqs.length && !emitted.text) addSvc("message user");
@@ -2468,6 +2798,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const renderCodex = (obj: Record<string, unknown>) => {
     const p = rec(obj.payload);
     const ts = obj.timestamp;
+    if ((obj.type === "session_meta" || obj.type === "turn_context") && textPart(p.cwd)) conversationCwd = redactSecrets(textPart(p.cwd));
+    if (obj.type === "turn_context" || ["task_started", "task_complete", "turn_aborted"].includes(textPart(p.type))) {
+      execWindow = null;
+      pendingExecs.clear();
+      execPairingOverflow = false;
+    }
+    if (["function_call", "custom_tool_call"].includes(textPart(p.type))) execWindow = null;
     // Hidden lifecycle records must still separate adjacent reasoning runs.
     const turnId = textPart(p.turn_id) || textPart(p.turnId);
     if (turnId && reasoningTurnId && turnId !== reasoningTurnId) reasoningBoundary += 1;
@@ -2509,7 +2846,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         return addCodexAssistant("event-agent", ts, textPart(p.message));
       }
       if (p.type === "task_started") return addSvc(textPart(p.type));
-      if (p.type === "task_complete") return addNote(tr("render.taskComplete") + (ts ? " · " + hhmm(ts) : ""));
+      if (p.type === "task_complete") {
+        /* A turn that died on the provider says so here and nowhere else: the
+           record that closed it is the only evidence in the transcript. */
+        const failure = codexTurnFailure(p);
+        if (failure) return addTurnError(ts, failure);
+        return addNote(tr("render.taskComplete") + (ts ? " · " + hhmm(ts) : ""));
+      }
       if (p.type === "context_compacted") {
         if (codexCompacted) return void (codexCompacted = null);
         return addCompact(ts);
@@ -2536,6 +2879,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           snapshot = null;
         }
         return;
+      }
+      if (p.type === "view_image_tool_call") {
+        addViewedImagePath(textPart(p.call_id), textPart(p.path));
+        return addSvc("view_image_tool_call");
       }
       if ([
         "patch_apply_end",
@@ -2595,7 +2942,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
            opaque "session_id" service line (issue #141). summarizeTool owns their
            summary; attach() decodes and collapses their output. */
         if (name === "exec" || name === "functions.exec") return void emitCustomTool(ts, name, textPart(args.input), textPart(p.call_id));
-        return void registerCall(newToolEvent({ ts, id: textPart(p.call_id) || "plain-" + pushSeq + "-" + String(ts ?? ""), tool: name, args, engine: "codex" }));
+        const event = newToolEvent({ ts, id: textPart(p.call_id) || "plain-" + pushSeq + "-" + String(ts ?? ""), tool: name, args, engine: "codex" });
+        if (event.family === "spawn") {
+          const task = redactSecrets(taskText(args.message ?? args.prompt));
+          event.outputPreview = task.slice(0, COMMAND_MAX);
+          event.outputTruncated = task.length > COMMAND_MAX;
+        }
+        return void registerCall(event);
       }
       if (p.type === "function_call_output") {
         const rawSession = toolOutputSession(p.output);
@@ -2819,6 +3172,98 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
     }
   };
+  /* GitHub Copilot CLI `events.jsonl` (docs/design/copilot-engine.md 3.2):
+     `{type, data, id, timestamp}` records. The schema is unpublished and moves
+     between CLI releases, so an unknown type renders nothing and a missing
+     field degrades one row. `system.message` is the system prompt and turn
+     boundaries are bookkeeping; neither is a row. */
+  const registerCopilotCall = (ts: unknown, callId: string, name: string, rawArgs: unknown) => {
+    if (!callId || calls.has(callId)) return;
+    const tool = copilotFeedToolName(name || "tool");
+    const args = copilotToolArgs(name, rec(rawArgs));
+    const family = familyOf(tool);
+    const command = family === "shell" ? textPart(args.command) || undefined : undefined;
+    const lang = family === "read" ? extLang(textPart(args.file_path)) : undefined;
+    const mcpIdentity = viewerMcpToolUse(tool);
+    const mcp = mcpIdentity ? { ...mcpIdentity, args, result: null } : undefined;
+    registerCall(newToolEvent({ ts, id: callId, tool, args, engine: "copilot", command, lang, mcp }));
+    const viewed = name === "view" ? rasterImagePath(textPart(args.file_path)) : null;
+    if (viewed) copilotViewPaths.set(callId, viewed);
+  };
+  /* The pictures a Copilot completion handed the model (#2075): each
+     `binaryResultsForLlm` entry references a `session.binary_asset` by id. An
+     asset that slid out of the loaded window falls back to the file the `view`
+     call opened, drawn from disk. */
+  const copilotResultImages = (callId: string, result: Record<string, unknown>): ToolOutputBlock[] => {
+    const images: ToolOutputBlock[] = [];
+    for (const entry of arr(result.binaryResultsForLlm)) {
+      const asset = copilotAssets.get(textPart(entry.assetId));
+      if (asset) {
+        images.push(asset.block);
+        continue;
+      }
+      const inline = toolImageBlock({ source: { media_type: textPart(entry.mimeType), data: textPart(entry.data) } });
+      if (inline) images.push(inline);
+      else if (textPart(entry.type) === "image" || textPart(entry.mimeType).startsWith("image/")) {
+        const path = copilotViewPaths.get(callId);
+        if (path && !images.some((image) => image.type === "image" && image.path === path)) images.push({ type: "image", path });
+      }
+    }
+    return images;
+  };
+  const renderCopilot = (obj: Record<string, unknown>) => {
+    const ts = obj.timestamp;
+    const data = rec(obj.data);
+    const type = textPart(obj.type);
+    if (type === "user.message") {
+      /* `content` is what was sent; `transformedContent` adds the CLI's own
+         datetime preamble and is not shown. */
+      return addUserText(ts, textPart(data.content));
+    }
+    if (type === "assistant.message") {
+      const content = textPart(data.content);
+      if (content.trim()) addProse(ts, content, textPart(data.messageId) || textPart(obj.id) || undefined);
+      for (const request of arr(data.toolRequests)) {
+        registerCopilotCall(ts, textPart(request.toolCallId), textPart(request.name), request.arguments);
+      }
+      return;
+    }
+    if (type === "tool.execution_start") {
+      return registerCopilotCall(ts, textPart(data.toolCallId), textPart(data.toolName), data.arguments);
+    }
+    if (type === "tool.execution_complete") {
+      const result = rec(data.result);
+      const exitCode = num(rec(data.shellExecution).exitCode);
+      const failed = data.success === false || (exitCode !== undefined && exitCode !== 0);
+      const text = textPart(result.content) || textPart(result.detailedContent) || textPart(data.error);
+      const images = failed ? [] : copilotResultImages(textPart(data.toolCallId), result);
+      const blocks: ToolOutputBlock[] | undefined = images.length ? [...(text ? [{ type: "text" as const, text }] : []), ...images] : undefined;
+      return addOutput(textPart(data.toolCallId), text, failed, undefined, ts, blocks);
+    }
+    if (type === "session.binary_asset") {
+      const assetId = textPart(data.assetId);
+      if (!assetId || textPart(data.type) !== "image") return;
+      const block = toolImageBlock({ source: { media_type: textPart(data.mimeType), data: textPart(data.data) } });
+      if (!block) return;
+      copilotAssets.delete(assetId);
+      copilotAssets.set(assetId, { src: curSrc, block });
+      while (copilotAssets.size > COPILOT_ASSET_LIMIT) {
+        const oldest = copilotAssets.keys().next().value;
+        if (oldest === undefined) break;
+        copilotAssets.delete(oldest);
+      }
+      return;
+    }
+    if (type === "abort") return void push({ kind: "note", text: tr("render.turnInterrupted") });
+    if (type === "session.model_change") {
+      const label = [textPart(data.newModel), textPart(data.reasoningEffort)].filter(Boolean).join(" · ");
+      return addSvc(label ? `model · ${label}` : "model_change");
+    }
+    if (type === "session.start" || type === "session.resume") {
+      const label = [textPart(data.selectedModel), textPart(data.reasoningEffort)].filter(Boolean).join(" · ");
+      return addSvc(`${type === "session.start" ? "Copilot session" : "Copilot resumed"}${label ? ` · ${label}` : ""}`);
+    }
+  };
   /* Job .output logs echo the final review/citation block as bare lines after the
      [codex] stream ends; collect that run so it renders as one structured card
      instead of per-line raw rows. Falls back to the old raw rows when the block
@@ -2907,6 +3352,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           }
           if (cfg.fmt === "claude") renderClaude(obj);
           else if (cfg.fmt === "openclaw") renderOpenclaw(obj);
+          else if (cfg.fmt === "copilot") renderCopilot(obj);
           else renderCodex(obj);
           if (facts?.fails) finishTurn(true);
           else if (facts?.closes) finishTurn(false);
@@ -2919,10 +3365,19 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const reset = () => {
     entries.length = 0;
+    conversationCwd = cfg.cwd ?? "";
     reasoningBoundary = 0;
     reasoningTurnId = "";
     reasoningSeqs.clear();
     calls.clear();
+    execWindow = null;
+    pendingExecs.clear();
+    execPairingOverflow = false;
+    representedExecs.clear();
+    viewedImagePaths.clear();
+    copilotAssets.clear();
+    copilotViewPaths.clear();
+    agentCalls.clear();
     sessionOwners.clear();
     tmsgSeqs.clear();
     tmsgKeyBySeq.clear();
@@ -2983,6 +3438,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     const openclawBoundaryEvicted = openclawModelBoundaries.some((src) => src < start);
     openclawModelBoundaries = openclawModelBoundaries.filter((src) => src >= start);
     if (lastPlainCall && entryIndex(lastPlainCall.seq) < 0) lastPlainCall = null;
+    for (const id of pendingExecs) if (!calls.has(id)) pendingExecs.delete(id);
+    for (const id of representedExecs) if (!calls.has(id)) representedExecs.delete(id);
+    for (const id of viewedImagePaths.keys()) if (!calls.has(id)) viewedImagePaths.delete(id);
+    for (const id of copilotViewPaths.keys()) if (!calls.has(id)) copilotViewPaths.delete(id);
+    for (const [assetId, asset] of copilotAssets) if (asset.src < start) copilotAssets.delete(assetId);
+    for (const [agent, id] of agentCalls) if (!calls.has(id)) agentCalls.delete(agent);
+    if (execWindow && !calls.has(execWindow.id)) execWindow = null;
     /* Drop wakeup calls whose entry slid out of the window; recompute so the
        active/superseded assignment matches a fresh parse of the shortened
        window. */
@@ -3007,6 +3469,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
      events are all identity-equal to the previous snapshot's — and whose active
      lifecycle matches — is reused as-is, keeping its card memoized. */
   const buildSnapshot = (isLive: boolean): FeedSnapshot => {
+    const visibleEntries = entries.filter(entry => !(entry.item.kind === "tool" && representedExecs.has(entry.item.id)));
     const out: FeedEntry[] = [];
     const nextGroups = new Map<number, CmdGroupItem>();
     const anchorOrdinals = new Map<string, number>();
@@ -3017,13 +3480,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return `${source}:${ordinal}`;
     };
     let i = 0;
-    while (i < entries.length) {
-      const head = entries[i];
+    while (i < visibleEntries.length) {
+      const head = visibleEntries[i];
       if (head.item.kind === "think" && head.item.sourceId) {
         const members: ReasoningMember[] = [];
         let j = i;
-        while (j < entries.length) {
-          const cur = entries[j];
+        while (j < visibleEntries.length) {
+          const cur = visibleEntries[j];
           if (cur.item.kind !== "think" || !cur.item.sourceId || cur.reasoningBoundary !== head.reasoningBoundary) break;
           members.push({ sourceId: cur.item.sourceId, anchorKey: anchorKey({ ...cur, src: cur.bornSrc }, "row"), text: cur.item.text,
             availability: cur.item.text ? "available" : "unavailable" });
@@ -3041,14 +3504,15 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           key: String(head.seq),
           item: head.item,
           ...(head.responseDurationMs !== undefined ? { responseDurationMs: head.responseDurationMs } : {}),
+          ...(head.submissionDedup ? { submissionDedup: head.submissionDedup } : {}),
         });
         i += 1;
         continue;
       }
       let j = i;
       const toolEntries: { idx: number; seq: number; item: ToolEvent }[] = [];
-      while (j < entries.length) {
-        const cur = entries[j];
+      while (j < visibleEntries.length) {
+        const cur = visibleEntries[j];
         if (foldableTool(cur.item)) toolEntries.push({ idx: j, seq: cur.seq, item: cur.item });
         else if (cur.item.kind !== "think" || cur.item.sourceId) break;
         j += 1;
@@ -3058,7 +3522,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
          command and output shown at once (issue #475); an interior or settled
          run folds the same way but inactive, so the card auto-collapses it to
          the compact summary. */
-      const isLiveTail = isLive && j === entries.length;
+      const isLiveTail = isLive && j === visibleEntries.length;
       const foldCount = toolEntries.length;
       if (foldCount >= CMD_GROUP_MIN) {
         const grouped = toolEntries.slice(0, foldCount);
@@ -3151,7 +3615,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
 /** One-shot parse of a whole window — a fresh session fed once. */
 export function buildFeed(file: FileEntry, lines: string[], showSvc: boolean, lineFilter: string) {
-  const session = createFeedSession({ engine: file.engine, fmt: file.fmt, showSvc, lineFilter });
+  const session = createFeedSession({ engine: file.engine, fmt: file.fmt, cwd: file.cwd, showSvc, lineFilter });
   const snap = session.feed(lines, 0, file.activity === "live");
   return { items: snap.items.map((entry) => entry.item), hiddenServiceCount: snap.hiddenServiceCount };
 }

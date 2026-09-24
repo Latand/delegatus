@@ -1,4 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+
+import { matchesOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
+import { readRetirementStatus } from "@/lib/runtime/structuredHostRetirementStatus";
 
 import { isCanonicalBranchRef } from "@/lib/runtime/canonicalRevision";
 import { RuntimeHostUnavailableError, runtimeHostClient, runtimeHostRequestHealth } from "@/lib/runtime/client";
@@ -12,9 +17,11 @@ export const dynamic = "force-dynamic";
 const DEFAULT_LIST_LIMIT = 25;
 const MAX_LIST_LIMIT = 100;
 
-function deploymentListLimit(request: NextRequest): number | null {
+function deploymentListLimit(request: NextRequest): number {
   const rawLimit = request.nextUrl.searchParams.get("limit");
-  if (rawLimit === null) return null;
+  // Legacy journal-projection readers omit the limit. Keep the largest bounded
+  // page for them; MCP readers explicitly request their smaller default.
+  if (rawLimit === null) return MAX_LIST_LIMIT;
   const parsedLimit = rawLimit && /^\d+$/.test(rawLimit)
     ? Number(rawLimit)
     : DEFAULT_LIST_LIMIT;
@@ -37,11 +44,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
   const limit = deploymentListLimit(request);
   try {
-    const ledger = (await client.snapshot()).deployments;
-    const deployments = limit === null ? ledger : ledger.slice(-limit);
+    const page = await client.listViewerDeployments!({ limit,
+      ...(request.nextUrl.searchParams.has("cursor") ? { cursor: request.nextUrl.searchParams.get("cursor")! } : {}),
+      compact: request.nextUrl.searchParams.get("compact") === "true",
+    });
     return NextResponse.json({
-      count: deployments.length,
-      deployments,
+      count: page.deployments.length,
+      ...page,
       runtimeHostRequests: runtimeHostRequestHealth(),
     });
   } catch (error) {
@@ -50,7 +59,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         error: error instanceof Error ? error.message : "runtime host is unavailable",
         runtimeHostRequests: runtimeHostRequestHealth(),
       },
-      { status: 503 },
+      { status: error instanceof Error && error.message === "deployment list cursor is invalid" ? 400 : 503 },
     );
   }
 }
@@ -76,6 +85,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) return rejection;
+  if (request.nextUrl.searchParams.get("kind") === "host-retirement") {
+    // The MCP process attributes its own session before using this existing
+    // trusted control credential. A browser or a worker capability cannot
+    // assert the identity in this internal read envelope.
+    if (!matchesOperatorSpawnCapability(request.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER) ?? "")) {
+      return NextResponse.json({ error: "retirement observation requires authenticated MCP attribution" }, { status: 403 });
+    }
+    const parsed = retirementReadSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) return NextResponse.json({ error: "invalid retirement observation request" }, { status: 400 });
+    const { authentication, ...query } = parsed.data;
+    try { return NextResponse.json(readRetirementStatus(query, authentication)); }
+    catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "retirement observation unavailable" }, { status: 403 });
+    }
+  }
   if (runtimeEventsRolledBack()) {
     return NextResponse.json(
       { error: "runtime events are disabled", code: RUNTIME_PLANE_ABSENT },
@@ -125,3 +149,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: error instanceof Error ? error.message : "viewer deployment request failed" }, { status });
   }
 }
+
+const retirementReadSchema = z.object({
+  project: z.string().min(1).max(256),
+  limit: z.number().int().min(1).max(100),
+  cursor: z.string().min(1).max(512).optional(),
+  authentication: z.union([
+    z.object({ conversationId: z.string().min(1).max(256), seatProject: z.string().min(1).max(256) }).strict(),
+    z.object({ conversationId: z.string().min(1).max(256), launchId: z.string().min(1).max(256) }).strict(),
+  ]),
+}).strict();

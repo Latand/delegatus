@@ -1,6 +1,8 @@
 "use client";
 
+import { TriangleAlert } from "lucide-react";
 import { memo, type CSSProperties } from "react";
+import { DelegatusMark } from "@/components/brand/BrandMark";
 import { useLocale } from "@/lib/i18n";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -14,6 +16,7 @@ import { SelectedContextBadge } from "../SelectedContextBadge";
 import { CopyButton } from "./CopyButton";
 import { InboxImageCard } from "./InboxImage";
 import { md, mdBlocks } from "./markdown";
+import { UserMessageRow } from "./UserMessageRow";
 import { useMessageProvenance, type ProvenanceLookup } from "./messageProvenance";
 import { tr, type Item } from "./parse";
 import { BlobCard } from "./cards/BlobCard";
@@ -50,6 +53,12 @@ import { McpCallCard } from "../runtime/McpCallCard";
  * keeps their own bubble.
  */
 function resolveDeliveredItem(item: Item, provenance: ProvenanceLookup): Item {
+  if (item.structuredUserRef && (item.kind === "user" || item.kind === "tmsg")) {
+    const resolved = provenance.forItem(item);
+    if (resolved?.origin === "agent") return internalCard(item.ts, item.text, resolved.senderRole);
+    if (item.kind === "user" && resolved?.selectedContext) return { ...item, selectedContext: resolved.selectedContext };
+    return item;
+  }
   if (item.kind === "user") {
     /* A selected-context capture exists only on operator composer sends. */
     if (item.selectedContext) return item;
@@ -92,9 +101,10 @@ function internalCard(ts: unknown, text: string, senderRole: string | undefined)
 /* Mobile v2 (#1439, lane 4): the engine mark is the only avatar left on the
    phone — a 16 px glyph in secondary colour beside the engine's name in the
    message header (README §5). Proper nouns, so no locale entry. */
-const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw", string> = {
+const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> = {
   claude: "Claude",
   codex: "Codex",
+  copilot: "Copilot",
   openclaw: "OpenClaw",
 };
 
@@ -110,7 +120,10 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
   /* Mobile v2 (#1439, lane 4): no avatar column on the phone, so nothing lines
      up with one — the `ml-9` chrome indent goes with it. */
   const indent = isMobile ? "" : "ml-9 ";
-  if (item.kind === "image") return <ImageCard media={item.media} data={item.data} w={item.w} h={item.h} bytes={item.bytes} />;
+  if (item.kind === "image") {
+    const { kind: _kind, ...source } = item;
+    return <ImageCard {...source} />;
+  }
   if (item.kind === "inbox-image") return <InboxImageCard name={item.name} path={item.path} />;
   if (item.kind === "blob") return <BlobCard bytes={item.bytes} text={item.text} />;
   if (item.kind === "sysmsg") return <SysMsgCard label={item.label} text={item.text} />;
@@ -216,41 +229,11 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
     );
   }
   if (item.kind === "user") {
-    const long = item.text.length > 500;
-    return (
-      <div className="group/msg my-3 flex items-start justify-end gap-1.5" data-mobile-message={isMobile ? "user" : undefined}>
-        <CopyButton
-          text={item.text}
-          label={tr("feed.copyMd")}
-          className={`mt-2 ${MESSAGE_ACTION}`}
-        />
-        {/* Mobile v2 (#1439, lane 4): the user keeps the bubble, at 86% and
-            15 px on the phone (README §2.6). */}
-        <div className={isMobile ? "max-w-[86%] whitespace-pre-wrap break-words rounded-surface bg-user px-3 py-[9px] text-title leading-[1.45]" : "max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5"}>
-          {/* #844: what this turn pointed at, from the reference persisted on
-              the record itself — the same badge the composer showed before the
-              operator sent it, so the two can be compared at a glance. */}
-          {item.selectedContext ? (
-            <SelectedContextBadge reference={item.selectedContext} className="mb-1.5" />
-          ) : null}
-          {long ? (
-            <details className="group/usr">
-              <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-                <span className="group-open/usr:hidden">
-                  {item.text.slice(0, 180)}… <span className="font-semibold text-accent">({tr("common.chars", { n: item.text.length })})</span>
-                </span>
-                <span className="hidden items-center gap-1 text-[11px] font-semibold text-muted group-open/usr:inline-flex">
-                  {tr("common.collapse")} <ChevronUp className="h-3 w-3" aria-hidden />
-                </span>
-              </summary>
-              {mdBlocks(item.text)}
-            </details>
-          ) : (
-            mdBlocks(item.text)
-          )}
-        </div>
-      </div>
-    );
+    /* One renderer for the operator's own message, shared with the outbox row
+       it replaces (send-latency slice 3): the message keeps one width, one
+       opacity, one type size and one set of controls from the moment it is
+       submitted to the moment the transcript carries it. */
+    return <UserMessageRow text={item.text} selectedContext={item.selectedContext ?? null} />;
   }
   if (item.kind === "tool" && item.mcp) return <McpCallCard event={item} />;
   if (item.kind === "tool" && item.wakeup) return <WakeupCard event={item} wakeup={item.wakeup} />;
@@ -263,7 +246,9 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
       <div className={`my-3 ${indent}overflow-hidden rounded-surface border border-accent/25 bg-accent-soft shadow-1`}>
         <div className="flex items-center gap-2 px-3.5 pt-2">
           <span className="flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-            <Mail className="h-3.5 w-3.5" aria-hidden />
+            {/* Internal traffic is relayed by Delegatus itself, so it carries the
+                product's mark; a peer's own team message keeps the envelope. */}
+            {item.internal ? <DelegatusMark size={20} /> : <Mail className="h-3.5 w-3.5" aria-hidden />}
           </span>
           {/* #1117: an MCP/structured relay says outright that it is internal
               traffic, and the peer pill names the sender ROLE, so the operator
@@ -323,6 +308,11 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
   }
   if (item.kind === "think") {
     const available = item.availability === "available" || Boolean(item.text.trim());
+    // Keep source identities for delayed live reasoning and prepend anchors;
+    // an empty provider record has no visible row of its own.
+    if (!available) return <span hidden data-empty-reasoning aria-hidden>
+      {item.members?.map(member => <span key={member.sourceId} data-feed-key={member.anchorKey} data-feed-source-id={member.sourceId} />)}
+    </span>;
     const count = item.members?.length ?? 1;
     return (
       <details className={`group relative my-0.5 ${indent}text-label text-muted`} data-reasoning-availability={available ? "available" : "unavailable"}>
@@ -346,6 +336,48 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
     );
   }
 
+  if (item.kind === "turn-error") {
+    /* The one row that must read as a failure with no assistant prose behind
+       it (#1846 recurrence): a turn that ended unauthorized produced nothing
+       else, so this row carries the whole story — what failed, what the
+       provider said, and what the operator can do next. Same alert anatomy the
+       question card uses, in the danger hue, and the phone drops the chrome
+       indent like every other card. */
+    /* Same clock the rest of the feed keeps: HH:MM on the phone, the full
+       time on the desktop. */
+    const clock = isMobile ? mobileClock(item.ts) : hhmm(item.ts);
+    return (
+      <div
+        data-turn-error={item.reason}
+        role="status"
+        className={`my-3 ${indent}rounded-surface border border-danger/40 bg-danger-soft px-3 pb-2.5 pt-1`}
+      >
+        <div className="flex min-h-11 items-center gap-1.5 text-label font-bold text-danger">
+          <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 break-words">{t(item.reason === "auth" ? "render.turnFailedAuth" : "render.turnFailed")}</span>
+          {clock ? <span className="ml-auto shrink-0 font-normal tabular-nums">{clock}</span> : null}
+        </div>
+        {/* Every word here is the Viewer's own. A provider's error text is
+            arbitrary prose that can quote whatever it rejected, so the row
+            explains the failure rather than echoing it. */}
+        <p className="break-words text-[13px] text-primary">
+          {t(item.reason === "auth" ? "render.turnFailedAuthBody" : "render.turnFailedBody")}
+        </p>
+        {item.reason === "auth" ? (
+          <p className="mt-1.5 break-words text-label text-secondary">{t("render.turnFailedAuthHint")}</p>
+        ) : null}
+        {(item.code || item.withheld) ? (
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-label text-muted">
+            {item.code ? (
+              /* The recognized constant, never the record's bytes. */
+              <code data-turn-error-code className="rounded-control bg-sunken px-1 py-0.5 font-mono text-[11px]">{item.code}</code>
+            ) : null}
+            {item.withheld ? <span className="min-w-0 break-words">{t("render.turnFailedWithheld")}</span> : null}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
   if (item.kind === "svc") return <div className="my-1 break-words text-[11.5px] text-muted">{item.text}</div>;
   if (item.kind === "note") return <div className="my-2 break-words text-[12.5px] text-muted">{md(item.text)}</div>;
   return <div className={`my-0.5 break-words text-[12.5px] ${item.err ? "text-danger" : "text-secondary"}`}>{item.text}</div>;

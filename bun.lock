@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "agent-log-viewer",
+      "name": "delegatus-cli",
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.30.0",
         "entities": "^8.0.0",

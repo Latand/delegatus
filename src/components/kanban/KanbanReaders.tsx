@@ -8,19 +8,22 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, nowFragment } from "@/components/mobile/mobileBoardModel";
-import { stageChipLabel } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
 import { CtxChip } from "@/components/PlanChip";
 import { captureReader, restoreReader, type ReaderSnapshot } from "@/components/scheme/NativeConversationPane";
 import { useProcessKill } from "@/components/TaskHeader";
+import { RoleFrameMark } from "@/components/RoleFrameMark";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
-import { cleanTitle, fmtAge } from "@/components/utils";
+import { conversationFrameRole } from "@/lib/roleFrames";
+import { cleanTitle, fileModelLabel, fmtAge } from "@/components/utils";
 
 import { ConversationAccountChip } from "./AccountPicker";
 import { engineWord } from "./identityMarks";
 import { BranchGlyph, CloseGlyph, CollapseGlyph, ExpandGlyph, MaximizeGlyph, MinimizeGlyph, MoreGlyph } from "./kanbanGlyphs";
 import { KanbanPopover } from "./kanbanMenus";
+import { pipelineActionOptions } from "./stagesModel";
 
 /**
  * Conversations open inside kanban cards (#1695 K3).
@@ -193,6 +196,7 @@ interface ReaderProps extends ReaderView {
   onMenu: (key: string, anchor: HTMLElement, stop: ReaderStop) => void;
   /** A failed launch in the conversation's feed offers its retry (K9a). */
   onSpawnRetry?: (file: FileEntry) => void;
+  onCloseConversation?: (file: FileEntry) => void;
 }
 
 /** The host control the reader's actions menu offers, as the capability
@@ -205,7 +209,7 @@ export interface ReaderStop {
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu, onSpawnRetry }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
@@ -214,10 +218,43 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
   const stateWord = t(`kanban.memberState.${row.key}`);
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
   const working = row.key === "working";
-  const role = owner?.stage ? stageChipLabel(t, owner.stage.stage) : null;
-  const title = role && owner ? `${role} · ${owner.cardTitle}` : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
-  const needs = row.dot === "warning";
   const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
+  /* The header names the stage the way the stage list does, with the attempt
+     once it ran twice, «Critique · 2», and keeps the role preset for the
+     tooltip (#1865). */
+  const place = owner?.stage ? stageAttemptPlace(owner.stage.pipeline, owner.stage.stage.id, file) : null;
+  const role = owner?.stage && place ? stageCardLabel(t, owner.stage.stage, place) : null;
+  const title = role && owner ? `${role} · ${owner.cardTitle}` : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
+  /* The attempt number is set apart the way the tile sets it: a muted
+     tabular suffix of the stage's name, never a third bold word. */
+  const labelParts = owner?.stage && place ? stageCardLabelParts(t, owner.stage.stage, place) : null;
+  const titleHint = owner?.stage && place ? `${stageLabelTitle(t, owner.stage.stage, place, engine ? engineWord(engine) : null)} · ${owner.cardTitle}` : title;
+  // A failed receipt alone cannot authorize retry of a closed or superseded stage.
+  const pipelineOwner = owner?.stage;
+  const retryOption = pipelineOwner
+    ? pipelineActionOptions(pipelineOwner.pipeline).find((option) => option.action === "retry-stage")
+    : null;
+  const pipelineLaunch = file.durableLineage?.memberships.some((item) => item.kind === "pipeline");
+  const retryEligible = pipelineOwner
+    ? retryOption?.refusal === null && retryOption.stageId === pipelineOwner.stage.id
+      && latestAttempt(pipelineOwner.pipeline, pipelineOwner.stage.id)?.launchId === file.spawn?.launchId
+    : !pipelineLaunch;
+  const retryLaunch = retryEligible ? onSpawnRetry : undefined;
+  const neverStarted = file.spawn?.state === "failed" && file.path.startsWith("spawn:");
+  const dismissLaunch = neverStarted && onCloseConversation ? (
+    <button
+      type="button"
+      className="btn sm"
+      data-launch-dismiss=""
+      onClick={() => { onClose(readerKey); onCloseConversation(file); }}
+    >
+      {t("runtime.receipt.dismiss")}
+    </button>
+  ) : null;
+  const needs = row.dot === "warning";
+  /* The role frame: which agent this is, from the stage it is an
+     attempt of and its own durable lineage. */
+  const frameRole = conversationFrameRole({ stage: owner?.stage?.stage ?? null, file });
   const identity = (
     <>
       {engine ? (
@@ -228,7 +265,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       ) : null}
       {file.model ? (
         <span className="ch-model" title={t("kanban.readerModelTitle")}>
-          <span>{file.model}</span>
+          <span>{fileModelLabel(file)}</span>
           <EffortScale effort={file.effort} />
           {file.effort ? <span className="ch-effort">{file.effort}</span> : null}
         </span>
@@ -269,13 +306,15 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
         file={file}
         tasks={[]}
         isRoot={false}
-        onSpawnRetry={onSpawnRetry}
+        onSpawnRetry={retryLaunch}
         chrome={{
           header: (
             <div className="conv-head">
               <div className="ch-meta pane-id">
+                <RoleFrameMark role={frameRole} />
                 {identity}
                 <span className="spacer" />
+                {dismissLaunch}
                 {menuButton}
               </div>
             </div>
@@ -284,8 +323,15 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
           attributes: {
             tabIndex: "-1",
             "data-kanban-reader": readerKey,
+            /* The pane's own transcript path. An attention arrival that opens a
+               conversation no card holds lands on THIS pane, and the board's
+               anchor for it is the path — the reader key is the conversation
+               id, which the board index does not hold (#1836 item 4). */
+            "data-reader-path": file.path,
             "data-folded": "0",
             "data-in-sheet": "1",
+            "data-role-host": "reader",
+            "data-role": frameRole,
             role: "region",
             "aria-label": t("kanban.readerAria", { title, state: stateWord }),
           },
@@ -297,8 +343,13 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
     <>
       <div className="conv-head">
         <div className="ch-row">
+          <RoleFrameMark role={frameRole} />
           <span className={`ch-dot ${tone}${working ? " live" : ""}`} aria-hidden="true" />
-          <span className="ch-title" title={title}>{title}</span>
+          <span className="ch-title" title={titleHint}>
+            {labelParts && labelParts.attempt !== null && owner
+              ? <>{labelParts.name}<span className="attempt"> · {labelParts.attempt}</span> · {owner.cardTitle}</>
+              : title}
+          </span>
           <span className="spacer" />
           <button
             type="button"
@@ -324,6 +375,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
               {full ? <MinimizeGlyph /> : <MaximizeGlyph />}
             </button>
           )}
+          {dismissLaunch}
           {menuButton}
           <button
             type="button"
@@ -364,14 +416,18 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       file={file}
       tasks={[]}
       isRoot={false}
-      onSpawnRetry={onSpawnRetry}
+      onSpawnRetry={retryLaunch}
       chrome={{
         header,
         className: `reader conv${needs ? " needs" : ""}${folded ? " folded" : ""}${full ? " full" : ""}`,
         attributes: {
           tabIndex: "-1",
           "data-kanban-reader": readerKey,
+          /* See above: the pane an arrival on a loose conversation lands on. */
+          "data-reader-path": file.path,
           "data-folded": folded ? "1" : "0",
+          "data-role-host": "reader",
+          "data-role": frameRole,
           role: "region",
           "aria-label": t("kanban.readerAria", { title, state: stateWord }),
         },

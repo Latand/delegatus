@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { readStateCollectionRows } from "@/lib/state/sqliteStateStore";
+
 const sandboxes: string[] = [];
 
 afterEach(() => {
@@ -18,6 +20,15 @@ async function waitFor(pathname: string, timeoutMs = 5_000): Promise<void> {
 }
 
 type WriterOperation = "create" | "update" | "transition";
+
+/** The task store lives in `state.sqlite` beside its legacy path (#1870). */
+function persistedTasks(stateFile: string): { tasks: Record<string, unknown>[]; recentCreates: Record<string, unknown>[] } {
+  const rows = (readStateCollectionRows(path.join(path.dirname(stateFile), "state.sqlite"), "tasks") ?? []) as Record<string, unknown>[];
+  return {
+    tasks: rows.filter((row) => typeof row.status === "string"),
+    recentCreates: rows.filter((row) => typeof row.clientRequestId === "string"),
+  };
+}
 
 async function runConcurrentWriters(
   kind: "task" | "pipeline",
@@ -91,7 +102,7 @@ async function runConcurrentWriters(
   return {
     creatorPath,
     enteredBeforeRelease,
-    persisted: JSON.parse(fs.readFileSync(stateFile, "utf8")) as Record<string, unknown>,
+    persisted: kind === "task" ? persistedTasks(stateFile) : JSON.parse(fs.readFileSync(stateFile, "utf8")) as Record<string, unknown>,
   };
 }
 
@@ -186,8 +197,6 @@ test("an aged live writer without process identity retains the transaction until
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-live-owner-writers-"));
   sandboxes.push(sandbox);
   const stateFile = path.join(sandbox, "tasks.json");
-  const queuePath = `${stateFile}.write-locks`;
-  const lockPath = `${stateFile}.write-lock`;
   const fixture = path.join(import.meta.dir, "writerConcurrencyChild.ts");
   fs.writeFileSync(stateFile, "{\"tasks\":[]}\n", "utf8");
 
@@ -214,9 +223,16 @@ test("an aged live writer without process identity retains the transaction until
 
   const first = spawnWriter("http");
   await waitFor(first.ready);
-  const aged = new Date(Date.now() - 60_000);
-  fs.utimesSync(lockPath, aged, aged);
-  for (const ticket of fs.readdirSync(queuePath)) fs.utimesSync(path.join(queuePath, ticket), aged, aged);
+  /* The first writer holds the tasks collection lease (#1870). Age it well
+     past the old file lock's 30 s staleness window: a live owner keeps it. */
+  const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+  const db = new Database(path.join(sandbox, "state.sqlite"));
+  try {
+    const held = db.query("UPDATE state_leases SET acquired_at = ? WHERE collection = 'tasks'").run(Date.now() - 60_000);
+    expect(held.changes).toBe(1);
+  } finally {
+    db.close();
+  }
 
   const second = spawnWriter("mcp");
   await Bun.sleep(300);
@@ -231,6 +247,5 @@ test("an aged live writer without process identity retains the transaction until
     throw new Error(errors.filter(Boolean).join("\n"));
   }
   expect(enteredBeforeRelease).toBe(false);
-  const persisted = JSON.parse(fs.readFileSync(stateFile, "utf8")) as { tasks: unknown[] };
-  expect(persisted.tasks).toHaveLength(2);
+  expect(persistedTasks(stateFile).tasks).toHaveLength(2);
 }, 15_000);

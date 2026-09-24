@@ -50,6 +50,9 @@ export const LIFECYCLE_EVENT_TYPES = [
   "agent_stalled",
   "agent_gone",
   "agent_resumed",
+  /** A project's identity moved to a new key (#1874): a folder gained a
+      repository or an origin after it was first used. */
+  "project_moved",
 ] as const;
 
 export type LifecycleEventType = typeof LIFECYCLE_EVENT_TYPES[number];
@@ -74,6 +77,7 @@ export const LIFECYCLE_STATE_FOR_EVENT: Record<LifecycleEventType, LifecycleStat
   agent_stalled: "stalled",
   agent_gone: "gone",
   agent_resumed: "running",
+  project_moved: "completed",
 };
 
 /**

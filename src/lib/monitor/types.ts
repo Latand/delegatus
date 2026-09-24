@@ -196,7 +196,11 @@ export type SeatTickWakeReasonKind =
   | "child-terminal"
   /** A lane the seat itself launched whose stage completed, failed or parked
       on a decision (#1749), and which nobody has closed out. */
-  | "own-lane-settled";
+  | "own-lane-settled"
+  /** A deployment the seat itself started with deploy_exact_sha reached a
+      terminal phase (#2063). The seat ended its turn so the promotion could
+      replace its host, and this is the wake that brings it back, once. */
+  | "deploy-settled";
 
 export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "lane-event",
@@ -206,6 +210,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "interval",
   "child-terminal",
   "own-lane-settled",
+  "deploy-settled",
 ];
 
 export interface SeatTickWakeReason {
@@ -236,13 +241,31 @@ export interface SeatTickItem {
       same child again an hour later under the other heading is the repeat this
       exists to stop. Only child items have any. */
   stateTokens?: readonly string[];
-  /** `provisioning` is the outcome of the seat's own create call (#1799): the
-      lane it asked for is provisioned and its first stage has launched. It is
-      announced once — see {@link SeatTickProjectState.announcedLanes} — because
-      there is nothing for the seat to close out, only something to know. */
-  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning";
+  /** The lane and settled state this visible line announces on delivery. */
+  laneAnnouncement?: string;
+  /** `provisioning` is the outcome of the seat's own create call (#1799). */
+  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy";
   id: string;
   label: string;
+  /** A settled child's readable transcript (#1881): the controller attaches
+      the child's final message from its tail to a wake that is going out. The
+      pre-check itself never opens it. */
+  finalMessageFrom?: { path: string; engine: string | null };
+  /** That final message, bounded and redacted, once the controller read it. */
+  finalMessage?: string;
+  /** Only on a `deploy` line (#2063): the settled deployment as the ledger
+      records it. `id` is its deployment id. */
+  deploy?: { deploymentId: string; phase: string; sha: string; error: string | null };
+}
+
+/** A spawned child a wake names as unreadable, and why (#1881). */
+export interface SeatTickUnreadableChild {
+  conversationId: string;
+  title: string;
+  reason: string;
+  /** What a landing records, so the same child under the same reason is not
+      named again. */
+  stateToken: string;
 }
 
 /**
@@ -259,9 +282,10 @@ export interface SeatTickSkippedChildren {
   /** Outcomes recorded before this seat's designation, or taken by an earlier
       seat epoch. */
   stale: number;
-  /** Children whose transcript the Viewer cannot resolve — outside every
-      scanner root, or gone from disk — so their outcome can never be read or
-      harvested, whoever is seated. */
+  /** Running or stalled children whose transcript the Viewer cannot resolve
+      and that this wake could not also name (#1881): past the per-wake bound
+      on named ones. A settled child is never here — it is listed with its
+      reason — and a child already named under its reason is `unchanged`. */
   unreadable: number;
   /** Children in exactly the state a landed wake already showed this seat
       (#1783 round two). Nothing about them has moved since — no later record
@@ -289,6 +313,10 @@ export type SeatTickVerdict =
         Counted rather than named — the wake says how many it skipped, why,
         and nothing else about them. */
     skippedChildren: SeatTickSkippedChildren;
+    /** Children skipped because their transcript cannot be read, named with
+        the reason (#1881) — each once, up to a bound; the rest stay in the
+        count above until a later wake names them. */
+    unreadableChildren?: SeatTickUnreadableChild[];
     /** Evidence this check could not read (#1298). The reasons above stand
         without it; this is what the wake says it could not see. */
     gaps: SeatTickEvidenceGap[];
@@ -404,6 +432,9 @@ export interface SeatTickSeatInput {
   designatedAt: string | null;
   turn: "busy" | "idle" | "terminal" | "unknown";
   activity: SeatTickActivity | null;
+  /** Whether the mandate this seat was delivered states the tick contract
+      (#2030). Absent or false, its wakes carry the clauses themselves. */
+  mandateCarriesTickContract?: boolean;
 }
 
 /**
@@ -423,6 +454,36 @@ export interface SeatTickPipelineInput {
       stage, or null when no stage is running or the plane had no answer. */
   stageActivity: SeatTickActivity | null;
   stageId: string | null;
+  /**
+   * Who paused the lane, read off its pause record (#2063); absent when it is
+   * not paused. `seat` is the seat this check is about: a lane it paused, for a
+   * deploy or anything else, is owed work until it is resumed, so every wake
+   * lists it. `operator` is excluded from the seat's work altogether: the
+   * operator stopped it, and only the operator's resume starts it again.
+   * `other` is anyone else, a predecessor seat among them, and is read as any
+   * parked lane is.
+   */
+  pausedBy?: "seat" | "operator" | "other";
+}
+
+/**
+ * A deployment the seat started that reached a terminal phase and that no
+ * landed wake has announced yet (#2063).
+ *
+ * The ledger does not know who asked for a deployment, so `deploy_exact_sha`
+ * records the seat's conversation beside the deployment id when the runtime
+ * host accepts it, and the gather joins the two.
+ */
+export interface SeatTickDeployInput {
+  deploymentId: string;
+  /** The terminal phase: succeeded, rolled-back or failed. */
+  phase: string;
+  /** The exact revision the ledger resolved. */
+  sha: string;
+  error: string | null;
+  /** When the ledger last moved the deployment, which for a terminal one is
+      when it settled. */
+  settledAt: string | null;
 }
 
 /**
@@ -455,7 +516,7 @@ export interface SeatTickOwnLaneInput {
    * the worktree failed and the lane parked without ever running a stage,
    * carrying the reason in {@link detail}.
    */
-  settled: "completed" | "failed" | "needs_decision" | "provisioned" | "provisioning-failed";
+  settled: "completed" | "failed" | "needs_decision" | "needs_review" | "provisioned" | "provisioning-failed";
   /** Newest movement instant, or null. The backlog bound is measured from it,
       so a lane the seat settled and left alone for days stops being a reason
       it can never discharge — the same rule an unstarted card lives under. */
@@ -463,6 +524,9 @@ export interface SeatTickOwnLaneInput {
   /** Why a lane that never ran a stage parked (#1799), bounded and redacted by
       the source. Only `provisioning-failed` carries one. */
   detail?: string | null;
+  /** Only on `needs_review` (#1938): the last review's verdict, the head it
+      judged and the head nobody has reviewed. */
+  review?: import("@/lib/pipelines/failEdgeBudget").PipelineReviewSummary;
 }
 
 export interface SeatTickTaskInput {
@@ -604,6 +668,16 @@ export const SEAT_TICK_CHILDREN_GAPS: readonly SeatTickChildrenGap[] = [
  * never observed with no host behind it — and it is neither open work nor
  * harvestable: an unknown is kept unknown, never counted as completed.
  */
+/**
+ * Why the Viewer cannot read a spawned child's transcript (#1881).
+ *
+ * - `no-transcript`: the registry holds no transcript generation for it;
+ * - `outside-roots`: the recorded path is outside every scanner root, as
+ *   written and as it resolves on disk;
+ * - `missing`: the path is inside a root and no file is there any more.
+ */
+export type SeatTickTranscriptGap = "no-transcript" | "outside-roots" | "missing";
+
 export interface SeatTickChildInput {
   conversationId: string;
   /** Immutable completed-turn identity, independent of conversation reuse. */
@@ -642,6 +716,19 @@ export interface SeatTickChildInput {
       disk. Such a child can never be read or harvested by any seat, so it is
       never listed as harvestable and only counted. Absent is readable. */
   transcript?: "readable" | "unresolvable";
+  /** Why an `unresolvable` transcript cannot be read (#1881), so the wake can
+      name it per child instead of counting it. Absent on a readable one. */
+  transcriptReason?: SeatTickTranscriptGap;
+  /** Where a readable transcript lives and which engine wrote it (#1881). The
+      pre-check never opens it; the controller reads the child's final message
+      from its tail for a wake that is already going out. */
+  transcriptPath?: string;
+  engine?: string;
+  /** When the seat's spawn of this child was recorded — the lineage edge's own
+      instant, written once (#1881). The last fallback of the child's clock for
+      a child with no terminal instant and no readable transcript, so its age
+      against the designation can still be told. */
+  spawnedAt?: string;
   /** The seat epoch whose landed wake last harvested an outcome of this child
       (#1749). An earlier epoch's harvest is what makes an outcome that predates
       this seat history rather than work, however the identity was re-minted:
@@ -707,16 +794,25 @@ export interface SeatTickWakeCommit {
   /** Terminal children this wake names (#1465). A landing records them as
       harvested; a wake that never lands leaves them owed. */
   children: string[];
-  /** The lanes whose provisioning this wake announces (#1799). Recorded by a
+  /** The lane settlement states this wake announces (#2081). Recorded by a
       landing and by nothing else, exactly as the harvested children are: an
       announcement the delivery layer never delivered told the seat nothing,
       and the lane stays announceable. */
   announcedLanes?: string[];
+  /** The settled deployments this wake announces (#2063), recorded by a
+      landing and by nothing else, so a deploy whose wake never arrived is
+      offered again. */
+  announcedDeploys?: string[];
   /** The state tokens of every child line this wake carries (#1783 round two),
       recorded by a landing and by nothing else — a wake the layer never
       delivered showed the seat nothing, and must leave its children offerable
       exactly as #1465 requires of the harvest. */
   shownChildren?: string[];
+  /** The revision of the monitor note this wake carries (#2030), or null when
+      it carries none. Recorded by a landing and by nothing else, so the next
+      wake shows the note again unless the seat actually received it. Absent
+      on a plan written before this field existed, which records nothing. */
+  noteShown?: string | null;
 }
 
 /**
@@ -825,10 +921,9 @@ export const SEAT_TICK_RETIRED_WAKE_LIMIT = 20;
     which is the failure mode this bound is chosen to have. */
 export const SEAT_TICK_CHILDREN_SHOWN_LIMIT = 64;
 
-/** How many announced lanes a project's row keeps (#1799). Past it the oldest
-    may be announced once more, which is a repeated line rather than a lost
-    obligation — an announcement carries no obligation at all. */
-export const SEAT_TICK_ANNOUNCED_LANES_LIMIT = 64;
+/** Settled deployment history has its own bounded announcement window. Lane
+    announcements instead live for the lane's entire eligibility window. */
+export const SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT = 64;
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
@@ -932,18 +1027,60 @@ export interface SeatTickProjectState {
    */
   childrenShown: string[];
   /**
-   * Lanes whose provisioning a delivered wake has already announced (#1799),
-   * newest last, bounded to {@link SEAT_TICK_ANNOUNCED_LANES_LIMIT}.
+   * Lane and settlement-state pairs a delivered wake announced (#2081).
+   * Kept while the lane remains eligible, even when more than 64 settle.
    *
-   * A provisioned lane is the one own-lane settlement with no obligation
-   * behind it: the seat asked for the lane, the lane is running, and there is
-   * nothing to close out. So it has no discharge of its own, and without this
-   * row it would be a wake reason every interval for as long as the backlog
-   * bound held it — the reason nothing can discharge that the bound exists to
-   * refuse. Announced once, it is never offered again; the lane's later
-   * settlements are unaffected, because they are different settlements.
+   * Legacy bare lane ids mean provisioning only. A completed lane's automatic
+   * closedAt is not evidence that its creator heard it completed.
    */
   announcedLanes: string[];
+  /**
+   * Settled deployments of the seat's a delivered wake has already announced
+   * (#2063), newest last, bounded to {@link SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT}.
+   * A settled deployment stays settled for ever, so this is the only discharge
+   * its reason has: announced once, it is never offered again. Absent reads as
+   * empty.
+   */
+  announcedDeploys?: string[];
+  /**
+   * The revision of the monitor note the last landed wake carried to THIS
+   * seat (#2030), or null/absent when none did. A wake whose note has this
+   * revision says "unchanged" in one line instead of repeating the note. It is
+   * the seat's, like {@link childrenShown}: a rotation reads it empty, so a
+   * successor's first wake shows the note it never received.
+   */
+  noteShown?: string | null;
+  /** The project's unbroken run of attempts released on the same permanent
+      refusal, or null/absent when there is none. See
+      {@link SeatTickRefusalRun}. */
+  refusals?: SeatTickRefusalRun | null;
+}
+
+/**
+ * Consecutive attempts the delivery layer refused for one reason waiting cannot
+ * change. Each such attempt is released at once under its own key; after
+ * `SEAT_TICK_REFUSAL_CIRCUIT` of them the tick stops preparing wakes for the
+ * project. The run stands only while everything it was counted against still
+ * holds — the seat epoch, the last landed wake and the project's tick settings
+ * record — so a landing, a rotation or an operator settings write ends it
+ * without anyone clearing it. Nothing else does: an attempt between two
+ * permanent refusals that met a retryable refusal and retired on its age
+ * bound leaves the count where it was. That is deliberate and the safe
+ * direction — it only ever holds a seat that has refused this many times for
+ * a reason waiting cannot change.
+ */
+export interface SeatTickRefusalRun {
+  reason: string;
+  count: number;
+  /** The delivery layer's own words for the newest refusal, redacted. */
+  detail: string;
+  /** The newest refused attempt: its key and when it was prepared. */
+  clientMessageId: string;
+  preparedAt: string;
+  refusedAt: string;
+  seatEpoch: number;
+  lastWakeAt: string | null;
+  settingsUpdatedAt: string | null;
 }
 
 export interface SeatTickCheckInput {
@@ -981,6 +1118,9 @@ export interface SeatTickCheckInput {
       a seat that launched nothing and for lanes some other hand created: the
       obligation is the seat's own, and it is the one the tick was blind to. */
   ownLanes: readonly SeatTickOwnLaneInput[];
+  /** Deployments the seat started that settled and were not announced yet
+      (#2063). Absent reads as none. */
+  settledDeploys?: readonly SeatTickDeployInput[];
   /** The seat's own standalone children (#1465), bounded and project-scoped,
       with already-harvested terminal ones removed. Empty when the seat spawned
       nothing, and empty when the registry could not be read — the field below
@@ -1055,6 +1195,10 @@ export interface SeatTickCard {
    * one tick-settings state, and one guard per reason kind.
    */
   instance?: string;
+  /** The attempt a `wake-unresolved` card describes now. The card is one per
+      project, so this is what tells a newer attempt from the one it already
+      names, and what the card's attempt count moves on. */
+  attempt?: string;
 }
 
 export interface SeatTickDecision {

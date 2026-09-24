@@ -138,6 +138,9 @@ interface CommandAttachments {
   /** Starts `refused`: every exit above the delivery attempt is terminal —
       nothing was ever handed over, so nothing can be reading these paths. */
   outcome: AttachmentDeliveryOutcome;
+  /** Releases this request's in-flight claim on its send key, so the read half
+      stops answering `unknown` once this request has answered (#1932). */
+  releaseAdmission: (() => void) | null;
 }
 
 async function dispatchRuntimeCommand(
@@ -217,6 +220,14 @@ async function dispatchRuntimeCommand(
     command = parseRuntimeCommand(kind, parseValue);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "runtime command is invalid" }, { status: 400 });
+  }
+  /* The key is claimed the moment a message-bearing command is known to be
+     well formed — before the inbox write, before admission, before anything
+     durable exists — because the whole window from here to the answer is the
+     window in which the record says nothing and means nothing. Released in the
+     caller's `finally`, whatever this request does next. */
+  if (command.kind === "send" || command.kind === "steer" || command.kind === "inject") {
+    attachments.releaseAdmission = claimAdmissionInFlight(command.conversationId, command.idempotencyKey);
   }
   /* #1652: the batch derives from the key alone, so a queued message or a send
      of another conversation may already hold these paths. The files are
@@ -367,7 +378,7 @@ export async function handleRuntimeCommand(
   kind: RuntimeOperationKind,
   dependencies: RuntimeHttpDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<NextResponse> {
-  const attachments: CommandAttachments = { files: [], batch: "", staged: null, leave: null, outcome: "refused" };
+  const attachments: CommandAttachments = { files: [], batch: "", staged: null, leave: null, outcome: "refused", releaseAdmission: null };
   try {
     return await dispatchRuntimeCommand(request, kind, dependencies, attachments);
   } finally {
@@ -376,7 +387,13 @@ export async function handleRuntimeCommand(
     try {
       if (attachments.staged) (await import("@/lib/inboxFiles")).settleInboxFiles(attachments.staged, attachments.outcome);
     } finally {
-      attachments.leave?.();
+      try {
+        attachments.leave?.();
+      } finally {
+        /* Last, and unconditionally: this request has answered, so a lookup
+           under its key may read the record it left. */
+        attachments.releaseAdmission?.();
+      }
     }
   }
 }
@@ -520,7 +537,7 @@ export async function handleRuntimeDiscard(
     }
     const registry = (dependencies.registry ?? agentRegistry)();
     const presentationOperationId = operation.receipt.presentationOperationId ?? operation.operationId;
-    const deliveryRecord = sendReceiptFor(registry.readOnlySnapshot(), presentationOperationId);
+    const deliveryRecord = sendReceiptFor(registry.deliverySnapshotForOperation(presentationOperationId), presentationOperationId);
     const settleDelivered = () => {
       if (operation.receipt.conversationId.startsWith("conversation_")) {
         registry.recordDeliveryOutcomeForOperation(
@@ -590,7 +607,7 @@ export async function handleRuntimeDiscard(
       SEND_DISCARDED_REASON,
       disposition,
     );
-    const settled = sendReceiptFor(registry.readOnlySnapshot(), presentationOperationId);
+    const settled = sendReceiptFor(registry.deliverySnapshotForOperation(presentationOperationId), presentationOperationId);
     if (!settled || settled.state !== "failed" || settled.reason !== SEND_DISCARDED_REASON) {
       return NextResponse.json({
         error: "delivery discard could not be recorded durably",
@@ -687,7 +704,7 @@ export async function handleRuntimeRetry(
       }, { status: 409 });
     }
     const registry = (dependencies.registry ?? agentRegistry)();
-    const deliverySnapshot = registry.readOnlySnapshot();
+    const deliverySnapshot = registry.deliverySnapshotForOperation(previous.operationId);
     const deliveryRecord = sendReceiptFor(deliverySnapshot, previous.operationId);
     if (previous.operationId === operationId
       && previous.receipt.status !== "failed"
@@ -739,7 +756,7 @@ export async function handleRuntimeRetry(
         return NextResponse.json({ error: "runtime operation has no delivery reservation" }, { status: 409 });
       }
       if (reservation.state === "delivered" || reservation.state === "failed") {
-        const settled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
+        const settled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
         if (settled) {
           return NextResponse.json({ operationId, receipt: runtimeReceiptForSend(settled), send: settled });
         }
@@ -860,4 +877,155 @@ export async function handleRuntimeRetry(
     const retryable = message === "structured recovery ownership changed before retry admission";
     return NextResponse.json({ error: message, ...(retryable ? { retryable: true } : {}) }, { status });
   }
+}
+
+export interface RuntimeAdmissionQueryDependencies {
+  enabled(): boolean;
+  registry(): AgentRegistry;
+  /** What became of an operation the lookup found, so an admitted key can hand
+      back the receipt the caller would otherwise have to ask for separately. */
+  query(operationId: string): Promise<NextResponse>;
+  /** Whether a send under this exact key is still being admitted in this
+      process, which makes any absence in the record meaningless. */
+  sendInFlight(conversationId: string, clientMessageId: string): boolean;
+}
+
+const DEFAULT_ADMISSION_QUERY_DEPENDENCIES: RuntimeAdmissionQueryDependencies = {
+  enabled: runtimeEventsEnabled,
+  registry: agentRegistry,
+  query: (operationId) => handleRuntimeOperationQuery(operationId),
+  sendInFlight: (conversationId, clientMessageId) => admissionInFlight(conversationId, clientMessageId),
+};
+
+/**
+ * The keys whose send is between "the request arrived" and "the request
+ * answered", in this process.
+ *
+ * The record a lookup reads is written DURING that window, not at its start,
+ * so a lookup landing inside it sees a registry with nothing under the key and
+ * would otherwise call that proof of non-execution — while the send it is
+ * asking about is still on its way to the host. Counted rather than flagged,
+ * because the same key can legitimately be in flight twice (a replay of an
+ * admitted send answers from its reservation), and released in a `finally` so
+ * a throw cannot leave a key claimed for ever.
+ */
+const admissionsInFlight = new Map<string, number>();
+
+function admissionKey(conversationId: string, clientMessageId: string): string {
+  return `${conversationId}\u0000${clientMessageId}`;
+}
+
+function claimAdmissionInFlight(conversationId: string, clientMessageId: string): () => void {
+  const key = admissionKey(conversationId, clientMessageId);
+  admissionsInFlight.set(key, (admissionsInFlight.get(key) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const remaining = (admissionsInFlight.get(key) ?? 1) - 1;
+    if (remaining > 0) admissionsInFlight.set(key, remaining);
+    else admissionsInFlight.delete(key);
+  };
+}
+
+export function admissionInFlight(conversationId: string, clientMessageId: string): boolean {
+  return (admissionsInFlight.get(admissionKey(conversationId, clientMessageId)) ?? 0) > 0;
+}
+
+/**
+ * WAS THIS MESSAGE EVER ADMITTED? — asked under its ORIGINAL key, answered
+ * without sending anything.
+ *
+ * A browser that loses the response to `POST /api/runtime/send` knows only
+ * that it asked. The message may be durably admitted and on its way, or it may
+ * never have reached the journal at all, and those two need opposite actions.
+ * Re-posting the send to find out is the one thing that must not happen: under
+ * a key the server already admitted the POST is a second request against a
+ * message that is already being delivered, and the safety contract for an
+ * unknown outcome is a LOOKUP, never a resend.
+ *
+ * So this is a read. It takes the conversation and the client message id the
+ * attempt was stamped with, and answers with one of three words:
+ *
+ * - `admitted` — a reservation or an operation owner exists under that exact
+ *   key. The operation id comes back with it, and with it whatever the
+ *   operation query can say about its fate. Nothing may be resent.
+ * - `not-executed` — the registry was read, holds NO record under the key, and
+ *   its record of this conversation is complete: no retention boundary stands
+ *   between the question and the answer. Admission writes the reservation
+ *   before anything reaches a host, so a send that ever started left a row
+ *   behind, and here there is none. Only this answer authorizes a later
+ *   attempt.
+ * - `unknown` — the registry could not be read, the plane is off, a POST under
+ *   this very key is still in flight, or the conversation's evidence has been
+ *   compacted past the point where absence means anything. The attempt keeps
+ *   its uncertainty and its bytes, and the caller may ask again. Absence that
+ *   was never actually observed — or that a bounded record could have
+ *   swallowed — is not evidence of anything.
+ */
+export async function handleRuntimeAdmissionQuery(
+  request: NextRequest,
+  dependencies: RuntimeAdmissionQueryDependencies = DEFAULT_ADMISSION_QUERY_DEPENDENCIES,
+): Promise<NextResponse> {
+  const rejection = rejectCrossOrigin(request);
+  if (rejection) return rejection;
+  const conversationId = request.nextUrl.searchParams.get("conversationId") ?? "";
+  const clientMessageId = request.nextUrl.searchParams.get("clientMessageId") ?? "";
+  if (!/^conversation_[a-zA-Z0-9_-]+$/.test(conversationId)) {
+    return NextResponse.json({ error: "conversationId is invalid" }, { status: 400 });
+  }
+  if (!clientMessageId.trim()) {
+    return NextResponse.json({ error: "clientMessageId is required" }, { status: 400 });
+  }
+  if (!dependencies.enabled()) {
+    return NextResponse.json({ outcome: "unknown", error: "runtime events are disabled" }, { status: 200 });
+  }
+  /* A POST under this key that has not finished is the other way absence
+     lies: the send may be inside its own admission right now, with the
+     reservation a microsecond away from existing. Asked before the record is
+     read — the claim is released only when the request that took it has
+     answered — so a lookup that races the send it is asking about can never
+     be told that nothing was sent. */
+  if (dependencies.sendInFlight(conversationId, clientMessageId.trim())) {
+    return NextResponse.json({
+      outcome: "unknown",
+      reason: "a send under this key is still in flight, so its record is not settled yet",
+    }, { status: 200 });
+  }
+  const record = await readEvidence(
+    async () => dependencies.registry().deliveryAdmissionForKey(conversationId, clientMessageId.trim()),
+    "the delivery record could not be read",
+  );
+  /* An unreadable registry is the `unknown` case and it answers 200: the caller
+     is not being told something went wrong with its request, it is being told
+     the question has no answer yet. A 503 here reads as a failed lookup the
+     client should convert into a failure, which is exactly the misreading that
+     loses the operator's message. */
+  if (!record.readable) {
+    return NextResponse.json({ outcome: "unknown", reason: record.reason }, { status: 200 });
+  }
+  const admission = record.value;
+  if (admission.outcome === "unknown") {
+    /* The registry answered, and what it answered is that its own retention
+       cannot settle the question. Same word, same 200, same consequence: ask
+       again, never send again. */
+    return NextResponse.json({ outcome: "unknown", reason: admission.reason }, { status: 200 });
+  }
+  if (admission.outcome === "not-executed") {
+    return NextResponse.json({ outcome: "not-executed", conversationId, clientMessageId }, { status: 200 });
+  }
+  const answer = await dependencies.query(admission.operationId);
+  const body = (await answer.json().catch(() => ({}))) as Record<string, unknown>;
+  /* The operation query's own answer rides along when it had one. When it did
+     not, admission is still proven and still forbids a resend — the fate of an
+     admitted message is a separate question from whether it exists. */
+  return NextResponse.json({
+    outcome: "admitted",
+    conversationId,
+    clientMessageId,
+    operationId: admission.operationId,
+    state: admission.state,
+    ...(body.receipt ? { receipt: body.receipt } : {}),
+    ...(body.send ? { send: body.send } : {}),
+  }, { status: 200 });
 }

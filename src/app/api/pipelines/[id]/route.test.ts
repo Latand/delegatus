@@ -13,7 +13,9 @@ const pipeline = {
   }],
 };
 const closeReport = {
-  stopped: [{ stageId: "build", attempt: 1, conversationId: "conversation_stage_1", agentPath: null, paneId: null }],
+  status: "pending",
+  stopped: [],
+  pending: [{ stageId: "build", attempt: 1, conversationId: "conversation_stage_1", agentPath: null, paneId: null }],
   alreadyStopped: [],
   unconfirmed: [],
   acknowledged: [],
@@ -23,6 +25,8 @@ const closeReport = {
 };
 const refusedClose = {
   ...closeReport,
+  status: "settled",
+  pending: [],
   stopped: [],
   stillRunning: [{ stageId: "build", attempt: 1, conversationId: "conversation_stage_1", agentPath: null, paneId: null, error: "host is unreachable" }],
 };
@@ -56,6 +60,7 @@ mock.module("@/lib/pipelines/engine", () => ({
 }));
 
 const { DELETE, GET, PATCH } = await import("./route");
+const { pipelineRevision } = await import("@/lib/pipelines/store");
 const { graphDigest, stageDigest } = await import("@/lib/pipelines/stageDigest");
 const { GET: GET_COLLECTION } = await import("../route");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
@@ -67,7 +72,7 @@ test("pipeline GET returns the full record for a known id", async () => {
   );
   expect(response.status).toBe(200);
   /* #1695 C7 and graph slice 1: the stage digests and the plan's digest ride along, for guarded graph edits. */
-  expect(await response.json()).toEqual({ ok: true, pipeline, stageDigests: { build: stageDigest(pipeline.stages[0] as never) }, graphDigest: graphDigest(pipeline.stages as never) });
+  expect(await response.json()).toEqual({ ok: true, pipeline, revision: pipelineRevision(pipeline as never), stageDigests: { build: stageDigest(pipeline.stages[0] as never) }, graphDigest: graphDigest(pipeline.stages as never) });
 });
 
 test("pipeline PATCH forwards a malformed guard's field without a code", async () => {
@@ -113,7 +118,7 @@ test("pipeline GET returns 404 for an unknown id", async () => {
 });
 
 test("pipeline GET record matches the same id in the collection response", async () => {
-  const collection = await (await GET_COLLECTION()).json() as { pipelines: Array<{ id: string }> };
+  const collection = await (await GET_COLLECTION(new NextRequest("http://127.0.0.1/api/pipelines"))).json() as { pipelines: Array<{ id: string }> };
   const response = await GET(
     new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1"),
     { params: Promise.resolve({ id: "pipeline-1" }) },
@@ -134,7 +139,7 @@ test("pipeline GET returns 500 when the registry is unreadable", async () => {
 test("pipeline PATCH accepts control and task-link actions", async () => {
   let ticks = 0;
   const unregister = registerPipelineTick(async () => { ticks += 1; });
-  for (const action of ["start", "update-draft", "set-position", "add-stage", "remove-stage", "reorder-stage", "set-edge", "pause", "resume", "retry-stage", "skip-stage", "override-stage", "link-task", "unlink-task", "set-src", "delete", "close"]) {
+  for (const action of ["start", "update-draft", "set-position", "add-stage", "remove-stage", "reorder-stage", "set-edge", "pause", "resume", "retry-stage", "skip-stage", "resolve-decision", "override-stage", "link-task", "unlink-task", "set-src", "delete", "close"]) {
     const response = await PATCH(
       new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", { method: "PATCH", headers: { host: "127.0.0.1" }, body: JSON.stringify({ action }) }),
       { params: Promise.resolve({ id: "pipeline-1" }) },
@@ -142,7 +147,7 @@ test("pipeline PATCH accepts control and task-link actions", async () => {
     expect(response.status).toBe(200);
     await Promise.resolve();
   }
-  expect(ticks).toBe(4);
+  expect(ticks).toBe(5);
   unregister();
 });
 

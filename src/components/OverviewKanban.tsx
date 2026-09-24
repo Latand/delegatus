@@ -1,16 +1,24 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 import { useNowSeconds, BOARD_CLOCK_MS } from "@/hooks/useNowSeconds";
+import { isOpaqueProjectKey, projectTitle } from "@/lib/displayNames";
+import { cachedProjectName } from "@/lib/client/projectNameCache";
+import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
-import type { BoardTask } from "@/lib/tasks/types";
+import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
+import { useSeatConversations } from "./orchestrator/useOrchestratorSeat";
 import { KanbanBoard, type KanbanOverviewScope } from "./kanban/KanbanBoard";
 import { cardHasLiveWork } from "./kanban/kanbanModel";
+import { MobileKanban } from "./mobile/MobileKanban";
+import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
+import { overviewAttention } from "./mobile/overviewPhone";
 import { pipelinesForProjects } from "./pipelines/pipelineModel";
+import { PhoneKanbanSkeleton } from "./skeletons";
 import { buildBranchGroups, OVERVIEW } from "./projectModel";
 
 /**
@@ -29,6 +37,12 @@ import { buildBranchGroups, OVERVIEW } from "./projectModel";
  *    «N working» and «N need you» counters — narrows the columns exactly where
  *    the board's search narrows them.
  *
+ * The one thing it asks for itself is the set of conversations the seat
+ * records name (#1841): an orchestrator seat belongs to the seat panel of its
+ * own project's board and to no task list, and a board spanning every project
+ * needs every project's seats to keep them all out. The per-project read
+ * cannot answer that here, because the Overview names no project.
+ *
  * What stays project-only is what needs one project to write into: the
  * orchestrator seat, «+ Task», «+ Agent», drafts and the per-project board
  * preferences (hidden cards, crowned favourites, manual placement). None of
@@ -36,8 +50,16 @@ import { buildBranchGroups, OVERVIEW } from "./projectModel";
  * A status move is unaffected — it already writes with the task's own
  * `expectedProject`.
  *
- * Every byte comes from the projection the Viewer already polls. This file
- * issues no request and starts no loop of its own.
+ * Every card, count and column comes from the projection the Viewer already
+ * polls; the seat read above is the file's only request, one slow status read
+ * that starts and stops with this board.
+ *
+ * On the phone (#2098) the same inputs draw the phone kanban a project draws
+ * (`MobileKanban`): its status tabs, its cards with the pipeline block at card
+ * density, its card sheet, each card naming its project. A card opens its
+ * task, its pipeline or its conversation through `phone`, full screen on the
+ * navigation stack the Overview is the board of; nothing expands inside a
+ * card.
  */
 
 const NO_FILES: FileEntry[] = [];
@@ -60,12 +82,27 @@ export interface OverviewKanbanProps {
   onSelectProject: (project: string) => void;
   /** The board's «see every conversation» escape: the Overview's own search. */
   onOpenConversations: () => void;
+  /** The phone's doors (#2098). Present, the Overview draws the phone kanban
+      instead of the desktop board. */
+  phone?: OverviewPhoneDoors | null;
 }
 
-export function OverviewKanban({ projects, displayNames, files, tasks, flows, pipelines, loaded, catalogFailures, onSelectProject, onOpenConversations }: OverviewKanbanProps) {
+export interface OverviewPhoneDoors {
+  onOpenTask: (task: BoardTask) => void;
+  onOpenPipeline: (pipeline: Pipeline) => void;
+  onOpenConversation: (file: FileEntry) => void;
+  /** How many tasks the board is not drawing, for ⋯ › Hidden tasks. */
+  onHiddenCount?: (count: number) => void;
+}
+
+export function OverviewKanban({ projects, displayNames, files, tasks, flows, pipelines, loaded, catalogFailures, onSelectProject, onOpenConversations, phone = null }: OverviewKanbanProps) {
+  const { t } = useLocale();
   /* The dashboard's board clock, shared by cadence: the working predicate is
      read from row states that age, so it must advance between scans. */
   const now = useNowSeconds(BOARD_CLOCK_MS);
+  /* Null until the first answer, which hides nothing: the board draws the
+     seats it does today until it is told which conversations they are. */
+  const seatRefs = useSeatConversations(true);
   const shown = useMemo(() => new Set(projects), [projects]);
   /* One grouping pass per project, concatenated. `buildBranchGroups` already
      selects a project's own roots out of the whole file list, so this is the
@@ -83,6 +120,61 @@ export function OverviewKanban({ projects, displayNames, files, tasks, flows, pi
     () => ({ names: displayNames, onOpenProject: onSelectProject, keep: cardHasLiveWork }),
     [displayNames, onSelectProject],
   );
+  /* The phone's pin walks the queue the bar's ⚠ sheet lists on the Overview:
+     every project's. Keyed by value, since the queue is rebuilt each render. */
+  const closing = useClosingPipelines();
+  const onPhone = phone !== null;
+  const attentionSignature = useMemo(
+    () => (onPhone ? overviewAttention(files, pipelines, now, closing).join("\n") : ""),
+    [onPhone, files, pipelines, now, closing],
+  );
+  const attention = useMemo(() => (attentionSignature ? attentionSignature.split("\n") : []), [attentionSignature]);
+  /* The name the Overview shows for a project, never its raw key: the name
+     map, else the one this browser last saw, else a readable key. The map
+     falls back to the key itself for a project nobody named, and an opaque
+     key is not a name. */
+  const projectLabel = useCallback((project: string) => {
+    const named = displayNames[project]?.trim();
+    const live = named && named !== project && !isOpaqueProjectKey(named) ? named : undefined;
+    return projectTitle(project, live, cachedProjectName(project));
+  }, [displayNames]);
+  /* An empty column says what the Overview's narrowing left out of it; the
+     whole board empty says nothing works anywhere. */
+  const emptyCopy = useCallback((status: TaskStatus, elsewhere: boolean) => ({
+    title: elsewhere ? t("mobile2.overview.emptyColumn", { column: t(`kanban.status.${status}`) }) : t("overview.noneWorking"),
+    body: t("overview.noneWorkingHint"),
+  }), [t]);
+
+  if (phone) {
+    /* Not answered yet (#2071): the shape of the phone board. */
+    if (!loaded) return <PhoneKanbanSkeleton seat={false} />;
+    return (
+      <MobileKanban
+        project={OVERVIEW}
+        overview={scope}
+        cardFilter={cardHasLiveWork}
+        groups={groups}
+        manual={NO_FILES}
+        files={files}
+        flows={flows}
+        pipelines={pipelines}
+        surfacePipelines={surfacePipelines}
+        tasks={boardTasks}
+        allTasks={boardTasks}
+        drafts={NO_DRAFTS}
+        now={now}
+        seatRefs={seatRefs}
+        attention={attention}
+        closing={closing}
+        projectLabel={projectLabel}
+        emptyCopy={emptyCopy}
+        onOpenTask={phone.onOpenTask}
+        onOpenPipeline={phone.onOpenPipeline}
+        onOpenConversation={phone.onOpenConversation}
+        onHiddenCount={phone.onHiddenCount}
+      />
+    );
+  }
 
   return (
     <KanbanBoard
@@ -101,9 +193,9 @@ export function OverviewKanban({ projects, displayNames, files, tasks, flows, pi
       loaded={loaded}
       catalogFailures={catalogFailures}
       selection={NO_SELECTION}
-      /* Known and empty: the Overview reads no seat, so the board neither
-         fetches one nor waits on one. */
-      seatRefs={null}
+      /* Every project's seat conversations, so no seat draws a card and no
+         seat-only task lands in the header's hidden count (#1841). */
+      seatRefs={seatRefs}
       onOpenConversations={onOpenConversations}
     />
   );

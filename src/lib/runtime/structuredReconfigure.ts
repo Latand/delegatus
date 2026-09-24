@@ -32,7 +32,7 @@ async function releaseStructuredHost(key: SessionKey): Promise<boolean> {
   return await releaseStructuredDeliveryHost(key);
 }
 
-interface StructuredReconfigureDependencies {
+export interface StructuredReconfigureDependencies {
   registry?: AgentRegistry;
   validateAccount?: (engine: "claude" | "codex", accountId: string) => Promise<void>;
   resolveAccount?: typeof accountManager.resolveSpawn;
@@ -90,9 +90,13 @@ export async function applyStructuredReconfigure(
   const conversation = registry.conversation(conversationId);
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) throw new Error("viewer conversation is unknown");
-  const key = { engine: conversation.engine, sessionId: generation.id } as const;
+  const engine = conversation.engine;
+  const key = { engine, sessionId: generation.id } as const;
   const targetAccountId = effect.accountId ?? generation.accountId;
   const switchingAccount = Boolean(effect.accountId && effect.accountId !== generation.accountId);
+  if (engine === "copilot" && switchingAccount) {
+    throw new Error("a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation");
+  }
   const ownsOperation = dependencies.ownsOperation ?? (async () => true);
   const release = dependencies.releaseHost ?? releaseStructuredHost;
   const recover = dependencies.recover ?? recoverDeadStructuredConversation;
@@ -141,8 +145,8 @@ export async function applyStructuredReconfigure(
 
   if (switchingAccount) {
     try {
-      await (dependencies.validateAccount ?? validateAccountAuthentication)(conversation.engine, targetAccountId!);
-      (dependencies.resolveAccount ?? accountManager.resolveSpawn)(conversation.engine, targetAccountId);
+      await (dependencies.validateAccount ?? validateAccountAuthentication)(engine as "claude" | "codex", targetAccountId!);
+      (dependencies.resolveAccount ?? accountManager.resolveSpawn)(engine, targetAccountId);
     } catch (error) {
       await settle("failed", error);
       if (inheritedApplyingOperation) {

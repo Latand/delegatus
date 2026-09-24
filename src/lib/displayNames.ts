@@ -42,6 +42,31 @@ export function projectDisplayName(project: string, displayName?: string): strin
   return undashed || project;
 }
 
+/** A canonical key that is an identity hash rather than anything a person
+    can read: `repo-<hex>` and `dir-<hex>` (`src/lib/projects/identity.ts`).
+    Such a key is never rendered as a title (#2071). */
+const OPAQUE_PROJECT_KEY = /^(?:repo|dir)-[0-9a-f]{16,}$/;
+
+export function isOpaqueProjectKey(project: string): boolean {
+  return OPAQUE_PROJECT_KEY.test(project);
+}
+
+/**
+ * The title a header shows for a project (#2071): the live display name,
+ * then the name this browser remembered from an earlier answer, then the
+ * readable form of the key. An opaque key has no readable form, so the answer
+ * is null and the caller draws a placeholder (while loading) or its
+ * "Unnamed project" copy (once the catalog is certified) instead of the key.
+ */
+export function projectTitle(project: string, liveName?: string, cachedName?: string): string | null {
+  const live = liveName?.trim();
+  if (live) return live;
+  const cached = cachedName?.trim();
+  if (cached) return cached;
+  if (isOpaqueProjectKey(project)) return null;
+  return projectDisplayName(project);
+}
+
 /**
  * Rail-filter predicate: a query matches a project when it matches the
  * canonical key OR the presented name, so typing what the row shows works

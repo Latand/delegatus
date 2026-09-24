@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,10 +10,118 @@ import { emptyLaunchProfile, type SuccessorProviderPort } from "./contracts";
 import { QuotaController, type QuotaProbePort } from "./quotaController";
 
 const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-account-controller-"));
-const { AccountMigrationController, createMigrationDeliveryPort, reconcileAccountMigrationCycle } = await import("./controller");
+const { AccountMigrationController, createMigrationDeliveryPort, reconcileAccountMigrationCycle, startAccountMigrationController } = await import("./controller");
 
 afterAll(() => {
   fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+test("production inventory scheduler leaves a full idle minute after a slow scan completes", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "idle-scheduler.json"));
+  let clock = 0;
+  let scans = 0;
+  let finishScan!: () => void;
+  const timers = new Map<object, { run: () => void; due: number; interval: number }>();
+  const schedule = (run: () => void, delay: number, interval = 0) => {
+    const handle = { unref() {} };
+    timers.set(handle, { run, due: clock + delay, interval });
+    return handle;
+  };
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => {
+      scans++;
+      if (scans === 1) await new Promise<void>(resolve => { finishScan = resolve; });
+      return { files: [], projectCatalog: [], complete: true };
+    },
+    // External board/process/account writes are isolated. Inventory and migration
+    // reconciliation, the controller's poll/running fence and its scheduler are real.
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {}, reconcileFiles: async () => {},
+    reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+  });
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const keys = ["__llvAccountMigrationController", "__llvAccountMigrationStopPolling", "__llvAccountMigrationTimer",
+    "__llvAccountMigrationInitialTimer", "__llvAccountMigrationBootstrapStarted"];
+  const saved = new Map(keys.map(key => [key, globals[key]]));
+  const worker = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+  const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay: number) => schedule(run, delay)) as never);
+  const interval = spyOn(globalThis, "setInterval").mockImplementation(((run: () => void, delay: number) => schedule(run, delay, delay)) as never);
+  const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((handle: object) => { timers.delete(handle); }) as never);
+  const advance = async (ms: number) => {
+    const until = clock + ms;
+    while (true) {
+      const next = [...timers].filter(([, timer]) => timer.due <= until).sort((a, b) => a[1].due - b[1].due)[0];
+      if (!next) break;
+      const [handle, timer] = next;
+      clock = timer.due;
+      if (timer.interval) timer.due += timer.interval; else timers.delete(handle);
+      timer.run();
+      await Promise.resolve();
+    }
+    clock = until;
+  };
+  try {
+    for (const key of keys) delete globals[key];
+    globals.__llvAccountMigrationController = controller;
+    process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
+    await startAccountMigrationController();
+    await advance(1000);
+    expect(scans).toBe(1);
+    await advance(180_000);
+    expect(scans).toBe(1);
+    const running = controller.poll();
+    finishScan();
+    await running;
+    await Promise.resolve(); await Promise.resolve();
+    await advance(59_000);
+    expect(scans).toBe(1);
+    await advance(1000);
+    expect(scans).toBe(2);
+    await controller.poll();
+  } finally {
+    (globals.__llvAccountMigrationStopPolling as (() => void) | undefined)?.();
+    await controller.poll();
+    timeout.mockRestore(); interval.mockRestore(); clear.mockRestore();
+    for (const [key, value] of saved) { if (value === undefined) delete globals[key]; else globals[key] = value; }
+    if (worker === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+    else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = worker;
+    registry.close();
+  }
+});
+
+test("historical failures and orphaned applying rows perform no conversation or delivery reads per migration tick", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "quiet-history.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    registry.reconcileConversations(Array.from({ length: 100 }, (_, i) => ({ engine: "codex" as const,
+      path: `/quiet/${i}.jsonl`, accountId: "account-a", launchProfile: emptyLaunchProfile(),
+      turn: { state: "idle" as const, source: "empty" as const, terminalAt: null }, observedAt: "2026-07-01T00:00:00Z" })));
+    const rows = Object.values(registry.readOnlySnapshot().conversations);
+    for (const row of rows.slice(0, 13)) {
+      const requested = registry.requestConversationReseat(row.id, "account-b");
+      registry.transitionConversationMigration(row.id, requested.migration!.revision, [requested.migration!.phase], { phase: "failed-recoverable", error: "old failure" });
+      registry.holdDelivery(row.id, "preserve this held message", `held-${row.id}`, "text", [], null);
+    }
+    for (const [i, row] of rows.slice(13, 15).entries()) registry.claimConversationReconfigure(row.id, {
+      operationId: `orphan-${i}`, revision: 1, profile: { model: "gpt-5.6-sol", effort: "high", fast: false }, accountId: "account-b",
+    });
+    let reads = 0;
+    for (const method of ["conversation", "pendingDeliveries"] as const) {
+      const original = registry[method].bind(registry);
+      registry[method] = ((id: Parameters<typeof original>[0]) => { reads++; return original(id); }) as never;
+    }
+    const provider: SuccessorProviderPort = { create: async () => { throw new Error("no actionable migration"); }, verify: async () => {} };
+    const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+      scan: async () => ({ files: [], projectCatalog: [], complete: true }),
+      reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {},
+      reconcileHandoffOwnership: async () => {}, reconcileFiles: async () => {},
+      reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+      reconcileMigrationCycle: (r, q) => reconcileAccountMigrationCycle(r, q, provider,
+        { deliver: async () => { throw new Error("no actionable delivery"); } }),
+    });
+    for (let tick = 0; tick < 3; tick++) await controller.poll();
+    expect(reads).toBe(0);
+    expect(Object.values(registry.readOnlySnapshot().conversations).filter(row => row.migration?.phase === "failed-recoverable")).toHaveLength(13);
+  } finally { registry.close(); }
 });
 
 test("controller migration cycle reconciles and ticks both durable quota policy guards", async () => {
@@ -263,7 +371,8 @@ test("quota controller cycles preserve routing and transcript ownership", async 
         };
       },
     };
-    const quota = new QuotaController(registry, probe, "00000000-0000-4000-8000-000000000040", () => current);
+    const bootId = crypto.randomUUID();
+    const quota = new QuotaController(registry, probe, bootId, () => current);
     registry.setAutoBalancePolicy("codex", true);
     registry.setEngineRouting("codex", "default");
     registry.reconcileConversations([{
@@ -275,7 +384,7 @@ test("quota controller cycles preserve routing and transcript ownership", async 
       observedAt: new Date(current).toISOString(),
     }]);
     registry.upsert({
-      key: { engine: "codex", sessionId: "019f4906-3f67-7b72-9fbc-9ec3b5ad1326" },
+      key: { engine: "codex", sessionId: crypto.randomUUID() },
       artifactPath: "/main.jsonl",
       cwd: "/repo",
       accountId: "default",
@@ -309,8 +418,8 @@ test("quota controller cycles preserve routing and transcript ownership", async 
     current += 60_000;
     await reconcileAccountMigrationCycle(registry, quota, provider, { async deliver() { return "delivered"; } });
     const snapshot = registry.snapshot();
-    expect(snapshot.quotaObservations.codex.default).toMatchObject({ authenticated: true, bootId: "00000000-0000-4000-8000-000000000040" });
-    expect(snapshot.quotaObservations.codex.managed).toMatchObject({ authenticated: true, bootId: "00000000-0000-4000-8000-000000000040" });
+    expect(snapshot.quotaObservations.codex.default).toMatchObject({ authenticated: true, bootId });
+    expect(snapshot.quotaObservations.codex.managed).toMatchObject({ authenticated: true, bootId });
     expect(snapshot.engineRouting.codex.activeAccountId).toBe("default");
     expect(snapshot.conversations[conversationId]?.migration).toBeNull();
     expect(snapshot.conversations[conversationId]?.generations.at(-1)?.accountId).toBe("default");

@@ -7,8 +7,11 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { createPipelineFromRequest, getPipelines } from "@/lib/pipelines/engine";
 import type { CreatePipelineRequest, Pipeline, PipelineRepoPreflightErrorCode, PipelinesResponse } from "@/lib/pipelines/types";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
+import { selectPipelineListRecords } from "@/lib/pipelines/listProjection";
+import { loadArchivedPipelines } from "@/lib/pipelines/store";
 import type { PipelineValidationViolation } from "@/lib/pipelines/validation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import type { ENGINE_NOT_CONNECTED, EngineNotConnectedDetails } from "@/lib/accounts/engineConnection";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import type { ApiError } from "@/lib/types";
 
@@ -16,7 +19,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "store_busy";
+  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "store_busy" | typeof ENGINE_NOT_CONNECTED;
+  /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
+  details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before anything was admitted, so
       the caller may repeat the identical request without risking a duplicate. */
   retryable?: true;
@@ -27,9 +32,39 @@ type PipelineApiError = ApiError & {
   violations?: PipelineValidationViolation[];
 };
 
-export async function GET(): Promise<NextResponse<PipelinesResponse | ApiError>> {
+/** The query parameters GET reads — the `list_pipelines` filters. */
+const LIST_PARAMETERS = new Set(["project", "state", "includeClosed", "limit"]);
+
+/**
+ * With no query, the whole hot store, as it always answered: the Viewer's own
+ * callers pass none. With one, the same filters `list_pipelines` applies
+ * (#1845 defect B): `project`, `state` (a state, or `open`), `includeClosed`
+ * and `limit`, over whole records. Before this every query parameter was
+ * ignored, so `?project=<one project>` answered every pipeline of every project
+ * — 5 MB — and `?project=<a project with none>` answered the same 5 MB rather
+ * than nothing. A parameter this route does not read is refused, never
+ * silently dropped again.
+ */
+export async function GET(req: NextRequest): Promise<NextResponse<PipelinesResponse | ApiError>> {
+  const params = req.nextUrl.searchParams;
+  const unknown = [...new Set(params.keys())].filter((key) => !LIST_PARAMETERS.has(key));
+  if (unknown.length > 0) {
+    return NextResponse.json({
+      error: `unsupported query parameter${unknown.length > 1 ? "s" : ""} ${unknown.join(", ")}; this route reads ${[...LIST_PARAMETERS].join(", ")}`,
+    }, { status: 400 });
+  }
   try {
-    return NextResponse.json(getPipelines());
+    if (params.size === 0) return NextResponse.json(getPipelines());
+    const includeClosed = params.get("includeClosed") === "true" || params.get("includeClosed") === "1";
+    const limit = params.has("limit") ? Number(params.get("limit")) : null;
+    const records = includeClosed ? [...getPipelines().pipelines, ...loadArchivedPipelines()] : getPipelines().pipelines;
+    const pipelines = selectPipelineListRecords(records, {
+      project: params.get("project"),
+      state: params.get("state"),
+      includeClosed,
+      limit: Number.isFinite(limit) ? limit : null,
+    });
+    return NextResponse.json({ pipelines: [...pipelines] });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }
@@ -94,10 +129,11 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
     if (!result.pipeline) return NextResponse.json({
       error: result.error ?? "could not create pipeline",
       ...(result.code ? { code: result.code, field: result.field, path: result.path } : {}),
+      ...(result.details ? { details: result.details } : {}),
       ...(result.violations?.length ? { violations: result.violations } : {}),
     }, { status: result.status ?? 400 });
     if (result.pipeline.state !== "draft") requestPipelineTick();
-    return NextResponse.json({ ok: true, pipeline: result.pipeline }, { status: 201 });
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.warnings?.length ? { warnings: result.warnings } : {}) }, { status: 201 });
   } catch (error) {
     /* #1766: the registry lock was never taken, so no pipeline was created.
        Say so, and say the same request may be repeated — a 500 leaves a caller

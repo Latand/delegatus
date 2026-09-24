@@ -27,6 +27,7 @@ process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent.sock");
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
 const { TASKS_FILE, loadTasks, saveTasks } = await import("@/lib/tasks/store");
+const { persistedTaskRows, persistedTaskState } = await import("@/lib/tasks/storeFixture");
 const { statePath } = await import("@/lib/configDir");
 const { NextRequest } = await import("next/server");
 const { PATCH } = await import("@/app/api/tasks/[id]/route");
@@ -40,7 +41,7 @@ async function protocol() {
   await Promise.all([client.connect(a), server.connect(b)]);
   let sequence = 0;
   const call = async (name: string, args: Record<string, unknown>) =>
-    (await client.callTool({ name, arguments: { clientRequestId: `k4a-${Math.random().toString(36).slice(2)}-${++sequence}`, ...args } })).structuredContent as
+    (await client.callTool({ name, arguments: { full: true, clientRequestId: `k4a-${Math.random().toString(36).slice(2)}-${++sequence}`, ...args } })).structuredContent as
       { ok: boolean; task: TaskWithRevision; code?: string; details?: { field?: string; code?: string } };
   return { client, call, close: async () => { await client.close(); await server.close(); receipts.close(); } };
 }
@@ -118,7 +119,7 @@ test("the dashboard's PATCH hides as the operator, and both surfaces refuse the 
     expect(loadTasks().find((row) => row.id === plain.task.id)!.groupHidden?.by).toBe("operator");
 
     const seatRow = loadTasks().find((row) => row.id === seatTask.task.id) as TaskWithRevision;
-    const before = fs.readFileSync(TASKS_FILE, "utf8");
+    const before = persistedTaskState(TASKS_FILE);
     const refused = await patchHttp(seatTask.task.id, { hide: true, expectedProject: seatRow.project, expectedRevision: seatRow.revision });
     expect(refused.status).toBe(409);
     /* The HTTP refusal carries the same code and field MCP does. */
@@ -132,7 +133,7 @@ test("the dashboard's PATCH hides as the operator, and both surfaces refuse the 
     const agentRefused = await p.call("update_task", { taskId: seatTask.task.id, hide: true, expectedProject: seatRow.project, expectedRevision: seatRow.revision });
     expect(agentRefused.ok).toBe(false);
     expect(JSON.stringify(agentRefused)).toContain("TASK_HIDE_PROTECTED");
-    expect(fs.readFileSync(TASKS_FILE, "utf8")).toBe(before);
+    expect(persistedTaskState(TASKS_FILE)).toBe(before);
   } finally { await p.close(); }
 });
 
@@ -152,12 +153,12 @@ test("a seat record the store cannot establish refuses every hide with 503 on bo
     for (const [label, write] of unreadable) {
       fs.rmSync(seats, { recursive: true, force: true });
       write();
-      const before = fs.readFileSync(TASKS_FILE, "utf8");
+      const before = persistedTaskState(TASKS_FILE);
       const http = await patchHttp(created.task.id, { hide: true, ...fence() });
       expect({ label, status: http.status, body: await http.json() }).toMatchObject({ label, status: 503, body: { code: "TASK_HIDE_UNVERIFIED", field: "hide" } });
       const agent = await p.call("update_task", { taskId: created.task.id, hide: true, ...fence() });
       expect({ label, ok: agent.ok, refusal: JSON.stringify(agent).includes("TASK_HIDE_UNVERIFIED") }).toEqual({ label, ok: false, refusal: true });
-      expect({ label, unchanged: fs.readFileSync(TASKS_FILE, "utf8") === before }).toEqual({ label, unchanged: true });
+      expect({ label, unchanged: persistedTaskState(TASKS_FILE) === before }).toEqual({ label, unchanged: true });
     }
     /* No record at all: a project with no seat, and the hide applies. */
     fs.rmSync(seats, { recursive: true, force: true });

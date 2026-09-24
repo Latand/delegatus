@@ -3,6 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { viewerDeploymentListCursor } from "./contracts";
 
 import {
   resetRuntimeHostRequestHealthForTests,
@@ -21,8 +22,7 @@ afterAll(async () => {
   fs.rmSync(SANDBOX, { recursive: true, force: true });
 });
 
-function serve(onRequest: (frame: string, socket: net.Socket) => void): string {
-  const socketPath = path.join(SANDBOX, `${crypto.randomUUID().slice(0, 8)}.sock`);
+function serve(onRequest: (frame: string, socket: net.Socket) => void, socketPath = path.join(SANDBOX, `${crypto.randomUUID().slice(0, 8)}.sock`)): string {
   const server = net.createServer((socket) => {
     connections.push(socket);
     socket.on("error", () => undefined);
@@ -51,6 +51,45 @@ test("snapshot forwards its abort signal and settles exactly once on external ab
   const settled = await outcome;
   expect(settled).toBeInstanceOf(RuntimeHostUnavailableError);
   expect((settled as Error).message).toBe("runtime host request cancelled");
+});
+
+test("startup snapshot deadline is caller-local and never sent to the runtime host", async () => {
+  const requests: unknown[] = [];
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    requests.push(request.params);
+    setTimeout(() => {
+      if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result: { revision: 9 } }) + "\n");
+    }, 80);
+  });
+  const client = new UnixRuntimeHostClient(socketPath, 20, 20, 20);
+  expect(await client.snapshot(undefined, { timeoutMs: 500 })).toEqual({ revision: 9 } as never);
+  await expect(client.snapshot()).rejects.toThrow("runtime host request timed out");
+  expect(requests).toEqual([undefined, undefined]);
+});
+
+test("startup keyed read deadline is bounded and leaves interactive reads and wire parameters unchanged", async () => {
+  const requests: unknown[] = [];
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    requests.push(request.params);
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result: null }) + "\n");
+    }, 80);
+    timers.add(timer);
+  });
+  const client = new UnixRuntimeHostClient(socketPath, 20);
+  const identity = { conversationId: "conversation_slow" };
+  try {
+    expect(await client.readSession(identity, { timeoutMs: 500 })).toBeNull();
+    await expect(client.readSession(identity)).rejects.toThrow("runtime host request timed out");
+    await expect(client.readSession(identity, { timeoutMs: 30 })).rejects.toThrow("runtime host request timed out");
+    expect(requests).toEqual([identity, identity, identity]);
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+  }
 });
 
 test("a timeout, a late response, and a socket teardown settle the call exactly once", async () => {
@@ -185,4 +224,99 @@ test("snapshot accepts an upgrade-sized frame from the previous runtime host", a
   const snapshot = await client.snapshot() as unknown as { padding: string };
 
   expect(snapshot.padding.length).toBe(padding.length);
+});
+
+
+test("deployment list remembers one unsupported probe across clients and concurrent polls until the socket generation changes", async () => {
+  const methods: string[] = [];
+  const deployments = ["a", "c", "b"].map(deploymentId => ({ deploymentId, createdAt: "2026-09-20T12:00:00Z", updatedAt: "2026-09-20T12:00:00Z",
+    phase: "succeeded", terminal: true, revision: "a".repeat(40), error: null }));
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    methods.push(request.method);
+    socket.end(JSON.stringify(request.method === "viewer-deployment-list"
+      ? { id: request.id, ok: false, error: "runtime request method is unsupported" }
+      : { id: request.id, ok: true, result: { deployments } }) + "\n");
+  });
+  const pages = await Promise.all(Array.from({ length: 5 }, () => new UnixRuntimeHostClient(socketPath).listViewerDeployments({ limit: 1 })));
+  expect(methods.filter(method => method === "viewer-deployment-list")).toHaveLength(1);
+  expect(methods.filter(method => method === "snapshot")).toHaveLength(5);
+  for (const page of pages) expect(page.deployments.map(row => row.deploymentId)).toEqual(["c"]);
+  expect(pages[0]!.legacySnapshot).toBe(true);
+  await expect(new UnixRuntimeHostClient(socketPath).listViewerDeployments({ cursor: viewerDeploymentListCursor(Date.parse(deployments[0]!.createdAt), "c") }))
+    .rejects.toThrow("restart the list after hand-over");
+  expect(methods.filter(method => method === "snapshot")).toHaveLength(5);
+  const second = await new UnixRuntimeHostClient(socketPath).listViewerDeployments({ limit: 1, cursor: pages[0]!.nextCursor!, compact: true });
+  expect(second.deployments).toEqual([{ deploymentId: "b", phase: "succeeded", terminal: true, sha: "a".repeat(40),
+    startedAt: "2026-09-20T12:00:00Z", finishedAt: "2026-09-20T12:00:00Z", error: null }]);
+  fs.unlinkSync(socketPath); // This test owns both listeners; a successor binds a new inode.
+  const nextMethods: string[] = [];
+  serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    nextMethods.push(request.method);
+    socket.end(JSON.stringify({ id: request.id, ok: true, result: { deployments: [], nextCursor: null, hasMore: false } }) + "\n");
+  }, socketPath);
+  expect(await new UnixRuntimeHostClient(socketPath).listViewerDeployments()).toEqual({ deployments: [], nextCursor: null, hasMore: false });
+  expect(nextMethods).toEqual(["viewer-deployment-list"]);
+});
+
+for (const failure of ["deployment list cursor is invalid", "viewer deployments are disabled", "runtime host is unavailable"]) {
+  test(`deployment list does not fall back on ${failure}`, async () => {
+    const methods: string[] = [];
+    const socketPath = serve((frame, socket) => {
+      const request = JSON.parse(frame);
+      methods.push(request.method);
+      socket.end(JSON.stringify({ id: request.id, ok: false, error: failure }) + "\n");
+    });
+    await expect(new UnixRuntimeHostClient(socketPath).listViewerDeployments()).rejects.toThrow(failure);
+    expect(methods).toEqual(["viewer-deployment-list"]);
+  });
+}
+
+
+test("a keyed session frame preserves UTF-8 characters split across socket chunks", async () => {
+  const text = "before\u{1f642}after";
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    expect(request.method).toBe("session-read");
+    expect(request.params).toEqual({ conversationId: "conversation_utf8" });
+    const reply = Buffer.from(JSON.stringify({ id: request.id, ok: true, result: { conversationId: "conversation_utf8", liveTurn: { text } } }) + "\n");
+    const split = reply.indexOf(Buffer.from("\u{1f642}")) + 2;
+    socket.write(reply.subarray(0, split));
+    setTimeout(() => socket.end(reply.subarray(split)), 10);
+  });
+  const client = new UnixRuntimeHostClient(socketPath);
+  expect(await client.readSession({ conversationId: "conversation_utf8" })).toMatchObject({ liveTurn: { text } });
+});
+
+test("issue 1987: a snapshot-sized frame is measured once per byte, not once per chunk", async () => {
+  /* The runtime snapshot is several megabytes. Re-measuring and re-scanning the
+     whole accumulated frame on every socket chunk made receiving one quadratic
+     and held the Viewer's event loop for hundreds of milliseconds. */
+  const payload = "x".repeat(8 * 1024 * 1024);
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    const reply = Buffer.from(JSON.stringify({ id: request.id, ok: true, result: { conversationId: "conversation_large", liveTurn: { text: payload } } }) + "\n");
+    let offset = 0;
+    const writeNext = () => {
+      if (offset >= reply.length) return socket.end();
+      const next = Math.min(reply.length, offset + 64 * 1024);
+      socket.write(reply.subarray(offset, next), writeNext);
+      offset = next;
+    };
+    writeNext();
+  });
+  let measured = 0;
+  const byteLength = Buffer.byteLength;
+  const spy = spyOn(Buffer, "byteLength").mockImplementation(((value: Parameters<typeof Buffer.byteLength>[0], encoding?: BufferEncoding) => {
+    if (typeof value === "string") measured += value.length;
+    return byteLength(value, encoding);
+  }) as typeof Buffer.byteLength);
+  try {
+    const session = await new UnixRuntimeHostClient(socketPath).readSession({ conversationId: "conversation_large" });
+    expect((session as { liveTurn: { text: string } }).liveTurn.text.length).toBe(payload.length);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(measured).toBeLessThan(payload.length * 2);
 });

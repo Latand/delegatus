@@ -8,13 +8,20 @@ import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
-import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
+import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid, MAX_LEGACY_REVIEW_CONVERSIONS } from "./legacyReviewDefinition";
 import { normalizeStageOutputPath } from "./stageAccess";
-import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
+import { MAX_DECISION_ANSWER_CHARS } from "./types";
+import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
+
+/** Same opaque content revision used by MCP record acknowledgements. */
+export function pipelineRevision(pipeline: Pipeline): string {
+  return crypto.createHash("sha256").update(JSON.stringify(pipeline)).digest("hex");
+}
 
 export const PIPELINES_SCHEMA_VERSION = 5;
 /** Older registries are migrated in memory on load; the file is rewritten in
@@ -107,7 +114,8 @@ function isActivation(value: unknown): value is PipelineEdgeActivation | null {
     typeof activation.stageId === "string" &&
     Number.isInteger(activation.attempt) &&
     (activation.attempt as number) >= 1 &&
-    (activation.edge === "pass" || activation.edge === "fail")
+    (activation.edge === "pass" || activation.edge === "fail") &&
+    (activation.budgetSpent === undefined || (activation.budgetSpent === true && activation.edge === "fail"))
   );
 }
 
@@ -138,7 +146,9 @@ function isAttempt(value: unknown, index: number): boolean {
   const attempt = value as Record<string, unknown>;
   return (
     attempt.n === index + 1 &&
+    (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
+    (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
     ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
     isEffectiveRole(attempt.effectiveRole) &&
     isNullableString(attempt.launchId) &&
@@ -172,12 +182,36 @@ function isAttempt(value: unknown, index: number): boolean {
     isVerdict(attempt.verdict) &&
     isNullableString(attempt.error) &&
     (attempt.decisionRequested === undefined || typeof attempt.decisionRequested === "boolean") &&
+    (attempt.budgetSpent === undefined || typeof attempt.budgetSpent === "boolean") &&
+    (attempt.reviewedHead === undefined || isNullableString(attempt.reviewedHead)) &&
     isVerdictRecovery(attempt.verdictRecovery) &&
     isAttemptDefinition(attempt.definition) &&
+    isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isUnresolvedTermination(attempt.unresolvedTermination)
   );
+}
+
+function isSpawnActivation(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const activation = value as Record<string, unknown>;
+  const input = activation.input as Record<string, unknown> | undefined;
+  const owner = activation.owner as Record<string, unknown> | undefined;
+  return typeof activation.id === "string" && activation.id.length > 0
+    && ["reserved", "reserving", "dispatching", "settled"].includes(String(activation.phase))
+    && typeof activation.clientAttemptId === "string" && activation.clientAttemptId.length > 0
+    && typeof activation.startedAt === "string" && typeof activation.fence === "string"
+    && (activation.replay === undefined || typeof activation.replay === "boolean")
+    && (activation.cancelRequested === undefined || typeof activation.cancelRequested === "boolean")
+    && (activation.closeRequested === undefined || typeof activation.closeRequested === "boolean")
+    && (!owner || (Number.isSafeInteger(owner.pid) && Number(owner.pid) > 0
+      && isNullableString(owner.startIdentity) && isNullableString(owner.bootEpoch)))
+    && !!input && isEffectiveRole(input.role) && typeof input.prompt === "string"
+    && typeof input.cwd === "string" && typeof input.project === "string"
+    && typeof input.clientAttemptId === "string" && typeof input.title === "string"
+    && !!input.runtimeProfile && !!input.membership;
 }
 
 function isAttemptDefinition(value: unknown): boolean {
@@ -298,12 +332,13 @@ function isRun(value: unknown): value is Pipeline["runs"][number] {
 function isFailEdge(value: unknown): boolean {
   if (value === null || value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const edge = value as { to?: unknown; maxRounds?: unknown };
+  const edge = value as { to?: unknown; maxRounds?: unknown; onExhausted?: unknown };
   return (
     typeof edge.to === "string" &&
     Number.isInteger(edge.maxRounds) &&
     (edge.maxRounds as number) >= 1 &&
-    (edge.maxRounds as number) <= MAX_FAIL_EDGE_ROUNDS
+    (edge.maxRounds as number) <= MAX_FAIL_EDGE_ROUNDS &&
+    (edge.onExhausted === undefined || edge.onExhausted === "advance" || edge.onExhausted === "park")
   );
 }
 
@@ -328,6 +363,45 @@ function isUnconfirmedHost(value: unknown): value is PipelineUnconfirmedHost {
     && typeof host.at === "string";
 }
 
+function isCloseCustody(pipeline: Partial<Pipeline>): boolean {
+  const plan = pipeline.closeTeardown;
+  const report = pipeline.closeReport;
+  if (plan === undefined && report === undefined) return true;
+  if (!plan || !report || typeof plan !== "object" || typeof report !== "object") return false;
+  const host = (item: unknown): boolean => {
+    if (!item || typeof item !== "object") return false;
+    const ref = item as Record<string, unknown>;
+    return typeof ref.stageId === "string" && Number.isInteger(ref.attempt) && Number(ref.attempt) > 0
+      && isNullableString(ref.conversationId) && isNullableString(ref.agentPath) && isNullableString(ref.paneId)
+      && (ref.launchId === undefined || isNullableString(ref.launchId));
+  };
+  const owner = plan.owner;
+  return typeof plan.id === "string" && !!plan.id && ["pending", "running", "settled"].includes(plan.phase)
+    && (plan.hosts === undefined || (Array.isArray(plan.hosts) && plan.hosts.every((item) => item && host(item.target)
+      && item.evidence && isEffectiveRole(item.evidence.effectiveRole) && typeof item.evidence.startedAt === "string"
+      && typeof item.evidence.state === "string" && isNullableString(item.evidence.error)
+      && isNullableString(item.evidence.completedAt) && isVerdict(item.evidence.verdict)
+      && isUnresolvedTermination(item.evidence.unresolvedTermination))))
+    && typeof plan.waitingForActivation === "boolean" && typeof plan.acknowledgeHosts === "boolean"
+    && (owner === undefined || (owner && typeof owner === "object" && Number.isInteger(owner.pid) && owner.pid > 0 && isNullableString(owner.startIdentity) && isNullableString(owner.bootEpoch)))
+    && (plan.flow === null || (typeof plan.flow === "object" && typeof plan.flow.id === "string"
+      && typeof plan.flow.stageId === "string" && Number.isInteger(plan.flow.attempt)))
+    && ["pending", "settled"].includes(report.status)
+    && (plan.phase === "settled") === (report.status === "settled")
+    && [report.pending, report.stopped, report.alreadyStopped, report.unconfirmed, report.acknowledged, report.stillRunning, report.notes]
+      .every((items) => Array.isArray(items) && items.every(host))
+    && report.unconfirmed.every((item) => isNullableString(item.operationId) && typeof item.detail === "string")
+    && report.stillRunning.every((item) => typeof item.error === "string")
+    && report.acknowledged.every((item) => typeof item.detail === "string")
+    && report.notes.every((item) => typeof item.detail === "string")
+    && Array.isArray(report.reviewers) && report.reviewers.every((item) => item && typeof item.stageId === "string"
+      && Number.isInteger(item.attempt) && typeof item.flowId === "string" && Number.isInteger(item.round))
+    && (report.worktree === null || (typeof report.worktree === "object" && typeof report.worktree.dir === "string"
+      && Array.isArray(report.worktree.uncommitted) && report.worktree.uncommitted.every((item) => typeof item === "string")
+      && typeof report.worktree.truncated === "boolean"))
+    && (report.status !== "settled" || report.pending.length === 0);
+}
+
 function isTerminalReap(value: unknown): value is PipelineTerminalReap {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const reap = value as Partial<PipelineTerminalReap>;
@@ -345,7 +419,7 @@ function isStage(value: unknown): value is PipelineStage {
   const role = (value as { role?: unknown }).role;
   if (!(
     typeof stage.id === "string" &&
-    (stage.kind === "run" || stage.kind === "review-loop") &&
+    (stage.kind === "run" || isLegacyReviewLoopStage(stage)) &&
     typeof stage.prompt === "string" &&
     (stage.next === null || typeof stage.next === "string") &&
     isFailEdge(stage.onFail) &&
@@ -367,7 +441,7 @@ function isStage(value: unknown): value is PipelineStage {
   const referencedRoleId = role === undefined ? null : (role as { roleId: EffectivePipelineRole["roleId"] }).roleId;
   if (stage.outputs !== undefined && effective.access !== "read-only") return false;
   if (effective.roleId !== referencedRoleId) return false;
-  if (stage.kind === "review-loop" && effective.access !== "read-only") return false;
+  if (isLegacyReviewLoopStage(stage) && !legacyReviewLoopShapeValid(stage as PipelineStage)) return false;
   if (stage.engine !== undefined && stage.engine !== effective.engine) return false;
   if (stage.model !== undefined && stage.model !== effective.model) return false;
   if (stage.effort !== undefined && stage.effort !== effective.effort) return false;
@@ -390,6 +464,10 @@ function isStage(value: unknown): value is PipelineStage {
  */
 export function pipelineGraphError(
   stages: ReadonlyArray<Pick<PipelineStage, "id" | "kind" | "next"> & { onFail?: Pipeline["stages"][number]["onFail"] }>,
+  /** Decoding a stored record passes false: a legacy review-loop no run
+      reaches still loads (retire-flows §3), and start refuses it. Every edit
+      and every start keeps the rule. */
+  options: { legacyReachability?: boolean } = {},
 ): string | null {
   const ids = new Set(stages.map((stage) => stage.id));
   const nextOf = new Map(stages.map((stage) => [stage.id, stage.next] as const));
@@ -397,10 +475,13 @@ export function pipelineGraphError(
     if (stage.next !== null && !ids.has(stage.next)) return `stage ${stage.id} next must reference an existing stage`;
     if (stage.next === stage.id) return `stage ${stage.id} pass edge may not target itself`;
     const onFail = stage.onFail ?? null;
-    if (stage.kind === "review-loop" && onFail) return `review-loop stage ${stage.id} does not support onFail`;
+    if (isLegacyReviewLoopStage(stage) && onFail) return `review-loop stage ${stage.id} does not support onFail`;
     if (onFail && !ids.has(onFail.to)) return `stage ${stage.id} onFail must reference an existing stage`;
     if (onFail && (!Number.isInteger(onFail.maxRounds) || onFail.maxRounds < 1 || onFail.maxRounds > MAX_FAIL_EDGE_ROUNDS)) {
       return `stage ${stage.id} onFail maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`;
+    }
+    if (onFail?.onExhausted !== undefined && onFail.onExhausted !== "advance" && onFail.onExhausted !== "park") {
+      return `stage ${stage.id} onFail onExhausted must be advance or park`;
     }
   }
   /* Out-degree-1 pass graph: walking `next` from any stage must terminate
@@ -412,17 +493,10 @@ export function pipelineGraphError(
       cursor = nextOf.get(cursor) ?? null;
     }
   }
+  if (options.legacyReachability === false) return null;
   for (const stage of stages) {
-    if (stage.kind !== "review-loop") continue;
-    const reachable = stages.some((candidate) => {
-      if (candidate.kind !== "run") return false;
-      let cursor: string | null = candidate.next;
-      for (let hops = 0; cursor !== null && hops <= stages.length; hops += 1) {
-        if (cursor === stage.id) return true;
-        cursor = nextOf.get(cursor) ?? null;
-      }
-      return false;
-    });
+    if (!isLegacyReviewLoopStage(stage)) continue;
+    const reachable = legacyReviewLoopReachable(stages, stage.id);
     /* #1026: this used to say "review-loop stage requires a preceding run
        stage", which reads as an ordering rule and sent a caller reordering an
        array that was already in the right order. The defect is a missing pass
@@ -440,11 +514,95 @@ export function pipelineGraphError(
   return null;
 }
 
+function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> {
+  if (!value || typeof value !== "object") return false;
+  const delivery = value as NonNullable<Pipeline["delivery"]>;
+  const target = delivery.target;
+  if (!target || typeof target.repository !== "string" || !target.repository || typeof target.remote !== "string"
+    || typeof target.branch !== "string" || !target.branch.startsWith("refs/heads/")
+    || !["owner", "comparison"].includes(delivery.disposition) || !["enabled", "disabled"].includes(delivery.publish)
+    || typeof delivery.ownerId !== "string" || !delivery.ownerId || !Number.isSafeInteger(delivery.epoch) || delivery.epoch < 1
+    || typeof delivery.active !== "boolean" || !Array.isArray(delivery.journal) || delivery.journal.length > 100) return false;
+  if (delivery.disposition === "comparison" && (delivery.active || delivery.publish !== "disabled")) return false;
+  if (delivery.active && delivery.publish !== "enabled") return false;
+  const operation = delivery.operation;
+  return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
+    && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
+    && ["pending", "running", "settled"].includes(operation.state));
+}
+
+/** #1938: the needs_review record and its continue-review grants. */
+function isReviewPending(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const pending = value as Record<string, unknown>;
+  return typeof pending.stageId === "string" && pending.stageId.length > 0
+    && Number.isSafeInteger(pending.attempt) && (pending.attempt as number) >= 0
+    && typeof pending.fixStageId === "string" && pending.fixStageId.length > 0
+    && Number.isSafeInteger(pending.fixAttempt) && (pending.fixAttempt as number) > 0
+    && isNullableString(pending.reviewedHead)
+    && typeof pending.currentHead === "string"
+    && ["pass", "fail", "needs_decision"].includes(String(pending.verdict))
+    && Number.isSafeInteger(pending.findings) && (pending.findings as number) >= 0
+    && typeof pending.at === "string";
+}
+
+function isReviewGrant(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const grant = value as Record<string, unknown>;
+  return typeof grant.clientRequestId === "string" && grant.clientRequestId.length > 0 && grant.clientRequestId.length <= 200
+    && typeof grant.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(grant.expectedRevision)
+    && typeof grant.stageId === "string" && grant.stageId.length > 0
+    && Number.isSafeInteger(grant.rounds) && (grant.rounds as number) >= 1 && (grant.rounds as number) <= MAX_FAIL_EDGE_ROUNDS
+    && isNullableString(grant.reviewedHead)
+    && typeof grant.currentHead === "string"
+    && isActor(grant.actor) && typeof grant.at === "string";
+}
+
+/** An explicit legacy review-loop conversion and the definition it replaced. */
+function isLegacyReviewConversion(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const conversion = value as Record<string, unknown>;
+  const original = conversion.original as Record<string, unknown> | null;
+  const reverted = conversion.reverted as Record<string, unknown> | undefined;
+  return typeof conversion.clientRequestId === "string" && conversion.clientRequestId.length > 0 && conversion.clientRequestId.length <= 200
+    && typeof conversion.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(conversion.expectedRevision)
+    && typeof conversion.stageId === "string" && conversion.stageId.length > 0
+    && typeof conversion.fixerStageId === "string" && conversion.fixerStageId.length > 0
+    && typeof conversion.implementerStageId === "string" && conversion.implementerStageId.length > 0
+    && Number.isSafeInteger(conversion.reviewLimit) && (conversion.reviewLimit as number) >= 1 && (conversion.reviewLimit as number) <= MAX_FAIL_EDGE_ROUNDS
+    && ["request", "flow", "default"].includes(String(conversion.reviewLimitSource))
+    && Boolean(original && typeof original === "object" && Array.isArray(original.stages) && original.stages.every(isStage)
+      && isRun(original.run) && (original.run as { stageId: string }).stageId === conversion.stageId
+      && (original.cursor === null || (typeof original.cursor === "object" && typeof (original.cursor as { stageId?: unknown }).stageId === "string"))
+      && (original.stateDetail === undefined || isNullableString(original.stateDetail)))
+    && typeof conversion.convertedGraphDigest === "string"
+    && isActor(conversion.actor) && typeof conversion.at === "string"
+    && (reverted === undefined || (Boolean(reverted) && typeof reverted === "object" && typeof reverted.clientRequestId === "string"
+      && reverted.clientRequestId.length > 0 && isActor(reverted.actor) && typeof reverted.at === "string"));
+}
+
+function isDecisionAnswer(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const answer = value as Record<string, unknown>;
+  return typeof answer.clientRequestId === "string" && answer.clientRequestId.length > 0 && answer.clientRequestId.length <= 200
+    && typeof answer.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(answer.expectedRevision)
+    && typeof answer.stageId === "string" && answer.stageId.length > 0
+    && Number.isSafeInteger(answer.attempt) && (answer.attempt as number) > 0
+    && Number.isSafeInteger(answer.nextAttempt) && (answer.nextAttempt as number) > (answer.attempt as number)
+    && typeof answer.question === "string"
+    && typeof answer.answer === "string" && answer.answer.trim().length > 0 && answer.answer.length <= MAX_DECISION_ANSWER_CHARS
+    && isActor(answer.actor) && typeof answer.at === "string";
+}
+
 function isPipeline(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
   if (!(
     typeof pipeline.id === "string" &&
+    isCloseCustody(pipeline) &&
+    (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
+    (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
+    (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
     typeof pipeline.task === "string" &&
     Array.isArray(pipeline.taskIds) &&
     pipeline.taskIds.every((taskId) => typeof taskId === "string") &&
@@ -464,8 +622,8 @@ function isPipeline(value: unknown): value is Pipeline {
     pipeline.stages.every(isStage) &&
     Array.isArray(pipeline.runs) &&
     pipeline.runs.every(isRun) &&
-    ["draft", "provisioning", "running", "needs_decision", "paused", "completed", "closed"].includes(String(pipeline.state)) &&
-    (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "completed", "closed"].includes(String(pipeline.pausedState))) &&
+    ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"].includes(String(pipeline.state)) &&
+    (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"].includes(String(pipeline.pausedState))) &&
     (pipeline.pausedAt === undefined || isNullableString(pipeline.pausedAt)) &&
     (pipeline.resumedAt === undefined || isNullableString(pipeline.resumedAt)) &&
     isNullableString(pipeline.stateDetail) &&
@@ -479,6 +637,11 @@ function isPipeline(value: unknown): value is Pipeline {
       || (Array.isArray(pipeline.unconfirmedHosts) && pipeline.unconfirmedHosts.every(isUnconfirmedHost))) &&
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
     (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
+    (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
+    (pipeline.reviewPending === undefined || isReviewPending(pipeline.reviewPending)) &&
+    (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
+    (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
+      && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
     (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
     (pipeline.pos === undefined || (
@@ -497,7 +660,7 @@ function isPipeline(value: unknown): value is Pipeline {
   if (stages.length < minStages || stages.length > MAX_PIPELINE_STAGES || runs.length !== stages.length) return false;
   const ids = stages.map((stage) => stage.id);
   if (new Set(ids).size !== ids.length) return false;
-  if (pipelineGraphError(stages) !== null) return false;
+  if (pipelineGraphError(stages, { legacyReachability: false }) !== null) return false;
   if (runs.some((run, index) => run.stageId !== stages[index]!.id)) return false;
   const expectedWorktree = path.join(path.dirname(pipeline.repoDir!), `${path.basename(pipeline.repoDir!)}-pipeline-${pipeline.id}`);
   if (pipeline.worktreeDir !== expectedWorktree || pipeline.branch !== `pipeline/${slugify(pipeline.task!)}-${pipeline.id}`) return false;
@@ -595,6 +758,8 @@ function migrateReviewLoopFailEdges(raw: unknown): unknown {
   if (!Array.isArray(pipeline.stages)) return raw;
   return {
     ...pipeline,
+    ...(pipeline.delivery ? { delivery: structuredClone(pipeline.delivery) } : {}),
+    ...(pipeline.creationRequest ? { creationRequest: { ...pipeline.creationRequest } } : {}),
     stages: pipeline.stages.map((stage) => {
       if (!stage || typeof stage !== "object" || Array.isArray(stage)) return stage;
       const record = stage as Record<string, unknown>;
@@ -686,6 +851,8 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
       : []);
   return {
     ...pipeline,
+    closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
+    closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
     project: canonicalProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
@@ -760,6 +927,8 @@ function decodePipeline(value: unknown): Pipeline | null {
 }
 
 function pipelineControllerActive(pipeline: Pipeline): boolean {
+  if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
+  if (pipeline.activationCloseRequested) return true;
   if (pipeline.state === "closed") return Boolean(pipeline.unconfirmedHosts?.length);
   if (pipeline.state === "completed") {
     return Boolean(pipeline.unconfirmedHosts?.length) || !pipeline.terminalReap?.settledAt;
@@ -803,6 +972,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
       ? error
       : new PipelineStoreError("pipeline registry contains malformed records", { cause: error }),
     validate: (pipeline: Pipeline) => {
+      releaseTerminalDelivery(pipeline);
       if (!isPipeline(pipeline)) {
         throw new PipelineStoreError("refusing to persist a malformed pipeline record");
       }
@@ -855,7 +1025,17 @@ function cachedPipelines(): Pipeline[] {
     pass `loadPipelines` uses, so a projection overlay can never write into the
     cache. */
 export function loadPipelinesForProjection(): Pipeline[] {
-  return cachedPipelines().map(reviveLoadedPipeline);
+  return cachedPipelines().map((pipeline) => withDeliveryPublicationDetail(reviveLoadedPipeline(pipeline)));
+}
+
+/** Reuse the lane card's existing publication/detail slot. Never persist this
+    presentation overlay or feed it into a controller mutation. */
+export function withDeliveryPublicationDetail(pipeline: Pipeline): Pipeline {
+  const delivery = pipeline.delivery;
+  if (!delivery) return pipeline;
+  const publication = `Viewer publication: ${delivery.disposition}; owner ${delivery.ownerId}, epoch ${delivery.epoch}${delivery.publish === "disabled" ? "; disabled" : ""}`;
+  const detail = pipeline.stateDetail;
+  return { ...pipeline, stateDetail: detail?.includes(publication) ? detail : [detail, publication].filter(Boolean).join(" · ") };
 }
 
 /** The registry read behind bounded list projections (issue #863).
@@ -899,11 +1079,12 @@ export async function withPipelineMutation<T>(
     (): void;
     (records: readonly Pipeline[]): void;
   }) => Promise<T> | T,
+  observeHold?: (heldMs: number) => void,
 ): Promise<T> {
   return refuseBusyBeforeAdmission((admitted) => pipelineStore().mutate((pipelines, persist) => {
     admitted();
     return mutate(pipelines, persist);
-  }, undefined, false, pipelineLockWaitMs()));
+  }, undefined, false, pipelineLockWaitMs(), observeHold));
 }
 
 export async function withPipelineControllerMutation<T>(
@@ -915,12 +1096,15 @@ export async function withPipelineControllerMutation<T>(
   return pipelineStore().mutate(mutate, undefined, true);
 }
 
-/** Hold the existing cross-process mutation lease through startup admission.
+/** Short startup state admission under the existing cross-process lease.
+ * Callers finish host and transcript I/O before entering this callback.
  * Unavailable state or authority permits only the caller's deferred path.
  * Never reinterpret a failure inside admission as permission to run it again.
  */
 export async function withPipelineStartupAdmission<T>(
   admit: (available: boolean) => Promise<T>,
+  phase = "startup evidence",
+  observeHold?: (heldMs: number) => void,
 ): Promise<T> {
   let entered = false;
   try {
@@ -930,11 +1114,132 @@ export async function withPipelineStartupAdmission<T>(
     return await withPipelineMutation(() => {
       entered = true;
       return admit(true);
+    }, (heldMs) => {
+      if (heldMs > 100) console.warn("[structured hosts] state lease exceeded budget", {
+        phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
+      });
+      observeHold?.(heldMs);
     });
   } catch (error) {
     if (entered) throw error;
     return admit(false);
   }
+}
+
+export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["delivery"]>["journal"][number]["kind"], reason: string, conversationId: string | null = null): void {
+  const delivery = pipeline.delivery!;
+  delivery.journal = [...delivery.journal, { at: new Date().toISOString(), kind, ownerId: delivery.ownerId, epoch: delivery.epoch, conversationId, reason }].slice(-100);
+}
+
+function terminalDeliveryFailure(pipeline: Pipeline): string | null {
+  const terminalAttempt = pipeline.state === "needs_decision" && pipeline.cursor
+    ? pipeline.runs.find((run) => run.stageId === pipeline.cursor!.stageId)?.attempts.findLast((attempt) => !attempt.historical)
+    : null;
+  return terminalAttempt?.verdict?.status === "fail" && terminalAttempt.completedAt
+    ? `${pipeline.cursor!.stageId}:${terminalAttempt.n}:${terminalAttempt.startedAt ?? ""}` : null;
+}
+
+function releaseTerminalDelivery(pipeline: Pipeline): void {
+  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return;
+  const delivery = pipeline.delivery;
+  const failure = terminalDeliveryFailure(pipeline);
+  const failed = failure !== null && failure !== delivery?.settledFailure;
+  if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed" && !failed)) return;
+  // An interrupted external write remains fenced until its result is known.
+  if (delivery.operation?.state === "running") return;
+  delivery.active = false;
+  delivery.publish = "disabled";
+  delivery.releasedAt = pipeline.closedAt ?? new Date().toISOString();
+  if (failed) delivery.settledFailure = failure;
+  deliveryJournal(pipeline, "release", failed ? "terminal failure without an active fail edge" : `pipeline ${pipeline.state}`);
+}
+
+export function pipelineDeliveryLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): Pipeline | null {
+  return pipelineStore().pipelineLookup(query);
+}
+
+export function unclaimedPipelinePublications(): Pipeline[] {
+  return pipelineStore().unclaimedPipelinePublications();
+}
+
+export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R): R {
+  return pipelineStore().boundedPatch(16, operation);
+}
+
+export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R): Promise<R> {
+  return refuseBusyBeforeAdmission((admitted) => pipelineStore().boundedPatchAsync(16, (tx) => {
+    admitted();
+    return operation(tx);
+  }, pipelineLockWaitMs()));
+}
+
+/** Called under the existing pipeline lease; indexed reads, no provisioning. */
+export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false,
+  lookup: typeof pipelineDeliveryLookup = pipelineDeliveryLookup): void {
+  const owner = lookup({ ...target, active: true });
+  const previous = lookup(target);
+  const epoch = owner?.delivery?.epoch ?? (comparison && previous?.delivery ? previous.delivery.epoch : (previous?.delivery?.epoch ?? 0) + 1);
+  pipeline.delivery = {
+    target, disposition: owner || comparison ? "comparison" : "owner",
+    publish: owner || comparison ? "disabled" : "enabled",
+    ownerId: owner?.id ?? (comparison ? previous?.delivery?.ownerId : undefined) ?? pipeline.id, epoch, active: !owner && !comparison, journal: [],
+  };
+  if (pipeline.delivery.disposition === "comparison") pipeline.publication = "internal";
+  deliveryJournal(pipeline, pipeline.delivery.disposition === "owner" ? "claim" : "comparison",
+    owner ? `target owned by ${owner.id} at epoch ${epoch}` : comparison ? "comparison requested; no active owner" : "target claimed", pipeline.srcConversationId);
+}
+
+export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false): Promise<Pipeline> {
+  return withDeliveryMutationAsync((tx) => {
+    if (pipeline.creationRequest) {
+      const replay = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
+      if (replay) {
+        if (replay.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
+        return replay;
+      }
+    }
+    assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);
+    tx.put(pipeline);
+    return pipeline;
+  });
+}
+
+export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): string | null {
+  const delivery = pipeline.delivery;
+  if (delivery?.active && delivery.publish === "enabled" && delivery.disposition === "owner"
+    && owner?.id === pipeline.id && owner.delivery?.epoch === delivery.epoch
+    && pipeline.state !== "closed" && pipeline.state !== "completed") return null;
+  return `Viewer publication denied: target owner is ${owner?.id ?? delivery?.ownerId ?? "unclaimed"} at epoch ${owner?.delivery?.epoch ?? delivery?.epoch ?? 0}; this lane must request explicit takeover`;
+}
+
+export async function takeoverPipelineDelivery(id: string, expectedOwner: string, expectedEpoch: number, reason: string, conversationId: string | null): Promise<{ pipeline?: Pipeline; error?: string; status?: number }> {
+  return withDeliveryMutationAsync((tx) => {
+    const pipeline = tx.get(id);
+    if (!pipeline?.delivery) return { error: "pipeline has no delivery target", status: 409 };
+    const target = pipeline.delivery.target;
+    const owner = tx.pipelineLookup({ ...target, active: true });
+    const previous = owner ?? tx.pipelineLookup(target);
+    if (!previous?.delivery || previous.delivery.ownerId !== expectedOwner || previous.delivery.epoch !== expectedEpoch) {
+      return { error: `delivery owner changed: current owner ${previous?.delivery?.ownerId ?? "none"}, epoch ${previous?.delivery?.epoch ?? 0}`, status: 409 };
+    }
+    const old = tx.get(expectedOwner);
+    if (old?.delivery?.operation?.state === "running") return { error: `publisher ${expectedOwner} at epoch ${expectedEpoch} is in flight or its outcome is uncertain; reconcile it before takeover`, status: 409 };
+    if (pipeline.state === "closed" || pipeline.state === "completed") return { error: "a terminal lane cannot take ownership", status: 409 };
+    if (old?.delivery) {
+      old.delivery.active = false;
+      old.delivery.publish = "disabled";
+      old.delivery.releasedAt = new Date().toISOString();
+      deliveryJournal(old, "release", reason, conversationId);
+      tx.put(old);
+    }
+    pipeline.delivery = { target, disposition: "owner", publish: "enabled", active: true,
+      ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal,
+      settledFailure: terminalDeliveryFailure(pipeline) ?? pipeline.delivery.settledFailure };
+    pipeline.publishedCommit = null;
+    deliveryJournal(pipeline, "takeover", reason, conversationId);
+    tx.put(pipeline);
+    return { pipeline };
+  });
 }
 
 export function savePipelines(pipelines: Pipeline[]): void {
@@ -952,6 +1257,9 @@ export function loadArchivedPipelines(): Pipeline[] {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return false;
+  if (pipeline.activationCloseRequested) return false;
+  if (pipeline.delivery?.active || pipeline.delivery?.operation?.state === "running") return false;
   /* Closed records archive on closedAt. A discarded draft now closes like
      anything else (#1274), but records discarded before that fix are hidden
      with no closedAt at all, so their hiddenAt still stands in. Anything still
@@ -998,11 +1306,15 @@ export async function checkpointPipelineRollbackMirrorsForDemotionAsync(): Promi
   return { pipelines, pipelinesArchive };
 }
 
+/** Active collection source for the bounded MCP selection projection. */
+export function pipelineSelectionSource() {
+  const collection = pipelineStore();
+  return { filename: stateDatabaseFile(), read: (id: string) => collection.get(id) };
+}
+
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
-  return loadPipelines().find((pipeline) => pipeline.id === pipelineId)
-    ?? loadArchivedPipelines().find((pipeline) => pipeline.id === pipelineId)
-    ?? null;
+  return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);
 }
 
 /** Validates durable task membership at the pipeline store seam. */

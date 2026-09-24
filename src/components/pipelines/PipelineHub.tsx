@@ -7,12 +7,14 @@ import { useLocale } from "@/lib/i18n";
 import type { Pipeline, PipelineAction } from "@/lib/pipelines/types";
 
 import { latestAttempt, patchPipeline, pipelineStateLabel, stageChipLabel } from "./pipelineModel";
+import { Z } from "@/components/layers";
 
 const TONES: Record<Pipeline["state"], string> = {
   draft: "var(--color-warning)",
   provisioning: "var(--color-accent)",
   running: "var(--color-accent)",
   needs_decision: "var(--color-warning)",
+  needs_review: "var(--color-warning)",
   paused: "var(--color-warning)",
   completed: "var(--color-success)",
   closed: "var(--color-muted)",
@@ -83,7 +85,7 @@ export function PipelineHub({
 
   return (
     <div
-      className={`absolute left-0 top-0 ${open ? "z-30" : "z-[5]"} ${interactive ? "" : "pointer-events-none"}`}
+      className={`absolute left-0 top-0 ${open ? Z.popover : "z-[5]"} ${interactive ? "" : "pointer-events-none"}`}
       style={{ transform: `translate(${x}px, ${y}px)${semanticZoom ? " scale(var(--inv-z, 1))" : ""}`, transition: moveTransition, transformOrigin: "top left" }}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || !open) return;
@@ -111,7 +113,7 @@ export function PipelineHub({
           role="dialog"
           tabIndex={-1}
           aria-label={t("pipelineHub.controls")}
-          className="absolute bottom-[24px] left-0 z-30 flex w-[224px] -translate-x-1/2 flex-col gap-1.5 rounded-[12px] border border-border bg-card p-2.5 shadow-2 focus-visible:outline-none"
+          className={`absolute bottom-[24px] left-0 ${Z.popover} flex w-[224px] -translate-x-1/2 flex-col gap-1.5 rounded-[12px] border border-border bg-card p-2.5 shadow-2 focus-visible:outline-none`}
         >
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: tone }} aria-hidden />
@@ -126,7 +128,7 @@ export function PipelineHub({
           {error ? <span className="truncate text-[10.5px] font-semibold text-danger" title={error}>{error}</span> : null}
           {parked ? (
             <span className="flex items-center gap-1.5">
-              <button className="flex-1 rounded-full border border-accent bg-accent px-3 py-1 text-[11px] font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40" disabled={busy} onClick={() => void run("retry-stage")}>{t("pipelineStrip.retryStage")}</button>
+              <button className="flex-1 rounded-full border border-brand bg-brand px-3 py-1 text-[11px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40" disabled={busy} onClick={() => void run("retry-stage")}>{t("pipelineStrip.retryStage")}</button>
               <button className="rounded-full border border-border bg-canvas px-2.5 py-1 text-[10.5px] font-bold text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40" disabled={busy} onClick={() => void run("skip-stage")}>{t("pipelineStrip.skipStage")}</button>
             </span>
           ) : null}

@@ -15,7 +15,9 @@ import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/co
 import type { Pipeline } from "@/lib/pipelines/types";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, canonicalOrchestratorProject, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -162,13 +164,13 @@ test("spawn_agent rejects an explicit model outside the engine catalog before co
     (error: unknown) => error as Error & { details?: { violations?: Array<{ field: string; message: string; expected: string }> } },
   );
 
-  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna";
+  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna";
   expect(refusal?.name).toBe("McpToolRefusal");
   expect(refusal?.message).toBe(message);
   expect(refusal?.details?.violations).toEqual([{
     field: "model",
     message,
-    expected: "one of: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    expected: "one of: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
   }]);
   expect(requests).toEqual([]);
 });
@@ -489,7 +491,7 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
   const designatedSeat = {
     callerAttribution: () => ({ kind: "manager" as const, conversationId: "conversation_seat", role: null }),
     callerProject: () => "proj-a",
-    viewerProject: () => "proj-a",
+    viewerProjects: () => ["proj-a"],
     authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
     /* #845: the send resolves the conversation it names from ONE injected registry
        projection rather than reaching for the registry itself. */
@@ -1093,7 +1095,7 @@ test("list_pipelines applies project, state, and closed filters to the durable r
   } as never);
 
   const listed = await bindings.list_pipelines({
-    clientRequestId: "list-pipelines",
+    clientRequestId: "list-pipelines", compact: false,
     project: "viewer",
     state: "running",
   }) as { count: number; pipelines: { id: string; project: string; state: string }[] };
@@ -1117,7 +1119,7 @@ test("list_pipelines returns bounded rows and leaves prompts, specs and transcri
     getPipelines: () => ({ pipelines: [pipeline] }),
   } as never);
 
-  const listed = await bindings.list_pipelines({ clientRequestId: "list-bounded", project: "viewer" });
+  const listed = await bindings.list_pipelines({ clientRequestId: "list-bounded", compact: false, project: "viewer" });
   const serialized = JSON.stringify(listed.pipelines);
   for (const marker of Object.values(CORPUS_BODY_MARKERS)) expect(serialized).not.toContain(marker);
   expect(listed.pipelines).toMatchObject([{
@@ -1152,7 +1154,7 @@ test("task read tools expose the pipeline-linked durable read model", async () =
     getPipelines: () => ({ pipelines: [{ id: "pipeline_608", taskIds: ["task_viewer"] }] }),
   } as never);
 
-  expect(await bindings.list_tasks({ clientRequestId: "list-tasks", project: "viewer" })).toEqual({
+  expect(await bindings.list_tasks({ clientRequestId: "list-tasks", project: "viewer", full: true })).toMatchObject({
     count: 1,
     tasks: [{ ...tasks[0], pipelineIds: ["pipeline_608"] }],
   });
@@ -1269,7 +1271,11 @@ test.each(["kill", "interrupt", "resume", "compact", "dialog-key"])("conversatio
 test("conversation_action archives every generation from either target form and unarchives symmetrically", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-archive-generations-"));
   sandboxes.push(sandbox);
-  const boardFile = path.join(sandbox, "board.json");
+  /* Each phase starts on a board of its own: the store imports a board.json
+     once and leaves a tombstone in its place (#1870), so a phase boundary is a
+     fresh directory rather than deleting the file. */
+  const freshBoard = () => path.join(fs.mkdtempSync(path.join(sandbox, "board-")), "board.json");
+  let boardFile = freshBoard();
   const project = "fixture-generation-project";
   const earlierPath = "/fixtures/codex/raw-sessions/2026/08/rollout-earlier.jsonl";
   const currentPath = "/fixtures/codex/accounts/account-a/sessions/2026/08/rollout-current.jsonl";
@@ -1395,7 +1401,7 @@ test("conversation_action archives every generation from either target form and 
     outcomes: [{ transcriptPath: currentPath, paths: [earlierPath, currentPath], outcome: "unarchived" }],
   });
   expect(boardFor(project, boardFile)).toMatchObject({ revision: 2, prefs: { hidden: [] } });
-  fs.rmSync(boardFile);
+  boardFile = freshBoard();
 
   expect(mutateBoard(project, 0, [{
     kind: "remap-paths",
@@ -1453,7 +1459,7 @@ test("conversation_action archives every generation from either target form and 
     revision: 4,
     prefs: { hidden: [], taskPanelOpen: true },
   });
-  fs.rmSync(boardFile);
+  boardFile = freshBoard();
 
   expect(patchBoard(project, 0, { hidden: [currentPath] }, boardFile)).toMatchObject({ ok: true, applied: true });
   const repairedPartialArchive = await bindings.conversation_action({
@@ -1897,63 +1903,52 @@ test("conversation_action refuses archive batches above 100 before reading board
   expect(reads).toBe(0);
 });
 
-test("conversation_migration delegates to the revision-fenced migration command with a stable receipt", async () => {
+test("conversation_migration forwards revision fences and stable identity to Viewer", async () => {
   const requests: unknown[] = [];
-  const bindings = viewerMcpBindings(undefined, undefined, {
-    applyConversationMigration: async (request: { conversationId: string; expectedRevision?: number }) => {
-      requests.push(request);
-      return {
-        status: 200,
-        body: { conversation: { id: request.conversationId, migration: { phase: "rolled-back", revision: request.expectedRevision } } },
-      };
-    },
-  } as never);
-
+  const bindings = viewerMcpBindings(undefined, { post: async (pathname, body) => {
+    requests.push({ pathname, body });
+    return { conversation: { id: "conversation_test", migration: { phase: "rolled-back", revision: body.expectedRevision } } };
+  } });
   const result = await bindings.conversation_migration({
-    clientRequestId: "rollback-608",
-    conversationId: "conversation_608",
-    action: "rollback",
-    expectedRevision: 4,
+    clientRequestId: "rollback-test", conversationId: "conversation_test", action: "rollback", expectedRevision: 4,
   });
-  const migrationOperationId = result.operationId as string;
-
   expect(requests).toEqual([{
-    conversationId: "conversation_608",
-    action: "rollback",
-    expectedRevision: 4,
-    path: "",
+    pathname: "/api/conversations/conversation_test/migration",
+    body: { action: "rollback", expectedRevision: 4, path: "", requestOperationId: result.operationId },
   }]);
-  expect(result).toMatchObject({
-    conversationId: "conversation_608",
-    receipt: { status: "delivered" },
-    conversation: { migration: { phase: "rolled-back", revision: 4 } },
-  });
-  expect(migrationOperationId).toMatch(/^mcp_conversation_migration_[0-9a-f]{24}$/);
-  expect((result.receipt as { operationId: string }).operationId).toBe(migrationOperationId);
+  expect(result).toMatchObject({ conversationId: "conversation_test", receipt: { status: "delivered" }, conversation: { migration: { phase: "rolled-back", revision: 4 } } });
+  expect(result.operationId).toMatch(/^mcp_conversation_migration_[0-9a-f]{24}$/);
 });
 
-test("conversation_migration passes a withdrawal's operation id and a cancel's revision through, and a refusal carries its words, code and revision (#1705)", async () => {
-  const requests: unknown[] = [];
+test("pipeline close acknowledges pending teardown and get_pipeline reads final host results", async () => {
+  const target = { stageId: "build", attempt: 1, conversationId: "conversation_build", agentPath: null, paneId: null };
+  const close = { status: "pending", pending: [target], stopped: [], alreadyStopped: [], unconfirmed: [],
+    acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
+  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  const pipeline = buildPipeline({ id: "pipeline_close_pending", task: "Close pending", project: "viewer", repoDir: "/repo", stages: [{
+    id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null },
+  }],
+    srcPath: null, srcConversationId: null, now: "2026-09-20T00:00:00Z", state: "draft" });
+  pipeline.state = "closed";
+  pipeline.cursor = null;
+  pipeline.closedAt = "2026-09-20T00:00:00Z";
   const bindings = viewerMcpBindings(undefined, undefined, {
-    applyConversationMigration: async (request: { action: string }) => {
-      requests.push(request);
-      return request.action === "withdraw"
-        ? { status: 409, body: { error: "the queue has already claimed this switch; cancel it with the migration's revision", code: "SWITCH_CLAIMED", expectedRevision: 3 } }
-        : { status: 200, body: { conversation: { id: "conversation_1705", migration: { phase: "rolled-back", revision: 3 } } } };
-    },
+    patchPipeline: async () => ({ pipeline, close }),
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
   } as never);
-
-  const refusal = await bindings.conversation_migration({ clientRequestId: "withdraw-1705", conversationId: "conversation_1705", action: "withdraw", operationId: "reconfigure-to-b" })
-    .then(() => null, (error: unknown) => error as { name?: string; message?: string; details?: unknown } | null);
-  expect(refusal?.name).toBe("McpToolRefusal");
-  expect(refusal?.message).toContain("the queue has already claimed this switch");
-  expect(refusal?.details).toMatchObject({ status: 409, code: "SWITCH_CLAIMED", expectedRevision: 3 });
-  const cancelled = await bindings.conversation_migration({ clientRequestId: "cancel-1705", conversationId: "conversation_1705", action: "cancel", expectedRevision: 3 });
-  expect(requests).toEqual([
-    { conversationId: "conversation_1705", action: "withdraw", expectedRevision: undefined, path: "", operationId: "reconfigure-to-b" },
-    { conversationId: "conversation_1705", action: "cancel", expectedRevision: 3, path: "" },
-  ]);
-  expect(cancelled).toMatchObject({ conversation: { migration: { phase: "rolled-back" } } });
+  const answer = await bindings.pipeline_action({ clientRequestId: "close-pending", pipelineId: pipeline.id, action: "close" });
+  /* #2030: counts, never the host list; get_pipeline reads the list below. */
+  expect(answer).toMatchObject({ state: "closed", close: { status: "pending", pending: 1, stopped: 0, alreadyStopped: 0 } });
+  expect(JSON.stringify(answer)).not.toContain("conversation_build");
+  expect(answer).not.toHaveProperty("stageDigests");
+  const full = await bindings.pipeline_action({ clientRequestId: "close-pending-full", pipelineId: pipeline.id, action: "close", full: true });
+  expect(full).toMatchObject({ close: { pending: [target] } });
+  Object.assign(close, { status: "settled", pending: [], stopped: [target] });
+  pipeline.closeReport = close as import("@/lib/pipelines/types").PipelineCloseReport;
+  pipeline.closeTeardown = { id: "close-fixture", phase: "settled", waitingForActivation: false, acknowledgeHosts: false, flow: null };
+  savePipelines([pipeline]);
+  const read = await bindings.get_pipeline({ clientRequestId: "close-read-final", pipelineId: pipeline.id });
+  expect(read).toMatchObject({ pipeline: { closeReport: { status: "settled", pending: [], stopped: [target] } } });
 });
 
 test("a refused pipeline close exposes its host report through MCP, not only prose (#670)", async () => {
@@ -2068,7 +2063,22 @@ test("a stage completion call is attributed by the server, and a caller cannot n
        never as the actor: the actor below is the server's own attribution. */
     conversationId: "conversation_somebody_else",
   });
-  expect(accepted).toMatchObject({ ok: true, pipelineId: "pipeline_1", stageId: "build", attempt: 1, replaced: false, report });
+  expect(accepted).toMatchObject({
+    ok: true,
+    pipelineId: "pipeline_1",
+    stageId: "build",
+    attempt: 1,
+    replaced: false,
+    report: {
+      seq: 1,
+      at: "2026-09-18T00:00:00.000Z",
+      verdict: { status: "fail", findingCount: 1, severityCounts: { P0: 1, P1: 0, P2: 0, P3: 0 } },
+      provenance: { head: "0".repeat(40), branch: "pipeline/x", dirty: false, outputs: [] },
+      calls: 1,
+    },
+  });
+  expect(JSON.stringify(accepted)).not.toContain("the fence is missing");
+  expect(JSON.stringify(accepted)).not.toContain("One finding left.");
   expect(calls[0]![1]).toEqual({ kind: "agent", role: "builder", conversationId: "conversation_stage_1" });
 
   const refused = await service.callTool("stage_report", { clientRequestId: "report-2", verdict: "pass", stageId: "not-mine" });
@@ -2110,7 +2120,7 @@ test("agent_activity reports the liveness snapshot and journals the stalls it fi
     },
   } as never);
 
-  const result = await bindings.agent_activity({ clientRequestId: "activity-645", liveOnly: true });
+  const result = await bindings.agent_activity({ clientRequestId: "activity-645", liveOnly: true, full: true, includeGone: true });
 
   expect(result).toMatchObject({ count: 1, stalledCount: 1, journaled: 1 });
   expect((result.conversations as Array<Record<string, unknown>>)[0]).toMatchObject({
@@ -2187,7 +2197,7 @@ test("agent_activity exposes a provider throttle retryAt without journaling a st
     },
   } as never);
 
-  const result = await bindings.agent_activity({ clientRequestId: "activity-provider-throttle", liveOnly: true });
+  const result = await bindings.agent_activity({ clientRequestId: "activity-provider-throttle", liveOnly: true, full: true });
 
   expect(result).toMatchObject({ count: 1, stalledCount: 0, journaled: 0 });
   expect((result.conversations as Array<Record<string, unknown>>)[0]).toMatchObject({
@@ -2231,9 +2241,9 @@ test("project-scoped agent_activity selects from the binding's cached catalog an
   let freshSweeps = 0;
   let handedCatalog: CompletedGenerationRead | null = null;
   const files = [
-    activityRow({ path: "/corpus/viewer/live.jsonl", activity: "stalled", activityReason: "jsonl_turn_stalled", conversationId: "conversation_selected" }),
+    activityRow({ path: "/corpus/viewer/live.jsonl", activity: "live", activityReason: "jsonl_turn_stalled", conversationId: "conversation_selected" }),
     activityRow({ path: "/corpus/viewer/idle.jsonl" }),
-    activityRow({ path: "/corpus/other/live.jsonl", project: "other", activity: "stalled", activityReason: "jsonl_turn_stalled" }),
+    activityRow({ path: "/corpus/other/live.jsonl", project: "other", activity: "live", activityReason: "jsonl_turn_stalled" }),
   ];
   /* The completed generation the board path reads. A fresh whole-corpus sweep
      would have to come through one of the two counters below. */
@@ -2262,13 +2272,15 @@ test("project-scoped agent_activity selects from the binding's cached catalog an
       registrySnapshot: () => ({ entries: {}, conversations: {} }),
       pipelines: () => [],
       describeTranscript: async () => null,
-      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: Date.parse("2026-08-22T08:40:00.000Z") }),
+      // Keep this unhosted launch inside the starting grace; expired launches are excluded by liveOnly.
+      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: now - 60_000 }),
       listFiles: async () => { freshSweeps += 1; return files; },
     }),
     refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
   } as never);
 
   const result = await bindings.agent_activity({
+    full: true,
     clientRequestId: "activity-860-catalog",
     project: "viewer",
     liveOnly: true,
@@ -2511,7 +2523,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     "stages[0].model",
     "stages[1].model",
   ]);
-  expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
+  expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
   expect(refusal?.message).toContain("valid claude model ids: opus, fable, sonnet, haiku");
 });
 
@@ -2563,8 +2575,15 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
     enabled: false,
     reason: "the only open lane is a draft nothing can discharge",
   });
-  expect(applied).toMatchObject({
+  /* #2030: a write is acknowledged, never read back. */
+  expect(applied).toEqual({
     changed: true,
+    revision: expect.any(String),
+    changedFields: ["enabled", "reason"],
+    monitorPromptLength: 0,
+  });
+  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(300);
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-off-read" })).toMatchObject({
     scope: "own-project",
     effective: { enabled: false, isDefault: false, until: null, reason: "the only open lane is a draft nothing can discharge" },
   });
@@ -2603,17 +2622,22 @@ test("seat_tick_settings says which attempt holds this project's wakes, since wh
   });
 
   const { bindings } = tickSettingsBindings();
-  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-fence-read" }) as {
+  type FencedAnswer = {
     fence: { clientMessageId: string; slot: string; since: string; lapsesAt: string; keptPastBound: boolean } | null;
-    fenceDetail: string;
+    fenceDetail?: string;
     fenceError: string | null;
   };
+  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-fence-read" }) as FencedAnswer;
   expect(read.fence).toMatchObject({ clientMessageId: key, slot: "outstanding", since: preparedAt, keptPastBound: false });
   /* Two of the project's wake intervals, and never less than an hour. */
   expect(read.fence!.lapsesAt).toBe(new Date(Date.parse(preparedAt) + 2 * 60 * 60_000).toISOString());
-  expect(read.fenceDetail).toContain(`under key ${key}`);
-  expect(read.fenceDetail).toContain("the fence lapses at");
   expect(read.fenceError).toBeNull();
+  /* #1845: the sentence restates the fence's own fields, key included, so the
+     default answer carries the fence once and a verbose read adds the prose. */
+  expect(read).not.toHaveProperty("fenceDetail");
+  const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-fence-verbose", verbose: true }) as FencedAnswer;
+  expect(verbose.fenceDetail).toContain(`under key ${key}`);
+  expect(verbose.fenceDetail).toContain("the fence lapses at");
 
   /* And a project with nothing prepared says that, rather than nothing. */
   const other = tickSettingsBindings({ callerProject: "quiet-project" });
@@ -2631,7 +2655,9 @@ test("seat_tick_settings sets a cadence and restores the default", async () => {
   });
   expect(store.get("viewer")).toMatchObject({ enabled: true, wakeIntervalMinutes: 240 });
   const restored = await bindings.seat_tick_settings({ clientRequestId: "tick-default", wakeIntervalMinutes: null });
-  expect(restored).toMatchObject({ effective: { wakeIntervalMinutes: 60, isDefault: true } });
+  expect(restored).toMatchObject({ changed: true, changedFields: ["wakeIntervalMinutes"] });
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-default-read" }))
+    .toMatchObject({ effective: { wakeIntervalMinutes: 60, isDefault: true } });
 });
 
 test("seat_tick_settings accepts an expiry in minutes and records the instant it lapses", async () => {
@@ -2658,6 +2684,7 @@ test("seat_tick_settings lets one seat set another project's tick, and says whos
   });
   /* Allowed rather than refused; what answers for it is attribution. */
   expect(applied).toMatchObject({ project: "another-project", changed: true, scope: "other-project", callerProject: "viewer" });
+  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(300);
   expect(store.get("another-project")).toMatchObject({
     enabled: false,
     setBy: { conversationId: TICK_SEAT, project: "viewer" },
@@ -2676,33 +2703,34 @@ test("seat_tick_settings refuses only the change that would leave no reason behi
 test("seat_tick_settings sets, replaces and clears the monitor prompt, and the record read back is what says so (#1280)", async () => {
   const { bindings, store } = tickSettingsBindings();
   const set = await bindings.seat_tick_settings({
-    clientRequestId: "tick-prompt-set",
+    clientRequestId: "tick-prompt-set", full: true,
     monitorPrompt: "before the items, check whether last night's digest actually sent",
   });
   expect(set).toMatchObject({
     changed: true,
-    /* The stored note in full and its length ride the reply (#1450), so a seat
-       can check what persisted against what it sent. */
+    /* An explicit full write reads the stored note back (#1450), so a seat can
+       check what persisted against what it sent — once (#2030). */
     monitorPrompt: "before the items, check whether last night's digest actually sent",
     monitorPromptLength: "before the items, check whether last night's digest actually sent".length,
-    effective: { monitorPrompt: "before the items, check whether last night's digest actually sent" },
   });
+  expect(JSON.stringify(set).split("last night's digest").length - 1).toBe(1);
 
   /* Read back through a second call, which is what the tick itself does at its
      next check — the echo of the write proves nothing about the record. */
-  const readBack = await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read" });
+  const readBack = await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read", verbose: true });
   expect(readBack).toMatchObject({
     changed: false,
-    effective: { monitorPrompt: "before the items, check whether last night's digest actually sent" },
+    monitorPrompt: "before the items, check whether last night's digest actually sent",
   });
+  expect(JSON.stringify(readBack).split("last night's digest").length - 1).toBe(1);
 
   await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-replace", monitorPrompt: "the digest is fixed; watch the review rounds instead" });
-  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-2" }))
-    .toMatchObject({ changed: false, effective: { monitorPrompt: "the digest is fixed; watch the review rounds instead" } });
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-2", verbose: true }))
+    .toMatchObject({ changed: false, monitorPrompt: "the digest is fixed; watch the review rounds instead" });
 
   await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-clear", monitorPrompt: null });
   expect(store.get("viewer")).toMatchObject({ monitorPrompt: null });
-  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-len" }))
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-len", verbose: true }))
     .toMatchObject({ monitorPrompt: null, monitorPromptLength: 0 });
 
   /* Over the limit the write is refused out loud, with nothing stored (#1450). */
@@ -2710,8 +2738,77 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
   await expect(bindings.seat_tick_settings({ clientRequestId: "tick-prompt-long", monitorPrompt: longNote }))
     .rejects.toThrow(`monitorPrompt is ${SEAT_TICK_PROMPT_LIMIT + 1} characters; the limit is ${SEAT_TICK_PROMPT_LIMIT}`);
   expect(store.get("viewer")).toMatchObject({ monitorPrompt: null });
-  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-3" }))
-    .toMatchObject({ changed: false, effective: { monitorPrompt: null } });
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-3", verbose: true }))
+    .toMatchObject({ changed: false, monitorPrompt: null });
+});
+
+/* #1845: a seat changing its cadence read its whole note back three times on
+   every call — 56% of what the tool answered in a day. */
+test("seat_tick_settings carries a stored monitor prompt only when it is written or a verbose read asks for it (#1845)", async () => {
+  const { bindings } = tickSettingsBindings();
+  const note = "watch the review rounds; ".repeat(200).trim();
+  await bindings.seat_tick_settings({ clientRequestId: "tick-note-set", monitorPrompt: note });
+
+  const cadence = await bindings.seat_tick_settings({
+    clientRequestId: "tick-note-cadence",
+    wakeIntervalMinutes: 30,
+    reason: "two lanes are close to merging",
+  });
+  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-note-read" });
+  for (const answer of [cadence, read]) {
+    expect(JSON.stringify(answer)).not.toContain("watch the review rounds");
+    expect(answer).toMatchObject({ monitorPromptLength: note.length });
+    expect(answer).not.toHaveProperty("monitorPrompt");
+    expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThan(2_000);
+  }
+  const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-note-verbose", verbose: true });
+  expect(verbose).toMatchObject({ monitorPrompt: note });
+  /* Once (#2030): a verbose read used to carry three copies. */
+  expect(JSON.stringify(verbose).split(note).length - 1).toBe(1);
+});
+
+test("a plain seat_tick_settings read of a fenced, paused project with a note stays under 1.7 KB, and verbose keeps the whole record (#1845)", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-tick-size-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  /* The live shape the review measured: a 544-character note, a paused tick
+     with a long reason, and an unresolved wake holding the project's wakes. */
+  const key = "seat-tick:viewer:175:2026-09-19T07:23:31.118Z:child-terminal:fp-7c1e";
+  writeSeatTickState("viewer", {
+    ...emptySeatTickState(),
+    seatEpoch: 175,
+    outstandingWake: {
+      clientMessageId: key, conversationId: TICK_SEAT, seatEpoch: 175, operationId: null,
+      preparedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      commit: { proposal: false, reasons: ["child-terminal"], fingerprint: "fp-7c1e", eventsThrough: 12, children: [] },
+    },
+  });
+  const note = "Before the items, read list_pipelines with state open and compact; ".repeat(9).slice(0, 544).trim().padEnd(544, ".");
+  const reason = "The operator paused the tick while the release runs: every lane is merged, the deploy is theirs to start, and a wake now would only re-read a board with nothing on it to discharge.";
+  const { bindings } = tickSettingsBindings();
+  await bindings.seat_tick_settings({ clientRequestId: "tick-size-note", monitorPrompt: note });
+  await bindings.seat_tick_settings({ clientRequestId: "tick-size-pause", enabled: false, reason });
+
+  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-size-read" }) as Record<string, unknown>;
+  expect(Buffer.byteLength(JSON.stringify(read))).toBeLessThan(1_700);
+  expect(read).toMatchObject({ effective: { enabled: false, reason }, monitorPromptLength: 544, fence: { clientMessageId: key } });
+  /* Each fact once: the reason is the effective one, the defaults and the
+     fence sentence are the verbose read's. */
+  expect(JSON.stringify(read).split(reason).length - 1).toBe(1);
+  expect(JSON.stringify(read).split(key).length - 1).toBe(1);
+  expect(read).not.toHaveProperty("defaults");
+
+  const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-size-verbose", verbose: true });
+  expect(verbose).toMatchObject({
+    settings: { enabled: false, reason },
+    monitorPrompt: note,
+    effective: { reason },
+    defaults: { enabled: true, wakeIntervalMinutes: null, reason: null },
+    fence: { clientMessageId: key },
+  });
+  expect(JSON.stringify(verbose).split(note).length - 1).toBe(1);
+  expect((verbose as { fenceDetail: string }).fenceDetail).toContain(`under key ${key}`);
 });
 
 test("a monitor prompt needs no reason and leaves the tick on its default (#1280)", async () => {
@@ -2720,12 +2817,13 @@ test("a monitor prompt needs no reason and leaves the tick on its default (#1280
      nothing — it changes what a wake says, never whether or when one is sent —
      so there is nothing here for a reason to explain. */
   const applied = await bindings.seat_tick_settings({
-    clientRequestId: "tick-prompt-no-reason",
+    clientRequestId: "tick-prompt-no-reason", full: true,
     monitorPrompt: "start from the oldest blocked card",
   });
   expect(applied).toMatchObject({
     changed: true,
-    effective: { enabled: true, wakeIntervalMinutes: 60, isDefault: true, reason: null, monitorPrompt: "start from the oldest blocked card" },
+    monitorPrompt: "start from the oldest blocked card",
+    effective: { enabled: true, wakeIntervalMinutes: 60, isDefault: true, reason: null },
   });
   expect(store.get("viewer")).toMatchObject({ enabled: true, wakeIntervalMinutes: null, reason: null, until: null });
 });
@@ -3514,17 +3612,18 @@ test("task placement bindings require atomic guards and classify field refusals 
     import { viewerMcpBindings } from "./src/lib/mcp/bindings";
     import { createMcpToolService, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
     import { TASKS_FILE } from "./src/lib/tasks/store";
+    import { persistedTaskState } from "./src/lib/tasks/storeFixture";
     if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
     const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
     const created = await service.callTool("create_task", { clientRequestId: "binding-position-create", project: "fixture-project", text: "task" });
     if (!created.ok) throw new Error(created.error);
-    const before = fs.readFileSync(TASKS_FILE, "utf8");
+    const before = persistedTaskState(TASKS_FILE);
     const missing = await service.callTool("update_task", { clientRequestId: "binding-missing-guard", taskId: created.taskId, pos: { x: 0, y: 0 } });
     const invalid = [];
     for (const [index, pos] of [null, {}, { x: 1 }, { x: Infinity, y: 1 }, { x: 0, y: NaN }].entries()) {
       invalid.push(await service.callTool("create_task", { clientRequestId: "binding-invalid-pos-" + index, project: "fixture-project", text: "task", placement: "pinned", pos }));
     }
-    console.log(JSON.stringify({ missing, invalid, unchanged: fs.readFileSync(TASKS_FILE, "utf8") === before }));
+    console.log(JSON.stringify({ missing, invalid, unchanged: persistedTaskState(TASKS_FILE) === before }));
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
@@ -3536,4 +3635,104 @@ test("task placement bindings require atomic guards and classify field refusals 
     expect(invalid.details.field.startsWith("pos")).toBe(true);
   }
   expect(result.unchanged).toBe(true);
+});
+
+
+test("continue-review forwards its receipt key, added budget and server actor, answers the grant and wakes the controller (#1938)", async () => {
+  const calls: unknown[] = [];
+  const reviewContinuation = { clientRequestId: "continue-1", expectedRevision: "a".repeat(64), stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), actor: { kind: "operator" }, at: "2026-09-20T00:00:00.000Z" };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
+      calls.push({ request, actor });
+      return { pipeline: { id: "pipeline_1", state: "running" }, reviewContinuation, replayed: false };
+    },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_creator", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+  const request = { clientRequestId: "continue-1", pipelineId: "pipeline_1", action: "continue-review", addRounds: 2, expectedRevision: "a".repeat(64) };
+  const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+  let ticks = 0;
+  const unregister = registerPipelineTick(async () => { ticks += 1; });
+  try {
+    const answer = await service.callTool("pipeline_action", request);
+    expect(answer).toMatchObject({ ok: true, reviewContinuation: { clientRequestId: "continue-1", stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40) } });
+    expect(calls).toEqual([{ request: { clientRequestId: "continue-1", action: "continue-review", addRounds: 2, expectedRevision: request.expectedRevision }, actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } }]);
+    await Promise.resolve();
+    expect(ticks).toBe(1);
+  } finally { unregister(); }
+});
+
+test("continue-review from a conversation that did not create the pipeline is refused before its receipt is spent (#1938)", async () => {
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    patchPipeline: async () => { throw new Error("must not be reached"); },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_other", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+  const answer = await service.callTool("pipeline_action", { clientRequestId: "continue-2", pipelineId: "pipeline_1", action: "continue-review", addRounds: 1, expectedRevision: "a".repeat(64) });
+  expect(answer).toMatchObject({ ok: false });
+  expect(JSON.stringify(answer)).toContain("only the pipeline creator");
+});
+
+test("resolve-decision forwards its receipt key and server actor and wakes the controller", async () => {
+  const calls: unknown[] = [];
+  const decisionAnswer = { clientRequestId: "decision-answer", stageId: "build", attempt: 1, nextAttempt: 2, at: "2026-09-20T00:00:00.000Z" };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
+      calls.push({ request, actor });
+      return { pipeline: { id: "pipeline_1", state: "running" }, decisionAnswer, replayed: false };
+    },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_creator", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+  const request = { clientRequestId: "decision-answer", pipelineId: "pipeline_1", action: "resolve-decision", answer: "Use Markdown.", expectedStageId: "build", expectedAttempt: 1, expectedRevision: "a".repeat(64) };
+  const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+  let ticks = 0;
+  const unregister = registerPipelineTick(async () => { ticks += 1; });
+  try {
+    const answer = await service.callTool("pipeline_action", request);
+    expect(answer).toMatchObject({ ok: true, decisionAnswer });
+    await service.callTool("pipeline_action", request);
+    expect(calls).toEqual([{ request: { clientRequestId: request.clientRequestId, action: request.action, answer: request.answer, expectedStageId: request.expectedStageId, expectedAttempt: request.expectedAttempt, expectedRevision: request.expectedRevision }, actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } }]);
+    await Promise.resolve();
+    expect(ticks).toBe(1);
+  } finally { unregister(); }
+});
+
+test("with the rename alias recorded, the Viewer's own project is the seat's under the old and the new remote", () => {
+  /* rename-delegatus.md §2.3: a release resolves its own project from the
+     canonical remote string. Deployed releases carry the old string until
+     slice 4 moves it, and a host may already be configured with the new one;
+     either way `deploy_exact_sha` compares it against the seat's project, so
+     both spellings must fold into the one key once the forge-proven alias is
+     recorded. */
+  const restoreState = process.env.LLV_STATE_DIR;
+  const restoreRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-renamed-viewer-project-"));
+  process.env.LLV_STATE_DIR = state;
+  resetProjectAliasesForTests();
+  try {
+    const oldRemote = "https://github.com/acme/old-widgets.git";
+    const newRemote = "https://github.com/acme/delegated-widgets.git";
+    const before = projectIdentityFromRemote(oldRemote, state)!;
+    const after = projectIdentityFromRemote(newRemote, state)!;
+    expect(persistProjectAliases([{ source: before.project, target: after.project, displayName: after.displayName }])).toBe(true);
+    /* The seat was designated under the old key and is read alias-resolved. */
+    const seatProject = canonicalOrchestratorProject(before.project);
+    expect(seatProject).toBe(after.project);
+    const viewerProjects = () => productionDomainDependencies.viewerProjects?.() ?? [];
+    for (const remote of [oldRemote, newRemote]) {
+      process.env.LLV_VIEWER_CANONICAL_REMOTE = remote;
+      expect(viewerProjects()).toEqual([seatProject]);
+    }
+  } finally {
+    if (restoreState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = restoreState;
+    if (restoreRemote === undefined) delete process.env.LLV_VIEWER_CANONICAL_REMOTE;
+    else process.env.LLV_VIEWER_CANONICAL_REMOTE = restoreRemote;
+    resetProjectAliasesForTests();
+    fs.rmSync(state, { recursive: true, force: true });
+  }
 });

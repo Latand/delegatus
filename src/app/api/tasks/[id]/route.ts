@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { deleteTask, patchTask, type PatchTaskInput } from "@/lib/tasks/commands";
+import { taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
+import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
+import { loadPipelines } from "@/lib/pipelines/store";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -17,7 +20,7 @@ type TaskRouteContext = {
 export async function PATCH(
   req: NextRequest,
   ctx: TaskRouteContext,
-): Promise<NextResponse<{ ok: true; task: BoardTask } | ApiError>> {
+): Promise<NextResponse<{ ok: true; task: BoardTask; workLinks?: ResolvedWorkLinks; notes?: string[] } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -32,7 +35,7 @@ export async function PATCH(
   const result = mutateTasks((tasks) => {
     /* The dashboard is the operator; a group hide is refused for the task
        holding the project's orchestrator seat. */
-    const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", seatHolding: taskSeatHolding });
+    const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", seatHolding: taskSeatHolding, workLinks: taskWorkLinkContext(loadPipelines) });
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   /* The refusal's code and field travel with it, as they do over MCP, so a
@@ -43,7 +46,9 @@ export async function PATCH(
       { status: result.status },
     );
   }
-  return NextResponse.json({ ok: true, task: result.task });
+  /* #2059: the card redraws its links from this answer, not the next poll. */
+  const links = Object.hasOwn(body, "attachLinks") || Object.hasOwn(body, "detachLinks") ? taskWorkLinks(result.task, loadPipelines()) : null;
+  return NextResponse.json({ ok: true, task: result.task, ...(links ? { workLinks: links } : {}), ...(result.notes ? { notes: result.notes } : {}) });
 }
 
 export async function DELETE(_req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true } | ApiError>> {

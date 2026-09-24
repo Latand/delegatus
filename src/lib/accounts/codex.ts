@@ -1,11 +1,16 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
+import { procBackend } from "@/lib/proc";
 import os from "node:os";
 import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
+
+import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { isShellCommand } from "@/lib/status";
-import { withAccountMutationLock } from "./accountMutation";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountHomeExistsForRemoval, accountRemovalBlockers, discardStagedAccountHome, releaseStagedAccountHome, removeHistoryFreeAccountHome, rollbackStagedAccountHome, scrubAccountHomeToRetainedHistory, stageAccountHomeCleanup, verifyStagedAccountHome, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type StagedAccountHomeCleanup } from "./removal";
+import { accountProbeIdentity, withAccountMutationLockAsync, withAccountMutationLock } from "./accountMutation";
+import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import type { AccountPathRewrite } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DEFAULT_ID = "default";
@@ -34,19 +39,24 @@ export interface CodexAccount {
   createdAt: number;
 }
 
+type LoginReservation = { token: string; pid: number; identity: string | null; namespace: string | null; bootId: string | null };
+
 interface StoredAccount {
   id: string;
   label: string;
   kind: "managed";
   createdAt: number;
   loginPane?: LoginPane | null;
+  loginReservation?: LoginReservation | null;
 }
 
-/** A removed account whose session tree was retained (issue #643). */
+/** A removed account. `archived` leftovers live in the shared archive
+    (issue #1857); older records kept their session tree in the home (#643). */
 interface RetiredAccount {
   id: string;
   label: string;
   retiredAt: number;
+  archived?: true;
 }
 
 interface Registry {
@@ -54,11 +64,8 @@ interface Registry {
   active: string;
   accounts: StoredAccount[];
   retired: RetiredAccount[];
-}
-
-interface CachedRegistry {
-  key: string;
-  loaded: LoadedRegistry;
+  /** Account removals in flight (issue #1857). */
+  removals: AccountRemovalJournalEntry[];
 }
 
 interface LoadedRegistry {
@@ -66,7 +73,6 @@ interface LoadedRegistry {
   corrupt: boolean;
 }
 
-let cached: CachedRegistry | null = null;
 const reportedStoreErrors = new Set<string>();
 
 export class UnknownAccountError extends Error {
@@ -111,7 +117,7 @@ function registryPath(): string {
 }
 
 function defaultRegistry(): Registry {
-  return { version: REGISTRY_VERSION, active: DEFAULT_ID, accounts: [], retired: [] };
+  return { version: REGISTRY_VERSION, active: DEFAULT_ID, accounts: [], retired: [], removals: [] };
 }
 
 function storeKey(file: string): string {
@@ -137,6 +143,11 @@ function isStoredAccount(value: unknown): value is StoredAccount {
     typeof account.label === "string" &&
     account.kind === "managed" &&
     typeof account.createdAt === "number" &&
+    (account.loginReservation == null || (typeof account.loginReservation.token === "string"
+      && Number.isSafeInteger(account.loginReservation.pid) && account.loginReservation.pid > 0
+      && (account.loginReservation.identity === null || typeof account.loginReservation.identity === "string")
+      && (account.loginReservation.namespace === null || typeof account.loginReservation.namespace === "string")
+      && (account.loginReservation.bootId === null || typeof account.loginReservation.bootId === "string"))) &&
     (account.loginPane === undefined || account.loginPane === null || (
       typeof account.loginPane === "object" &&
       typeof account.loginPane.paneId === "string" &&
@@ -149,7 +160,8 @@ function isStoredAccount(value: unknown): value is StoredAccount {
 function isRetiredAccount(value: unknown): value is RetiredAccount {
   if (!value || typeof value !== "object") return false;
   const account = value as Partial<RetiredAccount>;
-  return typeof account.id === "string" && typeof account.label === "string" && typeof account.retiredAt === "number";
+  return typeof account.id === "string" && typeof account.label === "string" && typeof account.retiredAt === "number"
+    && (account.archived === undefined || account.archived === true);
 }
 
 function managedHome(id: string): string {
@@ -202,6 +214,7 @@ function normalizeRegistry(value: unknown, sourceKey: string): LoadedRegistry {
       label: account.label,
       kind: "managed",
       createdAt: account.createdAt,
+      loginReservation: account.loginReservation ?? null,
       loginPane: account.loginPane ? { ...account.loginPane, startedAt: account.loginPane.startedAt ?? 0 } : null,
     });
   }
@@ -213,25 +226,43 @@ function normalizeRegistry(value: unknown, sourceKey: string): LoadedRegistry {
       continue;
     }
     seen.add(account.id);
-    retired.push({ id: account.id, label: account.label, retiredAt: account.retiredAt });
+    retired.push({ id: account.id, label: account.label, retiredAt: account.retiredAt, ...(account.archived ? { archived: true as const } : {}) });
   }
-  return { registry: { version: REGISTRY_VERSION, active: raw.active, accounts, retired }, corrupt: rejected };
+  const removals = normalizeAccountRemovalJournal(raw.removals, (id) => ACCOUNT_ID.test(id) && id !== DEFAULT_ID);
+  if (!removals) {
+    reportStoreErrorOnce(`${sourceKey}:invalid-removals`, "registry has an unreadable removal journal; serving the default account");
+    return { registry: defaultRegistry(), corrupt: true };
+  }
+  return { registry: { version: REGISTRY_VERSION, active: raw.active, accounts, retired, removals }, corrupt: rejected };
 }
 
+/* The registry is the `accounts` collection of state.sqlite (#1870, slice 7).
+   The rows hold what `codex-accounts.json` held, so every check below is the
+   one it always was, including what counts as corrupt. */
 function readRegistry(): LoadedRegistry {
+  const read = readAccountSource(CODEX_ACCOUNTS_SOURCE);
+  if (read.kind === "legacy") return readLegacyRegistryFile();
+  /* A registry whose record could not be read is corrupt, never empty: the
+     default account is served and every mutation refuses. */
+  if (read.kind === "gap") {
+    reportStoreErrorOnce(`${registryPath()}:gap`, "registry cannot be read; serving the default account");
+    return { registry: defaultRegistry(), corrupt: true };
+  }
+  if (read.body === undefined) return { registry: defaultRegistry(), corrupt: false };
+  return normalizeRegistry(read.body, registryPath());
+}
+
+/** The pre-#1870 read, for a release that is not yet allowed to import. */
+function readLegacyRegistryFile(): LoadedRegistry {
   const file = registryPath();
   const key = `${file}:${storeKey(file)}`;
-  if (cached?.key === key) return cached.loaded;
-  let loaded: LoadedRegistry;
   try {
-    if (!fs.existsSync(file)) loaded = { registry: defaultRegistry(), corrupt: false };
-    else loaded = normalizeRegistry(JSON.parse(fs.readFileSync(file, "utf8")), key);
+    if (!fs.existsSync(file)) return { registry: defaultRegistry(), corrupt: false };
+    return normalizeRegistry(JSON.parse(fs.readFileSync(file, "utf8")), key);
   } catch {
     reportStoreErrorOnce(key, "registry cannot be read; serving the default account");
-    loaded = { registry: defaultRegistry(), corrupt: true };
+    return { registry: defaultRegistry(), corrupt: true };
   }
-  cached = { key, loaded };
-  return loaded;
 }
 
 function mutableRegistry(): Registry {
@@ -248,6 +279,20 @@ function registryLockPath(): string {
   return `${registryPath()}.lock`;
 }
 
+/* The file lock is only ever taken inside the account mutation lock, so a lock
+   left by a process that died (a crash mid-removal, #1857) is released at once
+   instead of stalling every account mutation for the staleness window. */
+function registryLockOwnerGone(lock: string): boolean {
+  try {
+    const pid = Number.parseInt(fs.readFileSync(lock, "utf8"), 10);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return false;
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+
 function withRegistryLock<T>(operation: () => T): T {
   return withAccountMutationLock(() => {
     const lock = registryLockPath();
@@ -260,7 +305,7 @@ function withRegistryLock<T>(operation: () => T): T {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         try {
-          if (Date.now() - fs.statSync(lock).mtimeMs > REGISTRY_LOCK_STALE_MS) {
+          if (registryLockOwnerGone(lock) || Date.now() - fs.statSync(lock).mtimeMs > REGISTRY_LOCK_STALE_MS) {
             fs.rmSync(lock, { force: true });
             continue;
           }
@@ -289,17 +334,11 @@ export function codexAccountsMutationLocked(): boolean {
   return readRegistry().corrupt;
 }
 
+/** One transaction: the account rows, the retired records and the removal
+    journal step commit together, and the collection revision — the account
+    mutation revision — advances with them (#1870). */
 function writeRegistry(registry: Registry): void {
-  const file = registryPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmp, file);
-    cached = null;
-  } finally {
-    fs.rmSync(tmp, { force: true });
-  }
+  writeAccountSource(CODEX_ACCOUNTS_SOURCE, registry);
 }
 
 function authPresent(home: string): boolean {
@@ -339,12 +378,83 @@ function defaultAccount(): CodexAccount {
 }
 
 export function listCodexAccounts(): CodexAccount[] {
+  recoverRemovalsAtStartup();
   return [defaultAccount(), ...readRegistry().registry.accounts.map(asAccount)];
 }
 
+export class CodexLoginBusyError extends Error {
+  constructor() { super("Codex sign-in is already changing; retry shortly"); }
+}
+
+function loginNamespace(): string | null {
+  try { return fs.readlinkSync("/proc/self/ns/pid"); } catch { return null; }
+}
+
+function loginBootId(): string | null {
+  try { return fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null; } catch { return null; }
+}
+
+/** Called before acquiring the lease: portable process identity can invoke ps. */
+function liveLoginReservation(reservation: LoginReservation | null | undefined): boolean {
+  if (!reservation) return false;
+  const bootId = loginBootId();
+  if (reservation.bootId && bootId && reservation.bootId !== bootId) return false;
+  // An owner in another namespace cannot be proved dead from here.
+  if (reservation.namespace !== loginNamespace()) return true;
+  if (!procBackend.pidAlive(reservation.pid)) return false;
+  const identity = procBackend.processIdentity(reservation.pid);
+  return identity === null || reservation.identity === null || identity === reservation.identity;
+}
+
+export function codexAccountLoginBusy(id: string): boolean {
+  return Boolean(readRegistry().registry.accounts.find((account) => account.id === id)?.loginReservation);
+}
+
+/** Keep removal and competing login requests fenced in the existing account
+ * row while the runtime owns child/RPC work outside the collection lease. */
+export async function withManagedCodexLogin<T>(account: CodexAccount, operation: () => Promise<T>): Promise<T> {
+  const reservation: LoginReservation = { token: crypto.randomUUID(), pid: process.pid,
+    identity: procBackend.processIdentity(process.pid), namespace: loginNamespace(), bootId: loginBootId() };
+  const previous = readRegistry().registry.accounts.find((candidate) => candidate.id === account.id)?.loginReservation ?? null;
+  if (liveLoginReservation(previous)) throw new CodexLoginBusyError();
+  const identity = accountProbeIdentity(account);
+  await withAccountMutationLockAsync(() => {
+    const registry = mutableRegistry();
+    const current = registry.accounts.find((candidate) => candidate.id === account.id);
+    if (!current || current.createdAt !== account.createdAt || identity !== accountProbeIdentity(account)) throw new UnknownAccountError(account.id);
+    if (JSON.stringify(current.loginReservation ?? null) !== JSON.stringify(previous)) throw new CodexLoginBusyError();
+    if (registry.removals.some((item) => item.id === account.id) || accountRemovalInFlight("codex", account.id)) throw new CodexLoginBusyError();
+    writeRegistry({ ...registry, accounts: registry.accounts.map((item) => item.id === account.id ? { ...item, loginReservation: reservation } : item) });
+  }, { holder: "Codex login reservation" });
+  try { return await operation(); }
+  finally {
+    // Keep cleanup responsibility while transient lock/storage failures clear.
+    // Every retry revalidates this exact token; sleeps never own the lease.
+    for (let attempt = 0; ; attempt++) {
+      let released: boolean;
+      try {
+        released = await withAccountMutationLockAsync(() => {
+          const registry = mutableRegistry();
+          const current = registry.accounts.find((candidate) => candidate.id === account.id);
+          if (!current || current.loginReservation?.token !== reservation.token) return false;
+          writeRegistry({ ...registry, accounts: registry.accounts.map((item) => item.id === account.id ? { ...item, loginReservation: null } : item) });
+          return true;
+        }, { holder: "Codex login completion" });
+      } catch (error) {
+        if (error instanceof CorruptCodexAccountsError) throw error;
+        if (attempt === 0) console.warn("[codex accounts] login completion could not persist; retrying");
+        await new Promise<void>((resolve) => setTimeout(resolve, Math.min(100 * 2 ** Math.min(attempt, 8), 5_000)));
+        continue;
+      }
+      if (!released) throw new Error("Codex login reservation changed");
+      break;
+    }
+  }
+}
+
 export function activeCodexAccountId(): string {
-  const active = readRegistry().registry.active;
-  return listCodexAccounts().some((account) => account.id === active) ? active : DEFAULT_ID;
+  const { active, accounts, removals } = readRegistry().registry;
+  return !removals.some((item) => item.id === active) && accounts.some((account) => account.id === active) ? active : DEFAULT_ID;
 }
 
 export function accountForSpawn(requested?: string | null): Pick<CodexAccount, "id" | "kind" | "home" | "sessionsDir"> {
@@ -359,17 +469,19 @@ export function isManagedCodexHome(home: string): boolean {
 }
 
 export function setActiveCodexAccount(id: string): void {
-  withRegistryLock(() => {
-    cached = null;
+  withAccountMutationLock(() => {
     const registry = mutableRegistry();
-    if (!listCodexAccounts().some((account) => account.id === id)) throw new UnknownAccountError(id);
+    if (id !== DEFAULT_ID && !registry.accounts.some((account) => account.id === id)) throw new UnknownAccountError(id);
+    if (registry.removals.some((item) => item.id === id) || accountRemovalInFlight("codex", id)) throw new UnknownAccountError(id);
     writeRegistry({ ...registry, active: id });
   });
 }
 
-/** Session trees kept by removed accounts (issue #643). Their homes hold nothing else. */
+/** Session trees kept by removed accounts: the shared archive (issue #1857),
+    or the home itself for accounts retired in place before it (issue #643).
+    Both the scanner and `/api/log` admission read these roots. */
 export function retiredCodexSessionRoots(): string[] {
-  return readRegistry().registry.retired.map((account) => path.join(managedHome(account.id), "sessions"));
+  return readRegistry().registry.retired.map((account) => path.join(account.archived ? retiredAccountArchive("codex", account.id) : managedHome(account.id), "sessions"));
 }
 
 /** Every Codex session root the scanner reads: live accounts first, then retained archives. */
@@ -399,7 +511,7 @@ function accountIdForLabel(label: string, existing: Set<string>): string {
   const base = label.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "account";
   for (let suffix = 0; ; suffix += 1) {
     const candidate = suffix === 0 ? base : `${base.slice(0, 32 - String(suffix).length - 1)}-${suffix}`;
-    if (ACCOUNT_ID.test(candidate) && candidate !== DEFAULT_ID && !existing.has(candidate) && !fs.existsSync(managedHome(candidate))) return candidate;
+    if (ACCOUNT_ID.test(candidate) && candidate !== DEFAULT_ID && !existing.has(candidate) && !fs.existsSync(managedHome(candidate)) && !fs.existsSync(retiredAccountArchive("codex", candidate))) return candidate;
   }
 }
 
@@ -407,7 +519,6 @@ export function createManagedCodexAccount(label: string): CodexAccount {
   const cleanLabel = label.trim();
   if (!cleanLabel || cleanLabel.length > 80 || /[\u0000-\u001f\u007f]/.test(cleanLabel)) throw new InvalidAccountLabelError();
   return withRegistryLock(() => {
-    cached = null;
     const registry = mutableRegistry();
     const id = accountIdForLabel(cleanLabel, new Set([...listCodexAccounts().map((account) => account.id), ...registry.retired.map((account) => account.id)]));
     const home = managedHome(id);
@@ -441,78 +552,108 @@ function historyFitsRetainedSessions(report: AccountHistoryInventoryReport): boo
   return report.artifacts.filter((artifact) => artifact.history).every((artifact) => artifact.path.startsWith(`sessions${path.sep}`));
 }
 
+function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewrites?: readonly AccountPathRewrite[]): void {
+  const current = mutableRegistry();
+  writeRegistry({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
+}
+
+/** The registry once `id` is removed: it leaves, a retired record points at
+    its archive, and its journal record moves to `scrubbing`. */
+function withAccountRetired(registry: Registry, id: string): Registry {
+  const label = registry.accounts.find((account) => account.id === id)?.label ?? id;
+  return {
+    ...registry,
+    active: registry.active === id ? DEFAULT_ID : registry.active,
+    accounts: registry.accounts.filter((account) => account.id !== id),
+    retired: [...registry.retired.filter((account) => account.id !== id), { id, label, retiredAt: Date.now(), archived: true }],
+    removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
+  };
+}
+
+function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } {
+  const registry = mutableRegistry();
+  const recovered: string[] = [];
+  const unresolved: string[] = [];
+  for (const entry of registry.removals) {
+    if (accountRemovalInFlight("codex", entry.id)) continue;
+    let settled: "retired" | "restored" | null = null;
+    try {
+      settled = recoverManagedAccountRemoval({
+        engine: "codex",
+        accountId: entry.id,
+        home: managedHome(entry.id),
+        entry,
+        listed: registry.accounts.some((account) => account.id === entry.id),
+        commitRetired: () => {
+          writeRegistry(withAccountRetired(mutableRegistry(), entry.id));
+        },
+        clearJournal: () => writeJournal(entry.id, null),
+      });
+    } catch {
+      /* stays journaled; one stuck record never blocks another account */
+    }
+    (settled ? recovered : unresolved).push(entry.id);
+  }
+  return { recovered, unresolved };
+}
+
+/** Settles removals a crash interrupted (issue #1857): an unfinished move is
+    undone, a committed one is finished. */
+export function recoverInterruptedCodexAccountRemovals(): { recovered: string[]; unresolved: string[] } {
+  return withRegistryLock(() => recoverRemovalsLocked());
+}
+
+let startupRecoveryDone = false;
+/** Runs recovery once per process, on the first listing. A held registry lock
+    means another mutation is running; the next listing tries again. */
+function recoverRemovalsAtStartup(): void {
+  if (startupRecoveryDone) return;
+  const loaded = readRegistry();
+  if (loaded.corrupt || loaded.registry.removals.length === 0) {
+    startupRecoveryDone = true;
+    return;
+  }
+  if (fs.existsSync(registryLockPath()) && !registryLockOwnerGone(registryLockPath())) return;
+  try {
+    recoverInterruptedCodexAccountRemovals();
+    startupRecoveryDone = true;
+  } catch {
+    /* busy: retried by the next listing */
+  }
+}
+
 /**
- * Removes a managed account while preserving its history (issue #643), by the
- * same retain-in-place mechanism as `removeManagedClaudeAccount`: the home
- * keeps only its `sessions` tree and becomes a retired archive, so every
- * transcript stays readable at its original absolute path and no conversation
- * identity or board placement has to be rewritten.
+ * Removes a managed account (issue #1857). The whole home, rollouts and
+ * provider state included, moves in one rename into
+ * `shared/codex/retired/<id>/`; registry paths move with it, the scanner and
+ * `/api/log` keep reading `sessions/` there, and only `auth.json` and the
+ * Viewer's overlay links are deleted.
  */
-export function removeManagedCodexAccount(id: string): { cleanupPending: boolean } {
+export function removeManagedCodexAccount(id: string): AccountArchiveRemovalReport {
   return withRegistryLock(() => {
-    cached = null;
+    if (codexAccountLoginBusy(id)) throw new CodexLoginBusyError();
+    recoverRemovalsLocked();
     const registry = mutableRegistry();
     const existing = registry.accounts.find((account) => account.id === id);
     if (!existing) throw new UnknownAccountError(id);
-    const home = managedHome(id);
-    const exists = accountHomeExistsForRemoval(home);
-    if (exists && !managedHomeIsSafe(id, true)) throw new UnsafeCodexHomeError();
-    const history = exists ? accountHistoryInventory("codex", id, home) : null;
-    if (history && !historyFitsRetainedSessions(history)) {
-      throw new AccountHistoryInventoryBlockedError({ ...history, error: { path: ".", message: "history falls outside the retained sessions archive" } });
-    }
-    const retain = history?.artifacts.some((artifact) => artifact.history) ?? false;
-    const staged: StagedAccountHomeCleanup | null = exists
-      ? stageAccountHomeCleanup("codex", id, home, retain ? "sessions" : null)
-      : null;
-    const retired = registry.retired.filter((account) => account.id !== id);
-    try {
-      writeRegistry({
-        ...registry,
-        active: registry.active === id ? DEFAULT_ID : registry.active,
-        accounts: registry.accounts.filter((account) => account.id !== id),
-        retired: [...retired, { id, label: existing.label, retiredAt: Date.now() }],
-      });
-    } catch (error) {
-      if (staged) rollbackStagedAccountHome(staged);
-      throw error;
-    }
-    let cleanupPending = false;
-    if (staged) {
-      try { verifyStagedAccountHome("codex", id, staged); }
-      catch (error) {
-        try { writeRegistry(registry); }
-        finally { rollbackStagedAccountHome(staged); }
-        throw error;
-      }
-      let discarded = false;
-      try { discarded = discardStagedAccountHome("codex", id, staged); }
-      catch (error) {
-        if (error instanceof AccountHistoryInventoryBlockedError) {
-          try { writeRegistry(registry); }
-          finally { rollbackStagedAccountHome(staged); }
-          throw error;
-        }
-        /* The staged tree remains recoverable. */
-      }
-      if (discarded) {
-        releaseStagedAccountHome(staged);
-        if (!retain) {
-          try { fs.rmdirSync(home); }
-          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") cleanupPending = true; }
-        }
-      } else {
-        cleanupPending = true;
-        try {
-          rollbackStagedAccountHome(staged);
-        } catch { console.warn("[codex accounts] staged home cleanup requires manual recovery"); }
-      }
-    }
-    if (!retain) {
-      try { if (accountHomeExistsForRemoval(home)) cleanupPending = true; }
-      catch { cleanupPending = true; }
-    }
-    return { cleanupPending };
+    const before: Registry = { ...registry, removals: withAccountRemovalJournal(registry.removals, id, null) };
+    return removeManagedAccountIntoArchive({
+      engine: "codex",
+      accountId: id,
+      home: managedHome(id),
+      homeIsSafe: () => managedHomeIsSafe(id, true),
+      unsafeHome: () => new UnsafeCodexHomeError(),
+      rewrites: (home, archive) => {
+        const spellings = [home];
+        try { const real = fs.realpathSync(home); if (real !== home) spellings.push(real); } catch { /* the lexical spelling still applies */ }
+        return spellings.map((spelling) => ({ from: spelling, to: archive }));
+      },
+      registry: {
+        journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
+        commitRetired: () => writeRegistry(withAccountRetired(before, id)),
+        restore: () => writeRegistry(before),
+      },
+    });
   });
 }
 
@@ -521,15 +662,17 @@ export function removeManagedCodexAccount(id: string): { cleanupPending: boolean
  *  the point — but a strip left incomplete by an earlier removal is retried. */
 export function cleanupOrphanedCodexHomes(): AccountOrphanCleanupReport {
   return withRegistryLock(() => {
-    cached = null;
+    /* A removal whose archive still holds its sign-in file stays journaled;
+       it is named here so the dialog never reports that file deleted. */
+    const recovery = recoverRemovalsLocked();
     const registry = mutableRegistry();
     const registered = new Set(registry.accounts.map((account) => account.id));
     const retired = new Set(registry.retired.map((account) => account.id));
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(codexAccountsRoot(), { withFileTypes: true }); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { removed: [], unresolved: [] }; throw error; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { removed: [], unresolved: [...recovery.unresolved].sort() }; throw error; }
     const removed: string[] = [];
-    const unresolved: string[] = [];
+    const unresolved: string[] = [...recovery.unresolved];
     const historyReports: Record<string, AccountHistoryInventoryReport> = {};
     for (const entry of entries) {
       if (registered.has(entry.name)) continue;
@@ -583,7 +726,6 @@ export function cleanupOrphanedCodexHomes(): AccountOrphanCleanupReport {
 
 export function setCodexAccountLoginPane(id: string, loginPane: LoginPane | null): void {
   withRegistryLock(() => {
-    cached = null;
     const registry = mutableRegistry();
     const index = registry.accounts.findIndex((account) => account.id === id);
     if (index < 0) throw new UnknownAccountError(id);

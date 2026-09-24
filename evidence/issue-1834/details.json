@@ -1,0 +1,190 @@
+{
+  "frames": {
+    "390": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "closed": {
+        "rows": 1,
+        "label": "Details",
+        "expanded": false,
+        "details": null,
+        "taskText": "Restore search results after the index rebuild",
+        "contextReadable": false
+      },
+      "open": {
+        "rows": 1,
+        "label": "Details",
+        "expanded": true,
+        "details": {
+          "chars": 1020,
+          "clientHeight": 148,
+          "scrollHeight": 454,
+          "overflowY": "auto"
+        },
+        "taskText": "Restore search results after the index rebuild",
+        "contextReadable": true
+      }
+    },
+    "light-en": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "closed": {
+        "board": "kanban",
+        "detailed": {
+          "cardHeight": 334,
+          "title": "Restore search results after the index rebuild",
+          "description": "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.",
+          "row": {
+            "present": true,
+            "label": "Details",
+            "expanded": false,
+            "text": null,
+            "editorField": null
+          },
+          "textOnCard": false
+        },
+        "plain": {
+          "row": {
+            "present": false,
+            "label": "",
+            "expanded": false,
+            "text": null,
+            "editorField": null
+          },
+          "description": "Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs."
+        }
+      },
+      "open": {
+        "board": "kanban",
+        "detailed": {
+          "cardHeight": 558,
+          "title": "Restore search results after the index rebuild",
+          "description": "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.",
+          "row": {
+            "present": true,
+            "label": "Details",
+            "expanded": true,
+            "text": {
+              "chars": 1020,
+              "firstLine": "Stage: implement. Worktree /repo/atlas, branch lane/search-i",
+              "clientHeight": 220,
+              "scrollHeight": 300,
+              "overflowY": "auto",
+              "fontFamily": "ui-monospace, \"JetBrains Mono\", Menlo, monospace"
+            },
+            "editorField": null
+          },
+          "textOnCard": true
+        },
+        "plain": {
+          "row": {
+            "present": false,
+            "label": "",
+            "expanded": false,
+            "text": null,
+            "editorField": null
+          },
+          "description": "Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs."
+        }
+      },
+      "editing": {
+        "present": true,
+        "label": "Details",
+        "expanded": true,
+        "text": null,
+        "editorField": "details"
+      },
+      "shut": {
+        "present": true,
+        "label": "Details",
+        "expanded": false,
+        "text": null,
+        "editorField": null
+      }
+    },
+    "dark-uk": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "closed": {
+        "board": "kanban",
+        "detailed": {
+          "cardHeight": 334,
+          "title": "Restore search results after the index rebuild",
+          "description": "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.",
+          "row": {
+            "present": true,
+            "label": "Деталі",
+            "expanded": false,
+            "text": null,
+            "editorField": null
+          },
+          "textOnCard": false
+        },
+        "plain": {
+          "row": {
+            "present": false,
+            "label": "",
+            "expanded": false,
+            "text": null,
+            "editorField": null
+          },
+          "description": "Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs."
+        }
+      },
+      "open": {
+        "board": "kanban",
+        "detailed": {
+          "cardHeight": 558,
+          "title": "Restore search results after the index rebuild",
+          "description": "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.",
+          "row": {
+            "present": true,
+            "label": "Деталі",
+            "expanded": true,
+            "text": {
+              "chars": 1020,
+              "firstLine": "Stage: implement. Worktree /repo/atlas, branch lane/search-i",
+              "clientHeight": 220,
+              "scrollHeight": 300,
+              "overflowY": "auto",
+              "fontFamily": "ui-monospace, \"JetBrains Mono\", Menlo, monospace"
+            },
+            "editorField": null
+          },
+          "textOnCard": true
+        },
+        "plain": {
+          "row": {
+            "present": false,
+            "label": "",
+            "expanded": false,
+            "text": null,
+            "editorField": null
+          },
+          "description": "Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs."
+        }
+      },
+      "editing": {
+        "present": true,
+        "label": "Деталі",
+        "expanded": true,
+        "text": null,
+        "editorField": "details"
+      },
+      "shut": {
+        "present": true,
+        "label": "Деталі",
+        "expanded": false,
+        "text": null,
+        "editorField": null
+      }
+    }
+  },
+  "failures": []
+}

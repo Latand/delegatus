@@ -1,10 +1,13 @@
 import { createRoot } from "react-dom/client";
 
+import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { runFocusTransaction } from "@/components/attention/navigate";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
+import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
@@ -28,29 +31,60 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * scenario also answers the account routes: the accounts and their limits, the
  * project's accounts, a conversation's account switch and a stage's account,
  * with hooks for the migration record, a committed switch, a refusal and a lost
- * answer. Every
- * request the Viewer makes is answered here; nothing reaches a server, a store
+ * answer. With `&icons=1` (#2102) some tasks carry a stored lucide icon, so a
+ * board shows stored, suggested and default icons side by side. Every
+ * request the Viewer makes is answered here, except the task icons' drawings,
+ * which the evidence server reads from lucide itself; nothing reaches a store
  * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
 
 const PROJECT = "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+/* #2102: stored icons on some tasks; the others draw the title's suggestion or the quiet default. */
+const ICONS = new URLSearchParams(location.search).get("icons") === "1";
 const EDITING = SCENARIO === "editing";
 /* K5a: the pipelines' review stages are bound to review flows with rounds. K5b's Stages build on them. */
-const TIER_LIMITS = SCENARIO === "tier-limits";
+/* #1839: the same tier scenario, with the windows arriving the way the provider
+   actually files them — under codenamed buckets, one of them carrying the
+   provider's own human label and one carrying none. */
+const CODENAME_TIERS = SCENARIO === "tier-codename";
+const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
 const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
 const STAGES = SCENARIO === "stages" || ACCOUNTS;
-const PIPELINES = SCENARIO === "pipelines" || STAGES;
+/* The pipeline block in variant B (#2072 slice 3, docs/design/desktop-flat-cards.md §9):
+   the variant renders' cards, with Ukrainian content when the page is uk. */
+const FLAT = SCENARIO === "pipeline-block";
+const UK = localStorage.getItem("llv_lang") === "uk";
+const L = (en: string, uk: string) => (UK ? uk : en);
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT;
+/* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
+   verify conversation, so its composer's runtime pill and the board's account chip both draw. */
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured";
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
    a card's rows can be read for what each pipeline actually does. */
-const MANY = SCENARIO === "issue1765";
+/* Columns balanced on large screens: every column holds a card whose
+   pipelines name their stages in 5, 20 and 40 characters, on a one-stage
+   chain and on Build → Review with a fail loop that fired, beside the task
+   carrying five pipelines and a shelf of long-titled cards. */
+const BALANCE = SCENARIO === "balance";
+/* PR and issue chips: the five pipelines of t-many carry an open PR with two
+   issues, a lane with no PR, a merged PR two lanes share, a closed attempt and
+   a merged fix, so the card aggregates seven links behind "+N"; the longest
+   Inbox title carries an attached draft, so chips are read under the longest
+   titles in the narrowest column. */
+const WORK_LINKS = SCENARIO === "work-links" || FLAT;
+const MANY = SCENARIO === "issue1765" || BALANCE || WORK_LINKS;
 /* #1743: one task whose pipelines exercise the whole identity/edge vocabulary —
    a fail edge fired twice of three, one whose budget is spent, mixed engines,
    all five effort levels, a long uncatalogued model, a stage edited after its
    launch, and a stage that has never started. */
 const MARKS = SCENARIO === "issue1743";
+/* #1865: the header lane the operator read — design → build → critique, where
+   design and critique share the architect preset and critique ran twice — so
+   each stage's conversation can be read for which stage it is. */
+const LABELS = SCENARIO === "issue1865";
 /* #1820: the Overview draws the SAME board over every project, filtered to the
    cards a worker is working on right now. Two invented projects join `atlas`
    so the shared columns can be read across three, each bringing one card with
@@ -70,6 +104,14 @@ const MESH = "river-mesh";
    the spent budget already stopped the lane, and a lane with two fail edges
    into the same stage. */
 const ARCS = SCENARIO === "issue1798";
+/* #1938: a lane whose review budget ran out and whose last fix wrote a head
+   nobody reviewed — parked in needs_review, never completed. */
+const REVIEW_SPENT = SCENARIO === "issue1938" || FLAT;
+/* The seat's header at its fullest: a mandate a version behind the default,
+   so the stale chip draws, a designated incumbent with its effort, account and
+   a context past the rotation line, twenty previous seats and a running host
+   with its Stop host control — every element the row has to keep readable. */
+const SEAT_HEAD = SCENARIO === "seat-head";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -132,6 +174,20 @@ const searchImpl2 = add(conversation("search-impl-2", "Swap the alias only after
 const searchRev = add(conversation("search-rev", "Review the warm-up gate", { mtime: now - 41 * MIN, engine: "codex", model: "gpt-5.6" }));
 const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s after the swap", { mtime: now - 90 * MIN }));
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
+
+/** The runtime snapshot `&runtime=structured` answers: the verify conversation on a structured host, mid-turn. */
+function structuredSnapshot() {
+  return {
+    schemaVersion: 1, snapshotSeq: 1, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
+    sessions: [{
+      conversationId: searchVer2.conversationId, sessionKey: { engine: "claude", sessionId: "search-ver-2-session" }, hostKind: "claude-broker", host: "hosted",
+      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
+      parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
+      capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
+    }],
+    attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
+  };
+}
 /* t-upload: an eight-stage chain, the UI builder working. */
 const uploadPlan = add(conversation("upload-plan", "Plan: 8 MB chunks, resume token per file", { mtime: now - 8 * 60 * MIN }));
 const uploadApi = add(conversation("upload-api", "Endpoint and resume token in place", { mtime: now - 6 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
@@ -159,7 +215,10 @@ const compactVer = add(conversation("compact-ver", "Board frames match at five w
 /* The project's orchestrator: seated above the board, and, as in production,
    also a conversation on it ("Not on a task" here). Its one composer is the
    seat's. */
-const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", working({ plan: { current: "Watching the search fix" } })));
+const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", working({
+  plan: { current: "Watching the search fix" },
+  ...(SEAT_HEAD ? { model: "claude-opus-4-5-1m", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } } : {}),
+})));
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
@@ -200,8 +259,10 @@ const manyPipelines: Pipeline[] = MANY ? ([
     closedAt: closedAgo === null ? null : iso(closedAgo * MIN),
     /* The last completed pipeline carries a stage report: role, outcome, age —
        and no conversation id anywhere on the card. */
+    /* Its PR (#2150 below) was opened while it ran: a settled lane keeps only
+       the head's PRs from its own lifetime (#2059), so it starts before them. */
     ...(id === "p-many-report"
-      ? { stageReports: [{ seq: 1, at: iso(30 * MIN), actor: { kind: "agent", role: "builder", conversationId: closing.conversationId }, stageId: second, attempt: 1, status: "pass", findings: 0, replaces: null, summary: "Read the line as words." }] }
+      ? { createdAt: iso(28 * 60 * MIN), stageReports: [{ seq: 1, at: iso(30 * MIN), actor: { kind: "agent", role: "builder", conversationId: closing.conversationId }, stageId: second, attempt: 1, status: "pass", findings: 0, replaces: null, summary: "Read the line as words." }] }
       : {}),
   });
 }) : [];
@@ -273,6 +334,30 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
    is the length a real lane usually has, four stages, and wraps everywhere the
    board is not a 1920 px screen: that is the row the suffix is drawn on, and
    it is the common case rather than the narrow one. */
+const REVIEWED_HEAD = "4f1c2a9d3b7e6f5a8c0d1e2f3a4b5c6d7e8f9a0b";
+const UNREVIEWED_HEAD = "9b2e7d4c1a0f3e6d5c8b7a6f9e0d1c2b3a4f5e6d";
+const reviewSpentPipelines: Pipeline[] = REVIEW_SPENT ? (() => {
+  const build1 = add(conversation("review-build-1", "First pass at the retry count", { mtime: now - 90 * MIN }));
+  const critique = add(conversation("review-crit-1", "Sent it back: the count hides behind the close button", { mtime: now - 60 * MIN, engine: "codex", model: "gpt-5.6" }));
+  const build2 = add(conversation("review-build-2", "Moved the count out from under the close button", { mtime: now - 20 * MIN }));
+  const findings = ["P1 — the count hides behind the close button", "P2 — the banner never says which attempt failed"];
+  return [pipeline("p-review-spent", "Show the retry count in the banner", "t-review-spent", "needs_review",
+    [stage("build", "builder", "critique"), stage("critique", "reviewer", null, { kind: "run", onFail: { to: "build", maxRounds: 1 } })],
+    [
+      { stageId: "build", attempts: [
+        attempt(1, "passed", build1, { startedAt: iso(100 * MIN), completedAt: iso(90 * MIN) }),
+        attempt(2, "passed", build2, { startedAt: iso(55 * MIN), completedAt: iso(20 * MIN), activatedBy: { stageId: "critique", attempt: 1, edge: "fail", budgetSpent: true } }),
+      ] },
+      { stageId: "critique", attempts: [
+        attempt(1, "failed", critique, { startedAt: iso(85 * MIN), completedAt: iso(60 * MIN), activatedBy: { stageId: "build", attempt: 1, edge: "pass" }, verdict: { status: "fail", findings }, budgetSpent: true, reviewedHead: REVIEWED_HEAD }),
+      ] },
+    ], null, {
+      lastPassedCommit: UNREVIEWED_HEAD,
+      stateDetail: "review budget spent: last review failed (fail, 2 findings), head 9b2e7d4c1a0f unreviewed; reviewed 4f1c2a9d3b7e. continue-review adds rounds",
+      reviewPending: { stageId: "critique", attempt: 1, fixStageId: "build", fixAttempt: 2, reviewedHead: REVIEWED_HEAD, currentHead: UNREVIEWED_HEAD, verdict: "fail", findings: findings.length, at: iso(20 * MIN) },
+    })];
+})() : [];
+
 const arcPipelines: Pipeline[] = ARCS ? (() => {
   const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
   const restFix = conv("arc-rest-fix", "Draft the empty-state copy", { mtime: now - 70 * MIN });
@@ -388,8 +473,116 @@ const arcPipelines: Pipeline[] = ARCS ? (() => {
   ];
 })() : [];
 
+const labelPipelines: Pipeline[] = LABELS ? (() => {
+  const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
+  const design = conv("labels-design", "Lay out the header lane", { mtime: now - 240 * MIN });
+  const build1 = conv("labels-build-1", "First build of the header lane", { mtime: now - 200 * MIN });
+  const critique1 = conv("labels-critique-1", "Sent it back: the lane overlaps the search field", { mtime: now - 160 * MIN });
+  const build2 = conv("labels-build-2", "Second build after the critique", { mtime: now - 90 * MIN });
+  const critique2 = conv("labels-critique-2", "Reading the header render at 1280", working({ plan: { current: "Reading the header render at 1280" } }));
+  return [pipeline("p-labels", "Build the board header lane", "t-labels", "running", [
+    stage("design", "architect", "build", { effectiveRole: role("architect") }),
+    stage("build", "builder", "critique"),
+    stage("critique", "architect", null, { effectiveRole: role("architect"), onFail: { to: "build", maxRounds: 3 } }),
+  ], [
+    { stageId: "design", attempts: [attempt(1, "passed", design, { effectiveRole: role("architect"), startedAt: iso(240 * MIN) })] },
+    { stageId: "build", attempts: [
+      attempt(1, "passed", build1, { startedAt: iso(200 * MIN), activatedBy: { stageId: "design", attempt: 1, edge: "pass" } }),
+      attempt(2, "passed", build2, { startedAt: iso(90 * MIN), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" } }),
+    ] },
+    { stageId: "critique", attempts: [
+      attempt(1, "failed", critique1, { effectiveRole: role("architect"), startedAt: iso(160 * MIN), activatedBy: { stageId: "build", attempt: 1, edge: "pass" } }),
+      attempt(2, "running", critique2, { effectiveRole: role("architect"), startedAt: iso(60 * MIN), activatedBy: { stageId: "build", attempt: 2, edge: "pass" } }),
+    ] },
+  ], { stageId: "critique", state: "running", input: null, activatedBy: null })];
+})() : [];
+
+const BALANCE_COLUMNS: TaskStatus[] = ["inbox", "assigned", "blocked", "done"];
+const BALANCE_NAMES = { short: "build", mid: "design-and-prototype", long: "check-every-stage-pill-at-a-narrow-width" } as const;
+/* Each attempt ran on its stage's values, so the pill draws the model label beside the mark. */
+const FABLE = { effectiveRole: runRole("builder", "claude", "fable", "high") };
+const ASTRA = { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "xhigh") };
+const balancePipelines: Pipeline[] = BALANCE ? BALANCE_COLUMNS.flatMap((column) => {
+  const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(`bal-${column}-${id}`, title, { model: "fable", ...over }));
+  /* A one-stage chain: the stage running, or on Blocked parked on the operator. */
+  const one = (key: keyof typeof BALANCE_NAMES) => {
+    const id = BALANCE_NAMES[key];
+    const parked = column === "blocked" && key === "long";
+    const file = conv(`one-${key}`, `One stage: ${id}`, parked ? { waitingInput: { since: now - 5 * MIN } } : working({ model: "fable" }));
+    return pipeline(`p-bal-${column}-one-${key}`, `Run the one ${key} stage in ${column}`, `t-bal-${column}`, parked ? "needs_decision" : "running",
+      [marksStage(id, "builder", null, "claude", "fable", "high")],
+      [{ stageId: id, attempts: [attempt(1, parked ? "needs_decision" : "running", file, { ...FABLE, startedAt: iso(30 * MIN) })] }],
+      { stageId: id, state: "running", input: null, activatedBy: null });
+  };
+  /* Build → Review with a fail loop that fired once: Review sent the work back. */
+  const loop = (key: "mid" | "long") => {
+    const id = BALANCE_NAMES[key];
+    const review = key === "mid" ? "review" : "review-the-pill-at-every-column-width-ok";
+    const first = conv(`loop-${key}-1`, `First pass: ${id}`, { mtime: now - 90 * MIN });
+    const critique = conv(`loop-${key}-rev`, `Sent back: ${review}`, { mtime: now - 60 * MIN, engine: "codex", model: "gpt-6-astra" });
+    const second = conv(`loop-${key}-2`, `Second pass: ${id}`, working({ model: "fable" }));
+    return pipeline(`p-bal-${column}-loop-${key}`, `Loop the ${key} stage names in ${column}`, `t-bal-${column}`, "running",
+      [marksStage(id, "builder", review, "claude", "fable", "high"), marksStage(review, "reviewer", null, "codex", "gpt-6-astra", "xhigh", { onFail: { to: id, maxRounds: 3 } })],
+      [
+        { stageId: id, attempts: [attempt(1, "passed", first, { ...FABLE, startedAt: iso(100 * MIN) }), attempt(2, "running", second, { ...FABLE, startedAt: iso(50 * MIN), activatedBy: { stageId: review, attempt: 1, edge: "fail" } })] },
+        { stageId: review, attempts: [attempt(1, "failed", critique, { ...ASTRA, startedAt: iso(70 * MIN), activatedBy: { stageId: id, attempt: 1, edge: "pass" } })] },
+      ],
+      { stageId: id, state: "running", input: null, activatedBy: null });
+  };
+  return [one("short"), one("long"), loop("mid"), loop("long")];
+}) : [];
+
+const flatPipelines: Pipeline[] = FLAT ? (() => {
+  const mdImpl = add(conversation("md-impl", L("Builder: move the delta chain off the request thread", "Білдер: винести ланцюг дельт з потоку запиту"), { mtime: now - 41 * MIN }));
+  const mdAccept = add(conversation("md-accept", L("Acceptor: hidden tabs stop polling", "Приймальник: приховані вкладки більше не опитують"), { mtime: now - 120 * MIN }));
+  const loopBuild = add(conversation("many-loop-build", L("Builder: name rows by the prompt", "Білдер: назви рядків із промпту"), { mtime: now - 70 * MIN }));
+  const loopRev = add(conversation("many-loop-rev", L("Reviewer: second round on row names", "Рецензент: другий раунд назв рядків"), working({ engine: "codex", model: "gpt-5.6", plan: { current: "Reading round 2" } })));
+  const firedFix = add(conversation("many-fired-fix", L("Builder: second pass after verify", "Білдер: другий прохід після перевірки"), working({ plan: { current: "Re-measuring the fold" } })));
+  const firedVer = add(conversation("many-fired-ver", L("Verifier: the fold hides a running lane", "Перевіряльник: згортка ховає робочий конвеєр"), { mtime: now - 30 * MIN, engine: "codex", model: "gpt-6-astra" }));
+  const finding = L("The delta chain is rebuilt on the request thread; the worker must own it.", "Ланцюг дельт перебудовується в потоці запиту; ним має володіти воркер.");
+  return [
+    pipeline("p-md-decision", L("Stop repeated full-board downloads", "Припинити повторні завантаження всієї дошки"), "t-mobile", "needs_decision",
+      [stage("implement", "builder", "review"), stage("review", "reviewer", null)],
+      [{ stageId: "implement", attempts: [attempt(1, "needs_decision", mdImpl, { startedAt: iso(80 * MIN), completedAt: iso(41 * MIN), verdict: { status: "fail", findings: [finding], rankedFindings: [{ severity: "P1", text: finding }] } })] }],
+      { stageId: "implement", state: "needs_decision", input: null, activatedBy: null },
+      { createdAt: iso(90 * MIN), stageReports: [{ seq: 1, at: iso(41 * MIN), actor: { kind: "agent", role: "builder", conversationId: mdImpl.conversationId }, stageId: "implement", attempt: 1, status: "fail", findings: 1, replaces: null, summary: finding }] }),
+    /* Paused while its acceptance stage ran: the engine keeps the cursor on the
+       held stage, which the phone's pipeline screen draws hollow (§3.13). */
+    pipeline("p-md-accept", L("Finish mobile traffic acceptance", "Завершити приймання мобільного трафіку"), "t-mobile", "paused",
+      [stage("accept", "verifier", "review"), stage("review", "reviewer", null)],
+      [{ stageId: "accept", attempts: [attempt(1, "running", mdAccept, { startedAt: iso(150 * MIN) })] }],
+      { stageId: "accept", state: "running", input: null, activatedBy: null }, { pausedState: "running", createdAt: iso(160 * MIN) }),
+    pipeline("p-many-loop", L("Name every pipeline row by its first prompt line", "Називати кожен рядок конвеєра першим рядком промпту"), "t-many", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", loopBuild, { startedAt: iso(90 * MIN) })] },
+        { stageId: "review", attempts: [attempt(1, "reviewing", loopRev, { flowId: "flow-rounds-review", startedAt: iso(60 * MIN), activatedBy: { stageId: "build", attempt: 1, edge: "pass" } })] },
+      ],
+      { stageId: "review", state: "reviewing", input: null, activatedBy: null }, { createdAt: iso(100 * MIN) }),
+    pipeline("p-many-fired", L("Keep a running lane out of the completed fold", "Не ховати робочий конвеєр у згортку завершених"), "t-many", "running",
+      [stage("fix", "builder", "verify"), stage("verify", "verifier", null, { onFail: { to: "fix", maxRounds: 2 } })],
+      [
+        { stageId: "fix", attempts: [attempt(1, "passed", firedFix, { startedAt: iso(100 * MIN) }), attempt(2, "running", firedFix, { startedAt: iso(20 * MIN), activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } })] },
+        { stageId: "verify", attempts: [attempt(1, "failed", firedVer, { startedAt: iso(60 * MIN), completedAt: iso(30 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } })] },
+      ],
+      { stageId: "fix", state: "running", input: null, activatedBy: null }, { createdAt: iso(110 * MIN) }),
+  ];
+})() : [];
+
+/* The pipeline block's case (#2072) runs the eight-stage chain with its
+   current stage named in 44 characters: too long to keep "✓3" and "+4" beside
+   it in a 390 px card, so the card's fold has to reach the stage alone. */
+const UPLOAD_UI = FLAT ? "verify-backward-compatibility-and-migrations" : "build-ui";
+/* And a two-stage lane whose current stage is named in 86 characters: too long
+   for a 390 px card's line even alone, so its name wraps inside the pill. */
+const ATTACH_VERIFY = FLAT ? "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge" : "verify";
+
 const pipelines: Pipeline[] = [
+  ...flatPipelines,
+  ...reviewSpentPipelines,
+  ...balancePipelines,
   ...arcPipelines,
+  ...labelPipelines,
   ...marksPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -406,14 +599,14 @@ const pipelines: Pipeline[] = [
     ],
     { stageId: "verify", state: "running", input: null, activatedBy: null }),
   pipeline("p-upload", "Redesign attachment upload for large files", "t-upload", "running",
-    [stage("plan", "architect", "build-api"), stage("build-api", "builder", "review-api"), stage("review-api", "reviewer", "build-ui"), stage("build-ui", "builder", "review-ui"), stage("review-ui", "reviewer", "verify"), stage("verify", "verifier", "docs", { onFail: { to: "build-ui", maxRounds: 2 } }), stage("docs", "builder", "merge"), stage("merge", "cleaner", null)],
+    [stage("plan", "architect", "build-api"), stage("build-api", "builder", "review-api"), stage("review-api", "reviewer", UPLOAD_UI), stage(UPLOAD_UI, "builder", "review-ui"), stage("review-ui", "reviewer", "verify"), stage("verify", "verifier", "docs", { onFail: { to: UPLOAD_UI, maxRounds: 2 } }), stage("docs", "builder", "merge"), stage("merge", "cleaner", null)],
     [
       { stageId: "plan", attempts: [attempt(1, "passed", uploadPlan)] },
       { stageId: "build-api", attempts: [attempt(1, "passed", uploadApi)] },
       { stageId: "review-api", attempts: [attempt(1, "passed", uploadRevApi, { ...flowOf("flow-upload-review-api"), reviewFlowSync: { generation: "g2", roundCount: 2, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
-      { stageId: "build-ui", attempts: [attempt(1, "running", uploadUi)] },
+      { stageId: UPLOAD_UI, attempts: [attempt(1, "running", uploadUi)] },
     ],
-    { stageId: "build-ui", state: "running", input: null, activatedBy: null }),
+    { stageId: UPLOAD_UI, state: "running", input: null, activatedBy: null }),
   pipeline("p-links", "Repair old links in the release notes", "t-links", "needs_decision",
     [stage("implement", "builder", "review"), stage("review", "reviewer", null)],
     [{ stageId: "implement", attempts: [attempt(1, "needs_decision", linksImpl)] }],
@@ -426,9 +619,9 @@ const pipelines: Pipeline[] = [
     ],
     { stageId: "diagnose", state: "running", input: null, activatedBy: null }),
   pipeline("p-attach", "Finish responsive native attachment delivery", "t-attach", "running",
-    [stage("build", "builder", "verify"), stage("verify", "verifier", null)],
-    [{ stageId: "build", attempts: [attempt(1, "passed", attachBuild)] }, { stageId: "verify", attempts: [attempt(1, "running", attachVerify)] }],
-    { stageId: "verify", state: "running", input: null, activatedBy: null }),
+    [stage("build", "builder", ATTACH_VERIFY), stage(ATTACH_VERIFY, "verifier", null)],
+    [{ stageId: "build", attempts: [attempt(1, "passed", attachBuild)] }, { stageId: ATTACH_VERIFY, attempts: [attempt(1, "running", attachVerify)] }],
+    { stageId: ATTACH_VERIFY, state: "running", input: null, activatedBy: null }),
   pipeline("p-compact", "Compact board stages and separate history from live work", "t-compact", "completed",
     [stage("build", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", null)],
     [
@@ -486,7 +679,13 @@ const resetIn = (minutes: number) => Math.floor(Date.now() / 1000) + minutes * 6
 const tierLimits = {
   session: { usedPercent: 12, resetsAt: resetIn(120), windowMinutes: 300 },
   weekly: { usedPercent: 30, resetsAt: resetIn(6000), windowMinutes: 10080 },
-  tiers: [
+  tiers: CODENAME_TIERS ? [
+    // The bucket key is a codename; the label is the provider's own, and the
+    // label is what the operator must read (#1839).
+    { tier: "nimbus_quill", label: "Fable", usedPercent: 88, resetsAt: resetIn(6000), windowMinutes: 10080 },
+    // No label came with this one, so its bucket key is spelled out as words.
+    { tier: "cedar_ember", usedPercent: 63, resetsAt: resetIn(6000), windowMinutes: 10080 },
+  ] : [
     { tier: "fable", usedPercent: 88, resetsAt: resetIn(6000), windowMinutes: 10080 },
     { tier: "opus", usedPercent: 63, resetsAt: resetIn(6000), windowMinutes: 10080 },
   ],
@@ -549,12 +748,29 @@ function task(id: string, status: TaskStatus, title: string, description: string
 }
 
 const tasks: BoardTask[] = [
-  task("t-search", "assigned", "Restore search results after the index rebuild", "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.", 4 * MIN),
+  /* The one task carrying agent-facing details (#1834): the long context an
+     agent needs, which the card folds behind its Details row instead of
+     printing where the human description belongs. */
+  task("t-search", "assigned", "Restore search results after the index rebuild", "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.", 4 * MIN, [], {
+    details: [
+      "Stage: implement. Worktree /repo/atlas, branch lane/search-index-swap.",
+      "Read the swap path in src/search/indexSwap.ts before changing anything: the old index must answer every read until the new one reports ready, and the swap is one atomic rename.",
+      "Files another lane holds, do not edit: src/search/query.ts, src/search/ranking.ts, src/search/analyzers/*.",
+      "Rules: no new dependency; no schema change; the rebuild stays resumable; every refusal names its field.",
+      "Gates: the typecheck, the touched tests by path, the build.",
+      "Known state: rebuild-12 left a half-written segment under var/index/next; the reader already skips it, the writer does not.",
+      "Reads that reproduce it: GET /search?q=atlas during a rebuild, then again after the swap.",
+      "Prior attempt: lane/search-index-lock held the whole index for the rebuild and timed out the reads; do not take that path again.",
+      "Answer the operator with what the reads returned, never with what the code intends.",
+      "Report through the stage tool; the verdict is the only completion channel.",
+    ].join("\n"),
+  } as Partial<BoardTask>),
   task("t-upload", "assigned", "Redesign attachment upload for large files", "Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.", 2 * MIN),
   task("t-export", "assigned", "Simplify the export settings sheet", "Fold the eleven toggles into three sensible presets and one advanced disclosure.", 9 * MIN, [exportImpl, exportExplore]),
   task("t-links", "assigned", "Repair old links in the release notes", "", 17 * MIN),
-  task("t-merge-a", "assigned", "Merge the approved queue adapter release · merge", "", 26 * 60 * MIN),
-  task("t-verify-a", "assigned", "Verify delivery recovery across transcript boundaries · verify", "", 30 * 60 * MIN),
+  ...(FLAT ? [task("t-mobile", "assigned", L("Mobile data: stop repeated full-board downloads and hidden-tab traffic", "Мобільні дані: припинити повторні завантаження всієї дошки й трафік прихованих вкладок"), L("A phone with the board open keeps downloading the whole board every few seconds, even in a hidden tab.", "Телефон із відкритою дошкою кожні кілька секунд завантажує її всю, навіть у прихованій вкладці."), 1 * MIN)] : []),
+  ...(FLAT ? [] : [task("t-merge-a", "assigned", "Merge the approved queue adapter release · merge", "", 26 * 60 * MIN),
+  task("t-verify-a", "assigned", "Verify delivery recovery across transcript boundaries · verify", "", 30 * 60 * MIN)]),
   task("t-disk", "assigned", "Disk space: find what Docker, worktrees and temp storage hold", "", 41 * 60 * MIN),
   task("t-longtitle", "inbox", "You are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.", "", 3 * 60 * MIN),
   task("t-pending", "inbox", "", "", 6 * MIN, [pendingWorker], { origin: { kind: "launch", key: "launch-pending", refinement: "pending" } } as Partial<BoardTask>),
@@ -571,8 +787,72 @@ const tasks: BoardTask[] = [
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
+  ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
+  ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
+
+if (FLAT) {
+  const retitle: Record<string, [string, string, string, string]> = {
+    "t-review-spent": ["GitHub Copilot as a third engine the Viewer can launch", "The last review failed, and the fix after it was never reviewed.", "GitHub Copilot як третій рушій, який Viewer уміє запускати", "Останнє рев’ю не пройшло, а виправлення після нього ніхто не перевірив."],
+    "t-many": ["Kanban: say what each pipeline of a task does, and fold the finished ones behind their count", "Seven pipelines on one card: four running, three finished.", "Канбан: казати, що робить кожен конвеєр задачі, і згортати завершені за лічильником", "Сім конвеєрів на одній картці: чотири працюють, три завершені."],
+    "t-search": ["Restore search results after the index rebuild", "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.", "Повернути результати пошуку після перебудови індексу", "Результати зникають на десять хвилин після перебудови. Тримати старий індекс, доки новий не відповість."],
+    "t-upload": ["Redesign attachment upload for large files", "Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.", "Переробити завантаження великих вкладень", "Відновлюване завантаження файлів понад 100 МБ: API частинами, прогрес, що переживає перезавантаження, і документація."],
+    "t-export": ["Simplify the export settings sheet", "Fold the eleven toggles into three sensible presets and one advanced disclosure.", "Спростити аркуш налаштувань експорту", "Згорнути одинадцять перемикачів у три розумні пресети й один розширений розділ."],
+    "t-links": ["Repair old links in the release notes", "", "Полагодити старі посилання в нотатках до випуску", ""],
+    "t-disk": ["Disk space: find what Docker, worktrees and temp storage hold", "", "Місце на диску: знайти, що тримають Docker, worktree і тимчасові файли", ""],
+    "t-rounds": ["Rework the retry banner until review passes", "", "Переробляти банер повтору, доки рев’ю не пройде", ""],
+  };
+  for (let index = 0; index < tasks.length; index += 1) {
+    const entry = retitle[tasks[index]!.id];
+    if (!entry) continue;
+    const [title, description] = UK ? [entry[2], entry[3]] : [entry[0], entry[1]];
+    tasks[index] = { ...tasks[index]!, text: description ? `${title}\n${description}` : title } as BoardTask;
+  }
+  const rename: Record<string, [string, string]> = {
+    "p-review-spent": ["Launch Copilot sessions from the composer", "Запускати сесії Copilot із композера"],
+    "p-many-pills": ["Name every pipeline row on a task card", "Назвати кожен рядок конвеєра на картці задачі"],
+    "p-many-drawers": ["Remove the legacy drawers under the board columns", "Прибрати старі шухляди під колонками дошки"],
+    "p-search": ["Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"],
+    "p-upload": ["Redesign attachment upload for large files", "Переробити завантаження великих вкладень"],
+    "p-links": ["Repair old links in the release notes", "Полагодити старі посилання в нотатках до випуску"],
+    "p-rounds": ["Rework the retry banner until review passes", "Переробляти банер повтору, доки рев’ю не пройде"],
+  };
+  for (const lane of pipelines) {
+    const names = rename[lane.id];
+    if (names) (lane as { task: string }).task = UK ? names[1] : names[0];
+  }
+}
+// Stopped launch receipts on a completed task, including a still-retryable parked lane.
+if (SCENARIO === "stopped-launches") {
+  const launches = ["closed", "needs_decision"].map((state) => {
+    const launchId = `launch-${state}`;
+    const file = conversation(`stopped-${state}`, `Stopped ${state} launch`, {
+      path: `spawn:${launchId}`, size: 0, mtime: now, activityReason: "structured_spawn_failed",
+      spawn: { launchId, clientAttemptId: null, accountId: null, state: "failed",
+        initialMessage: "failed", retrySafe: true, error: "stage launch never started: runtime host recovery exhausted after 2 checks" },
+      durableLineage: { kind: "spawn", role: "builder", parentConversationId: null, reviewsConversationId: null,
+        memberships: [{ kind: "pipeline", containerId: `p-${state}`, role: "builder", slot: "build",
+          stageId: "build", stageOrder: 0, round: null, parentConversationId: null }] },
+    });
+    return { file, pipeline: pipeline(`p-${state}`, `Stopped ${state} launch`, "t-stopped", state,
+      [stage("build", "builder", null)],
+      [{ stageId: "build", attempts: [attempt(1, "failed", file, { agentPath: null, launchId, completedAt: iso(0) })] }],
+      { stageId: "build", state: "needs_decision", input: null, activatedBy: null }) };
+  });
+  files.splice(0, files.length, ...launches.map((entry) => entry.file));
+  pipelines.splice(0, pipelines.length, ...launches.map((entry) => entry.pipeline));
+  tasks.splice(0, tasks.length, task("t-stopped", "done", "Recover stopped launches", "", 0, files));
+}
+if (BALANCE) {
+  for (const column of BALANCE_COLUMNS) {
+    tasks.push(task(`t-bal-${column}`, column, `Stage pills in ${column}: 5, 20 and 40 character names`, "One-stage chains and Build → Review with a fail loop that fired.", 1 * MIN));
+  }
+  /* A shelf with many cards, each with a title long enough to wrap. */
+  for (let index = 0; index < 8; index += 1) {
+    tasks.push(task(`t-bal-long-${index}`, "inbox", `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`, "", (index + 2) * 60 * MIN));
+  }
+}
 if (OVERVIEW_SCOPE) {
   tasks.push(
     task("t-ledger", "assigned", "Reconcile the ledger export against the bank file", "Two of the quarter's statements disagree by one day.", 3 * MIN, [ledgerBuild!], { project: LEDGER }),
@@ -580,6 +860,16 @@ if (OVERVIEW_SCOPE) {
     task("t-mesh", "blocked", "Unblock the mesh id migration", "The old ids must survive the cut-over.", 11 * MIN, [meshAsk!], { project: MESH }),
     task("t-mesh-quiet", "done", "Write the migration notes", "", 6 * 60 * MIN, [meshQuiet!], { project: MESH }),
   );
+}
+if (ICONS) {
+  const stored: Record<string, string> = {
+    "t-upload": "cloud-upload", "t-disk": "hard-drive", "t-auth": "key-round", "t-interrupt": "hand",
+    "t-many": "kanban", "t-review-spent": "bot", "t-ledger": "landmark", "t-mesh": "network",
+  };
+  for (let index = 0; index < tasks.length; index += 1) {
+    const icon = stored[tasks[index]!.id];
+    if (icon) tasks[index] = { ...tasks[index]!, icon } as BoardTask;
+  }
 }
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
@@ -646,7 +936,10 @@ const evidence = {
   assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
   /* The focus handoff this page's Viewer runs, for driving an attention
      arrival without a server behind the offer. */
-  focus: { bus: focusHandoffBus, runFocusTransaction },
+  /* `startArrivalPulse` is here for the same reason: a driver that set the
+     attribute itself would photograph the stylesheet and prove nothing about
+     the code that decides WHAT to mark and how (#1836 item 4). */
+  focus: { bus: focusHandoffBus, runFocusTransaction, startArrivalPulse, cancelArrivalPulse },
   /* Transcript reads for this path fail, as a broken route would. */
   failLogsFor: null as string | null,
   /* A write another client made to a task, arriving on the next task read:
@@ -745,6 +1038,8 @@ const evidence = {
   },
   /* K6: conversation account switches the board sent, in order. */
   accountRequests: [] as Array<Record<string, unknown>>,
+  /* Reconfigures the runtime pill sent (#1846). */
+  pillRequests: [] as Array<Record<string, unknown>>,
   accountAnswerDelayMs: 200,
   /* The next switch is refused with these words. */
   refuseNextAccountRequest: null as { status: number; error: string } | null,
@@ -780,6 +1075,20 @@ const evidence = {
     files[index] = next as FileEntry;
     window.dispatchEvent(new Event("llv:files-changed"));
     window.dispatchEvent(new Event("llv:pipelines-changed"));
+  },
+  /* #1836: a lane the server has admitted that the corpus scan does not carry
+     yet. `/api/attention` hands it out as the pushed rows; `/api/files` never
+     does, so a board that draws it drew it from the push. */
+  admitted: null as { pipeline: Pipeline; task: BoardTask } | null,
+  /* Every `/api/attention` call, as the page made it. */
+  attentionCalls: [] as Array<{ url: string; method: string }>,
+  admitLane(title: string) {
+    evidence.admitted = {
+      pipeline: pipeline("p-admitted", title, "t-admitted", "provisioning",
+        [stage("build", "builder", "review"), stage("review", "reviewer", null)], [],
+        { stageId: "build", state: "pending", input: null, activatedBy: null }, { createdAt: new Date().toISOString() }),
+      task: task("t-admitted", "assigned", title, "", 0),
+    };
   },
 };
 Object.assign(window, { evidence });
@@ -818,9 +1127,62 @@ function fixtureStageDigest(stage: Pipeline["stages"][number]): string {
   return hex;
 }
 
+/* The links go through the board's own resolver, over an invented forge
+   cache: the same rules and the same shapes `/api/files` answers with. */
+function fixtureWorkLinks(): FilesWorkLinks {
+  const repository = "acme/atlas";
+  const pr = (number: number, head: string, state: CachedPullRequest["state"], closes: number[] = [], openedAgo = 7 * 60): CachedPullRequest => ({
+    number, url: `https://github.com/${repository}/pull/${number}`, headRefName: head, createdAt: iso(openedAgo * MIN), state, closes, checkedAt: iso(2 * MIN),
+  });
+  const prs = [
+    pr(2201, "pipeline/p-many-pills", "open", [2059, 2060]),
+    pr(2188, "fix/shared-pill-head", "merged"),
+    pr(2170, "pipeline/p-many-collapse", "closed"),
+    /* Opened inside its lane's lifetime, which ended 26 hours ago. */
+    pr(2150, "pipeline/p-many-report", "merged", [2045], 27 * 60),
+    pr(2190, "pipeline/p-search", "open", [2044]),
+    /* The lane the phone's queue opens: three chips beside the attach link. */
+    pr(2195, "pipeline/p-links", "draft", [2046, 2047]),
+    pr(1996, "pipeline/p-md-accept", "open", [1990]),
+    pr(2031, "pipeline/p-review-spent", "open", [2030]),
+    pr(2204, "pipeline/p-many-drawers", "draft"),
+    pr(2207, "pipeline/p-upload", "open", [2061]),
+    pr(2212, "pipeline/p-many-loop", "open"),
+  ];
+  const view: ForgeRepositoryView = {
+    canonical: repository,
+    completeSince: iso(24 * 60 * MIN),
+    pr: (number) => prs.find((entry) => entry.number === number),
+    byHead: (head) => prs.filter((entry) => entry.headRefName === head),
+    isIssue: () => false,
+  };
+  const cache: ForgeCacheView = { repository: (name) => (name === repository ? view : null) };
+  const delivered = (lane: Pipeline) => ({
+    ...lane,
+    delivery: { target: { repository: PROJECT, remote: `https://github.com/${repository}.git`, branch: `refs/heads/${lane.id === "p-many-pill" || lane.id === "p-many-collapse" ? "fix/shared-pill-head" : lane.branch}` } },
+  } as Pipeline);
+  const out: FilesWorkLinks = { pipelines: {}, tasks: {} };
+  const byTask = new Map<string, ResolvedWorkLinks[]>();
+  for (const lane of pipelines) {
+    const resolved = resolvePipelineLinks(delivered(lane), repository, cache);
+    if (resolved.links.length || resolved.noPr) out.pipelines[lane.id] = resolved;
+    for (const taskId of lane.taskIds) byTask.set(taskId, [...(byTask.get(taskId) ?? []), resolved]);
+  }
+  for (const entry of tasks) {
+    const own = entry.id === "t-longtitle" ? { workLinks: [{ repository, number: 2210, kind: "pr" as const, addedAt: iso(MIN), addedBy: "operator" as const }] } : {};
+    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache);
+    if (resolved.links.length) out.tasks[entry.id] = resolved;
+  }
+  return out;
+}
+const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
+
+/* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
+const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   if (url.pathname === "/api/files") {
     /* #1820's first run: an installation with nothing in it at all. */
     /* Nothing is working in the quiet installation: every conversation has
@@ -851,11 +1213,28 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
       };
-    const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } } });
+    const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } }, ...(workLinks ? { workLinks } : {}) });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }
+  if (url.pathname === "/api/attention") {
+    evidence.attentionCalls.push({ url: url.pathname + url.search, method });
+    if (method !== "GET") return json({ error: "unsupported in the evidence fixture" }, 400);
+    const echoed = (url.searchParams.get("echoes") ?? "").split(",").filter(Boolean);
+    const admitted = evidence.admitted;
+    const withdrawn = echoed.filter((id) => id !== admitted?.pipeline.id).map((id) => ({ id, reason: "never-materialized" }));
+    const records = admitted || withdrawn.length
+      ? { pipelines: admitted ? [admitted.pipeline] : [], tasks: admitted ? [admitted.task] : [], withdrawn }
+      : null;
+    if (!url.searchParams.get("deviceId")) return json({ ok: true, records });
+    return json({ ok: true, rootId: "root-fixture", offer: null, live: [], expired: [], records });
+  }
+  if (url.pathname === "/api/runtime/snapshot" && STRUCTURED) return json(structuredSnapshot());
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
+  if (STRUCTURED && url.pathname === "/api/tmux" && method === "POST") {
+    evidence.pillRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return json({ ok: true, structured: true });
+  }
   if (url.pathname === "/api/board") {
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
@@ -910,6 +1289,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (body.color === "none") delete next.color;
       else next.color = body.color as BoardTask["color"];
     }
+    /* The picker only ever sends a lucide name or "none" (#2102). */
+    if (body.icon !== undefined) {
+      if (body.icon === "none" || body.icon === null) delete next.icon;
+      else next.icon = String(body.icon);
+    }
+    /* Agent-facing details (#1834), on the route's own terms: a string sets it,
+       null or an empty string clears the field rather than leaving it empty. */
+    if (body.details !== undefined) {
+      const details = typeof body.details === "string" ? body.details.trim() : "";
+      if (details) next.details = details;
+      else delete next.details;
+    }
     if (body.hide === true) {
       if (current.assignments.some((row) => row.conversationId === orchestrator.conversationId)) {
         return json({ error: "this task holds the project's orchestrator seat conversation, which stays on the board; it cannot be hidden", code: "TASK_HIDE_PROTECTED", field: "hide" }, 409);
@@ -918,7 +1309,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     } else if (body.hide === false) {
       delete next.groupHidden;
     }
-    const presentationOnly = Object.keys(body).every((key) => key === "color" || key === "hide" || key === "expectedProject" || key === "expectedRevision");
+    const presentationOnly = Object.keys(body).every((key) => key === "color" || key === "icon" || key === "hide" || key === "expectedProject" || key === "expectedRevision");
     next.updatedAt = presentationOnly ? current.updatedAt : new Date().toISOString();
     next.revision = REV(revision++);
     tasks[index] = next;
@@ -1100,12 +1491,28 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       seat: {
         project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: "Keep the project moving.",
-        promptVersion: null, predecessorConversationId: null, state: "active",
+        promptVersion: SEAT_HEAD ? ORCHESTRATOR_PROMPT_VERSION - 1 : null, predecessorConversationId: null, state: "active",
         intent: { clientRequestId: "seat-atlas", mode: "spawn", launchId: null, error: null }, designatedAt: iso(9 * 60 * MIN), activatedAt: iso(9 * 60 * MIN),
       },
       pending: null,
       exists: true,
       viewerMcpRegistered: true,
+      ...(SEAT_HEAD ? {
+        previous: Array.from({ length: 20 }, (_, index) => ({
+          conversationId: `conversation_previous_${index}`, title: `Seat ${index + 1}`, engine: "claude",
+          heldFrom: iso((40 - index) * 60 * MIN), heldTo: iso((39 - index) * 60 * MIN), taskId: null, hasNotes: false,
+        })),
+      } : {}),
+    });
+  }
+  if (SEAT_HEAD && url.pathname === "/api/orchestrator/seat/status") {
+    return json({
+      project: PROJECT, designated: true, conversationId: orchestrator.conversationId, predecessorConversationId: null,
+      engine: "claude", model: "claude-opus-4-5-1m", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: orchestrator.path,
+      liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
+      context: { tokens: 520_825, limit: 1_000_000, percent: 52, estimated: false, basis: "" },
+      transcriptFacts: null,
+      rotation: { recommended: true, level: "strongly_recommend", reasons: ["context usage has reached the rotation threshold"], thresholdUnknown: false },
     });
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something

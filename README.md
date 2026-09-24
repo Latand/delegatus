@@ -1,521 +1,323 @@
-# Agent Log Viewer
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="public/brand/delegatus-lockup-on-dark.svg">
+    <img alt="Delegatus" src="public/brand/delegatus-lockup.svg" width="340">
+  </picture>
+</p>
 
-`agent-log-viewer` is a local web UI that turns raw Codex / Claude Code agent
-logs into a readable, live-updating chat feed. It discovers every session,
-subagent and background shell task on your machine, links them into a
-parent→child tree, and tails the selected one in real time.
+# Delegatus
 
-![From the overview board into a session and its live tail](docs/media/board-to-live-tail.gif)
+Delegatus is a local web app for running Claude Code and Codex agents
+and reading what they do. It shows every agent conversation on your machine
+as a readable chat, and lets you give agents work through a task board and
+pipelines, from a desktop browser or your phone.
 
-The default setup runs locally against transcripts already on disk. It reads
-`~/.claude` and `~/.codex` directly, while operational Viewer state is kept in
-a local SQLite database under its private configuration directory.
-Optional outbound integrations stay disabled until you configure them:
+![A project board: tasks by status, the agents working on each, a running pipeline, and account limits in the sidebar](docs/media/readme/board.svg)
 
-```bash
-bunx agent-log-viewer   # or: npx agent-log-viewer
-```
+## What you can do
 
-See [WakaTime activity integration](docs/wakatime.md) for opt-in activity
-export, its disclosure boundary, and disablement steps.
+- **Read any agent as a chat.** Claude Code sessions and their subagents,
+  Codex rollouts and background shell tasks, with tool calls shown as cards:
+  diffs for edits, commands with their output, and the final answer. It
+  follows new output live, and every conversation has its own link.
+- **Keep work on a board.** Each project has a task board with Inbox,
+  Assigned, Blocked and Done columns. A task card shows the agents working on
+  it and whether they are working, waiting or done. An Overview board
+  collects what is running across all projects.
+- **Start and talk to agents.** Launch a Claude or Codex agent from a task or
+  the Create button, pick the model and reasoning effort, and send messages,
+  images and files from the composer. Interrupt, resume or stop an agent from
+  its window.
+- **Run pipelines.** A pipeline runs a chain of agent stages (build, review,
+  verify, …) in its own git worktree, and sends work back to the builder when
+  a reviewer fails it.
+- **Hand a project to an orchestrator.** One agent per project can hold the
+  orchestrator seat: you tell it what to ship, and it opens pipelines, spawns
+  builders and reviewers, and reports back.
+- **Switch accounts before a limit stops you.** Add more than one Claude or
+  Codex account, see each one's five-hour and weekly usage, and change which
+  account an agent runs on.
+- **Use it from your phone.** Over your Tailscale network, with a layout made
+  for a 390 px screen.
+- **Talk instead of typing.** Dictate messages, have answers read aloud, or
+  hold a live voice conversation with a Codex agent.
+- **Let agents drive it.** The bundled MCP server gives agents the same board,
+  tasks, pipelines and conversations you use.
+- **English or Ukrainian** interface.
 
-Prefer video? A 45-second cut of the full flow lives at
-[docs/media/demo.mp4](docs/media/demo.mp4).
+<a id="run"></a>
 
-## The tour
+## Quick start
 
-### Read any session as a chat
-
-User bubbles, assistant prose, tool-call cards with ✓/✗ statuses, expandable
-command output and diffs — for **Claude Code** sessions and their subagents
-(`~/.claude/projects/**/*.jsonl`), **Codex CLI** rollouts
-(`~/.codex/sessions/**/rollout-*.jsonl`) with command cards, patches and
-service events, and **background shell tasks** (recovered from the transcript
-and shown above the terminal output).
-
-![The chat feed: user bubbles, assistant prose, and tool-call cards with
-statuses and expandable output](docs/media/chat-feed.png)
-
-### Hand a project to an orchestrator
-
-![The orchestrator dock beside its project board](docs/media/orchestrator-dock.png)
-
-Each project can designate one agent as its **orchestrator**. Press
-**Orchestrator** in the project header, tell it what you want shipped, and it
-opens a lane per issue, spawns the implementer, runs a fresh reviewer each
-round and merges on APPROVE. Its mandate and any handoff from a predecessor are
-written for you — there is no "you are an orchestrator" prompt to compose — and
-you come back to the board when an agent needs a decision.
-
-[docs/orchestrator.md](docs/orchestrator.md) walks the whole flow on a fresh
-install: the dock, the board, pipelines, tasks, the attention queue, the
-model/effort matrix the conveyor uses, and when three tasks a week does not
-need any of it.
-
-### Spawn agents from the board
-
-Each project is a pannable, zoomable scheme — root conversations on top,
-spawned agents one generation below, arrows colored by engine. Draft a new
-agent right on the board: pick Claude or Codex, a model and reasoning effort,
-type the first prompt, and it launches.
-
-![Drafting and configuring a new agent on the project board](docs/media/spawn-agent.gif)
-
-### Run implement → review loops
-
-The viewer orchestrates review cycles: a long-lived implementer, a fresh
-read-only reviewer each round over the full diff, findings relayed
-automatically, and a verdict deck in the scheme view.
-
-![A review loop: round 1 requested changes, round 2 re-checks live](docs/media/review-loop.gif)
-
-### Answer a blocked agent from the browser
-
-When an agent stops on an `AskUserQuestion`, the question surfaces as a card
-with clickable options. The answer is delivered to the agent and confirmed
-against the transcript — the agent just keeps going.
-
-![Answering a pending AskUserQuestion from the feed](docs/media/pending-question.gif)
-
-### And everything around it
-
-- **Parentage tree**: session → subagents → rollouts → background tasks, built
-  server-side by scanning transcripts (append-only incremental,
-  cached — the warm `/api/files` poll stays around 100 ms).
-- **Live activity**: content-based badges — a transcript reads *working* while
-  it is mid-turn and *done* once the final assistant message lands.
-- **Deep links**: every selection is reflected in the URL (`#f=<path>`), so a
-  link opens that exact log.
-- **English or Ukrainian UI**, model chips (`opus`, `gpt-5.6-sol`, `sonnet`…),
-  collapsible tree with persisted state, follow-mode autoscroll, service-event
-  toggle, and a line filter.
-
-The session parentage tree, wiring root conversations to their spawned agents:
-
-![Session parentage tree](docs/media/session-tree.png)
-
-| A Codex CLI session | The overview board |
-| --- | --- |
-| ![Codex session with command cards and patches](docs/media/codex-session.png) | ![Overview board across projects](docs/media/overview-board.png) |
-
-All media above is regenerated deterministically from a synthetic fixture —
-see [docs/media/README.md](docs/media/README.md).
-
-## Run
-
-The package is published to npm, so the quickstart above needs no clone:
+You need [Bun](https://bun.sh) 1.4 or newer, and the Claude Code and/or Codex
+CLI installed and logged in. Then:
 
 ```bash
-bunx agent-log-viewer
-# or
-npx agent-log-viewer
+bunx delegatus-cli
 ```
 
-This starts the server on `127.0.0.1:8898` and opens your browser. The CLI also
-starts and supervises the packaged structured runtime host, including restart
-backoff and Ctrl-C cleanup. Pipelines and the orchestrator work from this
-installation without Docker. Both launch paths require Bun because the runtime
-journal and authoritative state stores use Bun SQLite.
+or install it once with `npm i -g delegatus-cli` and run `delegatus` (the
+short alias `dlg` starts the same command). Delegatus was called Agent Log
+Viewer before; the old `agent-log-viewer` command still works and prints a
+one-line notice.
 
-### From a local clone
+This serves Delegatus on `http://127.0.0.1:8898` and opens it in your
+browser. It reads the transcripts already in `~/.claude` and `~/.codex`, so
+existing sessions show up at once. The same command also starts the runtime
+host that launches and supervises agents. Stop both with Ctrl-C.
 
-```bash
-bun install
-bun run build
-bun bin/cli.mjs --no-open --port 8898 --hostname 127.0.0.1
-# open http://127.0.0.1:8898/
-```
-
-The CLI serves the output of the last `build`, so run `build` first. For
-development, `bun dev` runs the app with hot reload and expects a separately
-managed runtime host (it needs a high OS file-watch limit for large home
-directories).
-
-The Viewer server runs on Bun. The runtime journal and hot state collections
-use `bun:sqlite`, and macOS process ownership uses the kernel's microsecond
-start token. The Docker runtime and `agent-log-viewer` CLI select Bun for every
-feature-flag configuration.
-
-### Spawn transport
-
-Agents launch through a structured runtime host. The installed CLI supervises
-that host with the same Bun executable as the Viewer and places its Unix socket
-and runtime journal under the Viewer state directory with installation-specific
-names. Ambient deployment runtime settings are ignored so separate bunx
-installations cannot attach to each other's host or claim each other's journal
-epoch. Startup fails clearly when Bun, the packaged host entry, the managed
-socket, or its directory permissions are unavailable.
-The CLI log carries the host failure and the pipeline card directs the operator
-to it. There is no tmux fallback.
-
-### Connect an orchestrator through MCP
-
-The package includes `agent-log-viewer-mcp`, a local stdio MCP server. It
-invokes Viewer services in-process and shares their durable stores, locks, and
-idempotency rules. Keep the Viewer package and the MCP process under the same
-OS user so they resolve the same state directory.
-
-For an installed package, add this server to the orchestrator's standard MCP
-configuration:
-
-```json
-{
-  "mcpServers": {
-    "viewer": {
-      "command": "agent-log-viewer-mcp"
-    }
-  }
-}
-```
-
-For a local clone, point the client at the launcher:
-
-```json
-{
-  "mcpServers": {
-    "viewer": {
-      "command": "bun",
-      "args": ["/absolute/path/to/live-log-viewer-next/bin/mcp-server.mjs"]
-    }
-  }
-}
-```
-
-Quick install from the CLI:
-
-```bash
-# Claude Code (user scope)
-claude mcp add viewer -s user -- bun /absolute/path/to/live-log-viewer-next/bin/mcp-server.mjs
-
-# Codex — append to ~/.codex/config.toml
-[mcp_servers.viewer]
-command = "bun"
-args = ["/absolute/path/to/live-log-viewer-next/bin/mcp-server.mjs"]
-```
-
-To register the server everywhere at once — the operator's Claude Code and
-Codex configs plus every Viewer-managed account under
-`~/.config/agent-log-viewer/accounts` (their spawned agents each run with
-their own `CLAUDE_CONFIG_DIR`/`CODEX_HOME`, so each account needs its own
-registration) — run the idempotent installer and re-run it after adding
-accounts:
-
-```bash
-scripts/install-mcp.sh                     # uses the managed stable launcher when present
-LLV_MCP_BIN=/path/to/mcp-server.mjs \
-  scripts/install-mcp.sh                   # select an explicit launcher
-```
-
-Exact deployments keep the managed executable at
-`~/.agents/tools/llv-mcp-runtime/bin/mcp-server.mjs`. Existing Claude and
-Codex registrations retain that path. Each fresh MCP process reads the atomic
-Viewer release target and starts the runtime bundle staged from the same
-revision. Deployment receipts expose the staged runtime digest plus durable
-activation or restore evidence.
-
-The server name must stay `viewer` (or another `isViewerMcpServer()` match:
-`viewer-*`, `agent-log-viewer*`) — transcript calls attributed to other names
-do not render as Viewer cards.
-
-The MCP surface includes:
-
-- conversations and the board: `board_snapshot`, `list_conversations`,
-  `get_conversation`, `send_message`, `message_receipt` (what became of an
-  accepted send, by its operation id), and `conversation_action` for
-  `interrupt`, `kill`, `resume`, `compact`, and `dialog-key`;
-- review flows: `list_flows`, `get_flow`, and `flow_action`;
-- pipelines: `create_pipeline`, `list_pipelines`, `get_pipeline`,
-  `pipeline_action`, and `link_task_to_pipeline`;
-- tasks: `create_task`, `list_tasks`, `get_task`, and `update_task`;
-- operator/runtime reads: `operator_snapshot`, `deployment_status`, and
-  `resources`;
-- agent liveness and lifecycle: `agent_activity` for the per-conversation
-  `{lastRecordAt, turnState, host alive/gone, stalledForMs}` stall snapshot, and
-  `lifecycle_events` for the durable lifecycle journal (`mode: "query"`, by
-  project/pipeline/conversation and cursor) and its bounded relay digest
-  (`mode: "digest"`, terminal events immediately, routine progress coalesced and
-  rate-limited to one per five minutes per subscriber);
-- agent/runtime mutations: `spawn_agent`, `conversation_migration`, and
-  `deploy_exact_sha`;
-- the operator's attention: `request_attention`, which offers to move their
-  Viewer to a target and waits for their answer. It only asks — nothing moves
-  until they agree on a device, and the request names the root agent by an
-  identity the server resolves, never one the caller supplies.
-
-Every call requires a stable `clientRequestId`. Reusing that id with the same
-arguments returns the durable result as a replay. Reusing it with different
-arguments returns an idempotency conflict. Read tools are inert, bounded, and
-secret-redacted. Mutating tools return stable operation receipts, and their
-durable MCP receipt prevents a replay from applying the action twice.
-`deploy_exact_sha` accepts a full 40-character commit SHA and requires
-`confirm: "deploy"`.
-
-The package exposes the MCP launcher as `agent-log-viewer/mcp-server` in
-addition to the `agent-log-viewer-mcp` executable.
-
-Tool results contain the durable entity identifiers available for that action,
-including conversation ids, transcript paths, pipeline ids, task ids, and
-runtime operation ids. Viewer transcripts render calls attributed to the `viewer` MCP
-server as live cards and turn those identifiers into navigation chips.
-
-**Prerequisites:** Node ≥ 20.9, and bun or npm/pnpm. `tmux` is optional — see
-[Platform support](#platform-support).
-
-### Docker (reproducible runtime)
-
-For a pinned, reproducible deployment the repo ships a `Dockerfile` and
-`docker-compose.yml` that build `.next` inside the image and run the Viewer
-with host parity. The container reuses your real `tmux`, `claude`, `codex`, and
-home directory. Runtime-host owns production releases and the listener.
-Complete the [bootstrap listener migration](docs/docker.md#bootstrap-listener-ownership)
-before the first runtime-host activation.
-
-```bash
-export LLV_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
-LLV_RUNTIME_EVENTS=1 LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d runtime-host
-scripts/rebuild.sh
-LLV_TEST_PORT=8901 docker compose --profile test up -d viewer-test
-```
-
-`scripts/rebuild.sh` is the whole release command, run from any checkout of the
-repository — a worktree included — with nothing wrapping it and no `git pull`
-first. It posts a revision to the runtime host, which builds that revision from
-its own canonical Git mirror rather than from the working tree. With no argument
-and no `LLV_DEPLOY_REVISION` override, it resolves the canonical
-`refs/heads/main` tip and deploys that exact commit; a full 40-character commit
-SHA in either case pins a redeploy or a rollback and is posted lowercase.
-
-See [docs/docker.md](docs/docker.md) for the parity model, the nsenter shims,
-and volume/port details.
-
-### Attach to a live tmux pane
-
-The Viewer resolves and copies a complete command for each live pane. Paste that command into a normal shell; it selects the supervisor endpoint and the current pane coordinate. The read-only variant adds `-r`.
-
-```bash
-TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -t 'agents:2.0'
-TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -r -t 'agents:2.0'
-```
-
-Detach with `Ctrl-b d` and the agent keeps running. An unqualified tmux command may use a different server. Refresh and copy again after a stale-pane or restarted-server message; the fresh command accounts for window renumbering. See [the Docker guide](docs/docker.md#attach-to-a-viewer-pane) for the supervisor migration context.
-
-### CLI options
-
-```
-agent-log-viewer [options]
-```
+Useful options:
 
 | Option | Description |
 | --- | --- |
 | `-p, --port <n>` | Port for the local server (default `8898`). |
 | `-H, --hostname <h>` | Bind address (default `127.0.0.1`). |
-| `--tailscale` | Expose the viewer inside your tailnet (see below). |
-| `--new-token` | Generate a fresh access key and invalidate old cookies. |
 | `--no-open` | Don't open the browser on start. |
-| `-v, --version` | Print the version. |
-| `-h, --help` | Show usage. |
+| `--tailscale` | Serve inside your tailnet for phone access (see below). |
+| `--new-token` | Create a fresh access key and invalidate old cookies. |
+| `--new-operator-token` | Rotate the key that authorizes launching agents. |
+| `-v, --version` / `-h, --help` | Print the version / usage. |
 
-## Platform support
-
-Linux is the native target: process discovery reads `/proc` directly. macOS is
-supported through a portable backend that shells out to `ps` and `lsof`
-instead — same live-process detection, composer host targeting, agent
-spawn/kill and background-task discovery, just a bit more subprocess overhead
-per scan. Windows has its own backend: one `Get-CimInstance Win32_Process`
-snapshot per five seconds for pids, lineage, command lines and memory, plus two
-values read from the kernel — the process creation time that makes up the
-identity token, and each agent's working directory. The backend is chosen
-automatically by `process.platform` (see `src/lib/proc/`); `VIEWER_PROC_BACKEND`
-forces one of `linux`, `portable` or `windows`, for testing.
-
-### Windows
-
-The package installs on Windows. Install Claude Code with its **native
-installer**, or put a `claude.exe` on `PATH`: an npm-only install exposes
-`claude.cmd`, and a shim is not something the Viewer will run without a shell.
-State lives under `%USERPROFILE%\.config\agent-log-viewer`, transcripts under
-`%USERPROFILE%\.claude\projects`. Run the Viewer where the agents run — a
-Claude installed inside WSL writes into the WSL filesystem, and a native Viewer
-does not see those transcripts (or the reverse).
-
-These stay WSL routes on Windows, and WSL still works exactly as Linux:
-
-- **Codex** — hosting, review flows, and everything Codex-side. Upstream calls
-  native Windows experimental and recommends WSL 2.
-- **The Telegram connector** and **local dictation** (cloud dictation backends
-  are unaffected).
-- **Workflow setup commands**, which are `sh -c`.
-- **Docker deployments and staging**, which are Linux by nature.
-- **The MCP server** for orchestrator agents, and **`--tailscale`**.
-
-These work natively but narrower than on Linux:
-
-- **No open-handle scan.** A transcript reads as live from mtime recency, and
-  its owning process from the `--session-id` in its argv or from its working
-  directory — never from a live writer holding the file open. Background-task
-  `.output` files cannot be mapped back to a pid.
-- **Termination is immediate.** Windows has no signals; every stop is
-  `TerminateProcess` after the child's stdin is closed, and the "force" step in
-  the task header is a second immediate kill. A host's process tree is walked
-  and killed descendants-first, each member's identity checked, in place of the
-  process-group signal Linux sends.
-- **A process the Viewer cannot open stays invisible.** Reading an agent's
-  working directory needs a handle on it, so an elevated console's `claude`, or
-  one running as another user, is not listed.
-- **Memory shows the working set only**, with no swap figure.
-- **Managed (multi) Claude accounts, the in-app login supervisor and composer
-  image attachments** are not available; log in from a terminal with `claude`,
-  and use the Main account.
-- **Claude background tasks and scratchpad sessions** have no project. The
-  background-task root depends on a Windows directory layout nobody has
-  observed, so it is simply absent. A scratchpad session is still recognised as
-  one, but the walk that turns the encoded path in its container back into a
-  repository starts at the filesystem root and a Windows path starts at a drive
-  letter, so no repository is found and the session lands in "Unresolved
-  project" along with every other one. Sessions started from an ordinary
-  directory are unaffected — they group by that directory.
-- **A session whose recorded path differs from a root only by drive-letter
-  case** forms its own project.
-
-`tmux` is optional, and nothing needs it to launch or message an agent —
-agents run on a structured runtime host (see [Spawn transport](#spawn-transport)),
-which is why none of it is required on Windows. It is needed only to attach a
-terminal to a legacy pane that predates that host (`brew install tmux` on macOS,
-or your distro's package on Linux).
-
-## Language
-
-The UI defaults to English and shows a compact EN/UK toggle in the project
-list header. The locale is resolved as `localStorage` key `llv_lang` first,
-then the browser language (Ukrainian if the browser prefers it), then English.
-
-CLI messages are English by default, and switch to Ukrainian with
-`LLV_LANG=uk` or a `uk_*` value in `LANG`/`LC_ALL`.
-
-## Dictation / voice input
-
-Composers that talk to agents have a mic button for dictating messages. By
-default transcription runs fully locally via faster-whisper — no audio leaves
-the machine. Run `scripts/setup-whisper.sh` once to install the local engine.
-
-Two cloud backends are available as an explicit per-machine opt-in (never a UI
-toggle): ChatGPT (reuses your local Codex login) and ElevenLabs Scribe (the
-only one with live, streaming transcription). Select with
-`LLV_TRANSCRIBE_BACKEND=local|chatgpt|elevenlabs` or by writing the backend
-name to `~/.config/agent-log-viewer/transcribe-backend`; local is the default.
-
-See [docs/transcription.md](docs/transcription.md) for setup, key locations,
-and troubleshooting.
-
-## Review loops
-
-The viewer orchestrates implement→review cycles: a long-lived implementer
-agent, a fresh read-only reviewer per round over the full diff,
-automatic relay of findings, and a verdict deck in the scheme view. Start one
-from the **Flow** chip above a conversation pane; presets pair engines and
-reasoning efforts per role (e.g. `Terra high → Sol xhigh`). New Codex agents
-also expose explicit GPT-5.6-Sol and GPT-5.6-Terra choices beside effort and
-speed.
-
-See [docs/review-loop.md](docs/review-loop.md) for the round protocol,
-presets, the HTTP automation API, and troubleshooting. A Claude Code skill
-for driving flows from an agent ships in `.claude/skills/review-loop/` —
-agents working in a clone pick it up automatically.
-
-## Tailscale access
+### From a clone
 
 ```bash
-bunx agent-log-viewer --tailscale
+bun install
+bun run build
+bun bin/cli.mjs --no-open --port 8898
 ```
 
-`--tailscale` starts the local server on `127.0.0.1` and exposes it inside your
-tailnet through a foreground `tailscale serve <port>` process. The public
-internet (Funnel) is never used.
+The CLI serves the output of the last build, so build first. `bun dev` runs
+the app with hot reload; it expects a runtime host you start yourself.
 
-The CLI generates a 32-character access key, appends it to the tailnet URL as
-`?k=...`, and after the first visit the server sets an `llv_auth` cookie for 30
-days. `--new-token` generates a fresh key and immediately invalidates every old
-cookie — each request compares the hash against the current token, so a cookie
-minted with a previous key no longer passes.
+## Reading conversations
 
-The terminal prints the tailnet URL along with a QR code to scan with a phone.
-The same QR is available inside the web UI: the QR-icon button in the project
-list header opens a popover with the code and the link as text (with a copy
-button). The QR is rendered entirely client-side (the `qrcode` package, no
-external requests) and is served only to already-authorized clients — the same
-token gate from `src/proxy.ts` also protects `/api/access`. When the server
-runs without `--tailscale`, the button shows a hint to start
-`bunx agent-log-viewer --tailscale`.
+Open any card to read the conversation. Tool calls are grouped under a
+summary line ("wrote 1 file · patched 1 file · ran 1 command"); expand it to
+see each call as a card.
 
-Anyone with tailnet access to this URL can read all agent transcripts,
-including any sensitive data that landed in a session, and can execute commands
-through `/api/conversation-host` and `/api/spawn`. Treat the tailnet URL as a
-secret — do not forward it to anyone else.
+![A Claude Code conversation: an edit shown as a diff, a test run with its output, and the answer](docs/media/readme/conversation.svg)
 
-## Security model
+A card reads *working* while the agent is in the middle of a turn and
+*done* once its final answer lands, so you can tell a busy agent from one
+waiting for you. When an agent stops on a question, the question appears with
+its options and your answer goes straight back to it.
 
-The log APIs refuse any path that does not resolve into one of the whitelisted
-log roots (see `src/lib/scanner/roots.ts`). Mutating endpoints exist:
-`/api/conversation-host` resumes or respawns a conversation's host and delivers
-a message to it, and `/api/spawn` starts commands. The same handlers are still
-mounted at the legacy path `/api/tmux`; that name is historical and no tmux is
-involved in delivery — the engine is spawned into the host namespace through
-`nsenter` with privileges dropped.
+## How agents are driven
 
-By default the CLI binds to `127.0.0.1`. With `--tailscale`, access is exposed
-inside the tailnet via `tailscale serve` and guarded by the token gate in
-`src/proxy.ts`. Non-loopback binds also force token mode. Treat any URL
-containing `?k=` as a credential.
+**Tasks.** A task is a card on its project's board. Add one from the board,
+assign an agent to it with **+ Agent**, and move it between columns as the
+work goes. Agents can create and update tasks through the MCP server too.
 
-A Docker-deployed runtime host on a personal workstation can keep `LLV_TOKEN`
-for the tailnet while serving plain `http://127.0.0.1:8898/` token-free, by
-splitting its stable listener into a local entry and an authenticated remote
-entry; see [docs/docker.md](docs/docker.md#personal-workstation-token-free-localhost-authenticated-tailnet).
+**Pipelines.** A pipeline takes a task and a specification and runs up to
+eight stages in a dedicated worktree and branch. Each stage has a role
+(builder, reviewer, verifier, and others) that sets the engine, model,
+effort and whether it may change the repository. A stage ends by reporting
+a verdict: pass moves to the next stage, fail follows the stage's fail edge
+(usually back to the builder) within a round budget, and "needs decision"
+stops and asks you. A "needs decision" that carries findings on a stage with
+a fail edge is routed like a fail, so the findings reach the stage that can
+fix them; only a decision without findings, or on a stage without a fail
+edge, parks the pipeline for you. The pipeline card on the board shows where it is; open
+it to see the stage graph and each stage's conversation side by side.
 
-## Environment variables
+![A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation](docs/media/readme/pipeline.svg)
 
-All optional. Transcription variables are documented in full in
-[docs/transcription.md](docs/transcription.md).
+Reviewers run with read-only access in a conversation of their own, so a
+review reads the whole diff without the builder's context. See
+[docs/pipelines.md](docs/pipelines.md) for stage definitions, roles and the
+HTTP API.
+
+**The orchestrator.** Press **Orchestrator** in a project's header to create
+the project's orchestrator seat. You describe what you want shipped; it turns
+that into tasks and pipelines, watches them, and comes back to you when a
+stage needs a decision. Its standing instructions are written for you and
+editable. [docs/orchestrator.md](docs/orchestrator.md) walks through it.
+
+## Accounts and limits
+
+The sidebar shows the active Claude and Codex account with the share of each
+usage window left and when it resets. Open an engine's account list to add an
+account, refresh its reading, or make another account active. Each account
+keeps its own login, and agents launched afterwards use the active one.
+
+![Claude accounts with their five-hour, weekly and per-model limits](docs/media/readme/accounts.svg)
+
+## Phone access
+
+Open the setup guide (sidebar **More** menu → **Setup guide**, or the board's
+⋯ menu on a phone) and go to **Phone**. If Tailscale is signed in on this
+computer, one button, **Turn on phone access**, publishes the running Delegatus
+inside your tailnet with `tailscale serve --bg`, protects it with the access
+key and comes back with the link and its QR code. Nothing restarts. The
+choice is remembered in `~/.config/delegatus/phone-access`, so the next
+start publishes again by itself; **Turn off phone access** takes the mapping
+down and forgets the choice. When Tailscale is missing, signed out or has no
+MagicDNS name, the step says which in one sentence with a link, and picks up
+the change by itself.
+
+The same thing from a terminal:
+
+```bash
+bunx delegatus-cli --tailscale
+```
+
+Either way the server stays on `127.0.0.1` and is published only inside your
+tailnet; the public internet (Funnel) is never used. The terminal prints the
+tailnet URL with a QR code; the same QR is in the web app under the sidebar's
+**More** menu. The URL carries a 32-character access key; after the first
+visit the server sets a cookie for 30 days, and `--new-token` invalidates
+every earlier key and cookie. Once phone access is on, every browser, on
+this computer too, needs the link once.
+
+Publishing needs Tailscale's operator right. If the button reports that it
+is missing, run `sudo tailscale set --operator=$USER` once and press it again.
+
+<img src="docs/media/readme/phone-conversation.svg" width="300" alt="A conversation on a 390 px phone screen, its test run expanded">
+
+On a phone Delegatus opens a layout of its own: a project list, the board,
+and one conversation at a time with the composer at the bottom. Accounts and
+limits are in the board's ⋯ menu. Push notifications, once enabled, tell
+you when an agent asks you a question.
+
+Anyone who has the tailnet URL can read every transcript and start commands
+through Delegatus, so treat it as a secret.
+
+## Voice
+
+- **Dictation.** The composer's microphone button transcribes speech into the
+  message. By default this runs locally with faster-whisper, and no audio
+  leaves the machine; run `scripts/setup-whisper.sh` once to install it. Cloud
+  backends (ChatGPT through your Codex login, ElevenLabs, Soniox) are a
+  per-machine opt-in: pick one in the setup guide's **Voice** step (also the
+  **Dictation** menu row) or by right-clicking the microphone button. The
+  Voice step saves an ElevenLabs or Soniox key without showing it again and
+  checks that dictation answers. `DELEGATUS_TRANSCRIBE_BACKEND` overrides the
+  choice and locks it. See [docs/transcription.md](docs/transcription.md).
+- **Read aloud.** An answer's speaker button reads it with OpenAI, ElevenLabs
+  or Soniox speech, billed to your own API key. Right-click the button to pick
+  the provider.
+- **Voice conversation.** A Codex agent that Delegatus hosts offers a
+  continuous voice conversation from its composer.
+
+<a id="connect-an-orchestrator-through-mcp"></a>
+
+## MCP server for agents
+
+The package includes `delegatus-mcp`, a local stdio MCP server that runs
+Delegatus services against the same state as the web app. With the package
+installed globally (`npm i -g delegatus-cli`), register it under the name
+`viewer`. The key keeps its old name so that tool names (`mcp__viewer__*`)
+and the permission allowlists that list them keep matching:
+
+```bash
+# Claude Code
+claude mcp add viewer -s user -- delegatus-mcp
+```
+
+```toml
+# Codex: ~/.codex/config.toml
+[mcp_servers.viewer]
+command = "delegatus-mcp"
+```
+
+From a clone, point the command at `bin/mcp-server.mjs` instead, or run
+`scripts/install-mcp.sh`, which registers the server for your Claude Code and
+Codex configurations and for every account Delegatus manages.
+
+The tools include:
+
+- **conversations:** `list_conversations`, `get_conversation`,
+  `conversation_messages`, `search_transcripts`, `send_message`,
+  `message_receipt`, `conversation_deliverability`, `conversation_action`
+  (interrupt, kill, resume, compact), `spawn_agent`, `suggest_replies`;
+- **board and tasks:** `board_snapshot`, `create_task`, `list_tasks`,
+  `get_task`, `update_task`;
+- **pipelines:** `create_pipeline`, `list_pipelines`, `get_pipeline`,
+  `pipeline_action`, `link_task_to_pipeline`, and `stage_report`, which is
+  how a stage agent reports its verdict;
+- **the orchestrator seat:** `create_orchestrator`, `get_orchestrator`,
+  `rotate_orchestrator`, `send_message_to_orchestrator`,
+  `seat_tick_settings`;
+- **accounts:** `account_limits`, `account_project_binding`,
+  `conversation_migration`;
+- **the operator and the machine:** `operator_snapshot`, `request_attention`
+  (moves your active Delegatus view to a conversation, task or other target and
+  returns once the browser has arrived there; it does not wait for a reply,
+  and a Return control takes you back), `agent_activity`,
+  `lifecycle_events`, `resources`, `deployment_status`, `deploy_exact_sha`.
+
+Every call takes a `clientRequestId`; repeating a call with the same id and
+arguments returns the first result instead of acting twice. Calls to the
+`viewer` server render in transcripts as cards whose ids link to the
+conversation, task or pipeline they name.
+
+## Configuration
+
+Everything Delegatus keeps lives in one directory, `~/.config/delegatus/`
+(it follows `XDG_CONFIG_HOME`). An install from before the rename keeps its
+data in `~/.config/agent-log-viewer/`, and `~/.config/delegatus` becomes a
+link to it; nothing is moved or copied:
+
+- `state/` — tasks, pipelines, the agent registry and other state, mostly in
+  SQLite;
+- `accounts/` — the extra Claude and Codex accounts you add, each with its own
+  login;
+- `token`, `transcribe-backend`, and API key files such as
+  `elevenlabs-api-key` and `openai-api-key`.
+
+The local transcription environment lives in
+`~/.cache/delegatus/whisper-venv` (`~/.cache/agent-log-viewer/whisper-venv`
+on an install from before the rename).
+
+**Language.** The interface is in English or Ukrainian. Switch it under the
+sidebar's **More** menu; the default follows your browser. CLI messages
+switch to Ukrainian with `DELEGATUS_LANG=uk` or a `uk_*` locale.
+
+**Environment variables.** All optional. Each `DELEGATUS_` variable is also
+accepted under its earlier `LLV_` spelling; when both are set, the
+`DELEGATUS_` one wins:
 
 | Variable | Effect |
 | --- | --- |
-| `VIEWER_PROC_BACKEND` | `portable`, `linux` or `windows` — force the process-discovery backend (auto-selected by default). |
-| `LLV_LANG` | `uk` or `en` — force the CLI message language. |
-| `LLV_TRANSCRIBE_BACKEND` | `local`, `chatgpt`, or `elevenlabs` — pick the dictation backend (default `local`). |
-| `LLV_WHISPER_MODEL` | faster-whisper model size (default `small`). |
-| `LLV_WHISPER_DEVICE` | `cpu` (default) or `cuda`. |
-| `LLV_WHISPER_VENV` | Path to the whisper virtualenv (default `~/.cache/agent-log-viewer/whisper-venv`). |
-| `LLV_ELEVENLABS_STT_MODEL` | ElevenLabs batch model override. |
-| `ELEVENLABS_API_KEY` | ElevenLabs API key for the ElevenLabs backend. |
-| `LLV_REAPER_ENABLED` | `1` enables verified pane and detached-reviewer process cleanup by the deterministic agent reaper. Unset keeps dry-run mode and exposes its latest report at `GET /api/lifecycle/reaper`. |
-| `LLV_SCHEME_PROJECT_CAP` | Number of most-recent projects rendered by the scheme feed (default `10`). List and search remain complete. |
-| `LLV_SCHEME_CARDS_PER_PROJECT` | Maximum scanner entries rendered per scheme project (default `80`). List and search remain complete. |
-| `NEXT_PUBLIC_LLV_SCHEME_AGE_HORIZON_HOURS` | Age horizon in hours for automatic card placement on the project scheme (default `48`). A root conversation with activity inside the horizon keeps an automatic card even while idle; older roots leave the canvas for quiet history and «All conversations». Live or running conversations and manually placed cards are never removed by the horizon. Inlined at build time (`NEXT_PUBLIC_*`). |
-| `LLV_HEADLESS_REAPER_THRESHOLD_MS` | Minimum age in milliseconds for the always-active leaked Codex/MCP safety reaper (default `7200000`, two hours; minimum accepted value `60000`). |
-| `LLV_HOST_RETIREMENT_IDLE_HOURS` | How long a structured host's transcript must have been quiet before the automatic retirement sweep may end it (default `6`). `0` turns the sweep off. Staleness is transcript modification time, never process age, and the sweep still refuses any host with a turn in flight, a pending question, an undelivered handoff entry, an open spawn receipt, an unflushed event tail, a realtime binding, or an orchestrator seat. Every qualification is re-proved one step before the signal, and each retirement is written to `state/host-retirement-report.json` and appended to `state/host-retirement-journal.ndjson`. |
-| `LLV_HOST_RETIREMENT_GRACE_MS` | How long a retiring host may take to honour SIGTERM before its tree is force-killed (default `5000`, capped at `60000`). Raising it lowers how many hosts one sweep attempts, so a sweep's terminations still fit well inside the interval before the next one; whatever is skipped is reported as deferred and picked up by the following sweep. |
-| `LLV_DOCKER_NSENTER_SHIMS` | `1` makes the agent CLI resolver prefer the container's `/usr/local/bin` nsenter shims for host CLIs. Set automatically by the Docker image; leave unset on a host runtime. See [docs/docker.md](docs/docker.md). |
+| `DELEGATUS_LANG` | `en` or `uk`: the CLI message language. |
+| `DELEGATUS_TRANSCRIBE_BACKEND` | `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu. |
+| `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` | faster-whisper model size (default `small`) and device (`cpu` or `cuda`). |
+| `DELEGATUS_TTS_BACKEND` | `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider. |
+| `DELEGATUS_HOST_RETIREMENT_IDLE_HOURS` | Hours a hosted agent's transcript must be quiet before Delegatus may stop its host (default `6`, `0` turns this off). Hosts in the middle of a turn, with a pending question or holding an orchestrator seat are never stopped. |
+| `DELEGATUS_REAPER_ENABLED` | `1` lets the agent reaper stop leaked agent processes it has verified; unset, it only reports them at `GET /api/lifecycle/reaper`. |
+| `VIEWER_PROC_BACKEND` | `linux`, `portable` or `windows`: force the process-discovery backend. |
 
-## Config paths
+## Platform support
 
-The viewer keeps its state under the standard XDG directories, named after the
-package:
+Linux is the main target. macOS works through a backend that uses `ps` and
+`lsof` instead of `/proc`. Native Windows runs Delegatus with Claude Code
+(install Claude with its native installer so a `claude.exe` is on `PATH`)
+but leaves out Codex, managed accounts, local dictation, the MCP server and
+`--tailscale`; run under WSL 2 for those. Windows also has no open-file scan,
+so liveness comes from file modification times.
 
-- `~/.config/agent-log-viewer/` — access `token`, `transcribe-backend`, and
-  `elevenlabs-api-key`.
-- `~/.cache/agent-log-viewer/whisper-venv` — the local transcription
-  virtualenv.
+## Security
 
-Legacy `live-log-viewer` paths remain valid fallbacks. When a legacy config or
-cache file is the resolved existing file, subsequent updates keep using that
-same path so existing setups continue without a forced move.
+The server binds to `127.0.0.1` by default. Any non-loopback bind, and
+`--tailscale`, require the access key. Endpoints that start or message agents
+exist, so anyone who can reach Delegatus can run commands as you. The log
+APIs refuse paths outside the known transcript roots.
 
-## Architecture
+## Docker
 
-See [ARCHITECTURE.md](ARCHITECTURE.md): route handlers under `src/app/api/*`, a
-pure scanner pipeline under `src/lib/scanner/*` (discover → describe → activity
-→ model → links), React components under `src/components/*`. Caches live on
-`globalThis` and survive dev hot-reload.
+For a pinned deployment the repository ships a `Dockerfile` and
+`docker-compose.yml`; a runtime host owns releases and the listener, and
+`scripts/rebuild.sh` deploys a revision. See [docs/docker.md](docs/docker.md).
+
+## More
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — how the scanner, API routes, runtime
+  host and UI fit together.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — commit identity, the privacy check and
+  what CI runs.
+- [docs/media/readme/](docs/media/readme/provenance.json) — the screenshots
+  above are rendered from an invented demo home by
+  `scripts/capture-readme-media.ts`.
 
 ## License
 

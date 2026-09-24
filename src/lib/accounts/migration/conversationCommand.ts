@@ -9,10 +9,12 @@ import {
 } from "@/lib/accounts/projectBindings";
 import { chooseProjectReseatTarget } from "@/lib/accounts/reseat";
 import { headCwd } from "@/lib/agent/transcript";
+import type { AccountChoiceActor } from "@/lib/accounts/accountOverrides";
 
 import { runtimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeOperationResult } from "@/lib/runtime/contracts";
 import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
+import { dispatchStructuredControl } from "@/lib/runtime/structuredControls";
 
 import { advanceConversationMigration, drainHeldDeliveries, type HeldDeliveryPort } from "./coordinator";
 import { createMigrationDeliveryPort } from "./deliveryPort";
@@ -26,6 +28,12 @@ export type ConversationMigrationCommand = {
   path?: string;
   /** `withdraw`: the queued reconfigure operation to withdraw. */
   operationId?: unknown;
+  /** Stable identity of this command, distinct from a withdrawal's subject. */
+  requestOperationId?: string;
+  /** select-account only: the same explicit choice as the browser picker. */
+  accountId?: unknown;
+  targetAccountId?: unknown;
+  actor?: AccountChoiceActor;
 };
 
 export type ConversationMigrationCommandResult = {
@@ -42,6 +50,8 @@ export interface ConversationMigrationCommandDependencies {
   operationStatus?: (operationId: string) => Promise<RuntimeOperationResult | null | "unreadable">;
   /** Wakes the structured delivery queue so a cancelled reconfigure settles now. */
   kick?: () => void | Promise<void>;
+  /** Records a structured conversation's intended account (#1846). */
+  dispatchControl?: typeof dispatchStructuredControl;
 }
 
 /* Receipt statuses after which an operation is settled in the journal. */
@@ -80,6 +90,38 @@ export async function applyConversationMigration(
     return { status: 400, body: { error: "invalid conversation id" } };
   }
   const conversationId = command.conversationId as ViewerConversationId;
+  if (command.targetAccountId !== undefined || (command.accountId !== undefined && command.action !== "select-account")) {
+    return { status: 400, body: { error: "use select-account with accountId for an explicit account choice; reseat selects automatically" } };
+  }
+  if (command.action === "select-account") {
+    if (typeof command.accountId !== "string" || !command.accountId.trim()) {
+      return { status: 400, body: { error: "accountId must be a non-empty string" } };
+    }
+    const registry = registryForCommand();
+    const conversation = registry.conversation(conversationId);
+    if (!conversation) return { status: 404, body: { error: "viewer conversation is unknown" } };
+    if (conversation.engine === "copilot") return { status: 409, body: { error: "account switching does not cover Copilot conversations yet" } };
+    const source = conversation.generations.at(-1);
+    if (!source) return { status: 409, body: { error: "conversation has no current generation" } };
+    if (command.path && command.path !== source.path) {
+      return { status: 409, body: { error: "transcript path does not name this conversation's current generation" } };
+    }
+    const profile = source.launchProfile;
+    if (!profile.model || !profile.effort) {
+      return { status: 409, body: { error: "conversation has no managed model and effort for account selection" } };
+    }
+    const result = await (dependencies.dispatchControl ?? dispatchStructuredControl)({
+      path: source.path,
+      conversationId,
+      action: "reconfigure",
+      operationId: command.requestOperationId,
+      actor: command.actor,
+      reconfiguration: { model: profile.model, effort: profile.effort, fast: conversation.engine === "codex" ? profile.fast ?? false : profile.fast, accountId: command.accountId },
+    }, { registry });
+    return result
+      ? { status: result.status, body: result.body as Record<string, unknown> }
+      : { status: 409, body: { error: "explicit account selection requires a structured conversation" } };
+  }
   if (command.action === "reseat") {
     if (command.path !== undefined && typeof command.path !== "string") {
       return { status: 400, body: { error: "path must be a string" } };
@@ -87,6 +129,7 @@ export async function applyConversationMigration(
     const registry = registryForCommand();
     const conversation = registry.conversation(conversationId);
     if (!conversation) return { status: 404, body: { error: "viewer conversation is unknown" } };
+    if (conversation.engine === "copilot") return { status: 409, body: { error: "account switching does not cover Copilot conversations yet" } };
     const source = conversation.generations.at(-1);
     if (!source?.accountId) {
       return { status: 409, body: { error: "conversation has no managed account to reseat from" } };
@@ -144,6 +187,33 @@ export async function applyConversationMigration(
       };
     }
     const target = selection.target;
+    /* #1846: a structured conversation's reseat is the same account pick the operator makes. It records the
+       intended account, and the conversation moves when it is next engaged, through the same rebind. */
+    const profile = source.launchProfile;
+    const intended = profile.model && profile.effort
+      ? await (dependencies.dispatchControl ?? dispatchStructuredControl)({
+          path: source.path,
+          conversationId,
+          action: "reconfigure",
+          operationId: command.requestOperationId,
+          actor: command.actor,
+          reconfiguration: { model: profile.model, effort: profile.effort, fast: profile.fast, accountId: target.accountId },
+        }, { registry })
+      : null;
+    if (intended) {
+      if (intended.status >= 400) return { status: intended.status, body: intended.body as Record<string, unknown> };
+      return {
+        status: 200,
+        body: {
+          reseat: "intended",
+          targetId: target.accountId,
+          targetLabel: target.label,
+          operationId: "operationId" in intended.body ? intended.body.operationId : null,
+          ...("receipt" in intended.body ? { receipt: intended.body.receipt } : {}),
+          conversation: registry.conversation(conversationId) ?? conversation,
+        },
+      };
+    }
     const requested = registry.requestConversationReseat(conversationId, target.accountId);
     let final = requested;
     if (requested.migration) {
@@ -211,6 +281,15 @@ export async function applyConversationMigration(
     /* The withdrawal is durable; the queue notices it on its next pass even if this kick fails. */
     await settleAfterCommit(() => (dependencies.kick ?? kickStructuredDeliveryQueue)());
     return { status: 200, body: { withdraw: withdrawal.kind, conversation: withdrawal.conversation } };
+  }
+
+  if (command.action === "keep-current") {
+    /* #1846: messages a failed account switch held go out on the account the conversation runs on. */
+    const registry = registryForCommand();
+    if (!registry.conversation(conversationId)) return { status: 404, body: { error: "viewer conversation is unknown" } };
+    const { released, conversation } = registry.releaseSwitchHold(conversationId);
+    await settleAfterCommit(() => (dependencies.kick ?? kickStructuredDeliveryQueue)());
+    return { status: 200, body: { keepCurrent: released ? "released" : "nothing-held", conversation } };
   }
 
   if (!Number.isInteger(command.expectedRevision) || (command.expectedRevision as number) < 0) {

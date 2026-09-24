@@ -4,14 +4,29 @@ import path from "node:path";
 
 import { migrateBoardProjects } from "@/lib/board/store";
 import { statePath } from "@/lib/configDir";
+import { fsyncPath, readJsonCache } from "@/lib/state/durableJson";
 import { forEachCooperatively, mapCooperatively } from "@/lib/cooperative";
 import {
   durableProjectAliasCandidates,
   persistProjectAliases,
   projectAliasesCanAccept,
+  recordProjectRemote,
   type ProjectAliasRegistration,
 } from "@/lib/projects/aliases";
-import { displayNameFromProjectIdentity } from "@/lib/projects/identity";
+import {
+  forgeRenameCandidateFor,
+  forgeRenameCandidatesFromMoves,
+  scheduleForgeRenames,
+  type ForgeRenameCandidate,
+} from "@/lib/projects/forgeRename";
+import {
+  displayNameFromProjectIdentity,
+  isRepositoryProjectId,
+  localRepositoryProjectId,
+  projectIdentityFromRepositoryRoot,
+  repositoryRootForPath,
+} from "@/lib/projects/identity";
+import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
 
 import type { Engine, Fmt, ProjectCatalogEntry } from "../types";
 import { replaceConversationCatalog, type ConversationCatalogEntry } from "./conversationCatalog";
@@ -112,8 +127,8 @@ function catalogPath(): string {
 
 function readState(): ProjectCatalogState {
   try {
-    const raw = JSON.parse(fs.readFileSync(catalogPath(), "utf8")) as Partial<Omit<ProjectCatalogState, "version">> & { version?: number };
-    if ((raw.version !== 1 && raw.version !== 2) || !raw.files || typeof raw.files !== "object" || Array.isArray(raw.files)) {
+    const raw = readJsonCache(catalogPath()) as Partial<Omit<ProjectCatalogState, "version">> & { version?: number } | undefined;
+    if (!raw || (raw.version !== 1 && raw.version !== 2) || !raw.files || typeof raw.files !== "object" || Array.isArray(raw.files)) {
       return { version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: {} };
     }
     const files: Record<string, CachedProjectFile> = {};
@@ -121,7 +136,7 @@ function readState(): ProjectCatalogState {
       if (!value || typeof value !== "object" || Array.isArray(value)) continue;
       const file = value as Partial<CachedProjectFile>;
       if (
-        (file.rootName !== "codex-sessions" && file.rootName !== "claude-projects" && file.rootName !== "claude-tasks" && file.rootName !== "openclaw-sessions") ||
+        (file.rootName !== "codex-sessions" && file.rootName !== "claude-projects" && file.rootName !== "claude-tasks" && file.rootName !== "openclaw-sessions" && file.rootName !== "copilot-sessions") ||
         typeof file.size !== "number" ||
         typeof file.mtimeMs !== "number" ||
         typeof file.stateKey !== "string" ||
@@ -133,8 +148,8 @@ function readState(): ProjectCatalogState {
       ) {
         continue;
       }
-      const engine = file.engine === "codex" || file.engine === "claude" || file.engine === "shell" || file.engine === "openclaw" ? file.engine : undefined;
-      const fmt = file.fmt === "codex" || file.fmt === "claude" || file.fmt === "plain" || file.fmt === "openclaw" ? file.fmt : undefined;
+      const engine = file.engine === "codex" || file.engine === "claude" || file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? file.engine : undefined;
+      const fmt = file.fmt === "codex" || file.fmt === "claude" || file.fmt === "plain" || file.fmt === "openclaw" || file.fmt === "copilot" ? file.fmt : undefined;
       const cwd = typeof file.cwd === "string" ? file.cwd : file.cwd === null ? null : undefined;
       const sessionStartedAt = typeof file.sessionStartedAt === "string"
         ? file.sessionStartedAt
@@ -219,9 +234,11 @@ function writeState(state: ProjectCatalogState): void {
     operation = "write temporary index";
     target = temporary;
     fs.writeFileSync(temporary, JSON.stringify(state) + "\n", { encoding: "utf8", mode: 0o600 });
+    fsyncPath(temporary);
     operation = "rename temporary index";
     target = filePath;
     fs.renameSync(temporary, filePath);
+    fsyncPath(path.dirname(filePath));
   } catch (error) {
     if (temporary !== undefined) {
       try {
@@ -237,6 +254,7 @@ function writeState(state: ProjectCatalogState): void {
 function isConversation(rootName: RawEntry["rootName"], kind: string): boolean {
   return rootName === "codex-sessions"
     || rootName === "openclaw-sessions"
+    || rootName === "copilot-sessions"
     || (rootName === "claude-projects" && (kind === "session" || kind === "subagent"));
 }
 
@@ -244,6 +262,7 @@ function engineForRoot(rootName: RawEntry["rootName"]): ProjectCatalogFile["engi
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
   if (rootName === "openclaw-sessions") return "openclaw";
+  if (rootName === "copilot-sessions") return "copilot";
   return "shell";
 }
 
@@ -251,6 +270,7 @@ function fmtForRoot(rootName: RawEntry["rootName"]): ProjectCatalogFile["fmt"] {
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
   if (rootName === "openclaw-sessions") return "openclaw";
+  if (rootName === "copilot-sessions") return "copilot";
   return "plain";
 }
 
@@ -260,6 +280,7 @@ function fallbackTitle(raw: RawEntry, kind: string): string {
   if (raw.rootName === "codex-sessions") return "Codex session";
   if (raw.rootName === "claude-projects") return "Claude session";
   if (raw.rootName === "openclaw-sessions") return "OpenClaw session";
+  if (raw.rootName === "copilot-sessions") return "Copilot session";
   return "Background task " + filename.split(".")[0];
 }
 
@@ -434,6 +455,23 @@ function claudeSlug(raw: RawEntry): string | null {
   return path.relative(raw.root, raw.path).split(path.sep)[0] || null;
 }
 
+/** Whether `project` is the local repository id some folder in `folders`
+    minted: of the folder itself, or of the repository it sits in while it
+    exists. */
+function pathDerivedRepositoryKey(project: string, folders: Iterable<string | null | undefined>): boolean {
+  for (const folder of folders) {
+    if (!folder?.trim()) continue;
+    const roots = new Set([folder, repositoryRootForPath(folder)].filter((root): root is string => Boolean(root)));
+    for (const root of roots) {
+      if (localRepositoryProjectId(root) === project) return true;
+    }
+  }
+  return false;
+}
+
+/** Project roots whose remote this process has already put in the ledger. */
+const ledgerRecordedRoots = new Set<string>();
+
 function migrationPlan(
   changes: ReadonlyMap<string, ReadonlySet<string>>,
   groups: ReadonlyMap<string, ProjectCatalogEntry>,
@@ -484,8 +522,13 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   const rootCandidates = new Map<string, Map<string, { count: number; newest: number }>>();
   const projectByPath = new Map<string, string>();
   const previousProjects = new Map<string, string | undefined>();
+  /* The folders a file's previous record named, read before it is
+     re-described: what proves a changed key was minted from a path. */
+  const previousFolders = new Map<string, Array<string | null | undefined>>();
   await forEachCooperatively(raw, (entry) => {
-    previousProjects.set(entry.path, state.files[entry.path]?.project);
+    const previous = state.files[entry.path];
+    previousProjects.set(entry.path, previous?.project);
+    previousFolders.set(entry.path, [previous?.projectRoot, previous?.cwd]);
   });
   const files = await mapCooperatively(raw, (entry) => cachedFile(entry, state, stateKey));
   const complete = options.complete !== false && files.every((file) => file.summaryVersion === PROJECT_SUMMARY_VERSION);
@@ -501,6 +544,8 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
     if (project) files[index]!.project = project;
   });
   const changes = new Map<string, Set<string>>();
+  const changedSourceFolders = new Map<string, Set<string>>();
+  const projectsByCwd = new Map<string, Set<string>>();
   await forEachCooperatively(files, (file) => {
     nextFiles[file.path] = {
       summaryVersion: file.summaryVersion,
@@ -526,11 +571,21 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
       engine: file.engine,
       fmt: file.fmt,
     };
+    if (file.cwd && file.project) {
+      const held = projectsByCwd.get(file.cwd) ?? new Set<string>();
+      held.add(file.project);
+      projectsByCwd.set(file.cwd, held);
+    }
     const previousProject = previousProjects.get(file.path);
     if (previousProject && previousProject !== file.project) {
       const targets = changes.get(previousProject) ?? new Set<string>();
       targets.add(file.project);
       changes.set(previousProject, targets);
+      const folders = changedSourceFolders.get(previousProject) ?? new Set<string>();
+      for (const folder of [...(previousFolders.get(file.path) ?? []), file.cwd, file.projectRoot]) {
+        if (folder?.trim()) folders.add(folder);
+      }
+      changedSourceFolders.set(previousProject, folders);
     }
     const project = file.project || "other";
     projectByPath.set(file.path, project);
@@ -584,7 +639,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
       kind: file.kind,
       fmt: file.fmt,
     });
-    if (!file.session || (file.engine !== "codex" && file.engine !== "claude" && file.engine !== "openclaw")) return;
+    if (!file.session || (file.engine !== "codex" && file.engine !== "claude" && file.engine !== "openclaw" && file.engine !== "copilot")) return;
     conversationCatalog.push({
       path: file.path,
       root: file.rootName,
@@ -607,11 +662,41 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   publishConversationCatalogForScan(conversationCatalog, scanToken, complete);
   if (isCurrentPersistence && persistIndex && complete) {
     let boardHealed = true;
+    const forgeCandidates: ForgeRenameCandidate[] = [];
     if (options.persist !== false) {
+      /* Fill the remote ledger a forge-proven rename reads its old remote from
+         (rename-delegatus.md §2.3), once per project root per process. */
+      for (const group of groups.values()) {
+        if (!group.projectRoot) continue;
+        const seen = `${group.project}\0${group.projectRoot}`;
+        if (ledgerRecordedRoots.has(seen)) continue;
+        ledgerRecordedRoots.add(seen);
+        try {
+          const identity = projectIdentityFromRepositoryRoot(group.projectRoot);
+          if (identity) recordProjectRemote(identity);
+        } catch {
+          ledgerRecordedRoots.delete(seen);
+        }
+      }
       try {
         const plan = migrationPlan(changes, groups);
         if (plan.conflicts.length > 0) throw new Error("ambiguous catalog project identity");
         const migrations = plan.migrations;
+        /* A file re-described under a new key is the same unproven evidence
+           as the durable pass's (§2.4, #2035). Between two repository ids the
+           move is kept only when the old key is path-derived: the local id of
+           the target's checkout, or of a folder the moved files' own records
+           name (a checkout that once resolved as its own repository). Anything
+           else is a changed origin, which only the forge may join; with no
+           ledger entry for the old key it is never asked, and nothing moves. */
+        for (const [source, target] of [...migrations]) {
+          if (!isRepositoryProjectId(source) || !isRepositoryProjectId(target)) continue;
+          const targetRoot = groups.get(target)?.projectRoot ?? null;
+          if (pathDerivedRepositoryKey(source, [targetRoot, ...(changedSourceFolders.get(source) ?? [])])) continue;
+          migrations.delete(source);
+          const candidate = forgeRenameCandidateFor(source, targetRoot);
+          if (candidate) forgeCandidates.push(candidate);
+        }
         const registrations: ProjectAliasRegistration[] = [...migrations].map(([source, target]) => ({
           source,
           target,
@@ -622,6 +707,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
            on every scan, so skipping it here loses nothing while the clean
            registrations, the board migration, and the catalog write proceed. */
         const durable = durableProjectAliasCandidates();
+        forgeCandidates.push(...forgeRenameCandidatesFromMoves(durable.remoteMoves));
         let deferredSources = durable.conflicts.length;
         for (const registration of durable.registrations) {
           const held = migrations.get(registration.source);
@@ -644,6 +730,28 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
         boardHealed = false;
       }
     }
+    if (boardHealed && options.persist !== false) {
+      /* #1874: one working directory under two project keys in the same scan
+         is the signature of a folder whose identity moved (it gained a
+         repository or an origin after first use). Only those cwds are judged,
+         so a scan costs nothing while no folder has moved; the next scan
+         re-projects the old key's conversations through the recorded alias. */
+      try {
+        const movedCwds = [...projectsByCwd].filter(([, projects]) => projects.size > 1);
+        recordProjectSuccessions(movedCwds
+          .flatMap(([cwd, projects]) => [...projects].map((project) => projectSuccessionFor(project, cwd))));
+        /* The same signal, for a remote that changed: a candidate for the
+           forge, which alone may prove it a rename. */
+        forgeCandidates.push(...movedCwds
+          .flatMap(([cwd, projects]) => [...projects].map((project) => forgeRenameCandidateFor(project, cwd)))
+          .filter((candidate): candidate is ForgeRenameCandidate => candidate !== null));
+      } catch {
+        console.error("[project catalog] project identity succession deferred; a later scan will retry");
+      }
+    }
+    /* Network work, so detached from the scan and after its persistence; an
+       unanswered lookup decides nothing and the next scan asks again. */
+    scheduleForgeRenames(forgeCandidates);
     if (boardHealed) {
       writeState({ version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: nextFiles });
     } else {

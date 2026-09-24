@@ -1,4 +1,6 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
+
+afterEach(() => setSystemTime());
 
 import type { DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import {
@@ -434,6 +436,12 @@ test("a reconfigure admitted during an active apply supersedes it before publica
     kind: "runtime.reconfigure",
     eventSeq: 10,
     payload: { operationId: "switch-b", conversationId: "conversation-one", model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "b" },
+  }, {
+    /* An account switch moves the conversation when a message engages it (#1846). */
+    id: "effect:message-engaging",
+    kind: "runtime.send",
+    eventSeq: 9,
+    payload: { operationId: "message-engaging", conversationId: "conversation-one", text: "continue", policy: "queue" },
   }];
   const terminal = new Set<string>();
   const transitions: Array<[string, string, string | null | undefined]> = [];
@@ -470,7 +478,7 @@ test("a reconfigure admitted during an active apply supersedes it before publica
   await Promise.all([firstDrain, rerun]);
 
   expect(applied).toEqual(["switch-c"]);
-  expect(transitions).toEqual([
+  expect(transitions.filter(([operationId]) => operationId.startsWith("switch-"))).toEqual([
     ["switch-b", "applying", undefined],
     ["switch-b", "failed", "superseded"],
     ["switch-c", "applying", undefined],
@@ -1853,6 +1861,7 @@ test("an absent-host kill retries after terminal projection fails", async () => 
     ["kill-retry", "queued", "dead projection unavailable"],
   ]);
 
+  setSystemTime(Date.now() + 1_001);
   await queue.drain();
 
   expect(pending).toBeFalse();
@@ -2114,6 +2123,7 @@ test("an active-host kill retries after terminal projection fails", async () => 
     ["kill-active-retry", "queued", "dead projection unavailable"],
   ]);
 
+  setSystemTime(Date.now() + 1_001);
   await queue.drain();
 
   expect(pending).toBeFalse();

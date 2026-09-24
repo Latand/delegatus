@@ -8,7 +8,7 @@ import { StringDecoder } from "node:string_decoder";
 import { statePath } from "@/lib/configDir";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import type { ProcessIdentity } from "@/lib/agent/registry";
-import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS } from "@/lib/agent/spawnPolicy";
+import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
@@ -38,6 +38,7 @@ import {
   type RuntimeEventCursorRecoveryReporter,
   type RuntimeEventStore,
 } from "./eventStore";
+import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { NATIVE_MULTI_AGENT_DENY_FLAG } from "./hostActivityFlags";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { withTelegramConnectorGrant } from "./telegramConnectorEnv";
@@ -387,6 +388,10 @@ function subscriptionEnv(
   for (const name of CHILD_ENV_ALLOWLIST) if (source[name] !== undefined) env[name] = source[name];
   if (forwardGitHubConfig && source.GH_CONFIG_DIR !== undefined) env.GH_CONFIG_DIR = source.GH_CONFIG_DIR;
   if (claudeConfigDir) env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+  /* The commands this agent runs resolve their own config and state root, not
+     the operator's (#1905). The account home above and the Viewer MCP server's
+     own environment are what keep pointing at the real installation. */
+  withAgentConfigSandbox(env, source, claudeConfigDir);
   /* Provenance the resources rail can verify later: a process wearing this
      command line is only ever treated as the viewer's host — and only ever
      killable from the rail — when it carries this viewer's stamp (#1199). */
@@ -715,6 +720,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         cwd: options.cwd,
         mcpServers: options.mcpServers,
         mcpStatePath: options.mcpStatePath,
+        viewerTransport: viewerMcpTransportForLaunch(env),
       });
       args.push(
         "--settings", settings.settingsPath,

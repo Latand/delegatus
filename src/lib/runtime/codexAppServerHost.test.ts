@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -14,7 +14,10 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { saveTelegramSession, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
-import { encodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
+import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
+import type { SelectedContextRef } from "@/lib/selection/selectedContext";
+
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import type { HostState, RuntimeEvent } from "./engineHost";
 import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn } from "./liveTurn";
@@ -29,6 +32,20 @@ import {
   VOICE_PERSONA_FILE,
   voiceSessionPersona,
 } from "./voicePersona";
+
+const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
+let metadataState: string;
+let previousMetadataState: string | undefined;
+beforeEach(() => {
+  previousMetadataState = process.env.LLV_STATE_DIR;
+  metadataState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-"));
+  process.env.LLV_STATE_DIR = metadataState;
+});
+afterEach(() => {
+  if (previousMetadataState === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = previousMetadataState;
+  fs.rmSync(metadataState, { recursive: true, force: true });
+});
 
 function deliveryDedup(operationId: string): string {
   return createHash("sha256").update(operationId).digest("hex");
@@ -575,7 +592,10 @@ describe("CodexAppServerHost", () => {
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(readWriteServer, readWriteCapture),
     });
-    expect(readWriteCapture.options?.env?.GH_CONFIG_DIR).toBeUndefined();
+    /* The agent no longer inherits XDG_CONFIG_HOME, which is where `gh` found
+       its configuration, so the boundary pins it instead of forwarding it
+       (#1905). A source value still wins where the caller forwards one. */
+    expect(readWriteCapture.options?.env?.GH_CONFIG_DIR).toBe(path.join(os.homedir(), ".config", "gh"));
     await readWriteHost.release();
   });
 
@@ -1339,20 +1359,20 @@ describe("CodexAppServerHost", () => {
 
     expect((await host.health()).activeFlags).toContain(STRUCTURED_IMAGE_CAPABILITY);
     const firstContent = structuredContent("inspect", [first]);
-    expect(await host.send({ id: "image-start", ...firstContent })).toEqual({
+    expect(await host.send({ id: "image-start", ...firstContent, selectedContext: COMPACT_SELECTED, origin: { kind: "operator" } })).toEqual({
       outcome: "turn-started",
       turnId: "turn-1",
     });
     expect(server.requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
       input: [
         { type: "localImage", path: `/runtime-images/${first.sha256}` },
-        { type: "text", text: encodeCodexStructuredUserText("inspect", firstContent.contentDigest, null, null, deliveryDedup("image-start")) },
+        { type: "text", text: encodeCodexStructuredUserText("inspect", firstContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-start")) },
       ],
       clientUserMessageId: "image-start",
     });
 
     const secondContent = structuredContent("", [second]);
-    expect(await host.send({ id: "image-steer", expectedTurnId: "turn-1", ...secondContent })).toEqual({
+    expect(await host.send({ id: "image-steer", expectedTurnId: "turn-1", ...secondContent, selectedContext: COMPACT_SELECTED, origin: { kind: "operator" } })).toEqual({
       outcome: "steered",
       turnId: "turn-1",
     });
@@ -1360,11 +1380,17 @@ describe("CodexAppServerHost", () => {
       expectedTurnId: "turn-1",
       input: [
         { type: "localImage", path: `/runtime-images/${second.sha256}` },
-        { type: "text", text: encodeCodexStructuredUserText("", secondContent.contentDigest, null, null, deliveryDedup("image-steer")) },
+        { type: "text", text: encodeCodexStructuredUserText("", secondContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-steer")) },
       ],
       clientUserMessageId: "image-steer",
     });
     expect(resolved).toEqual([first, second]);
+    for (const method of ["turn/start", "turn/steer"]) {
+      const params = server.requests.find((request) => request.method === method)!.params as { input: Array<{ type: string; text?: string }> };
+      const wire = params.input.find((part) => part.type === "text")!.text!;
+      expect(wire.split("\n")[0]!.length).toBeLessThanOrEqual(96);
+      expect(decodeCodexStructuredUserText(wire).metadataRef).toBeDefined();
+    }
     await host.release();
   });
 
@@ -1487,11 +1513,18 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
     /* The allowlisted env, plus the provenance stamp the resources rail needs
-       to tell this host from any other process wearing the same argv (#1199). */
+       to tell this host from any other process wearing the same argv (#1199),
+       plus the agent's own config and state root (#1905): the commands it runs
+       resolve those, never the operator's, and `gh` is pinned to the
+       operator's configuration because it used to read XDG_CONFIG_HOME. */
+    const sandboxConfig = path.join(os.tmpdir(), "llv-spawn-sandbox", "codex-home", "config");
     expect(captured.options?.env).toEqual({
       NODE_ENV: "test",
       PATH: process.env.PATH,
       CODEX_HOME: "/codex-home",
+      XDG_CONFIG_HOME: sandboxConfig,
+      LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
+      GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
     expect(host.identity).toEqual({ threadId: "thread-149", path: "/sessions/thread-149.jsonl" });
@@ -1941,8 +1974,12 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
 
+    /* The re-hosted agent runs under its own state root; the Viewer MCP
+       connector below is what keeps the real one, so the link still resolves
+       this machine's release (#1905). */
     expect(captured.options?.env).toMatchObject({
-      LLV_STATE_DIR: "fixture-state",
+      XDG_CONFIG_HOME: path.join(os.tmpdir(), "llv-spawn-sandbox", "default", "config"),
+      LLV_STATE_DIR: path.join(os.tmpdir(), "llv-spawn-sandbox", "default", "config", "agent-log-viewer", "state"),
       LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
       LLV_VIEWER_PORT: "8898",
     });
@@ -2165,6 +2202,62 @@ describe("CodexAppServerHost", () => {
     }
   });
 
+  test("a compact record whose metadata is gone costs only that record, never the rollout", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-recipient-dedup-lost-metadata-"));
+    const transcriptPath = path.join(directory, "delivery-thread.jsonl");
+    const metadataDirectory = path.join(metadataState, "structured-user-metadata");
+    const userRecord = (message: string) => JSON.stringify({ timestamp: "t1", type: "event_msg", payload: { type: "user_message", message } });
+    const lost = { id: "operation-lost-metadata", text: "delivered under another state directory" };
+    const kept = { id: "operation-kept-metadata", text: "delivered under this state directory" };
+    const lostWire = encodeCodexStructuredUserText(lost.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(lost.id));
+    for (const file of fs.readdirSync(metadataDirectory)) fs.unlinkSync(path.join(metadataDirectory, file));
+    const keptWire = encodeCodexStructuredUserText(kept.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(kept.id));
+    fs.writeFileSync(transcriptPath, `${userRecord(lostWire)}\n${userRecord(keptWire)}\n`);
+    const server = new FakeAppServer("delivery-thread", "delivery-thread");
+    server.threadPath = transcriptPath;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+    const writes = () => server.requests.filter((request) => request.method === "turn/start" || request.method === "turn/steer");
+    try {
+      expect(() => rolloutTurnsFromDisk(transcriptPath)).not.toThrow();
+      expect(await host.send(kept)).toEqual({ outcome: "turn-started", turnId: kept.id });
+      expect(writes()).toHaveLength(0);
+      /* Its payload cannot be proven, so it cannot authorize a second write. */
+      await expect(host.send(lost)).rejects.toThrow("belongs to a different payload");
+      expect(writes()).toHaveLength(0);
+      expect(await host.send({ id: "operation-after-lost-metadata", text: "a new message" }))
+        .toMatchObject({ outcome: "turn-started" });
+      expect(writes()).toHaveLength(1);
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a rollout written under state directory A still reads from state directory B", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-state-ab-"));
+    const transcriptPath = path.join(directory, "rollout.jsonl");
+    const wire = encodeCodexStructuredUserText("hello from A", undefined, COMPACT_SELECTED, { kind: "agent", role: "orchestrator" }, deliveryDedup("operation-state-a"));
+    const item = { type: "userMessage", id: "user-a", content: [{ type: "text", text: wire }] };
+    fs.writeFileSync(transcriptPath, [
+      { payload: { type: "user_message", message: wire } },
+      { payload: { type: "item_completed", turn_id: "turn-a", item } },
+      { payload: { type: "task_complete", turn_id: "turn-a" } },
+    ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+    const stateB = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-b-"));
+    process.env.LLV_STATE_DIR = stateB;
+    try {
+      expect(rolloutTurnsFromDisk(transcriptPath)).toMatchObject([{ id: "turn-a", items: [{ id: "user-a" }] }]);
+    } finally {
+      process.env.LLV_STATE_DIR = metadataState;
+      fs.rmSync(stateB, { recursive: true, force: true });
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test.each([false, true])("a bounded tail starting inside a marker-bearing record preserves send dedup (already delivered: %s)", async (alreadyDelivered) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tail-boundary-"));
     const transcriptPath = path.join(directory, "delivery-thread.jsonl");
@@ -2309,11 +2402,13 @@ describe("CodexAppServerHost", () => {
         entryId: "long-history-send", conversationId: "conversation_fixture",
         binding: {threadId: "long-native-thread", accountId: "fixture"},
         clientUserMessageId: "long-history-send", nativeSubmissionId: "native-submission",
-        revision: 1, versions: [{revision: 1, operationId: "long-history-send", text: "Continue the authorized review", images: [], contentDigest: "fixture-digest"}],
+        revision: 1, versions: [{revision: 1, operationId: "long-history-send", text: "Continue the authorized review", images: [], contentDigest: "fixture-digest", selectedContext: COMPACT_SELECTED, origin: { kind: "agent", role: "orchestrator" }}],
         profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null,
         dispatchedRevision: null, dispatchedTurnId: null, proof: null, reason: null,
       };
       entry.versions[0].input = await host.nativeQueue!.prepare(entry, entry.versions[0]);
+      const preparedText = entry.versions[0].input.find((part) => part.type === "text");
+      expect(preparedText?.type === "text" && preparedText.text.split("\n")[0]!.length).toBeLessThanOrEqual(96);
       const user = {type: "userMessage", id: "canonical-user", clientId: entry.clientUserMessageId, content: entry.versions[0].input};
       // Match the observed 316-turn, roughly 2,500-item / 12 MB projection.
       // The target is recent; reading unrelated history must fit the original
@@ -2982,6 +3077,48 @@ describe("CodexAppServerHost", () => {
     stopPersistence();
     await host.release();
     fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  test("a native queue turn started during resume survives its idle snapshot", async () => {
+    const threadId = "queue-start-during-idle-resume";
+    const turnId = "queued-turn";
+    const eventStore = new MemoryEventStore();
+    const server = new FakeAppServer(threadId, threadId, false, [], { type: "idle" }, [
+      { method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: ["running"] } } },
+      { method: "turn/started", params: { threadId, turn: { id: turnId } } },
+    ]);
+    const host = await CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server),
+    });
+    try {
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: turnId });
+      expect(eventStore.load(threadId).filter(event => event.kind === "turn-ended")).toEqual([]);
+      await host.interrupt(turnId);
+      expect(server.requests.some(request => request.method === "turn/interrupt")).toBeTrue();
+    } finally {
+      await host.release();
+    }
+  });
+
+  test("a buffered start cannot reopen a turn the resume history proves terminal", async () => {
+    const threadId = "buffered-start-terminal-history";
+    const turnId = "completed-before-snapshot";
+    const eventStore = new MemoryEventStore();
+    const server = new FakeAppServer(threadId, threadId, false, [
+      { id: turnId, status: "completed", items: [] },
+    ], { type: "idle" }, { method: "turn/started", params: { threadId, turn: { id: turnId } } });
+    const host = await CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server),
+    });
+    try {
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(eventStore.load(threadId).filter(event => event.kind === "turn-started")).toHaveLength(1);
+      expect(eventStore.load(threadId).filter(event => event.kind === "turn-ended")).toEqual([
+        expect.objectContaining({ turnId, status: "completed" }),
+      ]);
+    } finally {
+      await host.release();
+    }
   });
 
   test("a newer buffered turn survives the stale snapshot of its completed predecessor", async () => {

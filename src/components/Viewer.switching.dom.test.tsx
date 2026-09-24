@@ -705,9 +705,10 @@ test("desktop: a cold deep link from the URL still resolves a beyond-cap convers
 
 /*
  * The phone's switching gesture is the BOARD (mobile v2 lane 2, README §4.1,
- * §3.3): the leaf with no conversation on top of the navigation stack is the
- * triage list, a row opens its conversation over it, and ‹ pops back onto the
- * list that is still there underneath. The retired shape — a focused pane the
+ * §3.3; the status columns since #2072 slice 4): the leaf with no
+ * conversation on top of the navigation stack is the board, a row opens its
+ * conversation over it, and ‹ pops back onto the board that is still there
+ * underneath. The retired shape — a focused pane the
  * viewport opens on, with a scrolling chip strip for switching — is what these
  * three tests used to drive; what they measure is unchanged and is the point:
  * a REVISIT paints from cache, in the same synchronous flush as the gesture,
@@ -730,10 +731,11 @@ async function switchRow(host: HTMLElement, title: string): Promise<HTMLButtonEl
   if (!row) throw new Error(`no switcher row for ${title}`);
   return row;
 }
-/** The board leaf, and one of its conversation rows. */
-const onBoard = (host: HTMLElement) => host.querySelector("[data-mobile2-board]") !== null;
+/** The board leaf (the status columns since #2072 slice 4), and the row that
+    opens one of its conversations. */
+const onBoard = (host: HTMLElement) => host.querySelector("[data-phone-kanban]") !== null;
 const boardRow = (host: HTMLElement, path: string) =>
-  host.querySelector(`[data-mobile2-row="conversation"][data-mobile2-path="${path}"]`) as HTMLButtonElement | null;
+  host.querySelector(`[data-phone-kanban] [data-phone-card-agent="${path}"]`) as HTMLButtonElement | null;
 /** The bar's ‹: the same pop the platform back gesture performs. */
 async function popToBoard(host: HTMLElement): Promise<void> {
   await click(host.querySelector("[data-mobile2-back]")!);
@@ -887,7 +889,7 @@ test("phone: switching project through the project sheet paints the revisited bo
   });
   const after = probe.snapshot();
   record("phone", "project switch (revisit) → board rows painted from cache", paint,
-    `skeleton ${sawSkeleton ? "shown" : "never"}; dashboard mounts +${after.mounts.ProjectDashboardView ?? 0}; MobileBoard mounts ${after.mounts.MobileBoard ?? 0}; BranchPane mounts ${after.mounts.BranchPane ?? 0}`);
+    `skeleton ${sawSkeleton ? "shown" : "never"}; dashboard mounts +${after.mounts.ProjectDashboardView ?? 0}; MobileKanban mounts ${after.mounts.MobileKanban ?? 0}; BranchPane mounts ${after.mounts.BranchPane ?? 0}`);
   expect(sawSkeleton).toBe(false);
   expect(paint.virtualMs).toBe(0);
   expect(after.mounts.ProjectDashboardView ?? 0).toBe(0);
@@ -927,8 +929,13 @@ test("phone: the bar's badge counts THIS project's queue and its pipelines, not 
   pipelines = [{
     id: "pipeline_alpha_lane", task: "Rebuild the board status projection", taskIds: [], project: "alpha",
     repoDir: "/repos/alpha", worktreeDir: "/repos/alpha-lane", branch: "lane", baseBranch: "main", baseRef: "main",
-    lastPassedCommit: "", stages: [{ id: "implement", kind: "run" }, { id: "review", kind: "review-loop" }],
-    runs: [{ stageId: "review", attempts: [{ n: 2, state: "failed", verdict: { status: "fail", findings: ["one"] }, completedAt: "2100-01-01T00:00:00.000Z" }] }],
+    /* Every stage and attempt carries the role it runs under, as the engine
+       records it: the task projection the columns read relies on it. */
+    lastPassedCommit: "", stages: [
+      { id: "implement", kind: "run", effectiveRole: { roleId: "builder", access: "read-write", promptScaffold: null } },
+      { id: "review", kind: "review-loop", effectiveRole: { roleId: "reviewer", access: "read-only", promptScaffold: null } },
+    ],
+    runs: [{ stageId: "review", attempts: [{ n: 2, state: "failed", effectiveRole: { roleId: "reviewer", access: "read-only", promptScaffold: null }, verdict: { status: "fail", findings: ["one"] }, completedAt: "2100-01-01T00:00:00.000Z" }] }],
     cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
     state: "needs_decision", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
     createdAt: "2100-01-01T00:00:00.000Z", closedAt: null,
@@ -942,10 +949,9 @@ test("phone: the bar's badge counts THIS project's queue and its pipelines, not 
   /* One queued conversation in this project and one pipeline: two, and the
      other project's queued row is not one of them. */
   expect(badge()!.getAttribute("data-mobile2-attention-count")).toBe("2");
-  const queuedRows = Array.from(host.querySelectorAll('[data-mobile2-board] [data-mobile2-row]'))
-    .filter((row) => ["waiting", "needs_decision"].includes(row.getAttribute("data-mobile2-state") ?? ""));
+  const queuedRows = Array.from(host.querySelectorAll('[data-phone-kanban] [data-phone-card][data-needs="1"]'));
   expect(queuedRows).toHaveLength(2);
-  expect(host.querySelector('[data-mobile2-path="/sessions/beta/waiting.jsonl"]')).toBeNull();
+  expect(host.querySelector('[data-phone-card-agent="/sessions/beta/waiting.jsonl"]')).toBeNull();
 
   /* The sheet the badge opens lists exactly those two, in the same words. */
   await click(badge()!);

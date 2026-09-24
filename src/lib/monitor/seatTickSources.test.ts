@@ -38,7 +38,7 @@ const { projectForCwd } = await import("@/lib/scanner/describe");
 import type { OriginalSendEvidence, SendReceipt } from "@/lib/runtime/sendSettlement";
 import type { SeatTickJournalReceipt } from "./seatTickSources";
 import type { SeatTickSources } from "./seatTickSources";
-const { DEFAULT_SEAT_TICK_POLICY, seatTickBoardMoved, seatTickDecision, seatTickWakeCommit } = await import("./seatTick");
+const { DEFAULT_SEAT_TICK_POLICY, seatTickBoardMoved, seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
 const { defaultSeatTickSettings } = await import("./seatTickSettings");
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import type { OpenPullRequest, OpenPullRequestsUnavailable } from "./githubEvidence";
@@ -372,6 +372,27 @@ test("a project whose only lane is hidden is not a project the tick checks (#127
   expect(projects).toEqual([]);
 });
 
+/* A reversible dismiss discharges a parked lane's wakes: the seat was woken
+   at every interval for superseded lanes the operator had dismissed off the
+   board. `undismiss` clears the field and the lane is evidence again. */
+test("a dismissed parked lane raises no wake, and undismissing it restores the lane", async () => {
+  const parked = { id: "pipeline_parked", state: "needs_decision", pausedState: "needs_decision", stateDetail: "parked" };
+  const dismissed = await gather({ pipelines: [lane({ ...parked, dismissedAt: "2026-08-28T11:40:00.000Z" })] });
+  expect(dismissed.pipelines).toEqual([]);
+  expect(reasonsOf(seatTickDecision(dismissed))).toEqual([]);
+  expect(seatTickProjects({
+    ...sources({}),
+    activeSeats: () => [],
+    pipelines: () => [lane({ ...parked, project: "dismissed-only", dismissedAt: "2026-08-28T11:40:00.000Z" })] as never,
+    tasks: () => [] as never,
+  })).toEqual([]);
+
+  const restored = await gather({ pipelines: [lane({ ...parked, dismissedAt: null })] });
+  expect(restored.pipelines.map((pipeline) => pipeline.id)).toEqual(["pipeline_parked"]);
+  // The parked lane is a stalled item again, carried by the interval wake.
+  expect(reasonsOf(seatTickDecision(restored))).toEqual(["interval"]);
+});
+
 test("the check carries the project's own tick settings, expiry already applied (#1275)", async () => {
   const unconfigured = await gather({});
   expect(unconfigured.settings).toMatchObject({ enabled: true, isDefault: true, configured: false });
@@ -585,6 +606,7 @@ function finishedLane(over: Record<string, unknown> = {}): Record<string, unknow
     state: "completed",
     cursor: null,
     runs: [],
+    createdAt: "2026-08-27T09:00:00.000Z",
     closedAt: new Date(NOW - 14 * 60 * 60_000).toISOString(),
     ...over,
   });
@@ -636,6 +658,7 @@ function openPullRequest(over: Partial<OpenPullRequest> = {}): OpenPullRequest {
     number: 1289,
     title: "wake on a merge that is waiting",
     headRefName: "topic-merge-queue",
+    createdAt: "2026-08-27T10:00:00.000Z",
     updatedAt: new Date(NOW - 30 * 60_000).toISOString(),
     ...over,
   };
@@ -765,12 +788,12 @@ test("a project whose tick is off asks GitHub nothing", async () => {
 /** The same lane, three days later: out of the hot store, into cold storage,
     and its pull request still unmerged. */
 function archivedLane(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return finishedLane({ closedAt: new Date(NOW - 5 * DAY_MS).toISOString(), ...over });
+  return finishedLane({ createdAt: new Date(NOW - 6 * DAY_MS).toISOString(), closedAt: new Date(NOW - 5 * DAY_MS).toISOString(), ...over });
 }
 
 test("a lane that has been archived still owes its open pull request", async () => {
   const input = await gather(
-    { pipelines: [], archivedPipelines: [archivedLane()], openPullRequests: [openPullRequest()] },
+    { pipelines: [], archivedPipelines: [archivedLane()], openPullRequests: [openPullRequest({ createdAt: new Date(NOW - 5.5 * DAY_MS).toISOString() })] },
     withCursor(0, OVERDUE),
   );
   expect(input.pullRequests).toEqual([{
@@ -789,7 +812,7 @@ test("a lane that has been archived still owes its open pull request", async () 
 test("an archived lane names the repository the pull requests are read from", async () => {
   const calls: { cwd: string; limit: number }[] = [];
   await gather(
-    { pipelines: [], archivedPipelines: [archivedLane()], openPullRequests: [openPullRequest()], pullRequestCalls: calls },
+    { pipelines: [], archivedPipelines: [archivedLane()], openPullRequests: [openPullRequest({ createdAt: new Date(NOW - 5.5 * DAY_MS).toISOString() })], pullRequestCalls: calls },
     withCursor(0, OVERDUE),
   );
   expect(calls).toEqual([{ cwd: "/srv/repo", limit: 60 }]);
@@ -1490,7 +1513,7 @@ interface ChildRegistry {
   project: string;
   seatId: string;
   now: number;
-  spawn(options: { title: string; turn?: "busy" | "idle" | "terminal" | "unknown"; terminalAt?: string | null; host?: "live" | "dead" | "idle" | null; cwd?: string; unobserved?: boolean; parent?: string }): { id: string; launchId: string; path: string };
+  spawn(options: { title: string; turn?: "busy" | "idle" | "terminal" | "unknown"; terminalAt?: string | null; host?: "live" | "dead" | "idle" | null; cwd?: string; unobserved?: boolean; parent?: string; transcriptPath?: string; ledger?: boolean }): { id: string; launchId: string; path: string };
 }
 
 function childRegistry(name: string): ChildRegistry {
@@ -1512,7 +1535,7 @@ function childRegistry(name: string): ChildRegistry {
     now,
     spawn(options) {
       const childCwd = options.cwd ?? cwd;
-      const childPath = path.join(SESSIONS, `${crypto.randomUUID()}.jsonl`);
+      const childPath = options.transcriptPath ?? path.join(SESSIONS, `${crypto.randomUUID()}.jsonl`);
       fs.writeFileSync(childPath, "");
       const observed = options.unobserved ? null : registry.ensureConversation("claude", childPath, null);
       const begun = registry.beginSpawnRequest({
@@ -1538,7 +1561,7 @@ function childRegistry(name: string): ChildRegistry {
       if (options.host) {
         registry.upsert({ key: sessionKeyFromTranscript("claude", childPath)!, artifactPath: childPath, cwd: childCwd, accountId: null, status: options.host, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
       }
-      if (observed && (options.turn === "terminal" || (options.turn === "idle" && options.host !== "idle"))) {
+      if (observed && (options.ledger ?? (options.turn === "terminal" || (options.turn === "idle" && options.host !== "idle")))) {
         const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
         ledger.append(observed.generations[0]!.id, { kind: "turn-started", turnId: "turn-one", seq: 1 });
         ledger.append(observed.generations[0]!.id, { kind: "turn-ended", turnId: "turn-one", status: "completed", seq: 2 });
@@ -1774,4 +1797,133 @@ test("a lane that parked before it ran a stage carries why it never started (#17
      the settlement it always had. */
   const afterAStage = lane({ srcConversationId: CONVERSATION, state: "needs_decision", stateDetail: "the reviewer asked" });
   expect((await gather({ pipelines: [afterAStage] })).ownLanes).toMatchObject([{ settled: "needs_decision" }]);
+});
+
+/* #1938: a spent review budget whose last fix wrote a new head is its own
+   settlement, carrying both heads and the verdict, and its pull request is
+   never one "left open by a lane that finished". */
+const NEEDS_REVIEW = {
+  stageId: "review", attempt: 2, fixStageId: "build", fixAttempt: 3,
+  reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), verdict: "fail", findings: 2, at: "2026-08-28T11:30:00.000Z",
+};
+
+test("a lane parked in needs_review settles as needs_review with the reviewed head, the current head and the last verdict (#1938)", async () => {
+  const parked = lane({ srcConversationId: CONVERSATION, state: "needs_review", cursor: null, reviewPending: NEEDS_REVIEW });
+  expect((await gather({ pipelines: [parked] })).ownLanes).toMatchObject([{
+    id: "pipeline_a1",
+    settled: "needs_review",
+    review: { stageId: "review", reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), lastVerdict: "fail", findings: 2 },
+  }]);
+});
+
+test("a needs_review lane's pull request is not one a finished lane left open (#1938)", async () => {
+  const parked = finishedLane({ state: "needs_review", closedAt: null, reviewPending: NEEDS_REVIEW });
+  const input = await gather({ pipelines: [parked], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(input.pullRequests).toEqual([]);
+});
+
+/* ---------------------------------------------------------------------------
+ * A seat is woken when an agent it spawned finishes (#1881)
+ *
+ * Fresh state, a designated seat, one child spawned outside any pipeline with
+ * the seat as its lineage source, and the child ending its turn — read by the
+ * production gather and decided by the production pre-check.
+ * ------------------------------------------------------------------------- */
+
+/** The check the controller runs: gather, decide, and land the wake if one is
+    raised, so the next check sees the state a delivered wake leaves. */
+async function childCheck(fixture: ChildRegistry, now: number, state: SeatTickProjectState) {
+  const input = await childGather(fixture, { now }, state);
+  const decision = seatTickDecision(input);
+  const plan = seatTickWakeCommitPlan(decision.verdict, {
+    fingerprint: input.changeFingerprint,
+    eventsThrough: decision.state.eventsThrough ?? 0,
+    terminalChildren: input.children.filter((child) => child.status === "terminal").flatMap((child) => [child.outcomeId ?? child.conversationId]),
+  });
+  const landed = plan ? seatTickWakeCommit(decision.state, plan, now) : decision.state;
+  return { input, decision, state: landed };
+}
+
+function settleChild(fixture: ChildRegistry, child: { id: string; path: string }, title: string, at: number): void {
+  fixture.registry.reconcileConversations([{
+    engine: "claude",
+    path: child.path,
+    accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: fixture.cwd, title }),
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: new Date(at).toISOString(),
+  }]);
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  const generation = fixture.registry.conversation(child.id as never)!.generations[0]!.id;
+  ledger.append(generation, { kind: "turn-started", turnId: "turn-one", seq: 1 });
+  ledger.append(generation, { kind: "turn-ended", turnId: "turn-one", status: "completed", seq: 2 });
+}
+
+test("a child settling its turn wakes the seat at the next check, not an hour after the last wake (#1881)", async () => {
+  const fixture = childRegistry("settles-1881");
+  /* The structured host stays up after the turn ends, as it does in
+     production: the registry's turn state is what says the child finished. */
+  const child = fixture.spawn({ title: "reviewer one", turn: "busy", host: "idle" });
+  const first = await childCheck(fixture, fixture.now, emptySeatTickState());
+  expect(first.input.children).toMatchObject([{ conversationId: child.id, status: "running" }]);
+  /* Whatever the first check did, the next one comes one check interval later
+     and the child has ended its turn in between. */
+  const later = fixture.now + DEFAULT_SEAT_TICK_POLICY.checkIntervalMs;
+  settleChild(fixture, child, "reviewer one", later - MINUTE_MS);
+  const second = await childCheck(fixture, later, first.state);
+  expect(second.input.children).toMatchObject([{ conversationId: child.id, status: "terminal", outcome: "finished", transcript: "readable" }]);
+  expect(second.decision.verdict.kind).toBe("wake");
+  if (second.decision.verdict.kind !== "wake") return;
+  expect(second.decision.verdict.reasons.map((reason) => reason.kind)).toContain("child-terminal");
+  expect(second.decision.verdict.items).toContainEqual(expect.objectContaining({ kind: "child", id: child.id }));
+});
+
+test("a child recorded through a symlink into a scanner root is readable (#1881)", async () => {
+  const fixture = childRegistry("symlinked-1881");
+  const alias = path.join(SANDBOX, `sessions-alias-${crypto.randomUUID()}`);
+  fs.symlinkSync(SESSIONS, alias);
+  const child = fixture.spawn({ title: "linked worker", turn: "idle", host: "dead", transcriptPath: path.join(alias, `${crypto.randomUUID()}.jsonl`) });
+  const input = await childGather(fixture);
+  expect(input.children).toMatchObject([{ conversationId: child.id, status: "terminal", transcript: "readable" }]);
+});
+
+test("a finished child whose transcript is gone still wakes the seat, with the reason named once (#1881)", async () => {
+  const fixture = childRegistry("unreadable-1881");
+  const child = fixture.spawn({ title: "reviewer two", turn: "idle", host: "dead" });
+  fs.rmSync(child.path);
+  const check = await childCheck(fixture, fixture.now, emptySeatTickState());
+  expect(check.input.children).toMatchObject([{ conversationId: child.id, status: "terminal", transcript: "unresolvable", transcriptReason: "missing" }]);
+  expect(check.decision.verdict.kind).toBe("wake");
+  if (check.decision.verdict.kind !== "wake") return;
+  expect(check.decision.verdict.reasons.map((reason) => reason.kind)).toContain("child-terminal");
+  const line = check.decision.verdict.items.find((item) => item.id === child.id);
+  expect(line?.label).toContain("reviewer two — spawned child finished, transcript not readable: the transcript file is no longer on disk");
+  expect(check.decision.verdict.skippedChildren.unreadable).toBe(0);
+});
+
+test("a seat's settled deploy is gathered, and one requested past the backlog bound is never read off the ledger (#2063)", async () => {
+  const ledgerReads: string[] = [];
+  const record = (deploymentId: string, minutesAgo: number, conversationId = CONVERSATION) => ({
+    deploymentId, conversationId, project: PROJECT, revision: "c".repeat(40),
+    requestedAt: new Date(NOW - minutesAgo * 60_000).toISOString(),
+  });
+  const records = [
+    record("deploy-stale", 4 * 24 * 60),
+    record("deploy-fresh", 10),
+    record("deploy-announced", 30),
+    record("deploy-other-seat", 10, "conversation_other_seat"),
+  ];
+  const base = sources({});
+  const input = await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), announcedDeploys: ["deploy-announced"] }, DEFAULT_SEAT_TICK_POLICY, {
+    ...base,
+    seatDeployments: (conversationId) => records.filter((row) => row.conversationId === conversationId),
+    deployment: (deploymentId) => {
+      ledgerReads.push(deploymentId);
+      return { state: "ok", value: { deploymentId, phase: "succeeded", terminal: true, revision: "c".repeat(40), error: null, updatedAt: new Date(NOW - 60_000).toISOString() } } as never;
+    },
+  });
+  expect(input.settledDeploys).toEqual([{
+    deploymentId: "deploy-fresh", phase: "succeeded", sha: "c".repeat(40), error: null, settledAt: new Date(NOW - 60_000).toISOString(),
+  }]);
+  expect(ledgerReads).toEqual(["deploy-fresh"]);
 });

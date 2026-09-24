@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
-import { viewerMcpServerEntry } from "./agent/spawnPolicy";
-import { headlessCodexThreadConfig } from "./codexHeadlessConfig";
+import { viewerMcpHttpCodexEntry, viewerMcpServerEntry, viewerMcpServerEnv } from "./agent/spawnPolicy";
+import { codexViewerOverHttp, headlessCodexThreadConfig } from "./codexHeadlessConfig";
 
 test("headless Codex threads allow only the registered Viewer MCP server", () => {
   expect(headlessCodexThreadConfig({
@@ -13,7 +13,14 @@ test("headless Codex threads allow only the registered Viewer MCP server", () =>
     },
   })).toEqual({
     mcp_servers: {
-      viewer: { command: "agent-log-viewer-mcp", enabled: true, default_tools_approval_mode: "approve" },
+      /* The thread runs under the agent's own config root, so the Viewer
+         server carries the real one itself (#1905). */
+      viewer: {
+        command: "agent-log-viewer-mcp",
+        env: viewerMcpServerEnv(),
+        enabled: true,
+        default_tools_approval_mode: "approve",
+      },
       docs: { enabled: false },
     },
     features: { plugins: false, apps: false, multi_agent: false, realtime_conversation: true },
@@ -142,6 +149,7 @@ test("a replayed Viewer entry drops the unset fields config/read reports as null
     command: "bun",
     args: ["/opt/viewer/bin/mcp-server.mjs"],
     environment_id: "local",
+    env: viewerMcpServerEnv(),
     enabled: true,
     default_tools_approval_mode: "approve",
   });
@@ -159,4 +167,59 @@ test("a replayed Viewer entry keeps a timeout the operator actually set (#1410)"
   }) as { mcp_servers: Record<string, Record<string, unknown>> };
 
   expect(thread.mcp_servers.viewer.tool_timeout_sec).toBe(120);
+});
+
+test("over HTTP, a thread with no registered Viewer reaches the shared endpoint by URL and capability header", () => {
+  const config = headlessCodexThreadConfig({ config: { mcp_servers: { docs: {} } } }, false, undefined, undefined, "http");
+  expect(config.mcp_servers).toEqual({
+    docs: { enabled: false },
+    viewer: {
+      url: "http://127.0.0.1:8898/api/mcp",
+      env_http_headers: { "x-llv-spawn-capability": "LLV_SPAWN_CAPABILITY" },
+      enabled: true,
+      default_tools_approval_mode: "approve",
+    },
+  });
+  /* The header names the variable Codex reads; the capability itself is never
+     written into the thread configuration. */
+  expect(JSON.stringify(config)).not.toContain("command");
+  expect(viewerMcpHttpCodexEntry()).toEqual({
+    url: "http://127.0.0.1:8898/api/mcp",
+    env_http_headers: { "x-llv-spawn-capability": "LLV_SPAWN_CAPABILITY" },
+  });
+});
+
+test("over HTTP, an account that registers the Viewer over HTTP is pointed at the shared endpoint and given no env", () => {
+  const config = headlessCodexThreadConfig({
+    config: { mcp_servers: { viewer: { url: "http://127.0.0.1:9999/api/mcp", tool_timeout_sec: null } } },
+  }, false, undefined, undefined, "http");
+  expect(config.mcp_servers).toEqual({
+    viewer: {
+      url: "http://127.0.0.1:8898/api/mcp",
+      env_http_headers: { "x-llv-spawn-capability": "LLV_SPAWN_CAPABILITY" },
+      enabled: true,
+      default_tools_approval_mode: "approve",
+    },
+  });
+});
+
+test("over HTTP, a stdio registration keeps the thread on stdio, because Codex cannot layer a url over a command", () => {
+  /* codex-cli 0.155.1 refuses `thread/start` with "url is not supported for
+     stdio" when a thread's table adds `url` to a registered `command`. */
+  const registered = { command: "bun", args: ["/viewer/bin/mcp-server.mjs"] };
+  expect(codexViewerOverHttp(registered, "http")).toBe(false);
+  const config = headlessCodexThreadConfig({ config: { mcp_servers: { viewer: registered } } }, false, undefined, undefined, "http");
+  expect(config.mcp_servers).toEqual({
+    viewer: { ...registered, env: viewerMcpServerEnv(), enabled: true, default_tools_approval_mode: "approve" },
+  });
+});
+
+test("on stdio, an HTTP registration is replayed as registered and never given a stdio env", () => {
+  const registered = { url: "http://127.0.0.1:8898/api/mcp", env_http_headers: { "x-llv-spawn-capability": "LLV_SPAWN_CAPABILITY" } };
+  const config = headlessCodexThreadConfig({ config: { mcp_servers: { viewer: registered } } });
+  expect(config.mcp_servers).toEqual({
+    viewer: { ...registered, enabled: true, default_tools_approval_mode: "approve" },
+  });
+  expect(codexViewerOverHttp(null, "stdio")).toBe(false);
+  expect(codexViewerOverHttp(null, "http")).toBe(true);
 });

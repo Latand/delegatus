@@ -7,7 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
 import { viewBus, type ViewSlice } from "@/hooks/viewPresenceBus";
-import { answerAttentionRequest, attentionForDevice, raiseAttentionRequest } from "@/lib/attention/service";
+import { answerAttentionRequest, attentionForDevice, attentionRecordsForSurface, raiseAttentionRequest } from "@/lib/attention/service";
 import { readAttentionFile } from "@/lib/attention/store";
 import { OFFER_TTL_MS, type FocusRect } from "@/lib/attention/types";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
@@ -16,7 +16,11 @@ import { validateAttentionEvent } from "@/lib/attention/validation";
 import { buildFocusFrameIndex, type FocusLayoutSlice } from "@/components/scheme/focusFrames";
 import type { MiniStack, SchemeRect } from "@/components/scheme/layout";
 
+import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
+import { resetFilesClientCacheForTests, useFiles } from "@/hooks/useFiles";
+
 import { AttentionHost, resetHandoffTransactionsForTest } from "./AttentionHost";
+import { ARRIVAL_PULSE_ATTRIBUTE, cancelArrivalPulse } from "./arrivalPulse";
 import { createFocusHandoffBus, type BoardFocusController } from "./focusHandoffBus";
 import { claimHandoff, readHandoffClaim } from "./handoffClaim";
 import { setLeftShellInset } from "../shellLayout";
@@ -89,6 +93,7 @@ beforeEach(() => {
   viewBus.reportSlice(WHERE_I_WAS);
 });
 afterEach(async () => {
+  cancelArrivalPulse();
   for (const root of roots) flushSync(() => root.unmount());
   roots = [];
   setLeftShellInset(0);
@@ -130,7 +135,17 @@ function transport(): typeof fetch {
       throw new TypeError("Failed to fetch");
     }
     if (!init?.body) {
-      return { ok: true, status: 200, json: async () => ({ ok: true, ...attentionForDevice(DEVICE, { now }) }) };
+      /* The route reads the lanes this device says it is holding off the query
+         string; the read answers for them (#1836). */
+      const params = new URL(url, "http://localhost/").searchParams;
+      const echoedPipelineIds = (params.get("echoes") ?? "")
+        .split(",").map((id) => id.trim()).filter((id) => id.length > 0);
+      /* The phone names no device and asks for the rows alone. */
+      if (!params.get("deviceId")) {
+        if (params.get("records") !== "only") return { ok: false, status: 400, json: async () => ({ error: "INVALID_REQUEST" }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, ...attentionRecordsForSurface({ now, echoedPipelineIds }) }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, ...attentionForDevice(DEVICE, { now, echoedPipelineIds }) }) };
     }
     const id = decodeURIComponent(url.split("/").pop()!);
     const outcome = answerAttentionRequest(id, validateAttentionEvent(JSON.parse(init.body)), { now });
@@ -166,7 +181,7 @@ function memoryStorage(): Pick<Storage, "getItem" | "setItem" | "removeItem"> {
 }
 let tabClaims = memoryStorage();
 
-function board(rects: Record<string, FocusRect>, project = "demo") {
+function board(rects: Record<string, FocusRect>, project = "demo", pulseSelectors?: Record<string, string>) {
   const bus = createFocusHandoffBus();
   const log: BoardLog = { moved: [], restored: [] };
   const opened: string[] = [];
@@ -186,6 +201,9 @@ function board(rects: Record<string, FocusRect>, project = "demo") {
       boardRevision: 9,
       rectFor: (key) => rects[key] ?? null,
       named: [{ key: ANCHOR, label: "Reviewer — login fix", rect: LIVE_RECT }],
+      /* What this board says it DREW the anchor as — the arrival pulse's
+         target. A board that answers none marks nothing. */
+      ...(pulseSelectors ? { pulseSelectorFor: (key: string) => pulseSelectors[key] ?? null } : {}),
     },
     moveTo: ({ rect }) => {
       log.moved.push(rect);
@@ -483,8 +501,11 @@ test("mobile never moves its board, renders nothing, and leaves the request for 
   await settle();
   for (let i = 0; i < 5; i += 1) await poll();
 
-  /* Not one request, so the phone cannot even report having seen the offer. */
-  expect(calls).toEqual([]);
+  /* Not one request names this device and nothing is posted, so the phone
+     cannot even report having seen the offer. The only read it makes is the
+     rows-only one that draws a freshly admitted lane (#1836). */
+  expect(calls.length).toBeGreaterThan(0);
+  expect(calls.every((url) => url.startsWith("/api/attention?records=only"))).toBe(true);
   expect(log.moved).toEqual([]);
   expect(dom.document.body.textContent).toBe("");
   expect(one("[data-testid='focus-return-chip']")).toBeNull();
@@ -1176,4 +1197,165 @@ test("a desktop landing awaiting confirmation cannot announce after a mobile rou
   expect(record().state).toBe("following");
   expect(strip() === null).toBe(true);
   expect(clock.callbacks).toHaveLength(0);
+});
+
+/* ── Where the view was taken (#1836 item 4) ──────────────────────────────── */
+
+/** The card the board draws for the request's anchor, in the page. */
+function landedCard(): HTMLElement {
+  const card = dom.document.createElement("div");
+  card.className = "card";
+  card.setAttribute("data-id", "task:landed");
+  dom.document.body.appendChild(card);
+  return card as unknown as HTMLElement;
+}
+
+const CARD_SELECTOR = '.card[data-id="task:landed"]';
+
+test("an arrival marks the card it landed on, and the mark takes itself off", async () => {
+  const card = landedCard();
+  const { bus } = board({ [ANCHOR]: LIVE_RECT }, "demo", { [ANCHOR]: CARD_SELECTOR });
+  raise();
+  mount(bus, { pulseMs: 30 });
+  await settle();
+
+  /* The handoff landed, so the operator is looking somewhere new — and the
+     card says which one it is. */
+  expect(record().state).toBe("following");
+  /* `lift` rather than `on`: this card is in normal flow, so the mark may give
+     it the paint order without moving it. */
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("lift");
+
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  /* Temporarily, the operator said: nothing was clicked and it is gone. */
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBeNull();
+});
+
+test("a move the operator made themselves marks nothing", async () => {
+  const card = landedCard();
+  const { bus } = board({ [ANCHOR]: LIVE_RECT }, "demo", { [ANCHOR]: CARD_SELECTOR });
+  raiseAttentionRequest({
+    origin: "operator",
+    target: { kind: "conversation", path: ANCHOR },
+    frameAtCreation: { project: "demo", rect: RAISED_RECT, boardRevision: 4 },
+    intent: "show",
+    reason: "Take me to the reviewer.",
+    offeredTo: [DEVICE],
+  }, { now, id: "attention_1" });
+  mount(bus, { pulseMs: 30 });
+  await settle();
+
+  expect(record().state).toBe("following");
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBeNull();
+});
+
+test("Return takes the mark off with it", async () => {
+  const card = landedCard();
+  const { bus } = board({ [ANCHOR]: LIVE_RECT }, "demo", { [ANCHOR]: CARD_SELECTOR });
+  raise();
+  mount(bus, { pulseMs: 100_000 });
+  await settle();
+  /* `lift` rather than `on`: this card is in normal flow, so the mark may give
+     it the paint order without moving it. */
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("lift");
+
+  click(one("[data-testid='attention-return']")!);
+  await settle();
+
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBeNull();
+});
+
+test("a lane the read pushed and the server then dropped leaves the board and says why", async () => {
+  /* Item 1's other half: the board draws a lane the moment the server admits
+     it, and if that creation is refused or never materializes the placeholder
+     goes away — saying which lane, so the operator is not left wondering what
+     they saw. */
+  resetFilesClientCacheForTests();
+  savePipelines([buildPipeline({
+    id: "pl-fresh",
+    task: "A lane just created\nWhat the lane is for",
+    taskIds: [],
+    project: "demo",
+    repoDir: "/repo",
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null,
+    srcConversationId: null,
+    now: now.toISOString(),
+  })]);
+  const { bus } = board({});
+  mount(bus);
+  await settle();
+
+  /* Nothing is being said yet: the lane exists. */
+  expect(one('[data-testid="attention-lane-withdrawn"]')).toBeNull();
+
+  savePipelines([]);
+  await poll();
+
+  const note = one('[data-testid="attention-lane-withdrawn"]');
+  expect(note?.textContent).toContain("A lane just created");
+  resetFilesClientCacheForTests();
+});
+
+/** A pipeline the server has just admitted, filed under a board task. */
+function admitFreshLane() {
+  savePipelines([buildPipeline({
+    id: "pl-fresh",
+    task: "A lane just created\nWhat the lane is for",
+    taskIds: [],
+    project: "demo",
+    repoDir: "/repo",
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null,
+    srcConversationId: null,
+    now: now.toISOString(),
+  })]);
+}
+
+test("the phone board draws a lane the server just admitted, and still answers no request (#1836)", async () => {
+  /* The phone withholds its device id so it is never offered a handoff. That
+     must not also keep the lane off its board: the rows the desktop gets on its
+     device read reach the phone's data layer before any scan carries them. */
+  resetFilesClientCacheForTests();
+  admitFreshLane();
+  raise();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+
+  const seen: string[][] = [];
+  function Board() {
+    seen.push(useFiles().pipelines.map((row) => row.id));
+    return null;
+  }
+  const calls: Array<{ url: string; posted: boolean }> = [];
+  const spy = (async (url: string, init?: { body?: string }) => {
+    calls.push({ url: String(url), posted: Boolean(init?.body) });
+    return transport()(url as unknown as string, init as never);
+  }) as unknown as typeof fetch;
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(
+    <>
+      <AttentionHost mobile bus={bus} deviceId={DEVICE} fetchFn={spy} pollMs={100_000} timing={{ timeoutMs: 0, pollMs: 0 }} />
+      <Board />
+    </>,
+  ));
+  roots.push(root);
+  await settle();
+
+  expect(seen.at(-1)).toEqual(["pl-fresh"]);
+  /* And the phone stays chat-only: nothing posted, nothing moved, and the
+     request is still waiting for a desktop. */
+  expect(calls.some((call) => call.posted)).toBe(false);
+  expect(calls.some((call) => call.url.includes("deviceId="))).toBe(false);
+  expect(log.moved).toEqual([]);
+  expect(record().state).toBe("pending");
+  expect(record().offeredTo).toEqual([]);
+
+  /* A lane the phone drew and the server then dropped goes away there too. */
+  savePipelines([]);
+  await poll();
+  expect(seen.at(-1)).toEqual([]);
+  resetFilesClientCacheForTests();
 });

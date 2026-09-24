@@ -6,6 +6,7 @@ import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 
 import { procBackend } from "@/lib/proc";
 
+import { openCurrentDatabase } from "./currentDatabase";
 import { FileTransactionBusyError } from "./fileTransaction";
 import {
   hotStatePreparingWriterReady,
@@ -102,6 +103,13 @@ export interface StateMutationContext<T> {
   structural: boolean;
 }
 
+export interface StateBoundedTransaction<T> {
+  get(key: string): T | null;
+  pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
+  put(record: T): void;
+  delete(key: string): void;
+}
+
 function sqliteDatabase(): typeof import("bun:sqlite").Database {
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) throw new Error("SQLite state stores require the Bun runtime");
@@ -168,14 +176,21 @@ function assertSqliteInitializationAuthority(filename: string, allowFencedExisti
   throw new FileTransactionBusyError("hot state migration is waiting for release promotion");
 }
 
+/* Every connection stays bound to the file at its name: a database the
+   activation fallback replaced is reopened, never written through the moved
+   handle (currentDatabase.ts). */
 function connectDatabase(filename: string): Database {
+  return openCurrentDatabase(filename, () => connectRawDatabase(filename));
+}
+
+function connectRawDatabase(filename: string): Database {
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
   const Database = sqliteDatabase();
   const db = new Database(filename, { create: true, strict: true });
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       try {
-        db.exec("PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
+        db.exec("PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON;");
         return db;
       } catch (error) {
         if (!isBusyError(error)) throw error;
@@ -191,6 +206,10 @@ function connectDatabase(filename: string): Database {
 
 function connectReadonlyDatabase(filename: string): Database {
   readonlyConnectionCount += 1;
+  return openCurrentDatabase(filename, () => connectRawReadonlyDatabase(filename));
+}
+
+function connectRawReadonlyDatabase(filename: string): Database {
   const Database = sqliteDatabase();
   const db = new Database(filename, { readonly: true, strict: true });
   db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON;");
@@ -198,7 +217,11 @@ function connectReadonlyDatabase(filename: string): Database {
 }
 
 function openDatabase(filename: string): Database {
-  const db = connectDatabase(filename);
+  return openCurrentDatabase(filename, () => openRawDatabase(filename));
+}
+
+function openRawDatabase(filename: string): Database {
+  const db = connectRawDatabase(filename);
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       try {
@@ -227,6 +250,21 @@ function openDatabase(filename: string): Database {
             ON state_rows(collection, row_order);
           CREATE INDEX IF NOT EXISTS state_rows_controller_active
             ON state_rows(collection, controller_active, row_order);
+          CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
+            ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'))
+            WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
+              AND json_extract(value_json, '$.delivery.disposition') = 'owner';
+          CREATE INDEX IF NOT EXISTS pipeline_delivery_history
+            ON state_rows(collection, json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'), json_extract(value_json, '$.delivery.epoch') DESC)
+            WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json);
+          CREATE UNIQUE INDEX IF NOT EXISTS pipeline_creation_request
+            ON state_rows(collection, json_extract(value_json, '$.creationRequest.key'))
+            WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.creationRequest.key') IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS pipeline_delivery_unclaimed ON state_rows(row_key)
+            WHERE collection = 'pipelines' AND json_valid(value_json)
+              AND json_extract(value_json, '$.delivery') IS NULL
+              AND json_extract(value_json, '$.publication') = 'remote-branch'
+              AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed');
           CREATE TABLE IF NOT EXISTS state_changes (
             collection TEXT NOT NULL,
             revision INTEGER NOT NULL,
@@ -243,6 +281,19 @@ function openDatabase(filename: string): Database {
             owner_pid INTEGER NOT NULL,
             owner_start_identity TEXT,
             acquired_at INTEGER NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS state_imports (
+            collection TEXT PRIMARY KEY REFERENCES state_collections(collection) ON DELETE CASCADE,
+            source_name TEXT NOT NULL,
+            source_sha256 TEXT,
+            source_bytes INTEGER NOT NULL,
+            row_count INTEGER NOT NULL,
+            row_digest TEXT NOT NULL,
+            gap TEXT,
+            release TEXT,
+            imported_at TEXT NOT NULL,
+            mirror_sha256 TEXT,
+            mirror_revision INTEGER
           );
         `);
         const collectionColumns = db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all();
@@ -386,6 +437,265 @@ export function initializeStateCollections(
       }
     }
     throw new FileTransactionBusyError("state migration is busy");
+  } finally {
+    db.close();
+  }
+}
+
+/** Evidence of one legacy file's first-boot import (#1870). */
+export interface StateImportRecord {
+  collection: string;
+  sourceName: string;
+  sourceSha256: string | null;
+  sourceBytes: number;
+  rowCount: number;
+  rowDigest: string;
+  gap: string | null;
+  release: string | null;
+  importedAt: string;
+  mirrorSha256: string | null;
+  mirrorRevision: number | null;
+}
+
+export interface StateImportRow {
+  key: string;
+  value: unknown;
+  controllerActive: boolean;
+}
+
+export class StateImportVerificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StateImportVerificationError";
+  }
+}
+
+type StateImportDbRow = {
+  collection: string;
+  source_name: string;
+  source_sha256: string | null;
+  source_bytes: number;
+  row_count: number;
+  row_digest: string;
+  gap: string | null;
+  release: string | null;
+  imported_at: string;
+  mirror_sha256: string | null;
+  mirror_revision: number | null;
+};
+
+function stateImportRecord(row: StateImportDbRow): StateImportRecord {
+  return {
+    collection: row.collection,
+    sourceName: row.source_name,
+    sourceSha256: row.source_sha256,
+    sourceBytes: row.source_bytes,
+    rowCount: row.row_count,
+    rowDigest: row.row_digest,
+    gap: row.gap,
+    release: row.release,
+    importedAt: row.imported_at,
+    mirrorSha256: row.mirror_sha256,
+    mirrorRevision: row.mirror_revision,
+  };
+}
+
+/** sha256 over each row's value_json in row order, one line per row. */
+export function stateRowDigest(valueJsons: readonly string[]): string {
+  const hash = crypto.createHash("sha256");
+  for (const valueJson of valueJsons) hash.update(valueJson).update("\n");
+  return hash.digest("hex");
+}
+
+function selectStateImport(db: Database, collection: string): StateImportRecord | null {
+  const row = db.query<StateImportDbRow, [string]>("SELECT * FROM state_imports WHERE collection = ?").get(collection);
+  return row ? stateImportRecord(row) : null;
+}
+
+/** The import evidence for a collection, or null before its import commits. */
+export function readStateImport(filename: string, collection: string): StateImportRecord | null {
+  if (!fs.existsSync(filename)) return null;
+  const db = connectReadonlyDatabase(filename);
+  try {
+    return selectStateImport(db, collection);
+  } catch (error) {
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Import a legacy store's rows as a new collection in one `BEGIN IMMEDIATE`
+ * transaction. The rows are read back inside the transaction and their count
+ * and digest compared with what the caller parsed; a mismatch rolls back and
+ * leaves the database unmarked. An existing import record makes this a no-op,
+ * checked after the write lock is held, so concurrent importers import once.
+ */
+export function importStateCollection(filename: string, input: {
+  collection: string;
+  schemaVersion: number;
+  migrationId: string;
+  rows: readonly StateImportRow[];
+  sourceName: string;
+  sourceSha256: string | null;
+  sourceBytes: number;
+  gap: string | null;
+  release: string | null;
+  /** Test seam: runs inside the transaction after the rows are written. */
+  beforeVerify?: (execute: (sql: string, ...bindings: SQLQueryBindings[]) => void) => void;
+}): { imported: boolean; record: StateImportRecord } {
+  const encoded = input.rows.map((row) => ({ ...row, valueJson: JSON.stringify(row.value) }));
+  const seen = new Set<string>();
+  for (const row of encoded) {
+    if (!row.key || seen.has(row.key)) throw new Error(`duplicate or empty ${input.collection} import key: ${row.key}`);
+    seen.add(row.key);
+  }
+  const expectedDigest = stateRowDigest(encoded.map((row) => row.valueJson));
+  const db = openDatabase(filename);
+  try {
+    const outcome = withImmediateTransaction(db, `${input.collection} import is busy`, () => {
+      assertSqliteWriteAuthority(filename);
+      const held = selectStateImport(db, input.collection);
+      if (held) return { imported: false, record: held };
+      if (db.query("SELECT 1 FROM state_collections WHERE collection = ?").get(input.collection)) {
+        throw new StateImportVerificationError(`${input.collection} collection exists without import evidence`);
+      }
+      const revision = encoded.length > 0 ? 1 : 0;
+      const importedAt = new Date().toISOString();
+      db.query(`
+        INSERT INTO state_collections(collection, schema_version, revision, migration_id, imported_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(input.collection, input.schemaVersion, revision, input.migrationId, importedAt);
+      const insert = db.query(`
+        INSERT INTO state_rows(collection, row_key, value_json, row_order, row_revision, controller_active)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      encoded.forEach((row, index) => {
+        insert.run(input.collection, row.key, row.valueJson, index, revision, row.controllerActive ? 1 : 0);
+      });
+      input.beforeVerify?.((sql, ...bindings) => { db.query(sql).run(...bindings); });
+      const stored = db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM state_rows WHERE collection = ? ORDER BY row_order, row_key",
+      ).all(input.collection).map((row) => row.value_json);
+      const storedDigest = stateRowDigest(stored);
+      if (stored.length !== encoded.length || storedDigest !== expectedDigest) {
+        throw new StateImportVerificationError(
+          `${input.collection} import verification failed: ${stored.length}/${encoded.length} rows, digest mismatch=${storedDigest !== expectedDigest}`,
+        );
+      }
+      db.query(`
+        INSERT INTO state_imports(collection, source_name, source_sha256, source_bytes, row_count, row_digest, gap, release, imported_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(input.collection, input.sourceName, input.sourceSha256, input.sourceBytes, encoded.length,
+        storedDigest, input.gap, input.release, importedAt);
+      assertSqliteWriteAuthority(filename);
+      return { imported: true, record: selectStateImport(db, input.collection)! };
+    });
+    secureDatabaseFiles(filename);
+    return outcome;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Rebuild a collection from its legacy source, replacing the rows and the
+ * import record an earlier, stale import left (#1905). Same verified,
+ * single-transaction shape as {@link importStateCollection}: the rows are read
+ * back and compared before the commit, so a mismatch rolls the replacement
+ * back and leaves the stale rows exactly as they were.
+ *
+ * The collection revision moves forward rather than restarting, and the change
+ * log is cleared up to it, so every reader holding an older revision — in this
+ * process or another — takes a full snapshot instead of replaying changes
+ * against rows that are no longer there.
+ */
+export function reimportStateCollection(filename: string, input: {
+  collection: string;
+  schemaVersion: number;
+  migrationId: string;
+  rows: readonly StateImportRow[];
+  sourceName: string;
+  sourceSha256: string | null;
+  sourceBytes: number;
+  gap: string | null;
+  release: string | null;
+  /** Test seam: runs inside the transaction after the rows are written. */
+  beforeVerify?: (execute: (sql: string, ...bindings: SQLQueryBindings[]) => void) => void;
+}): { record: StateImportRecord } {
+  const encoded = input.rows.map((row) => ({ ...row, valueJson: JSON.stringify(row.value) }));
+  const seen = new Set<string>();
+  for (const row of encoded) {
+    if (!row.key || seen.has(row.key)) throw new Error(`duplicate or empty ${input.collection} import key: ${row.key}`);
+    seen.add(row.key);
+  }
+  const expectedDigest = stateRowDigest(encoded.map((row) => row.valueJson));
+  const db = openDatabase(filename);
+  try {
+    const outcome = withImmediateTransaction(db, `${input.collection} import is busy`, () => {
+      assertSqliteWriteAuthority(filename);
+      const held = selectStateImport(db, input.collection);
+      if (!held) throw new StateImportVerificationError(`${input.collection} has no import record to replace`);
+      if (held.mirrorSha256 !== null || held.mirrorRevision !== null) {
+        throw new StateImportVerificationError(`${input.collection} carries a rollback mirror and may not be re-imported`);
+      }
+      const previous = db.query<{ revision: number }, [string]>(
+        "SELECT revision FROM state_collections WHERE collection = ?",
+      ).get(input.collection)?.revision ?? 0;
+      const revision = previous + 1;
+      const importedAt = new Date().toISOString();
+      db.query("DELETE FROM state_changes WHERE collection = ?").run(input.collection);
+      db.query("DELETE FROM state_rows WHERE collection = ?").run(input.collection);
+      db.query(`
+        UPDATE state_collections
+        SET schema_version = ?, revision = ?, change_floor = ?, migration_id = ?, imported_at = ?
+        WHERE collection = ?
+      `).run(input.schemaVersion, revision, revision, input.migrationId, importedAt, input.collection);
+      const insert = db.query(`
+        INSERT INTO state_rows(collection, row_key, value_json, row_order, row_revision, controller_active)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      encoded.forEach((row, index) => {
+        insert.run(input.collection, row.key, row.valueJson, index, revision, row.controllerActive ? 1 : 0);
+      });
+      input.beforeVerify?.((sql, ...bindings) => { db.query(sql).run(...bindings); });
+      const stored = db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM state_rows WHERE collection = ? ORDER BY row_order, row_key",
+      ).all(input.collection).map((row) => row.value_json);
+      const storedDigest = stateRowDigest(stored);
+      if (stored.length !== encoded.length || storedDigest !== expectedDigest) {
+        throw new StateImportVerificationError(
+          `${input.collection} re-import verification failed: ${stored.length}/${encoded.length} rows, digest mismatch=${storedDigest !== expectedDigest}`,
+        );
+      }
+      db.query(`
+        UPDATE state_imports
+        SET source_name = ?, source_sha256 = ?, source_bytes = ?, row_count = ?, row_digest = ?,
+            gap = ?, release = ?, imported_at = ?
+        WHERE collection = ?
+      `).run(input.sourceName, input.sourceSha256, input.sourceBytes, encoded.length, storedDigest,
+        input.gap, input.release, importedAt, input.collection);
+      assertSqliteWriteAuthority(filename);
+      return { record: selectStateImport(db, input.collection)! };
+    });
+    secureDatabaseFiles(filename);
+    return outcome;
+  } finally {
+    db.close();
+  }
+}
+
+/** Record the rollback mirror last written for a collection. Evidence only, so
+    it is written during a release fence, when collection writes are refused. */
+export function recordStateImportMirror(filename: string, collection: string, mirrorSha256: string | null, mirrorRevision: number | null): void {
+  const db = connectDatabase(filename);
+  try {
+    withImmediateTransaction(db, `${collection} import is busy`, () => {
+      db.query("UPDATE state_imports SET mirror_sha256 = ?, mirror_revision = ? WHERE collection = ?")
+        .run(mirrorSha256, mirrorRevision, collection);
+    });
   } finally {
     db.close();
   }
@@ -546,14 +856,10 @@ export class SqliteStateCollection<T> {
 
   /** A bounded read/modify/write transaction. No collection materialization.
       Every read and mutation consumes the caller's finite row budget. */
-  boundedPatch<R>(limit: number, operation: (tx: {
-    get(key: string): T | null;
-    put(record: T): void;
-    delete(key: string): void;
-  }) => R): R {
+  boundedPatch<R>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, heldLease?: string): R {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4096) throw new Error("invalid state patch limit");
     assertSqliteWriteAuthority(this.filename);
-    const lease = this.acquireLeaseSync();
+    const lease = heldLease ?? this.acquireLeaseSync();
     try {
       const db = connectDatabase(this.filename);
       try {
@@ -565,6 +871,10 @@ export class SqliteStateCollection<T> {
           const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
           const changed = new Map<string, "upsert" | "delete">();
           const result = operation({
+            pipelineLookup: (query) => {
+              consume();
+              return this.lookupPipeline(db, query);
+            },
             get: (key) => {
               consume();
               const row = db.query<{ value_json: string }, [string, string]>(
@@ -580,9 +890,9 @@ export class SqliteStateCollection<T> {
               this.validate(record);
               const key = this.options.key(record);
               db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
-                VALUES (?,?,?,0,?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
+                VALUES (?,?,?,(SELECT COALESCE(MAX(row_order)+1,0) FROM state_rows WHERE collection=?),?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
                 value_json=excluded.value_json,row_revision=excluded.row_revision,controller_active=excluded.controller_active`)
-                .run(this.options.collection, key, JSON.stringify(record), revision, this.options.controllerActive?.(record) === false ? 0 : 1);
+                .run(this.options.collection, key, JSON.stringify(record), this.options.collection, revision, this.options.controllerActive?.(record) === false ? 0 : 1);
               changed.set(key, "upsert");
             },
             delete: (key) => {
@@ -607,7 +917,62 @@ export class SqliteStateCollection<T> {
         this.invalidateAfterCommit();
         return result;
       } finally { db.close(); }
-    } finally { this.releaseLeaseSync(lease); }
+    } finally { if (!heldLease) this.releaseLeaseSync(lease); }
+  }
+
+  async boundedPatchAsync<R>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, lockWaitMs?: number): Promise<R> {
+    const lease = await this.acquireLease(lockWaitMs);
+    try { return this.boundedPatch(limit, operation, lease); }
+    finally { await this.releaseLease(lease); }
+  }
+
+  private lookupPipeline(db: Database, query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null {
+    if (this.options.collection !== "pipelines") throw new Error("pipeline lookup requires the pipeline collection");
+    if (!("requestKey" in query) && query.active) {
+      const row = db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows INDEXED BY pipeline_delivery_owner
+        WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
+        AND json_extract(value_json, '$.delivery.disposition') = 'owner'
+        AND json_extract(value_json, '$.delivery.target.repository') = ? AND json_extract(value_json, '$.delivery.target.branch') = ? LIMIT 1`).get(query.repository, query.branch);
+      if (!row) return null;
+      const decoded = this.decodeRow(row.value_json);
+      if (!decoded) throw new Error("invalid indexed owner row");
+      return this.options.clone(decoded);
+    }
+    const rows = ["pipelines", "pipelines_archive"].flatMap((collection) => {
+      if (!("requestKey" in query) && query.active && collection !== "pipelines") return [];
+      const row = "requestKey" in query
+        ? db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows
+            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.creationRequest.key') IS NOT NULL
+            AND json_extract(value_json, '$.creationRequest.key') = ? LIMIT 1`).get(collection, query.requestKey)
+        : db.query<{ value_json: string }, [string, string, string]>(`SELECT value_json FROM state_rows
+            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.delivery.target.repository') = ?
+            AND json_extract(value_json, '$.delivery.target.branch') = ?
+            ${query.active ? "AND json_extract(value_json, '$.delivery.active') = 1 AND json_extract(value_json, '$.delivery.disposition') = 'owner'" : ""}
+            ORDER BY json_extract(value_json, '$.delivery.epoch') DESC LIMIT 1`).get(collection, query.repository, query.branch);
+      if (!row) return [];
+      const decoded = this.decodeRow(row.value_json);
+      if (!decoded) throw new Error("invalid indexed pipeline row");
+      return [this.options.clone(decoded)];
+    });
+    if (!("requestKey" in query)) rows.sort((a, b) =>
+      Number((b as { delivery?: { epoch: number } }).delivery?.epoch ?? 0) - Number((a as { delivery?: { epoch: number } }).delivery?.epoch ?? 0));
+    return rows[0] ?? null;
+  }
+
+  pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null {
+    return this.lookupPipeline(this.readDb, query);
+  }
+
+  unclaimedPipelinePublications(): T[] {
+    if (this.options.collection !== "pipelines") throw new Error("pipeline admission requires the pipeline collection");
+    return this.readDb.query<{ value_json: string }, []>(`SELECT value_json FROM state_rows INDEXED BY pipeline_delivery_unclaimed
+      WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery') IS NULL
+      AND json_extract(value_json, '$.publication') = 'remote-branch'
+      AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed') ORDER BY row_key LIMIT 16`).all().map((row) => {
+      const decoded = this.decodeRow(row.value_json);
+      if (!decoded) throw new Error("invalid legacy pipeline row");
+      return this.options.clone(decoded);
+    });
   }
 
   loadReadonly(): readonly T[] {
@@ -800,15 +1165,32 @@ export class SqliteStateCollection<T> {
     }
   }
 
-  patchSync(prepare: () => { records: readonly T[]; deleteKeys?: readonly string[] }): void {
-    assertSqliteWriteAuthority(this.filename);
+  /** `fenceOwner` also admits the release that owns an active rollback fence,
+      for the legacy reconcile its own demotion checkpoint runs (#1870).
+      `appendKeys` names changed rows that move to the end of the collection
+      order instead of keeping their held position. */
+  patchSync(
+    prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[] },
+    options: { fenceOwner?: boolean } = {},
+  ): void {
+    const authorize = options.fenceOwner
+      ? () => assertSqliteInitializationAuthority(this.filename, true)
+      : () => assertSqliteWriteAuthority(this.filename);
+    authorize();
     const lease = this.acquireLeaseSync();
     try {
       const patch = prepare();
-      this.persistReplacement(lease, patch.records, true, patch.deleteKeys ?? []);
+      this.persistReplacement(lease, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []));
     } finally {
       this.releaseLeaseSync(lease);
     }
+  }
+
+  /** Each row's last-written collection revision, by row key. */
+  rowRevisions(): Map<string, number> {
+    return new Map(this.readDb.query<Pick<CollectionRow, "row_key" | "row_revision">, [string]>(
+      "SELECT row_key, row_revision FROM state_rows WHERE collection = ?",
+    ).all(this.options.collection).map((row) => [row.row_key, row.row_revision] as const));
   }
 
   withSnapshotSync<R>(read: (records: readonly T[]) => R): R {
@@ -825,9 +1207,11 @@ export class SqliteStateCollection<T> {
     beforePersist?: (context: StateMutationContext<T>) => void,
     controllerOnly = false,
     lockWaitMs?: number,
+    observeHold?: (heldMs: number) => void,
   ): Promise<R> {
     assertSqliteWriteAuthority(this.filename);
     const lease = await this.acquireLease(lockWaitMs);
+    const acquiredAt = performance.now();
     try {
       const source = controllerOnly ? this.loadControllerReadonly() : this.loadReadonly();
       const session = this.track(source);
@@ -836,6 +1220,7 @@ export class SqliteStateCollection<T> {
       });
     } finally {
       await this.releaseLease(lease);
+      observeHold?.(performance.now() - acquiredAt);
     }
   }
 
@@ -1123,6 +1508,8 @@ export class SqliteStateCollection<T> {
     records: readonly T[],
     mergeOmitted: boolean,
     deleteKeys: readonly string[] = [],
+    authorize: () => void = () => assertSqliteWriteAuthority(this.filename),
+    appendKeys: ReadonlySet<string> = new Set(),
   ): void {
     for (const record of records) this.validate(record);
     const seen = new Set<string>();
@@ -1138,7 +1525,7 @@ export class SqliteStateCollection<T> {
     const db = connectDatabase(this.filename);
     try {
       const revision = withImmediateTransaction(db, this.options.busyMessage, () => {
-        assertSqliteWriteAuthority(this.filename);
+        authorize();
         this.assertLease(db, ownerToken);
         const meta = this.collectionMeta(db)!;
         const current = new Map(db.query<CollectionRow, [string]>(`
@@ -1182,7 +1569,7 @@ export class SqliteStateCollection<T> {
         `);
         for (const entry of changed) {
           const held = current.get(entry.key);
-          const order = mergeOmitted ? held?.row_order ?? appended++ : entry.order;
+          const order = mergeOmitted ? (appendKeys.has(entry.key) ? undefined : held?.row_order) ?? appended++ : entry.order;
           upsert.run(this.options.collection, entry.key, entry.valueJson, order, nextRevision, entry.controllerActive);
           change.run(this.options.collection, nextRevision, entry.key, "upsert");
         }

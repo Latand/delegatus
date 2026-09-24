@@ -14,7 +14,214 @@
     },
     "vertical": {
       "startedOn": "pipeline:lane-7",
-      "scrollTop": 393,
+      "scrollTop": 385,
+      "openRows": 0
+    },
+    "tray": {
+      "open": "true",
+      "touchAction": "pan-y",
+      "cardLeft": -132,
+      "cardRight": 234,
+      "opacity": "1",
+      "buttons": [
+        {
+          "key": "hide",
+          "label": "Hide from board. Takes it off the board's queue. The lane stays as it is.",
+          "x": 234,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "label": "Close lane. Stops its agents. The worktree and transcripts stay.",
+          "x": 306,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        }
+      ]
+    },
+    "hide": {
+      "rowGone": true,
+      "badge": 10,
+      "receipt": "Hid «Fast conversation switching»Restore",
+      "receiptBox": {
+        "x": 12,
+        "y": 737,
+        "width": 366,
+        "height": 44
+      },
+      "dockBox": {
+        "x": 12,
+        "y": 794,
+        "width": 366,
+        "height": 44
+      },
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        }
+      ]
+    },
+    "restored": {
+      "badge": 11,
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        },
+        {
+          "id": "lane-0",
+          "action": "undismiss"
+        }
+      ]
+    },
+    "refused": {
+      "rowGone": true,
+      "badge": 10,
+      "badgeAfter": 11,
+      "receipt": "refused by the evidence fixture"
+    },
+    "closeLane": {
+      "rowGone": true,
+      "badge": 11,
+      "receipt": "Lane closedRestore",
+      "sent": 0
+    },
+    "closes": {
+      "successive": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sent": [
+          "lane-4"
+        ]
+      },
+      "inFlight": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sinceSecondTapMs": 4457,
+        "sent": [
+          "lane-4",
+          "lane-5"
+        ],
+        "answered": [
+          "lane-4"
+        ]
+      },
+      "answered": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "answered": [
+          "lane-4",
+          "lane-5"
+        ]
+      }
+    },
+    "rehide": {
+      "sent": [
+        "lane-parked-again:undismiss",
+        "lane-parked-again:dismiss"
+      ],
+      "answers": [
+        {
+          "id": "lane-parked-again",
+          "action": "undismiss",
+          "dismissedAt": null
+        },
+        {
+          "id": "lane-parked-again",
+          "action": "dismiss",
+          "dismissedAt": "2026-09-19T08:42:35.578Z"
+        }
+      ],
+      "answeredDismissAgeMs": 614,
+      "frames": 85,
+      "framesWithRow": 0,
+      "badges": [
+        "8"
+      ],
+      "rowAfter": 0,
+      "badgeBefore": 9,
+      "badgeAfter": 8
+    },
+    "longPress": {
+      "sheet": true,
+      "rows": [
+        {
+          "key": "hide",
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "height": 56
+        }
+      ],
+      "pipelineScreen": false
+    },
+    "conversationClose": {
+      "tray": [
+        "Close card. Hides it from the board. The agent keeps running."
+      ],
+      "rowGone": true,
+      "reopened": true,
+      "boardScreen": 1,
+      "mutations": [
+        "reconcile-roots",
+        "reconcile-roots",
+        "mark-seen",
+        "close",
+        "restore"
+      ],
+      "pipelineWrites": 4
+    },
+    "banners": 0,
+    "expanded": {
+      "rows": 30,
+      "requests": 0,
+      "toggle": "Show fewerStored entries load as you scroll"
+    },
+    "appended": {
+      "rows": 75,
+      "unique": 75,
+      "stored": 45,
+      "superseded": false,
+      "rowStyles": 1,
+      "heights": [
+        56
+      ],
+      "requests": [
+        "?limit=20&project=atlas",
+        "?limit=20&project=atlas&cursor=20",
+        "?limit=20&project=atlas&cursor=40"
+      ],
+      "searchFields": 0,
+      "pageOverflow": false,
+      "boardOverflow": false
+    },
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "key": "390-dark",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "scheme": "dark",
+    "queued": 11,
+    "hideDecision": {
+      "stillHidden": 0,
+      "parkedAgain": 1,
+      "listedLanes": 11
+    },
+    "vertical": {
+      "startedOn": "pipeline:lane-7",
+      "scrollTop": 395,
       "openRows": 0
     },
     "tray": {
@@ -136,214 +343,7 @@
         {
           "id": "lane-parked-again",
           "action": "dismiss",
-          "dismissedAt": "2026-09-14T04:22:39.443Z"
-        }
-      ],
-      "answeredDismissAgeMs": 613,
-      "frames": 85,
-      "framesWithRow": 0,
-      "badges": [
-        "8"
-      ],
-      "rowAfter": 0,
-      "badgeBefore": 9,
-      "badgeAfter": 8
-    },
-    "longPress": {
-      "sheet": true,
-      "rows": [
-        {
-          "key": "hide",
-          "height": 56
-        },
-        {
-          "key": "closeLane",
-          "height": 56
-        }
-      ],
-      "pipelineScreen": false
-    },
-    "conversationClose": {
-      "tray": [
-        "Close card. Hides it from the board. The agent keeps running."
-      ],
-      "rowGone": true,
-      "reopened": true,
-      "boardScreen": 1,
-      "mutations": [
-        "reconcile-roots",
-        "reconcile-roots",
-        "mark-seen",
-        "close",
-        "restore"
-      ],
-      "pipelineWrites": 4
-    },
-    "banners": 0,
-    "expanded": {
-      "rows": 30,
-      "requests": 0,
-      "toggle": "Show fewerStored entries load as you scroll"
-    },
-    "appended": {
-      "rows": 75,
-      "unique": 75,
-      "stored": 45,
-      "superseded": false,
-      "rowStyles": 1,
-      "heights": [
-        56
-      ],
-      "requests": [
-        "?limit=20&project=atlas",
-        "?limit=20&project=atlas&cursor=20",
-        "?limit=20&project=atlas&cursor=40"
-      ],
-      "searchFields": 0,
-      "pageOverflow": false,
-      "boardOverflow": false
-    },
-    "pageErrors": [],
-    "failures": []
-  },
-  {
-    "key": "390-dark",
-    "viewport": {
-      "width": 390,
-      "height": 844
-    },
-    "scheme": "dark",
-    "queued": 11,
-    "hideDecision": {
-      "stillHidden": 0,
-      "parkedAgain": 1,
-      "listedLanes": 11
-    },
-    "vertical": {
-      "startedOn": "pipeline:lane-7",
-      "scrollTop": 396,
-      "openRows": 0
-    },
-    "tray": {
-      "open": "true",
-      "touchAction": "pan-y",
-      "cardLeft": -132,
-      "cardRight": 234,
-      "opacity": "1",
-      "buttons": [
-        {
-          "key": "hide",
-          "label": "Hide from board. Takes it off the board's queue. The lane stays as it is.",
-          "x": 234,
-          "y": 176,
-          "width": 72,
-          "height": 56
-        },
-        {
-          "key": "closeLane",
-          "label": "Close lane. Stops its agents. The worktree and transcripts stay.",
-          "x": 306,
-          "y": 176,
-          "width": 72,
-          "height": 56
-        }
-      ]
-    },
-    "hide": {
-      "rowGone": true,
-      "badge": 10,
-      "receipt": "Hid «Fast conversation switching»Restore",
-      "receiptBox": {
-        "x": 12,
-        "y": 737,
-        "width": 366,
-        "height": 44
-      },
-      "dockBox": {
-        "x": 12,
-        "y": 794,
-        "width": 366,
-        "height": 44
-      },
-      "patches": [
-        {
-          "id": "lane-0",
-          "action": "dismiss"
-        }
-      ]
-    },
-    "restored": {
-      "badge": 11,
-      "patches": [
-        {
-          "id": "lane-0",
-          "action": "dismiss"
-        },
-        {
-          "id": "lane-0",
-          "action": "undismiss"
-        }
-      ]
-    },
-    "refused": {
-      "rowGone": true,
-      "badge": 10,
-      "badgeAfter": 11,
-      "receipt": "refused by the evidence fixture"
-    },
-    "closeLane": {
-      "rowGone": true,
-      "badge": 11,
-      "receipt": "Lane closedRestore",
-      "sent": 0
-    },
-    "closes": {
-      "successive": {
-        "first": 0,
-        "second": 0,
-        "badge": 9,
-        "sent": [
-          "lane-4"
-        ]
-      },
-      "inFlight": {
-        "first": 0,
-        "second": 0,
-        "badge": 9,
-        "sinceSecondTapMs": 4455,
-        "sent": [
-          "lane-4",
-          "lane-5"
-        ],
-        "answered": [
-          "lane-4"
-        ]
-      },
-      "answered": {
-        "first": 0,
-        "second": 0,
-        "badge": 9,
-        "answered": [
-          "lane-4",
-          "lane-5"
-        ]
-      }
-    },
-    "rehide": {
-      "sent": [
-        "lane-parked-again:undismiss",
-        "lane-parked-again:dismiss"
-      ],
-      "answers": [
-        {
-          "id": "lane-parked-again",
-          "action": "undismiss",
-          "dismissedAt": null
-        },
-        {
-          "id": "lane-parked-again",
-          "action": "dismiss",
-          "dismissedAt": "2026-09-14T04:23:08.491Z"
+          "dismissedAt": "2026-09-19T08:43:04.757Z"
         }
       ],
       "answeredDismissAgeMs": 612,
@@ -428,7 +428,7 @@
     },
     "vertical": {
       "startedOn": "pipeline:lane-8",
-      "scrollTop": 394,
+      "scrollTop": 383,
       "openRows": 0
     },
     "tray": {
@@ -517,7 +517,7 @@
         "first": 0,
         "second": 0,
         "badge": 9,
-        "sinceSecondTapMs": 4455,
+        "sinceSecondTapMs": 4458,
         "sent": [
           "lane-4",
           "lane-5"
@@ -550,11 +550,11 @@
         {
           "id": "lane-parked-again",
           "action": "dismiss",
-          "dismissedAt": "2026-09-14T04:23:37.539Z"
+          "dismissedAt": "2026-09-19T08:43:34.010Z"
         }
       ],
-      "answeredDismissAgeMs": 613,
-      "frames": 85,
+      "answeredDismissAgeMs": 624,
+      "frames": 86,
       "framesWithRow": 0,
       "badges": [
         "8"
@@ -635,7 +635,7 @@
     },
     "vertical": {
       "startedOn": "pipeline:lane-8",
-      "scrollTop": 391,
+      "scrollTop": 395,
       "openRows": 0
     },
     "tray": {
@@ -757,10 +757,10 @@
         {
           "id": "lane-parked-again",
           "action": "dismiss",
-          "dismissedAt": "2026-09-14T04:24:06.440Z"
+          "dismissedAt": "2026-09-19T08:44:03.338Z"
         }
       ],
-      "answeredDismissAgeMs": 609,
+      "answeredDismissAgeMs": 621,
       "frames": 85,
       "framesWithRow": 0,
       "badges": [

@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 
 import { expect, test } from "bun:test";
 
+import { publishRegistryBackendIdentity } from "@/lib/agent/registryBackendIdentity";
 import { procBackend } from "@/lib/proc";
 
 import {
@@ -180,7 +181,40 @@ test("runtime image reachability scans registry backends, Claude ledger, host ev
   registryDb.query("INSERT INTO registry_rows VALUES (?)").run(JSON.stringify({ runtimeImages: [refs[4]] }));
   registryDb.close();
 
+  /* No published backend: either file may be the authority, so both count. */
   expect([...collectRuntimeImageReachableDigests(state)].sort()).toEqual(refs.map((ref) => ref.sha256));
+});
+
+/** A JSON registry and a registry store side by side, each holding one image. */
+function registryPair(state: string): { json: string; store: string } {
+  const json = "a".repeat(64);
+  const store = "b".repeat(64);
+  fs.writeFileSync(path.join(state, "agent-registry.json"), JSON.stringify({
+    heldDeliveries: { one: { runtimeImages: [{ sha256: json, mime: "image/png", bytes: PNG.byteLength }] } },
+  }));
+  const registryDb = new Database(path.join(state, "agent-registry.sqlite"), { create: true });
+  registryDb.exec("CREATE TABLE registry_rows (value_json TEXT)");
+  registryDb.query("INSERT INTO registry_rows VALUES (?)").run(JSON.stringify({
+    runtimeImages: [{ sha256: store, mime: "image/png", bytes: PNG.byteLength }],
+  }));
+  registryDb.close();
+  return { json, store };
+}
+
+test("runtime image reachability skips a leftover JSON mirror once SQLite is the published backend (#1870)", () => {
+  const state = sandbox();
+  const { store } = registryPair(state);
+  publishRegistryBackendIdentity(path.join(state, "agent-registry.json"), "sqlite", path.join(state, "agent-registry.sqlite"));
+  expect([...collectRuntimeImageReachableDigests(state)]).toEqual([store]);
+});
+
+test("runtime image reachability keeps the JSON registry's images where JSON is the published backend", () => {
+  /* An explicitly configured `off` install with a stale store beside it: the
+     JSON is the authority, and its images must never look unreachable. */
+  const state = sandbox();
+  const { json } = registryPair(state);
+  publishRegistryBackendIdentity(path.join(state, "agent-registry.json"), "off", path.join(state, "agent-registry.sqlite"));
+  expect([...collectRuntimeImageReachableDigests(state)]).toContain(json);
 });
 
 function reservationRow(sha: string, state: string, at: string | null): Record<string, unknown> {

@@ -1,6 +1,6 @@
 # Dictation / voice input
 
-Agent Log Viewer can turn speech into text in any composer, so you can dictate a
+Delegatus can turn speech into text in any composer, so you can dictate a
 message to an agent instead of typing it. Transcription runs through a pluggable
 backend: the default keeps everything on your machine, and three cloud providers
 are available as an explicit per-machine opt-in.
@@ -46,25 +46,35 @@ order:
 1. **Environment variable `LLV_TRANSCRIBE_BACKEND`** — accepts `local`,
    `chatgpt`, `elevenlabs`, or `soniox` (case-insensitive). If set to a valid
    value, it wins.
-2. **Override file `~/.config/agent-log-viewer/transcribe-backend`** — accepts
+2. **Override file `~/.config/delegatus/transcribe-backend`** — accepts
    `chatgpt`, `elevenlabs`, or `soniox` (case-insensitive). Use this to switch
    to a cloud backend without setting an env var. A value of `local` in this file is not
    needed — local is already the default. Create the file with just the backend
-   name as its contents, e.g. `echo elevenlabs > ~/.config/agent-log-viewer/transcribe-backend`.
+   name as its contents, e.g. `echo elevenlabs > ~/.config/delegatus/transcribe-backend`.
 3. **Default: `local`.**
 
-> **Legacy paths:** the config and cache directories moved from `live-log-viewer`
-> to `agent-log-viewer` (matching the package name). Files still under the old
+> **Legacy paths:** the config and cache directories are named `delegatus`. An
+> install from before the rename keeps its `agent-log-viewer` directories:
+> `~/.config/delegatus` is a link to `~/.config/agent-log-viewer`, and the cache
+> stays at `~/.cache/agent-log-viewer/…`. Files still under the older
 > `~/.config/live-log-viewer/…` and `~/.cache/live-log-viewer/…` locations remain
-> valid fallbacks when no `agent-log-viewer` copy exists. Updates keep using a
-> resolved legacy config or cache file, so existing setups continue unchanged.
+> valid fallbacks when no newer copy exists. Updates keep using a resolved
+> legacy config or cache file, so existing setups continue unchanged.
 
-The cloud backends stay off the UI on purpose. There is no in-app toggle to
-enable ChatGPT, ElevenLabs, or Soniox transcription; each one turns on only when
-you set the environment variable or write the override file on that specific
-machine.
-This keeps the on-by-default behaviour fully local and makes any audio leaving
-the machine a deliberate, per-machine choice.
+The default stays local, and any audio leaving the machine is a deliberate,
+per-machine choice. There are two places to make it in Delegatus: the setup
+guide's **Voice** step (reachable again from the **Dictation** menu row) and
+the microphone button's right-click menu. Both write the override file above
+(mode 600).
+
+The Voice step also takes the ElevenLabs or Soniox key: it is written to
+`elevenlabs-api-key` or `soniox-api-key` in the same directory, mode 600,
+through `PUT /api/transcribe/key`, and is never shown or returned again. A key
+set in `ELEVENLABS_API_KEY` or `SONIOX_API_KEY` wins over the file and cannot
+be replaced from the page. **Check dictation** asks the real path: for a live
+backend it requests a token from `POST /api/transcribe/token` (and discards
+it), and for local or ChatGPT it reads the backend's availability, then says
+in one sentence whether dictation works.
 
 Backend selection is read at request time, so switching the override file takes
 effect on the next dictation without restarting the server.
@@ -85,7 +95,7 @@ the model.
 scripts/setup-whisper.sh
 ```
 
-This creates the venv at `~/.cache/agent-log-viewer/whisper-venv`, installs
+This creates the venv at `~/.cache/delegatus/whisper-venv`, installs
 `faster-whisper`, and downloads the model so the first dictation is not the slow
 one. The model is fetched on first load if you skip this step, but the first
 recording then blocks while the download runs.
@@ -94,7 +104,7 @@ recording then blocks while the download runs.
 
 | Variable            | Default                                    | Meaning                                        |
 | ------------------- | ------------------------------------------ | ---------------------------------------------- |
-| `LLV_WHISPER_VENV`  | `~/.cache/agent-log-viewer/whisper-venv`   | Virtualenv the transcription runs from.        |
+| `LLV_WHISPER_VENV`  | `~/.cache/delegatus/whisper-venv`          | Virtualenv the transcription runs from.        |
 | `LLV_WHISPER_MODEL` | `small`                                    | Whisper model size (e.g. `tiny`, `base`, `small`, `medium`, `large-v3`). |
 | `LLV_WHISPER_DEVICE`| `cpu`                                      | `cpu` (int8) or `cuda` (int8_float16) if you have a working CUDA setup. |
 
@@ -120,7 +130,7 @@ browser.
 2. Enable the backend:
 
    ```bash
-   echo chatgpt > ~/.config/agent-log-viewer/transcribe-backend
+   echo chatgpt > ~/.config/delegatus/transcribe-backend
    # or: LLV_TRANSCRIBE_BACKEND=chatgpt
    ```
 
@@ -142,14 +152,14 @@ batch.
 **Key location** (read at request time, env first):
 
 1. Environment variable `ELEVENLABS_API_KEY`, or
-2. File `~/.config/agent-log-viewer/elevenlabs-api-key` (the key as the file's
+2. File `~/.config/delegatus/elevenlabs-api-key` (the key as the file's
    only contents).
 
 **Setup:**
 
 ```bash
-echo 'YOUR_ELEVENLABS_KEY' > ~/.config/agent-log-viewer/elevenlabs-api-key
-echo elevenlabs > ~/.config/agent-log-viewer/transcribe-backend
+echo 'YOUR_ELEVENLABS_KEY' > ~/.config/delegatus/elevenlabs-api-key
+echo elevenlabs > ~/.config/delegatus/transcribe-backend
 ```
 
 How it works:
@@ -180,14 +190,14 @@ marks the utterance finished.
 **Key location** (read at request time, env first):
 
 1. Environment variable `SONIOX_API_KEY`, or
-2. File `~/.config/agent-log-viewer/soniox-api-key` (the key as the file's only
+2. File `~/.config/delegatus/soniox-api-key` (the key as the file's only
    contents).
 
 **Setup:**
 
 ```bash
-echo 'YOUR_SONIOX_KEY' > ~/.config/agent-log-viewer/soniox-api-key
-echo soniox > ~/.config/agent-log-viewer/transcribe-backend
+echo 'YOUR_SONIOX_KEY' > ~/.config/delegatus/soniox-api-key
+echo soniox > ~/.config/delegatus/transcribe-backend
 ```
 
 How it works:
@@ -220,7 +230,7 @@ the same way, one selector over:
 
 1. **Environment variable `LLV_TTS_BACKEND`** — accepts `openai`, `elevenlabs`,
    or `soniox`. When set it wins and locks the in-app picker.
-2. **Override file `~/.config/agent-log-viewer/tts-backend`**, written by that
+2. **Override file `~/.config/delegatus/tts-backend`**, written by that
    picker or by hand.
 3. **Default: `openai`.**
 
@@ -228,8 +238,8 @@ Each provider reads the key file it already uses for transcription, so a Soniox
 key set up above needs nothing more:
 
 ```bash
-echo 'YOUR_SONIOX_KEY' > ~/.config/agent-log-viewer/soniox-api-key
-echo soniox > ~/.config/agent-log-viewer/tts-backend
+echo 'YOUR_SONIOX_KEY' > ~/.config/delegatus/soniox-api-key
+echo soniox > ~/.config/delegatus/tts-backend
 ```
 
 The server posts the answer text to `https://tts-rt.soniox.com/tts` (model

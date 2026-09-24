@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { sqliteRegistryStoreImported } from "./sqliteRegistryStore";
+
 export type RegistryBackendMode = "off" | "dual-write" | "read" | "sqlite";
 
 export const REGISTRY_BACKEND_ENV = "LLV_AGENT_REGISTRY_SQLITE";
@@ -32,7 +34,10 @@ export interface RegistryBackendResolution {
   mode: RegistryBackendMode;
   /** The store the writer named. `null` leaves the default to the caller. */
   sqliteFilename: string | null;
-  source: "environment" | "descriptor" | "json-only" | "explicit" | "unmanaged";
+  source: "environment" | "descriptor" | "default" | "explicit" | "unmanaged";
+  /** The JSON file is still the authority and SQLite is the target: this open
+      must import it once, verified, before it serves (#1870). */
+  pendingJsonImport: boolean;
 }
 
 /** The filesystem seam. Tests drive unreadable and contradictory states
@@ -41,6 +46,9 @@ export interface RegistryBackendIo {
   /** `null` means absent; any other failure must throw. */
   readText(filename: string): string | null;
   exists(filename: string): boolean;
+  /** Whether a registry store holds a committed import. An unmarked store (an
+      import that rolled back) is no authority. Defaults to `exists`. */
+  storeImported?(filename: string): boolean;
   writeText(filename: string, contents: string): void;
 }
 
@@ -57,6 +65,9 @@ export const nodeRegistryBackendIo: RegistryBackendIo = {
   },
   exists(filename) {
     return fs.existsSync(filename);
+  },
+  storeImported(filename) {
+    return sqliteRegistryStoreImported(filename);
   },
   writeText(filename, contents) {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -87,14 +98,23 @@ function isBackendMode(value: unknown): value is RegistryBackendMode {
   return value === "off" || value === "dual-write" || value === "read" || value === "sqlite";
 }
 
-/** Pure env read: lets health/capability probes answer without paying the
-    full registry load (a multi-MB JSON parse) on first touch. */
+/** SQLite is the registry's only default store (#1870). The JSON modes remain
+    reachable only when a deployment names one explicitly. */
+export const DEFAULT_REGISTRY_BACKEND_MODE: RegistryBackendMode = "sqlite";
+
+/** Pure env read: lets health/capability probes answer without opening the
+    registry. An unset variable is the default, SQLite. */
 export function registryBackendModeFromEnvironment(
   environment: RegistryBackendEnvironment = process.env,
 ): RegistryBackendMode {
-  const configured = environment[REGISTRY_BACKEND_ENV] ?? "off";
+  const configured = environment[REGISTRY_BACKEND_ENV] ?? DEFAULT_REGISTRY_BACKEND_MODE;
   if (isBackendMode(configured)) return configured;
   throw new Error(`${REGISTRY_BACKEND_ENV} must be off, dual-write, read, or sqlite`);
+}
+
+/** The JSON-authoritative modes, kept for one deprecation window. */
+export function isDeprecatedRegistryBackendMode(mode: RegistryBackendMode): boolean {
+  return mode !== "sqlite";
 }
 
 function parseDescriptor(raw: string, label: string): RegistryBackendDescriptor {
@@ -139,46 +159,59 @@ function parseDescriptor(raw: string, label: string): RegistryBackendDescriptor 
 /**
  * Which backend this process must open.
  *
- * A writer states its mode in the environment and is authoritative. Every
+ * A writer that states its mode in the environment is authoritative. Every
  * other process — most importantly the MCP server, which Claude launches with
  * an empty env — resolves the durable descriptor the writer published, so a
- * reader can never silently open a different store than the writer owns.
+ * reader can never silently open a different store than the writer owns. With
+ * neither, the registry is SQLite (#1870).
  *
- * Absent, invalid, contradictory, and unavailable identities all fail closed.
- * The one safe fallback is a deployment that genuinely has no SQLite store:
- * there is nothing to diverge from, so the JSON backend is proven, not assumed.
+ * An install whose published authority is still the JSON file (a descriptor
+ * that says `off` or `dual-write`, or no descriptor and only the JSON on disk)
+ * resolves to SQLite with `pendingJsonImport`: the opening process imports the
+ * JSON once, verified, and flips the descriptor last. Invalid, contradictory
+ * and unavailable identities still fail closed.
  */
 export function resolveRegistryBackend(
   registryFilename: string,
   environment: RegistryBackendEnvironment = process.env,
   io: RegistryBackendIo = nodeRegistryBackendIo,
 ): RegistryBackendResolution {
-  if (environment[REGISTRY_BACKEND_ENV] !== undefined) {
-    return { mode: registryBackendModeFromEnvironment(environment), sqliteFilename: null, source: "environment" };
-  }
   const descriptorPath = registryBackendDescriptorPath(registryFilename);
   const descriptorName = path.basename(descriptorPath);
   const defaultStore = defaultRegistrySqliteFilename(registryFilename);
+  if (environment[REGISTRY_BACKEND_ENV] !== undefined) {
+    const mode = registryBackendModeFromEnvironment(environment);
+    if (mode !== "sqlite") return { mode, sqliteFilename: null, source: "environment", pendingJsonImport: false };
+    /* A writer told `sqlite` over an install whose descriptor still names the
+       JSON imports it; with no descriptor at all, only a JSON with no store
+       beside it is unambiguously the authority. */
+    const raw = io.readText(descriptorPath);
+    const descriptor = raw === null ? null : parseDescriptor(raw, descriptorName);
+    const pendingJsonImport = descriptor
+      ? descriptor.mode === "off" || descriptor.mode === "dual-write"
+      : io.exists(registryFilename) && !(io.storeImported ? io.storeImported(defaultStore) : io.exists(defaultStore));
+    return { mode, sqliteFilename: null, source: "environment", pendingJsonImport };
+  }
   const raw = io.readText(descriptorPath);
   if (raw === null) {
-    if (io.exists(defaultStore)) {
+    const storeImported = io.storeImported ? io.storeImported(defaultStore) : io.exists(defaultStore);
+    if (io.exists(registryFilename) && storeImported) {
       throw new RegistryBackendIdentityError(
-        `the agent registry backend identity is unpublished while ${path.basename(defaultStore)} exists,`
-        + ` so SQLite may be authoritative and the JSON mirror may be stale;`
+        `the agent registry backend identity is unpublished while both ${path.basename(registryFilename)}`
+        + ` and ${path.basename(defaultStore)} exist, so either may be authoritative;`
         + ` start the registry writer with ${REGISTRY_BACKEND_ENV} set so it publishes ${descriptorName}`,
       );
     }
-    return { mode: "off", sqliteFilename: null, source: "json-only" };
+    return {
+      mode: DEFAULT_REGISTRY_BACKEND_MODE,
+      sqliteFilename: null,
+      source: "default",
+      pendingJsonImport: io.exists(registryFilename),
+    };
   }
   const descriptor = parseDescriptor(raw, descriptorName);
-  if (descriptor.mode === "off") {
-    if (io.exists(defaultStore)) {
-      throw new RegistryBackendIdentityError(
-        `${descriptorName} claims the JSON backend while ${path.basename(defaultStore)} exists;`
-        + ` remove the stale store or republish the descriptor from the writer`,
-      );
-    }
-    return { mode: "off", sqliteFilename: null, source: "descriptor" };
+  if (descriptor.mode === "off" || descriptor.mode === "dual-write") {
+    return { mode: DEFAULT_REGISTRY_BACKEND_MODE, sqliteFilename: null, source: "descriptor", pendingJsonImport: true };
   }
   const store = path.join(path.dirname(descriptorPath), descriptor.sqliteFile!);
   if (!io.exists(store)) {
@@ -186,7 +219,18 @@ export function resolveRegistryBackend(
       `${descriptorName} names the ${descriptor.mode} backend store ${descriptor.sqliteFile}, which is unavailable`,
     );
   }
-  return { mode: descriptor.mode, sqliteFilename: store, source: "descriptor" };
+  return { mode: descriptor.mode, sqliteFilename: store, source: "descriptor", pendingJsonImport: false };
+}
+
+/** The mode the published descriptor names, or null when there is none.
+    Throws on a descriptor that cannot be trusted. */
+export function publishedRegistryBackendMode(
+  registryFilename: string,
+  io: RegistryBackendIo = nodeRegistryBackendIo,
+): RegistryBackendMode | null {
+  const descriptorPath = registryBackendDescriptorPath(registryFilename);
+  const raw = io.readText(descriptorPath);
+  return raw === null ? null : parseDescriptor(raw, path.basename(descriptorPath)).mode;
 }
 
 /** Publishes the writer's own backend identity. Idempotent: an unchanged

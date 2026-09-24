@@ -29,19 +29,31 @@ function hostWithoutPort(host: string): string {
   return idx === -1 ? host : host.slice(0, idx);
 }
 
-export function rejectCrossOrigin(req: NextRequest): NextResponse<ApiError> | null {
-  // DNS rebinding: an attacker's public DNS name can resolve to 127.0.0.1 after
-  // the browser's same-origin checks pass, carrying a Host header the attacker
-  // controls. Pin Host to known names regardless of Origin/Sec-Fetch-Site; the
-  // optional tailnet hostname is pinned explicitly, preserving the allowlist.
+function allowedHostNames(): Set<string> {
   const allowedHosts = new Set(LOOPBACK_HOSTS);
   const tailnetHost = process.env.LLV_TS_HOST;
   if (tailnetHost) {
     allowedHosts.add(hostWithoutPort(tailnetHost));
   }
+  return allowedHosts;
+}
 
+/** The Host half of the gate alone, for a route whose callers are cross-origin
+    by design and which authorizes them some other way (the report frame). */
+export function rejectForeignHost(req: NextRequest): NextResponse<ApiError> | null {
   const host = req.headers.get("host");
-  if (host === null || !allowedHosts.has(hostWithoutPort(host))) return forbidden();
+  if (host === null || !allowedHostNames().has(hostWithoutPort(host))) return forbidden();
+  return null;
+}
+
+export function rejectCrossOrigin(req: NextRequest): NextResponse<ApiError> | null {
+  // DNS rebinding: an attacker's public DNS name can resolve to 127.0.0.1 after
+  // the browser's same-origin checks pass, carrying a Host header the attacker
+  // controls. Pin Host to known names regardless of Origin/Sec-Fetch-Site; the
+  // optional tailnet hostname is pinned explicitly, preserving the allowlist.
+  const allowedHosts = allowedHostNames();
+  const hostRejection = rejectForeignHost(req);
+  if (hostRejection) return hostRejection;
 
   const origin = req.headers.get("origin");
   if (origin !== null) {

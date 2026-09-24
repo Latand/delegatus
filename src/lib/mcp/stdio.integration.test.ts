@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import net from "node:net";
 
 const downstream = (tool: string, key: string) => `mcp_${tool === "send_message" ? "send" : "spawn"}_${crypto.createHash("sha256").update(key).digest("hex")}`;
 import os from "node:os";
@@ -114,6 +115,95 @@ async function callSpawn(client: Client, clientRequestId: string, extra: Record<
   });
 }
 
+test("store reads stay independent of a slow host, held pipeline lease and same-client HTTP call", async () => {
+  const sandbox = sandboxDir("llv-mcp-read-latency-");
+  const socketPath = path.join(sandbox, "host.sock");
+  const methods: string[] = [];
+  const sockets = new Set<net.Socket>();
+  const host = net.createServer(socket => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => {});
+    socket.once("data", async chunk => {
+      const request = JSON.parse(String(chunk));
+      methods.push(request.method);
+      await Bun.sleep(3_000);
+      if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result: { sessions: [] } }) + "\n");
+    });
+  });
+  await new Promise<void>(resolve => host.listen(socketPath, resolve));
+  let httpStarted!: () => void;
+  const started = new Promise<void>(resolve => { httpStarted = resolve; });
+  const { UnixRuntimeHostClient } = await import("@/lib/runtime/client");
+  const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch() {
+    httpStarted();
+    await new UnixRuntimeHostClient(socketPath).snapshot();
+    return Response.json({ items: [], total: 0, nextCursor: null });
+  } });
+  const environment = identifiedEnvironment(sandbox, {
+    LLV_RUNTIME_HOST_SOCKET: socketPath,
+    LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${http.port}`,
+  });
+  const seed = Bun.spawn([process.execPath, "-e", `
+    const { withPipelineMutation, buildPipeline } = await import('./src/lib/pipelines/store');
+    const { mutateTasks } = await import('./src/lib/tasks/store');
+    await withPipelineMutation((rows, persist) => {
+      rows.push(buildPipeline({ id: 'latency-pipeline', task: 'Latency fixture', project: 'fixture', repoDir: process.cwd(), stages: [{ id: 'build', kind: 'run', role: { roleId: 'builder' }, prompt: 'Fixture', next: null, effectiveRole: { roleId: 'builder', engine: 'codex', model: null, effort: null, access: 'read-write', promptScaffold: 'Fixture' } }], srcPath: null, srcConversationId: null, now: new Date().toISOString(), state: 'draft' }));
+      persist();
+    });
+    mutateTasks(rows => ({ tasks: [...rows, { id: 'latency-task', text: 'Latency fixture', project: 'fixture', status: 'inbox', placement: 'unplaced', assignments: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }], result: null }));
+    await withPipelineMutation(async () => {
+      console.log('held');
+      for await (const chunk of Bun.stdin.stream()) break;
+    });
+  `], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  let session: McpSession | undefined;
+  try {
+    const reader = seed.stdout.getReader();
+    const ready = await reader.read();
+    if (ready.done) throw new Error(await new Response(seed.stderr).text());
+    expect(new TextDecoder().decode(ready.value)).toContain("held");
+    reader.releaseLock();
+    session = await startMcp(environment, "read-latency");
+    const slow = session.client.callTool({ name: "search_transcripts", arguments: { clientRequestId: "slow-http", query: "fixture" } });
+    await started;
+    let completedCloses = 0;
+    const closes = ["close-first", "close-second"].map(clientRequestId => session!.client.callTool({ name: "pipeline_action", arguments: { clientRequestId, pipelineId: "latency-pipeline", action: "close" } })
+      .then(result => { completedCloses++; return result; }));
+    const measurements = await Promise.all([
+      ["list_tasks", { ids: ["absent"] }],
+      ["get_task", { taskId: "latency-task" }],
+      ["get_pipeline", { pipelineId: "latency-pipeline" }],
+    ].map(async ([name, args]) => {
+      const start = performance.now();
+      const result = await session!.client.callTool({ name: name as string, arguments: { ...args as object, clientRequestId: `read-${name}` } });
+      const ms = Math.round(performance.now() - start);
+      expect(result.structuredContent).toMatchObject({ ok: true });
+      return { tool: name, ms };
+    }));
+    console.log(JSON.stringify({ readLatency: measurements, hostMethods: methods }));
+    expect(methods.filter(method => method !== "snapshot")).toEqual([]);
+    expect(measurements.every(row => row.ms < 1_000)).toBe(true);
+    expect(completedCloses).toBe(0);
+    seed.stdin.end();
+    for (const result of await Promise.all(closes)) expect(result.structuredContent).toMatchObject({ ok: true });
+    await slow;
+    expect(methods).toEqual(["snapshot"]);
+    const lines = session.stderr().split("\n").filter(line => line.startsWith("[mcp slow]"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/tool=search_transcripts callerMs=\d+ httpMs=\d+/);
+    expect(Number(lines[0]!.match(/httpMs=(\d+)/)?.[1])).toBeGreaterThanOrEqual(2_900);
+    expect(lines[0]).not.toContain("slow-http");
+  } finally {
+    seed.stdin.end();
+    await seed.exited;
+    await session?.close();
+    http.stop(true);
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>(resolve => host.close(() => resolve()));
+  }
+}, 20_000);
+
 test("the packaged stdio host publishes and invokes the expanded read surface", async () => {
   const sandbox = sandboxDir("llv-mcp-stdio-");
   const session = await startMcp(isolatedEnvironment(sandbox), "viewer-stdio-integration");
@@ -121,6 +211,13 @@ test("the packaged stdio host publishes and invokes the expanded read surface", 
     const tools = await session.client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toContain("board_snapshot");
     expect(tools.tools.map((tool) => tool.name)).toContain("conversation_migration");
+    const retirement = tools.tools.find(tool => tool.name === "deployment_status")!;
+    expect(Object.keys(retirement.inputSchema.properties ?? {})).toEqual(expect.arrayContaining([
+      "kind", "project", "callerLaunchId", "limit", "cursor",
+    ]));
+    expect(retirement.description).toContain("designated seat");
+    expect((retirement.inputSchema.properties?.callerLaunchId as { description: string }).description).toContain("Optional");
+    expect(retirement.inputSchema.required).not.toContain("callerLaunchId");
 
     const first = await session.client.callTool({
       name: "list_flows",

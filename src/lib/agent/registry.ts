@@ -4,6 +4,8 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
+import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import {
   captureProcessIdentity,
   processIdentityMayOwn,
@@ -12,7 +14,8 @@ import {
   type ProcessIdentity,
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
-import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { admitAutomaticAccountTarget } from "@/lib/accounts/projectSelection";
@@ -28,6 +31,7 @@ import {
   type HeldDeliveryCommand,
   type HeldDeliveryCommandInput,
   type LaunchProfile,
+  type MigrationEngine,
   type MigrationIntent,
   type MigrationOrigin,
   type NativeGeneration,
@@ -54,7 +58,7 @@ import {
   type IdentityWaveSeat,
 } from "./identityWaveMigration";
 import { mcpServersForStoredSession, reboundAssembledMcpGrants, reboundEntryMcpGrant, reboundStoredMcpGrants, type McpGrantPolicy } from "./mcpAllowlist";
-import { liveAccountConversationIds, type AccountLivenessOptions } from "./accountLiveness";
+import { accountHasLiveSessions, liveAccountConversationIds, type AccountLivenessOptions } from "./accountLiveness";
 import { loadSpawnNestingPolicy } from "./nestingPolicy";
 import {
   SpawnAdmissionError,
@@ -68,18 +72,25 @@ import {
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "./sessionKey";
 import {
   defaultRegistrySqliteFilename,
+  isDeprecatedRegistryBackendMode,
+  publishedRegistryBackendMode,
   publishRegistryBackendIdentity,
   registryBackendModeFromEnvironment,
+  REGISTRY_BACKEND_ENV,
   resolveRegistryBackend,
+  type RegistryBackendMode,
   type RegistryBackendResolution,
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
+  registryRowsMatching, registryKeysMatching, registryConversationsForPath,
+  sqliteRegistryStoreImported,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
+import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
@@ -100,7 +111,7 @@ export interface TmuxHostEvidence {
 }
 
 export interface StructuredHostColumns {
-  kind: "codex-app-server" | "claude-broker";
+  kind: "codex-app-server" | "claude-broker" | "copilot-acp";
   endpoint: string;
   process: ProcessIdentity | null;
   eventCursor: number;
@@ -345,7 +356,8 @@ export interface DurableConversationMembership {
   round: number | null;
   parentConversationId: ViewerConversationId | null;
   /** Child runtime captured at adoption admission so pipeline recovery can
-      parse the materialized transcript with its owning engine. */
+      parse the materialized transcript with its owning engine. Pipeline
+      stages run Claude or Codex; Copilot is not a stage engine yet. */
   runtime?: {
     engine: Extract<AgentEngine, "claude" | "codex">;
     model: string | null;
@@ -454,6 +466,19 @@ export type ConversationReconfigureClaimResult =
   /* The operation was withdrawn before any claim (#1705): nothing was written. */
   | { kind: "withdrawn"; state: ConversationReconfigureState | null; conversation: RegistryConversation };
 
+/**
+ * An account switch that failed when a message engaged it (#1846). While it
+ * stands the conversation's messages stay queued where they are, and the
+ * operator either sends them on the account the conversation runs on or picks
+ * another account, whose claim ends the hold.
+ */
+export interface ConversationSwitchHold {
+  operationId: string;
+  accountId: string;
+  reason: string;
+  at: string;
+}
+
 /** A queued reconfigure withdrawn before the queue claimed it (#1705). */
 export interface ConversationReconfigureWithdrawal {
   operationId: string;
@@ -514,7 +539,7 @@ export class SupersedenceConflictError extends Error {
 
 export interface RegistryConversation {
   id: ViewerConversationId;
-  engine: Extract<AgentEngine, "claude" | "codex">;
+  engine: AgentEngine;
   generations: NativeGeneration[];
   /** Provider-created transcript artifacts that retain this conversation's
       identity while the canonical generation path advances. */
@@ -539,6 +564,8 @@ export interface RegistryConversation {
   reconfigure?: ConversationReconfigureState | null;
   /** Reconfigure operations withdrawn before their claim (#1705), newest last. */
   reconfigureWithdrawals?: ConversationReconfigureWithdrawal[];
+  /** The failed account switch holding this conversation's messages (#1846). */
+  switchHold?: ConversationSwitchHold | null;
   migration: ConversationMigration | null;
   /** Explicit Stop/Keep decision for one target at one routing revision. */
   migrationOptOut: { targetId: string; updatedAt: string } | null;
@@ -553,6 +580,26 @@ export interface RegistryConversation {
       conversations; admission then falls back to membership/lineage evidence. */
   delegationDepth: number | null;
   turn: TurnState & { observedAt: string | null };
+  /**
+   * THIS CONVERSATION'S DELIVERY EVIDENCE HAS BEEN COMPLETE SINCE IT BEGAN.
+   *
+   * Stamped once, at birth, by a build that writes a
+   * {@link DeliveryEvidenceCompaction} note for every keyed delivery record
+   * its retention drops. It is the only thing that lets absence under a key
+   * mean non-execution, because it is the only thing that says the notes were
+   * there to be written.
+   *
+   * False on every conversation carried across an upgrade FROM a build that
+   * had no note to write. Those histories were trimmed silently and nothing
+   * left in the file can say by how much: a retained-row count at the
+   * retention bound looks like proof that compaction ran, but the count moves
+   * both ways — any later operation that clears its terminal state puts the
+   * group back under the bound — and a fate read off a number that can go back
+   * down is a delivered message read as one that never went. So a pre-note
+   * conversation answers `unknown` for every key it cannot show, for good, and
+   * a conversation this build created answers for itself.
+   */
+  deliveryEvidenceTracked: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -567,6 +614,16 @@ export interface RegistryConversation {
  * one.
  */
 export type DeliveryTerminalDisposition = "delivered" | "lost" | "unverified";
+
+/**
+ * What the retained record can say about one send key (#1932): admission
+ * proven, non-execution proven, or neither — the third being the answer a
+ * bounded record owes whenever its own retention could have swallowed the row.
+ */
+export type DeliveryAdmissionEvidence =
+  | { outcome: "admitted"; operationId: string; deliveryId: string; state: HeldDelivery["state"] | null }
+  | { outcome: "not-executed" }
+  | { outcome: "unknown"; reason: string };
 
 export interface DeliveryOperationOwner {
   conversationId: ViewerConversationId;
@@ -597,6 +654,61 @@ export interface DeliveryOperationOwner {
   terminalDisposition: DeliveryTerminalDisposition | null;
   terminalReason: string | null;
   settledAt: string | null;
+  /** How a delivered send reached a running turn when it took more than a
+      plain send: `interrupt-then-turn-started` on an engine without steer
+      (Copilot), whose message interrupted the running turn and started the
+      next one. Kept here, beside the settlement, so `message_receipt` still
+      answers it once the journal receipt has been compacted. Absent on every
+      other delivery. */
+  delivery?: RuntimeDeliveryMode;
+  /** The turn that delivery interrupted. */
+  interruptedTurnId?: string;
+}
+
+/** The delivery route a settled send is recorded with (see `delivery` above). */
+export interface DeliveryRoute {
+  delivery: RuntimeDeliveryMode;
+  interruptedTurnId: string | null;
+}
+
+/** The owner row a reservation writes for itself, when it is still that reservation's. */
+function deliveryOwner(file: RegistryFile, delivery: HeldDelivery): DeliveryOperationOwner | undefined {
+  const owner = file.deliveryOperationOwners[delivery.command.operationId];
+  return owner?.deliveryId === delivery.id ? owner : undefined;
+}
+
+function recordDeliveryRoute(owner: DeliveryOperationOwner | undefined, route: DeliveryRoute | null | undefined): void {
+  if (!owner || !route) return;
+  owner.delivery = route.delivery;
+  if (route.interruptedTurnId) owner.interruptedTurnId = route.interruptedTurnId;
+  else delete owner.interruptedTurnId;
+}
+
+/**
+ * ONE CONVERSATION'S ADMISSION HISTORY IS INCOMPLETE FROM HERE ON.
+ *
+ * Delivery evidence is retained, not kept forever, and the moment a record
+ * that could have answered "was this key ever admitted?" is dropped, absence
+ * under that conversation stops meaning anything. That fact has to outlive the
+ * rows it is about, so it is written down here when the drop happens rather
+ * than inferred afterwards from what is left: the counts that are left move in
+ * both directions — a later operation leaving its terminal state puts a
+ * compacted conversation back under the retention bound — and a fate inferred
+ * from a number that can go back down is a delivered message read as one that
+ * never went.
+ *
+ * Only a dropped row that CARRIED a key is recorded. A record with no client
+ * message id could never have answered a lookup for one, so losing it narrows
+ * nothing.
+ */
+export interface DeliveryEvidenceCompaction {
+  conversationId: ViewerConversationId;
+  /** When this conversation first lost keyed admission evidence. */
+  firstAt: string;
+  /** The most recent drop, and how many rows have gone. Diagnostic: one drop
+      is already the whole answer. */
+  lastAt: string;
+  dropped: number;
 }
 
 export interface RegistryFile {
@@ -620,13 +732,15 @@ export interface RegistryFile {
   /** Durable redirects for conversation IDs that escaped before scanner-owned
       provisional identities were adopted by their canonical owner. */
   conversationAliases: Record<string, ViewerConversationId>;
-  conversationRevision: Record<Extract<AgentEngine, "claude" | "codex">, number>;
+  conversationRevision: Record<AgentEngine, number>;
   migrationIntents: Record<string, MigrationIntent>;
-  engineRouting: Record<Extract<AgentEngine, "claude" | "codex">, { activeAccountId: string | null; revision: number }>;
-  autoBalance: Record<Extract<AgentEngine, "claude" | "codex">, AutoBalancePolicy>;
-  quotaObservations: Record<Extract<AgentEngine, "claude" | "codex">, Record<string, DurableQuotaObservation>>;
+  engineRouting: Record<AgentEngine, { activeAccountId: string | null; revision: number }>;
+  autoBalance: Record<AgentEngine, AutoBalancePolicy>;
+  quotaObservations: Record<AgentEngine, Record<string, DurableQuotaObservation>>;
   heldDeliveries: Record<string, HeldDelivery>;
   deliveryOperationOwners: Record<string, DeliveryOperationOwner>;
+  /** Keyed by canonical conversation id; see {@link DeliveryEvidenceCompaction}. */
+  deliveryEvidenceCompactions: Record<string, DeliveryEvidenceCompaction>;
   pendingSuccessorCleanups: Record<string, { conversationId: ViewerConversationId; receipt: ProviderReceipt; createdAt: string; lastError: string | null }>;
   /** Supersedence edges staged behind a still-live chain end (issue #383),
       keyed by successor conversation id. */
@@ -675,7 +789,7 @@ type SuccessorGenerationInput = Omit<NativeGeneration, "createdAt" | "archivedAt
   Partial<Pick<NativeGeneration, "launchProfile" | "historyHash" | "host">>;
 
 export interface ConversationObservation {
-  engine: Extract<AgentEngine, "claude" | "codex">;
+  engine: AgentEngine;
   path: string;
   accountId: string | null;
   launchProfile: LaunchProfile;
@@ -702,6 +816,68 @@ export interface ConversationObservation {
 }
 
 export type MigrationScope = "active" | "all";
+
+/** One prefix move applied to every registry path under a removed account's
+    home (issue #1857). `from` and `to` are absolute directory paths. */
+export interface AccountPathRewrite {
+  from: string;
+  to: string;
+}
+
+/** What `retireAccount` changed, reported back to the removal dialog. */
+export interface AccountRetirementReport {
+  conversationsRewritten: number;
+  pinsCleared: number;
+  deliveriesDropped: number;
+  migrationsSettled: number;
+}
+
+const ACCOUNT_REMOVED_DELIVERY_REASON = "delivery dropped because its account was removed";
+
+function rewriteAccountPath(pathname: string, rewrites: readonly AccountPathRewrite[]): string {
+  for (const { from, to } of rewrites) {
+    if (pathname === from) return to;
+    if (pathname.startsWith(`${from}${path.sep}`)) return path.join(to, pathname.slice(from.length + 1));
+  }
+  return pathname;
+}
+
+/** Applies path rewrites to every registry field that addresses a transcript
+    artifact. Returns the ids of the conversations whose paths changed. */
+function rewriteRegistryAccountPaths(
+  file: RegistryFile,
+  engine: MigrationEngine,
+  rewrites: readonly AccountPathRewrite[],
+): Set<ViewerConversationId> {
+  const changed = new Set<ViewerConversationId>();
+  if (rewrites.length === 0) return changed;
+  const move = (pathname: string) => rewriteAccountPath(pathname, rewrites);
+  const moveAll = (paths: string[]) => paths.map(move);
+  for (const conversation of Object.values(file.conversations)) {
+    if (conversation.engine !== engine) continue;
+    const before = JSON.stringify([conversation.generations.map((generation) => generation.path), conversation.continuityPaths, conversation.abandonedContinuityPaths, conversation.providerForkPaths, conversation.migration?.pendingContinuityPaths ?? [], conversation.migration?.providerReceipt ?? null]);
+    for (const generation of conversation.generations) generation.path = move(generation.path);
+    conversation.continuityPaths = moveAll(conversation.continuityPaths);
+    conversation.abandonedContinuityPaths = moveAll(conversation.abandonedContinuityPaths);
+    conversation.providerForkPaths = moveAll(conversation.providerForkPaths);
+    if (conversation.migration) {
+      conversation.migration.pendingContinuityPaths = moveAll(conversation.migration.pendingContinuityPaths);
+      const receipt = conversation.migration.providerReceipt;
+      if (receipt) conversation.migration.providerReceipt = { ...receipt, path: move(receipt.path), continuityPaths: moveAll(receipt.continuityPaths) };
+    }
+    const after = JSON.stringify([conversation.generations.map((generation) => generation.path), conversation.continuityPaths, conversation.abandonedContinuityPaths, conversation.providerForkPaths, conversation.migration?.pendingContinuityPaths ?? [], conversation.migration?.providerReceipt ?? null]);
+    if (before !== after) changed.add(conversation.id);
+  }
+  for (const entry of Object.values(file.entries)) {
+    if (entry.key.engine === engine) entry.artifactPath = move(entry.artifactPath);
+  }
+  for (const receipt of Object.values(file.receipts)) {
+    if (receipt.engine !== engine) continue;
+    if (receipt.artifactPath) receipt.artifactPath = move(receipt.artifactPath);
+    if (receipt.resumeSourcePath) receipt.resumeSourcePath = move(receipt.resumeSourcePath);
+  }
+  return changed;
+}
 
 export interface MigrationScopeCounts {
   total: number;
@@ -936,13 +1112,23 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
 
 function migrationReadinessSignature(
   file: RegistryFile,
-  engine: Extract<AgentEngine, "claude" | "codex">,
+  engine: AgentEngine,
   paths: ReadonlySet<string>,
 ): string {
-  const index = migrationReadinessIndex(file);
-  return JSON.stringify(Object.values(file.conversations)
-    .filter((conversation) => conversation.engine === engine
-      && paths.has(conversation.generations.at(-1)?.path ?? ""))
+  /* Account migration covers Claude and Codex; Copilot has no migration scope
+     (docs/design/copilot-engine.md, slices 2–4). */
+  if (engine === "copilot") return "";
+  const conversations = [...new Map([...paths].flatMap(path => registryConversationsForPath(file, path))
+    .filter(conversation => conversation.engine === engine && paths.has(conversation.generations.at(-1)?.path ?? ""))
+    .map(conversation => [conversation.id, conversation])).values()];
+  const deliveries = conversations.flatMap(conversation => registryRowsMatching(file, "heldDeliveries", "conversationId", conversation.id));
+  const index: MigrationReadinessIndex = {
+    uncertainDeliveryConversationIds: new Set(deliveries.filter(row => row.state === "delivery-uncertain").map(row => row.conversationId)),
+    pendingDeliveryConversationIds: new Set(deliveries.filter(row => row.state !== "delivered").map(row => row.conversationId)),
+    activeHostPaths: new Set([...paths].filter(path => registryRowsMatching(file, "entries", "artifactPath", path)
+      .some(entry => ["starting", "live", "idle", "handoff"].includes(entry.status)))),
+  };
+  return JSON.stringify(conversations
     .map((conversation) => [conversation.id, migrationReadiness(file, conversation, index)])
     .sort(([left], [right]) => left.localeCompare(right)));
 }
@@ -956,10 +1142,13 @@ function activeHostPathsChangedByEntry(
   const paths = new Set([previous?.artifactPath, replacement.artifactPath].filter((value): value is string => Boolean(value)));
   const activeStatuses = new Set<AgentRegistryEntry["status"]>(["starting", "live", "idle", "handoff"]);
   const activeAtPath = (pathname: string, replace: boolean): boolean => {
-    for (const [candidateKey, current] of Object.entries(file.entries)) {
+    for (const candidateKey of registryKeysMatching(file, "entries", "artifactPath", pathname)) {
+      const current = file.entries[candidateKey]!;
       const candidate = replace && candidateKey === keyId ? replacement : current;
       if (candidate.artifactPath === pathname && activeStatuses.has(candidate.status)) return true;
     }
+    if (replace && previous?.artifactPath !== pathname && replacement.artifactPath === pathname
+      && activeStatuses.has(replacement.status)) return true;
     return replace && !(keyId in file.entries)
       && replacement.artifactPath === pathname
       && activeStatuses.has(replacement.status);
@@ -969,10 +1158,11 @@ function activeHostPathsChangedByEntry(
 
 function advanceMigrationScopeRevision(
   file: RegistryFile,
-  engine: Extract<AgentEngine, "claude" | "codex">,
+  engine: AgentEngine,
   previousSignature: string,
   paths: ReadonlySet<string>,
 ): void {
+  if (engine === "copilot") return;
   if (migrationReadinessSignature(file, engine, paths) === previousSignature) return;
   file.conversationRevision[engine] += 1;
   file.engineRouting[engine].revision += 1;
@@ -980,7 +1170,7 @@ function advanceMigrationScopeRevision(
 
 function migrationScopeCounts(
   file: RegistryFile,
-  engine: Extract<AgentEngine, "claude" | "codex">,
+  engine: MigrationEngine,
   targetId: string,
 ): MigrationScopeCounts {
   const counts: MigrationScopeCounts = { total: 0, idle: 0, busy: 0, deferred: 0, alreadyTarget: 0 };
@@ -1070,6 +1260,7 @@ function migrationEnrollmentAdmission(
   intent: MigrationIntent,
 ): MigrationEnrollmentAdmission {
   if (intent.origin !== "auto") return { kind: "accepted" };
+  if (conversation.engine === "copilot") return { kind: "refused", reason: "account migration does not cover Copilot conversations" };
   const project = conversationProjectKey(conversation.projectOwnership, source.launchProfile);
   try {
     const resolution = admitAutomaticAccountTarget({
@@ -1308,6 +1499,64 @@ function refenceHeldDeliveries(
   }
 }
 
+/* A spawn that began before an account switch remains attributable to its
+   birth account. The already-active engine-wide migration intent still
+   applies to the new conversation through the existing coordinator
+   contract — and through the SAME admission the drain itself uses, since
+   an automatic intent enrolling a conversation nobody named is the
+   eleventh automatic selection (#1279); a conversation-scoped reseat moves
+   only its own thread. The migration record is the shared construction, so
+   settlement cannot drift from the two paths that queue the same move.
+   Answers whether the conversation was enrolled. */
+function enrollSettledSpawnInDrain(file: RegistryFile, conversation: RegistryConversation, at: string): boolean {
+  const activeIntent = Object.values(file.migrationIntents).find((intent) =>
+    intent.engine === conversation.engine
+    && engineScopedIntent(intent)
+    && migrationIntentCanEnroll(file, intent, Date.parse(at)));
+  const source = conversation.generations.at(-1);
+  if (!activeIntent || conversation.pinnedAccountId || !source
+    || source.accountId === activeIntent.targetId || conversation.migration
+    || migrationEnrollmentAdmission(file, conversation, source, activeIntent).kind !== "accepted") return false;
+  conversation.migration = conversationMigrationForIntent(
+    conversation,
+    source,
+    activeIntent,
+    migrationTurnIsBusy(file, conversation) ? "waiting-turn" : "requested",
+    at,
+  );
+  conversation.updatedAt = at;
+  return true;
+}
+
+/** Whether `launchId` names this conversation's fresh launch, still settling,
+    on the account its current generation runs on (#2051). A settled launch no
+    longer speaks for the account: from then on the conversation is ordinary
+    work the lazy move may carry. */
+/** The account each conversation's fresh launch chose, for every launch still
+    settling: staged, its first message not yet delivered (#2051). */
+function settlingLaunchAccounts(file: RegistryFile): Map<ViewerConversationId, string | null> {
+  const accounts = new Map<ViewerConversationId, string | null>();
+  for (const receipt of Object.values(file.receipts)) {
+    if (receipt.purpose !== "launch" || (receipt.state !== "starting" && receipt.state !== "path-pending")) continue;
+    accounts.set(resolveConversationAlias(file, receipt.conversationId), receipt.accountId);
+  }
+  return accounts;
+}
+
+function settlingLaunchChoseAccount(
+  file: RegistryFile,
+  conversationId: ViewerConversationId,
+  generation: RegistryConversation["generations"][number],
+  launchId: string | null | undefined,
+): boolean {
+  const receipt = launchId ? file.receipts[launchId] : undefined;
+  return Boolean(receipt
+    && receipt.purpose === "launch"
+    && (receipt.state === "starting" || receipt.state === "path-pending")
+    && resolveConversationAlias(file, receipt.conversationId) === conversationId
+    && receipt.accountId === generation.accountId);
+}
+
 /** The in-flight migration a transaction is about to replace, whose held deliveries its replacement adopts. */
 function inFlightMigration(conversation: RegistryConversation): ConversationMigration | null {
   return conversation.migration && IN_FLIGHT_MIGRATION_PHASES.has(conversation.migration.phase) ? { ...conversation.migration } : null;
@@ -1433,13 +1682,14 @@ const EMPTY: RegistryFile = {
   legacyResumePanes: { serverPid: null, panes: {} },
   conversations: {},
   conversationAliases: {},
-  conversationRevision: { claude: 0, codex: 0 },
+  conversationRevision: { claude: 0, codex: 0, copilot: 0 },
   migrationIntents: {},
-  engineRouting: { claude: { activeAccountId: null, revision: 0 }, codex: { activeAccountId: null, revision: 0 } },
-  autoBalance: { claude: emptyPolicy(), codex: emptyPolicy() },
-  quotaObservations: { claude: {}, codex: {} },
+  engineRouting: { claude: { activeAccountId: null, revision: 0 }, codex: { activeAccountId: null, revision: 0 }, copilot: { activeAccountId: null, revision: 0 } },
+  autoBalance: { claude: emptyPolicy(), codex: emptyPolicy(), copilot: emptyPolicy() },
+  quotaObservations: { claude: {}, codex: {}, copilot: {} },
   heldDeliveries: {},
   deliveryOperationOwners: {},
+  deliveryEvidenceCompactions: {},
   pendingSuccessorCleanups: {},
   pendingSupersedence: {},
 };
@@ -1533,6 +1783,11 @@ function liveViewerChildCount(file: RegistryFile, parentConversationId: ViewerCo
 }
 
 function nativeGenerationId(pathname: string): string {
+  /* A Copilot transcript is `<session-id>/events.jsonl`: the id is the directory. */
+  if (path.basename(pathname) === "events.jsonl") {
+    const directory = path.basename(path.dirname(pathname)).match(/^[0-9a-f-]{36}$/i)?.[0];
+    if (directory) return directory.toLowerCase();
+  }
   return path.basename(pathname).match(/([0-9a-f-]{36})(?:\.jsonl)?$/i)?.[1] ?? crypto.randomUUID();
 }
 
@@ -1548,7 +1803,7 @@ function normalizeGeneration(value: NativeGeneration, policy?: McpGrantPolicy): 
 function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   if (!value || typeof value !== "object") return null;
   const host = value as Partial<StructuredHostColumns>;
-  if (host.kind !== "codex-app-server" && host.kind !== "claude-broker") return null;
+  if (host.kind !== "codex-app-server" && host.kind !== "claude-broker" && host.kind !== "copilot-acp") return null;
   const eventCursor = (value as Record<string, unknown>).eventCursor;
   if (eventCursor !== undefined && (!Number.isSafeInteger(eventCursor) || (eventCursor as number) < 0)) {
     throw new Error("structured host event cursor is invalid");
@@ -1717,6 +1972,14 @@ function normalizeReconfigureWithdrawals(value: unknown): ConversationReconfigur
     .slice(-RECONFIGURE_WITHDRAWAL_LIMIT);
 }
 
+function normalizeSwitchHold(value: unknown): ConversationSwitchHold | null {
+  const hold = value as Partial<ConversationSwitchHold> | null | undefined;
+  if (!hold || typeof hold !== "object") return null;
+  if (typeof hold.operationId !== "string" || typeof hold.accountId !== "string"
+    || typeof hold.reason !== "string" || typeof hold.at !== "string") return null;
+  return { operationId: hold.operationId, accountId: hold.accountId, reason: hold.reason, at: hold.at };
+}
+
 function normalizeConversation(value: RegistryConversation, policy?: McpGrantPolicy): RegistryConversation {
   const generations = Array.isArray(value.generations)
     ? value.generations.map((generation) => normalizeGeneration(generation, policy))
@@ -1791,6 +2054,7 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
       : null,
     reconfigure: normalizeConversationReconfigure((value as Partial<RegistryConversation>).reconfigure),
     reconfigureWithdrawals: normalizeReconfigureWithdrawals((value as Partial<RegistryConversation>).reconfigureWithdrawals),
+    switchHold: normalizeSwitchHold((value as Partial<RegistryConversation>).switchHold),
     migration,
     migrationOptOut,
     supersededBy,
@@ -1799,6 +2063,10 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     turn: value.turn && typeof value.turn === "object"
       ? { state: value.turn.state, source: value.turn.source, terminalAt: value.turn.terminalAt ?? null, observedAt: value.turn.observedAt ?? null }
       : { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
+    /* A record written before the stamp existed cannot claim it, and the
+       absence is the answer rather than a gap to fill in: nothing about the
+       file it came from says its notes were ever written. */
+    deliveryEvidenceTracked: (value as Partial<RegistryConversation>).deliveryEvidenceTracked === true,
   };
 }
 
@@ -1867,16 +2135,29 @@ function heldDeliveryRequestDigest(
   ])).digest("hex");
 }
 
+/** Reverse alias traversal uses the value index, including aliases of aliases. */
+function conversationIdentities(file: RegistryFile, id: ViewerConversationId): ViewerConversationId[] {
+  const canonicalId = resolveConversationAlias(file, id);
+  const ids = new Set<ViewerConversationId>([canonicalId]);
+  for (const current of ids) {
+    for (const alias of registryKeysMatching(file, "conversationAliases", "alias", current)) ids.add(alias as ViewerConversationId);
+  }
+  return [...ids].filter(identity => resolveConversationAlias(file, identity) === canonicalId);
+}
+
+function conversationRows<C extends "heldDeliveries" | "deliveryOperationOwners" | "deliveryEvidenceCompactions">(
+  file: RegistryFile, collection: C, id: ViewerConversationId,
+): RegistryFile[C][string][] {
+  return registryRowsMatching(file, collection, "conversationId", conversationIdentities(file, id));
+}
+
 function heldDeliveryRequestDigests(
   file: RegistryFile,
   conversationId: ViewerConversationId,
   text: string,
   command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId">,
 ): Set<string> {
-  const identities = new Set<ViewerConversationId>([conversationId]);
-  for (const alias of Object.keys(file.conversationAliases) as ViewerConversationId[]) {
-    if (resolveConversationAlias(file, alias) === conversationId) identities.add(alias);
-  }
+  const identities = conversationIdentities(file, conversationId);
   return new Set([...identities].map((identity) => heldDeliveryRequestDigest(identity, text, command)));
 }
 
@@ -2118,7 +2399,7 @@ function inspectDeliveryReservation(
   commandInput: HeldDeliveryCommandInput,
 ): DeliveryReservationInspection {
   const canonicalId = resolveConversationAlias(file, conversationId);
-  let existing = clientMessageId ? Object.values(file.heldDeliveries).find((item) =>
+  let existing = clientMessageId ? conversationRows(file, "heldDeliveries", canonicalId).find((item) =>
     resolveConversationAlias(file, item.conversationId) === canonicalId
     && item.clientMessageId === clientMessageId) : undefined;
   const requestedCommand = canonicalHeldDeliveryCommand(commandInput, existing?.id ?? "pending-delivery");
@@ -2144,8 +2425,7 @@ function inspectDeliveryReservation(
   }
   let terminalOperationRetry: DeliveryOperationOwner | null = null;
   if (!existing && commandInput.operationId) {
-    const ownedDelivery = Object.values(file.heldDeliveries).find((item) =>
-      item.command.operationId === requestedCommand.operationId);
+    const ownedDelivery = registryRowsMatching(file, "heldDeliveries", "command.operationId", requestedCommand.operationId)[0];
     const operationOwner = file.deliveryOperationOwners[requestedCommand.operationId]
       ?? (ownedDelivery?.requestDigest ? {
         conversationId: ownedDelivery.conversationId,
@@ -2273,6 +2553,10 @@ function normalizeDeliveryOperationOwners(
         settledAt: typeof owner.settledAt === "string"
           ? owner.settledAt
           : referencedDelivery?.deliveredAt ?? settledDelivery?.deliveredAt ?? null,
+        ...(owner.delivery === "interrupt-then-turn-started" ? { delivery: owner.delivery } : {}),
+        ...(owner.delivery === "interrupt-then-turn-started" && typeof owner.interruptedTurnId === "string" && owner.interruptedTurnId
+          ? { interruptedTurnId: owner.interruptedTurnId }
+          : {}),
       };
     }
   }
@@ -2303,9 +2587,56 @@ function normalizeDeliveryOperationOwners(
 
 const DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT = 200;
 
+/**
+ * Writes down that this conversation just lost a record a key lookup could
+ * have been answered from, at the moment it is lost.
+ *
+ * Retention is the only thing that removes these records, and it removes them
+ * silently: afterwards a message that WAS delivered is indistinguishable from
+ * one that never happened. What survives the row is this note, so a later
+ * lookup can tell the two apart — it is durable, it is per conversation, and
+ * nothing ever clears it, because nothing can bring the dropped row back.
+ *
+ * A row with no client message id is skipped: it could never have answered a
+ * lookup for a key, so losing it costs the history nothing.
+ */
+function recordDroppedDeliveryEvidence(
+  file: RegistryFile,
+  conversationId: ViewerConversationId,
+  clientMessageId: string | null,
+): void {
+  if (clientMessageId === null) return;
+  const canonicalId = resolveConversationAlias(file, conversationId);
+  const at = now();
+  const existing = file.deliveryEvidenceCompactions[canonicalId];
+  if (existing) {
+    existing.lastAt = at;
+    existing.dropped += 1;
+    return;
+  }
+  file.deliveryEvidenceCompactions[canonicalId] = {
+    conversationId: canonicalId,
+    firstAt: at,
+    lastAt: at,
+    dropped: 1,
+  };
+}
+
+/** Removes one reservation, recording the loss unless the operation owner it
+    belongs to survives holding the same key — which is the ordinary case, and
+    the reason a conversation's first hundred-and-first delivery does not make
+    every one of its lookups uncertain. */
+function dropCompactedHeldDelivery(file: RegistryFile, delivery: HeldDelivery): void {
+  const owner = file.deliveryOperationOwners[delivery.command.operationId];
+  const keyRetained = owner?.deliveryId === delivery.id
+    && owner.clientMessageId === delivery.clientMessageId;
+  if (!keyRetained) recordDroppedDeliveryEvidence(file, delivery.conversationId, delivery.clientMessageId);
+  delete file.heldDeliveries[delivery.id];
+}
+
 function compactDeliveryOperationOwners(file: RegistryFile, onlyConversationId?: ViewerConversationId): void {
   const terminalGroups = new Map<ViewerConversationId, Array<[string, DeliveryOperationOwner]>>();
-  for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
+  for (const [operationId, owner] of (onlyConversationId ? conversationRows(file, "deliveryOperationOwners", onlyConversationId).map(owner => [owner.command.operationId, owner] as const) : Object.entries(file.deliveryOperationOwners))) {
     if (owner.terminalState === null) continue;
     const canonicalId = resolveConversationAlias(file, owner.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
@@ -2321,7 +2652,8 @@ function compactDeliveryOperationOwners(file: RegistryFile, onlyConversationId?:
       Number(right.terminalDisposition === "unverified") - Number(left.terminalDisposition === "unverified")
       || right.createdAt.localeCompare(left.createdAt)
       || rightId.localeCompare(leftId));
-    for (const [operationId] of owners.slice(DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT)) {
+    for (const [operationId, owner] of owners.slice(DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT)) {
+      recordDroppedDeliveryEvidence(file, owner.conversationId, owner.clientMessageId);
       delete file.deliveryOperationOwners[operationId];
     }
   }
@@ -2339,7 +2671,7 @@ function terminalDeliveryExpired(delivery: HeldDelivery, nowMs: number | undefin
 }
 
 function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: ViewerConversationId, nowMs?: number): number {
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
     /* Every accepted send gets its row, including the ordinary one whose
        operation id the reservation generated for itself (#1131). The exception
        used to be free — the reservation IS the record under that id — and it
@@ -2367,7 +2699,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
   }
   const deliveredGroups = new Map<ViewerConversationId, HeldDelivery[]>();
   const failedGroups = new Map<ViewerConversationId, HeldDelivery[]>();
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
     const canonicalId = resolveConversationAlias(file, delivery.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
     if (delivery.state === "delivered") {
@@ -2388,7 +2720,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
       const kept: HeldDelivery[] = [];
       for (const delivery of deliveries) {
         if (terminalDeliveryExpired(delivery, nowMs)) {
-          delete file.heldDeliveries[delivery.id];
+          dropCompactedHeldDelivery(file, delivery);
           removed += 1;
         } else {
           kept.push(delivery);
@@ -2400,18 +2732,18 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
   for (const deliveries of deliveredGroups.values()) {
     deliveries.sort((left, right) => (right.deliveredAt ?? right.createdAt).localeCompare(left.deliveredAt ?? left.createdAt) || right.id.localeCompare(left.id));
     for (const expired of deliveries.slice(100)) {
-      delete file.heldDeliveries[expired.id];
+      dropCompactedHeldDelivery(file, expired);
       removed += 1;
     }
   }
   for (const [conversationId, deliveries] of failedGroups) {
-    const activeCount = Object.values(file.heldDeliveries).filter((delivery) =>
+    const activeCount = (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries)).filter((delivery) =>
       resolveConversationAlias(file, delivery.conversationId) === conversationId
       && ["held", "assigned", "delivery-uncertain"].includes(delivery.state)).length;
     const retainedFailed = Math.max(0, Math.min(50, 99 - activeCount));
     deliveries.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
     for (const expired of deliveries.slice(retainedFailed)) {
-      delete file.heldDeliveries[expired.id];
+      dropCompactedHeldDelivery(file, expired);
       removed += 1;
     }
   }
@@ -2528,7 +2860,7 @@ function recordObservedLineage(
   };
 }
 
-function resolveConversationAlias(file: Pick<RegistryFile, "conversationAliases">, id: ViewerConversationId): ViewerConversationId {
+export function resolveConversationAlias(file: Pick<RegistryFile, "conversationAliases">, id: ViewerConversationId): ViewerConversationId {
   const seen = new Set<ViewerConversationId>();
   let current = id;
   while (!seen.has(current)) {
@@ -2791,6 +3123,9 @@ function adoptProvisionalOwner(
   }
   target.agentRole ??= owner.agentRole;
   target.delegationDepth ??= owner.delegationDepth;
+  /* The adopted identity's keys are answered under the target from here on, so
+     the target inherits the weaker of the two histories. */
+  if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
   for (const receipt of Object.values(file.receipts)) {
     if (receipt.conversationId === owner.id) receipt.conversationId = target.id;
     if (receipt.parentConversationId === owner.id) receipt.parentConversationId = target.id;
@@ -2995,7 +3330,7 @@ function normalizeQueuedPinnedSpawn(value: unknown, policy?: McpGrantPolicy): Qu
     || !candidate.accountId
     || (candidate.locale !== "en" && candidate.locale !== "uk")
     || !spec
-    || (spec.engine !== "claude" && spec.engine !== "codex")
+    || (spec.engine !== "claude" && spec.engine !== "codex" && spec.engine !== "copilot")
     || typeof spec.command !== "string"
     || typeof spec.cwd !== "string"
     || typeof spec.windowName !== "string"
@@ -3105,7 +3440,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     parentSource: value.parentSource === "explicit" || value.parentSource === "inferred-caller" ? value.parentSource : null,
     state,
     artifactLifecycle: value.artifactLifecycle === "materialized" ? "materialized" : "pending",
-    key: value.key && typeof value.key === "object" && (value.key.engine === "claude" || value.key.engine === "codex") && typeof value.key.sessionId === "string" ? value.key : null,
+    key: value.key && typeof value.key === "object" && (value.key.engine === "claude" || value.key.engine === "codex" || value.key.engine === "copilot") && typeof value.key.sessionId === "string" ? value.key : null,
     pane,
     verifiedHost: value.verifiedHost && typeof value.verifiedHost === "object" && value.verifiedHost.kind === "tmux" ? value.verifiedHost : null,
     target: pane?.paneId ?? (typeof value.target === "string" && /^%\d+$/.test(value.target) ? value.target : null),
@@ -3194,6 +3529,28 @@ function backfillMaterializedSpawnArtifacts(file: RegistryFile): RegistryFile {
   return file;
 }
 
+/** A record here is a durable "this history is incomplete". A row that cannot
+    be read as one is dropped rather than guessed at: the conservative answer
+    it would have forced is reached again by the first drop after this load. */
+function normalizeDeliveryEvidenceCompactions(value: unknown): RegistryFile["deliveryEvidenceCompactions"] {
+  if (!value || typeof value !== "object") return {};
+  const records: RegistryFile["deliveryEvidenceCompactions"] = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const record = raw as Partial<DeliveryEvidenceCompaction> | null;
+    if (!record
+      || typeof record.conversationId !== "string"
+      || !record.conversationId.startsWith("conversation_")
+      || typeof record.firstAt !== "string") continue;
+    records[key] = {
+      conversationId: record.conversationId as ViewerConversationId,
+      firstAt: record.firstAt,
+      lastAt: typeof record.lastAt === "string" ? record.lastAt : record.firstAt,
+      dropped: Number.isSafeInteger(record.dropped) && Number(record.dropped) > 0 ? Number(record.dropped) : 1,
+    };
+  }
+  return records;
+}
+
 function normalizePendingSupersedence(value: unknown): RegistryFile["pendingSupersedence"] {
   if (!value || typeof value !== "object") return {};
   const records: RegistryFile["pendingSupersedence"] = {};
@@ -3222,6 +3579,7 @@ function upgradeV1(parsed: Omit<Partial<RegistryFile>, "version">, policy?: McpG
     autoBalance: {
       claude: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
       codex: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
+      copilot: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
     },
     entries: (parsed.entries as RegistryFile["entries"]) ?? {},
     receipts: Object.fromEntries(Object.entries((parsed.receipts as RegistryFile["receipts"]) ?? {}).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
@@ -3267,26 +3625,63 @@ export function normalizeRegistry(value: unknown, policy?: McpGrantPolicy): Regi
         ? Object.fromEntries(Object.entries(parsed.conversationAliases).filter(([alias, destination]) => alias.startsWith("conversation_") && typeof destination === "string" && destination.startsWith("conversation_"))) as RegistryFile["conversationAliases"]
         : {},
       conversationRevision: parsed.conversationRevision && typeof parsed.conversationRevision === "object"
-        ? { ...EMPTY.conversationRevision, ...parsed.conversationRevision }
+        ? normalizeConversationRevision(parsed.conversationRevision)
         : clone(EMPTY.conversationRevision),
       migrationIntents: parsed.migrationIntents && typeof parsed.migrationIntents === "object" ? parsed.migrationIntents : {},
-      engineRouting: parsed.engineRouting && typeof parsed.engineRouting === "object" ? { ...EMPTY.engineRouting, ...parsed.engineRouting } : clone(EMPTY.engineRouting),
+      engineRouting: normalizeEngineRouting(parsed.engineRouting),
       autoBalance: parsed.autoBalance && typeof parsed.autoBalance === "object"
-        ? { claude: normalizePolicy(parsed.autoBalance.claude), codex: normalizePolicy(parsed.autoBalance.codex) }
+        ? { claude: normalizePolicy(parsed.autoBalance.claude), codex: normalizePolicy(parsed.autoBalance.codex), copilot: normalizePolicy(parsed.autoBalance.copilot) }
         : {
             claude: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
             codex: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
+            copilot: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
           },
       quotaObservations: parsed.quotaObservations && typeof parsed.quotaObservations === "object"
-        ? { ...EMPTY.quotaObservations, ...parsed.quotaObservations }
+        ? normalizeQuotaObservations(parsed.quotaObservations)
         : clone(EMPTY.quotaObservations),
       heldDeliveries,
       deliveryOperationOwners: normalizeDeliveryOperationOwners(parsed.deliveryOperationOwners, heldDeliveries),
+      deliveryEvidenceCompactions: normalizeDeliveryEvidenceCompactions(parsed.deliveryEvidenceCompactions),
       pendingSuccessorCleanups: parsed.pendingSuccessorCleanups && typeof parsed.pendingSuccessorCleanups === "object"
         ? parsed.pendingSuccessorCleanups
         : {},
       pendingSupersedence: normalizePendingSupersedence(parsed.pendingSupersedence),
   }), policy);
+}
+
+/* A registry persisted before an engine existed (Copilot, #2045) carries no
+   key for it, so every per-engine record gets each engine of the union here.
+   Copies, never EMPTY's own objects: a `revision += 1` must not reach the
+   default every later read starts from. */
+function normalizeEngineRouting(value: unknown): RegistryFile["engineRouting"] {
+  const stored = value && typeof value === "object" ? value as Partial<RegistryFile["engineRouting"]> : {};
+  const routing = clone(EMPTY.engineRouting);
+  for (const engine of Object.keys(routing) as AgentEngine[]) {
+    const route = stored[engine];
+    if (!route || typeof route !== "object") continue;
+    routing[engine] = {
+      activeAccountId: typeof route.activeAccountId === "string" ? route.activeAccountId : null,
+      revision: Number.isSafeInteger(route.revision) ? route.revision : 0,
+    };
+  }
+  return routing;
+}
+
+function normalizeConversationRevision(value: Partial<RegistryFile["conversationRevision"]>): RegistryFile["conversationRevision"] {
+  const revisions = clone(EMPTY.conversationRevision);
+  for (const engine of Object.keys(revisions) as AgentEngine[]) {
+    if (Number.isSafeInteger(value[engine])) revisions[engine] = value[engine]!;
+  }
+  return revisions;
+}
+
+function normalizeQuotaObservations(value: Partial<RegistryFile["quotaObservations"]>): RegistryFile["quotaObservations"] {
+  const observations = clone(EMPTY.quotaObservations);
+  for (const engine of Object.keys(observations) as AgentEngine[]) {
+    const stored = value[engine];
+    if (stored && typeof stored === "object") observations[engine] = stored;
+  }
+  return observations;
 }
 
 function sqliteRevisionFromParsed(value: unknown): number | null {
@@ -3427,6 +3822,12 @@ export interface AgentRegistryStorageOptions {
   beforeDualWriteMutationReplace?: () => void;
   beforeMirrorRename?: () => void;
   afterMirrorRename?: () => void;
+  /** Sees (and may corrupt, to exercise the refusal) a copy of the snapshot a
+      first-boot import read back, before it is compared with its source. */
+  onRegistryImportVerify?: (imported: RegistryFile) => void;
+  /** Runs after a migrating open set the JSON aside and before it publishes
+      the SQLite descriptor. */
+  afterRegistryJsonRetired?: () => void;
   mirrorCheckpointMs?: number;
   now?: () => number;
   scheduleMirrorCheckpoint?: (callback: () => void, delayMs: number) => { unref?(): unknown };
@@ -3450,8 +3851,103 @@ export class RegistryParityError extends Error {
   override name = "RegistryParityError";
 }
 
-/** Pure env read: lets health/capability probes answer without paying the
-    full registry load (a multi-MB JSON parse) on first touch. */
+/** A first-boot import read back rows that differ from the JSON it imported.
+    The import rolled back: the store stays unmarked and the JSON untouched. */
+export class RegistryImportVerificationError extends Error {
+  override name = "RegistryImportVerificationError";
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort()
+      .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Entity count and content digest of a registry snapshot, the evidence a
+    first-boot import is checked against. */
+function registryImportEvidence(file: RegistryFile): { entities: number; digest: string } {
+  let entities = 0;
+  for (const value of Object.values(file)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) entities += Object.keys(value).length;
+  }
+  return { entities, digest: crypto.createHash("sha256").update(canonicalJson(file)).digest("hex") };
+}
+
+function verifyRegistryImport(
+  source: RegistryFile,
+  imported: RegistryFile,
+  inspect: ((imported: RegistryFile) => void) | undefined,
+): void {
+  const readBack = JSON.parse(JSON.stringify(imported)) as RegistryFile;
+  inspect?.(readBack);
+  const expected = registryImportEvidence(source);
+  const actual = registryImportEvidence(readBack);
+  if (expected.entities !== actual.entities || expected.digest !== actual.digest) {
+    throw new RegistryImportVerificationError(
+      `agent registry import read back ${actual.entities} entities (digest ${actual.digest.slice(0, 12)})`
+      + ` where the JSON holds ${expected.entities} (digest ${expected.digest.slice(0, 12)}); the import was rolled back`,
+    );
+  }
+}
+
+const warnedDeprecatedModes = new Set<RegistryBackendMode>();
+
+function warnDeprecatedMode(mode: RegistryBackendMode, source: RegistryBackendResolution["source"]): void {
+  if (warnedDeprecatedModes.has(mode)) return;
+  warnedDeprecatedModes.add(mode);
+  console.warn(
+    `agent registry backend mode "${mode}" (from the ${source}) is deprecated: the registry lives in SQLite only.`
+    + ` Unset ${REGISTRY_BACKEND_ENV} to migrate this install to SQLite.`,
+  );
+}
+
+function timestampLabel(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/** `<name>.<label>`, or with a timestamp appended when that name is taken, so
+    a kept copy is never overwritten. */
+function unusedSibling(filename: string, label: string): string {
+  const candidate = `${filename}.${label}`;
+  return fs.existsSync(candidate) ? `${candidate}-${timestampLabel()}` : candidate;
+}
+
+function releaseLabel(filename: string): string {
+  try {
+    return hotStateWriterRevision(path.dirname(filename))?.slice(0, 12) ?? timestampLabel();
+  } catch {
+    return timestampLabel();
+  }
+}
+
+function fsyncDirectory(directory: string): void {
+  const descriptor = fs.openSync(directory, "r");
+  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+}
+
+function isRegularFile(filename: string): boolean {
+  try {
+    return fs.lstatSync(filename).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Fixtures and child processes that construct a registry without a mode keep
+    the historical JSON default; only the process-wide registry resolves the
+    SQLite default (#1870). */
+function unmanagedBackendMode(): AgentRegistrySqliteMode {
+  return process.env[REGISTRY_BACKEND_ENV] === undefined ? "off" : registryBackendModeFromEnvironment();
+}
+
+/** Pure env read: lets health/capability probes answer without opening the
+    registry. Unset is SQLite, the mode the process-wide registry opens. */
 export function sqliteModeFromEnvironment(): AgentRegistrySqliteMode {
   return registryBackendModeFromEnvironment();
 }
@@ -3516,10 +4012,13 @@ export class AgentRegistry {
        historical env default, so a test directory that happens to hold a store
        is not mistaken for a deployment whose writer went silent. */
     const backend: RegistryBackendResolution = storage.sqliteMode !== undefined
-      ? { mode: storage.sqliteMode, sqliteFilename: null, source: "explicit" }
+      ? { mode: storage.sqliteMode, sqliteFilename: null, source: "explicit", pendingJsonImport: false }
       : storage.resolveBackendIdentity === true
         ? resolveRegistryBackend(filename)
-        : { mode: registryBackendModeFromEnvironment(), sqliteFilename: null, source: "unmanaged" };
+        : { mode: unmanagedBackendMode(), sqliteFilename: null, source: "unmanaged", pendingJsonImport: false };
+    if ((backend.source === "environment" || backend.source === "descriptor") && isDeprecatedRegistryBackendMode(backend.mode)) {
+      warnDeprecatedMode(backend.mode, backend.source);
+    }
     this.sqliteMode = backend.mode;
     const sqliteFilename = storage.sqliteFilename
       ?? backend.sqliteFilename
@@ -3535,53 +4034,210 @@ export class AgentRegistry {
       afterRename: storage.afterMirrorRename,
     };
     this.beforeDualWriteMutationReplace = storage.beforeDualWriteMutationReplace;
+    const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
+      /* Lazy: an initialised store never reads the JSON (#1870). */
+      initialSnapshot: () => readFile(filename, storage.mcpGrantPolicy),
+      verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
+      normalize: (value) => normalizeRegistry(value, storage.mcpGrantPolicy),
+      mcpGrantPolicy: storage.mcpGrantPolicy,
+      onWriterWait: (duration) => {
+        this.recordMetric(this.writerWaits, duration);
+        storage.onSqliteWriterWait?.(duration);
+      },
+      onSnapshotLoad: storage.onSqliteSnapshotLoad,
+      onRowPayloadRead: storage.onSqliteRowPayloadRead,
+      onRowPayloadParse: storage.onSqliteRowPayloadParse,
+      onRevisionQuery: storage.onSqliteRevisionQuery,
+    });
     this.sqliteStore = this.sqliteMode === "off"
       ? null
-      : new SqliteAgentRegistryStore(sqliteFilename, {
-          initialSnapshot: readFile(filename, storage.mcpGrantPolicy),
-          normalize: (value) => normalizeRegistry(value, storage.mcpGrantPolicy),
-          mcpGrantPolicy: storage.mcpGrantPolicy,
-          onWriterWait: (duration) => {
-            this.recordMetric(this.writerWaits, duration);
-            storage.onSqliteWriterWait?.(duration);
-          },
-          onSnapshotLoad: storage.onSqliteSnapshotLoad,
-          onRowPayloadRead: storage.onSqliteRowPayloadRead,
-          onRowPayloadParse: storage.onSqliteRowPayloadParse,
-          onRevisionQuery: storage.onSqliteRevisionQuery,
-        });
-    if (this.sqliteMode === "off") {
+      : backend.pendingJsonImport
+        ? this.migrateJsonRegistry(sqliteFilename, openStore, storage.afterRegistryJsonRetired)
+        : openStore();
+    /* Every branch below includes a startup write: cleanup, compaction,
+       dual-write synchronization, or retirement of a JSON mirror. A reader
+       such as MCP stands down against the operator's state until the serving
+       Viewer or runtime host takes the release fence. */
+    const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
+    if (this.sqliteMode === "off" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.compactAtStartup();
     }
-    if (this.sqliteMode === "dual-write") {
+    if (this.sqliteMode === "dual-write" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.synchronizeDualWriteStartup(storage.beforeDualWriteStartupReplace);
     }
-    if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
-      this.cleanupStaleTempFiles();
+    if (this.sqliteMode === "read") {
       const sqlite = this.sqliteStore!.snapshot();
       const mirrorRevision = sqliteMirrorRevision(this.filename);
       /* `read` is the parity burn-in, so a same-revision mismatch must stop
-         rollout. In authoritative `sqlite` mode the JSON file is a rollback
-         mirror: missing stamps and torn/stale same-revision contents are
-         repaired from the durable SQLite snapshot during every startup. */
-      if (this.sqliteMode === "read" && (mirrorRevision === null || mirrorRevision === sqlite.revision)) {
-        this.assertSqliteParity(sqlite);
-      }
+         rollout. */
+      if (mirrorRevision === null || mirrorRevision === sqlite.revision) this.assertSqliteParity(sqlite);
       if (mirrorRevision !== null && mirrorRevision > sqlite.revision) {
-        if (this.sqliteMode === "sqlite") this.fenceAheadMirror(mirrorRevision, sqlite.revision);
         throw new RegistryParityError(
           `agent registry JSON revision ${mirrorRevision} is ahead of SQLite revision ${sqlite.revision}`,
         );
       }
-      this.mirrorSqliteSnapshot(sqlite);
+      if (mayRunStartupMaintenance) {
+        this.cleanupStaleTempFiles();
+        this.mirrorSqliteSnapshot(sqlite);
+      }
     }
-    /* Only the writer that was TOLD its mode publishes it. Test and child
-       constructions pass `sqliteMode` explicitly and stay silent, so a
-       fixture can never install an identity a reader would then trust. */
-    if (backend.source === "environment") {
+    if (this.sqliteMode === "sqlite") {
+      /* SQLite is the only store (#1870). A JSON file here is a mirror an
+         older release wrote: it is kept renamed for one release, never read
+         and never rewritten. */
+      /* These are startup cleanups too. An MCP server may read the live
+         registry, but it holds no release fence and must leave legacy files
+         for the serving Viewer or runtime host to retire (#1905). */
+      if (mayRunStartupMaintenance) {
+        this.cleanupStaleTempFiles();
+        this.retireJsonMirror();
+        this.removeDeadWriteLockResidue();
+      }
+    }
+    /* Only the writer that was TOLD its mode publishes it, or the process-wide
+       registry that resolved the SQLite default. Test and child constructions
+       pass `sqliteMode` explicitly and stay silent, so a fixture can never
+       install an identity a reader would then trust. */
+    if ((backend.source === "environment" || backend.source === "default") && mayRunStartupMaintenance) {
       publishRegistryBackendIdentity(filename, this.sqliteMode, sqliteFilename);
+    }
+  }
+
+  /**
+   * First open of an install whose authority is still the JSON file (#1870).
+   * Under the JSON's own write lock, which every JSON-mode writer takes:
+   * set a stale SQLite trio aside, import the JSON in one verified
+   * transaction, keep the JSON renamed, then publish the SQLite descriptor.
+   * The descriptor flips last, so a crash at any step leaves the next open to
+   * finish: an unflipped descriptor with the JSON gone and an imported store
+   * is an import that committed and only needs publishing.
+   */
+  private migrateJsonRegistry(
+    sqliteFilename: string,
+    openStore: () => SqliteAgentRegistryStore,
+    afterJsonRetired: (() => void) | undefined,
+  ): SqliteAgentRegistryStore {
+    /* Retiring the JSON registry is a state-mutating startup step: against the
+       operator's own directory it belongs to the serving Viewer or the runtime
+       host, never to a build, a test run or a script (#1905).
+
+       The deliberate consequence: on an install whose agents.json is still
+       authoritative, an MCP server, a launcher or a tool script that opens the
+       registry first now throws where it used to migrate. That is the trade
+       taken on purpose — importing the operator's authoritative registry from a
+       process that holds no release fence is the incident's own shape — and it
+       is reached only when there IS a JSON to retire: `resolveRegistryBackend`
+       reports `pendingJsonImport` for a descriptor that still names the JSON or
+       for a JSON on disk, so a fresh install initialises its empty store here
+       as before. A Viewer boot clears it. */
+    assertStateStartupMutation(path.dirname(this.filename), "agent registry import");
+    const claim = this.acquireLock(`${this.filename}.write-lock`, captureProcessIdentity(process.pid));
+    try {
+      const published = publishedRegistryBackendMode(this.filename);
+      /* A concurrent opener finished the migration while this one waited. */
+      if (published === "sqlite" || published === "read") return openStore();
+      const jsonPresent = isRegularFile(this.filename);
+      /* An imported store beside an authoritative JSON is an earlier
+         experiment (or an import this migration never finished publishing,
+         which the JSON reproduces exactly). The documented rebaseline sets it
+         aside; the JSON is the authority. */
+      if (jsonPresent && sqliteRegistryStoreImported(sqliteFilename)) this.setAsideStaleStore(sqliteFilename);
+      const store = openStore();
+      try {
+        if (jsonPresent) {
+          const kept = unusedSibling(this.filename, `imported-${releaseLabel(this.filename)}`);
+          fs.renameSync(this.filename, kept);
+          fsyncDirectory(path.dirname(this.filename));
+          console.info(`agent registry imported into ${path.basename(sqliteFilename)}; the JSON is kept as ${path.basename(kept)}`);
+        }
+        afterJsonRetired?.();
+        publishRegistryBackendIdentity(this.filename, "sqlite", sqliteFilename);
+      } catch (error) {
+        store.close();
+        throw error;
+      }
+      return store;
+    } finally {
+      this.releaseLock(claim);
+    }
+  }
+
+  /** Releases the SQLite connection. The registry is unusable afterwards. */
+  close(): void {
+    this.sqliteStore?.close();
+  }
+
+  private setAsideStaleStore(sqliteFilename: string): void {
+    const aside = unusedSibling(sqliteFilename, `stale-${timestampLabel()}`);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try {
+        fs.renameSync(`${sqliteFilename}${suffix}`, `${aside}${suffix}`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    fsyncDirectory(path.dirname(sqliteFilename));
+    console.warn(`agent registry: set the stale SQLite store aside as ${path.basename(aside)} before importing the JSON`);
+  }
+
+  /** Renames a leftover JSON mirror without reading it. */
+  private retireJsonMirror(): void {
+    if (!isRegularFile(this.filename)) return;
+    try {
+      fs.renameSync(this.filename, unusedSibling(this.filename, `imported-${releaseLabel(this.filename)}`));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    fsyncDirectory(path.dirname(this.filename));
+  }
+
+  /** Staging directories and retired claims the JSON write lock left behind
+      in the JSON era. Only a claim whose recorded owner is provably gone is
+      removed; a retired link whose claim is gone is removed with it. */
+  private removeDeadWriteLockResidue(): void {
+    const directory = path.dirname(this.filename);
+    const lock = `${path.basename(this.filename)}.write-lock`;
+    const pendingPrefix = `${lock}.owner.pending-`;
+    const retiredPrefix = `${lock}.retired-`;
+    let names: string[];
+    try {
+      names = fs.readdirSync(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    const ownerGone = (claim: string): boolean => {
+      let owner: Partial<ProcessIdentity>;
+      try {
+        owner = JSON.parse(fs.readFileSync(path.join(claim, "owner.json"), "utf8")) as Partial<ProcessIdentity>;
+      } catch {
+        return false;
+      }
+      if (!Number.isInteger(owner.pid) || owner.pid! <= 0) return false;
+      return !this.ownerAlive({ pid: owner.pid!, startIdentity: owner.startIdentity ?? null });
+    };
+    for (const name of names) {
+      if (!name.startsWith(pendingPrefix)) continue;
+      const claim = path.join(directory, name);
+      if (ownerGone(claim)) fs.rmSync(claim, { recursive: true, force: true });
+    }
+    for (const name of names) {
+      if (!name.startsWith(retiredPrefix)) continue;
+      const retired = path.join(directory, name);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(retired);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        if (!fs.existsSync(retired) || ownerGone(retired)) fs.rmSync(retired, { force: true });
+      } else if (stat.isDirectory() && ownerGone(retired)) {
+        fs.rmSync(retired, { recursive: true, force: true });
+      }
     }
   }
 
@@ -3597,21 +4253,6 @@ export class AgentRegistry {
         ));
       throw new RegistryParityError(`agent registry JSON and SQLite snapshots differ: ${fields.join(", ")}`);
     }
-  }
-
-  private fenceAheadMirror(mirrorRevision: number, sqliteRevision: number): void {
-    const conflictLabel = `sqlite-conflict-r${mirrorRevision}-over-r${sqliteRevision}`;
-    const conflict = `${this.filename}.${conflictLabel}`;
-    try {
-      fs.renameSync(this.filename, conflict);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    throw new RegistryParityError(
-      `agent registry JSON mirror revision ${mirrorRevision} is ahead of authoritative SQLite revision ${sqliteRevision}; `
-      + `conflicting mirror moved beside the registry as ${conflictLabel} and the next startup will rebuild from SQLite`,
-    );
   }
 
   private mirrorSqliteSnapshot(initial: SqliteRegistrySnapshot): void {
@@ -3640,7 +4281,7 @@ export class AgentRegistry {
   }
 
   private currentMirrorRevision(): number | null {
-    if (this.sqliteMode === "off") return null;
+    if (this.sqliteMode !== "read" && this.sqliteMode !== "dual-write") return null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = registryFileSignature(this.filename);
       if (this.mirrorRevisionCache?.signature === before) return this.mirrorRevisionCache.revision;
@@ -3680,20 +4321,11 @@ export class AgentRegistry {
   }
 
   checkpointRollbackMirror(): void {
-    if (!this.sqliteStore || this.sqliteMode === "dual-write") return;
+    if (!this.sqliteStore || this.sqliteMode !== "read") return;
     const currentRevision = this.sqliteStore.revision();
     if (!this.mirrorDirty && this.lastMirroredRevision !== null && currentRevision <= this.lastMirroredRevision) return;
     this.mirrorSqliteSnapshot(this.sqliteStore.snapshot());
     this.mirrorCheckpointFailures = 0;
-  }
-
-  checkpointRollbackMirrorForDemotion(maxAttempts = 2): void {
-    if (!this.sqliteStore || this.sqliteMode === "dual-write") return;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      this.checkpointRollbackMirror();
-      if (!this.storageDiagnostics().mirrorDirty) return;
-    }
-    throw new Error(`agent registry rollback mirror did not converge after ${maxAttempts} attempts`);
   }
 
   private scheduleRollbackMirror(delayMs = this.mirrorCheckpointMs): void {
@@ -4124,9 +4756,9 @@ export class AgentRegistry {
     }
   }
 
-  private mutate<T>(fn: (file: RegistryFile) => T): T {
+  private mutate<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean } = {}): T {
     const startedAt = performance.now();
-    const result = this.mutateStorage(fn);
+    const result = this.mutateStorage(fn, options);
     this.transactionCount += 1;
     this.recordMetric(this.transactionDurations, performance.now() - startedAt);
     const second = Math.floor(this.now() / 1_000);
@@ -4137,24 +4769,24 @@ export class AgentRegistry {
     return result;
   }
 
-  private mutateStorage<T>(fn: (file: RegistryFile) => T): T {
-    /* Every mutation sweeps the staged supersedence edges (issue #383) after
-       its own writes, so whichever transition marks a predecessor host dead —
+  private mutateStorage<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean }): T {
+    /* Host-state mutations sweep staged supersedence edges (issue #383) after
+       their own writes, so whichever transition marks a predecessor host dead —
        terminate, recovery, reconcile — retires its round in that same
        transaction, and an operator's discard within `fn` is final. */
     const mutator = (file: RegistryFile): T => {
       const result = fn(file);
-      commitPendingSupersedenceInFile(file);
+      // Delivery-only transitions cannot change the host eligibility used by
+      // supersedence. Host mutations still settle every staged edge atomically.
+      if (!options.deliveryOnly) commitPendingSupersedenceInFile(file);
       return result;
     };
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
-      const mutation = this.sqliteStore!.mutate(mutator, false);
+      const operationName = new Error().stack?.split("\n")[3]?.match(/at (\w+)/)?.[1] ?? "anonymous";
+      const mutation = this.sqliteStore!.mutate(mutator, false, { updateSnapshotCache: !options.deliveryOnly, operationName });
       if (this.sqliteMode === "read") {
         this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
         if (this.mirrorDirty) this.scheduleRollbackMirrorForCadence();
-      }
-      if (this.sqliteMode === "sqlite") {
-        this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
       }
       return mutation.result;
     }
@@ -4237,6 +4869,53 @@ export class AgentRegistry {
     return readFile(this.filename, this.mcpGrantPolicy);
   }
 
+  private readKeyed<T>(reader: (file: RegistryFile) => T): T {
+    return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot());
+  }
+
+  /** A detached delivery view for one conversation, including historical aliases. */
+  conversationDeliverySnapshot(target: { conversationId?: string | null; path?: string }): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const id = target.conversationId ? resolveConversationAlias(file, target.conversationId as ViewerConversationId)
+        : target.path ? registryConversationsForPath(file, target.path)[0]?.id : undefined;
+      if (!id) return result;
+      const conversation = file.conversations[id];
+      for (const identity of conversationIdentities(file, id)) {
+        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+      }
+      if (conversation) {
+        result.conversations[id] = clone(conversation);
+        const generation = conversation.generations.at(-1);
+        if (generation) {
+          const key = `${conversation.engine}:${generation.id}`;
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+      }
+      for (const collection of ["heldDeliveries", "deliveryOperationOwners", "deliveryEvidenceCompactions"] as const) {
+        for (const key of registryKeysMatching(file, collection, "conversationId", conversationIdentities(file, id))) {
+          (result[collection] as Record<string, unknown>)[key] = clone(file[collection][key]);
+        }
+      }
+      return result;
+    });
+  }
+
+  deliverySnapshotForOperation(operationId: string): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const owner = file.deliveryOperationOwners[operationId];
+      if (owner) {
+        result.deliveryOperationOwners[operationId] = clone(owner);
+        const delivery = file.heldDeliveries[owner.deliveryId];
+        if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
+      }
+      for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)) result.heldDeliveries[delivery.id] = clone(delivery);
+      return result;
+    });
+  }
+
   /** Resolves only the requested snapshot placeholders. SQLite-backed modes use
       one consistent keyed read; JSON mode retains its compatibility fallback. */
   snapshotSpawns(launchIds: readonly string[]): SnapshotSpawnProjection {
@@ -4301,20 +4980,63 @@ export class AgentRegistry {
   }
 
   rotateSpawnCapabilityForPath(artifactPath: string): string | null {
+    return this.rotateSpawnCapabilityWhere((file) => Object.values(file.conversations)
+      .find((candidate) => conversationOwnsPath(candidate, artifactPath))?.id ?? null)?.capability ?? null;
+  }
+
+  /**
+   * Mint a capability for a conversation's newest receipt, as a relaunch does,
+   * and return the digests it replaced so a launch that does not survive can
+   * hand them back ({@link restoreSpawnCapabilityDigests}).
+   */
+  rotateSpawnCapabilityForConversation(conversationId: string): {
+    capability: string;
+    digest: string;
+    previous: Record<string, string | null>;
+  } | null {
+    return this.rotateSpawnCapabilityWhere((file) => {
+      const owner = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      return file.conversations[owner] ? owner : null;
+    });
+  }
+
+  /** The one rotation: every receipt of the conversation loses its digest and
+      the newest one takes the new capability's. */
+  private rotateSpawnCapabilityWhere(conversationOf: (file: RegistryFile) => ViewerConversationId | null): {
+    capability: string;
+    digest: string;
+    previous: Record<string, string | null>;
+  } | null {
     const capability = crypto.randomBytes(32).toString("base64url");
     const digest = crypto.createHash("sha256").update(capability).digest("hex");
     return this.mutate((file) => {
-      const conversation = Object.values(file.conversations)
-        .find((candidate) => conversationOwnsPath(candidate, artifactPath));
-      if (!conversation) return null;
+      const conversationId = conversationOf(file);
+      if (!conversationId) return null;
       const receipts = Object.values(file.receipts)
-        .filter((candidate) => resolveConversationAlias(file, candidate.conversationId) === conversation.id)
+        .filter((candidate) => resolveConversationAlias(file, candidate.conversationId) === conversationId)
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
       const current = receipts[0];
       if (!current) return null;
+      const previous = Object.fromEntries(receipts.map((receipt) => [receipt.launchId, receipt.spawnCapabilityDigest ?? null]));
       for (const receipt of receipts) receipt.spawnCapabilityDigest = null;
       current.spawnCapabilityDigest = digest;
-      return capability;
+      return { capability, digest, previous };
+    });
+  }
+
+  /** Undo {@link rotateSpawnCapabilityForConversation}, and only while the
+      digest it minted is still the conversation's current one: a later launch
+      that rotated again owns the identity and is left alone. */
+  restoreSpawnCapabilityDigests(conversationId: string, rotatedDigest: string, previous: Record<string, string | null>): boolean {
+    return this.mutate((file) => {
+      const owner = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      const receipts = Object.values(file.receipts)
+        .filter((candidate) => resolveConversationAlias(file, candidate.conversationId) === owner);
+      if (!receipts.some((receipt) => receipt.spawnCapabilityDigest === rotatedDigest)) return false;
+      for (const receipt of receipts) {
+        receipt.spawnCapabilityDigest = Object.hasOwn(previous, receipt.launchId) ? previous[receipt.launchId]! : null;
+      }
+      return true;
     });
   }
 
@@ -4323,16 +5045,20 @@ export class AgentRegistry {
       Throws SpawnAdmissionError (#393) after durably persisting a typed
       terminal rejection receipt when the initiating origin is a denied role
       or the child would exceed the nesting-depth ceiling. */
+  /** Bounded, non-blocking admission for request and controller paths. */
+  async beginSpawnRequestAsync(input: SpawnRequest): Promise<SpawnBeginResult> {
+    return await withAccountMutationLockAsync(() => this.beginSpawnRequest(input), {
+      holder: input.purpose === "resume-successor" ? "resume admission" : "spawn admission",
+      caller: input.purpose === "resume-successor" ? "resume" : "spawn",
+    });
+  }
+
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
     const result = withAccountMutationLock(() => {
       if ((input.engine === "claude" || input.engine === "codex") && input.accountId && input.accountId !== "default") {
-        const filename = statePath(`${input.engine}-accounts.json`);
-        try {
-          const value = JSON.parse(fs.readFileSync(filename, "utf8")) as { retired?: Array<{ id?: unknown }> };
-          if (value.retired?.some((account) => account.id === input.accountId)) throw new Error(`${input.engine} account is retired`);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
+        /* The registry moved into state.sqlite (#1870, slice 7); its retired
+           list is read through the store rather than by parsing the file. */
+        if (retiredAccountIds(input.engine).has(input.accountId)) throw new Error(`${input.engine} account is retired`);
       }
       const result = this.mutate((file) => this.beginSpawnRequestInFile(file, input));
       if (result.kind === "rejected") throw new SpawnAdmissionError(result.receipt, result.receipt.rejection!);
@@ -4865,7 +5591,7 @@ export class AgentRegistry {
     file: RegistryFile,
     launchId: string,
     host: TmuxHostEvidence,
-    observed: { engine: Extract<AgentEngine, "claude" | "codex">; cwd: string },
+    observed: { engine: AgentEngine; cwd: string },
   ): SpawnReceipt | null {
     const receipt = file.receipts[launchId];
     if (!receipt || receipt.state !== "conflicted" || !receipt.pane) return receipt ?? null;
@@ -4890,7 +5616,7 @@ export class AgentRegistry {
   confirmSpawnPaneAlive(
     launchId: string,
     host: TmuxHostEvidence,
-    observed: { engine: Extract<AgentEngine, "claude" | "codex">; cwd: string },
+    observed: { engine: AgentEngine; cwd: string },
   ): SpawnReceipt | null {
     const current = this.readOnlySnapshot().receipts[launchId];
     if (!current || current.state !== "conflicted") return current ? clone(current) : null;
@@ -4982,7 +5708,7 @@ export class AgentRegistry {
     const createdAt = now();
     const conversation = existingConversation ?? {
       id: receipt.conversationId,
-      engine: receipt.engine as Extract<AgentEngine, "claude" | "codex">,
+      engine: receipt.engine,
       generations: [],
       continuityPaths: [],
       abandonedContinuityPaths: [],
@@ -4995,6 +5721,7 @@ export class AgentRegistry {
       agentRole: null,
       delegationDepth: null,
       turn: { state: "unknown" as const, source: "empty" as const, terminalAt: null, observedAt: null },
+      deliveryEvidenceTracked: true,
       createdAt,
       updatedAt: createdAt,
     };
@@ -5099,30 +5826,11 @@ export class AgentRegistry {
       file.conversationRevision[conversation.engine] += 1;
       file.engineRouting[conversation.engine].revision += 1;
     }
-    /* A spawn that began before an account switch remains attributable to its
-       birth account. The already-active engine-wide migration intent still
-       applies to the new conversation through the existing coordinator
-       contract — and through the SAME admission the drain itself uses, since
-       an automatic intent enrolling a conversation nobody named is the
-       eleventh automatic selection (#1279); a conversation-scoped reseat moves
-       only its own thread. The migration record is the shared construction, so
-       settlement cannot drift from the two paths that queue the same move. */
-    const activeIntent = Object.values(file.migrationIntents).find((intent) =>
-      intent.engine === conversation.engine
-      && engineScopedIntent(intent)
-      && migrationIntentCanEnroll(file, intent, Date.parse(createdAt)));
-    const source = conversation.generations.at(-1);
-    if (activeIntent && !conversation.pinnedAccountId && source
-      && source.accountId !== activeIntent.targetId && !conversation.migration
-      && migrationEnrollmentAdmission(file, conversation, source, activeIntent).kind === "accepted") {
-      conversation.migration = conversationMigrationForIntent(
-        conversation,
-        source,
-        activeIntent,
-        migrationTurnIsBusy(file, conversation) ? "waiting-turn" : "requested",
-        createdAt,
-      );
-    }
+    /* A fresh launch staged ahead of its first message joins a running drain
+       only once that message is delivered, at finalization (#2051): until
+       then the thread has no turn, and a migration fenced on it would hold the
+       very message it waits for. */
+    if (finalize || receipt.purpose !== "launch") enrollSettledSpawnInDrain(file, conversation, createdAt);
     conversation.updatedAt = createdAt;
     file.conversations[conversation.id] = conversation;
 
@@ -5207,6 +5915,11 @@ export class AgentRegistry {
       receipt.state = "completed";
       receipt.error = null;
       receipt.completionMode = "route-completed";
+      /* The drain enrollment staging deferred for a fresh launch (#2051). */
+      if (receipt.purpose === "launch" && enrollSettledSpawnInDrain(file, conversation, entry.updatedAt)) {
+        file.conversationRevision[conversation.engine] += 1;
+        file.engineRouting[conversation.engine].revision += 1;
+      }
       if (receipt.supersedes) {
         stageOrRecordSupersedenceInFile(file, receipt.supersedes.conversationId, receipt.conversationId, receipt.supersedes.reason);
       }
@@ -5247,6 +5960,10 @@ export class AgentRegistry {
       receipt.state = "completed";
       receipt.error = null;
       receipt.completionMode = receipt.completionMode ?? "route-recovered";
+      if (receipt.purpose === "launch" && enrollSettledSpawnInDrain(file, conversation, entry.updatedAt)) {
+        file.conversationRevision[conversation.engine] += 1;
+        file.engineRouting[conversation.engine].revision += 1;
+      }
       if (receipt.supersedes) {
         stageOrRecordSupersedenceInFile(file, receipt.supersedes.conversationId, receipt.conversationId, receipt.supersedes.reason);
       }
@@ -5339,13 +6056,14 @@ export class AgentRegistry {
     return outcome.entry;
   }
 
-  failSpawn(launchId: string, error: string): void {
-    this.mutate((file) => {
+  failSpawn(launchId: string, error: string): boolean {
+    return this.mutate((file) => {
       const receipt = file.receipts[launchId];
-      if (!receipt || receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") return;
+      if (!receipt || receipt.state === "completed" || receipt.state === "conflicted") return false;
+      if (receipt.state === "failed") return true;
       if (receipt.state === "host-verified" || receipt.state === "prompt-delivered") {
         receipt.error = error;
-        return;
+        return false;
       }
       receipt.state = receipt.pane ? "conflicted" : "failed";
       receipt.error = error;
@@ -5361,6 +6079,7 @@ export class AgentRegistry {
          held or assigned attempts-zero initial delivery. Converge it in the
          same transaction instead of waiting for the reaper. */
       terminalizeFailedSpawnDeliveriesInFile(file);
+      return receipt.state === "failed";
     });
   }
 
@@ -5890,7 +6609,7 @@ export class AgentRegistry {
 
   /** Allocates one Viewer-owned identity for every native generation. Paths
       remain an interoperability detail and can change on every account move. */
-  ensureConversation(engine: Extract<AgentEngine, "claude" | "codex">, artifactPath: string, accountId: string | null): RegistryConversation {
+  ensureConversation(engine: AgentEngine, artifactPath: string, accountId: string | null): RegistryConversation {
     return this.mutate((file) => {
       const existing = Object.values(file.conversations).find((conversation) => conversation.engine === engine && conversationOwnsPath(conversation, artifactPath));
       if (existing) return clone(existing);
@@ -5919,6 +6638,7 @@ export class AgentRegistry {
         agentRole: null,
         delegationDepth: null,
         turn: { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
+        deliveryEvidenceTracked: true,
         createdAt,
         updatedAt: createdAt,
       };
@@ -5933,7 +6653,7 @@ export class AgentRegistry {
       backfill, account provenance, and authoritative turn observations. */
   reconcileConversations(observations: ConversationObservation[]): RegistryFile {
     return this.mutate((file) => {
-      const scopeChanged = new Set<Extract<AgentEngine, "claude" | "codex">>();
+      const scopeChanged = new Set<AgentEngine>();
       const firstPathByNativeSession = new Map<string, string>();
       const pathPendingLaunches = correlatePathPendingReceipts(file, observations);
       const conversationsByPath = new Map<string, RegistryConversation[]>();
@@ -6118,6 +6838,7 @@ export class AgentRegistry {
             agentRole: null,
             delegationDepth: null,
             turn: { ...observation.turn, observedAt: observation.observedAt },
+            deliveryEvidenceTracked: true,
             createdAt,
             updatedAt: createdAt,
           };
@@ -6175,7 +6896,7 @@ export class AgentRegistry {
          snapshot — lets one inventory pass establish a parent plus its children
          atomically. Authoritative viewer-spawn edges are preserved; self-edges
          and cycles are refused. */
-      const ownerForPath = (pathname: string, engine: Extract<AgentEngine, "claude" | "codex">): RegistryConversation | null =>
+      const ownerForPath = (pathname: string, engine: AgentEngine): RegistryConversation | null =>
         preferredConversationOwner(file, (conversationsByPath.get(pathname) ?? []).filter((candidate) =>
           file.conversations[candidate.id] === candidate
           && candidate.engine === engine
@@ -6220,13 +6941,14 @@ export class AgentRegistry {
   }
 
   conversationForPath(artifactPath: string): RegistryConversation | null {
-    const conversation = Object.values(this.readOnlySnapshot().conversations)
-      .find((candidate) => conversationOwnsPath(candidate, artifactPath));
-    return conversation ? clone(conversation) : null;
+    return this.readKeyed(file => {
+      const conversation = registryConversationsForPath(file, artifactPath)[0];
+      return conversation ? clone(conversation) : null;
+    });
   }
 
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
-    return resolveConversationAlias(this.readOnlySnapshot(), id);
+    return this.readKeyed(file => resolveConversationAlias(file, id));
   }
 
   /** Records the terminal predecessor → successor edge (issue #383) outside
@@ -6252,7 +6974,7 @@ export class AgentRegistry {
   /** The alias-canonical end of a supersedence chain (the one conversation in
       the chain that is not itself superseded). */
   supersedenceChainTail(id: ViewerConversationId): ViewerConversationId {
-    return supersedenceChainTail(this.readOnlySnapshot(), id);
+    return this.readKeyed(file => supersedenceChainTail(file, id));
   }
 
   /** Pre-flight for a supersedence claim: the actively hosted chain end that
@@ -6291,9 +7013,10 @@ export class AgentRegistry {
   }
 
   conversation(id: ViewerConversationId): RegistryConversation | null {
-    const snapshot = this.readOnlySnapshot();
-    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
-    return conversation ? clone(conversation) : null;
+    return this.readKeyed(file => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      return conversation ? clone(conversation) : null;
+    });
   }
 
   launchProfileForPath(artifactPath: string): LaunchProfile | null {
@@ -6314,7 +7037,7 @@ export class AgentRegistry {
       The generation record is the source of truth for which account owns a
       conversation; deriving the account from the path layout stays in the
       account manager only as recovery for artifacts the registry never saw. */
-  transcriptAccountId(engine: Extract<AgentEngine, "claude" | "codex">, artifactPath: string): string | null {
+  transcriptAccountId(engine: AgentEngine, artifactPath: string): string | null {
     const snapshot = this.readOnlySnapshot();
     for (const conversation of Object.values(snapshot.conversations)) {
       if (conversation.engine !== engine) continue;
@@ -6411,6 +7134,10 @@ export class AgentRegistry {
       };
       writeConversationLaunchProfile(file, conversation, generation, state.profile);
       conversation.reconfigure = state;
+      /* #1846: a new account choice is what a failed switch's hold was waiting for. A settings change, or a
+         claim that names the account it already runs on, is not one: the held messages keep waiting until the
+         operator picks another account or sends them here explicitly (`releaseSwitchHold`). */
+      if (claim.accountId !== undefined && claim.accountId !== generation.accountId) conversation.switchHold = null;
       return { kind: "claimed" as const, state: clone(state), conversation: clone(conversation) };
     });
   }
@@ -6478,6 +7205,39 @@ export class AgentRegistry {
       conversation.reconfigureWithdrawals = [...withdrawals, { operationId, at }].slice(-RECONFIGURE_WITHDRAWAL_LIMIT);
       conversation.updatedAt = at;
       return { kind: "withdrawn" as const, conversation: clone(conversation) };
+    });
+  }
+
+  /** Holds the conversation's messages after the account switch they engaged failed (#1846). */
+  holdForFailedSwitch(id: ViewerConversationId, hold: Omit<ConversationSwitchHold, "at">): RegistryConversation {
+    return this.mutate((file) => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      if (!conversation) throw new Error("viewer conversation is unknown");
+      const at = now();
+      conversation.switchHold = { ...hold, at };
+      conversation.updatedAt = at;
+      return clone(conversation);
+    });
+  }
+
+  /** The failed account switch holding this conversation's messages, or null (#1846). */
+  switchHold(id: ViewerConversationId): ConversationSwitchHold | null {
+    const snapshot = this.readOnlySnapshot();
+    const hold = snapshot.conversations[resolveConversationAlias(snapshot, id)]?.switchHold;
+    return hold ? clone(hold) : null;
+  }
+
+  /** The operator sends the held messages on the account the conversation runs on (#1846). */
+  releaseSwitchHold(id: ViewerConversationId): { released: boolean; conversation: RegistryConversation } {
+    return this.mutate((file) => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      if (!conversation) throw new Error("viewer conversation is unknown");
+      const released = Boolean(conversation.switchHold);
+      if (released) {
+        conversation.switchHold = null;
+        conversation.updatedAt = now();
+      }
+      return { released, conversation: clone(conversation) };
     });
   }
 
@@ -6560,7 +7320,7 @@ export class AgentRegistry {
     return conversation?.generations.at(-1)?.path ?? artifactPath;
   }
 
-  setEngineRouting(engine: Extract<AgentEngine, "claude" | "codex">, accountId: string): number {
+  setEngineRouting(engine: AgentEngine, accountId: string): number {
     return withAccountMutationLock(() => this.mutate((file) => {
       const route = file.engineRouting[engine];
       route.activeAccountId = accountId;
@@ -6569,11 +7329,11 @@ export class AgentRegistry {
     }));
   }
 
-  engineRouting(engine: Extract<AgentEngine, "claude" | "codex">): { activeAccountId: string | null; revision: number } {
-    return clone(this.readOnlySnapshot().engineRouting[engine]);
+  engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {
+    return this.readKeyed(file => clone(file.engineRouting[engine]));
   }
 
-  migrationScope(engine: Extract<AgentEngine, "claude" | "codex">, targetId: string): MigrationScopeCounts {
+  migrationScope(engine: MigrationEngine, targetId: string): MigrationScopeCounts {
     return migrationScopeCounts(this.readOnlySnapshot(), engine, targetId);
   }
 
@@ -6581,17 +7341,57 @@ export class AgentRegistry {
       conversation is *genuinely live* on the account — the same liveness
       definition `accountRemovalBlockers` enforces at the DELETE route (issue
       #643), so the two can never disagree about whether a home may go. Dead,
-      unhosted history keeps its account provenance: the transcripts survive as
-      a retained archive, so the generation stays truthful about where it ran. */
+      unhosted history keeps its account provenance: the generation stays
+      truthful about where it ran.
+
+      Account removal (issue #1857) moves the home into an archive in the same
+      breath, so this one transaction also moves every registry path under the
+      home (`rewrite`), clears pins naming the account, and settles what can
+      never run again on it: owed deliveries on its conversations and their
+      parked `failed-recoverable` migrations. */
   retireAccount(
-    engine: Extract<AgentEngine, "claude" | "codex">,
+    engine: MigrationEngine,
     accountId: string,
     fallbackAccountId: string,
     liveness: AccountLivenessOptions = {},
-  ): void {
-    withAccountMutationLock(() => this.mutate((file) => {
+    options: { rewrite?: readonly AccountPathRewrite[] } = {},
+  ): AccountRetirementReport {
+    return withAccountMutationLock(() => this.mutate((file) => {
+      if (accountHasLiveSessions(file, engine, accountId, liveness)) throw new Error("account has live sessions");
       if (liveAccountConversationIds(file, engine, accountId, liveness).length > 0) throw new Error("account has current conversations");
       const changedAt = now();
+      const report: AccountRetirementReport = { conversationsRewritten: 0, pinsCleared: 0, deliveriesDropped: 0, migrationsSettled: 0 };
+      const touched = rewriteRegistryAccountPaths(file, engine, options.rewrite ?? []);
+      report.conversationsRewritten = touched.size;
+      for (const conversation of Object.values(file.conversations)) {
+        if (conversation.engine !== engine) continue;
+        if (conversation.pinnedAccountId === accountId) {
+          conversation.pinnedAccountId = null;
+          report.pinsCleared += 1;
+          touched.add(conversation.id);
+        }
+        if (conversation.generations.at(-1)?.accountId !== accountId) continue;
+        for (const delivery of Object.values(file.heldDeliveries)) {
+          if (delivery.state === "delivered" || delivery.state === "failed") continue;
+          if (resolveConversationAlias(file, delivery.conversationId) !== conversation.id) continue;
+          terminalizeHeldDelivery(file, delivery, ACCOUNT_REMOVED_DELIVERY_REASON);
+          report.deliveriesDropped += 1;
+          touched.add(conversation.id);
+        }
+        if (conversation.migration?.phase === "failed-recoverable") {
+          abandonPendingContinuityPaths(conversation);
+          queueAbandonedMigrationCleanup(file, conversation, changedAt);
+          conversation.migration = null;
+          report.migrationsSettled += 1;
+          touched.add(conversation.id);
+        }
+      }
+      for (const id of touched) {
+        const conversation = file.conversations[id];
+        if (!conversation) continue;
+        conversation.updatedAt = changedAt;
+        file.conversationRevision[conversation.engine] += 1;
+      }
       const route = file.engineRouting[engine];
       if (route.activeAccountId === accountId) {
         route.activeAccountId = fallbackAccountId;
@@ -6607,7 +7407,7 @@ export class AgentRegistry {
         intent.updatedAt = changedAt;
         intent.stoppedAt = changedAt;
       }
-      if (retiredIntentIds.size === 0) return;
+      if (retiredIntentIds.size === 0) return report;
       for (const conversation of Object.values(file.conversations)) {
         if (!conversation.migration || !retiredIntentIds.has(conversation.migration.intentId)) continue;
         abandonPendingContinuityPaths(conversation);
@@ -6617,11 +7417,29 @@ export class AgentRegistry {
         conversation.updatedAt = changedAt;
         file.conversationRevision[conversation.engine] += 1;
       }
+      return report;
+    }));
+  }
+
+  /** Moves registry paths back after an interrupted account removal returned
+      its home to place (issue #1857). Nothing else changes: this undoes only
+      the path half of `retireAccount`, and is a no-op when that never ran. */
+  rewriteAccountPaths(engine: MigrationEngine, rewrite: readonly AccountPathRewrite[]): number {
+    return withAccountMutationLock(() => this.mutate((file) => {
+      const changedAt = now();
+      const touched = rewriteRegistryAccountPaths(file, engine, rewrite);
+      for (const id of touched) {
+        const conversation = file.conversations[id];
+        if (!conversation) continue;
+        conversation.updatedAt = changedAt;
+        file.conversationRevision[conversation.engine] += 1;
+      }
+      return touched.size;
     }));
   }
 
   commitMigrationIntent(input: {
-    engine: Extract<AgentEngine, "claude" | "codex">;
+    engine: MigrationEngine;
     targetId: string;
     origin: MigrationOrigin;
     requestId: string;
@@ -6679,6 +7497,7 @@ export class AgentRegistry {
       route.revision += 1;
 
       let scoped = 0;
+      const settlingLaunches = settlingLaunchAccounts(file);
       for (const conversation of Object.values(file.conversations)) {
         if (conversation.engine !== input.engine) continue;
         if (conversation.pinnedAccountId) continue;
@@ -6697,6 +7516,11 @@ export class AgentRegistry {
           }
           continue;
         }
+        /* A launch still waiting on its first message stays where the pool put
+           it (#2051): a migration now would hold that message behind a move
+           that waits for the turn it starts. Finalization enrolls it into this
+           drain once the message is delivered. */
+        if (settlingLaunches.has(conversation.id) && settlingLaunches.get(conversation.id) === source.accountId) continue;
         /* The decision the engine-wide loop was missing, taken here at the
            per-conversation boundary because that is the only place the project
            is known: this conversation's own project's pool, and whether the
@@ -6744,17 +7568,29 @@ export class AgentRegistry {
    * conversation is returned exactly as it stands and the send lands on the
    * account it is already running on, which crosses nothing.
    */
-  requestConversationMigrationToActiveAccount(id: ViewerConversationId): RegistryConversation {
+  requestConversationMigrationToActiveAccount(
+    id: ViewerConversationId,
+    options: { launchId?: string | null } = {},
+  ): RegistryConversation {
     const bindings = accountProjectBindings();
     return this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, id);
       const conversation = file.conversations[canonicalId];
       if (!conversation) throw new Error("viewer conversation is unknown");
       if (conversation.pinnedAccountId) return clone(conversation);
+      /* Account migration covers Claude and Codex only. */
+      if (conversation.engine === "copilot") return clone(conversation);
       const targetId = file.engineRouting[conversation.engine].activeAccountId;
       const source = conversation.generations.at(-1);
       if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
       if (conversation.migrationOptOut?.targetId === targetId) return clone(conversation);
+      /* The launch's own first message (#2051). The launch picked this account
+         moments ago by the automatic rule, where the project's pool ranks
+         accounts by room and routing only breaks a tie. Moving the
+         conversation now strands its mandate behind a migration of a thread
+         with no turn yet: a Claude move waits for a transcript only that
+         held message can start, and a committed move drops the held message. */
+      if (settlingLaunchChoseAccount(file, canonicalId, source, options.launchId)) return clone(conversation);
       if (admitAutomaticAccountTarget({
         project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
         engine: conversation.engine,
@@ -6829,6 +7665,7 @@ export class AgentRegistry {
       const canonicalId = resolveConversationAlias(file, id);
       const conversation = file.conversations[canonicalId];
       if (!conversation) throw new Error("viewer conversation is unknown");
+      if (conversation.engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
       if (reconfigureOwner
         && (conversation.reconfigure?.operationId !== reconfigureOwner.operationId
           || conversation.reconfigure.revision !== reconfigureOwner.revision
@@ -6916,7 +7753,7 @@ export class AgentRegistry {
     });
   }
 
-  upsertMigrationIntent(engine: Extract<AgentEngine, "claude" | "codex">, targetId: string, origin: MigrationOrigin, requestId: string, evidence: MigrationIntent["evidence"] = null): MigrationIntent {
+  upsertMigrationIntent(engine: MigrationEngine, targetId: string, origin: MigrationOrigin, requestId: string, evidence: MigrationIntent["evidence"] = null): MigrationIntent {
     return this.mutate((file) => {
       const active = Object.values(file.migrationIntents).find((intent) => intent.engine === engine && intent.state === "draining" && engineScopedIntent(intent));
       if (active) {
@@ -7203,11 +8040,13 @@ export class AgentRegistry {
       const intent = file.migrationIntents[id];
       if (!intent) throw new Error("migration intent is unknown");
       if (expectedRevision !== undefined && intent.revision !== expectedRevision) throw new Error("migration intent revision is stale");
-      const paths = new Set(Object.values(file.conversations)
+      // Only stopping an intent edits conversation readiness. Completing or
+      // verifying it changes intent metadata alone, so no engine-wide scan is needed.
+      const paths = state === "stopped" ? new Set(Object.values(file.conversations)
         .filter((conversation) => conversation.engine === intent.engine)
         .map((conversation) => conversation.generations.at(-1)?.path)
-        .filter((pathname): pathname is string => Boolean(pathname)));
-      const signature = migrationReadinessSignature(file, intent.engine, paths);
+        .filter((pathname): pathname is string => Boolean(pathname))) : new Set<string>();
+      const signature = state === "stopped" ? migrationReadinessSignature(file, intent.engine, paths) : "";
       intent.state = state;
       intent.stoppedAt = state === "stopped" ? now() : intent.stoppedAt;
       intent.updatedAt = now();
@@ -7234,16 +8073,16 @@ export class AgentRegistry {
           terminalizeCancelledMigrationDeliveries(file, conversation, stoppedDeliveryReason.slice(0, 240));
         }
       }
-      advanceMigrationScopeRevision(file, intent.engine, signature, paths);
+      if (state === "stopped") advanceMigrationScopeRevision(file, intent.engine, signature, paths);
       return clone(intent);
     });
   }
 
-  autoBalancePolicy(engine: Extract<AgentEngine, "claude" | "codex">): AutoBalancePolicy {
+  autoBalancePolicy(engine: AgentEngine): AutoBalancePolicy {
     return clone(this.readOnlySnapshot().autoBalance[engine]);
   }
 
-  quotaObservations(engine: Extract<AgentEngine, "claude" | "codex">): DurableQuotaObservation[] {
+  quotaObservations(engine: AgentEngine): DurableQuotaObservation[] {
     return clone(Object.values(this.readOnlySnapshot().quotaObservations[engine]));
   }
 
@@ -7259,7 +8098,7 @@ export class AgentRegistry {
   }
 
   recordQuotaEvaluation(input: {
-    engine: Extract<AgentEngine, "claude" | "codex">;
+    engine: AgentEngine;
     observations: DurableQuotaObservation[];
     signature: string | null;
     evidence?: MigrationIntent["evidence"];
@@ -7292,7 +8131,7 @@ export class AgentRegistry {
     });
   }
 
-  setAutoBalancePolicy(engine: Extract<AgentEngine, "claude" | "codex">, enabled: boolean, expectedRevision?: number): AutoBalancePolicy {
+  setAutoBalancePolicy(engine: AgentEngine, enabled: boolean, expectedRevision?: number): AutoBalancePolicy {
     return this.mutate((file) => {
       const policy = file.autoBalance[engine];
       if (expectedRevision !== undefined && policy.revision !== expectedRevision) throw new Error("automatic balance policy revision is stale");
@@ -7304,7 +8143,7 @@ export class AgentRegistry {
   }
 
   recordAutoBalanceOutcome(
-    engine: Extract<AgentEngine, "claude" | "codex">,
+    engine: AgentEngine,
     outcome: "complete" | "stopped" | "failed-partial",
     evidence: AutoBalancePolicy["lastTrigger"],
     cooldownUntil: string,
@@ -7435,7 +8274,7 @@ export class AgentRegistry {
         error: null,
       };
       compactDeliveryReservations(file, canonicalId, this.now());
-      const count = Object.values(file.heldDeliveries).filter((item) =>
+      const count = conversationRows(file, "heldDeliveries", canonicalId).filter((item) =>
         item.conversationId === canonicalId
         && ["held", "assigned", "delivery-uncertain"].includes(item.state)).length;
       if (count >= 100) throw new Error("held delivery limit reached for conversation");
@@ -7456,7 +8295,7 @@ export class AgentRegistry {
         settledAt: null,
       };
       return place(held);
-    });
+    }, { deliveryOnly: true });
   }
 
   /** Resolves conflicts and terminal replays without mutating the registry.
@@ -7471,19 +8310,114 @@ export class AgentRegistry {
     contentDigest: string | null,
     commandInput: HeldDeliveryCommandInput = {},
   ): HeldDelivery | null {
-    const snapshot = this.readOnlySnapshot();
-    return terminalDeliveryReplay(
+    return this.readKeyed(snapshot => terminalDeliveryReplay(
       inspectDeliveryReservation(snapshot, conversationId, text, clientMessageId, contentDigest, commandInput),
       text,
       clientMessageId,
       payloadKind,
       runtimeImages,
       contentDigest,
-    );
+    ));
+  }
+
+  /**
+   * Whether anything was ever admitted under one conversation's ORIGINAL key.
+   *
+   * The answer for a caller that lost the response to its own send and must
+   * not send again to find out. Two records can prove admission and they are
+   * both consulted: the reservation itself, and the operation owner, which
+   * deliberately outlives the reservation a compaction removes.
+   *
+   * ABSENCE IS NOT THE SAME EVIDENCE, and the difference is this method's whole
+   * subject. Every send writes its reservation before anything reaches a host,
+   * so a message that ever started down the path left a row behind — but the
+   * rows are RETAINED, not kept forever. Terminal operation owners are
+   * compacted to the newest `DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT` per
+   * conversation, and delivered reservations to the newest hundred. Past that
+   * boundary a delivered message looks exactly like one that never happened,
+   * and reading it as "never happened" is how the operator's message is sent a
+   * second time.
+   *
+   * So absence answers `not-executed` only where the record it would be in is
+   * provably COMPLETE, and the proof is the conversation's own history: every
+   * retention pass that drops a keyed record writes
+   * {@link DeliveryEvidenceCompaction} for the conversation it dropped it
+   * from, durably and for good. A conversation carrying one has a hole in its
+   * record, wherever the hole happens to be, and every key it cannot show is
+   * `unknown`.
+   *
+   * A COUNT TAKEN NOW IS NOT THAT PROOF, and the difference is the whole
+   * reason the note exists. Compaction trims a group to exactly the retention
+   * bound, so "fewer rows than the bound" looks like "compaction never ran
+   * here" — until any later operation clears its own terminal state and pushes
+   * the group back under it. Re-arming an unverified operation does exactly
+   * that, one retry on an unrelated message, and a delivered key would go back
+   * to reading `not-executed`. No count is consulted here, at any bound, for
+   * anything.
+   *
+   * The other half is the history that predates the note. A registry the
+   * previous build left behind carries no notes because that build had none to
+   * write, and its retention still ran — so the same moving count would read
+   * it as complete, whether the retry that moved it happened before the
+   * upgrade or after. What answers instead is
+   * {@link RegistryConversation.deliveryEvidenceTracked}: a stamp put on a
+   * conversation when it is CREATED, by the build that creates it, which no
+   * later mutation touches. A conversation without it proves nothing and says
+   * so, for good.
+   *
+   * Read-only by construction: it mints nothing and settles nothing, so asking
+   * repeatedly is free and changes no fate.
+   */
+  deliveryAdmissionForKey(
+    conversationId: ViewerConversationId | string,
+    clientMessageId: string,
+  ): DeliveryAdmissionEvidence {
+    const snapshot = this.conversationDeliverySnapshot({ conversationId });
+    const canonicalId = resolveConversationAlias(snapshot, conversationId as ViewerConversationId);
+    const reserved = Object.values(snapshot.heldDeliveries).find((item) =>
+      resolveConversationAlias(snapshot, item.conversationId) === canonicalId
+      && item.clientMessageId === clientMessageId);
+    if (reserved) {
+      return {
+        outcome: "admitted",
+        operationId: reserved.command.operationId,
+        deliveryId: reserved.id,
+        state: reserved.state,
+      };
+    }
+    const owner = Object.values(snapshot.deliveryOperationOwners).find((item) =>
+      resolveConversationAlias(snapshot, item.conversationId) === canonicalId
+      && item.clientMessageId === clientMessageId);
+    if (owner) {
+      return {
+        outcome: "admitted",
+        operationId: owner.command.operationId,
+        deliveryId: owner.deliveryId,
+        state: owner.terminalState ?? null,
+      };
+    }
+    const evidenceDropped = Object.values(snapshot.deliveryEvidenceCompactions).some((record) =>
+      resolveConversationAlias(snapshot, record.conversationId) === canonicalId);
+    if (evidenceDropped) {
+      return {
+        outcome: "unknown",
+        reason: "this conversation's delivery evidence has been compacted, so nothing under this key is not proof that nothing was sent",
+      };
+    }
+    /* A history carried across the upgrade — and a conversation with no record
+       at all, which cannot show a stamp either. Neither one's notes were ever
+       written, so neither one's silence is an answer. */
+    if (!snapshot.conversations[canonicalId]?.deliveryEvidenceTracked) {
+      return {
+        outcome: "unknown",
+        reason: "this conversation's history is not known to be complete, so nothing under this key is not proof that nothing was sent",
+      };
+    }
+    return { outcome: "not-executed" };
   }
 
   pendingDeliveries(conversationId: ViewerConversationId): HeldDelivery[] {
-    const snapshot = this.readOnlySnapshot();
+    const snapshot = this.conversationDeliverySnapshot({ conversationId });
     const canonicalId = resolveConversationAlias(snapshot, conversationId);
     return clone(Object.values(snapshot.heldDeliveries)
       .filter((item) => item.conversationId === canonicalId && item.state !== "delivered")
@@ -7496,7 +8430,7 @@ export class AgentRegistry {
       if (!delivery) throw new Error("held delivery is unknown");
       if (delivery.state !== "delivered") terminalizeHeldDelivery(file, delivery, reason);
       return clone(delivery);
-    });
+    }, { deliveryOnly: true });
   }
 
   /** Expires pending work whose target has two terminal proofs: a durable
@@ -7565,7 +8499,7 @@ export class AgentRegistry {
       syncDeliveryOperationOwnerState(file, delivery);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       return clone(delivery);
-    });
+    }, { deliveryOnly: true });
   }
 
   recordDeliveryArtifacts(id: string, artifactPaths: string[]): HeldDelivery {
@@ -7659,6 +8593,7 @@ export class AgentRegistry {
     state: Extract<HeldDelivery["state"], "delivered" | "failed">,
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
+    route?: DeliveryRoute | null,
   ): DeliveryOperationOwner | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
@@ -7667,6 +8602,7 @@ export class AgentRegistry {
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
       owner.settledAt = now();
+      if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
     });
   }
@@ -7678,6 +8614,8 @@ export class AgentRegistry {
     /** What the settling caller PROVED. Omitted where it proved nothing, which
         the receipt reads as an unverified fate rather than a safe resend. */
     disposition?: DeliveryTerminalDisposition,
+    /** How a delivered send reached the engine, when the journal recorded it. */
+    route?: DeliveryRoute | null,
   ): HeldDelivery {
     return this.mutate((file) => {
       const delivery = file.heldDeliveries[id];
@@ -7695,10 +8633,11 @@ export class AgentRegistry {
       if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       syncDeliveryOperationOwnerState(file, delivery, disposition);
+      if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
       const settled = clone(delivery);
       if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
       return settled;
-    });
+    }, { deliveryOnly: true });
   }
 
   recordDeliveryOutcomeForOperation(
@@ -7707,6 +8646,7 @@ export class AgentRegistry {
     state: Extract<HeldDelivery["state"], "delivered" | "failed">,
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
+    route?: DeliveryRoute | null,
   ): HeldDelivery | null {
     return this.recordDeliveryOutcomesForOperations([{
       conversationId,
@@ -7714,6 +8654,7 @@ export class AgentRegistry {
       state,
       error,
       ...(disposition ? { disposition } : {}),
+      ...(route ? { route } : {}),
     }])[0] ?? null;
   }
 
@@ -7727,6 +8668,7 @@ export class AgentRegistry {
       state: Extract<HeldDelivery["state"], "delivered" | "failed">;
       error?: string | null;
       disposition?: DeliveryTerminalDisposition;
+      route?: DeliveryRoute | null;
     }[],
   ): (HeldDelivery | null)[] {
     return this.mutate((file) => {
@@ -7756,6 +8698,7 @@ export class AgentRegistry {
         if (outcome.state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
         if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
         syncDeliveryOperationOwnerState(file, delivery, outcome.disposition);
+        if (outcome.state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), outcome.route);
         compactConversations.add(delivery.conversationId);
         return clone(delivery);
       });
@@ -7869,7 +8812,7 @@ export class AgentRegistry {
       const delivery = file.heldDeliveries[id];
       if (!delivery) throw new Error("held delivery is unknown");
       return clone(placeDeliveryForRetryInFile(file, delivery, allowUncertain));
-    });
+    }, { deliveryOnly: true });
   }
 
   rollbackConversationMigration(id: ViewerConversationId, expectedRevision?: number): RegistryConversation {
@@ -7932,4 +8875,13 @@ export function agentRegistry(): AgentRegistry {
 
 export function setAgentRegistryForTests(value: AgentRegistry | null): void {
   registryProcessState.__llvAgentRegistry = value;
+}
+
+/** Closes the process-wide registry's SQLite connection and forgets it, for a
+    suite about to delete its state directory. macOS reports a store removed
+    under an open connection as SQLITE_IOERR_VNODE on the next query, where
+    Linux keeps reading the unlinked file. */
+export function closeAgentRegistryForTests(): void {
+  registryProcessState.__llvAgentRegistry?.close();
+  registryProcessState.__llvAgentRegistry = null;
 }

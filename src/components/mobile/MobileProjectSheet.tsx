@@ -11,6 +11,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "../projectModel";
+import { BoardRowsSkeleton } from "../skeletons";
 import { fmtAge } from "../utils";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 
@@ -126,12 +127,7 @@ export function MobileProjectSheet({
       <MobileSheetDivider />
       {crowned.map((summary) => row(summary))}
       {rest.map((summary) => row(summary))}
-      {!loaded && !summaries.length ? (
-        <div className="flex items-center justify-center gap-2 px-4 py-3 text-ui text-muted">
-          <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
-          {t("common.loading")}
-        </div>
-      ) : null}
+      {!loaded && !summaries.length ? <BoardRowsSkeleton variant="list" rows={4} className="flex-none" /> : null}
       {catalogFailures > 0 && !summaries.length ? <div className="px-4 py-3 text-ui font-semibold text-danger">{t("catalog.unreachable")}</div> : null}
       <MobileSheetDivider />
       {archived.length ? (
@@ -209,7 +205,7 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
       <button
         type="submit"
         disabled={busy || !root.trim()}
-        className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] bg-accent px-4 text-body font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] bg-brand px-4 text-body font-semibold text-on-brand disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <FolderPlus className="h-4 w-4" aria-hidden />}
         {t("mobile2.projects.createSubmit")}

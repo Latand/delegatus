@@ -1,8 +1,9 @@
 import fs from "node:fs";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
-import type { FlowEngine } from "@/lib/flows/types";
-import { lastAssistantMessageFromRecords } from "@/lib/flows/findings";
+import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
+import { lastAssistantMessageFromRecords } from "@/lib/scanner/lastAssistantMessage";
+import { heldBackgroundTasks, readBackgroundTaskLedger, type RunningBackgroundTask } from "@/lib/pipelines/backgroundTasks";
 import { readStableTailRecords } from "@/lib/scanner/activity";
 import { numberValue, recordValue, recordsValue, stringValue } from "@/lib/scanner/json";
 
@@ -41,6 +42,15 @@ export type StageTurnEvidence = {
     /** Structured Codex usage-limit evidence from this same terminal turn. */
     usageLimit?: { resetsAt: number | null };
   } | null;
+  /** Harness-tracked background work the conversation started and has not
+      heard the end of (#1441), read from the whole artifact, expired or not:
+      the reader filters by its own clock with `liveBackgroundTasks`. While one
+      is live, a terminal turn is not the conversation's last. Empty for Codex;
+      absent when the artifact could not be read for it. */
+  backgroundTasks?: RunningBackgroundTask[];
+  /** Epoch ms of the newest task notification or stop the agent received. A
+      stage report filed before it was filed while that work was still out. */
+  backgroundReportedAt?: number | null;
 };
 
 function recordTs(record: RecordLike, fallbackTs: number): number {
@@ -170,6 +180,7 @@ export async function durableStageTurnEvidence(
   }
   const message = lastAssistantMessageFromRecords(read.records, codex ? "codex-sessions" : "claude-projects", fallbackTs);
   const newest = read.records.at(-1);
+  const ledger = codex ? null : await readBackgroundTaskLedger(transcriptPath);
   return {
     turn: turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message,
@@ -184,5 +195,10 @@ export async function durableStageTurnEvidence(
     terminalProviderMessage: turn.state === "terminal"
       ? terminalProviderMessageFromRecords(read.records, codex, fallbackTs)
       : null,
+    ...(codex
+      ? { backgroundTasks: [], backgroundReportedAt: null }
+      : ledger
+        ? { backgroundTasks: heldBackgroundTasks(ledger), backgroundReportedAt: ledger.lastReportedAt }
+        : {}),
   };
 }

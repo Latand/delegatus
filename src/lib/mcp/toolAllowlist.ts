@@ -72,6 +72,12 @@ export type McpToolVerdict =
 
 const ALLOWED: McpToolVerdict = { allowed: true };
 
+/** Agent availability checks that actually consume caller authority. Health
+ * probes have a separate credential-scoped allowlist for every call. */
+export function mcpToolNeedsCallerIdentity(toolName: McpToolName, args: McpToolArgs): boolean {
+  return toolName === "conversation_action" && (args.action === "archive" || args.action === "unarchive");
+}
+
 /**
  * Who is calling, from evidence the caller cannot restate.
  *
@@ -112,7 +118,7 @@ export function permitMcpTool(
         error: `${toolName} is outside the managed MCP health-probe surface.`,
       };
   }
-  if (toolName === "conversation_action" && (args.action === "archive" || args.action === "unarchive")) {
+  if (mcpToolNeedsCallerIdentity(toolName, args)) {
     const authorized = identity.kind === "unrestricted" && identity.reason === "manager"
       || identity.kind === "restricted" && identity.reason === "gateway";
     if (!authorized) {
@@ -185,7 +191,10 @@ export function permitAttentionHandoff(
   return {
     allowed: false,
     refusedAs: "cross-project",
-    error: "this orchestrator seat is designated for a different project than the target; re-designate or target your own project",
+    /* Both keys, so a refusal is diagnosable from its own text (#1874): the
+       one report that motivated this was a seat under a plain name and a
+       target under its repository identity. */
+    error: `this orchestrator seat is designated for ${[...new Set(held.map((seat) => seat.project))].join(", ")}, and the target belongs to ${targetProject}; re-designate or target your own project`,
   };
 }
 

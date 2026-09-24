@@ -11,6 +11,7 @@ import {
   newSeatRequestId,
   orchestratorQuietBannerEligible,
   parseSeatStatus,
+  seatConversationsOf,
   resolveSeatFile,
   ROTATION_CONTEXT_PERCENT,
   SEAT_BIND_TIMEOUT_MS,
@@ -432,9 +433,46 @@ describe("the rotate draft renders the same two states the create draft does (#9
 
 describe("seat status parsing", () => {
   test("a malformed body reads as no seat rather than throwing", () => {
-    expect(parseSeatStatus(null)).toEqual({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false });
+    expect(parseSeatStatus(null)).toEqual({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTask: null, all: null });
     expect(parseSeatStatus({ seat: { project: 7 }, pending: [], exists: false }))
-      .toEqual({ seat: null, pending: null, lastFailure: null, exists: false, viewerMcpRegistered: false });
+      .toEqual({ seat: null, pending: null, lastFailure: null, exists: false, viewerMcpRegistered: false, previous: [], currentTask: null, all: null });
+  });
+
+  /* The seat's notes task comes off the answer, so a surface with no task list
+     can name the live seat and tell whether it has notes to offer at all. */
+  test("the current seat's task, its title and whether it has notes are read from the answer (#1841)", () => {
+    expect(parseSeatStatus({ currentTask: { taskId: "task-seat", title: "Manager seat, release week", hasNotes: true } }).currentTask)
+      .toEqual({ taskId: "task-seat", title: "Manager seat, release week", hasNotes: true });
+    /* No notes, and an unnamed task: neither is guessed into something else. */
+    expect(parseSeatStatus({ currentTask: { taskId: "task-seat" } }).currentTask).toEqual({ taskId: "task-seat", title: null, hasNotes: false });
+    expect(parseSeatStatus({ currentTask: { title: "no id" } }).currentTask).toBeNull();
+    expect(parseSeatStatus({ currentTask: "task-seat" }).currentTask).toBeNull();
+    /* Retired seats answer the same question the same way. */
+    const previous = parseSeatStatus({ previous: [
+      { conversationId: "conversation_a", heldTo: "2026-09-18T14:02:00.000Z", taskId: "task-a", hasNotes: true },
+      { conversationId: "conversation_b", heldTo: "2026-09-17T09:40:00.000Z", taskId: "task-b" },
+    ] }).previous;
+    expect(previous?.map((row) => [row.conversationId, row.hasNotes])).toEqual([["conversation_a", true], ["conversation_b", false]]);
+  });
+
+  /* The surfaces that span projects hide seat rows on this field, so an answer
+     that cannot supply it has to read as «unknown», never as «no seats». */
+  test("the cross-project seat conversations are read whole or not at all (#1841)", () => {
+    expect(parseSeatStatus({
+      all: { conversationIds: ["conversation_a", 7, ""], paths: ["/seats/a.jsonl"], previous: { conversationIds: ["conversation_b"], paths: [] } },
+    }).all).toEqual({
+      conversationIds: ["conversation_a"],
+      paths: ["/seats/a.jsonl"],
+      previous: { conversationIds: ["conversation_b"], paths: [] },
+    });
+    /* An empty record is still a record that was read. */
+    expect(parseSeatStatus({ all: { conversationIds: [], paths: [], previous: {} } }).all)
+      .toEqual({ conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } });
+    /* Unreadable, absent, or an answer from before the field existed. */
+    expect(parseSeatStatus({ all: null }).all).toBeNull();
+    expect(parseSeatStatus({}).all).toBeNull();
+    expect(parseSeatStatus({ all: { conversationIds: ["conversation_a"], paths: [] } }).all).toBeNull();
+    expect(seatConversationsOf("all of them")).toBeNull();
   });
 
   test("a well-formed seat keeps the fields the panel renders from", () => {

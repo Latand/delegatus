@@ -1,0 +1,423 @@
+/**
+ * The profiling probe's own verdicts, each driven to the answer it must NOT
+ * give, in a real Chrome (#1821 review).
+ *
+ *   LLV_PROFILE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test scripts/profileBrowser.browser.test.ts
+ *
+ * A timing table is only as good as the milestone and the attribution under
+ * it, and both used to go green on the wrong subject: a target row under
+ * display:none counted as painted, and so did a row its own scrolling pane
+ * clipped out of sight; a renderer with no animation frames still produced a
+ * milestone, a poll that asked for another transcript was credited
+ * to the target, and a poll was stamped delivered when its headers arrived.
+ * The page here is a bare stand-in for the Viewer — the probe reads only the
+ * attributes the Viewer renders — and the server answers a poll the way
+ * POST /api/logs does, with its body held back on request.
+ */
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
+import type { ChildProcess } from "node:child_process";
+
+import { armDocuments, assertViewport, Cdp, devToolsPort, launchChrome, navigate, pageWebSocketUrl, setViewport, stop, type Surface } from "./profileBrowser";
+
+const CHROME = process.env.CHROME_BIN ?? "";
+const browserTest = process.env.LLV_PROFILE_BROWSER_TEST === "1" && CHROME && fs.existsSync(CHROME) ? test : test.skip;
+
+const TARGET = "/sessions/probe/target.jsonl";
+const OTHER = "/sessions/probe/other.jsonl";
+
+const PAGE = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0">
+<div id="target" data-link-path="${TARGET}" style="display:none"><div data-feed-kind="prose" style="height:40px">target row</div></div>
+<div id="other" data-link-path="${OTHER}"><div data-feed-kind="prose" style="height:40px">other row</div></div>
+</body></html>`;
+
+let server: ReturnType<typeof Bun.serve> | null = null;
+let chrome: ChildProcess | null = null;
+let cdp: Cdp | null = null;
+let scratch = "";
+
+beforeAll(async () => {
+  if (process.env.LLV_PROFILE_BROWSER_TEST !== "1" || !CHROME || !fs.existsSync(CHROME)) return;
+  server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/logs" && request.method === "POST") {
+        const { reqs } = (await request.json()) as { reqs: Array<{ id: string; path: string; offset: number }> };
+        const delay = Number(url.searchParams.get("delay") ?? 0);
+        const chunks = Object.fromEntries(reqs.map((req) => [req.id, { data: "{\"type\":\"user\"}\n".repeat(8), offset: 128, size: 128, start: 0 }]));
+        const body = JSON.stringify({ chunks });
+        const encoder = new TextEncoder();
+        /* Headers and the first bytes now, the rest after `delay`: the moment
+           the fetch resolves is not the moment the answer is in hand. */
+        const stream = new ReadableStream({
+          async start(controller) {
+            controller.enqueue(encoder.encode(body.slice(0, 8)));
+            await Bun.sleep(delay);
+            controller.enqueue(encoder.encode(body.slice(8)));
+            controller.close();
+          },
+        });
+        return new Response(stream, { headers: { "content-type": "application/json" } });
+      }
+      return new Response(PAGE, { headers: { "content-type": "text/html" } });
+    },
+  });
+  scratch = fs.mkdtempSync(path.join(fs.existsSync("/var/tmp") ? "/var/tmp" : "/tmp", "llv-probe-check-"));
+  const userDataDir = path.join(scratch, "chrome");
+  chrome = launchChrome({ cdpPort: 0, userDataDir, home: scratch, chrome: CHROME });
+  cdp = await Cdp.connect(await pageWebSocketUrl(await devToolsPort(userDataDir)));
+  await cdp.send("Page.enable");
+  await cdp.send("Runtime.enable");
+  await armDocuments(cdp);
+}, 60_000);
+
+afterAll(async () => {
+  cdp?.close();
+  await stop(chrome);
+  server?.stop(true);
+  /* Chrome's helper processes can still be writing the profile as the main
+     process exits, so one removal can leave a half-emptied directory. */
+  for (let attempt = 0; scratch && fs.existsSync(scratch) && attempt < 20; attempt += 1) {
+    try {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    } catch {
+      /* still being written; retried below */
+    }
+    if (fs.existsSync(scratch)) await Bun.sleep(250);
+  }
+});
+
+const js = JSON.stringify;
+
+async function fresh(): Promise<Cdp> {
+  await navigate(cdp!, `http://127.0.0.1:${server!.port}/`);
+  return cdp!;
+}
+
+/** How a probe promise ended, as a value: `resolved:<json>` or the rejection. */
+function outcome(expression: string): string {
+  return `(async () => {
+    const p = window.__profile;
+    try { return 'resolved:' + JSON.stringify(await (${expression})); }
+    catch (error) { return 'rejected:' + (error && error.message ? error.message : String(error)); }
+  })()`;
+}
+
+browserTest("a target row under display:none is never a painted milestone, and becomes one only once shown", async () => {
+  const page = await fresh();
+  /* In the DOM, with a row — and not on screen. */
+  expect(await page.evaluate<number>(`window.__profile.rows(${js(TARGET)})`)).toBe(1);
+  const hidden = await page.evaluate<string>(outcome(`p.paintedAt(() => p.targetPainted(${js(TARGET)}, "desktop"), 700)`));
+  expect(hidden).toStartWith("rejected:milestone not reached");
+
+  /* Shown 200 ms from now: the milestone is the frame that carries it. */
+  const shown = await page.evaluate<string>(outcome(`(() => {
+    const at = performance.now() + 200;
+    setTimeout(() => { document.getElementById('target').style.display = 'block'; }, 200);
+    return p.paintedAt(() => p.targetPainted(${js(TARGET)}, "desktop"), 5000).then((m) => ({ ...m, shownAt: at }));
+  })()`));
+  expect(shown).toStartWith("resolved:");
+  const milestone = JSON.parse(shown.slice("resolved:".length)) as { rafConfirmed: boolean; detected: number; painted: number; shownAt: number };
+  expect(milestone.rafConfirmed).toBe(true);
+  expect(milestone.detected).toBeGreaterThanOrEqual(milestone.shownAt - 5);
+  expect(milestone.painted).toBeGreaterThanOrEqual(milestone.detected);
+}, 30_000);
+
+browserTest("a milestone no animation frame confirms is rejected, never resolved unconfirmed", async () => {
+  const page = await fresh();
+  const suppressed = await page.evaluate<string>(outcome(`(() => {
+    window.requestAnimationFrame = () => 0;
+    return p.paintedAt(() => true, 5000);
+  })()`));
+  expect(suppressed).toStartWith("rejected:milestone not confirmed");
+}, 30_000);
+
+browserTest("a poll that asked only for another transcript is never the target's delivery", async () => {
+  const page = await fresh();
+  const seen = await page.evaluate<{ target: unknown; other: { via: string } | null }>(`(async () => {
+    const response = await fetch('/api/logs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reqs: [{ id: '0', path: ${js(OTHER)}, offset: 0 }] }) });
+    await response.json();
+    const p = window.__profile;
+    return { target: p.deliveryFor(${js(TARGET)}, 0), other: p.deliveryFor(${js(OTHER)}, 0) };
+  })()`);
+  expect(seen.target).toBeNull();
+  expect(seen.other?.via).toBe("poll");
+}, 30_000);
+
+browserTest("a poll is delivered when its body completed, not when its headers arrived", async () => {
+  const page = await fresh();
+  const seen = await page.evaluate<{ headersAt: number; parsedAt: number; delivery: { at: number; via: string } | null }>(`(async () => {
+    const response = await fetch('/api/logs?delay=400', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reqs: [{ id: '0', path: ${js(TARGET)}, offset: 0 }] }) });
+    const headersAt = performance.now();
+    /* Nothing is delivered while the body is still on its way. */
+    const early = window.__profile.deliveryFor(${js(TARGET)}, 0);
+    if (early !== null) return { headersAt, parsedAt: headersAt, delivery: { ...early, early: true } };
+    await response.json();
+    const parsedAt = performance.now();
+    return { headersAt, parsedAt, delivery: window.__profile.deliveryFor(${js(TARGET)}, 0) };
+  })()`);
+  expect(seen.delivery?.via).toBe("poll");
+  expect(seen.delivery!.at).toBeGreaterThanOrEqual(seen.headersAt + 300);
+  expect(seen.delivery!.at).toBeLessThanOrEqual(seen.parsedAt + 1);
+}, 30_000);
+
+/** A pane that CLIPS, the way every transcript scroller does, holding one row
+    laid out entirely below what the pane shows. On the phone surface the pane
+    is the focused one, so only the clipping keeps the row out of sight. */
+const CLIPPED_PANE = (surface: Surface) => `(() => {
+  document.getElementById('target').remove();
+  document.getElementById('other').remove();
+  const pane = document.createElement('div');
+  pane.setAttribute('data-link-path', ${js(TARGET)});
+  pane.style.cssText = 'height:40px;overflow:hidden';
+  pane.innerHTML = '<div data-feed-kind="prose" style="height:40px;margin-top:100px">target row</div>';
+  if (${js(surface)} === 'phone') {
+    const focused = document.createElement('div');
+    focused.setAttribute('data-testid', 'mobile-focused-pane');
+    focused.appendChild(pane);
+    document.body.appendChild(focused);
+  } else document.body.appendChild(pane);
+  const row = pane.firstElementChild.getBoundingClientRect();
+  const box = pane.getBoundingClientRect();
+  return { pane: [box.top, box.bottom], row: [row.top, row.bottom] };
+})()`;
+
+for (const surface of ["desktop", "phone"] as const) {
+  browserTest(`a row its scrolling pane clips entirely out of sight is never painted, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await assertViewport(page, surface);
+    const layout = await page.evaluate<{ pane: number[]; row: number[] }>(CLIPPED_PANE(surface));
+    /* The row is inside the viewport and wholly below the 40px the pane shows. */
+    expect(layout.pane).toEqual([0, 40]);
+    expect(layout.row).toEqual([100, 140]);
+    expect(await page.evaluate<number>(`window.__profile.rows(${js(TARGET)})`)).toBe(1);
+    expect(await page.evaluate<number>(`window.__profile.visibleRows(${js(TARGET)}, ${js(surface)})`)).toBe(0);
+    const clipped = await page.evaluate<string>(outcome(`p.paintedAt(() => p.targetPainted(${js(TARGET)}, ${js(surface)}), 700)`));
+    expect(clipped).toStartWith("rejected:milestone not reached");
+
+    /* Scrolled into what the pane shows, the same row is a confirmed milestone. */
+    const scrolled = await page.evaluate<string>(outcome(`(() => {
+      setTimeout(() => { document.querySelector('[data-link-path=${js(TARGET)}]').scrollTop = 100; }, 100);
+      return p.paintedAt(() => p.targetPainted(${js(TARGET)}, ${js(surface)}), 5000);
+    })()`));
+    expect(scrolled).toStartWith("resolved:");
+    expect((JSON.parse(scrolled.slice("resolved:".length)) as { rafConfirmed: boolean }).rafConfirmed).toBe(true);
+  }, 30_000);
+}
+
+/* ── the appended-row milestone (revalidation after a reopen) ─────────────── */
+
+const MARKER = "Fresh tail record probe.";
+
+/** The target's pane, shown or not, focused on the phone or not, with one
+    existing row; the neighbour's pane beside it. */
+const APPEND_PAGE = (options: { surface: Surface; focus?: "target" | "other" }) => `(() => {
+  document.body.innerHTML = '';
+  const make = (path, text) => {
+    const el = document.createElement('div');
+    el.setAttribute('data-link-path', path);
+    el.innerHTML = '<div data-feed-kind="prose" data-feed-key="k0" style="height:40px">' + text + '</div>';
+    return el;
+  };
+  const target = make(${js(TARGET)}, 'target row');
+  target.id = 'target';
+  const other = make(${js(OTHER)}, 'other row');
+  other.id = 'other';
+  if (${js(options.surface)} === 'phone') {
+    const focused = document.createElement('div');
+    focused.setAttribute('data-testid', 'mobile-focused-pane');
+    const inFocus = ${js(options.focus ?? "target")} === 'target' ? target : other;
+    focused.appendChild(inFocus);
+    document.body.appendChild(focused);
+    document.body.appendChild(inFocus === target ? other : target);
+  } else {
+    document.body.appendChild(target);
+    document.body.appendChild(other);
+  }
+  return 1;
+})()`;
+
+/** Append a row carrying the marker to `pane` after `delayMs`. */
+const appendLater = (pane: "target" | "other", delayMs: number) => `setTimeout(() => {
+  const row = document.createElement('div');
+  row.setAttribute('data-feed-kind', 'prose');
+  row.setAttribute('data-feed-key', 'k1');
+  row.style.height = '40px';
+  row.textContent = ${js(MARKER)};
+  document.getElementById(${js(pane)}).appendChild(row);
+}, ${delayMs})`;
+
+for (const surface of ["desktop", "phone"] as const) {
+  browserTest(`an appended row under a hidden target pane is never the revalidation milestone, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await page.evaluate(APPEND_PAGE({ surface }));
+    /* Armed on a pane a reader sees; the pane is hidden as the row lands. */
+    const result = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      setTimeout(() => { document.getElementById('target').style.display = 'none'; }, 40);
+      ${appendLater("target", 50)};
+      return p.appendedAt(700);
+    })()`));
+    expect(result).toStartWith("rejected:milestone not reached");
+    /* The same row count condition the profiler used to time resolves here. */
+    expect(await page.evaluate<number>(`window.__profile.rows(${js(TARGET)})`)).toBe(2);
+  }, 30_000);
+
+  browserTest(`an appended row no animation frame confirms is rejected, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await page.evaluate(APPEND_PAGE({ surface }));
+    const result = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      window.requestAnimationFrame = () => 0;
+      ${appendLater("target", 50)};
+      return p.appendedAt(5000);
+    })()`));
+    expect(result).toStartWith("rejected:milestone not confirmed");
+  }, 30_000);
+
+  browserTest(`the appended text landing in another conversation's pane is never the target's row, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await page.evaluate(APPEND_PAGE({ surface }));
+    const result = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      ${appendLater("other", 50)};
+      return p.appendedAt(700);
+    })()`));
+    expect(result).toStartWith("rejected:milestone not reached");
+  }, 30_000);
+
+  browserTest(`the appended row is timed through confirmed frames, keeping the first row node, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await assertViewport(page, surface);
+    await page.evaluate(APPEND_PAGE({ surface }));
+    const result = await page.evaluate<string>(outcome(`(() => {
+      const armed = p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      ${appendLater("target", 200)};
+      return p.appendedAt(5000).then((m) => ({ ...m, armed }));
+    })()`));
+    expect(result).toStartWith("resolved:");
+    const milestone = JSON.parse(result.slice("resolved:".length)) as { rafConfirmed: boolean; detectedMs: number; paintedMs: number; rows: number; visibleRows: number; appendedRows: number; firstRowPreserved: boolean; armed: { rows: number } };
+    expect(milestone.rafConfirmed).toBe(true);
+    expect(milestone.detectedMs).toBeGreaterThanOrEqual(195);
+    expect(milestone.paintedMs).toBeGreaterThan(milestone.detectedMs);
+    expect(milestone.armed.rows).toBe(1);
+    expect(milestone).toMatchObject({ rows: 2, visibleRows: 2, appendedRows: 1, firstRowPreserved: true });
+  }, 30_000);
+}
+
+browserTest("on the phone, a target that is not the focused conversation cannot be armed at all", async () => {
+  await setViewport(cdp!, "phone");
+  const page = await fresh();
+  await page.evaluate(APPEND_PAGE({ surface: "phone", focus: "other" }));
+  const result = await page.evaluate<string>(outcome(`p.armAppend(${js(TARGET)}, "phone", ${js(MARKER)})`));
+  expect(result).toStartWith("rejected:append armed with no active pane");
+}, 30_000);
+
+browserTest("an append cannot be armed while the pane's last row is below the fold, and can once the tail is revealed", async () => {
+  await setViewport(cdp!, "desktop");
+  const page = await fresh();
+  await page.evaluate(APPEND_PAGE({ surface: "desktop" }));
+  /* The board lays a pane out past the viewport's bottom edge. */
+  await page.evaluate(`(() => { document.getElementById('target').style.marginTop = '1200px'; return 1; })()`);
+  const refused = await page.evaluate<string>(outcome(`p.armAppend(${js(TARGET)}, "desktop", ${js(MARKER)})`));
+  expect(refused).toStartWith("rejected:append armed with the target pane's last row off screen");
+  expect(await page.evaluate<boolean>(`window.__profile.revealTail(${js(TARGET)}, "desktop")`)).toBe(true);
+  const armed = await page.evaluate<string>(outcome(`p.armAppend(${js(TARGET)}, "desktop", ${js(MARKER)})`));
+  expect(armed).toBe(`resolved:${JSON.stringify({ rows: 1, visibleRows: 1 })}`);
+}, 30_000);
+
+/* ── a scaled world: the desktop board scales its whole canvas ──────────────── */
+
+/** The target's pane inside a world scaled to half size, the way the desktop
+    board scales its canvas: a 100px-high clipping scroller with a 10px border
+    ends at viewport y=60 and clips its content at y=55. The rows' boxes are in
+    viewport space, the scroller's clientHeight is not, so a clip computed from
+    the two unconverted would reach y=110 and admit a row it hides. `rows` are
+    `[marginTop, key, text]` for each row, in layout pixels. */
+const SCALED_PANE = (surface: Surface, rows: Array<[number, string, string]>) => `(() => {
+  document.body.innerHTML = '';
+  const world = document.createElement('div');
+  world.style.cssText = 'transform:scale(.5);transform-origin:0 0';
+  const pane = document.createElement('div');
+  pane.id = 'target';
+  pane.setAttribute('data-link-path', ${js(TARGET)});
+  pane.style.cssText = 'height:100px;border:10px solid black;overflow:hidden';
+  pane.innerHTML = ${js(rows.map(([top, key, text]) => `<div data-feed-kind="prose" data-feed-key="${key}" style="height:40px;margin-top:${top}px">${text}</div>`).join(""))};
+  world.appendChild(pane);
+  if (${js(surface)} === 'phone') {
+    const focused = document.createElement('div');
+    focused.setAttribute('data-testid', 'mobile-focused-pane');
+    focused.appendChild(world);
+    document.body.appendChild(focused);
+  } else document.body.appendChild(world);
+  const box = pane.getBoundingClientRect();
+  return { pane: [box.top, box.bottom], rows: Array.from(pane.children).map((row) => { const r = row.getBoundingClientRect(); return [r.top, r.bottom]; }) };
+})()`;
+
+for (const surface of ["desktop", "phone"] as const) {
+  browserTest(`a row a SCALED pane clips out of sight is never painted, and is once scrolled into view, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await assertViewport(page, surface);
+    const layout = await page.evaluate<{ pane: number[]; rows: number[][] }>(SCALED_PANE(surface, [[120, "k0", "target row"]]));
+    /* The pane ends at y=60 on screen; the row sits wholly below its clip. */
+    expect(layout.pane).toEqual([0, 60]);
+    expect(layout.rows).toEqual([[65, 85]]);
+    expect(await page.evaluate<number>(`window.__profile.visibleRows(${js(TARGET)}, ${js(surface)})`)).toBe(0);
+    const clipped = await page.evaluate<string>(outcome(`p.paintedAt(() => p.targetPainted(${js(TARGET)}, ${js(surface)}), 700)`));
+    expect(clipped).toStartWith("rejected:milestone not reached");
+
+    const scrolled = await page.evaluate<string>(outcome(`(() => {
+      setTimeout(() => { document.getElementById('target').scrollTop = 100; }, 100);
+      return p.paintedAt(() => p.targetPainted(${js(TARGET)}, ${js(surface)}), 5000);
+    })()`));
+    expect(scrolled).toStartWith("resolved:");
+    expect((JSON.parse(scrolled.slice("resolved:".length)) as { rafConfirmed: boolean }).rafConfirmed).toBe(true);
+  }, 30_000);
+
+  browserTest(`an appended row a SCALED pane clips is not the revalidation milestone until revealed, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await assertViewport(page, surface);
+    await page.evaluate(SCALED_PANE(surface, [[0, "k0", "target row"]]));
+    /* Lands 80px below the existing row: layout 120..160, screen 65..85. */
+    const appendClipped = (delayMs: number) => `setTimeout(() => {
+      const row = document.createElement('div');
+      row.setAttribute('data-feed-kind', 'prose');
+      row.setAttribute('data-feed-key', 'k1');
+      row.style.cssText = 'height:40px;margin-top:80px';
+      row.textContent = ${js(MARKER)};
+      document.getElementById('target').appendChild(row);
+    }, ${delayMs})`;
+    const clipped = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      ${appendClipped(50)};
+      return p.appendedAt(700);
+    })()`));
+    expect(clipped).toStartWith("rejected:milestone not reached");
+    expect(await page.evaluate<number[]>(`(() => { const r = document.querySelector('[data-feed-key="k1"]').getBoundingClientRect(); return [r.top, r.bottom]; })()`)).toEqual([65, 85]);
+
+    /* The same append, then the pane scrolled to show it: a confirmed milestone. */
+    await page.evaluate(SCALED_PANE(surface, [[0, "k0", "target row"]]));
+    const revealed = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      ${appendClipped(50)};
+      setTimeout(() => { document.getElementById('target').scrollTop = 100; }, 250);
+      return p.appendedAt(5000);
+    })()`));
+    expect(revealed).toStartWith("resolved:");
+    const milestone = JSON.parse(revealed.slice("resolved:".length)) as { rafConfirmed: boolean; detectedMs: number; appendedRows: number };
+    expect(milestone.rafConfirmed).toBe(true);
+    expect(milestone.detectedMs).toBeGreaterThanOrEqual(245);
+    expect(milestone.appendedRows).toBe(1);
+  }, 30_000);
+}

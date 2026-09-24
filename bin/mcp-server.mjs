@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+/* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
+   environment (docs/design/rename-delegatus.md §5). */
+import "./envAlias.mjs";
+
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, fstatSync, readFileSync } from "node:fs";
@@ -7,6 +11,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { appDirIn } from "./appDir.mjs";
 import {
   discardWakatimeEnvironmentCredential,
   viewerChildProcessOptions,
@@ -23,7 +28,7 @@ function deployedPackageRoot() {
      HOME is not a Windows variable at all, and the fallback named a directory
      that exists on no machine running this. */
   const configRoot = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-  const stateDir = process.env.LLV_STATE_DIR || join(configRoot, "agent-log-viewer", "state");
+  const stateDir = process.env.LLV_STATE_DIR || join(appDirIn(configRoot), "state");
   const targetFile = process.env.LLV_VIEWER_DEPLOY_TARGET || join(stateDir, "viewer-release.json");
   let target;
   try {

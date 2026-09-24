@@ -20,20 +20,22 @@ Reuse `LLV_DEPLOY_IDEMPOTENCY_KEY` after a client timeout to receive the origina
 
 `POST /api/runtime/deployments` takes the same target two ways: `{"revision": "<full commit SHA>", "idempotencyKey": "..."}` pins a commit, and `{"ref": "refs/heads/<branch>", "idempotencyKey": "..."}` names a branch of the canonical repository, which the host adapter resolves in the canonical mirror. A request carrying both is refused. Only `refs/heads/*` of the canonical repository is accepted — no tags, no remote-tracking refs, no revision expressions. Whichever way the request named its target, the deployment ledger records the requested target and the exact resolved SHA that was built and promoted.
 
-The canonical remote defaults to `https://github.com/Latand/live-log-viewer-next.git` for both the adapter's mirror and `scripts/rebuild.sh`. Set `LLV_VIEWER_CANONICAL_REMOTE` when a different public or private mirror is required.
+The canonical remote defaults to `https://github.com/Latand/delegatus.git` for both the adapter's mirror and `scripts/rebuild.sh`. Set `LLV_VIEWER_CANONICAL_REMOTE` when a different public or private mirror is required.
 
 The runtime host serializes deployment requests and journals every phase before invoking the host adapter. Its stable listener reads `state/viewer-release.json` for each new connection, so promotion and rollback use an atomic target-file rename. Candidate and previous Viewer containers stay under Docker ownership on alternate loopback ports.
 
 Enable this mode only after the [bootstrap listener migration](docker.md#bootstrap-listener-ownership) has health-gated an alternate managed release, placed its identity in `state/viewer-release.json`, and freed `127.0.0.1:8898` for runtime-host:
 
 ```bash
+export DELEGATUS_CONFIG_DIR="$(bun scripts/app-config-dir.mjs)"
 export LLV_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
 LLV_RUNTIME_EVENTS=1 LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d runtime-host
 ```
 
 The runtime-host container uses UID/GID `1000:1000` by default and receives
 the Docker socket GID as a supplementary group. `LLV_UID`, `LLV_GID`,
-`LLV_TMUX_TMPDIR`, and `LLV_ENV_FILE` flow into nested Compose resolution so
+`LLV_TMUX_TMPDIR`, `LLV_ENV_FILE` and the app dir (`DELEGATUS_CONFIG_DIR`,
+passed on as `LLV_CONFIG_DIR`) flow into nested Compose resolution so
 candidate containers preserve supported host overrides. The Docker namespace
 shim restores the complete credential set before invoking the host CLI.
 

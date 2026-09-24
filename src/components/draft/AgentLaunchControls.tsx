@@ -5,9 +5,10 @@ import { useEffect, useState } from "react";
 import { ReasoningControls, type SpeedChoice } from "@/components/ReasoningControls";
 import { Select } from "@/components/ui/Select";
 import { engineTintOf } from "@/components/utils";
-import { effortScale } from "@/lib/agent/efforts";
+import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
 import { defaultModelFor } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
+import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 
 /**
  * THE shared «which agent am I launching» control set (PRD #976 slice A).
@@ -33,7 +34,7 @@ import { useLocale } from "@/lib/i18n";
  * its per-draft sessionStorage keys and a transient surface keeps nothing.
  */
 
-export type LaunchEngine = "claude" | "codex";
+export type LaunchEngine = "claude" | "codex" | "copilot";
 export type { SpeedChoice };
 
 /** Secret-free slice of one stored account that a launch selector needs. */
@@ -48,7 +49,19 @@ export type LaunchAccountCatalog = Record<LaunchEngine, { active: string; accoun
 const ENGINES: { key: LaunchEngine; label: string }[] = [
   { key: "claude", label: "Claude" },
   { key: "codex", label: "Codex" },
+  { key: "copilot", label: "Copilot" },
 ];
+
+/** The engines a surface offers when it names none: every surface launches
+    Claude and Codex. Copilot is offered only where a surface opts in — the
+    agent draft — because pipeline stages and orchestrator seats do not run it
+    yet (docs/design/copilot-engine.md, slice 4). */
+export const DEFAULT_LAUNCH_ENGINES: readonly LaunchEngine[] = ["claude", "codex"];
+export const AGENT_LAUNCH_ENGINES: readonly LaunchEngine[] = ["claude", "codex", "copilot"];
+
+export function launchEngineLabel(engine: LaunchEngine): string {
+  return ENGINES.find((entry) => entry.key === engine)?.label ?? engine;
+}
 
 /** Crash-safe read of one engine section of `/api/accounts`: a malformed body
     yields an empty section, which simply hides that engine's selector. */
@@ -67,8 +80,8 @@ export function launchAccountSection(raw: unknown): LaunchAccountCatalog[LaunchE
 
 /** Both engine sections of one `/api/accounts` body. */
 export function launchAccountCatalogOf(body: unknown): LaunchAccountCatalog {
-  const raw = body as { claude?: unknown; codex?: unknown } | null;
-  return { claude: launchAccountSection(raw?.claude), codex: launchAccountSection(raw?.codex) };
+  const raw = body as { claude?: unknown; codex?: unknown; copilot?: unknown } | null;
+  return { claude: launchAccountSection(raw?.claude), codex: launchAccountSection(raw?.codex), copilot: launchAccountSection(raw?.copilot) };
 }
 
 /**
@@ -161,7 +174,7 @@ export function useAgentLaunchDraft(options: {
 
   const [engine, setEngineState] = useState<LaunchEngine>(() => {
     const stored = read("engine");
-    if (stored === "codex" || stored === "claude") return stored;
+    if (stored === "codex" || stored === "claude" || stored === "copilot") return stored;
     return options.initialEngine ?? "claude";
   });
   const [model, setModelState] = useState(() => read("model") || options.initialModel || defaultModelFor(engine));
@@ -227,18 +240,21 @@ export function EngineRadioGroup({
   engine,
   disabled,
   roomy,
+  engines = DEFAULT_LAUNCH_ENGINES,
   onChange,
 }: {
   engine: LaunchEngine;
   disabled?: boolean;
   /** The 32px control step for surfaces that give the draft its own column. */
   roomy?: boolean;
+  /** The engines this surface can launch; Claude and Codex unless it opts in. */
+  engines?: readonly LaunchEngine[];
   onChange: (engine: LaunchEngine) => void;
 }) {
   const { t } = useLocale();
   return (
     <div className="flex shrink-0 items-center gap-1" role="radiogroup" aria-label={t("draft.engineAria")}>
-      {ENGINES.map(({ key, label }) => {
+      {ENGINES.filter(({ key }) => engines.includes(key)).map(({ key, label }) => {
         const active = engine === key;
         const chip = engineTintOf(key);
         return (
@@ -287,7 +303,7 @@ export function LaunchAccountSelect({
       roomy={roomy}
       className={className}
       onChange={(event) => draft.setAccountId(event.target.value)}
-      aria-label={t("draft.accountAria", { engine: draft.engine === "codex" ? "Codex" : "Claude" })}
+      aria-label={t("draft.accountAria", { engine: launchEngineLabel(draft.engine) })}
     >
       {draft.accounts.map((account) => (
         /* The engine's active account is the default for future launches; a
@@ -321,6 +337,37 @@ export function AgentLaunchControls({
   stacked?: boolean;
 }) {
   const { t } = useLocale();
+  const catalogAccountId = draft.launchAccountId || draft.activeAccountId;
+  const [copilotModels, setCopilotModels] = useState<CopilotModelEntry[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (draft.engine !== "copilot" || !catalogAccountId) { setCopilotModels(null); return; }
+    setCopilotModels(null);
+    void fetch(`/api/accounts/copilot/models?account=${encodeURIComponent(catalogAccountId)}`)
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const body = await response.json() as { models?: unknown };
+        if (Array.isArray(body.models)) {
+          const models = body.models.filter((item): item is CopilotModelEntry => Boolean(item)
+            && typeof item === "object" && typeof (item as CopilotModelEntry).id === "string"
+            && typeof (item as CopilotModelEntry).name === "string");
+          registerCopilotEffortScales(models);
+          setCopilotModels(models);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [draft.engine, catalogAccountId]);
+  useEffect(() => {
+    if (draft.engine !== "copilot" || !copilotModels?.length) return;
+    if (!copilotModels.some((model) => model.id === draft.model)) {
+      draft.setModel("auto");
+      if (draft.effort) draft.setEffort("");
+      return;
+    }
+    const selected = copilotModels.find((model) => model.id === draft.model);
+    if (draft.effort && selected?.efforts && !selected.efforts.includes(draft.effort)) draft.setEffort("");
+  }, [draft.engine, draft.model, draft.effort, copilotModels, draft.setModel, draft.setEffort]);
   if (!stacked) {
     return (
       <div className="flex flex-wrap items-center gap-1.5">
@@ -335,6 +382,7 @@ export function AgentLaunchControls({
           onModel={draft.setModel}
           onEffort={draft.setEffort}
           onSpeed={draft.setSpeed}
+          copilotModels={draft.engine === "copilot" ? copilotModels : undefined}
         />
       </div>
     );
@@ -361,6 +409,7 @@ export function AgentLaunchControls({
             onModel={draft.setModel}
             onEffort={draft.setEffort}
             onSpeed={draft.setSpeed}
+            copilotModels={draft.engine === "copilot" ? copilotModels : undefined}
           />
         </div>
       </Field>

@@ -23,6 +23,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import {
   candidateLogExcerpt,
   hasViewerDeploymentCapability,
+  promotedViewerReadinessPhase,
   probeExcerpt,
   viewerDeploymentRegistryBackendMode,
   viewerDeploymentReleaseReady,
@@ -146,7 +147,8 @@ test("deployment capability requires the candidate-owned versioned endpoint", as
   expect(hasViewerDeploymentCapability(200, JSON.stringify({ deployments: [] }))).toBe(false);
   expect(response.status).toBe(200);
   expect(hasViewerDeploymentCapability(response.status, body)).toBe(true);
-  expect(viewerDeploymentRegistryBackendMode(response.status, body)).toBe("off");
+  /* No mode configured: the registry's default is SQLite (#1870). */
+  expect(viewerDeploymentRegistryBackendMode(response.status, body)).toBe("sqlite");
   expect(viewerDeploymentRegistryBackendMode(200, JSON.stringify({
     capability: "viewer-deployments",
     version: 1,
@@ -204,12 +206,15 @@ test("issue 1268: a failed structured-host adoption pass makes the serving Viewe
       completedHosts: 7,
       totalHosts: 19,
     });
-    markStructuredHostStartupFailed();
+    markStructuredHostStartupFailed("runtime-host-unavailable");
 
     const response = deploymentCapability();
+    const body = await response.text();
+    const progress = viewerDeploymentStructuredHostStartup(response.status, body);
+    expect(promotedViewerReadinessPhase(progress)).toContain("adopting Claude hosts - runtime-host-unavailable");
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
+    expect(JSON.parse(body)).toMatchObject({
       error: "structured host startup adoption is retrying after a failed pass",
       structuredDeliveryController: "ready",
       structuredHostStartup: {
@@ -217,6 +222,7 @@ test("issue 1268: a failed structured-host adoption pass makes the serving Viewe
         phase: "adopting Claude hosts",
         completedHosts: 7,
         totalHosts: 19,
+        failureCategory: "runtime-host-unavailable",
       },
     });
   } finally {

@@ -10,11 +10,13 @@ import { effectiveQuota, LIMITS_FRESHNESS_S, quotaAsEngineLimits, quotaReadingFr
 import { LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits, type LimitsPayload, type LimitsProvenance, type LimitWindow } from "@/lib/types";
 
 import { AccountsPanel } from "./AccountsPanel";
+import { CopilotFooterRow } from "./CopilotFooterRow";
 import { BurndownPanel } from "./BurndownPanel";
 import { TelegramFooterRow } from "./TelegramConnect";
 import { ChevronDown, Loader2 } from "./icons";
-import { formatQuotaAsOf, formatResetClock as fmtResetAt, formatResetEta as fmtEta, localeBcp47 as bcp47, windowLabel } from "./rateLimit";
+import { formatQuotaAsOf, localeBcp47 as bcp47, windowLabel } from "./rateLimit";
 import { engineTintOf, fmtAge } from "./utils";
+import { barColor, LimitRow } from "./LimitRow";
 
 const POLL_MS = 60_000;
 
@@ -41,62 +43,14 @@ export function fmtLimitsFailureReason(meta: LimitsProvenance, locale: Locale): 
 }
 
 /** Bar keeps the engine identity color while there is headroom, then warns. */
-function barColor(leftPercent: number, engineColor: string): string {
-  if (leftPercent <= 10) return "var(--color-danger)";
-  if (leftPercent <= 30) return "var(--color-warning)";
-  return engineColor;
-}
-
-function LimitRow({
-  label,
-  window: w,
-  engineColor,
-  now,
-  staleHint,
-}: {
-  label: string;
-  window: LimitWindow | null;
-  engineColor: string;
-  now: number;
-  staleHint?: string | null;
-}) {
-  const { t } = useLocale();
-  if (!w) return null;
-  const left = Math.max(0, Math.min(100, 100 - w.usedPercent));
-  const color = barColor(left, engineColor);
-  return (
-    <div className="mt-1.5">
-      <div className="flex items-baseline justify-between">
-        <span className="text-[11px] font-semibold text-primary">{label}</span>
-        <span className="text-[11px] text-muted">
-          {t("limits.left")} <span className={`font-bold tabular-nums ${left <= 30 ? "" : "text-primary"}`} style={left <= 30 ? { color } : undefined}>{Math.round(left)}%</span>
-        </span>
-      </div>
-      <div className="mt-1 h-[4px] overflow-hidden rounded-full bg-sunken">
-        <div
-          className="h-full rounded-full transition-[width] duration-700 ease-out"
-          style={{ width: Math.max(left, 1.5) + "%", backgroundColor: color }}
-        />
-      </div>
-      {w.resetsAt || staleHint ? (
-        <div className="mt-[3px] text-[10px] leading-none text-muted">
-          {w.resetsAt ? t("limits.reset", { eta: fmtEta(w.resetsAt, now), at: fmtResetAt(w.resetsAt, now) }) : null}
-          {w.resetsAt && staleHint ? " · " : null}
-          {staleHint}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 /** True only when both payloads name a Codex account and the id changed. A
     freshly added account has no transcripts, so its payload arrives with
     `codex: null`; without this guard the sticky merge would carry the previous
     account's percentages forward under the new account's name. */
-function accountChanged(previous: LimitsPayload | null, next: LimitsPayload, engine: "claude" | "codex"): boolean {
+function accountChanged(previous: LimitsPayload | null, next: LimitsPayload, engine: "claude" | "codex" | "copilot"): boolean {
   if (!previous) return false;
-  const prevId = engine === "claude" ? previous.claudeAccountId ?? null : previous.codexAccountId ?? null;
-  const nextId = engine === "claude" ? next.claudeAccountId ?? null : next.codexAccountId ?? null;
+  const prevId = engine === "claude" ? previous.claudeAccountId ?? null : engine === "codex" ? previous.codexAccountId ?? null : previous.copilotAccountId ?? null;
+  const nextId = engine === "claude" ? next.claudeAccountId ?? null : engine === "codex" ? next.codexAccountId ?? null : next.copilotAccountId ?? null;
   if (prevId === null || nextId === null) return false;
   return prevId !== nextId;
 }
@@ -104,13 +58,16 @@ function accountChanged(previous: LimitsPayload | null, next: LimitsPayload, eng
 export function stickyPayload(previous: LimitsPayload | null, next: LimitsPayload): LimitsPayload {
   const claudeChanged = accountChanged(previous, next, "claude");
   const codexChanged = accountChanged(previous, next, "codex");
+  const copilotChanged = accountChanged(previous, next, "copilot");
   return {
     claude: claudeChanged ? next.claude : (next.claude ?? previous?.claude ?? null),
     // A switch clears the prior account's values. Same-account refreshes may
     // retain the last snapshot while provenance explains its freshness.
     codex: codexChanged ? next.codex : (next.codex ?? previous?.codex ?? null),
+    copilot: copilotChanged ? next.copilot : (next.copilot ?? previous?.copilot ?? null),
     claudeAccountId: next.claudeAccountId ?? previous?.claudeAccountId ?? null,
     codexAccountId: next.codexAccountId ?? previous?.codexAccountId ?? null,
+    copilotAccountId: next.copilotAccountId ?? previous?.copilotAccountId ?? null,
     provenance: next.provenance,
     staleSince: next.staleSince ?? null,
   };
@@ -363,7 +320,7 @@ function EngineLimitsBlock({
             {quota.tiers.map((tier) => (
               <LimitRow
                 key={tier.value.tier}
-                label={t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier) })}
+                label={t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })}
                 window={tier.value}
                 engineColor={tint.color}
                 now={now}
@@ -418,6 +375,14 @@ export function LimitsFooter() {
     <div className="shrink-0 border-t border-border empty:hidden">
       <EngineLimitsBlock engine="claude" label="Claude" limits={snap?.data.claude ?? null} payloadAccountId={snap?.data.claudeAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.claude ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} />
       <EngineLimitsBlock engine="codex" label="Codex" limits={snap?.data.codex ?? null} payloadAccountId={snap?.data.codexAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.codex ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} />
+      {/* GitHub Copilot accounts and their monthly transcript quota. */}
+      <CopilotFooterRow
+        limits={snap?.data.copilot ?? null}
+        limitsAccountId={snap?.data.copilotAccountId ?? null}
+        now={now}
+        provenance={snap?.data.provenance.copilot ?? { source: "unavailable", reason: null, staleSince: null }}
+        onChanged={invalidateLimits}
+      />
       {/* The personal Telegram connector row (issue #1059) sits beside the
           account controls; the entry point never disappears. */}
       <TelegramFooterRow />

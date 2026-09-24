@@ -49,7 +49,7 @@ export async function reconcileAccountMigrationCycle(
      leave the account panel without fresh limits readings. Migration
      decisions already consume the previous tick's durable observations, so
      ordering between the two is immaterial. */
-  const quotaTicks = Promise.all([quota.tick("claude"), quota.tick("codex")]);
+  const quotaTicks = Promise.all([quota.tick("claude"), quota.tick("codex"), quota.tick("copilot")]);
   try {
     await reconcileMigrations(provider, delivery, registry);
   } finally {
@@ -57,6 +57,8 @@ export async function reconcileAccountMigrationCycle(
   }
 }
 
+// Compatibility routing reads persisted membership only. Neither getter nor
+// setter may resolve a provider catalog or credentials inside this lease.
 export function syncCompatibilityRouting(registry: AgentRegistry): void {
   const current = registry.readOnlySnapshot().engineRouting;
   const claudeNeedsSync = (() => {
@@ -241,33 +243,37 @@ export class AccountMigrationController {
 const globalController = globalThis as unknown as {
   __llvAccountMigrationController?: AccountMigrationController;
   __llvAccountMigrationFastController?: AccountMigrationController;
-  __llvAccountMigrationTimer?: ReturnType<typeof setInterval>;
-  __llvAccountMigrationInitialTimer?: ReturnType<typeof setTimeout>;
-  __llvAccountMigrationBootstrapStarted?: boolean;
+  __llvAccountMigrationStopPolling?: () => void;
   __llvAccountMigrationInventoryWorker?: ChildProcess;
   __llvAccountMigrationInventoryWorkerRestart?: ReturnType<typeof setTimeout>;
 };
 
+/** Space inventory from completion so a slow pass always yields a full idle
+    interval, even when it ran longer than the polling period (#1983). */
+export function pollAccountMigrationInventory(
+  controller: Pick<AccountMigrationController, "poll">,
+  schedule: (run: () => void, delayMs: number) => () => void = (run, delayMs) => {
+    const timer = setTimeout(run, delayMs);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
+): () => void {
+  let stopped = false;
+  let cancel = () => {};
+  const run = () => {
+    void controller.poll().catch(error => {
+      console.error("[account migration controller] durable reconciliation tick failed", error);
+    }).finally(() => {
+      if (!stopped) cancel = schedule(run, CONTROLLER_INTERVAL_MS);
+    });
+  };
+  cancel = schedule(run, INITIAL_INVENTORY_DELAY_MS);
+  return () => { stopped = true; cancel(); };
+}
+
 function startInventoryController(registry: AgentRegistry, quota: QuotaController): void {
   const controller = globalController.__llvAccountMigrationController ??= new AccountMigrationController(registry, quota);
-  if (!globalController.__llvAccountMigrationTimer) {
-    const timer = setInterval(() => void controller.poll().catch((error) => {
-      console.error("[account migration controller] durable reconciliation tick failed", error);
-    }), CONTROLLER_INTERVAL_MS);
-    timer.unref?.();
-    globalController.__llvAccountMigrationTimer = timer;
-  }
-  if (!globalController.__llvAccountMigrationBootstrapStarted) {
-    globalController.__llvAccountMigrationBootstrapStarted = true;
-    const timer = setTimeout(() => {
-      globalController.__llvAccountMigrationInitialTimer = undefined;
-      void controller.poll().catch((error) => {
-        console.error("[account migration controller] initial inventory reconciliation failed", error);
-      });
-    }, INITIAL_INVENTORY_DELAY_MS);
-    timer.unref?.();
-    globalController.__llvAccountMigrationInitialTimer = timer;
-  }
+  globalController.__llvAccountMigrationStopPolling ??= pollAccountMigrationInventory(controller);
 }
 
 function inventoryWorkerLaunch(cwd = process.cwd()): { executable: string; workerPath: string } {

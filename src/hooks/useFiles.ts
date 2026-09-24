@@ -8,8 +8,13 @@ import { PIPELINES_CHANGED_EVENT, PIPELINES_PATCHED_EVENT } from "@/components/p
 import { SESSION_TITLES_CHANGED_EVENT } from "@/components/session/sessionTitleApi";
 import { TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
 import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
+import { FILES_BUILT_HEADER, filesBuiltBefore, filesBuiltSuperseded, parseFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
+import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, type FilesDelta } from "@/lib/filesDelta";
+import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
+import { FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, indexedDbFilesSnapshotStore, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
 import type { Flow } from "@/lib/flows/types";
+import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { TmuxEndpointHealth } from "@/lib/tmux";
@@ -28,6 +33,11 @@ const FILES_GENERATION_RETRY_MAX_MS = 1_000;
 /** Failed initial hydration: first retry, then doubling to the ceiling (#696). */
 const FILES_HYDRATE_RETRY_MS = 1_000;
 const FILES_HYDRATE_RETRY_MAX_MS = 30_000;
+/* A hidden desktop tab keeps its feed for the chimes and the title count, at
+   a slower cadence (#1994): revisions coalesce into one delta read at most
+   this often, and the fallback poll runs at most this often. */
+export const HIDDEN_REVISION_COALESCE_MS = 10_000;
+export const HIDDEN_POLL_MS = 30_000;
 
 export interface FilesData {
   files: FileEntry[];
@@ -51,6 +61,8 @@ export interface FilesData {
   conversationAliases: Record<string, string>;
   /** `spawn:<launchId>` → canonical conversation id (issue #569). */
   launchRoutes: Record<string, string>;
+  /** Resolved PR and issue links (#2059). */
+  workLinks: FilesWorkLinks;
   loaded: boolean;
   /** The rows above were fetched for exactly `requestScope`. False while a
       newly requested scope — a deep-link pin — is still loading and the
@@ -64,10 +76,25 @@ export interface FilesData {
       failed fetch, and the UI must say so instead of presenting the affirmative
       "nothing is running right now" / "No logs yet" idle copy. */
   catalogFailures: number;
+  /** The rows above are the last answer an earlier document certified,
+      restored from this browser's snapshot (#2071) and not yet confirmed by
+      the network in this one. `loaded` stays false meanwhile, so everything
+      that ACTS on data keeps waiting; only rendering reads `loaded || cached`. */
+  cached?: boolean;
+  /** While `catalogFailures` is above zero: when the first failure of this
+      streak happened, and when the last good answer landed (epoch ms, null
+      if none in this document). They date the reconnecting state (#2071);
+      both are absent while the catalog answers. */
+  failingSince?: number;
+  lastSuccessAt?: number | null;
+  /** The scan generation the server built these rows from, as it said with
+      them (#2072). Every paint records it; nothing older than what is on
+      screen is painted, so a board that went back in time shows here. */
+  builtGeneration?: number;
 }
 
 const HEALTHY_SYSTEM = { tmux: { status: "healthy" as const } };
-const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, loaded: false, scopeCertified: false, catalogFailures: 0 };
+const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: false, scopeCertified: false, catalogFailures: 0 };
 
 export function filesApiUrl(_project?: string | null, pinnedPath?: string | null): string {
   const params: string[] = ["view=summary"];
@@ -79,13 +106,29 @@ export function filesApiUrl(_project?: string | null, pinnedPath?: string | null
 }
 
 type FilesFetcher = (input: string, init?: RequestInit) => Promise<Response>;
+/** The server's own representation, exactly as certified by its ETag — what a
+    delta applies to. Rows are shared with the published snapshot. */
+type RawFilesResponse = Record<string, unknown>;
+type Representation = {
+  data: FilesData;
+  etag?: string;
+  raw?: RawFilesResponse;
+  /** What the server built `data` from (#2072). A 304 re-dates it: the same
+      body confirmed later is the same state as of later. */
+  built?: FilesBuilt;
+  /** This scope's rows while `data` is older than the screen, kept for as
+      long as neither side moves. */
+  forward?: { base: FilesData; data: FilesData };
+};
 type CompletionRetry = {
   pinnedPath?: string | null;
   revision?: number;
   targetGeneration: number;
   logicalGeneration: number;
   attempt: number;
-  phase: "scheduled" | "queued" | "active" | "canceled";
+  /** `parked`: the tab is hidden. The retry keeps its target generation,
+      pin and attempt, and is rescheduled when the tab is shown (#1994). */
+  phase: "scheduled" | "queued" | "active" | "parked" | "canceled";
   timer?: ReturnType<typeof setTimeout>;
   controller?: AbortController;
 };
@@ -94,7 +137,7 @@ export interface FilesClientCache {
   read(): FilesData;
   /** Return only the representation previously certified for this request URL. */
   readScope(pinnedPath?: string | null): FilesData;
-  revalidate(pinnedPath?: string | null, revision?: number): Promise<FilesData>;
+  revalidate(pinnedPath?: string | null, revision?: number, signal?: AbortSignal): Promise<FilesData>;
   subscribe(
     listener: (data: FilesData, priority?: "background" | "urgent") => void,
     pinnedPath?: string | null,
@@ -107,6 +150,10 @@ export interface FilesClientCache {
   /** Drop a local overlay (a failed optimistic mutation) — the server snapshot
       is authoritative again. */
   revertPipeline(id: string): void;
+  /** Layer one task row over the server snapshot without a refetch (#1836).
+      Held only until a scan requested after the apply carries the row, exactly
+      as a confirmed pipeline echo is. */
+  applyTask(task: BoardTask): void;
   /** Layer a freshly admitted launch conversation (the client-built
       `spawn:<launchId>` card, issue #919) over the server snapshot without a
       refetch, so the board renders the live window the moment the spawn receipt
@@ -115,6 +162,18 @@ export interface FilesClientCache {
       stale or reconnecting feed can only delay the confirmation, never orphan
       the launch. */
   applySpawnedConversation(file: FileEntry): void;
+  /** Paint an answer an earlier document certified (#2071): published as
+      `cached` and remembered under its ETag, so the first request of this
+      document is conditional. Ignored once anything has loaded. */
+  hydrate(record: { etag: string; text: string }): boolean;
+  /** The global scope's representation, when the network certified it in
+      this document: what the snapshot store keeps. */
+  certifiedGlobal(): { etag: string; raw: Record<string, unknown> } | null;
+  /** The tab hid: abort completion retries in flight and park every retry
+      chain until {@link resumeCompletionRetries}. Idempotent. */
+  pauseCompletionRetries(): void;
+  /** The tab is visible again: reschedule every parked retry chain. */
+  resumeCompletionRetries(): void;
   /** Cancel owned retries and detach subscribers. A disposed cache is inert. */
   dispose(): void;
 }
@@ -123,15 +182,24 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+/** A completion retry that reached the network while the tab was hidden. Not
+    a server failure, so it never counts against the catalog. */
+class ParkedRetry extends Error {
+  override name = "AbortError";
+}
+
 function equalValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function patchRows<T>(previous: readonly T[], incoming: readonly T[], keyOf: (value: T) => string): T[] {
+  if (previous === incoming) return previous as T[];
   const previousByKey = new Map(previous.map((value) => [keyOf(value), value] as const));
   const patched = incoming.map((value) => {
     const cached = previousByKey.get(keyOf(value));
-    return cached !== undefined && equalValue(cached, value) ? cached : value;
+    /* A delta carries unchanged rows over by reference; only the rows it
+       replaced need comparing. */
+    return cached !== undefined && (cached === value || equalValue(cached, value)) ? cached : value;
   });
   return patched.length === previous.length && patched.every((value, index) => value === previous[index])
     ? previous as T[]
@@ -140,7 +208,7 @@ function patchRows<T>(previous: readonly T[], incoming: readonly T[], keyOf: (va
 
 function parsedFilesData(parsed: FilesResponse | FileEntry[], requestScope: string): FilesData {
   if (Array.isArray(parsed)) {
-    return { files: parsed, pinOverlayPaths: [], requestScope, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, loaded: true, scopeCertified: true, catalogFailures: 0 };
+    return { files: parsed, pinOverlayPaths: [], requestScope, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: true, scopeCertified: true, catalogFailures: 0 };
   }
   return {
     files: parsed.files ?? [],
@@ -159,6 +227,7 @@ function parsedFilesData(parsed: FilesResponse | FileEntry[], requestScope: stri
     systemHealth: parsed.systemHealth ?? HEALTHY_SYSTEM,
     conversationAliases: parsed.conversationAliases ?? {},
     launchRoutes: parsed.launchRoutes ?? {},
+    workLinks: parsed.workLinks ?? EMPTY_FILES_WORK_LINKS,
     loaded: true,
     scopeCertified: true,
     catalogFailures: 0,
@@ -191,7 +260,23 @@ function patchFilesData(previous: FilesData, incoming: FilesData): FilesData {
     launchRoutes: equalValue(previous.launchRoutes, incoming.launchRoutes)
       ? previous.launchRoutes
       : incoming.launchRoutes,
+    workLinks: equalValue(previous.workLinks, incoming.workLinks) ? previous.workLinks : incoming.workLinks,
   };
+}
+
+/** The rows of `own` that `owned` names and `base` lacks: a scope's own pin
+    rows, laid on top of newer rows (#2072). */
+function missingPinRows(base: FilesData, own: FilesData, owned: ReadonlySet<string>): FileEntry[] {
+  if (!owned.size) return [];
+  const present = new Set(base.files.map((file) => file.path));
+  return own.files.filter((file) => owned.has(file.path) && !present.has(file.path));
+}
+
+/** The stamp a 304 leaves on the representation it confirms: the later of the
+    two when they count in one epoch, else the server's. */
+function confirmedBuilt(header: FilesBuilt | undefined, stored: FilesBuilt | undefined): FilesBuilt | undefined {
+  if (!header) return stored;
+  return stored && filesBuiltBefore(header, stored) ? stored : header;
 }
 
 /** Restore the exact URL-specific representation certified by a strong ETag.
@@ -202,10 +287,13 @@ function restoreNotModified(current: FilesData, representation: FilesData, reque
 }
 
 /** Session-wide stale-while-revalidate cache over the global scan snapshot. */
-export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache {
+export function createFilesClientCache(
+  fetcher: FilesFetcher,
+  hooks: { accessDenied?: () => void } = {},
+): FilesClientCache {
   let snapshot = EMPTY;
   let disposed = false;
-  const representations = new Map<string, { data: FilesData; etag?: string }>();
+  const representations = new Map<string, Representation>();
   const listeners = new Map<
     (data: FilesData, priority?: "background" | "urgent") => void,
     string
@@ -213,6 +301,10 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
   const completionRetries = new Map<string, CompletionRetry>();
   let requestedGeneration = 0;
   let appliedGeneration = 0;
+  /* What the server built `snapshot` from (#2072). An answer built from
+     earlier state, in any scope, paints nothing: the board only moves
+     forward. Unknown means nothing to compare against. */
+  let shownBuilt: FilesBuilt | undefined;
   let requestQueue: Promise<void> = Promise.resolve();
   /* Locally patched pipelines (issue #221 instant stage mutations): each entry
      shadows the server row until a scan that was REQUESTED after the mutation
@@ -220,6 +312,13 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
      roll an applied edit back. `pipeline: null` hides a locally deleted draft. */
   const pipelineOverlays = new Map<string, { pipeline: Pipeline | null; minGeneration: number }>();
   let serverPipelines: readonly Pipeline[] = EMPTY.pipelines;
+  /* Task rows the client learned of outside the scan (#1836): a lane the
+     server admitted and pushed with an attention request, whose card the
+     board must draw before the fourteen-second corpus scan carries it. Same
+     lifetime rule as a confirmed pipeline echo — the first complete scan
+     requested after the apply is authoritative and retires the row. */
+  const taskOverlays = new Map<string, { task: BoardTask; minGeneration: number }>();
+  let serverTasks: readonly BoardTask[] = EMPTY.tasks;
   /* Freshly admitted launch conversations (issue #919), keyed by their
      `spawn:<launchId>` path. Composed under the server rows: any row the server
      carries for the same path or the same conversation wins, so the transcript
@@ -233,9 +332,21 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
      snapshot rather than inside it: a failure produces no new representation,
      so it has to be composed onto whatever each scope last certified. */
   let catalogFailures = 0;
+  let failingSince: number | undefined;
+  /* Kept silently on every success, published only once failures start, so a
+     healthy poll never re-renders anything for it. */
+  let lastSuccessAt: number | null = null;
 
-  const withCatalogFailures = (data: FilesData): FilesData =>
-    data.catalogFailures === catalogFailures ? data : { ...data, catalogFailures };
+  const withCatalogFailures = (data: FilesData): FilesData => {
+    if (catalogFailures === 0) {
+      return data.catalogFailures === 0 && data.failingSince === undefined
+        ? data
+        : { ...data, catalogFailures: 0, failingSince: undefined, lastSuccessAt: undefined };
+    }
+    return data.catalogFailures === catalogFailures && data.failingSince === failingSince
+      ? data
+      : { ...data, catalogFailures, failingSince, lastSuccessAt };
+  };
 
   const pipelinesWithOverlays = (pipelines: readonly Pipeline[]): Pipeline[] => {
     if (!pipelineOverlays.size) return [...pipelines];
@@ -252,11 +363,32 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     return composed;
   };
 
-  const withPipelineOverlays = (data: FilesData): FilesData => (pipelineOverlays.size
-    ? { ...data, pipelines: pipelinesWithOverlays(data.pipelines) }
-    /* No overlay: the representation itself is the answer, identity intact,
-       so a consumer reading an unchanged scope sees an unchanged object. */
-    : data);
+  const tasksWithOverlays = (tasks: readonly BoardTask[]): BoardTask[] => {
+    if (!taskOverlays.size) return [...tasks];
+    const seen = new Set<string>();
+    const composed = tasks.map((task) => {
+      const entry = taskOverlays.get(task.id);
+      if (!entry) return task;
+      seen.add(task.id);
+      return entry.task;
+    });
+    for (const [id, entry] of taskOverlays) {
+      if (!seen.has(id)) composed.push(entry.task);
+    }
+    return composed;
+  };
+
+  const withPipelineOverlays = (data: FilesData): FilesData => {
+    /* No overlay of either kind: the representation itself is the answer,
+       identity intact, so a consumer reading an unchanged scope sees an
+       unchanged object. */
+    if (!pipelineOverlays.size && !taskOverlays.size) return data;
+    return {
+      ...data,
+      ...(pipelineOverlays.size ? { pipelines: pipelinesWithOverlays(data.pipelines) } : {}),
+      ...(taskOverlays.size ? { tasks: tasksWithOverlays(data.tasks) } : {}),
+    };
+  };
 
   const withSpawnedOverlays = (data: FilesData): FilesData => {
     if (!spawnedOverlays.size) return data;
@@ -286,26 +418,63 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
      (once for the id pin, once for the path pin), before the pinned fetch even
      landed. Memoised on the snapshot so an unchanged stand-in keeps its
      identity across renders. */
+  /* The newest rows without any pin: the global representation when it is
+     as new as the screen, else the snapshot minus the rows only ITS pin
+     admitted — a pin-only row belongs to the request that asked for it and
+     must never leak into another scope. Memoised on its sources. */
+  let unpinned: { snapshot: FilesData; global: FilesData | undefined; data: FilesData } | null = null;
+  const newestUnpinned = (): FilesData => {
+    const global = representations.get(filesApiUrl());
+    const globalData = global && !filesBuiltSuperseded(global.built, shownBuilt) ? global.data : undefined;
+    if (unpinned && unpinned.snapshot === snapshot && unpinned.global === globalData) return unpinned.data;
+    /* A restored snapshot stands in too, still flagged `cached`. */
+    const base = globalData ?? snapshot;
+    const pinOnly = new Set(base.pinOverlayPaths);
+    const data = pinOnly.size
+      ? { ...base, files: base.files.filter((file) => !pinOnly.has(file.path)), pinOverlayPaths: [] }
+      : base;
+    unpinned = { snapshot, global: globalData, data };
+    return data;
+  };
+
   let standIn: { source: FilesData; requestScope: string; data: FilesData } | null = null;
   const standInFor = (requestScope: string): FilesData => {
-    if (standIn && standIn.source === snapshot && standIn.requestScope === requestScope) return standIn.data;
-    /* The global representation is the natural stand-in. Failing that, the
-       snapshot minus the rows only ITS pin admitted: a pin-only row belongs to
-       the request that asked for it and must never leak into another scope. */
-    const base = representations.get(filesApiUrl())?.data ?? snapshot;
-    const pinOnly = new Set(base.pinOverlayPaths);
-    const files = pinOnly.size ? base.files.filter((file) => !pinOnly.has(file.path)) : base.files;
-    standIn = { source: snapshot, requestScope, data: { ...base, files, pinOverlayPaths: [], requestScope, scopeCertified: false } };
+    const base = newestUnpinned();
+    if (standIn && standIn.source === base && standIn.requestScope === requestScope) return standIn.data;
+    standIn = { source: base, requestScope, data: { ...base, pinOverlayPaths: [], requestScope, scopeCertified: false } };
     return standIn.data;
   };
 
-  const exactScopeRepresentation = (requestScope: string): FilesData => {
-    const representation = representations.get(requestScope)?.data
-      ?? (snapshot.requestScope === requestScope
-        ? snapshot
-        : snapshot.loaded ? standInFor(requestScope) : { ...EMPTY, requestScope });
-    return withCatalogFailures(withPipelineOverlays(withSpawnedOverlays(representation)));
+  /* A scope whose own representation is older than the screen (#2072) — the
+     conversation the phone opened minutes ago, or the board left while a pin
+     moved ahead — shows the newest rows, with its own pin-only rows on top.
+     Its old rows never come back. */
+  const forwardFor = (requestScope: string, own: Representation): FilesData => {
+    const base = newestUnpinned();
+    if (own.forward?.base === base) return own.forward.data;
+    const pinRows = missingPinRows(base, own.data, new Set(own.data.pinOverlayPaths));
+    const data = !pinRows.length && base.requestScope === requestScope
+      ? base
+      : {
+          ...base,
+          files: pinRows.length ? [...base.files, ...pinRows] : base.files,
+          pinOverlayPaths: pinRows.map((file) => file.path),
+          requestScope,
+          scopeCertified: own.data.scopeCertified,
+        };
+    own.forward = { base, data };
+    return data;
   };
+
+  const scopeRows = (requestScope: string): FilesData => {
+    const own = representations.get(requestScope);
+    if (own) return filesBuiltSuperseded(own.built, shownBuilt) ? forwardFor(requestScope, own) : own.data;
+    if (snapshot.requestScope === requestScope) return snapshot;
+    return snapshot.loaded || snapshot.cached ? standInFor(requestScope) : { ...EMPTY, requestScope };
+  };
+
+  const exactScopeRepresentation = (requestScope: string): FilesData =>
+    withCatalogFailures(withPipelineOverlays(withSpawnedOverlays(scopeRows(requestScope))));
 
   const exactScopeSnapshot = (pinnedPath?: string | null): FilesData =>
     exactScopeRepresentation(filesApiUrl(undefined, pinnedPath));
@@ -328,8 +497,11 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
      that lets a consumer tell a failed fetch from an idle installation. */
   const noteCatalogOutcome = (ok: boolean) => {
     if (disposed) return;
+    if (ok) lastSuccessAt = Date.now();
     const next = ok ? 0 : catalogFailures + 1;
     if (next === catalogFailures) return;
+    if (catalogFailures === 0) failingSince = Date.now();
+    if (next === 0) failingSince = undefined;
     catalogFailures = next;
     publish(undefined, "urgent");
   };
@@ -355,16 +527,25 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     snapshot = { ...snapshot, pipelines: pipelinesWithOverlays(serverPipelines) };
   };
 
+  const composeTasks = () => {
+    snapshot = { ...snapshot, tasks: tasksWithOverlays(serverTasks) };
+  };
+
   /** A completed server snapshot from `generation` reflects every overlay whose
       minGeneration it reaches — those overlays retire; younger ones re-apply. */
   const settleServerPipelines = (generation: number, complete: boolean) => {
     serverPipelines = snapshot.pipelines;
+    serverTasks = snapshot.tasks;
     if (complete) {
       for (const [id, entry] of pipelineOverlays) {
         if (entry.minGeneration <= generation) pipelineOverlays.delete(id);
       }
+      for (const [id, entry] of taskOverlays) {
+        if (entry.minGeneration <= generation) taskOverlays.delete(id);
+      }
     }
     if (pipelineOverlays.size) composePipelines();
+    if (taskOverlays.size) composeTasks();
   };
 
   const trimRepresentations = () => {
@@ -375,11 +556,42 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     }
   };
 
-  const rememberRepresentation = (url: string, data: FilesData, etag?: string) => {
+  const rememberRepresentation = (url: string, data: FilesData, etag?: string, raw?: RawFilesResponse, built?: FilesBuilt) => {
     representations.delete(url);
-    representations.set(url, { data, etag });
+    representations.set(url, { data, etag, raw, built });
     trimRepresentations();
   };
+
+  /* An answer built from older state than the screen paints nothing (#2072).
+     The scope keeps it as the server's representation — its ETag is what the
+     next conditional request names — and shows the newest rows with its own
+     pin rows; its listeners hear only if that changed what they see. */
+  const refuseOlder = (url: string, data: FilesData, etag: string | undefined, raw: RawFilesResponse | undefined, built: FilesBuilt | undefined): FilesData => {
+    const before = scopeRows(url);
+    const previous = representations.get(url);
+    rememberRepresentation(url, data, etag, raw, built);
+    /* A 304 confirming the same old rows keeps the view it already had. */
+    if (previous?.data === data && previous.forward) representations.get(url)!.forward = previous.forward;
+    const after = scopeRows(url);
+    if (after !== before && !disposed) {
+      for (const [listener, scope] of listeners) {
+        if (scope === url) listener(exactScopeRepresentation(url), "background");
+      }
+    }
+    return exactScopeRepresentation(url);
+  };
+
+  /* The raw representation keeps the published rows (JSON-equal to what the
+     server sent) instead of a second copy of every row. */
+  const rawSharingRows = (parsed: RawFilesResponse, data: FilesData): RawFilesResponse => ({
+    ...parsed,
+    ...(Array.isArray(parsed.files) ? { files: data.files } : {}),
+    ...(Array.isArray(parsed.projectCatalog) ? { projectCatalog: data.projectCatalog } : {}),
+    ...(Array.isArray(parsed.flows) ? { flows: data.flows } : {}),
+    ...(Array.isArray(parsed.pipelines) ? { pipelines: data.pipelines } : {}),
+    ...(Array.isArray(parsed.workflows) ? { workflows: data.workflows } : {}),
+    ...(Array.isArray(parsed.tasks) ? { tasks: data.tasks } : {}),
+  });
 
   const performRevalidate = async (
     pinnedPath?: string | null,
@@ -388,9 +600,20 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     logicalGeneration?: number,
     completionRetryAttempt = 0,
     completionRetry?: CompletionRetry,
+    signal?: AbortSignal,
   ): Promise<FilesData> => {
     try {
-      const result = await runRevalidate(pinnedPath, revision, requiredGeneration, logicalGeneration, completionRetryAttempt, completionRetry);
+      let result: FilesData;
+      try {
+        result = await runRevalidate(pinnedPath, revision, requiredGeneration, logicalGeneration, completionRetryAttempt, completionRetry, signal);
+      } catch (error) {
+        if (!(error instanceof FilesDeltaMismatch)) throw error;
+        /* The delta did not fit what this tab certified. Forget the base and
+           take one full representation instead of guessing. */
+        const stale = representations.get(filesApiUrl(undefined, pinnedPath));
+        if (stale) stale.raw = undefined;
+        result = await runRevalidate(pinnedPath, revision, requiredGeneration, logicalGeneration, completionRetryAttempt, completionRetry, signal);
+      }
       noteCatalogOutcome(true);
       return result;
     } catch (error) {
@@ -408,19 +631,25 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     logicalGeneration?: number,
     completionRetryAttempt = 0,
     completionRetry?: CompletionRetry,
+    externalSignal?: AbortSignal,
   ): Promise<FilesData> => {
     if (disposed) return snapshot;
     const url = filesApiUrl(undefined, pinnedPath);
     if (completionRetry) {
       if (!ownsCompletionRetry(url, completionRetry)) return snapshot;
+      /* Queued before the tab hid: park instead of fetching. */
+      if (hiddenTrafficSuspended()) throw new ParkedRetry("completion retry parked while hidden");
       completionRetry.phase = "active";
       completionRetry.controller = new AbortController();
     }
     const generation = ++requestedGeneration;
     const representation = representations.get(url);
-    const headers = filesRequestHeaders(representation?.etag ?? "", revision, requiredGeneration);
-    const init = headers || completionRetry?.controller
-      ? { ...(headers ? { headers } : {}), ...(completionRetry?.controller ? { signal: completionRetry.controller.signal } : {}) }
+    /* Only a tab holding the server's exact representation can apply a delta
+       to it; otherwise the conditional request asks for the whole body. */
+    const headers = filesRequestHeaders(representation?.etag ?? "", revision, requiredGeneration, Boolean(representation?.raw));
+    const signal = completionRetry?.controller?.signal ?? externalSignal;
+    const init = headers || signal
+      ? { ...(headers ? { headers } : {}), ...(signal ? { signal } : {}) }
       : undefined;
     let response: Response;
     try {
@@ -442,66 +671,118 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     if (response.status === 304) {
       if (!representation) throw new Error("files request returned 304 without a cached representation");
       if (generation < appliedGeneration) return snapshot;
+      /* A dated 304 is the server confirming this body as of its stamp; an
+         undated one (a generation wait) only echoes what the client held. */
+      const header = parseFilesBuilt(response.headers.get(FILES_BUILT_HEADER));
+      const built = confirmedBuilt(header, representation.built);
+      if (header ? filesBuiltBefore(built, shownBuilt) : filesBuiltSuperseded(built, shownBuilt)) {
+        const refused = refuseOlder(url, representation.data, representation.etag, representation.raw, built);
+        scheduleOrCancelCompletionRetry(generationIncomplete, completionTargetGeneration, url, pinnedPath, revision, logicalGeneration ?? generation, completionRetryAttempt, completionRetry);
+        return refused;
+      }
       const previousSnapshot = snapshot;
       if (snapshot !== representation.data || snapshot.requestScope !== url) {
         snapshot = restoreNotModified(snapshot, representation.data, url);
       }
+      /* The answer a restored snapshot carried is still the server's: the
+         same rows, now certified, identities kept (#2071). */
+      if (!snapshot.loaded || snapshot.cached) {
+        snapshot = { ...snapshot, loaded: true, cached: false, scopeCertified: true };
+      }
+      /* A dated 304 confirms these rows as of a later scan: the generation the
+         screen reports moves with the stamp it now holds. */
+      if (built && snapshot.builtGeneration !== built.generation) {
+        snapshot = { ...snapshot, builtGeneration: built.generation };
+      }
       appliedGeneration = generation;
-      rememberRepresentation(url, snapshot, representation.etag);
+      shownBuilt = built;
+      rememberRepresentation(url, snapshot, representation.etag, representation.raw, built);
       settleServerPipelines(logicalGeneration ?? generation, !generationIncomplete);
       // Generation-completion probes commonly return the same bodyless 304
       // for minutes while a large catalog scan is active. Keep React asleep
       // until the certified representation or a local pipeline overlay changes.
       if (snapshot !== previousSnapshot) publish(url);
-      if (generationIncomplete && completionTargetGeneration !== undefined) {
-        scheduleCompletionRetry(
-          url,
-          pinnedPath,
-          revision,
-          completionTargetGeneration,
-          logicalGeneration ?? generation,
-          completionRetryAttempt,
-          completionRetry,
-        );
-      } else {
-        cancelCompletionRetry(url);
-      }
+      scheduleOrCancelCompletionRetry(generationIncomplete, completionTargetGeneration, url, pinnedPath, revision, logicalGeneration ?? generation, completionRetryAttempt, completionRetry);
       return snapshot;
     }
+    /* A browser the server refuses must not keep painting what an earlier
+       document was served: the stored snapshot is cleared (`accessDenied`),
+       and a restored answer this document never certified leaves the screen. */
+    if (response.status === 401 || response.status === 403) {
+      hooks.accessDenied?.();
+      if (snapshot.cached) {
+        snapshot = { ...EMPTY };
+        shownBuilt = undefined;
+        representations.clear();
+        publish(undefined, "urgent");
+      }
+    }
     if (!response.ok) throw new Error(`files request failed: ${response.status}`);
-    const parsed = JSON.parse(await response.text()) as FilesResponse | FileEntry[];
+    const etag = response.headers.get("ETag");
+    const text = await response.text();
+    const deltaBase = response.headers.get(FILES_DELTA_BASE_HEADER);
+    let parsed: FilesResponse | FileEntry[];
+    if (deltaBase !== null) {
+      parsed = appliedDeltas(representation, deltaBase, etag, text) as unknown as FilesResponse;
+    } else {
+      parsed = JSON.parse(text) as FilesResponse | FileEntry[];
+    }
     if (completionRetry && !ownsCompletionRetry(url, completionRetry)) return snapshot;
     if (generation < appliedGeneration) return snapshot;
-    const incoming = parsedFilesData(parsed, url);
+    const built = parseFilesBuilt(response.headers.get(FILES_BUILT_HEADER));
+    const parsedData = parsedFilesData(parsed, url);
+    const incoming = built ? { ...parsedData, builtGeneration: built.generation } : parsedData;
+    if (filesBuiltBefore(built, shownBuilt)) {
+      const raw = Array.isArray(parsed) ? undefined : rawSharingRows(parsed as unknown as RawFilesResponse, incoming);
+      const refused = refuseOlder(url, incoming, etag ?? undefined, etag ? raw : undefined, built);
+      scheduleOrCancelCompletionRetry(generationIncomplete, completionTargetGeneration, url, pinnedPath, revision, logicalGeneration ?? generation, completionRetryAttempt, completionRetry);
+      return refused;
+    }
     retireConfirmedSpawnOverlays(incoming);
     /* A restarted server can acknowledge a pinned target generation with its
        global-only stale snapshot before the pin hydration resumes. Keep the
-       last URL-scoped completed representation mounted until that generation
-       supplies the target, so the deep-link owner retains its subscription. */
-    const scopedIncoming = generationIncomplete && pinnedPath
+       rows this scope's pin admitted mounted until that generation supplies
+       them, so the deep-link owner retains its subscription — on top of the
+       answer's own rows, which are the newest: the rest of the scope's last
+       representation never comes back (#2072). */
+    const keptPinRows = generationIncomplete && pinnedPath
       && representation?.data.files.some((file) => file.path === pinnedPath)
-      ? { ...representation.data, requestScope: url }
+      ? missingPinRows(incoming, representation.data, new Set([...representation.data.pinOverlayPaths, pinnedPath]))
+      : [];
+    const scopedIncoming = keptPinRows.length
+      ? {
+          ...incoming,
+          files: [...incoming.files, ...keptPinRows],
+          pinOverlayPaths: [...incoming.pinOverlayPaths, ...keptPinRows.map((file) => file.path)],
+        }
       : incoming;
     snapshot = patchFilesData(snapshot, scopedIncoming);
     appliedGeneration = generation;
-    const etag = response.headers.get("ETag");
-    rememberRepresentation(url, snapshot, etag ?? undefined);
+    shownBuilt = built;
+    const raw = Array.isArray(parsed) ? undefined
+      : scopedIncoming === incoming ? rawSharingRows(parsed as unknown as RawFilesResponse, snapshot) : parsed as unknown as RawFilesResponse;
+    rememberRepresentation(url, snapshot, etag ?? undefined, etag ? raw : undefined, built);
     settleServerPipelines(logicalGeneration ?? generation, !generationIncomplete);
     publish(url);
-    if (generationIncomplete && completionTargetGeneration !== undefined) {
-      scheduleCompletionRetry(
-        url,
-        pinnedPath,
-        revision,
-        completionTargetGeneration,
-        logicalGeneration ?? generation,
-        completionRetryAttempt,
-        completionRetry,
-      );
+    scheduleOrCancelCompletionRetry(generationIncomplete, completionTargetGeneration, url, pinnedPath, revision, logicalGeneration ?? generation, completionRetryAttempt, completionRetry);
+    return snapshot;
+  };
+
+  const scheduleOrCancelCompletionRetry = (
+    incomplete: boolean,
+    targetGeneration: number | undefined,
+    url: string,
+    pinnedPath: string | null | undefined,
+    revision: number | undefined,
+    logicalGeneration: number,
+    attempt: number,
+    owner?: CompletionRetry,
+  ) => {
+    if (incomplete && targetGeneration !== undefined) {
+      scheduleCompletionRetry(url, pinnedPath, revision, targetGeneration, logicalGeneration, attempt, owner);
     } else {
       cancelCompletionRetry(url);
     }
-    return snapshot;
   };
 
   const enqueueRevalidate = (
@@ -511,6 +792,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     logicalGeneration?: number,
     completionRetryAttempt?: number,
     completionRetry?: CompletionRetry,
+    signal?: AbortSignal,
   ): Promise<FilesData> => {
     if (disposed) return Promise.resolve(snapshot);
     const result = requestQueue.then(() => performRevalidate(
@@ -520,6 +802,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       logicalGeneration,
       completionRetryAttempt,
       completionRetry,
+      signal,
     ));
     requestQueue = result.then(() => undefined, () => undefined);
     return result;
@@ -566,6 +849,12 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     retry.attempt = attempt;
     retry.phase = "scheduled";
     if (!owner) completionRetries.set(url, retry);
+    /* A hidden tab owes this read but does not make it: the chain waits,
+       target and pin intact, for resumeCompletionRetries. */
+    if (hiddenTrafficSuspended()) {
+      retry.phase = "parked";
+      return;
+    }
     const delay = Math.min(
       FILES_GENERATION_RETRY_MAX_MS,
       FILES_GENERATION_RETRY_MS * 2 ** Math.min(attempt, 10),
@@ -574,6 +863,10 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       retry.timer = undefined;
       if (!ownsCompletionRetry(url, retry)) {
         cancelCompletionRetry(url);
+        return;
+      }
+      if (hiddenTrafficSuspended()) {
+        retry.phase = "parked";
         return;
       }
       retry.phase = "queued";
@@ -599,8 +892,37 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     }, delay);
   };
 
-  const revalidate = (pinnedPath?: string | null, revision?: number): Promise<FilesData> =>
-    enqueueRevalidate(pinnedPath, revision);
+  const pauseCompletionRetries = () => {
+    for (const retry of completionRetries.values()) {
+      if (retry.timer !== undefined) {
+        clearTimeout(retry.timer);
+        retry.timer = undefined;
+        retry.phase = "parked";
+      }
+      /* In flight: the abort settles through the chain's own catch, which
+         reschedules it and parks it there. */
+      retry.controller?.abort();
+    }
+  };
+
+  const resumeCompletionRetries = () => {
+    if (disposed) return;
+    for (const [url, retry] of [...completionRetries]) {
+      if (retry.phase !== "parked") continue;
+      scheduleCompletionRetry(
+        url,
+        retry.pinnedPath,
+        retry.revision,
+        retry.targetGeneration,
+        retry.logicalGeneration,
+        retry.attempt,
+        retry,
+      );
+    }
+  };
+
+  const revalidate = (pinnedPath?: string | null, revision?: number, signal?: AbortSignal): Promise<FilesData> =>
+    enqueueRevalidate(pinnedPath, revision, undefined, undefined, undefined, undefined, signal);
 
   const applyPipeline = (pipeline: Pipeline, confirmed: boolean) => {
     if (disposed) return;
@@ -624,6 +946,13 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     publish(undefined, "urgent");
   };
 
+  const applyTask = (task: BoardTask) => {
+    if (disposed) return;
+    taskOverlays.set(task.id, { task, minGeneration: requestedGeneration + 1 });
+    composeTasks();
+    publish(undefined, "urgent");
+  };
+
   const applySpawnedConversation = (file: FileEntry) => {
     if (disposed) return;
     spawnedOverlays.delete(file.path);
@@ -634,6 +963,33 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       spawnedOverlays.delete(oldest);
     }
     publish(undefined, "urgent");
+  };
+
+  const hydrate = (record: { etag: string; text: string }): boolean => {
+    const url = filesApiUrl();
+    if (disposed || snapshot.loaded || snapshot.cached || representations.has(url) || !record.etag) return false;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(record.text);
+    } catch {
+      return false;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    const data: FilesData = { ...parsedFilesData(parsed as FilesResponse, url), loaded: false, cached: true, scopeCertified: false };
+    snapshot = data;
+    serverPipelines = data.pipelines;
+    serverTasks = data.tasks;
+    rememberRepresentation(url, data, record.etag, rawSharingRows(parsed as RawFilesResponse, data));
+    publish(undefined, "urgent");
+    return true;
+  };
+
+  const certifiedGlobal = () => {
+    const representation = representations.get(filesApiUrl());
+    if (!representation?.data.loaded || representation.data.cached || !representation.etag || !representation.raw) return null;
+    /* The next document starts from what this one last showed, never older. */
+    if (filesBuiltSuperseded(representation.built, shownBuilt)) return null;
+    return { etag: representation.etag, raw: representation.raw };
   };
 
   const subscribe = (
@@ -657,15 +1013,91 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     listeners.clear();
   };
 
-  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applySpawnedConversation, dispose };
+  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
-let filesClientCache = createFilesClientCache(defaultFilesFetcher);
 
-export function resetFilesClientCacheForTests(): void {
+/* The cached-first board (#2071, D4). The browser's snapshot store is read the
+   moment this module loads, before React mounts; the first request waits for
+   that read (bounded), so it can ask conditionally. */
+const RESTORE_WAIT_MS = 1_500;
+let snapshotStore: FilesSnapshotStore | null = typeof window === "undefined" ? null : indexedDbFilesSnapshotStore();
+let persistedEtag: string | null = null;
+let persistScheduled = false;
+let firstPersistDone = false;
+
+function newFilesClientCache(): FilesClientCache {
+  return createFilesClientCache(defaultFilesFetcher, {
+    accessDenied: () => {
+      persistedEtag = null;
+      void snapshotStore?.clear();
+    },
+  });
+}
+
+function restoreFilesSnapshot(cache: FilesClientCache, store: FilesSnapshotStore | null): Promise<void> {
+  if (!store) return Promise.resolve();
+  const read = store.read().then((record) => {
+    if (!record) return;
+    if (cache.hydrate(record)) persistedEtag = record.etag;
+  }, () => undefined);
+  const bound = new Promise<void>((resolve) => setTimeout(resolve, RESTORE_WAIT_MS));
+  return Promise.race([read, bound]);
+}
+
+let filesClientCache = newFilesClientCache();
+let snapshotRestore = restoreFilesSnapshot(filesClientCache, snapshotStore);
+
+/** Write what this document certified, when it differs from what is stored. */
+function persistFilesSnapshot(): void {
+  const store = snapshotStore;
+  const current = filesClientCache.certifiedGlobal();
+  if (!store || !current || current.etag === persistedEtag) return;
+  let text: string;
+  try {
+    text = JSON.stringify(current.raw);
+  } catch {
+    return;
+  }
+  if (text.length > FILES_SNAPSHOT_MAX_BYTES) return;
+  persistedEtag = current.etag;
+  void store.write({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: current.etag, text });
+}
+
+/** After the first certified load of a document, on idle time: once. Later
+    answers are written when the tab hides (below), not on every revision. */
+function persistAfterFirstLoad(): void {
+  if (firstPersistDone || persistScheduled || !snapshotStore) return;
+  persistScheduled = true;
+  const run = () => {
+    persistScheduled = false;
+    firstPersistDone = true;
+    persistFilesSnapshot();
+  };
+  if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 5_000 });
+  else setTimeout(run, 1_000);
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") persistFilesSnapshot();
+  });
+}
+
+export function resetFilesClientCacheForTests(store: FilesSnapshotStore | null = null): void {
   filesClientCache.dispose();
-  filesClientCache = createFilesClientCache(defaultFilesFetcher);
+  snapshotStore = store;
+  persistedEtag = null;
+  persistScheduled = false;
+  firstPersistDone = false;
+  filesClientCache = newFilesClientCache();
+  snapshotRestore = restoreFilesSnapshot(filesClientCache, store);
+}
+
+/** Test seam: write the certified answer now instead of on idle or hide. */
+export function persistFilesSnapshotForTests(): void {
+  persistFilesSnapshot();
 }
 
 /**
@@ -678,6 +1110,17 @@ export function resetFilesClientCacheForTests(): void {
  */
 export function applyPipelineSnapshot(pipeline: Pipeline, confirmed: boolean): void {
   flushSync(() => filesClientCache.applyPipeline(pipeline, confirmed));
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(PIPELINES_PATCHED_EVENT));
+}
+
+/**
+ * Apply a task row the client learned of outside the scan — the record the
+ * server pushed with an attention request (#1836) — so the board draws its
+ * card in the same frame. The next complete scan is authoritative and retires
+ * the overlay; a row the server no longer carries goes away with it.
+ */
+export function applyTaskSnapshot(task: BoardTask): void {
+  flushSync(() => filesClientCache.applyTask(task));
   if (typeof window !== "undefined") window.dispatchEvent(new Event(PIPELINES_PATCHED_EVENT));
 }
 
@@ -698,6 +1141,35 @@ export function applySpawnedConversationSnapshot(file: FileEntry): void {
   flushSync(() => filesClientCache.applySpawnedConversation(file));
 }
 
+class FilesDeltaMismatch extends Error {}
+
+/** The server's representation after the deltas in `text`, applied to the
+    one this tab certified under `base`. */
+function appliedDeltas(
+  representation: Representation | undefined,
+  base: string,
+  etag: string | null,
+  text: string,
+): RawFilesResponse {
+  if (!representation?.raw || representation.etag !== base || !etag) {
+    throw new FilesDeltaMismatch("files delta does not apply to the certified representation");
+  }
+  try {
+    const { deltas } = JSON.parse(text) as { deltas: FilesDelta[] };
+    let raw = representation.raw;
+    let at = base;
+    for (const delta of deltas) {
+      if (delta.base !== at) throw new Error("files delta chain is broken");
+      raw = applyFilesDelta(raw, delta);
+      at = delta.etag;
+    }
+    if (at !== etag) throw new Error("files delta chain ends elsewhere");
+    return raw;
+  } catch (error) {
+    throw new FilesDeltaMismatch(error instanceof Error ? error.message : "files delta is unreadable");
+  }
+}
+
 function responseGeneration(response: Response, name: string): number | undefined {
   const value = response.headers.get(name);
   if (value === null || !/^\d+$/.test(value)) return undefined;
@@ -709,9 +1181,11 @@ export function filesRequestHeaders(
   etag: string,
   revision?: number,
   generation?: number,
+  acceptDelta = false,
 ): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
   if (etag) headers["If-None-Match"] = etag;
+  if (etag && acceptDelta) headers[FILES_DELTA_ACCEPT_HEADER] = "1";
   if (revision !== undefined) headers["x-llv-files-revision"] = String(revision);
   if (generation !== undefined) headers["x-llv-files-generation"] = String(generation);
   return Object.keys(headers).length > 0 ? headers : undefined;
@@ -726,7 +1200,13 @@ export function filesPollCadence(connection: "live" | "reconnecting" | "degraded
   return connection === "live" ? "live" : "poll";
 }
 
-/** Polls /api/files. Keeps the last good list on transient fetch errors. */
+/** Polls /api/files. Keeps the last good list on transient fetch errors.
+ *
+ * A hidden tab asks for nothing (#1994): the recurring poll, revision
+ * hydrations and failed-hydration retries wait, and a request in flight when
+ * the tab hides is cancelled. What they would have fetched is remembered, and
+ * the tab revalidates once — conditionally, usually as a delta — the moment it
+ * is visible again. */
 export function useFiles(_project?: string | null, pinnedPath?: string | null): FilesData {
   const [data, setData] = useState<FilesData>(() => filesClientCache.readScope(pinnedPath));
   const requestScope = filesApiUrl(undefined, pinnedPath);
@@ -749,13 +1229,28 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       }
       publishBackgroundData(next);
     }, pinnedPath);
+    /* Aborted when the tab hides, so a body still downloading for a board
+       nobody is looking at stops costing the phone. */
+    let inflight = new AbortController();
+    /* Work that came due while hidden and must run when the tab returns. */
+    let owedWhileHidden = false;
     const performLoad = async (revision?: number): Promise<boolean> => {
       if (!alive) return true;
+      if (hiddenTrafficSuspended()) {
+        owedWhileHidden = true;
+        return false;
+      }
       try {
-        await cache.revalidate(pinnedPath, revision);
+        /* The first request of a document asks conditionally when a snapshot
+           was restored; after that this has long settled. */
+        await snapshotRestore;
+        if (!alive) return true;
+        await cache.revalidate(pinnedPath, revision, inflight.signal);
+        persistAfterFirstLoad();
         return true;
       } catch {
-        /* keep previous list */
+        /* keep previous list; a read the hiding tab cancelled is owed */
+        if (hiddenTrafficSuspended()) owedWhileHidden = true;
         return false;
       }
     };
@@ -767,11 +1262,19 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
     };
     let initialRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let hydrateAttempt = 0;
+    let hydrateOnVisible = false;
     const hydrateInitial = async () => {
       const hydrated = await load();
       if (!alive) return;
       if (hydrated) {
         hydrateAttempt = 0;
+        return;
+      }
+      /* Hidden: the visibility handler restarts hydration when the tab
+         returns instead of retrying into a tab nobody is looking at. */
+      if (hiddenTrafficSuspended()) {
+        owedWhileHidden = true;
+        hydrateOnVisible = true;
         return;
       }
       /* Bounded backoff (issue #696). The old flat 1s retry hammered a dead
@@ -797,11 +1300,18 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
      */
     let timer: ReturnType<typeof setInterval> | null = null;
     let mode: "poll" | "live" | null = null;
+    let lastPollAt = 0;
+    const pollTick = () => {
+      const now = Date.now();
+      if (documentHidden() && now - lastPollAt < HIDDEN_POLL_MS) return;
+      lastPollAt = now;
+      void load();
+    };
     const setCadence = (next: "poll" | "live") => {
       if (next === mode) return;
       mode = next;
       if (timer) clearInterval(timer);
-      timer = next === "poll" ? setInterval(load, POLL_MS) : null;
+      timer = next === "poll" ? setInterval(pollTick, POLL_MS) : null;
     };
 
     /* Flow, workflow and task mutations refresh out of band: strips and
@@ -846,7 +1356,8 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       revisionHydrating = false;
       if (!alive) return;
       if (hydrated && pendingRevision === requestedRevision) pendingRevision = null;
-      if (pendingRevision !== null) {
+      /* A hidden tab keeps the revision it owes and hydrates it on return. */
+      if (pendingRevision !== null && !hiddenTrafficSuspended()) {
         scheduleRevisionHydration(hydrated ? 0 : FILES_REVISION_RETRY_MS);
       }
     };
@@ -857,14 +1368,49 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       unsubBus = bus.subscribe(applyConnection);
       unsubFiles = bus.subscribeFilesRevision((revision) => {
         pendingRevision = pendingRevision === null ? revision : Math.max(pendingRevision, revision);
-        scheduleRevisionHydration(FILES_DEBOUNCE_MS);
+        /* Hidden desktop: a throttle, not a debounce — a busy board must not
+           postpone the read forever, and the first revision's read carries
+           every later one. */
+        if (!documentHidden()) scheduleRevisionHydration(FILES_DEBOUNCE_MS);
+        else if (!revisionTimer && !revisionHydrating) scheduleRevisionHydration(HIDDEN_REVISION_COALESCE_MS);
       });
     } else {
       setCadence("poll");
     }
 
+    const onVisibility = () => {
+      if (documentHidden()) {
+        /* A desktop keeps its (slower) feed while hidden. */
+        if (!hiddenTrafficSuspended()) return;
+        inflight.abort();
+        inflight = new AbortController();
+        cache.pauseCompletionRetries();
+        return;
+      }
+      cache.resumeCompletionRetries();
+      if (hydrateOnVisible) {
+        hydrateOnVisible = false;
+        owedWhileHidden = false;
+        hydrateAttempt = 0;
+        void hydrateInitial();
+        return;
+      }
+      if (pendingRevision !== null) {
+        owedWhileHidden = false;
+        scheduleRevisionHydration(0);
+        return;
+      }
+      if (owedWhileHidden) {
+        owedWhileHidden = false;
+        void load();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       alive = false;
+      document.removeEventListener("visibilitychange", onVisibility);
+      inflight.abort();
       if (timer) clearInterval(timer);
       if (initialRetryTimer) clearTimeout(initialRetryTimer);
       if (revisionTimer) clearTimeout(revisionTimer);

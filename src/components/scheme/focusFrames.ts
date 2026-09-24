@@ -136,5 +136,17 @@ export function buildFocusFrameIndex(
       const concrete = concreteAnchorKey(anchorKey);
       return concrete ? lookup(concrete) : null;
     },
+    /* The three shapes this board draws an anchor as, under the key the layout
+       actually holds it by: a node (a conversation, a deck, a stack, a planned
+       slot), a container heading, or a task band. One selector list rather
+       than three lookups — whichever of them the page has is the one that
+       pulses, and a key the board is not drawing matches nothing. */
+    pulseSelectorFor: (anchorKey) => {
+      const concrete = concreteAnchorKey(anchorKey);
+      if (!concrete) return null;
+      const quoted = concrete.replace(/["\\]/g, "\\$&");
+      const task = anchorKey.startsWith("task::") ? `,[data-scheme-band-task="${anchorKey.slice("task::".length).replace(/["\\]/g, "\\$&")}"]` : "";
+      return `[data-scheme-node="${quoted}"],[data-scheme-group-id="${quoted}"]${task}`;
+    },
   };
 }

@@ -1,9 +1,8 @@
 "use client";
 
-import { Archive, Bot, Columns3, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Redo2, Search, Undo2, UserRound } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { useBoardActionHistory } from "@/hooks/useBoardActionHistory";
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
 import { FavoritesProvider, type FavoritesApi } from "./favorites/FavoritesContext";
 import { resolveFavoriteRows } from "./favorites/favoriteRows";
@@ -11,8 +10,11 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { BOARD_CLOCK_MS, useNowSeconds } from "@/hooks/useNowSeconds";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { useRuntimeSelector } from "@/hooks/useRuntime";
+import { DelegatusBadge } from "@/components/brand/BrandMark";
 import { ProjectAccounts } from "@/components/ProjectAccounts";
-import { projectDisplayName } from "@/lib/displayNames";
+import { projectTitle } from "@/lib/displayNames";
+import { cachedProjectName } from "@/lib/client/projectNameCache";
+import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import type { Flow } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -22,15 +24,14 @@ import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import type { Workflow } from "@/lib/workflows/types";
 
-import { BoardHistoryControls } from "./BoardHistoryControls";
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
-import { deriveOrchestratorPanelState, resolveSeatFile } from "./orchestrator/seatState";
+import { deriveOrchestratorPanelState, resolveSeatFile, retiredSeatPaths, seatRefsOf } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
 import { DesktopConversations } from "./DesktopConversations";
 import { clearDraftStorage, draftBand, draftCwd, draftParentConversationId, draftSrc, resolveSystemDraftCwd, setDraftBand, setDraftCwd, setDraftSrc, setDraftText } from "./DraftAgentPane";
-import { OrchestratorPanelToggle } from "./orchestrator/OrchestratorPanelToggle";
 import { useOrchestratorSeat } from "./orchestrator/useOrchestratorSeat";
+import { seatOnlyTask, type SeatRefs } from "@/lib/tasks/groupHide";
 import { useOrchestratorIncumbent } from "./orchestrator/useOrchestratorIncumbent";
 import { planBoardConvergence, planClose } from "./projectBoardMutations";
 import { reviewerCloseMutations } from "./reviewerAutoClose";
@@ -51,25 +52,30 @@ import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
 import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
 import { TaskPanel } from "./tasks/TaskPanel";
 import { pushTaskToast, TaskToastHost } from "./tasks/taskToast";
-import { MobileBoard, MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
-import type { MobileBoardRowRef } from "./mobile/mobileBoardModel";
-import { MobileRowActionsSheet, useMobileBoardRowActions } from "./mobile/MobileRowActions";
+import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
+import { MobileKanban } from "./mobile/MobileKanban";
+import { useMobileBoardRowActions } from "./mobile/MobileRowActions";
+import { attentionKey } from "./mobile/phoneKanbanModel";
 import { MobileFocusView } from "./mobile/MobileFocusView";
 import { MobileHostSheet } from "./mobile/MobileHostSheet";
 import { MobileSeatCard } from "./mobile/MobileSeatCard";
+import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
+import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
+import { MobileTaskScreen } from "./mobile/MobileTaskScreen";
+import { useTaskMutations } from "./kanban/useTaskMutations";
 import { sameScreen, topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
 import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
-import { useKanbanSeat } from "./kanban/kanbanSeatStore";
+import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
-import { SchemeSkeleton } from "./scheme/SchemeSkeleton";
+import { FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton, TitleSkeleton } from "./skeletons";
 import { Switchboard } from "./Switchboard";
 import {
   buildArchiveBranchGroups,
@@ -93,6 +99,7 @@ import { ArchiveRestore } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { SoundToggle } from "./SoundToggle";
+import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
 /** How long an opened node keeps its highlight ring on the scheme. */
 const HIGHLIGHT_MS = 1800;
@@ -120,6 +127,11 @@ interface Props {
   projectCwd?: string;
   project: string;
   loaded: boolean;
+  /** The files are a restored earlier answer not yet confirmed (#2071). Only
+      rendering reads `loaded || cached`; every effect that acts on the data
+      (reviewer auto-close, draft restore, presence reports, pruning) keeps
+      waiting for `loaded`. */
+  cached?: boolean;
   /** Consecutive `/api/files` failures (issue #696). A restored `#p=` or
       localStorage project lands straight here, so this is the surface a dead
       server reaches FIRST — and on the phone the rail is behind a drawer, so
@@ -244,40 +256,38 @@ function gotoProject(project: string) {
 type DesktopView = "kanban" | "list";
 
 /**
- * The desktop view switch: Board and Conversations (#1614, #1695).
+ * The desktop view switch: Board and Conversations (#1614, #1695, #1801).
  *
- * `floating` draws it as its own chip over a leaf that has no chrome of its own
- * (Conversations, the empty project); on the Board it is `inline`, in flow in
- * the kanban's own bar, so nothing floats over the board's corner.
+ * One outlined 32 px group in the header bar, whichever leaf shows; the
+ * selected segment is pressed (accent fill), the other quiet. `compact` drops
+ * the words below the bar's wide tier, leaving them as the accessible name.
  */
 function ProjectViewTabs({
   value,
   onChange,
-  floating = false,
-  inline = false,
+  compact = false,
   modes = ["kanban", "list"],
 }: {
   value: DesktopView;
   onChange: (next: DesktopView) => void;
-  floating?: boolean;
-  /** Drawn in a toolbar row of its own (the kanban board's bar): the chip, in flow. */
-  inline?: boolean;
+  compact?: boolean;
   /** The views this project can show on the desktop: the Board, and Conversations when there are any. */
   modes?: readonly DesktopView[];
 }) {
   const { t } = useLocale();
   const labelOf = (mode: DesktopView) => t(mode === "kanban" ? "kanban.viewTab" : "dash.viewList");
   const iconOf = (mode: DesktopView) => mode === "kanban"
-    ? <Columns3 className="h-3 w-3" aria-hidden />
-    : <List className="h-3 w-3" aria-hidden />;
+    ? <Columns3 className="h-[15px] w-[15px]" aria-hidden />
+    : <List className="h-[15px] w-[15px]" aria-hidden />;
   return (
     <div
       data-project-view-tabs
-      className={`z-30 inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border bg-card p-0.5 shadow-1 ${
-        floating ? "absolute left-3 top-3" : inline ? "" : "mx-3 mt-3 self-start"
-      }`}
+      data-bar-control=""
+      className="inline-flex h-8 shrink-0 items-stretch overflow-hidden rounded-control border border-border bg-card shadow-1"
     >
-      {modes.map((mode) => (
+      {/* The segments fill the group edge to edge, split by one rule, so the group's border
+          is the switch's visible edge and its neighbours sit 8 / 16 px from it. */}
+      {modes.map((mode, index) => (
         <button
           key={mode}
           type="button"
@@ -285,12 +295,13 @@ function ProjectViewTabs({
           data-view-tab={mode}
           onClick={() => onChange(mode)}
           aria-label={labelOf(mode)}
-          className={`inline-flex items-center justify-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-            value === mode ? "bg-accent/10 text-accent" : "text-muted hover:text-primary"
-          }`}
+          title={compact ? labelOf(mode) : undefined}
+          className={`inline-flex items-center justify-center gap-1.5 text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+            compact ? "w-8" : "px-3"
+          } ${index > 0 ? "border-l border-border" : ""} ${value === mode ? "bg-accent/10 text-accent" : "bg-transparent text-secondary hover:bg-well hover:text-primary"}`}
         >
           {iconOf(mode)}
-          {labelOf(mode)}
+          {compact ? null : labelOf(mode)}
         </button>
       ))}
     </div>
@@ -325,6 +336,7 @@ function EmptyProjectLeaf({
   return (
     <div className="flex flex-1 items-center justify-center px-4 py-5 text-center" data-testid="project-empty">
       <div className="flex max-w-[440px] flex-col items-center gap-2">
+        <DelegatusBadge size={88} className="mb-1" />
         <div className="text-[13.5px] font-semibold text-primary">{t("dash.emptyTitle")}</div>
         <div className="text-[12px] text-secondary">{t("dash.emptyStartHere", { project: projectName })}</div>
         <div className="text-[12px] text-secondary">{t("dash.emptyOneAgent")}</div>
@@ -374,6 +386,7 @@ function ProjectDashboardView({
   projectCwd,
   project,
   loaded,
+  cached = false,
   catalogFailures = 0,
   openNonce,
   focusRequest,
@@ -393,8 +406,10 @@ function ProjectDashboardView({
   onOpenCatalogFile,
   onCloseFile,
 }: Props) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const isMobile = useIsMobile();
+  const reach = useServerReach();
+  const reachText = reachLineText(t, locale, reach);
   /* The phone's navigation (mobile v2 lane 1): which screen is on top and which
      sheet is open. The host sheet — the handoff, the docked background tasks
      and the hidden strips — opens from the board menu's «Host details» row and
@@ -419,8 +434,12 @@ function ProjectDashboardView({
   const boardIsMobileLeaf = isMobile && topScreen(mobileNavState).kind !== "chat";
   const cachedSeatRead = useOrchestratorSeat(boardIsMobileLeaf ? project : null, projectDraftCwd || undefined);
   // A failed revalidation retains a known incumbent, but cannot affirm vacancy.
-  // Give the card, its sheet, and the footer the same safe reading.
+  // Give the card, its sheet, and the footer the same safe reading. While the
+  // server is only being reconnected (#2071 D7) a failed re-read is the
+  // outage, not news about the seat: the last answer stays, and "unreadable"
+  // waits for a seat-specific failure or a long outage.
   const seatRead = cachedSeatRead.failed
+    && reach.kind !== "reconnecting"
     && !(cachedSeatRead.status?.exists && cachedSeatRead.status.seat?.conversationId)
     ? { ...cachedSeatRead, status: null }
     : cachedSeatRead;
@@ -437,11 +456,31 @@ function ProjectDashboardView({
   const seatPath = seatFile?.path ?? seatRead.status?.seat?.path ?? null;
   const seatState = deriveOrchestratorPanelState({ status: seatRead.status, statusFailed: seatRead.failed,
     submitting: false, submitFailure: null, file: seatFile, surface: null });
-  const inlineCatalog = useMobileInlineCatalog(project, isMobile && loaded);
-  const projectName = projectDisplayName(
+  /* The DESKTOP's read of the seat (#1841). The phone's read above is gated on
+     its board leaf; this one is not gated on a face, because the Tasks panel
+     and its `Tasks N` count leave the seat's own tasks out wherever the panel
+     is open — and on the Conversations face the board, which used to do this
+     reading, is not mounted at all. The board below is handed this answer
+     (`seatRefs` and `seatRead`) and polls nothing itself; the dock beside it,
+     which is a sibling of this dashboard and reads for itself, shares this
+     one poll, because the poll belongs to the project and cwd rather than to
+     a mount (`useOrchestratorSeat`). One request per interval per tab. */
+  const desktopSeatRead = useOrchestratorSeat(isMobile ? null : project, projectCwd);
+  const inlineCatalog = useMobileInlineCatalog(project, isMobile && (loaded || cached));
+  /* The header never shows the canonical key (#2071): the live name, then the
+     one this browser remembered, then a readable key. An opaque `repo-`/`dir-`
+     key with neither is a placeholder bar until the catalog is certified, and
+     "Unnamed project" after. Every other surface takes the string. */
+  const knownProjectName = projectTitle(
     project,
     providedProjectName ?? projectCatalogEntries.find((entry) => entry.project === project)?.displayName,
+    cachedProjectName(project),
   );
+  /* The surfaces that take the name as a string (the focus view, sheets, the
+     seat) say "Unnamed project" only once the catalog is certified; before
+     that, a neutral ellipsis rather than a verdict. */
+  const projectName = knownProjectName ?? (loaded ? t("dash.projectUnnamed") : "…");
+  const projectTitleNode = knownProjectName ?? (loaded ? projectName : <TitleSkeleton />);
   /* Durable flow/pipeline records freeze member transcript paths at launch; an
      account migration rotates a conversation onto a new path and every
      projection that string-matches the frozen one (halos, decks, claiming,
@@ -469,11 +508,7 @@ function ProjectDashboardView({
      until the scan and the persisted board arrangement have both loaded, so the
      first painted board already reflects closes, worker-stack collapse and caps
      instead of flashing the raw scan snapshot and culling it. */
-  const boardReady = boardFirstPaintReady(loaded, board.loaded);
-  /* Per-project, device-local undo/redo log of recent board actions (issue
-     #184). v1 records card closes; undo reopens the last-closed card through the
-     shared restore path, redo closes it again. */
-  const history = useBoardActionHistory(project);
+  const boardReady = boardFirstPaintReady(loaded || cached, board.loaded || board.cached);
   const prefs = useMemo<ColumnPrefs>(
     () => ({ manual: board.prefs.manual, hidden: board.prefs.hidden, expanded: board.prefs.expanded }),
     [board.prefs],
@@ -522,7 +557,7 @@ function ProjectDashboardView({
   const [pendingRestoredHandoffs, setPendingRestoredHandoffs] = useState<Set<string>>(() => new Set());
   /* The phone's task sheet, opened from the board menu: «New task» in its
      create view, «Tasks» as the list (mobile v2 lane 1). */
-  const [mobileTaskSheet, setMobileTaskSheet] = useState<TaskSheetView | null>(null);
+  const [mobileTaskSheet, setMobileTaskSheet] = useState<{ view: TaskSheetView; depth: number } | null>(null);
   /* Template-first pipeline entry (#196, #388): `+ Пайплайн` opens repository
      admission; a successful choice lands in the owning shelf or group. */
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
@@ -910,6 +945,53 @@ function ProjectDashboardView({
   );
   const hiddenSet = useMemo(() => new Set(prefs.hidden), [prefs.hidden]);
   const projectTasks = useMemo(() => tasks.filter((task) => task.project === project), [tasks, project]);
+  /* The phone's task mutations (#2072 slice 5): the columns and the task
+     screen share one set, so a move made on the task screen is still drawn on
+     the board after ‹. */
+  const phoneTaskMutations = useTaskMutations(isMobile ? projectTasks : EMPTY_TASKS);
+  /* Tasks that exist only for the orchestrator seat are the seat panel's to
+     list (#1841): every task list leaves them out — the desktop Tasks panel
+     and its count, the phone's task screens and their count — while the task
+     rows themselves stay in the store, where the seat keeps its notes.
+
+     The seat is read once per face: the phone's read above is gated on its
+     board leaf, the desktop's is not gated on a face at all, because the Tasks
+     panel is open on the Conversations face too, where the board that used to
+     do this reading is not mounted. The board is handed the same answer
+     instead of polling the route a second time, and every other surface
+     reading the same project shares the one poll behind it. */
+  const faceSeatRead = isMobile ? seatRead : desktopSeatRead;
+  const seatRefs = seatRefsOf(faceSeatRead.status, faceSeatRead.failed);
+  const seatKey = seatRefs ? JSON.stringify(seatRefs) : "";
+  const seatRefsForBoard = useMemo<SeatRefs | null>(
+    () => (seatKey ? (JSON.parse(seatKey) as SeatRefs) : null),
+    [seatKey],
+  );
+  /* The same read also carries every OTHER project's seats. The panel's «all»
+     scope lists those projects' tasks, and a seat of another project is no
+     more a task than this one's; a failed read drops them, as it drops this
+     project's retired seats. */
+  const allSeatKey = !faceSeatRead.failed && faceSeatRead.status?.all ? JSON.stringify(faceSeatRead.status.all) : "";
+  const allSeatRefs = useMemo<SeatRefs | null>(
+    () => (allSeatKey ? (JSON.parse(allSeatKey) as SeatRefs) : null),
+    [allSeatKey],
+  );
+  const seatTaskIds = useMemo(() => {
+    if (!seatRefsForBoard && !allSeatRefs) return new Set<string>();
+    const seatOnly = (task: BoardTask) => seatOnlyTask(task, allSeatRefs, pipelines)
+      || (task.project === project && seatOnlyTask(task, seatRefsForBoard, pipelines));
+    return new Set(tasks.filter(seatOnly).map((task) => task.id));
+  }, [seatRefsForBoard, allSeatRefs, tasks, project, pipelines]);
+  /* This project's tasks as a task LIST shows them. The board, the seat panel
+     and the pipeline screens keep `projectTasks`: the seat's own task is how
+     the panel finds its notes. */
+  const faceTasks = useMemo(
+    () => (seatTaskIds.size ? projectTasks.filter((task) => !seatTaskIds.has(task.id)) : projectTasks),
+    [projectTasks, seatTaskIds],
+  );
+  /** Open tasks as every count of them says: `Tasks N` on the desktop bar, the
+      phone menu's Tasks row. */
+  const openTaskCount = faceTasks.filter((task) => task.status !== "done").length;
   /* Compact default Kanban/status stacks: quiet placed cards fold off the
      canvas (layout, edges, minimap) into the status strip; active, attention,
      focused and explicitly expanded cards stay full-size. Explicit expansion
@@ -1063,9 +1145,25 @@ function ProjectDashboardView({
     highlightTimer.current = window.setTimeout(() => setHighlight(null), HIGHLIGHT_MS);
   };
 
+  /* On the phone a task is a SCREEN (#2072 slice 5, phone-kanban §3.7):
+     every door into a task — a column card, the ⋯ › Tasks list, a
+     conversation's task strip, a pipeline's linked tasks, a task link —
+     pushes it over the screen the operator is on, so ‹ lands back there. A
+     repeat open of the task already on top is not a second entry. */
+  const openMobileTask = (id: string) => {
+    onUserNavigate?.();
+    const top = topScreen(mobileNav.getState());
+    if (top.kind === "task" && top.id === id) return;
+    mobileNav.push({ kind: "task", id });
+  };
+
   /* Opening a task by intent (panel row, cross-project jump, stack chip)
      expands it back onto the canvas as a durable pin, then glides to it. */
   const openTaskOnBoard = (id: string) => {
+    if (isMobile) {
+      openMobileTask(id);
+      return;
+    }
     setTaskExpanded(id, true);
     flashNode("task::" + id);
   };
@@ -1200,12 +1298,24 @@ function ProjectDashboardView({
     revealPipeline(pending);
   }, [pipelines, project]);
 
-  /* The phone's task sheet: «New task» opens the create view, «Tasks» the list. */
+  /* The phone's task sheet: «New task» opens the create view, «Tasks» the list.
+     It stands over the screen it was opened on: a task opened from the list is
+     pushed above that screen, and ‹ from the task finds the list again. */
   const openMobileTasks = (view: TaskSheetView) => {
     onUserNavigate?.();
     mobileNav.closeSheet();
-    setMobileTaskSheet(view);
+    setMobileTaskSheet({ view, depth: mobileNav.getState().stack.length });
   };
+  const mobileTaskSheetShown = mobileTaskSheet !== null && mobileNavState.stack.length === mobileTaskSheet.depth;
+  /* Stepping below the screen the list stood over takes the list with it, and
+     so does any navigation that sends the stack home (a search result, a deep
+     link, a project switch): the list belonged to where the operator was. A
+     store subscription sees the reset itself, even when the conversation it
+     opens is pushed in the same tick. */
+  useEffect(() => mobileNav.subscribe(() => {
+    const state = mobileNav.getState();
+    setMobileTaskSheet((current) => (current && (state.motion === "act" || state.stack.length < current.depth) ? null : current));
+  }), [mobileNav]);
   const persistDrafts = (next: string[]) => {
     setDrafts(next);
     sessionStorage.setItem(draftsKey(project), JSON.stringify(next));
@@ -1337,7 +1447,7 @@ function ProjectDashboardView({
     openSwitchboardFile(file);
   };
 
-  /* The raw close, shared by an explicit user close and a history redo. */
+  /* The raw close behind an explicit user close. */
   const applyClose = (path: string) => {
     /* Card dismissal owns presentation only. Runtime termination stays on the
        conversation's explicit process control: a child can share its root's
@@ -1357,11 +1467,6 @@ function ProjectDashboardView({
        so the saved view is the authority again — the same retirement the
        Схема/Список control performs, from the other end of the gesture. */
     if (path === openedConversation) setOpenedConversation(null);
-    /* Record the close in the undo log before applying it, capturing the current
-       title for the undo tooltip. Redo replays through `applyClose` directly, so
-       it never re-records and the log stays a single linear trail. */
-    const title = projectCatalog.get(path)?.title ?? files.find((file) => file.path === path)?.title ?? "";
-    history.record({ kind: "close", path, title });
     /* Closing a card is the explicit dismissal a finished-but-unread outcome
        needs (#1244): it takes effect at once, and restoring the card later
        brings back a read result rather than a fresh unread one. */
@@ -1575,48 +1680,16 @@ function ProjectDashboardView({
       recordFocusNavigation(file, projectKey(file), { restore: true });
     }
     openBoardRow(file);
+    /* The focus records above re-typed the conversation's own entry whole;
+       it keeps its place on the shell's stack, so a screen pushed over the
+       conversation (a task from its task strip) pops back onto it. */
+    if (isMobile) mobileNav.stamp();
   };
-
-  /* Undo a close: reopen the card through the shared restore path so #199's
-     durable membership rebinds it to its pipeline/review zone automatically. When
-     the file entry is known we go through `openSwitchboardFile` (same role-based
-     placement + focus as an explicit open); otherwise we lift the tombstone
-     directly so a card whose transcript is momentarily absent still comes back. */
-  const onUndo = () => {
-    const entry = history.undo();
-    if (entry === null || entry.kind !== "close") return;
-    const file = projectCatalog.get(entry.path) ?? files.find((item) => item.path === entry.path);
-    if (file) openSwitchboardFile(file);
-    else board.restore(entry.path, "manual");
-  };
-  const onRedo = () => {
-    const entry = history.redo();
-    if (entry === null || entry.kind !== "close") return;
-    applyClose(entry.path);
-  };
-  /* Keep the keyboard handler pointed at the latest closures without re-binding
-     the listener every render. */
-  const undoRedoRef = useRef({ onUndo, onRedo });
-  undoRedoRef.current = { onUndo, onRedo };
-  useEffect(() => {
-    if (project === null) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      if (event.key.toLowerCase() !== "z") return;
-      /* Never steal Ctrl+Z from a text field — the composer and rename inputs own
-         their own undo. */
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
-      event.preventDefault();
-      if (event.shiftKey) undoRedoRef.current.onRedo();
-      else undoRedoRef.current.onUndo();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [project]);
 
   const statusBits: string[] = [];
+  /* Narrow, the bar keeps only the live count: «· N trees» and the quiet line are what the
+     Conversations list below already shows, and the name is the one text that truncates (#1801). */
+  const narrowStatus = liveCount ? t("dash.branchesLive", { count: liveCount }) : null;
   if (liveCount) {
     statusBits.push(
       `${t("dash.branchesLive", { count: liveCount })} · ${t("dash.trees", { count: treeGroups })}`,
@@ -1725,17 +1798,27 @@ function ProjectDashboardView({
      conversation is on top of the navigation stack. The model is pure, so the
      bar's badge and the rows below it are counted once, in one place. */
   const mobileTop = topScreen(mobileNavState);
+  /* The screen under the top one: a pipeline pushed from a task does not
+     list that task again among its linked tasks (§3.13). */
+  const mobileBelow = mobileNavState.stack.length > 1 ? mobileNavState.stack[mobileNavState.stack.length - 2] ?? null : null;
   const mobileConversationKey = mobileTop.kind === "chat" ? mobileTop.id : null;
   const crownedPaths = useMemo<ReadonlySet<string>>(() => new Set(favoriteRows.map((row) => row.file.path)), [favoriteRows]);
   /* A lane whose close is on its way is gone from the board already (#1671);
      the Viewer's badge reads the same closes. */
   const closingPipelines = useClosingPipelines();
+  /* Seats the project retired are the seat sheet's to list (#1841), never
+     rows beside product work. A failed read hides nothing extra. */
+  const retiredPaths = useMemo(
+    () => retiredSeatPaths(seatRead.failed ? [] : seatRead.status?.previous ?? [], files),
+    [files, seatRead.failed, seatRead.status?.previous],
+  );
+  const mobileHidden = useMemo(() => (retiredPaths.length ? new Set([...hiddenSet, ...retiredPaths]) : hiddenSet), [hiddenSet, retiredPaths]);
   const mobileBoardProps = {
     files,
     pipelines: activePipelines,
     project,
     seatPath,
-    hidden: hiddenSet,
+    hidden: mobileHidden,
     crowned: crownedPaths,
     closing: closingPipelines,
     now: nowSeconds,
@@ -1751,9 +1834,16 @@ function ProjectDashboardView({
     mobileNav.closeSheet();
     mobileNav.push({ kind: "pipeline", id: pipeline.id });
   };
-  /* What a board row reveals under a left swipe and lists on a long-press
-     (#1671). Closing a card is the board's own close, the one ⋯ › Close card
-     sends. A close the server refuses is shed by the outbox and the row comes
+  /* «Tell the orchestrator»: the dock and an empty Assigned column are the
+     same door — the seat's conversation, or over a vacancy the create draft,
+     which is the seat card's own sheet. */
+  const tellOrchestrator = () => {
+    if (seatState.kind === "live" && seatFile) openBoardRow(seatFile);
+    else mobileNav.openSheet(seatState.kind === "draft" ? "rotate" : "seat");
+  };
+  /* What a board row no task owns lists on its long-press (#1671; the
+     column pager owns the sideways swipe since #2072 slice 4). Closing a card
+     is the board's own close, the one ⋯ › Close card sends. A close the server refuses is shed by the outbox and the row comes
      back on its own; the paths closed from here are held until the board
      settles, so that return also gets a receipt. */
   const swipeClosesRef = useRef(new Map<string, string>());
@@ -1795,7 +1885,18 @@ function ProjectDashboardView({
       if (!hiddenSet.has(path)) showReceipt(t("mobile2.board.closeNotSaved", { title }));
     }
   }, [board.sync, hiddenSet, t]);
-  const [rowActionsFor, setRowActionsFor] = useState<MobileBoardRowRef | null>(null);
+  /* The attention queue's order, which the phone's columns pin by (#2072
+     slice 4): the rows the bar's ⚠ sheet lists, in the order Next › walks. */
+  const mobileAttentionKey = (mobileBoardModel?.needsYou ?? [])
+    .map((item) => (item.kind === "conversation" ? attentionKey.conversation(item.path) : attentionKey.pipeline(item.id)))
+    .join("\n");
+  /* Keyed by value: the board model is rebuilt on every render. */
+  const mobileAttention = useMemo(() => (mobileAttentionKey ? mobileAttentionKey.split("\n") : []), [mobileAttentionKey]);
+  /* The conversations the phone's visible column draws, for presence. */
+  const [mobileKanbanShown, setMobileKanbanShown] = useState("");
+  /* What the phone's columns are not drawing, for ⋯ › Hidden tasks. */
+  const [mobileHiddenCount, setMobileHiddenCount] = useState(0);
+  const reportMobileKanbanShown = useCallback((paths: readonly string[]) => setMobileKanbanShown(paths.join("\n")), []);
   /* The phone's board is the leaf when the scheme is this project's view and no
      conversation sits on top of the stack; the footer and the presence slice
      both hang off that one answer. */
@@ -1812,6 +1913,7 @@ function ProjectDashboardView({
      from anywhere opens as a reader in its card. */
   const kanbanLeaf = !isMobile && desktopBoardLeaf;
   const kanbanSeat = useKanbanSeat(project);
+  const seatSignal = useSeatSignal(kanbanLeaf ? project : null);
   /* While the board is still loading, its face is taken to be the Board it almost always is, so the orchestrator
      dock does not mount a panel for one commit that the Board's seat then takes over. */
   const kanbanFaceReported = !isMobile && (kanbanLeaf || !boardReady);
@@ -1824,13 +1926,7 @@ function ProjectDashboardView({
      as a signature so the presence effect below compares BY VALUE — a fresh
      array every render would re-report the same view on every poll. Null
      whenever the board is not the leaf. */
-  const mobileBoardSignature = mobileBoardModel && mobileBoardLeaf
-    ? [
-      ...mobileBoardModel.needsYou.flatMap((item) => (item.kind === "conversation" ? [item.path] : [])),
-      ...mobileBoardModel.working.map((row) => row.path),
-      ...mobileBoardModel.recent.map((row) => row.path),
-    ].join("\n")
-    : null;
+  const mobileBoardSignature = mobileBoardModel && mobileBoardLeaf ? mobileKanbanShown : null;
   /* The bar's badge is NOT composed here. The Viewer scopes the phone's queue
      to the project behind the badge and counts this project's pipelines
      waiting on a decision in it (README §4.1, §4.6), from the same pure answer
@@ -1913,7 +2009,6 @@ function ProjectDashboardView({
   /* The board menu (README §3.1, §4.1): every former header control as a
      labelled 44 px row, create actions first, the danger-free Archive last. No
      row asks for confirmation; Archive answers with a receipt carrying Restore. */
-  const openTasks = projectTasks.filter((task) => task.status !== "done").length;
   const archiveAllowed = (projectFiles.length > 0 || catalogKnown) && !projectFiles.some((file) => file.proc === "running" || file.activity === "live");
   const mobileMenuEntries = (): MobileMenuEntry[] => {
     const entries: MobileMenuEntry[] = [
@@ -1921,8 +2016,17 @@ function ProjectDashboardView({
       { kind: "row", key: "new-task", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newTask"), onSelect: () => openMobileTasks("new") },
       { kind: "row", key: "new-pipeline", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newPipeline"), onSelect: () => { mobileNav.closeSheet(); setTemplatePickerOpen(true); } },
       { kind: "divider", key: "d1" },
-      { kind: "row", key: "tasks", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.tasks"), trailing: openTasks ? t("mobile2.menu.tasksOpen", { count: openTasks }) : undefined, onSelect: () => openMobileTasks("list") },
+      { kind: "row", key: "tasks", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.tasks"), trailing: openTaskCount ? t("mobile2.menu.tasksOpen", { count: openTaskCount }) : undefined, onSelect: () => openMobileTasks("list") },
+      /* Every pipeline of the project (§3.1): the columns carry each one on its
+         task's card, and the board's old «N pipelines» row is gone. */
+      { kind: "row", key: "pipelines", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.board.pipelines"), go: "pipelines", onSelect: () => mobileNav.push({ kind: "pipelines" }) },
     ];
+    /* The groups hidden from the columns and the empty tasks taken off them
+       (§3.2), with Show; the columns draw the sheet, so the row is offered
+       where they are. */
+    if (mobileBoardLeaf && boardReady && mobileTop.kind === "board") {
+      entries.push({ kind: "row", key: "hidden", icon: <EyeOff className="h-[18px] w-[18px]" aria-hidden />, label: t("kanban.hiddenTitle"), trailing: mobileHiddenCount ? String(mobileHiddenCount) : undefined, opens: "hidden", onSelect: () => mobileNav.openSheet("hidden") });
+    }
     if (viewToggle) {
       /* The board's two faces (issue #613) stay one tap away here, as radio
          rows: the picture's «All conversations» is the catalog list, and the
@@ -1950,13 +2054,6 @@ function ProjectDashboardView({
       },
       { kind: "divider", key: "d2" },
     );
-    if (history.canUndo || history.canRedo) {
-      /* Board history stays here until the receipts of later lanes carry the
-         inverse of a close on the phone (issue #184, #1054 review). */
-      if (history.canUndo) entries.push({ kind: "row", key: "undo", icon: <Undo2 className="h-[18px] w-[18px]" aria-hidden />, label: t("board.undo"), onSelect: () => { mobileNav.closeSheet(); onUndo(); } });
-      if (history.canRedo) entries.push({ kind: "row", key: "redo", icon: <Redo2 className="h-[18px] w-[18px]" aria-hidden />, label: t("board.redo"), onSelect: () => { mobileNav.closeSheet(); onRedo(); } });
-      entries.push({ kind: "divider", key: "d3" });
-    }
     entries.push(
       {
         kind: "custom",
@@ -1971,6 +2068,9 @@ function ProjectDashboardView({
       /* «Keep screen awake» (issue #712) reads the Viewer-level controller that
          outlives this sheet; it renders nothing without one. */
       { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
+      { kind: "divider", key: "d-setup" },
+      ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
+      selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
     );
     if (archived) {
       entries.push({ kind: "divider", key: "d4" }, {
@@ -2003,18 +2103,81 @@ function ProjectDashboardView({
     return entries;
   };
 
+  /* The header bar's two ends (#1801, docs/design/board-header.md), shared by the Board's bar and
+     the other leaves' bar. Lead: where am I — the project and, when the bar is wide, its account
+     switches (#1331). Trail: the two panel toggles and the ⋯ menu, which holds message search
+     (on the Board, whose find field filters cards), sound, archive, delete and, when narrow, one
+     row per account switch. Undo and redo left the header (#1801; a kanban undo is #1856). */
+  const panelTasks = useMemo(() => (seatTaskIds.size ? tasks.filter((task) => !seatTaskIds.has(task.id)) : tasks), [seatTaskIds, tasks]);
+  const barLead = (wide: boolean) => (
+    <>
+      <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={knownProjectName ?? undefined}>{projectTitleNode}</h1>
+      {wide ? <ProjectAccounts project={project} appearance="bar" /> : null}
+    </>
+  );
+  const barTrail = (wide: boolean, withSearch: boolean) => (
+    <>
+      <BarPanelToggles
+        wide={wide}
+        orchestrator={onToggleOrchestratorPanel ? {
+          open: kanbanLeaf ? !kanbanSeat.collapsed : orchestratorPanelOpen,
+          onToggle: kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel,
+          dot: kanbanLeaf && kanbanSeat.collapsed && seatSignal ? { tone: seatSignal.tone, label: seatSignal.label } : null,
+        } : null}
+        tasks={{ open: taskPanelOpen, count: openTaskCount, onToggle: toggleTaskPanel }}
+      />
+      <BarMoreMenu
+        rows={(close) => (
+          <>
+            {withSearch && onOpenSearch ? (
+              <BarMenuGroup name="search">
+                <button type="button" className={BAR_MENU_ROW} data-testid="dash-search" onClick={() => { close(); onOpenSearch(); }}>
+                  <Search className="h-[15px] w-[15px]" aria-hidden /> {t("search.open")}
+                </button>
+              </BarMenuGroup>
+            ) : null}
+            {wide ? null : (
+              <BarMenuGroup name="accounts">
+                <ProjectAccounts project={project} appearance="menu" />
+              </BarMenuGroup>
+            )}
+            <BarMenuGroup name="sound">
+              <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
+            </BarMenuGroup>
+            <BarMenuGroup name="project">
+              {archived ? (
+                <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
+                  <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
+                </button>
+              ) : (
+                <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} rowClassName={BAR_MENU_ROW} />
+              )}
+              <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} rowClassName={BAR_MENU_ROW} />
+            </BarMenuGroup>
+          </>
+        )}
+      />
+    </>
+  );
+
+  /* The Tasks panel. The Board draws it under its bar, so the bar spans it and the attention
+     island sits over the bar, clear of the panel's header (#1801); the other leaves' bar already
+     spans the row the panel sits in. */
+  const taskPanel = taskPanelOpen ? (
+    <TaskPanel
+      tasks={panelTasks}
+      project={project}
+      boardMembers={boardMemberKeys}
+      favorites={favoriteRows}
+      onOpenFavorite={openSwitchboardFile}
+      onToggleFavorite={(id) => board.setFavorite(id, false)}
+      onOpenTask={openTask}
+      onClose={toggleTaskPanel}
+    />
+  ) : null;
+
   const renderMobileSheet = (name: MobileSheetName, close: () => void) => {
     if (name === "menu") return <MobileMenuSheet title={projectName} entries={mobileMenuEntries()} onClose={close} />;
-    /* A board row's long-press (#1671): the same actions its swipe reveals. */
-    if (name === "row") {
-      return rowActionsFor ? (
-        <MobileRowActionsSheet
-          title={t("mobile2.board.rowActions", { title: rowActionsFor.kind === "conversation" ? rowActionsFor.row.title : rowActionsFor.row.task })}
-          actions={mobileRowActions(rowActionsFor)}
-          onClose={close}
-        />
-      ) : null;
-    }
     /* Host details (mobile v2 lane 2): the background processes with their PIDs
        and a Kill that acts on the tap, the runtime connection, and the quiet
        conversations — the one place any of it appears on the phone. */
@@ -2036,90 +2199,50 @@ function ProjectDashboardView({
   return (
     <FavoritesProvider value={favoritesApi}>
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      {isMobile ? null : (
-        /* The desktop header row. The phone renders the shell's bar instead
-           (mobile v2 lane 1): one 52 px bar with the project name as the title
-           cell and at most three 44 px targets, everything else behind ⋯. */
-        <div className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4">
-          <h1 className="truncate text-[13.5px] font-bold" title={projectName}>{projectName}</h1>
-          {/* The project account surface is one compact switch per relevant engine
-              (#1331). Pool/carrier detail opens on demand, and quiet projects still
-              spend no header slot. */}
-          <ProjectAccounts project={project} />
-          <BoardHistoryControls
-            canUndo={history.canUndo}
-            canRedo={history.canRedo}
-            undoEntry={history.undoEntry}
-            redoEntry={history.redoEntry}
-            onUndo={onUndo}
-            onRedo={onRedo}
-          />
-          <>
-            {/* Issue #696: the header borrows the affirmative idle line only
-                when the catalog is actually known. Under a failing fetch it
-                names the failure, exactly as the overview board does. */}
-            <span className={`truncate text-[11.5px] ${catalogFailures > 0 ? "font-semibold text-danger" : "text-muted"}`}>
-              {catalogFailures > 0
+      {/* The desktop header bar on every leaf the board does not draw (#1801): the loading
+          skeleton, Conversations and the empty project. The Board draws the same bar itself,
+          with its own find, view and create groups between the same two ends. The phone
+          renders the shell's bar instead (mobile v2 lane 1). */}
+      {isMobile || (boardReady && kanbanLeaf) ? null : (
+        <DashboardBar
+          lead={barLead}
+          status={(wide) => (
+            /* Issue #696: the header borrows the affirmative idle line only
+               when the catalog is actually known. Under a failing fetch it
+               names the failure, exactly as the overview board does. */
+            /* A reconnect in progress is said quietly (#2071 D7); only a long
+               outage turns this red. */
+            <span data-bar-group="status" data-reach={reach.kind} className={`${wide || !narrowStatus ? "min-w-16 shrink" : "shrink-0"} truncate whitespace-nowrap text-[12px] ${reach.kind === "reconnecting" ? "text-muted" : catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
+              {reach.kind === "reconnecting"
+                ? reachText
+                : catalogFailures > 0
                 ? t("catalog.unreachable")
-                : statusBits.length ? statusBits.join(" · ") : t("common.nothingRunning")}
+                /* Loading never borrows «nothing is running» (#2071 D6). */
+                : !loaded ? t(cached ? "dash.updating" : "common.loadingCap")
+                : (wide ? (statusBits.length ? statusBits.join(" · ") : null) : narrowStatus) ?? (statusBits[0] ?? t("common.nothingRunning"))}
             </span>
-            <SoundToggle />
-            {archived ? (
-              <button
-                type="button"
-                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold text-muted hover:border-accent/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                onClick={() => onUnarchive(project)}
-              >
-                <ArchiveRestore className="h-3 w-3" aria-hidden /> {t("dash.unarchive")}
-              </button>
-            ) : (
-              <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} />
-            )}
-            <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} />
-            {/* One elastic cell absorbs the slack so the whole control cluster
-                stays right-aligned — the same rule the phone header follows. */}
-            <span aria-hidden className="min-w-0 flex-1" />
-            {onOpenSearch ? (
-              <button
-                type="button"
-                data-testid="dash-search"
-                aria-label={t("search.open")}
-                title={t("search.open")}
-                onClick={onOpenSearch}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              >
-                <Search className="h-4 w-4" aria-hidden />
-              </button>
-            ) : null}
-            {/* The orchestrator dock's switch opens the left-hand column: first
-                in the right-aligned control cluster, because the panel it opens
-                is the leftmost thing on screen (PRD #976 decision 6). */}
-            {onToggleOrchestratorPanel ? (
-              <OrchestratorPanelToggle
-                open={kanbanLeaf ? !kanbanSeat.collapsed : orchestratorPanelOpen}
-                onToggle={kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel}
-              />
-            ) : null}
+          )}
+          find={(wide) => onOpenSearch ? (
             <button
               type="button"
-              onClick={toggleTaskPanel}
-              aria-pressed={taskPanelOpen}
-              aria-label={t("tasks.panelToggleAria")}
-              className={`flex shrink-0 items-center gap-1 rounded-[8px] border px-2.5 py-1 text-[11.5px] font-bold shadow-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-                taskPanelOpen ? "border-accent/45 bg-accent/10 text-accent" : "border-border bg-card text-primary hover:border-accent/45 hover:text-accent"
-              }`}
+              data-testid="dash-search"
+              data-bar-group="find"
+              data-bar-control=""
+              aria-label={t("search.open")}
+              title={t("search.open")}
+              onClick={onOpenSearch}
+              className="inline-flex h-8 min-w-[160px] max-w-[420px] flex-[1_8_240px] items-center gap-2 rounded-control border border-border bg-sunken px-2.5 text-left text-[12px] text-muted hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
-              <ListTodo className="h-3.5 w-3.5" aria-hidden /> {t("tasks.panelTitle")}
-              {projectTasks.filter((task) => task.status !== "done").length ? (
-                <span className="rounded-full bg-accent/10 px-1.5 text-[10px] font-bold text-accent">
-                  {projectTasks.filter((task) => task.status !== "done").length}
-                </span>
-              ) : null}
+              <Search className="h-[15px] w-[15px] shrink-0" aria-hidden />
+              <span className="min-w-0 truncate">{wide ? t("search.open") : t("dash.searchShort")}</span>
             </button>
-            {/* No «+ Pipeline» on the desktop (#1695): pipelines are created by agents through MCP, and their
-                drafts and stages are shown and edited on the Board's cards and Stages sheet. */}
-          </>
-        </div>
+          ) : null}
+          view={(wide) => (boardReady && listAvailable
+            ? <ProjectViewTabs value="list" onChange={chooseDesktopView} modes={desktopViewModes} compact={!wide} />
+            : null)}
+          create={(wide) => (boardReady && listAvailable ? <BarCreateGroup wide={wide} reserve /> : null)}
+          trail={(wide) => barTrail(wide, false)}
+        />
       )}
 
       {templatePickerOpen ? (
@@ -2143,6 +2266,40 @@ function ProjectDashboardView({
            focus view stays until lane 3 folds it into the bar's title cell. */
         mobileTop.kind === "accounts" ? (
           <MobileAccountsScreen host={mobileShell} renderSheet={renderMobileSheet} />
+        ) : mobileTop.kind === "task" ? (
+          /* One task (#2072 slice 5, phone-kanban §3.5): its pipelines, its
+             agents and its status, on the same stack as the board. A stage or
+             an agent opens its conversation above it, and ‹ comes back here. */
+          <MobileTaskScreen
+            taskId={mobileTop.id}
+            layout={pipelineLayout}
+            project={project}
+            groups={layoutGroups}
+            manual={layoutManual}
+            files={files}
+            flows={flows}
+            reviewGroups={directReviewGroups}
+            pipelines={pipelines}
+            surfacePipelines={activePipelines}
+            now={nowSeconds}
+            tasks={hasNodes ? boardTasks : EMPTY_TASKS}
+            allTasks={projectTasks}
+            drafts={layoutDrafts}
+            favorites={favoriteIdSet}
+            isolatedManualPaths={isolatedCompactHistoryPaths}
+            draftBands={draftBands}
+            seatRefs={seatRefsForBoard}
+            mutations={phoneTaskMutations}
+            closing={closingPipelines}
+            rowActions={mobileRowActions}
+            host={mobileShell}
+            renderSheet={renderMobileSheet}
+            onOpenConversation={openPipelineStageConversation}
+            onOpenPipeline={openMobilePipeline}
+            onOpenDraft={(id) => showMobileConversation("draft::" + id)}
+            onAddAgent={addBandAgentDraft}
+            onShown={reportMobileKanbanShown}
+          />
         ) : mobileTop.kind === "pipelines" || mobileTop.kind === "pipeline" ? (
           /* The pipelines list and one pipeline (mobile v2 lane 7, §4.7). Both
              are screens on the same stack as the board, so ‹ leaves the way the
@@ -2160,11 +2317,13 @@ function ProjectDashboardView({
               host={mobileShell}
               renderSheet={renderMobileSheet}
               onOpenConversation={openPipelineStageConversation}
-              onOpenTask={(task) => openMobileTasks({ taskId: task.id })}
+              onOpenTask={(task) => openMobileTask(task.id)}
+              cameFromTask={mobileBelow?.kind === "task" ? mobileBelow.id : null}
             />
           ) : (
             <MobilePipelinesScreen
               pipelines={activePipelines}
+              flows={flows}
               now={nowSeconds}
               host={mobileShell}
               renderSheet={renderMobileSheet}
@@ -2178,7 +2337,8 @@ function ProjectDashboardView({
                lane 3 makes that screen its own, with the title cell and the
                meta line. */
             back={mobileConversationKey !== null}
-            title={<MobileBarTitle>{projectName}</MobileBarTitle>}
+            /* A restored answer being confirmed says so under the name (#2071). */
+            title={<MobileBarTitle meta={cached && !loaded ? t("dash.updating") : undefined}>{projectTitleNode}</MobileBarTitle>}
             titleLabel={t("mobile2.bar.switchProject")}
             titleOpens={mobileShell ? "projects" : undefined}
             host={mobileShell}
@@ -2191,57 +2351,72 @@ function ProjectDashboardView({
                which is the seat card's own sheet, so both halves of a board
                with no orchestrator lead to the one place that makes one. */
             dock={mobileBoardLeaf && boardReady
-              ? seatState.kind === "live" && seatFile
-                ? <MobileBoardDock onTell={() => openBoardRow(seatFile)} />
-                : <MobileBoardDock create={seatState.kind === "draft"} unresolved={seatState.kind !== "draft"}
-                    onTell={() => mobileNav.openSheet(seatState.kind === "draft" ? "rotate" : "seat")} />
-              : undefined}
+              ? <MobileBoardDock create={seatState.kind === "draft"} unresolved={!(seatState.kind === "live" && seatFile) && seatState.kind !== "draft"} onTell={tellOrchestrator} />
+              /* While the board loads the footer is already there, neutral, so
+                 the bottom edge never pops in when the rows land (#2071). */
+              : !boardReady && mobileConversationKey === null
+                ? <MobileBoardDock unresolved onTell={() => mobileNav.openSheet("seat")} />
+                : undefined}
           >
             {pipelinesAlert}
               {!boardReady ? (
-                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
+                /* The shape of what is coming: the board's tabs and cards, or
+                   a conversation's feed when one is on top. */
+                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : mobileConversationKey === null ? <PhoneKanbanSkeleton /> : <FeedSkeleton />
               ) : mobileBoardLeaf ? (
-                <MobileBoard
-                  {...mobileBoardProps}
-                  catalog={{
-                    data: inlineCatalog.catalog,
-                    expanded: inlineCatalog.view.expanded,
-                    paging: inlineCatalog.view.paging,
-                    position: inlineCatalog.view.position,
-                    onToggle: inlineCatalog.toggle,
-                    onReach: inlineCatalog.reach,
-                  }}
+                /* The phone's board is the desktop's status columns (#2072
+                   slice 4): the same bands, the same model and counts, one
+                   column at a time. The orchestrator card stays above the
+                   tabs and the dock below until the dock takes both (§3.6). */
+                <MobileKanban
+                  layout={pipelineLayout}
+                  project={project}
+                  groups={layoutGroups}
+                  manual={layoutManual}
+                  files={files}
+                  flows={flows}
+                  reviewGroups={directReviewGroups}
+                  pipelines={pipelines}
+                  surfacePipelines={activePipelines}
+                  now={nowSeconds}
+                  tasks={hasNodes ? boardTasks : EMPTY_TASKS}
+                  allTasks={projectTasks}
+                  drafts={layoutDrafts}
+                  favorites={favoriteIdSet}
+                  isolatedManualPaths={isolatedCompactHistoryPaths}
+                  draftBands={draftBands}
+                  seatRefs={seatRefsForBoard}
+                  attention={mobileAttention}
+                  closing={closingPipelines}
                   rowActions={mobileRowActions}
-                  onRowActions={(ref) => {
-                    setRowActionsFor(ref);
-                    mobileNav.openSheet("row");
-                  }}
-                  onOpenCatalogConversation={openFullCatalogFile}
                   seat={(
-                    /* The card takes the board's full width (README §4.1): it
-                       is the first CARD of the list, not the chip the strip's
-                       38 vw used to cap. */
+                    /* The card takes the board's full width (README §4.1). */
                     <div className="flex items-stretch px-3" data-testid="mobile-orchestrator-slot">
                       <MobileSeatCard
                         project={project}
                         projectName={projectName}
                         files={files}
                         /* One seat read for the phone: the board needs it to
-                           keep the seat out of the list, and the card renders
-                           from the same answer instead of polling for it a
-                           second time. */
+                           keep the seat out of the columns, and the card
+                           renders from the same answer instead of polling for
+                           it a second time. */
                         seat={seatRead}
                         incumbentRead={seatIncumbentRead}
                         /* The board's own clock, so the card's badge ticks with
-                           the rows beside it rather than on a second one. */
+                           the cards beside it rather than on a second one. */
                         now={nowSeconds}
                         onOpenConversation={openBoardRow}
                       />
                     </div>
                   )}
+                  mutations={phoneTaskMutations}
+                  onOpenTask={(task) => openMobileTask(task.id)}
                   onOpenConversation={openBoardRow}
                   onOpenPipeline={openMobilePipeline}
-                  onOpenPipelines={() => mobileNav.push({ kind: "pipelines" })}
+                  onNewTask={() => openMobileTasks("new")}
+                  onTellOrchestrator={tellOrchestrator}
+                  onShown={reportMobileKanbanShown}
+                  onHiddenCount={setMobileHiddenCount}
                 />
               ) : projectView === "scheme" && schemeAvailable ? (
                 <MobileFocusView
@@ -2255,11 +2430,11 @@ function ProjectDashboardView({
                   pipelines={pipelines}
                   surfacePipelines={activePipelines}
                   tasks={hasNodes ? boardTasks : EMPTY_TASKS}
-                  sheetTasks={projectTasks}
+                  sheetTasks={faceTasks}
                   drafts={layoutDrafts}
                   favorites={favoriteIdSet}
                   isolatedManualPaths={isolatedCompactHistoryPaths}
-                  loaded={loaded}
+                  loaded={loaded || cached}
                   /* The SCREEN is the truth on the phone (mobile v2 §3.3):
                      the conversation on top of the stack is the one this
                      screen is, and it outranks the board's own highlight —
@@ -2277,6 +2452,7 @@ function ProjectDashboardView({
                      host sheet's handoff handle — the last of the retired
                      shelf's contents — went with lane 10. */
                   onHandoff={addHandoffDraft}
+                  onOpenTask={(task) => openMobileTask(task.id)}
                   trayApi={trayApi}
                 />
               ) : (
@@ -2312,14 +2488,8 @@ function ProjectDashboardView({
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            {/* The board carries the switch inside its own tool palette (see
-                ProjectViewTabs); every other desktop leaf has no chrome in that
-                corner, so there it floats. */}
-            {boardReady && listAvailable && !desktopBoardLeaf ? (
-              <ProjectViewTabs value="list" onChange={chooseDesktopView} modes={desktopViewModes} floating />
-            ) : null}
             {!boardReady ? (
-              catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
+              catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <KanbanSkeleton project={project} />
             ) : kanbanLeaf ? (
               <KanbanBoard
                 layout={pipelineLayout}
@@ -2338,16 +2508,18 @@ function ProjectDashboardView({
                 favorites={favoriteIdSet}
                 isolatedManualPaths={isolatedCompactHistoryPaths}
                 draftBands={draftBands}
-                loaded={loaded}
+                loaded={loaded || cached}
+                updating={cached && !loaded}
                 catalogFailures={catalogFailures}
                 selection={board.selection}
                 focus={highlight}
                 onConversationOpened={markPathSeen}
                 projectCwd={projectCwd}
+                seatRefs={seatRefsForBoard}
                 closedPaths={board.prefs.hidden}
                 onRestoreConversation={restoreClosedConversation}
-                seat={(boardId, seatRead) => (
-                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} boardId={boardId} seatRead={seatRead} />
+                seat={(boardId) => (
+                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={desktopSeatRead} />
                 )}
                 onOpenConversations={openConversationsForOneLook}
                 onNewAgent={addDraft}
@@ -2357,7 +2529,10 @@ function ProjectDashboardView({
                 onHandoff={addHandoffDraft}
                 onSpawnRetry={retryLaunch}
                 onCloseConversation={(file) => closeNode(file.path)}
-                viewSwitch={<ProjectViewTabs value="kanban" onChange={chooseDesktopView} modes={desktopViewModes} inline />}
+                viewSwitch={(wide) => <ProjectViewTabs value="kanban" onChange={chooseDesktopView} modes={desktopViewModes} compact={!wide} />}
+                barLead={barLead}
+                barTrail={(wide) => barTrail(wide, true)}
+                aside={taskPanel}
               />
             ) : listAvailable ? (
               <DesktopConversations project={project} enabled={loaded && projectView === "list"} onOpen={openFullCatalogFile} />
@@ -2370,18 +2545,7 @@ function ProjectDashboardView({
               />
             )}
           </div>
-          {taskPanelOpen ? (
-            <TaskPanel
-              tasks={tasks}
-              project={project}
-              boardMembers={boardMemberKeys}
-              favorites={favoriteRows}
-              onOpenFavorite={openSwitchboardFile}
-              onToggleFavorite={(id) => board.setFavorite(id, false)}
-              onOpenTask={openTask}
-              onClose={toggleTaskPanel}
-            />
-          ) : null}
+          {boardReady && kanbanLeaf ? null : taskPanel}
         </div>
       )}
 
@@ -2392,8 +2556,20 @@ function ProjectDashboardView({
           lines to REAL flows itself. */}
       {!isMobile && boardReady ? <Switchboard files={files} flows={deckFlows} project={project} loaded={loaded} catalogFailures={catalogFailures} onOpenFile={openSwitchboardFile} onOpenCatalogFile={openFullCatalogFile} /> : null}
 
-      {isMobile && mobileTaskSheet ? (
-        <TaskSheet project={project} projectName={projectName} tasks={projectTasks} files={files} initialView={mobileTaskSheet} onClose={() => setMobileTaskSheet(null)} />
+      {isMobile && mobileTaskSheet && mobileTaskSheetShown ? (
+        <TaskSheet
+          project={project}
+          projectName={projectName}
+          tasks={faceTasks}
+          files={files}
+          initialView={mobileTaskSheet.view}
+          onClose={() => setMobileTaskSheet(null)}
+          onOpenTask={(task, from) => {
+            /* A task just created has no list to come back to. */
+            if (from === "new") setMobileTaskSheet(null);
+            openMobileTask(task.id);
+          }}
+        />
       ) : null}
 
       <TaskToastHost />

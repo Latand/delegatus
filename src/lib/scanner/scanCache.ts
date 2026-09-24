@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { fsyncPath, readJsonCache } from "@/lib/state/durableJson";
 import { listFilesWithProjectCatalog } from "@/lib/scanner";
 import { primeTranscriptTurnEvidence } from "@/lib/scanner/activity";
 import { globalCache } from "@/lib/scanner/caches";
@@ -46,6 +47,8 @@ type PinnedFileScanSnapshot = Pick<CachedFileScan, "snapshot" | "pinOverlayPaths
 };
 type FileScanCacheSlot = {
   schemaVersion: typeof FILE_SCAN_CACHE_SCHEMA_VERSION;
+  /** Which generation counter this slot's generations belong to (#2072). */
+  epoch: string;
   snapshot?: FileScanSnapshot;
   snapshotGeneration: number;
   requestedGeneration: number;
@@ -65,6 +68,10 @@ type FileScanCacheSlot = {
 export type CachedFileScan = {
   snapshot: FileScanSnapshot;
   pinOverlayPaths?: string[];
+  /** The epoch `generation` counts in: generations restart at zero with a new
+      slot (a new process, a schema change), so two of them compare only
+      within one epoch (#2072). */
+  epoch?: string;
   generation: number;
   targetGeneration: number;
   cacheStatus: "hit" | "stale" | "miss";
@@ -90,7 +97,9 @@ const FILE_SCAN_PIN_CACHE_MAX = 8;
 // v11: pre-#1718 snapshots lack lastAgentWorkAt. Recompute activity before
 // publishing either files representation; absence in a v11 row can still be
 // genuine unknown activity from a bounded tail.
-const FILE_SCAN_CACHE_SCHEMA_VERSION = 11 as const;
+// v12: entries may carry the `copilot-sessions` root and the `copilot`
+// engine/format; a pre-Copilot snapshot has no Copilot rows and is rescanned.
+const FILE_SCAN_CACHE_SCHEMA_VERSION = 12 as const;
 const FILE_SCAN_SNAPSHOT_VERSION = 1 as const;
 const FILE_SCAN_SNAPSHOT_FILE = "files-scan-snapshot.json";
 const FILE_SCAN_PERSISTENCE_DIAGNOSTIC_MS = 60_000;
@@ -102,6 +111,12 @@ const fileScanCacheStore = globalThis as typeof globalThis & {
 function fileScanCache(): Map<string, unknown> {
   fileScanCacheStore.__llvFilesRouteScans ??= new Map();
   return fileScanCacheStore.__llvFilesRouteScans;
+}
+
+let fileScanEpochs = 0;
+function newFileScanEpoch(): string {
+  fileScanEpochs += 1;
+  return `${Date.now().toString(36)}${fileScanEpochs.toString(36)}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -120,13 +135,13 @@ function isFileScanSnapshot(value: unknown): value is FileScanSnapshot {
   const filesValid = value.files.every((candidate) => {
     if (!isRecord(candidate)) return false;
     return typeof candidate.path === "string"
-      && (candidate.root === "codex-sessions" || candidate.root === "claude-projects" || candidate.root === "claude-tasks" || candidate.root === "openclaw-sessions")
+      && (candidate.root === "codex-sessions" || candidate.root === "claude-projects" || candidate.root === "claude-tasks" || candidate.root === "openclaw-sessions" || candidate.root === "copilot-sessions")
       && typeof candidate.name === "string"
       && typeof candidate.project === "string"
       && typeof candidate.title === "string"
-      && (candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "shell" || candidate.engine === "openclaw")
+      && (candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "shell" || candidate.engine === "openclaw" || candidate.engine === "copilot")
       && typeof candidate.kind === "string"
-      && (candidate.fmt === "codex" || candidate.fmt === "claude" || candidate.fmt === "plain" || candidate.fmt === "openclaw")
+      && (candidate.fmt === "codex" || candidate.fmt === "claude" || candidate.fmt === "plain" || candidate.fmt === "openclaw" || candidate.fmt === "copilot")
       && (candidate.parent === null || typeof candidate.parent === "string")
       && typeof candidate.mtime === "number" && Number.isFinite(candidate.mtime)
       && typeof candidate.size === "number" && Number.isFinite(candidate.size)
@@ -152,7 +167,7 @@ function isFileScanSnapshot(value: unknown): value is FileScanSnapshot {
 /* The primed evidence above is only meaningful for an engine whose transcript
    the turn reader parses; background-task output logs carry no turn. */
 function isTranscriptEngine(engine: Engine): engine is TranscriptEngine {
-  return engine === "claude" || engine === "codex" || engine === "openclaw";
+  return engine === "claude" || engine === "codex" || engine === "openclaw" || engine === "copilot";
 }
 
 function persistedTurnState(entry: FileEntry): TurnState | undefined {
@@ -252,7 +267,7 @@ function primePersistedFileDerivations(snapshot: FileScanSnapshot): void {
 
 function readPersistedFileScanSnapshot(): FileScanSnapshot | undefined {
   try {
-    const value = JSON.parse(fs.readFileSync(statePath(FILE_SCAN_SNAPSHOT_FILE), "utf8")) as unknown;
+    const value = readJsonCache(statePath(FILE_SCAN_SNAPSHOT_FILE));
     // The persisted snapshot carries the cache schema: a snapshot written by a
     // build with different derivation semantics (pre-#406 lastTurn boundaries
     // opened by meta records) must not warm-start this one — the first cold
@@ -286,7 +301,13 @@ export function persistedFileScanSnapshot(): FileScanSnapshot | undefined {
   return readPersistedFileScanSnapshot();
 }
 
-function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot): void {
+/** The generation a persisted snapshot holds, written beside it (#2072): the
+    files projection worker reads the file whenever its turn comes, and a
+    later scan may have replaced it by then, so the worker reports this pair
+    back and the projection is dated by what it actually read. */
+export type PersistedFileScanGeneration = { epoch: string; generation: number };
+
+function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot, scanned: PersistedFileScanGeneration): void {
   let temporary: string | undefined;
   let operation = "create state directory";
   let target = statePath(FILE_SCAN_SNAPSHOT_FILE);
@@ -300,14 +321,18 @@ function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot): void {
     fs.writeFileSync(temporary, JSON.stringify({
       version: FILE_SCAN_SNAPSHOT_VERSION,
       schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
+      epoch: scanned.epoch,
+      generation: scanned.generation,
       snapshot,
     }) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     });
+    fsyncPath(temporary);
     operation = "rename temporary snapshot";
     target = filename;
     fs.renameSync(temporary, filename);
+    fsyncPath(path.dirname(filename));
   } catch (error) {
     if (temporary !== undefined) {
       try {
@@ -426,6 +451,8 @@ function normalizeFileScanCacheSlot(value: unknown): FileScanCacheSlot {
     && Number.isSafeInteger(value.requestedGeneration)
   ) {
     const slot = value as FileScanCacheSlot;
+    /* A slot a build before #2072 created counts without a named epoch. */
+    if (typeof slot.epoch !== "string") slot.epoch = newFileScanEpoch();
     const pending = refreshPromise(slot.refresh);
     if (pending && (!slot.refresh?.controller || !Number.isSafeInteger(slot.refresh.subscribers))) {
       installFileScanRefresh(slot, slot.refresh?.generation ?? 0, pending);
@@ -436,6 +463,7 @@ function normalizeFileScanCacheSlot(value: unknown): FileScanCacheSlot {
   const legacy = isRecord(value) ? value : {};
   const slot: FileScanCacheSlot = {
     schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
+    epoch: newFileScanEpoch(),
     snapshot: isFileScanSnapshot(legacy.snapshot) ? legacy.snapshot : undefined,
     snapshotGeneration: 0,
     requestedGeneration: 0,
@@ -495,7 +523,7 @@ function fileScanRefreshPromise(
       ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),
     }, generationSignal));
     if (!snapshot.complete) throw new Error("filesystem scan incomplete");
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot);
+    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot, { epoch: slot.epoch, generation });
     slot.snapshot = snapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
@@ -595,7 +623,7 @@ function beginPinnedFileScanRefresh(
       slot.pinnedSnapshots.delete(oldest);
       slot.pinnedGenerations?.delete(oldest);
     }
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(globalSnapshot);
+    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(globalSnapshot, { epoch: slot.epoch, generation });
     slot.snapshot = globalSnapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
@@ -654,6 +682,7 @@ function completedScan(
     });
     return {
       ...completed,
+      epoch: slot.epoch,
       cacheStatus: cacheStatus ?? (completed.generation < targetGeneration ? "stale" : "hit"),
       requestCount: slot.requestCount ?? 0,
       cloneDurationMs: performance.now() - cloneStartedAt,
@@ -664,6 +693,7 @@ function completedScan(
   const snapshot = structuredClone(slot.snapshot!);
   return {
     snapshot,
+    epoch: slot.epoch,
     generation: slot.snapshotGeneration,
     targetGeneration,
     cacheStatus: cacheStatus ?? (slot.snapshotGeneration < targetGeneration ? "stale" : "hit"),
@@ -682,6 +712,7 @@ function resourceScan(
 ): CachedFileScan {
   return {
     snapshot,
+    epoch: slot.epoch,
     generation,
     targetGeneration,
     cacheStatus: "miss",
@@ -732,6 +763,7 @@ function globalFileScanSlot(): FileScanCacheSlot {
     if (snapshot) primePersistedFileDerivations(snapshot);
     const slot: FileScanCacheSlot = {
       schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
+      epoch: newFileScanEpoch(),
       snapshot,
       snapshotGeneration: 0,
       requestedGeneration: 0,

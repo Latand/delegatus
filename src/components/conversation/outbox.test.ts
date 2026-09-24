@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
+import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
+
 import {
   adoptOutbox,
   cancelOutbox,
@@ -9,6 +11,14 @@ import {
   enqueueOutbox,
   markOutboxResponded,
   nextDispatch,
+  OPERATION_RECONCILE_BATCH,
+  OPERATION_RECONCILE_GRACE_MS,
+  OPERATION_RECONCILE_INTERVAL_MS,
+  OPERATION_RECONCILE_MOVING_AFTER_MS,
+  OPERATION_READ_TIMEOUT_MS,
+  operationReadDue,
+  operationsToReconcile,
+  readOperationShared,
   outboxHistory,
   OUTBOX_DELIVERED_TTL_MS,
   OUTBOX_LIMIT,
@@ -24,7 +34,9 @@ import {
   seedLaunchOutbox,
   settleLaunchOutboxDelivered,
   settleLaunchOutboxFailed,
+  transcriptEchoBindings,
   transcriptEchoCount,
+  transcriptEchoObservationId,
   updateOutbox,
   visibleOutbox,
   type OutboxEntry,
@@ -2127,4 +2139,357 @@ test("pending then queued observations preserve a server-reported unknown delive
   const queued = { ...pending, ...outboxReceiptPatch(pending, "queued", { ...receipt, status: "queued", revision: 3 }) };
   expect(queued.deliveryUncertain).toBe(true);
   expect(queued.awaitingTurn).toBeUndefined();
+});
+
+test("an unknown outcome owns the record that NAMES it, and only that one", () => {
+  /* Round-4 P1 and round-2 P1, together. A submission whose acknowledgement
+     never came back used to be excluded from echo ownership, so the
+     transcript's own record of it could not be recognised as belonging to the
+     row the operator already had — and the feed mounted the canonical row
+     beside the spinning one. It owns records now.
+
+     What it does NOT own is a record that merely repeats its words. An
+     outcome nobody could establish is not established by somebody else's
+     message saying the same thing, so the claim rests on the identity the
+     delivery path recorded: the client message id the record was written
+     under, which is this row's own id. */
+  const conversation = "conv-unknown-echo";
+  const text = "Check the release status";
+  enqueueOutbox(conversation, { id: "key-unknown", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-unknown", { state: "failed", deliveryUncertain: true, error: "lost response" });
+  enqueueOutbox(conversation, { id: "key-later", text, images: 0, at: 2_000 });
+  updateOutbox(conversation, "key-later", { state: "delivering" });
+
+  const unrelated: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text };
+  const own: TranscriptEchoObservation = { generation: "gen-1", id: "row:1:0", text, submissionId: "key-unknown" };
+  /* An arrival that names nobody is nobody's proof. It does not settle the
+     unknown submission, and it does not get consumed on its behalf either —
+     the submission that CAN be recognised by its words takes it. */
+  expect([...transcriptEchoBindings(conversation, [unrelated])])
+    .toEqual([[transcriptEchoObservationId(unrelated), "key-later"]]);
+  /* The record that names the unknown submission binds it, and binds it
+     alone: the later submission keeps its own. */
+  expect([...transcriptEchoBindings(conversation, [unrelated, own])]).toEqual([
+    [transcriptEchoObservationId(own), "key-unknown"],
+    [transcriptEchoObservationId(unrelated), "key-later"],
+  ]);
+
+  /* And the named record retires the row it answers for, exactly once: the
+     unknown entry leaves the tail for its canonical record while the later
+     submission keeps waiting. The payload and the unknown fate stay in the
+     queue. */
+  publishTranscriptEchoes(conversation, [own]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-later"]);
+  expect(readOutbox(conversation).find((entry) => entry.id === "key-unknown"))
+    .toMatchObject({ text, deliveryUncertain: true });
+  /* Replaying the same record changes nothing: one record, one adoption. */
+  publishTranscriptEchoes(conversation, [own, own]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-later"]);
+});
+
+test("an unrelated arrival never settles a submission whose outcome is unknown", () => {
+  /* Round-2 P1: another sender's identical words used to flip the row from
+     pending to confirmed and take its Check status away, while the entry was
+     still marked uncertain. */
+  const conversation = "conv-unknown-unrelated";
+  const text = "Deploy the release";
+  enqueueOutbox(conversation, { id: "key-unknown", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-unknown", { state: "delivering", deliveryUncertain: true });
+  const somebodyElse: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text };
+  publishTranscriptEchoes(conversation, [somebodyElse]);
+  expect([...transcriptEchoBindings(conversation, [somebodyElse])]).toEqual([]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-unknown"]);
+  expect(readOutbox(conversation)[0]).toMatchObject({ deliveryUncertain: true });
+});
+
+test("a record that arrives out of order stays with the submission it names", () => {
+  /* Two sends of the same words, the second one's record first. The unknown
+     first send must not consume it — it belongs to the second, and saying so
+     is the whole of what an identity is for. */
+  const conversation = "conv-out-of-order";
+  const text = "Run it again";
+  enqueueOutbox(conversation, { id: "key-first", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-first", { state: "delivering", deliveryUncertain: true });
+  enqueueOutbox(conversation, { id: "key-second", text, images: 0, at: 2_000 });
+  const secondRecord: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, submissionId: "key-second" };
+  expect([...transcriptEchoBindings(conversation, [secondRecord])])
+    .toEqual([[transcriptEchoObservationId(secondRecord), "key-second"]]);
+  publishTranscriptEchoes(conversation, [secondRecord]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-first"]);
+});
+
+test("a delivered document binds by identity though its record carries the inbox paths", () => {
+  /* The route folds the attachment's inbox path into the text the agent
+     receives, so the record NEVER carries the words the row shows. Text could
+     not bind it and the feed painted the canonical copy beside the original;
+     the identity binds it whatever the words are. */
+  const conversation = "conv-document";
+  const typed = "Read this and tell me what changed";
+  const delivered = `${typed}\n/tmp/viewer-inbox/files/a1b2c3d4e5f6/release-notes.pdf`;
+  enqueueOutbox(conversation, { id: "key-doc", text: typed, images: 0, files: 1, at: 1_000 });
+  updateOutbox(conversation, "key-doc", { state: "delivering" });
+  const record: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text: delivered, submissionId: "key-doc" };
+  expect([...transcriptEchoBindings(conversation, [record])])
+    .toEqual([[transcriptEchoObservationId(record), "key-doc"]]);
+  publishTranscriptEchoes(conversation, [record]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(typed), Date.now())).toEqual([]);
+});
+
+test("a send that is nothing but an attachment binds to its textless record", () => {
+  /* No words on either side. The record the engine journaled carries the
+     picture and the delivery identity, and that identity is the only thing
+     that can join it to the row the operator already has. */
+  const conversation = "conv-image-only";
+  enqueueOutbox(conversation, { id: "key-image", text: "", images: 1, at: 1_000 });
+  updateOutbox(conversation, "key-image", { state: "delivering" });
+  const record: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text: "", submissionId: "key-image" };
+  expect([...transcriptEchoBindings(conversation, [record])])
+    .toEqual([[transcriptEchoObservationId(record), "key-image"]]);
+  publishTranscriptEchoes(conversation, [record]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(""), Date.now())).toEqual([]);
+});
+
+test("an unknown outcome with no record of its own keeps its row", () => {
+  /* The other side of the same rule: without evidence, unknown is neither
+     delivered nor lost, so the row stays whatever the failed request left
+     behind on the local entry. */
+  const conversation = "conv-unknown-alone";
+  enqueueOutbox(conversation, { id: "key-unknown", text: "Nobody can say", images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-unknown", { state: "failed", deliveryUncertain: true, error: "lost response" });
+  expect(visibleOutbox(readOutbox(conversation), echoes("something else"), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-unknown"]);
+});
+
+/* ── #1950 round 3: text never decides for a submission with an identity ── */
+
+test("two admitted equal-text sends: the second's record hides only the second", () => {
+  const conversation = "conv-admitted-reversed";
+  const text = "Run it again";
+  enqueueOutbox(conversation, { id: "key-first", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-first", { state: "delivering", operationId: "operation-first" });
+  enqueueOutbox(conversation, { id: "key-second", text, images: 0, at: 2_000 });
+  updateOutbox(conversation, "key-second", { state: "delivering", operationId: "operation-second" });
+  const secondRecord: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, submissionId: "key-second" };
+  const bindings = transcriptEchoBindings(conversation, [secondRecord]);
+  expect([...bindings]).toEqual([[transcriptEchoObservationId(secondRecord), "key-second"]]);
+  publishTranscriptEchoes(conversation, [secondRecord]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now(), undefined, undefined, new Set(bindings.values()))
+    .map((entry) => entry.id)).toEqual(["key-first"]);
+  expect(readOutbox(conversation).find((entry) => entry.id === "key-first")!.retiredEchoId).toBeUndefined();
+});
+
+test("an admitted submission is claimed by its own identity and never by equal text", () => {
+  const conversation = "conv-admitted-foreign";
+  const text = "Deploy the release";
+  enqueueOutbox(conversation, { id: "key-admitted", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-admitted", { state: "delivering", operationId: "operation-admitted" });
+  /* A record naming a delivery nobody here can resolve, and one naming none. */
+  const foreign: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, unresolvedSubmission: true };
+  const anonymous: TranscriptEchoObservation = { generation: "gen-1", id: "row:1:0", text };
+  expect([...transcriptEchoBindings(conversation, [foreign, anonymous])]).toEqual([]);
+  publishTranscriptEchoes(conversation, [foreign, anonymous]);
+  expect(readOutbox(conversation)[0]!.retiredEchoId).toBeUndefined();
+  expect(visibleOutbox(readOutbox(conversation), echoes([text, 2]), Date.now(), undefined, undefined, new Set())
+    .map((entry) => entry.id)).toEqual(["key-admitted"]);
+  /* Its own record does. */
+  const own: TranscriptEchoObservation = { generation: "gen-1", id: "row:2:0", text, submissionId: "key-admitted" };
+  const bindings = transcriptEchoBindings(conversation, [foreign, anonymous, own]);
+  expect([...bindings]).toEqual([[transcriptEchoObservationId(own), "key-admitted"]]);
+  publishTranscriptEchoes(conversation, [foreign, anonymous, own]);
+  expect(readOutbox(conversation)[0]!.retiredEchoId).toBe(transcriptEchoObservationId(own));
+});
+
+test("an unresolved identity is never claimed by text, even by a submission without one", () => {
+  const conversation = "conv-unadmitted-foreign";
+  const text = "Deploy the release";
+  enqueueOutbox(conversation, { id: "key-queued", text, images: 0, at: 1_000 });
+  const foreign: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, unresolvedSubmission: true };
+  expect([...transcriptEchoBindings(conversation, [foreign])]).toEqual([]);
+  publishTranscriptEchoes(conversation, [foreign]);
+  expect(readOutbox(conversation)[0]!.retiredEchoId).toBeUndefined();
+});
+
+describe("operationsToReconcile", () => {
+  const now = Date.parse("2026-09-22T05:00:00.000Z");
+  const old = now - 9 * 60 * 60_000;
+  const receipt = (operationId: string, overrides: Partial<RuntimeReceipt> = {}): RuntimeReceipt => ({
+    operationId, idempotencyKey: `${operationId}-key`, conversationId: "conv", kind: "send",
+    status: "delivering", at: new Date(old).toISOString(), admittedAt: new Date(old).toISOString(), revision: 2,
+    ...overrides,
+  });
+  const row = (id: string, overrides: Partial<OutboxEntry> = {}): OutboxEntry => ({
+    id, text: id, images: 0, at: old, state: "delivering", ...overrides,
+  });
+
+  test("an unsettled row whose receipt left the tail is read by its own operation id", () => {
+    const stale = receipt("op-stale", { idempotencyKey: "row-a" });
+    expect(operationsToReconcile([row("row-a", { deliveryReceipt: stale })], [], [], () => true, now))
+      .toEqual([{ operationId: "op-stale", idempotencyKey: "row-a", original: stale }]);
+    // An admitted row with only an operation id still names its key.
+    expect(operationsToReconcile([row("row-b", { operationId: "op-b" })], [], [], () => true, now))
+      .toMatchObject([{ operationId: "op-b", idempotencyKey: "row-b" }]);
+  });
+
+  test("settled, local and fresh rows are not read", () => {
+    const queue = [
+      row("delivered", { deliveryReceipt: receipt("op-delivered", { status: "delivered" }) }),
+      row("discarded", { deliveryReceipt: receipt("op-discarded", { status: "failed", reason: "delivery-discarded" }) }),
+      row("safe-failure", { deliveryReceipt: receipt("op-safe", { status: "failed", resend: "safe" }) }),
+      row("placeholder", { deliveryReceipt: receipt("composer-unconfirmed:placeholder") }),
+      row("launch", { launchOwned: true, operationId: "op-launch" }),
+      row("queued", { state: "queued", operationId: "op-queued" }),
+      row("fresh", { at: now - 1_000, operationId: "op-fresh" }),
+      row("no-operation"),
+    ];
+    expect(operationsToReconcile(queue, [], [], () => true, now)).toEqual([]);
+    // A tail that already carries the arrival settles the row without a read.
+    const arrived = receipt("op-arrived", { status: "delivered", revision: 1 });
+    expect(operationsToReconcile([row("arrived", { deliveryReceipt: receipt("op-arrived") })], [arrived], [], () => true, now)).toEqual([]);
+  });
+
+  test("a receipt the live tail still carries is left to the stream until a moving one outlives the settlement window", () => {
+    const uncertain = receipt("op-carried", { status: "uncertain" });
+    expect(operationsToReconcile([], [uncertain], [uncertain], () => true, now)).toEqual([]);
+    const moving = receipt("op-moving", { admittedAt: new Date(now - OPERATION_RECONCILE_MOVING_AFTER_MS + 60_000).toISOString() });
+    expect(operationsToReconcile([], [moving], [moving], () => true, now)).toEqual([]);
+    const abandoned = receipt("op-abandoned");
+    expect(operationsToReconcile([row("row-x", { deliveryReceipt: abandoned })], [abandoned], [abandoned], () => true, now)
+      .map((item) => item.operationId)).toEqual(["op-abandoned"]);
+  });
+
+  test("a shown receipt of unknown fate is read even without a local row", () => {
+    const uncertain = receipt("op-uncertain", { status: "uncertain" });
+    const verifyFirst = receipt("op-verify", { status: "failed", resend: "verify-first" });
+    expect(operationsToReconcile([], [uncertain, verifyFirst, receipt("op-done", { status: "delivered" })], [], () => true, now)
+      .map((item) => item.operationId)).toEqual(["op-uncertain", "op-verify"]);
+  });
+
+  test("an operation is read only when due, after the grace period, a bounded batch at a time", () => {
+    const tail = receipt("op-tail");
+    expect(operationsToReconcile([], [tail], [], () => false, now)).toEqual([]);
+    expect(operationsToReconcile([], [tail], [], () => true, now)).toHaveLength(1);
+    const recent = receipt("op-recent", { admittedAt: new Date(now - OPERATION_RECONCILE_GRACE_MS + 1).toISOString() });
+    expect(operationsToReconcile([], [recent], [], () => true, now)).toEqual([]);
+    const many = Array.from({ length: OPERATION_RECONCILE_BATCH + 3 }, (_, index) =>
+      receipt(`op-${String(index).padStart(2, "0")}`, { admittedAt: new Date(old + index).toISOString() }));
+    const batch = operationsToReconcile([], many.toReversed(), [], () => true, now);
+    expect(batch.map((item) => item.operationId)).toEqual(many.slice(0, OPERATION_RECONCILE_BATCH).map((item) => item.operationId));
+  });
+});
+
+describe("readOperationShared", () => {
+  beforeEach(() => resetOutboxForTests());
+  const now = Date.parse("2026-09-22T05:00:00.000Z");
+  const delivered = (operationId: string): RuntimeReceipt => ({
+    operationId, idempotencyKey: `${operationId}-key`, conversationId: "conv", kind: "send",
+    status: "delivered", at: new Date(now).toISOString(), revision: 1,
+  });
+  function server(answer: (operationId: string) => Response | Promise<Response>) {
+    const requests: { url: string; method: string; signal?: AbortSignal | null }[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method ?? "GET", signal: init?.signal });
+      return answer(decodeURIComponent(url.split("/").at(-1)!));
+    }) as typeof fetch;
+    return { requests, fetchImpl };
+  }
+
+  test("holders of one operation share one read, and it is spaced by the interval", async () => {
+    const { requests, fetchImpl } = server((operationId) => Response.json({ receipt: delivered(operationId) }));
+    const first = readOperationShared("op-one", now, { fetchImpl })!;
+    const second = readOperationShared("op-one", now, { fetchImpl })!;
+    expect(await first.result).toMatchObject({ operationId: "op-one", status: "delivered" });
+    expect(await second.result).toMatchObject({ operationId: "op-one", status: "delivered" });
+    first.release();
+    second.release();
+    expect(requests).toEqual([{ url: "/api/runtime/operations/op-one", method: "GET", signal: expect.anything() }]);
+    expect(readOperationShared("op-one", now + OPERATION_RECONCILE_INTERVAL_MS - 1, { fetchImpl })).toBeNull();
+    expect(operationReadDue("op-one", now + OPERATION_RECONCILE_INTERVAL_MS)).toBe(true);
+    // A distinct operation has its own read.
+    readOperationShared("op-two", now, { fetchImpl })!.release();
+    expect(requests.map((request) => request.url)).toEqual(["/api/runtime/operations/op-one", "/api/runtime/operations/op-two"]);
+  });
+
+  test("a read that learns nothing backs off, and only a terminal answer for the same operation counts", async () => {
+    const answers: Response[] = [
+      new Response("{}", { status: 503 }),
+      Response.json({ receipt: { ...delivered("op-slow"), status: "delivering" } }),
+      Response.json({ receipt: delivered("op-foreign") }),
+    ];
+    const { fetchImpl } = server(() => answers.shift()!);
+    for (let failures = 1; failures <= 3; failures += 1) {
+      const at = now + (failures - 1) * 10 * OPERATION_RECONCILE_INTERVAL_MS;
+      const read = readOperationShared("op-slow", at, { fetchImpl })!;
+      expect(await read.result).toBeNull();
+      read.release();
+      expect(operationReadDue("op-slow", at + OPERATION_RECONCILE_INTERVAL_MS * 2 ** failures - 1)).toBe(false);
+    }
+  });
+
+  test("an unknown-fate answer backs off to the ceiling instead of being asked again every interval", async () => {
+    let answer: RuntimeReceipt = { ...delivered("op-unknown"), status: "failed", resend: "verify-first" };
+    const { requests, fetchImpl } = server(() => Response.json({ receipt: answer }));
+    let at = now;
+    const spacings: number[] = [];
+    for (let read = 0; read < 6; read += 1) {
+      const shared = readOperationShared("op-unknown", at, { fetchImpl })!;
+      expect(await shared.result).toMatchObject({ status: "failed", resend: "verify-first" });
+      shared.release();
+      let next = at + OPERATION_RECONCILE_INTERVAL_MS;
+      while (!operationReadDue("op-unknown", next)) next += OPERATION_RECONCILE_INTERVAL_MS;
+      spacings.push(next - at);
+      at = next;
+    }
+    expect(spacings).toEqual([60_000, 120_000, 240_000, 300_000, 300_000, 300_000]);
+    expect(requests).toHaveLength(6);
+    // An arrival resets the spacing; the row then leaves the candidates anyway.
+    answer = delivered("op-unknown");
+    const arrived = readOperationShared("op-unknown", at, { fetchImpl })!;
+    expect(await arrived.result).toMatchObject({ status: "delivered" });
+    arrived.release();
+    expect(operationReadDue("op-unknown", at + OPERATION_RECONCILE_INTERVAL_MS)).toBe(true);
+  });
+
+  test("the last holder's release aborts the request, which is not counted as a failure", async () => {
+    let signal: AbortSignal | null | undefined;
+    const fetchImpl = ((_input: string, init?: RequestInit) => {
+      signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+    }) as unknown as typeof fetch;
+    const one = readOperationShared("op-held", now, { fetchImpl })!;
+    const two = readOperationShared("op-held", now, { fetchImpl })!;
+    one.release();
+    expect(signal?.aborted).toBe(false);
+    two.release();
+    expect(signal?.aborted).toBe(true);
+    expect(await one.result).toBeNull();
+    expect(operationReadDue("op-held", now + 1)).toBe(true);
+    expect(OPERATION_READ_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+
+  test("a caller after the last release starts a fresh read instead of joining the cancelled one", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const fetchImpl = ((_input: string, init?: RequestInit) => {
+      signals.push(init?.signal);
+      if (signals.length === 1) {
+        return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+      }
+      return Promise.resolve(Response.json({ receipt: delivered("op-rejoin") }));
+    }) as unknown as typeof fetch;
+    const first = readOperationShared("op-rejoin", now, { fetchImpl })!;
+    first.release();
+    // Same tick: the abort has not settled yet.
+    const second = readOperationShared("op-rejoin", now, { fetchImpl })!;
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(await second.result).toMatchObject({ operationId: "op-rejoin", status: "delivered" });
+    expect(await first.result).toBeNull();
+    second.release();
+    // The cancelled read counted as no failure; the arrival reset the spacing.
+    expect(operationReadDue("op-rejoin", now + OPERATION_RECONCILE_INTERVAL_MS)).toBe(true);
+  });
 });

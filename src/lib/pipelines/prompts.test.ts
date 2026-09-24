@@ -6,6 +6,21 @@ import { buildPipeline } from "./store";
 import { renderStagePrompt } from "./prompts";
 import type { PipelineStage } from "./types";
 
+test("comparison guidance names the owner while preserving full host capabilities", () => {
+  const stage: PipelineStage = { id: "build", kind: "run", prompt: "Compare changes", next: null, sandbox: "full",
+    effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } };
+  const pipeline = buildPipeline({ id: "comparison", task: "Compare changes", project: "viewer", repoDir: "/repo", stages: [stage],
+    srcPath: null, srcConversationId: null, now: "now" });
+  pipeline.delivery = { target: { repository: "repo-fixture", remote: "", branch: "refs/heads/review" },
+    disposition: "comparison", publish: "disabled", active: false, ownerId: "publishing-lane", epoch: 2, journal: [] };
+  const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
+  expect(prompt).toContain("owned by publishing-lane at epoch 2");
+  expect(prompt).toContain("Do not push to that branch");
+  expect(prompt).toContain("This instruction is guidance");
+  expect(prompt).toContain("Host access: full");
+  expect(stage.sandbox).toBe("full");
+});
+
 test("run prompt renders task, previous output, spec, access, verdict, and nesting contracts", () => {
   const stage: PipelineStage = {
     id: "build",

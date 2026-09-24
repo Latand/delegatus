@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { carryingTaskWorkLinks, pipelineWorkLinks } from "@/lib/forge/resolve";
+import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipelines/engine";
+import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
+import { loadPipelines, pipelineRevision } from "@/lib/pipelines/store";
+import { loadTasks } from "@/lib/tasks/store";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineGraphEdit, type PipelineGuardErrorCode, type PipelineGuardField, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import type { ENGINE_NOT_CONNECTED, EngineNotConnectedDetails } from "@/lib/accounts/engineConnection";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import type { ApiError } from "@/lib/types";
 
@@ -13,10 +19,13 @@ export const dynamic = "force-dynamic";
 
 const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 
-const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage"]);
+const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review"]);
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy";
+  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
+    | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT";
+  /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
+  details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before the action was admitted,
       so the identical request may be repeated. */
   retryable?: true;
@@ -24,12 +33,14 @@ type PipelineApiError = ApiError & {
   path?: string;
   /** Present when a close was refused: the hosts it stopped and the one it could not. */
   close?: PipelineCloseReport;
+  /** Present when a legacy review conversion was refused: the editable preview. */
+  legacyReviewPreview?: LegacyReviewPreview;
 };
 
 export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
   const { id } = await ctx.params;
   try {
     const pipeline = getPipeline(id);
@@ -37,7 +48,7 @@ export async function GET(
     /* #1695 C7 and graph slice 1: the digests a guarded graph edit names as
        `expectedStageDigest` — a stage's for override-stage and set-edge, the
        whole plan's for add-stage, remove-stage and reorder-stage. */
-    return NextResponse.json({ ok: true, pipeline, stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
+    return NextResponse.json({ ok: true, pipeline, revision: pipelineRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }
@@ -46,7 +57,7 @@ export async function GET(
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit } | PipelineApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit; workLinks?: ResolvedWorkLinks; taskWorkLinks?: Record<string, ResolvedWorkLinks> } | PipelineApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   let body: PatchPipelineRequest;
@@ -69,13 +80,19 @@ export async function PATCH(
       ...(result.code ? { code: result.code } : {}),
       ...(result.field ? { field: result.field } : {}),
       ...(result.path ? { path: result.path } : {}),
+      ...(result.details ? { details: result.details } : {}),
       /* #1026: a draft stage edit runs the same batched stage validation the
          create path does, so its caller gets the same field-level list. */
       ...(result.violations?.length ? { violations: result.violations } : {}),
       ...(result.close ? { close: result.close } : {}),
+      ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}),
     }, { status: result.status ?? 400 });
     if (CONTROLLER_ACTIONS.has(body.action)) requestPipelineTick();
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}) });
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
+      workLinks: pipelineWorkLinks(result.pipeline),
+      /* The task cards that aggregate this pipeline redraw from the same answer. */
+      taskWorkLinks: carryingTaskWorkLinks(result.pipeline, loadTasks(), loadPipelines()),
+    } : {}) });
   } catch (error) {
     /* #1766: nothing was admitted, so the same action may be repeated. */
     if (error instanceof StoreBusyBeforeAdmissionError) {

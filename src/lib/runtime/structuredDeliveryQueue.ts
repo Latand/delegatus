@@ -1,10 +1,11 @@
 import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
+import { RetryBackoff } from "./retryBackoff";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
 import { parseRuntimeCommand, parseRuntimeSendSettings } from "./commands";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
-import type { RuntimeInjectionBinding, RuntimeSendSettings } from "./contracts";
+import type { RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { evidenceAgrees, readEvidence, readOptionalEvidence, type Evidence } from "./evidence";
 import type { CompactCapableHost, DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome } from "./engineHost";
 import { hostSupportsCompact, hostSupportsInject, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
@@ -31,9 +32,16 @@ interface StructuredOperationStatus {
   /** Immutable admission time on current receipts; `at` supports older rows. */
   admittedAt?: string;
   at?: string;
+  /** The interrupt-and-resend route recorded when this send's delivery began,
+      so an executor that did not issue the interrupt still reports it. */
+  delivery?: string | null;
+  interruptedTurnId?: string | null;
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** A terminal provider turn engages an account pick immediately (#1983).
+      Live host health still fences a newer turn before applying it. */
+  terminalTurn?(conversationId: string): boolean;
   nativeQueueExecute?(command: NativeQueueCommand & { operationId: string }, refusalReason?: string): Promise<void>;
   nativeQueueReconcile?(): Promise<void>;
   /** Startup owns recovery for hosts it has not registered yet. Leave their
@@ -41,11 +49,15 @@ export interface StructuredDeliveryQueuePort {
   deferTarget?(conversationId: string): boolean;
   /** A reconfigure withdrawn before its claim, or whose claimed switch was cancelled (#1705). */
   reconfigureCancelled?(effect: StructuredReconfigureEffect): boolean;
+  /** The failed account switch holding this conversation's messages, or null (#1846). */
+  switchHold?(conversationId: string): { accountId: string; reason: string } | null;
+  /** Records that the account switch a message engaged failed, so that message and the ones after it stay held. */
+  holdForFailedSwitch?(effect: StructuredReconfigureEffect, reason: string): void;
   effects(kinds?: readonly string[], afterEventSeq?: number): Promise<StructuredDeliveryEffect[]>;
   transition(
     operationId: string,
     status: StructuredDeliveryTransition,
-    details?: { turnId?: string | null; reason?: string | null },
+    details?: RuntimeTransitionDetails,
   ): Promise<void>;
   /** The durable receipt state, when the port can read it. The compact control
       needs it to tell a control it must issue from one an earlier executor
@@ -191,7 +203,7 @@ export interface StructuredReconfigureEffect {
   operationId: string;
   conversationId: string;
   kind: "reconfigure";
-  sessionKey?: { engine: "codex" | "claude"; sessionId: string };
+  sessionKey?: { engine: "codex" | "claude" | "copilot"; sessionId: string };
   model: string;
   effort: string;
   fast: boolean | null;
@@ -233,6 +245,16 @@ function isCompactEffect(effect: DeliveryEffect): effect is CompactEffect {
 
 function isReconfigureEffect(effect: DeliveryEffect): effect is StructuredReconfigureEffect {
   return effect.kind === "reconfigure";
+}
+
+/** An account pick that has not started moving the conversation: it waits for the next engagement (#1846). */
+function isParkableSwitch(effect: DeliveryEffect, receipt: StructuredOperationStatus | null): boolean {
+  return isReconfigureEffect(effect) && Boolean(effect.accountId) && receipt?.status !== "applying";
+}
+
+/** What engages a conversation: a message for its next turn. */
+function isEngagement(effect: DeliveryEffect): boolean {
+  return effect.kind === "send" || effect.kind === "steer" || effect.kind === "native-queue";
 }
 
 function isRuntimeControlEffect(
@@ -410,7 +432,7 @@ function reconfigureEffect(effect: StructuredDeliveryEffect): StructuredReconfig
   const accountId = typeof effect.payload.accountId === "string" ? effect.payload.accountId : undefined;
   const key = effect.payload.sessionKey;
   const sessionKey = key && typeof key === "object" && !Array.isArray(key)
-    && ((key as Record<string, unknown>).engine === "codex" || (key as Record<string, unknown>).engine === "claude")
+    && ((key as Record<string, unknown>).engine === "codex" || (key as Record<string, unknown>).engine === "claude" || (key as Record<string, unknown>).engine === "copilot")
     && typeof (key as Record<string, unknown>).sessionId === "string"
     ? key as StructuredReconfigureEffect["sessionKey"]
     : undefined;
@@ -604,6 +626,9 @@ export class StructuredDeliveryQueue {
   private activeDrain: Promise<void> | null = null;
   private rerun = false;
   private readonly targetErrors = new Map<string, string>();
+  private readonly passRetry = new RetryBackoff();
+  private readonly reconfigureRetries = new Map<string, RetryBackoff>();
+  private readonly nativeExecutionRetries = new Map<string, RetryBackoff>();
   private lastPassError: string | null = null;
   /** This executor's identity, minted per instance and never persisted beyond
       the `delivering` rows it writes. A successor instance — in this process or
@@ -667,6 +692,7 @@ export class StructuredDeliveryQueue {
   ) {}
 
   drain(): Promise<void> {
+    if (!this.passRetry.ready()) { this.retrySoon(); return Promise.resolve(); }
     if (this.activeDrain) {
       this.rerun = true;
       return this.activeDrain;
@@ -695,7 +721,9 @@ export class StructuredDeliveryQueue {
       this.rerun = false;
       try {
         await this.drainPass();
+        this.passRetry.reset();
       } catch (error) {
+        this.passRetry.fail();
         this.lastPassError = failureReason(error);
         throw error;
       }
@@ -731,7 +759,11 @@ export class StructuredDeliveryQueue {
         if (!listed.has(operationId)) this.contendedRecoveries.delete(operationId);
       }
     }
-    if (rawEffects.length === 0) return;
+    const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
+    for (const operationId of this.reconfigureRetries.keys()) {
+      if (!listed.has(operationId)) this.reconfigureRetries.delete(operationId);
+    }
+    if (rawEffects.length === 0) { this.nativeExecutionRetries.clear(); return; }
     const grouped = new Map<string, DeliveryEffect[]>();
     const targetPreparations = new Map<string, Array<() => Promise<void>>>();
     const prepareTarget = (conversationId: string, prepare: () => Promise<void>) => {
@@ -788,6 +820,10 @@ export class StructuredDeliveryQueue {
       target.push(effect);
       grouped.set(effect.conversationId, target);
     }
+    const nativeTargets = new Set(effects.filter(effect => effect.kind === "native-queue").map(effect => effect.conversationId));
+    for (const id of this.nativeExecutionRetries.keys()) {
+      if (!nativeTargets.has(id)) this.nativeExecutionRetries.delete(id);
+    }
     const conversationIds = new Set([...grouped.keys(), ...targetPreparations.keys()]);
     const targets: Array<[string, () => Promise<boolean>]> = [...conversationIds].map((conversationId) => [
       conversationId,
@@ -827,39 +863,102 @@ export class StructuredDeliveryQueue {
     if (failures.length > 0) this.retrySoon();
   }
 
+  /** Native execution has its own target budget: a parked pick or a successful
+      send elsewhere must not reset a failed journal read. Keep the original
+      effect/receipt in custody, and let controls reach their own drain. */
+  private async executeNative(effect: Extract<DeliveryEffect, { kind: "native-queue" }>, reason?: string): Promise<boolean> {
+    const retry = this.nativeExecutionRetries.get(effect.conversationId) ?? new RetryBackoff();
+    this.nativeExecutionRetries.set(effect.conversationId, retry);
+    if (!retry.ready()) { this.retrySoon(); return false; }
+    try {
+      if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
+      await this.port.nativeQueueExecute(effect, reason);
+      this.nativeExecutionRetries.delete(effect.conversationId);
+      return true;
+    } catch (error) {
+      retry.fail();
+      this.retrySoon();
+      throw error;
+    }
+  }
+
   private async drainTarget(effects: DeliveryEffect[]): Promise<boolean> {
+    if (effects.length > 0 && effects.every(effect => effect.kind === "native-queue")
+      && this.nativeExecutionRetries.get(effects[0]!.conversationId)?.ready() === false) {
+      this.retrySoon();
+      return true;
+    }
+    const latestSwitch = effects.filter(isReconfigureEffect).reduce<StructuredReconfigureEffect | null>(
+      (latest, effect) => !latest || effect.eventSeq > latest.eventSeq ? effect : latest, null);
+    const switchDeferred = latestSwitch
+      && this.reconfigureRetries.get(latestSwitch.operationId)?.ready() === false;
+    if (switchDeferred) {
+      this.retrySoon();
+      effects = effects.filter(isControlEffect);
+      if (effects.length === 0) return true;
+    }
     const openEffects: DeliveryEffect[] = [];
     const durableStatuses = new Map<string, StructuredOperationStatus | null>();
+    let nativeReceiptUnavailable = false;
     for (const effect of effects) {
+      if (effect.kind === "native-queue" && this.nativeExecutionRetries.get(effect.conversationId)?.ready() === false) {
+        nativeReceiptUnavailable = true;
+        continue;
+      }
       const durable = await this.readStatus(effect.operationId);
-      if (!durable.readable) return this.fenceUnavailable();
+      if (!durable.readable) {
+        if (isReconfigureEffect(effect)) {
+          const retry = this.reconfigureRetries.get(effect.operationId) ?? new RetryBackoff();
+          retry.fail();
+          this.reconfigureRetries.set(effect.operationId, retry);
+        }
+        if (effect.kind === "native-queue") {
+          const retry = this.nativeExecutionRetries.get(effect.conversationId) ?? new RetryBackoff();
+          retry.fail();
+          this.nativeExecutionRetries.set(effect.conversationId, retry);
+          nativeReceiptUnavailable = true;
+          continue;
+        }
+        return this.fenceUnavailable();
+      }
       if (durable.value && TERMINAL_DELIVERY_STATUSES.has(durable.value.status)) {
         this.firstDispatches.delete(effect.operationId);
         this.contendedRecoveries.delete(effect.operationId);
         continue;
       }
-      const expired = isRuntimeControlEffect(effect)
+      /* An account pick is an intent, and it waits for the next engagement however long that is (#1846):
+         the settlement window is for a control that got stuck, which a switch nobody has engaged is not. */
+      const expired = isRuntimeControlEffect(effect) && !isParkableSwitch(effect, durable.value)
         ? expiredControlSettlement(effect, durable.value)
         : null;
       if (expired) {
-        await this.transitionUnlessSettled(effect.operationId, expired.status, { reason: expired.reason });
+        if (isReconfigureEffect(effect)) {
+          await this.transitionReconfigure(effect, expired.status, { reason: expired.reason }, latestSwitch ?? effect);
+        } else {
+          await this.transitionUnlessSettled(effect.operationId, expired.status, { reason: expired.reason });
+        }
         continue;
       }
       durableStatuses.set(effect.operationId, durable.value);
       openEffects.push(effect);
     }
-    effects = openEffects;
+    // An unreadable native receipt retains the message/switch barrier, while
+    // interrupt/answer/kill can still use their independently readable receipts.
+    effects = nativeReceiptUnavailable ? openEffects.filter(isControlEffect) : openEffects;
+    if (nativeReceiptUnavailable) this.retrySoon();
     const killedGenerations = new Set<string>();
     const reconfigures = effects.filter(isReconfigureEffect);
     const currentReconfigure = reconfigures.reduce<StructuredReconfigureEffect | null>(
       (current, effect) => !current || effect.eventSeq > current.eventSeq ? effect : current,
       null,
     );
-    for (const effect of reconfigures) {
-      if (effect !== currentReconfigure) {
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "superseded" });
-      }
-    }
+    /* A pick after a terminal provider turn applies now (#1983). Other idle
+       picks retain the next-engagement behavior from #1846. */
+    const engaged = effects.some(isEngagement)
+      || Boolean(currentReconfigure && this.port.terminalTurn?.(currentReconfigure.conversationId));
+    const conversationId = effects[0]?.conversationId;
+    const readHold = () => conversationId ? this.port.switchHold?.(conversationId) ?? null : null;
+    let hold = readHold();
     for (const effect of effects) {
       /* #862: a compaction in flight holds back everything that would write to
          the thread — messages and reconfigures — but never another control.
@@ -870,17 +969,28 @@ export class StructuredDeliveryQueue {
       if (!isControlEffect(effect) && this.compactingConversations.has(effect.conversationId)) return true;
       if (isReconfigureEffect(effect)) {
         if (effect !== currentReconfigure) continue;
+        // Controls above have independent receipts and must remain usable even
+        // when clearing an older choice cannot reach the journal.
+        for (const previous of reconfigures) {
+          if (previous !== effect) {
+            await this.transitionReconfigure(previous, "failed", { reason: "superseded" }, effect);
+          }
+        }
         if (effect.sessionKey
           ? killedGenerations.has(`${effect.sessionKey.engine}:${effect.sessionKey.sessionId}`)
           : killedGenerations.size > 0) {
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "conversation-killed" });
+          await this.transitionReconfigure(effect, "failed", { reason: "conversation-killed" });
           continue;
         }
+        if (effect.accountId && !engaged && !this.port.reconfigureCancelled?.(effect)
+          && durableStatuses.get(effect.operationId)?.status !== "applying") continue;
         const blocked = await this.drainReconfigure(effect);
         if (blocked) {
           this.scheduleControlSettlementCheck(durableStatuses.get(effect.operationId) ?? null);
           return true;
         }
+        /* A switch that moved releases the hold an earlier failed one left. */
+        hold = readHold();
         continue;
       }
       if (isControlEffect(effect)) {
@@ -906,10 +1016,25 @@ export class StructuredDeliveryQueue {
         }
         continue;
       }
+      /* Failed switches settle unactuated messages with the hold's explanation.
+         The operator can clear the hold and explicitly resend (#1983). */
+      if (hold && isEngagement(effect)) {
+        const reason = `account switch failed: ${hold.reason}`;
+        if (effect.kind === "native-queue") {
+          if (!await this.executeNative(effect, reason)) return true;
+        } else if (durableStatuses.get(effect.operationId)?.status === "delivering") {
+          // A switch failure cannot establish the fate of an earlier actuation.
+          this.retrySoon();
+          return true;
+        } else {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        }
+        continue;
+      }
       if (effect.kind === "native-queue") {
-        if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
         const boundary = this.successfulKillBoundaries.get(effect.conversationId);
-        await this.port.nativeQueueExecute(effect, boundary && effect.eventSeq <= boundary.eventSeq ? "conversation was intentionally terminated" : undefined);
+        if (!await this.executeNative(effect, boundary && effect.eventSeq <= boundary.eventSeq
+          ? "conversation was intentionally terminated" : undefined)) return true;
         continue;
       }
       const killBoundary = this.successfulKillBoundaries.get(effect.conversationId);
@@ -990,28 +1115,43 @@ export class StructuredDeliveryQueue {
         if (!await this.executeInjection(effect, host, health)) return true;
         continue;
       }
-      const maySteer = health.status === "active"
-        && (effect.kind === "steer" || effect.policy === "steer-if-active");
+      const steerRequested = effect.kind === "steer" || effect.policy === "steer-if-active";
+      const maySteer = health.status === "active" && steerRequested;
+      /* A host without steer that DECLARED an interrupt fallback (Copilot over
+         ACP) takes a steer the way `interrupt-active` takes a send: the running
+         turn is interrupted and the message starts the next one; a turn that
+         already ended leaves nothing to interrupt and the message simply starts
+         one. It is never delivered as `steered` (docs/design/copilot-engine.md 3.4). */
+      const steerByInterrupt = steerRequested && host.steerFallback === "interrupt";
       /* A host that DECLARED it cannot steer, which is the Claude broker: its
          write would land as an interrupt the operator never asked for, so the
          message is refused here rather than delivered as something else.
          An undeclared capability is unknown and is no refusal — a host that says
          nothing about steering keeps the delivery path it has always had. */
-      if (maySteer && host.supportsSteer === false) {
+      if (maySteer && host.supportsSteer === false && !steerByInterrupt) {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "unsupported-steering" });
         continue;
       }
-      const replacementIsActive = effect.policy === "interrupt-active"
+      const replacesTurn = effect.policy === "interrupt-active" || steerByInterrupt;
+      const replacementIsActive = replacesTurn
         && (health.status === "active" || health.status === "attention")
         && Boolean(health.activeTurnRef);
       const shouldInterrupt = replacementIsActive
         && (effect.turnId === undefined || effect.turnId === health.activeTurnRef)
         && !this.interruptAcknowledged.has(effect.operationId);
-      if (health.status !== "idle" && !maySteer && !shouldInterrupt) return true;
+      const steersIntoTurn = maySteer && !steerByInterrupt;
+      /* An engine without steer (Copilot) reports a message that interrupted
+         the running turn as interrupt-then-turn-started. The route is written
+         with the `delivering` transition that precedes the interrupt, so it is
+         durable before the interrupt is issued and a successor executor reads
+         it back from the receipt; Claude and Codex receipts carry no route. */
+      const recordsRoute = host.steerFallback === "interrupt";
+      const clearedRoute: RuntimeTransitionDetails = recordsRoute ? { delivery: null, interruptedTurnId: null } : {};
+      if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt) return true;
       if (health.status === "idle") this.interruptAcknowledged.delete(effect.operationId);
       const deliveryFence = shouldInterrupt
         ? effect.turnId ?? health.activeTurnRef
-        : effect.policy === "interrupt-active"
+        : replacesTurn
           ? effect.turnId ?? null
           : effect.turnId !== undefined
             ? effect.turnId
@@ -1022,7 +1162,7 @@ export class StructuredDeliveryQueue {
         contentDigest: effect.contentDigest,
         text: effect.content.text,
         images: effect.content.images,
-        expectedTurnId: effect.policy === "interrupt-active" ? null : deliveryFence,
+        expectedTurnId: replacesTurn ? null : deliveryFence,
         ...(effect.runtime ? { runtime: effect.runtime } : {}),
         ...(effect.selectedContext ? { selectedContext: effect.selectedContext } : {}),
         ...(effect.origin ? { origin: effect.origin } : {}),
@@ -1042,10 +1182,15 @@ export class StructuredDeliveryQueue {
         ? {operationId: effect.operationId, writerClaim: claim.value, firstDispatch: true}
         : undefined;
       if (!firstDispatch) this.firstDispatches.delete(effect.operationId);
+      const routedTurnId = recordsRoute && shouldInterrupt ? health.activeTurnRef! : null;
       if (!await this.transitionUnlessSettled(
         effect.operationId,
         "delivering",
-        { turnId: deliveryFence, reason: deliveringOwnershipReason(this.executorId, claim) },
+        {
+          turnId: deliveryFence,
+          reason: deliveringOwnershipReason(this.executorId, claim),
+          ...(routedTurnId ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId: routedTurnId } : {}),
+        },
       )) continue;
       if (firstDispatch) {
         this.firstDispatches.set(effect.operationId, firstDispatch);
@@ -1064,13 +1209,15 @@ export class StructuredDeliveryQueue {
              state is grouped with the one that waits rather than retries. No
              branch here converts it into a claim about the host. */
           const afterFailure = await this.readHealth(host);
+          /* The interrupt did not happen, so the route written with
+             `delivering` is withdrawn with it. */
           if (!afterFailure.readable
             || afterFailure.value.status === "dead"
             || afterFailure.value.status === "unhosted") {
-            await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
+            await this.transitionUnlessSettled(effect.operationId, "queued", { reason, ...clearedRoute });
             return true;
           }
-          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "interrupt-auto-retry" });
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "interrupt-auto-retry", ...clearedRoute });
           this.retrySoon();
           return true;
         }
@@ -1149,7 +1296,9 @@ export class StructuredDeliveryQueue {
       }
       if (receipt.outcome === "rejected") {
         if (receipt.reason === "stale-turn") {
-          if (effect.kind === "send" && effect.policy !== "steer-if-active") {
+          /* An interrupt-and-resend that lost a race with a new turn goes back
+             to the queue: the interrupt path is retried, nothing is dropped. */
+          if ((effect.kind === "send" && effect.policy !== "steer-if-active") || steerByInterrupt) {
             await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
             return true;
           }
@@ -1159,9 +1308,22 @@ export class StructuredDeliveryQueue {
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
         return true;
       }
-      await this.transitionUnlessSettled(effect.operationId, "delivered", { turnId: receipt.turnId });
+      /* The route this pass recorded, or the one an earlier pass or executor
+         recorded before this message went back to the queue. */
+      const interruptedTurnId = routedTurnId
+        ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null);
+      await this.transitionUnlessSettled(effect.operationId, "delivered", {
+        turnId: receipt.turnId,
+        /* A message that ended a running turn to start its own says so; the
+           Copilot path never reads `steered`. */
+        ...(interruptedTurnId
+          ? receipt.outcome === "turn-started"
+            ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId }
+            : clearedRoute
+          : {}),
+      });
     }
-    return false;
+    return Boolean(switchDeferred) || nativeReceiptUnavailable;
   }
 
   /**
@@ -1324,7 +1486,7 @@ export class StructuredDeliveryQueue {
   private async transitionUnlessSettled(
     operationId: string,
     status: StructuredDeliveryTransition,
-    details?: { turnId?: string | null; reason?: string | null },
+    details?: RuntimeTransitionDetails,
   ): Promise<boolean> {
     try {
       await this.port.transition(operationId, status, details);
@@ -1644,11 +1806,34 @@ export class StructuredDeliveryQueue {
     }
   }
 
+  /** Journal failure leaves the switch's outcome unknown. Every transition,
+   * including cleanup of an older choice, consumes the pending choice's budget.
+   * Healthy/parked peers cannot reset that operation's deadline. */
+  private async transitionReconfigure(
+    effect: StructuredReconfigureEffect,
+    status: StructuredDeliveryTransition,
+    details?: { turnId?: string | null; reason?: string | null },
+    retryOwner = effect,
+  ): Promise<boolean> {
+    try {
+      return await this.transitionUnlessSettled(effect.operationId, status, details);
+    } catch (error) {
+      const retry = this.reconfigureRetries.get(retryOwner.operationId) ?? new RetryBackoff();
+      retry.fail();
+      this.reconfigureRetries.set(retryOwner.operationId, retry);
+      this.retrySoon();
+      throw error;
+    }
+  }
+
   private async drainReconfigure(effect: StructuredReconfigureEffect): Promise<boolean> {
-    /* #1705: a cancelled operation ends now, whatever the turn is doing, with its one terminal transition.
-       The claim checks the same record again in its own transaction. */
+    const retry = this.reconfigureRetries.get(effect.operationId) ?? new RetryBackoff();
+    this.reconfigureRetries.set(effect.operationId, retry);
+    if (!retry.ready()) { this.retrySoon(); return true; }
+    /* #1705: cancellation settles without waiting for a turn boundary. The
+       claim checks the same record again in its own transaction. */
     if (this.port.reconfigureCancelled?.(effect)) {
-      await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "cancelled" });
+      await this.transitionReconfigure(effect, "failed", { reason: "cancelled" });
       return false;
     }
     const host = this.resolveHost(effect.conversationId);
@@ -1657,24 +1842,36 @@ export class StructuredDeliveryQueue {
          one: it cannot show the host busy, and treating it as idle would apply
          the switch across a turn that may be running. */
       const state = await this.readHealth(host);
-      if (!state.readable) { this.retrySoon(); return true; }
+      if (!state.readable) { retry.fail(); this.retrySoon(); return true; }
       const health = state.value;
       if (health.status === "active" || health.status === "attention" || health.activeTurnRef) return true;
     }
-    if (!await this.transitionUnlessSettled(effect.operationId, "applying")) return false;
+    if (!await this.transitionReconfigure(effect, "applying")) return false;
+    let outcome: Awaited<ReturnType<typeof this.reconfigure>>;
     try {
-      const outcome = await this.reconfigure(effect, {
+      outcome = await this.reconfigure(effect, {
         isCurrent: () => this.isCurrentReconfigure(effect),
       });
-      if (outcome === "pending") {
-        await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "turn-boundary" });
-        this.retrySoon();
-        return true;
-      }
-      await this.transitionUnlessSettled(effect.operationId, "applied");
     } catch (error) {
-      await this.transitionUnlessSettled(effect.operationId, "failed", { reason: failureReason(error) });
+      await this.transitionReconfigure(effect, "failed", { reason: failureReason(error) });
+      /* Keep the failed account hold; the unactuated messages below settle
+         with its reason. Supersedence and cancellation create no failure hold. */
+      if (effect.accountId && !this.port.reconfigureCancelled?.(effect)
+        && error instanceof Error && error.name !== "StructuredReconfigureSupersededError" && error.name !== "StructuredReconfigureCancelledError") {
+        this.port.holdForFailedSwitch?.(effect, failureReason(error));
+      }
+      return false;
     }
+    // Journal timeouts after the executor returns cannot turn its outcome into
+    // a failed switch. Read/reconcile the original receipt on a bounded retry.
+    if (outcome === "pending") {
+      await this.transitionReconfigure(effect, "queued", { reason: "turn-boundary" });
+      retry.fail();
+      this.retrySoon();
+      return true;
+    }
+    await this.transitionReconfigure(effect, "applied");
+    this.reconfigureRetries.delete(effect.operationId);
     return false;
   }
 

@@ -14,12 +14,18 @@
  * Old paths keep resolving through the symlinks, so nothing that recorded a
  * pre-cutover absolute path breaks even if it is missed by the rewrite.
  */
+/* FIRST, and before every other import: the claim has to precede the modules
+   below, which resolve the operator's state directory while they load (#1905).
+   See `src/lib/state/owner/tool.ts`. */
+import "../src/lib/state/owner/tool";
+
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { legacyClaudeHome, claudeAccountsRoot, sharedClaudeProjectsRoot } from "../src/lib/accounts/claude";
 import { stateDir } from "../src/lib/configDir";
+import { isProductContainer } from "../src/runtime-host/dockerNames";
 
 const EXECUTE = process.argv.includes("--execute");
 const ALLOW_LIVE = process.argv.includes("--allow-live");
@@ -111,10 +117,10 @@ function unionLines(target: string, source: string): void {
   fs.rmSync(source, { force: true });
 }
 
-function llvContainersRunning(): string[] {
+function productContainersRunning(): string[] {
   try {
     return execSync("docker ps --format {{.Names}}", { encoding: "utf8" })
-      .split("\n").filter((name) => name.startsWith("llv-"));
+      .split("\n").filter(isProductContainer);
   } catch { return []; }
 }
 
@@ -211,7 +217,7 @@ function main(): void {
 
   if (!EXECUTE) { console.log("\ndry-run only — pass --execute to perform the cutover"); return; }
 
-  const running = llvContainersRunning();
+  const running = productContainersRunning();
   if (running.length > 0 && !ALLOW_LIVE) {
     console.error(`ABORT: viewer containers running (${running.join(", ")}); stop them or pass --allow-live`);
     process.exitCode = 1;

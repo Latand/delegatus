@@ -1,10 +1,8 @@
 import fs from "node:fs";
-import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 
+import { mutateAccountSource, OVERRIDES_SOURCE, readAccountSource } from "./accountsStore";
 import { explicitAccountChoice, type BindingEngine } from "./projectBindings";
 
 /**
@@ -138,10 +136,21 @@ function overrideList(value: unknown): AccountProjectOverride[] {
   });
 }
 
-/** The journal as it stands. A file this process cannot read reports nothing. */
+/** The journal as it stands, from the `accounts` collection of state.sqlite
+    (#1870, slice 7). A record this process cannot read reports nothing, the
+    way an unreadable file always did: nothing consults this journal to decide
+    anything, so an empty answer can neither park work nor widen a fence. */
 function readOverrides(): AccountProjectOverride[] {
   try {
-    const parsed = JSON.parse(fs.readFileSync(overridesFile(), "utf8")) as Partial<OverrideFile> | null;
+    const read = readAccountSource(OVERRIDES_SOURCE);
+    /* A recorded gap reports nothing, deliberately the OPPOSITE of the binding
+       record's rule: nothing consults this journal to decide whether an account
+       may be used, so a record it could not read can neither widen a boundary
+       nor park a gesture. */
+    if (read.kind === "gap") return [];
+    const parsed = (read.kind === "collection"
+      ? read.body
+      : JSON.parse(fs.readFileSync(overridesFile(), "utf8")) as unknown) as Partial<OverrideFile> | null | undefined;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
     return overrideList(parsed.overrides);
   } catch {
@@ -174,21 +183,24 @@ export function accountProjectOverrides(query: AccountOverrideQuery = {}): Accou
  * see afterwards is the thing this journal exists to prevent, so the one
  * condition that produces it has to arrive somewhere a person reads.
  *
- * There is no retry here on purpose. The write already queues behind the
- * journal's file transaction for as long as that transaction waits, so what
- * reaches this catch is a durable failure of the state directory itself —
+ * There is no retry here on purpose. The append already queues behind the
+ * collection's own transaction for as long as that transaction waits, so what
+ * reaches this catch is a durable failure of the state store itself —
  * unwritable, full, gone — and repeating it changes nothing except how long
  * the switch takes to answer.
  */
 function appendOverride(override: AccountProjectOverride): { ok: true } | { ok: false; reason: string } {
-  const file = overridesFile();
   try {
-    return withFileTransactionSync(file, "the account override journal is busy", () => {
-      const next = [...readOverrides(), override].slice(-CAPACITY);
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-      writeJsonDurably(file, { schemaVersion: 1, overrides: next } satisfies OverrideFile);
-      return { ok: true } as const;
-    });
+    /* Read and write inside one transaction: two appends that each read the
+       journal first and then wrote it back would drop one of the two records,
+       and a choice nobody can see afterwards is what this journal exists to
+       prevent. Only the trimmed-off rows are deleted and only the new row is
+       written; the rest keep their sequence. */
+    mutateAccountSource(OVERRIDES_SOURCE, (body) => ({
+      schemaVersion: 1,
+      overrides: [...overrideList((body as Partial<OverrideFile> | undefined)?.overrides), override].slice(-CAPACITY),
+    } satisfies OverrideFile));
+    return { ok: true } as const;
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }

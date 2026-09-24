@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { viewerBootGateKey } from "@/lib/access/phoneAccessBootGate";
 import type { ViewerReleaseIdentity } from "@/lib/runtime/contracts";
 import { WAKATIME_CREDENTIAL_ENV, withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
@@ -39,8 +40,10 @@ export interface ViewerCandidateContainerOverrides {
 export const AGENT_REGISTRY_SQLITE_ENV = "LLV_AGENT_REGISTRY_SQLITE";
 export type AgentRegistryBackendMode = "off" | "dual-write" | "read" | "sqlite";
 
+/** The registry mode a Viewer service runs. Unset is SQLite, the registry's
+    only default store (#1870); the JSON modes must be named explicitly. */
 export function viewerRegistryBackendMode(service: Pick<ViewerComposeService, "environment">): AgentRegistryBackendMode {
-  const configured = service.environment[AGENT_REGISTRY_SQLITE_ENV] ?? "off";
+  const configured = service.environment[AGENT_REGISTRY_SQLITE_ENV] ?? "sqlite";
   if (configured === "off" || configured === "dual-write" || configured === "read" || configured === "sqlite") {
     return configured;
   }
@@ -136,9 +139,12 @@ export function viewerComposeServiceFromConfig(configJson: string): ViewerCompos
   };
 }
 
-export function viewerAuthenticationTokenFromConfig(configJson: string): string | null {
-  const token = viewerComposeServiceFromConfig(configJson).environment.LLV_TOKEN;
-  return token || null;
+/** The key a release started from this Compose config gates on once it has
+    booted: its `LLV_TOKEN`, else, with phone access remembered, the key file
+    its boot put in place (#2024). A probe carrying only the Compose key is
+    refused by such a release, and every deploy with it. */
+export function viewerCandidateGateKey(configJson: string): string | null {
+  return viewerBootGateKey(viewerComposeServiceFromConfig(configJson).environment);
 }
 
 export function viewerComposeServiceUid(service: ViewerComposeService): string {

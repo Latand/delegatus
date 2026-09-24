@@ -4,7 +4,7 @@ import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SE
 import { evidenceStallReason } from "./classify";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
-  SEAT_TICK_ANNOUNCED_LANES_LIMIT,
+  SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickCard,
@@ -12,6 +12,7 @@ import {
   type SeatTickChildInput,
   type SeatTickChildrenGap,
   type SeatTickDecision,
+  type SeatTickDeployInput,
   type SeatTickEventInput,
   type SeatTickEvidenceGap,
   type SeatTickItem,
@@ -23,6 +24,8 @@ import {
   type SeatTickSeatInput,
   type SeatTickSourceGap,
   type SeatTickTaskInput,
+  type SeatTickTranscriptGap,
+  type SeatTickUnreadableChild,
   type SeatTickVerdict,
   type SeatTickWakeCommit,
   type SeatTickWakeReason,
@@ -102,6 +105,27 @@ const MINUTE_MS = 60_000;
  */
 export const SEAT_TICK_WAKE_INTERVAL_MS = 60 * MINUTE_MS;
 
+/**
+ * The bound while the seat's own spawned children are moving (#1881).
+ *
+ * The hour is the bound for a board where nothing is moving. A seat that
+ * spawned workers and ended its turn to wait for them is not that board: it is
+ * waiting on exactly one thing, and an hour-long bound turned "your reviewers
+ * finished" into an hour of silence — the seat's user wrote to it by hand, and
+ * the seat set its own tick to two minutes to get the wake at all.
+ *
+ * A child that settled, or stalled, since the last wake is due at the next
+ * check. While children are only running, the interval wake comes after a
+ * quarter of an hour, so a settle the registry could not see still reaches the
+ * seat in minutes. Neither costs anything the ADR's argument rests on: the
+ * pre-check stays a read of durable state with no model call and no
+ * transcript scan, a wake still needs a reason, and the retry guard still
+ * stops a reason that changes nothing. A project whose own settings wake it
+ * more often keeps its own interval, and one with ticking off stays off.
+ */
+export const SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS = 5 * MINUTE_MS;
+export const SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS = 15 * MINUTE_MS;
+
 export const DEFAULT_SEAT_TICK_POLICY: SeatTickPolicy = {
   checkIntervalMs: 5 * MINUTE_MS,
   stallAfterMs: 40 * MINUTE_MS,
@@ -141,8 +165,39 @@ export function seatTickPolicy(env: Readonly<Record<string, string | undefined>>
   };
 }
 
+/**
+ * A lane that is the seat's work. A lane the operator paused is not (#2063):
+ * the operator stopped it and only the operator's resume starts it again, so
+ * it raises no stall, holds no interval open and is not on the agenda.
+ */
 function isOpenLane(pipeline: SeatTickPipelineInput): boolean {
-  return pipeline.state !== "terminal";
+  return pipeline.state !== "terminal" && pipeline.pausedBy !== "operator";
+}
+
+/**
+ * The lanes this seat paused and has not resumed (#2063). A seat pauses its
+ * lanes before a deploy and has to resume them after it, from a new turn; the
+ * lanes are that turn's work, so every wake lists them until they move.
+ */
+function seatPausedLanes(input: SeatTickCheckInput): SeatTickPipelineInput[] {
+  return input.pipelines.filter((pipeline) => isOpenLane(pipeline) && pipeline.pausedBy === "seat");
+}
+
+/**
+ * The seat's settled deploys that are still news (#2063), under the backlog
+ * bound own lanes live under: a deploy that settled days ago while ticking was
+ * off is history, and the bound keeps it from waking anyone for ever.
+ */
+function seatSettledDeploys(input: SeatTickCheckInput): readonly SeatTickDeployInput[] {
+  return (input.settledDeploys ?? []).filter((deploy) => {
+    const settledAt = deploy.settledAt ? Date.parse(deploy.settledAt) : Number.NaN;
+    return Number.isFinite(settledAt) && input.now - settledAt < input.policy.backlogAfterMs;
+  });
+}
+
+function deployLabel(deploy: SeatTickDeployInput): string {
+  const outcome = deploy.phase === "succeeded" ? "succeeded" : `ended ${deploy.phase}`;
+  return `deploy settled: the deployment you started ${outcome}, sha ${deploy.sha}${deploy.error ? `, error: ${deploy.error}` : ""}`;
 }
 
 /** A standalone child with a live host behind it (#1465): open work, exactly
@@ -211,6 +266,7 @@ function hasOpenWork(input: SeatTickCheckInput): boolean {
     || input.tasks.some((task) => task.status === "inbox" || task.status === "assigned")
     || input.pullRequests.length > 0
     || ownSettledLanes(input).length > 0
+    || seatSettledDeploys(input).length > 0
     /* Both child clauses ask the same question of the child as the item list
        does (#1749, #1783): a child no seat can read, or whose own clock is a
        predecessor's board, is not this seat's work whether it is still running
@@ -341,11 +397,16 @@ function stalledChildren(input: SeatTickCheckInput): { child: SeatTickChildInput
   for (const child of input.children) {
     if (!isRunningChild(child)) continue;
     const activity = child.activity;
-    if (activity && (activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
+    if (activity && isStalledActivity(activity)) {
       found.push({ child, reason: `child ${child.conversationId} runs a turn the registry reports ${activity.lifecycle} (${activity.reason})` });
     }
   }
   return found;
+}
+
+/** The registry's verdict that no live host is behind this turn. */
+function isStalledActivity(activity: SeatTickChildInput["activity"]): boolean {
+  return activity !== null && (activity.lifecycle === "stalled" || activity.lifecycle === "gone");
 }
 
 /**
@@ -388,7 +449,14 @@ function isHarvestable(child: SeatTickChildInput): boolean {
 function childOwnInstant(child: SeatTickChildInput): number {
   const terminalAt = child.terminalAt ? Date.parse(child.terminalAt) : Number.NaN;
   if (Number.isFinite(terminalAt)) return terminalAt;
-  return child.lastRecordAt ? Date.parse(child.lastRecordAt) : Number.NaN;
+  const recordAt = child.lastRecordAt ? Date.parse(child.lastRecordAt) : Number.NaN;
+  if (Number.isFinite(recordAt)) return recordAt;
+  /* The spawn's own instant, last (#1881): written once when the seat spawned
+     the child, and the only clock a child with no terminal instant and no
+     readable transcript has. It is never later than anything the child did,
+     so it can only call a child older than it is — the safe side of an age
+     test whose failure is a predecessor's worker reaching this seat. */
+  return child.spawnedAt ? Date.parse(child.spawnedAt) : Number.NaN;
 }
 
 /**
@@ -542,9 +610,15 @@ function childSkipReason(
  * says work is open.
  */
 function childFactsSkipReason(child: SeatTickChildInput, seat: SeatTickSeatInput): SeatTickChildSkip | null {
-  if (!isHarvestable(child)) return "unreadable";
-  if (!Number.isFinite(childOwnInstant(child))) return "unreadable";
+  /* A child that SETTLED is owed to the seat whether or not its transcript can
+     be read (#1881): the registry's turn state is what says it ended, and the
+     line that lists it says the transcript is unreadable and why. Skipping it
+     was a finished worker the seat was never told about. A running or stalled
+     child the seat cannot read is still not listed as work — it is named once
+     beside the agenda, with its reason — because nothing about it is owed. */
   if (isStaleChild(child, seat)) return "stale";
+  if (!isHarvestable(child) && child.status !== "terminal") return "unreadable";
+  if (!Number.isFinite(childOwnInstant(child))) return "unreadable";
   return null;
 }
 
@@ -553,7 +627,7 @@ function childFactsSkipReason(child: SeatTickChildInput, seat: SeatTickSeatInput
     designation to measure an age against and nothing to be stale relative to,
     so only the readable half is left. */
 function isActionableChild(child: SeatTickChildInput, seat: SeatTickSeatInput | null): boolean {
-  return seat ? childFactsSkipReason(child, seat) === null : isHarvestable(child);
+  return seat ? childFactsSkipReason(child, seat) === null : isHarvestable(child) || child.status === "terminal";
 }
 
 /**
@@ -562,8 +636,8 @@ function isActionableChild(child: SeatTickChildInput, seat: SeatTickSeatInput | 
  * The backlog bound is the one {@link isUnstarted} applies to an assigned card,
  * and for the same reason: "the seat launched a lane and it completed" is true
  * for ever, so without a bound it is a wake reason nothing can discharge. Past
- * the bound the lane is history; inside it, closing, dismissing or moving the
- * lane is what discharges it, and each of those makes it recent again.
+ * the bound the lane is history; inside it, a delivered announcement for its
+ * current state discharges that news. A later state has its own announcement.
  */
 function ownSettledLanes(input: SeatTickCheckInput): readonly SeatTickOwnLaneInput[] {
   return input.ownLanes.filter((lane) => {
@@ -577,8 +651,16 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
   if (lane.settled === "provisioning-failed") {
     return `${lane.title} — lane you launched: provisioning failed, it never ran a stage: ${lane.detail || "no reason recorded"}`;
   }
+  if (lane.settled === "needs_review") {
+    /* #1938: never "finished". The wake says the last review failed and the
+       head is unreviewed, with both heads, so nobody merges on it. */
+    const review = lane.review;
+    const short = (sha: string | null | undefined) => sha ? sha.slice(0, 12) : "unknown";
+    const verdict = review ? `${review.stageId} said ${review.lastVerdict} with ${review.findings} finding${review.findings === 1 ? "" : "s"} on ${short(review.reviewedHead)}; ` : "";
+    return `${lane.title} — lane you launched: last review failed, head unreviewed: ${verdict}current head ${short(review?.currentHead)} was never reviewed. pipeline_action continue-review with addRounds resumes it`;
+  }
   const settled = lane.settled === "completed"
-    ? "completed, and nobody has closed it out"
+    ? "completed"
     : lane.settled === "failed"
       ? "a stage failed"
       : "parked on a decision";
@@ -1024,10 +1106,16 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   for (const child of [...harvest.map((entry) => entry.child), ...offeredChildStalls.map((entry) => entry.child), ...runningChildren]) {
     skipped.delete(child.conversationId);
   }
+  /* The unreadable children are named, each once, with the reason (#1881). A
+     count of them said nothing anyone could act on: fourteen of them stood on
+     every wake of the seat the issue was filed from, and which ones they were
+     and why took a read of the registry to find out. A child already named
+     under the same reason is counted as unchanged. */
+  const unreadable = unreadableChildren(input.children, skipped, shown);
   const skippedChildren = {
     stale: countSkipped(skipped, "stale"),
-    unreadable: countSkipped(skipped, "unreadable"),
-    unchanged: countSkipped(skipped, "unchanged"),
+    unreadable: countSkipped(skipped, "unreadable") - unreadable.named.length - unreadable.unchanged,
+    unchanged: countSkipped(skipped, "unchanged") + unreadable.unchanged,
   };
   /* A stall is only reported once it survived a second check, so a lane between
      two attempts is never called stuck. */
@@ -1037,7 +1125,28 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const unstarted = input.tasks.filter((task) => isUnstarted(task, input.now, input.policy.backlogAfterMs));
   const backlog = input.tasks.filter((task) => task.status === "assigned" && !task.owned).length - unstarted.length;
   const openWork = hasOpenWork(input);
-  const wakeDue = seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs);
+  /* The bound shortens while the seat's own children are moving (#1881): a
+     child that settled or stalled since the last wake is due at the next
+     check, and running children bring the interval wake to a quarter of an
+     hour. With neither, the project's own interval stands.
+
+     A stall counts once it is confirmed, the same second sighting the stall
+     reason waits for. And only a child with a live host behind it shortens the
+     bound to the quarter hour: a worker whose host died over an open turn is
+     named once by the stall path and then stays open for ever, so on a board
+     that moves every check it would wake the seat four times an hour about a
+     condition nothing but the seat's own cleanup ends. It keeps the project's
+     own interval, as it did before. */
+  /* A deployment the seat started settling is the same kind of news (#2063):
+     the seat ended its turn for it, and an hour-long bound turned a five-minute
+     deploy into thirty minutes of paused lanes. */
+  const settledDeploys = seatSettledDeploys(input);
+  const childrenSettled = harvest.length > 0 || persistedChildStalls.length > 0 || settledDeploys.length > 0;
+  const liveChildren = runningChildren.filter((child) => !isStalledActivity(child.activity));
+  const childInterval = childrenSettled
+    ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
+    : liveChildren.length > 0 ? SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS : Number.POSITIVE_INFINITY;
+  const wakeDue = seatTickWakeDue(input.state.lastWakeAt, input.now, Math.min(input.settings.wakeIntervalMs, childInterval));
 
   const observed: SeatTickProjectState = { ...base, stalledSeen: stalledNow };
 
@@ -1076,7 +1185,14 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        by the check itself at no cost, and the check that reaches it names it.
        A wake that says only "something is waiting further down" is the empty
        agenda this whole mechanism exists to stop sending. */
-    /* First, and ahead of the lane events, because it is the seat's own work
+    /* The seat's own deploy leads (#2063): the seat ended its turn waiting on
+       exactly this, and the lanes it paused for the deploy wait on its answer. */
+    if (settledDeploys.length > 0) {
+      const newest = settledDeploys.at(-1)!;
+      const more = settledDeploys.length > 1 ? ` and ${settledDeploys.length - 1} more` : "";
+      candidates.push({ kind: "deploy-settled", detail: `a deployment you started ${newest.phase === "succeeded" ? "succeeded" : `ended ${newest.phase}`}${more}` });
+    }
+    /* Then, and ahead of the lane events, because it is the seat's own work
        (#1749): a lane it launched that settled and is standing there is the
        obligation the tick was blind to for the whole of the evidence in that
        issue, while five slots went to children of seats two weeks retired. */
@@ -1202,6 +1318,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
         items: all.slice(0, input.policy.itemsPerWake),
         deferred: Math.max(0, all.length - input.policy.itemsPerWake),
         skippedChildren,
+        unreadableChildren: unreadable.named,
         gaps,
       },
       state,
@@ -1267,6 +1384,47 @@ function quiet(state: SeatTickProjectState, at: string): SeatTickProjectState {
   return { ...state, quietSince: state.quietSince ?? at };
 }
 
+/** What a wake says about why a child's transcript cannot be read (#1881). */
+export function seatTickTranscriptGapClause(reason: SeatTickTranscriptGap | undefined): string {
+  switch (reason) {
+    case "no-transcript": return "the registry holds no transcript for it";
+    case "outside-roots": return "its transcript path is outside every folder this Viewer scans";
+    case "missing": return "the transcript file is no longer on disk";
+    default: return "the Viewer cannot resolve its transcript";
+  }
+}
+
+/** The most unreadable children one wake names; the rest stay counted and are
+    named by a later wake. */
+const UNREADABLE_NAMED_LIMIT = 5;
+
+function unreadableToken(child: SeatTickChildInput): string {
+  return `${child.conversationId}@unreadable:${child.transcriptReason ?? "unknown"}`;
+}
+
+/**
+ * The children skipped as unreadable, split into the ones this wake names and
+ * the ones an earlier landed wake already named under the same reason (#1881).
+ */
+function unreadableChildren(
+  children: readonly SeatTickChildInput[],
+  skipped: ReadonlyMap<string, SeatTickChildSkip>,
+  shown: ReadonlySet<string>,
+): { named: SeatTickUnreadableChild[]; unchanged: number } {
+  const named: SeatTickUnreadableChild[] = [];
+  const seen = new Set<string>();
+  let unchanged = 0;
+  for (const child of children) {
+    if (skipped.get(child.conversationId) !== "unreadable" || seen.has(child.conversationId)) continue;
+    seen.add(child.conversationId);
+    const token = unreadableToken(child);
+    if (shown.has(token)) { unchanged += 1; continue; }
+    if (named.length >= UNREADABLE_NAMED_LIMIT) continue;
+    named.push({ conversationId: child.conversationId, title: child.title, reason: seatTickTranscriptGapClause(child.transcriptReason), stateToken: token });
+  }
+  return { named, unchanged };
+}
+
 /**
  * The agenda, in the order the per-wake bound cuts it (#1749).
  *
@@ -1298,15 +1456,32 @@ function wakeItems(context: {
 }): SeatTickItem[] {
   const { input } = context;
   const items: SeatTickItem[] = [];
+  /* The seat's own deploy first, then the lanes it paused (#2063): the wake a
+     deploy owes is "it settled, now resume what you paused for it", and the
+     per-wake bound must never cut either half. A paused lane is listed on
+     every wake until it is resumed, whatever the reason the wake carries. */
+  for (const deploy of seatSettledDeploys(input)) {
+    items.push({
+      kind: "deploy",
+      id: deploy.deploymentId,
+      label: deployLabel(deploy),
+      deploy: { deploymentId: deploy.deploymentId, phase: deploy.phase, sha: deploy.sha, error: deploy.error },
+    });
+  }
+  for (const pipeline of seatPausedLanes(input)) {
+    items.push({ kind: "pipeline", id: pipeline.id, label: `${pipeline.title} — paused by you; resume it with pipeline_action resume once what you paused it for is done` });
+  }
   /* Named, not merely counted (#1289). The twelve hours were spent because the
      seat had no way to know a pull request was waiting; a wake that says one is
      and leaves the seat to rediscover which would have cost most of the same
      turn. The lane that produced it travels with it for the same reason. */
   for (const pullRequest of input.pullRequests) {
+    const lane = context.ownLanes.find((entry) => entry.id === pullRequest.pipelineId);
     items.push({
       kind: "pull-request",
       id: `#${pullRequest.number}`,
       label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished`,
+      ...(lane ? { laneAnnouncement: `${lane.id}:${lane.settled}` } : {}),
     });
   }
   /* A lane whose open pull request is already on the agenda is that pull
@@ -1321,7 +1496,7 @@ function wakeItems(context: {
        special: it rides the same reason, the same agenda order and the same
        per-wake bound as every other own-lane line, and the bound cutting it is
        what leaves it unannounced and offerable next time. */
-    items.push({ kind: lane.settled === "provisioned" ? "provisioning" : "pipeline", id: lane.id, label: ownLaneLabel(lane) });
+    items.push({ kind: lane.settled === "provisioned" ? "provisioning" : "pipeline", id: lane.id, label: ownLaneLabel(lane), laneAnnouncement: `${lane.id}:${lane.settled}` });
   }
   for (const event of context.laneEvents) {
     items.push({ kind: "event", id: event.pipelineId ?? event.type, label: `${event.type}: ${event.summary}` });
@@ -1331,14 +1506,23 @@ function wakeItems(context: {
      that fit are recorded as harvested when the wake lands; the rest stay owed. */
   for (const entry of context.harvest) {
     /* One line per child, with its latest state and every owed outcome behind
-       it (#1783). */
+       it (#1783). A child whose transcript cannot be read is listed all the
+       same, with why (#1881); one that can carries where its final message is,
+       for the controller to attach. */
+    const { child } = entry;
+    const readable = isHarvestable(child);
     items.push({
       kind: "child",
-      id: entry.child.conversationId,
-      outcomeId: entry.child.outcomeId,
+      id: child.conversationId,
+      outcomeId: child.outcomeId,
       outcomeIds: entry.outcomeIds,
-      stateTokens: [childStateToken(entry.child, entry.child.outcomeId ?? null), childStateToken(entry.child, null)],
-      label: `${entry.child.title} — spawned child ${entry.child.outcome ?? "finished"}, outcome unharvested`,
+      /* A line that said why the transcript is unreadable has named that too,
+         so a dead host's open turn does not name the child again (#1881). */
+      stateTokens: [childStateToken(child, child.outcomeId ?? null), childStateToken(child, null), ...(readable ? [] : [unreadableToken(child)])],
+      label: readable
+        ? `${child.title} — spawned child ${child.outcome ?? "finished"}, outcome unharvested`
+        : `${child.title} — spawned child ${child.outcome ?? "finished"}, transcript not readable: ${seatTickTranscriptGapClause(child.transcriptReason)}`,
+      ...(readable && child.transcriptPath ? { finalMessageFrom: { path: child.transcriptPath, engine: child.engine ?? null } } : {}),
     });
   }
   /* A lane parked on a decision is open, so it can be BOTH the seat's own
@@ -1347,6 +1531,7 @@ function wakeItems(context: {
   const owned = new Set(context.ownLanes.map((lane) => lane.id));
   for (const entry of context.stalled) {
     if (owned.has(entry.pipeline.id)) continue;
+    if (items.some((item) => item.kind === "pipeline" && item.id === entry.pipeline.id)) continue;
     items.push({ kind: "pipeline", id: entry.pipeline.id, label: `${entry.pipeline.title} — ${entry.reason}` });
   }
   /* One line per child here too (#1783 round two). A child whose host died
@@ -1401,16 +1586,24 @@ export function seatTickWakeCommitPlan(
         actually names — inside the per-wake bound — are recorded as harvested
         by its landing; a child the bound held back stays owed. */
     terminalChildren?: readonly string[];
+    /** The revision of the monitor note the wake carries (#2030). */
+    noteShown?: string | null;
   },
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
-  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], shownChildren: [] };
+  const note = context.noteShown === undefined ? {} : { noteShown: context.noteShown };
+  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], shownChildren: [], ...note };
   if (verdict.kind !== "wake") return null;
   const terminal = new Set(context.terminalChildren ?? []);
   /* What each child line SHOWS, for the clause that asks whether anything has
      moved since (#1783 round two). It is recorded by the landing and by
      nothing else: a wake the layer never delivered showed the seat nothing. */
-  const shownChildren = [...new Set(verdict.items.flatMap((item) => item.stateTokens ?? []))];
+  const shownChildren = [...new Set([
+    ...verdict.items.flatMap((item) => item.stateTokens ?? []),
+    /* A child named as unreadable was shown its reason (#1881), and is not
+       named again until the reason changes. */
+    ...(verdict.unreadableChildren ?? []).map((child) => child.stateToken),
+  ])];
   /* Every outcome the line stood for, not just the one that described it
      (#1783): a child the wake showed once with its latest state was shown all
      of what it was owed on, so a landing acknowledges all of it. Leaving the
@@ -1420,11 +1613,13 @@ export function seatTickWakeCommitPlan(
     .flatMap((item) => (item.outcomeIds?.length ? item.outcomeIds : [item.outcomeId ?? item.id]))
     .filter((id) => terminal.has(id));
   /* Read off the items the wake actually CARRIES, never off the check's own
-     list (#1799): a provisioned lane the per-wake bound held back was not
-     announced, and recording it here would be the announcement nobody ever
-     received. Same rule the harvested children live under. */
-  const announcedLanes = verdict.items.filter((item) => item.kind === "provisioning").map((item) => item.id);
-  return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, shownChildren };
+     list (#2081): a settled lane the per-wake bound held back was not
+     announced. A pull request line can carry its lane's settlement too. */
+  const announcedLanes = verdict.items.flatMap((item) => item.laneAnnouncement ? [item.laneAnnouncement] : []);
+  /* The same rule for a settled deploy (#2063): the landing of the wake that
+     carried it is what announces it, once. */
+  const announcedDeploys = verdict.items.filter((item) => item.kind === "deploy").map((item) => item.id);
+  return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, shownChildren, ...note };
 }
 
 /**
@@ -1450,9 +1645,13 @@ export function seatTickWakeCommit(
 ): SeatTickProjectState {
   const at = new Date(now).toISOString();
   const eventsThrough = Math.max(state.eventsThrough ?? 0, commit.eventsThrough);
+  /* What the seat now holds of its own note (#2030); a plan that predates the
+     field leaves the record as it was. */
+  const note = commit.noteShown === undefined ? {} : { noteShown: commit.noteShown };
   if (commit.proposal) {
     return {
       ...state,
+      ...note,
       lastWakeAt: at,
       lastProposalAt: at,
       lastWakeReasons: [],
@@ -1477,6 +1676,7 @@ export function seatTickWakeCommit(
   }
   return {
     ...state,
+    ...note,
     lastWakeAt: at,
     lastWakeReasons: carried,
     lastWakeFingerprint: commit.fingerprint,
@@ -1490,14 +1690,16 @@ export function seatTickWakeCommit(
     releasedWake: null,
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
-    announcedLanes: announcedLanes(state.announcedLanes ?? [], commit.announcedLanes ?? []),
+    announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
+    announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
   };
 }
 
-/** The lanes announced after a landing (#1799), newest last and bounded. */
-function announcedLanes(before: readonly string[], announced: readonly string[]): string[] {
-  return [...new Set([...before.filter((id) => !announced.includes(id)), ...announced])]
-    .slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT);
+/** Keep each lane announcement until source eligibility expires. Deployments
+    retain their separate bounded history. */
+function announced(before: readonly string[], landed: readonly string[], limit?: number): string[] {
+  const merged = [...new Set([...before.filter((id) => !landed.includes(id)), ...landed])];
+  return limit === undefined ? merged : merged.slice(-limit);
 }
 
 /** The harvest cursor after a landing (#1465): the children this wake named,

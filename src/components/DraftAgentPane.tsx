@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { roleDescription, roleName, roleParamDescription, roleParamLabel, roleParamOptionLabel } from "@/components/builderCopy";
 import {
+  AGENT_LAUNCH_ENGINES,
   EngineRadioGroup,
   LaunchAccountSelect,
+  launchEngineLabel,
   useAgentLaunchDraft,
 } from "@/components/draft/AgentLaunchControls";
 import { Play, X } from "@/components/icons";
@@ -50,8 +52,9 @@ import {
 import { ReasoningControls } from "./ReasoningControls";
 import { cleanTitle, engineTintOf } from "./utils";
 import { draftWorkingDirectory } from "./projectModel";
+import { Z } from "@/components/layers";
 
-type Engine = "claude" | "codex";
+type Engine = "claude" | "codex" | "copilot";
 
 /* Engine/model/effort/account state and the engine chips are SHARED with the
    orchestrator panel and the mobile create sheet (PRD #976 slice A) — they live
@@ -91,7 +94,9 @@ function spawnImageNegotiationValue(value: unknown): SpawnImageNegotiation | nul
   const claude = runtimeImageCapabilityValue(imageInput.claude);
   const codex = runtimeImageCapabilityValue(imageInput.codex);
   if (!claude || !codex) return null;
-  return { spawnTransport: candidate.spawnTransport, imageInput: { claude, codex } };
+  /* A server from before Copilot sends no section; nothing is claimed for it. */
+  const copilot = runtimeImageCapabilityValue(imageInput.copilot) ?? { ...claude, supported: false };
+  return { spawnTransport: candidate.spawnTransport, imageInput: { claude, codex, copilot } };
 }
 
 const field = (id: string, name: string) => `llvDraftPane:${id}:${name}`;
@@ -118,6 +123,13 @@ function fetchRoleCatalog(): Promise<RoleCatalogItem[] | null> {
       return roles;
     });
   return roleCatalogRequest;
+}
+
+/** Replace the session's catalog with the one a mapping save answered (#1876),
+    so the next draft opens on the runtime the install just chose. */
+export function replaceRoleCatalog(roles: RoleCatalogItem[]): void {
+  roleCatalogCache = roles;
+  roleCatalogRequest = Promise.resolve(roles);
 }
 
 /** The shared /api/roles catalog (agent drafts + stage placeholders),
@@ -405,7 +417,7 @@ export function DraftAgentPane({
       read: (name) => readField(draftId, name),
       write: (name, value) => writeField(draftId, name, value),
     },
-    initialEngine: srcFile?.engine === "codex" ? "codex" : "claude",
+    initialEngine: srcFile?.engine === "codex" || srcFile?.engine === "copilot" ? srcFile.engine : "claude",
     onEngineChange: (value) => setSpawnImageNegotiation({ status: "loading", requestKey: `${project}\n${src ?? ""}\n${value}` }),
   });
   const { engine, model, effort, speed } = launch;
@@ -453,17 +465,21 @@ export function DraftAgentPane({
     setRoleParams(next);
     const selected = roles.find((role) => role.id === roleId);
     if (selected?.id !== "builder") return;
+    /* The variants come from the catalog, so the install's agent mapping
+       (#1876) reaches the draft exactly as it reaches the registry. */
     if (next.domain === "frontend") {
-      setEngine(BUILDER_FRONTEND_CONFIG.engine);
-      setModel(BUILDER_FRONTEND_CONFIG.model);
-      setEffort(BUILDER_FRONTEND_CONFIG.effort);
+      const frontend = selected.variants?.frontend ?? BUILDER_FRONTEND_CONFIG;
+      setEngine(frontend.engine);
+      setModel(frontend.model);
+      setEffort(frontend.effort);
       setSpeed("");
       return;
     }
     if (next.mode === "apply-fixes") {
-      setEngine(BUILDER_APPLY_FIXES_CONFIG.engine);
-      setModel(BUILDER_APPLY_FIXES_CONFIG.model);
-      setEffort(BUILDER_APPLY_FIXES_CONFIG.effort);
+      const fixes = selected.variants?.["apply-fixes"] ?? BUILDER_APPLY_FIXES_CONFIG;
+      setEngine(fixes.engine);
+      setModel(fixes.model);
+      setEffort(fixes.effort);
       return;
     }
     /* Plain/general mode falls back to the server-merged config so a saved
@@ -819,7 +835,7 @@ export function DraftAgentPane({
       <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2.5" style={{ backgroundColor: tint.soft }}>
         <LaunchAccountSelect draft={launch} disabled={fieldsDisabled} className="max-w-28" />
         <span className="h-2 w-2 shrink-0 rounded-full bg-strong" title={t("draft.notStarted")} />
-        <EngineRadioGroup engine={engine} disabled={fieldsDisabled} onChange={setEngine} />
+        <EngineRadioGroup engine={engine} engines={AGENT_LAUNCH_ENGINES} disabled={fieldsDisabled} onChange={setEngine} />
         <span
           className="min-w-0 flex-1 truncate text-[12px] font-semibold text-muted"
           title={srcFile ? cleanTitle(srcFile.title) : undefined}
@@ -837,7 +853,7 @@ export function DraftAgentPane({
 
       {/* The picker's popup hangs out of this strip, so the strip cannot clip
           its own overflow — the pane below it scrolls, the strip does not. */}
-      <div className="relative z-20 flex shrink-0 items-center gap-1.5 border-b border-border bg-sunken px-2.5 py-1.5">
+      <div className={`relative ${Z.lifted} flex shrink-0 items-center gap-1.5 border-b border-border bg-sunken px-2.5 py-1.5`}>
         <span className="shrink-0 text-[10px] font-semibold text-muted">{t("draft.directory")}</span>
         <DirectoryPicker
           id={dirPickerId}
@@ -913,7 +929,7 @@ export function DraftAgentPane({
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
             <span className="rounded-full px-3 py-1 text-[13px] font-bold" style={{ backgroundColor: tint.soft, color: tint.color }}>
-              {engine === "claude" ? "Claude" : "Codex"}
+              {launchEngineLabel(engine)}
             </span>
             <div className="max-w-[360px] text-[12px] text-muted">
               {src ? t("draft.hintRelay") : structuredSpawn ? t("draft.hintNewStructured") : t("draft.hintNew")}

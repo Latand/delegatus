@@ -1,3 +1,4 @@
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { isDeepStrictEqual } from "node:util";
 
 import type { ResumeSpec } from "@/lib/agent/cli";
@@ -47,7 +48,7 @@ export interface TranscriptHost {
   agentPid: number;
   display: string;
   windowName?: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   cwd: string;
   /** argv observed with this pid; detects a pid that was recycled between
       observation and delivery. */
@@ -486,7 +487,10 @@ export function createTranscriptHostResolver(
       host.agentIdentity !== rejectedHost.agentIdentity;
     if (host && !identityReplaced && (await revalidate(host, input.entry))) return { host, resumed: false };
 
-    const prepared = dependencies.beginResume?.(input.entry, input.spec) ?? null;
+    const prepared = await withAccountMutationLockAsync(
+      () => dependencies.beginResume?.(input.entry, input.spec) ?? null,
+      { holder: "resume admission", caller: "resume admission" },
+    );
     const resumeSpec = prepared?.spec ?? input.spec;
     let spawnFailure: unknown = null;
     try {

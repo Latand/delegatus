@@ -16,11 +16,13 @@ import { useModalLayer } from "@/components/modalLayer";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
+import { useOrchestratorDraftPrefill } from "@/components/orchestrator/draftPrefill";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SPAWN_CONFIG, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
 import { boardContext } from "../orchestrator/IncumbentHeader";
+import { MobilePreviousSeatsRow, MobilePreviousSeatsScreen } from "../orchestrator/PreviousSeats";
 import type { OrchestratorIncumbent } from "../orchestrator/incumbent";
 import {
   deriveRotateDraftState,
@@ -50,6 +52,7 @@ import {
   type SeatBadgeTone,
   type SeatCardView,
 } from "./orchestratorRowState";
+import { Z } from "@/components/layers";
 
 const BADGE_TONE: Record<SeatBadgeTone, string> = {
   success: "bg-success-soft text-success",
@@ -214,7 +217,7 @@ interface SeatSheetProps {
 
 /** The draft's own launch state, on the create keys the desktop dock uses. */
 function useCreateDraft(project: string) {
-  return useAgentLaunchDraft({
+  const launch = useAgentLaunchDraft({
     storage: {
       read: (name) => readSeatDraftField(project, name),
       write: (name, value) => writeSeatDraftField(project, name, value),
@@ -223,6 +226,9 @@ function useCreateDraft(project: string) {
     initialModel: ORCHESTRATOR_SPAWN_CONFIG.model,
     initialEffort: ORCHESTRATOR_SPAWN_CONFIG.effort,
   });
+  /* The setup guide's tour opens this draft prefilled (#1876 slice 3). */
+  useOrchestratorDraftPrefill(project, launch);
+  return launch;
 }
 
 /**
@@ -240,6 +246,7 @@ function SeatStatusSheet({
   project,
   projectName,
   state,
+  status,
   file,
   incumbent,
   pendingMandate,
@@ -257,6 +264,8 @@ function SeatStatusSheet({
   const launch = useCreateDraft(project);
   const view = orchestratorRowView(state, { conversationReady: Boolean(file) });
   const mode = state.kind === "live" ? "live" : "create";
+  /* The previous seats list (#1841) is a screen inside this sheet. */
+  const [previousOpen, setPreviousOpen] = useState(false);
 
   const primary: { key: MessageKey; run: () => void; busy: boolean } | null = state.kind === "creating"
     ? (!submitting && state.clientRequestId
@@ -331,7 +340,7 @@ function SeatStatusSheet({
                 data-orchestrator-confirm
                 disabled={primary.busy}
                 onClick={primary.run}
-                className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-body font-semibold text-white shadow-1 active:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+                className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 active:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
               >
                 {primary.busy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden /> : <Bot className="h-4 w-4" aria-hidden />}
                 <span className="truncate">{t(primary.key)}</span>
@@ -375,8 +384,10 @@ function SeatStatusSheet({
               <p className="text-ui leading-4 text-muted">{t("orchPanel.creatingStuck")}</p>
             ) : null}
           </Centered>
+        ) : state.kind === "live" && previousOpen ? (
+          <MobilePreviousSeatsScreen status={status} currentEngine={file?.engine ?? null} onBack={() => setPreviousOpen(false)} />
         ) : state.kind === "live" ? (
-          <LiveView state={state} project={project} file={file} incumbent={incumbent} now={now} onEditMandate={rotate.onOpen} onOpenTick={tick.onOpen} />
+          <LiveView state={state} project={project} file={file} incumbent={incumbent} now={now} onEditMandate={rotate.onOpen} onOpenTick={tick.onOpen} previousRow={<MobilePreviousSeatsRow status={status} onOpen={() => setPreviousOpen(true)} />} />
         ) : (
           /* A vacancy or a failed designation reached this sheet from somewhere
              other than the card (the platform's forward gesture onto a replaced
@@ -491,7 +502,7 @@ function SeatDraftSheet({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex flex-col bg-canvas pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+      className={`fixed inset-0 ${Z.sheet} flex flex-col bg-canvas pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]`}
       /* The keyboard's overlap with this full-height surface (#983). Inline so
          it wins over the safe-area padding above: with the keyboard up, the
          home indicator is behind it and the only inset that matters is this. */
@@ -623,7 +634,7 @@ function SeatDraftSheet({
                     type="submit"
                     data-orchestrator-confirm
                     disabled={primary.busy}
-                    className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-body font-semibold text-white shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+                    className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
                   >
                     {primary.busy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden /> : <Bot className="h-4 w-4" aria-hidden />}
                     <span className="truncate">{t(primary.key)}</span>
@@ -812,7 +823,7 @@ function RotateDraft({
             data-orchestrator-confirm
             onClick={confirm}
             disabled={submitting}
-            className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-body font-semibold text-white shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
           >
             {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden /> : <RefreshCw className="h-4 w-4" aria-hidden />}
             <span className="truncate">{t(errored ? "orchPanel.confirmRetry" : "orchPanel.rotateConfirm")}</span>
@@ -959,7 +970,10 @@ function LiveView({
   now,
   onEditMandate,
   onOpenTick,
+  previousRow,
 }: {
+  /** The Previous seats row, under the tick row (#1841). */
+  previousRow?: React.ReactNode;
   state: Extract<OrchestratorPanelState, { kind: "live" }>;
   project: string;
   file: FileEntry | null;
@@ -985,6 +999,7 @@ function LiveView({
       {/* The tick, directly under who holds the seat: whether the Viewer wakes
           this seat, and how often, is a property of the seat (#1681). */}
       <MobileSeatTickRow project={project} onOpen={onOpenTick} />
+      {previousRow}
       {state.bindFailure ? (
         <div role="status" data-orchestrator-bind-failure={state.bindFailure} className="rounded-control border border-warning/30 bg-warning/10 px-3 py-2 text-ui text-primary">
           <p className="font-semibold">{t("orchPanel.bindStalled")}</p>

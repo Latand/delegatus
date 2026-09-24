@@ -110,7 +110,7 @@ test("spawn admission rejects an explicit model outside the selected engine cata
 
   expect(response.status).toBe(400);
   expect(await response.json()).toEqual({
-    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
   });
 });
 
@@ -392,7 +392,11 @@ test("an explicit spawn account is durably pinned while an omitted account uses 
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
-      resolveHealthySpawnAccount: async (_engine: "claude" | "codex", requested?: string | null) => ({
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", id: string | null) => ({
+        engine: "claude" as const, accountId: id ?? "selected", kind: "managed" as const,
+        home: path.join(cwd, id ?? "selected"), transcriptRoot: path.join(cwd, "projects"), env: { NODE_ENV: "test" as const },
+      }),
+      resolveHealthySpawnAccount: async (_engine: "claude" | "codex" | "copilot", requested?: string | null) => ({
         engine: "claude" as const,
         accountId: requested ?? "selected",
         kind: "managed" as const,
@@ -804,7 +808,7 @@ test("a queued pinned account survives restart and launches exactly once on the 
       resolveHealthySpawnAccount: async () => {
         throw new NoHealthyClaudeAccountError(["account-a"]);
       },
-      resolveSpawnAccount: (_engine: "claude" | "codex", accountId: string | null) => account(accountId ?? "account-b"),
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", accountId: string | null) => account(accountId ?? "account-b"),
       resolvePinnedSpawnAdmission: async () => pinAdmissible
         ? {
             kind: "admissible" as const,
@@ -1244,6 +1248,10 @@ test("a pinned account without a retry deadline falls back and records the degra
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", id: string | null) => ({
+        engine: "claude" as const, accountId: id ?? "account-b", kind: "managed" as const,
+        home: path.join(cwd, "account-b"), transcriptRoot: path.join(cwd, "account-b", "projects"), env: { NODE_ENV: "test" as const },
+      }),
       resolveHealthySpawnAccount: async () => ({
         engine: "claude" as const,
         accountId: "account-b",
@@ -1404,6 +1412,10 @@ test("a legacy resolver mismatch also degrades the pin to a durable fallback", a
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", id: string | null) => ({
+        engine: "claude" as const, accountId: id ?? "selected-account", kind: "managed" as const,
+        home: path.join(cwd, "selected-account"), transcriptRoot: path.join(cwd, "selected-account", "projects"), env: { NODE_ENV: "test" as const },
+      }),
       resolveHealthySpawnAccount: async () => ({
         engine: "claude" as const,
         accountId: "selected-account",
@@ -2170,7 +2182,9 @@ test("fresh processes rescue one orphaned immediate structured admission exactly
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
-    expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+    /* The child names the deprecated JSON mode on purpose; its warning is expected. */
+    const unexpected = stderr.split("\n").filter((line) => line && !line.includes("is deprecated: the registry lives in SQLite only")).join("\n");
+    expect({ exit, stderr: unexpected }).toEqual({ exit: 0, stderr: "" });
     return JSON.parse(stdout) as {
       status: number;
       body: { launchId: string; conversationId: string; state: string };
@@ -2820,7 +2834,7 @@ test("structured replay keeps its admitted account after routing changes", async
       accountResolutions.push(`healthy:${routedAccountId}`);
       return account(routedAccountId);
     },
-    resolveSpawnAccount: (_engine: "claude" | "codex", accountId: string | null) => {
+    resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", accountId: string | null) => {
       accountResolutions.push(`exact:${accountId ?? "null"}`);
       return account(accountId ?? routedAccountId);
     },
@@ -3019,7 +3033,7 @@ test("unknown Codex models reject before image blob and receipt mutation", async
     }), dependencies);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: "invalid codex model id \"gpt-5.3-codex-spark\"; valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+      error: "invalid codex model id \"gpt-5.3-codex-spark\"; valid codex model ids: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
     });
     expect(storageCalled).toBeFalse();
     expect(Object.keys(agentRegistry().snapshot().receipts).sort()).toEqual(beforeReceipts);
@@ -3947,7 +3961,11 @@ test("Astra and Sol orchestrator spawns carry top-tier effort and images into th
   const profiles: Array<{ model: string | null; effort: string | null }> = [];
   const deps: SpawnRouteTestDependencies = {
     ...base,
-    resolveHealthySpawnAccount: async () => ({
+    resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", id: string | null) => ({
+        engine: "codex" as const, accountId: id ?? "codex-test", kind: "managed" as const,
+        home: path.join(cwd, "account"), transcriptRoot: path.join(cwd, "sessions"), env: { NODE_ENV: "test" as const },
+      }),
+      resolveHealthySpawnAccount: async () => ({
       engine: "codex", accountId: "codex-test", kind: "managed",
       home: path.join(cwd, "account"), transcriptRoot: path.join(cwd, "sessions"), env: { NODE_ENV: "test" },
     }),

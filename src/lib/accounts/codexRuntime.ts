@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { listCodexAccounts, UnknownAccountError, type CodexAccount } from "./codex";
-import { AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
 import { statePath } from "../configDir";
+import { accountsCollectionRevision, CODEX_ACCOUNTS_SOURCE, CODEX_LOGIN_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import {
   CodexAppServerClient,
   type AppServerAccountRead,
@@ -89,12 +90,22 @@ function canonicalHome(home: string): string {
   try { return fs.realpathSync(resolved); } catch { return resolved; }
 }
 
-function currentCodexAccount(account: CodexAccount): CodexAccount {
-  try { fs.lstatSync(statePath("codex-accounts.json")); }
+/** Whether this installation records a Codex registry at all. An installation
+    that has never had one trusts the account it was handed; since #1870 that is
+    a collection with no registry rows rather than a pathname with no file. */
+function codexRegistryRecorded(): boolean {
+  const read = readAccountSource(CODEX_ACCOUNTS_SOURCE);
+  if (read.kind === "collection") return read.body !== undefined;
+  if (read.kind === "gap") return true;
+  try { fs.lstatSync(statePath("codex-accounts.json")); return true; }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return account;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+}
+
+function currentCodexAccount(account: CodexAccount): CodexAccount {
+  if (!codexRegistryRecorded()) return account;
   const current = listCodexAccounts().find((candidate) => candidate.id === account.id);
   if (!current || current.kind !== account.kind || canonicalHome(current.home) !== canonicalHome(account.home)) {
     throw new UnknownAccountError(account.id);
@@ -111,9 +122,16 @@ function safeStoredAttempt(value: unknown): value is PersistedAttempt {
     (item.reason === null || item.reason === "child-died" || item.reason === "login-unsuccessful" || item.reason === "cancelled" || item.reason === "viewer-restarted" || item.reason === "account-read-failed" || item.reason === "start-failed");
 }
 
+/* Device-login attempts are the `accounts` collection of state.sqlite (#1870,
+   slice 7), one row per canonical CODEX_HOME. `file` names the store's
+   directory; a store this process cannot read reports no attempt, the way an
+   absent or damaged file always did. */
 function readStoredAttempts(file: string): Map<string, PersistedAttempt> {
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<StoredAttempts>;
+    const read = readAccountSource(CODEX_LOGIN_SOURCE, path.dirname(file));
+    const parsed = (read.kind === "collection"
+      ? read.body ?? {}
+      : JSON.parse(fs.readFileSync(file, "utf8"))) as Partial<StoredAttempts>;
     if (parsed.version !== 1 || !parsed.attempts || typeof parsed.attempts !== "object") return new Map();
     return new Map(Object.entries(parsed.attempts).filter((entry): entry is [string, PersistedAttempt] => safeStoredAttempt(entry[1])));
   } catch {
@@ -260,17 +278,27 @@ export class ManagedCodexRuntime {
   }
 
   async loginSnapshot(account: CodexAccount): Promise<ManagedLoginSnapshot> {
-    return await withAccountMutationLockAsync(async () => this.loginSnapshotLocked(currentCodexAccount(account)));
+    const snapshot = await accountProbeSnapshot(() => currentCodexAccount(account), { holder: "Codex login snapshot" });
+    const home = canonicalHome(snapshot.account.home);
+    const activeBefore = this.active.get(home);
+    const storedBefore = readStoredAttempts(this.stateFile).get(home);
+    if (snapshot.account.kind !== "managed") return { state: snapshot.account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
+    const status = await this.readAccount(activeBefore?.client ?? null, snapshot.account.home)
+      .then((value) => ({ value, failed: false as const }), () => ({ value: null, failed: true as const }));
+    return await withAccountMutationLockAsync(() => {
+      const active = this.active.get(home);
+      const stored = readStoredAttempts(this.stateFile).get(home);
+      if (accountsCollectionRevision() !== snapshot.revision || accountProbeIdentity(snapshot.account) !== snapshot.identity
+        || active !== activeBefore || JSON.stringify(stored) !== JSON.stringify(storedBefore)) return this.peekLogin(snapshot.account);
+      return this.commitLoginSnapshot(home, active, stored, status);
+    }, { holder: "Codex login commit" });
   }
 
-  private async loginSnapshotLocked(account: CodexAccount): Promise<ManagedLoginSnapshot> {
-    if (account.kind !== "managed") return { state: account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
-    const home = canonicalHome(account.home);
-    const active = this.active.get(home);
-    const stored = readStoredAttempts(this.stateFile).get(home);
+  private commitLoginSnapshot(home: string, active: ActiveAttempt | undefined, stored: PersistedAttempt | undefined,
+    read: { value: AppServerAccountRead | null; failed: boolean }): ManagedLoginSnapshot {
     try {
-      const status = await this.readAccount(active?.client ?? null, account.home);
-      if (isSupportedChatGptAccount(status)) {
+      if (read.failed || !read.value) throw new Error("account read failed");
+      if (isSupportedChatGptAccount(read.value)) {
         if (active) this.settle(active, "completed", null, true);
         else if (stored) this.record(home, { ...stored, state: "completed", updatedAt: this.now(), reason: null });
         return { state: "authenticated", attemptState: "completed", deviceAuth: null };
@@ -333,10 +361,15 @@ export class ManagedCodexRuntime {
 
   /** Performs the two read-only account calls on one app-server client. */
   async probeQuota(account: CodexAccount): Promise<CodexQuotaProbe> {
-    return await withAccountMutationLockAsync(async () => this.probeQuotaLocked(currentCodexAccount(account)));
+    const snapshot = await accountProbeSnapshot(() => currentCodexAccount(account), { holder: "Codex quota snapshot" });
+    const result = await this.probeQuotaUnlocked(snapshot.account);
+    await withAccountMutationLockAsync(() => {
+      if (accountsCollectionRevision() !== snapshot.revision || accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new Error("Codex account changed during quota probe");
+    }, { holder: "Codex quota recheck" });
+    return result;
   }
 
-  private async probeQuotaLocked(account: CodexAccount): Promise<CodexQuotaProbe> {
+  private async probeQuotaUnlocked(account: CodexAccount): Promise<CodexQuotaProbe> {
     const active = this.active.get(canonicalHome(account.home));
     if (active?.client) return this.probeQuotaFrom(active.client);
     const client = await this.startClient(account.home);
@@ -362,22 +395,29 @@ export class ManagedCodexRuntime {
       shows zero available credits refuses locally and sends nothing — the
       backend is only asked to spend when the account is known to hold one. */
   async redeemResetCredit(account: CodexAccount, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
-    return await withAccountMutationLockAsync(async () => this.redeemResetCreditLocked(currentCodexAccount(account), idempotencyKey));
+    const snapshot = await accountProbeSnapshot(() => currentCodexAccount(account), { holder: "Codex credit admission" });
+    const recheck = () => withAccountMutationLockAsync(() => {
+      if (accountsCollectionRevision() !== snapshot.revision || accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new Error("Codex account changed during credit redemption");
+    }, { holder: "Codex credit recheck" });
+    const result = await this.redeemResetCreditUnlocked(snapshot.account, idempotencyKey, recheck);
+    await recheck();
+    return result;
   }
 
-  private async redeemResetCreditLocked(account: CodexAccount, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
+  private async redeemResetCreditUnlocked(account: CodexAccount, idempotencyKey: string, recheck: () => Promise<void>): Promise<CodexResetCreditRedemption> {
     const active = this.active.get(canonicalHome(account.home));
-    if (active?.client) return this.redeemResetCreditFrom(active.client, idempotencyKey);
+    if (active?.client) return this.redeemResetCreditFrom(active.client, idempotencyKey, recheck);
     const client = await this.startClient(account.home);
-    try { return await this.redeemResetCreditFrom(client, idempotencyKey); }
+    try { return await this.redeemResetCreditFrom(client, idempotencyKey, recheck); }
     finally { client.close(); }
   }
 
-  private async redeemResetCreditFrom(client: CodexAppServerClient, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
+  private async redeemResetCreditFrom(client: CodexAppServerClient, idempotencyKey: string, recheck: () => Promise<void>): Promise<CodexResetCreditRedemption> {
     const before = await this.probeQuotaFrom(client);
     if (before.resetCredits !== null && before.resetCredits.availableCount === 0) {
       return { outcome: "noCredit", refusedLocally: true, before, after: before };
     }
+    await recheck();
     const outcome = await client.consumeRateLimitResetCredit({ idempotencyKey });
     const after = await this.probeQuotaFrom(client);
     return { outcome, refusedLocally: false, before, after };
@@ -423,15 +463,7 @@ export class ManagedCodexRuntime {
     }
     if (!changed) return;
     const stored: StoredAttempts = { version: 1, attempts: Object.fromEntries(this.records) };
-    const dir = path.dirname(this.stateFile);
-    const tmp = path.join(dir, `.${path.basename(this.stateFile)}.${process.pid}.${Date.now()}.tmp`);
-    try {
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(tmp, JSON.stringify(stored, null, 2) + "\n", { mode: 0o600 });
-      fs.renameSync(tmp, this.stateFile);
-    } finally {
-      fs.rmSync(tmp, { force: true });
-    }
+    writeAccountSource(CODEX_LOGIN_SOURCE, stored, path.dirname(this.stateFile));
   }
 
   private queueRecord(home: string, attempt: PersistedAttempt): void {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, ChevronDown, ChevronUp, LoaderCircle, Lock, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, PanelLeft, PanelTop, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -20,13 +20,18 @@ import {
   orchestratorMandateStale,
 } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
+import { FeedSkeleton } from "../skeletons";
+import { RoleFrameMark } from "../RoleFrameMark";
 import { ProcessStatusControls } from "../TaskHeader";
+import { useOrchestratorDraftPrefill, useOrchestratorDraftReveal } from "./draftPrefill";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { OrchestratorConversation } from "./OrchestratorConversation";
+import { PreviousSeatsControl } from "./PreviousSeats";
 import {
   deriveOrchestratorPanelState,
   deriveRotateDraftState,
@@ -134,6 +139,10 @@ export function OrchestratorPanel({
   onClose,
   variant = "dock",
   collapsed = false,
+  placement = "top",
+  onTogglePlacement,
+  onSeatSignal,
+  seatTasks,
   seatRead,
 }: {
   project: string;
@@ -147,6 +156,16 @@ export function OrchestratorPanel({
       control collapses the panel to that header instead of closing it. */
   variant?: "dock" | "seat";
   collapsed?: boolean;
+  /** Where the seat frame sits (#1841): above the columns or at their side.
+      Collapsed at the side, the head becomes a 44 px rail. */
+  placement?: "top" | "side";
+  /** The seat head's placement switch; absent draws none. */
+  onTogglePlacement?: () => void;
+  /** The seat's state word and unread marker, for the header toggle's dot. */
+  onSeatSignal?: (signal: SeatSignal) => void;
+  /** The project's tasks as the page carries them: the titles and notes of
+      the seats the Previous seats popover lists (#1841). */
+  seatTasks?: readonly BoardTask[];
   /** A read of this project's seat its host already keeps (the kanban board,
       for the same project and cwd): the panel uses it and polls nothing. */
   seatRead?: OrchestratorSeatRead;
@@ -175,6 +194,8 @@ export function OrchestratorPanel({
     initialModel: ORCHESTRATOR_SPAWN_CONFIG.model,
     initialEffort: ORCHESTRATOR_SPAWN_CONFIG.effort,
   });
+  /* The setup guide's tour opens this draft prefilled (#1876 slice 3). */
+  useOrchestratorDraftPrefill(project, launch);
 
   const setMandate = (value: string) => {
     setMandateState(value);
@@ -318,6 +339,15 @@ export function OrchestratorPanel({
   const rotatingLive = state.kind === "live" && rotateFrom !== null && rotateFrom === state.conversationId;
   const rotatingVacant = state.kind !== "live" && rotateFrom !== null && rotateUnsettled && status?.seat != null;
   const rotating = rotatingLive || rotatingVacant;
+  /* The seat's state as one word and one tone: the head's word, the side
+     rail's dot and the header toggle's dot all read this. */
+  const signal = seatWordOf(t, state);
+  const seatEngine = file?.engine ?? status?.seat?.engine ?? null;
+  const signalRef = useRef(onSeatSignal);
+  signalRef.current = onSeatSignal;
+  useEffect(() => {
+    signalRef.current?.({ tone: signal.tone, label: signal.label, unread: unreadReply });
+  }, [signal.tone, signal.label, unreadReply]);
 
   /** `replayRequestId` re-posts an EXISTING durable intent by its own key — the
       seat command then completes that intent with ITS original mandate, so the
@@ -387,46 +417,86 @@ export function OrchestratorPanel({
       data-orchestrator-state={state.kind}
       data-orchestrator-mode={rotating ? "rotate" : "default"}
       aria-label={t("orchPanel.regionAria", { project: projectName })}
+      {...(variant === "dock" ? { "data-role-host": "dock", "data-role": "orchestrator" } : {})}
     >
-      {variant === "seat" ? (
-        <header className="seat-head">
-          <span className={`av ${file?.engine === "codex" ? "codex" : "claude"}`} aria-hidden>
+      {variant === "seat" && collapsed && placement === "side" ? (
+        /* Side, collapsed: a 44 px rail, one button whose dots keep the state
+           and an unread reply readable. */
+        <button
+          type="button"
+          className="seat-rail"
+          data-seat-collapse
+          data-seat-rail=""
+          aria-expanded={false}
+          aria-label={t("orchPanel.railAria", { state: signal.label })}
+          title={t("orchPanel.seatExpand")}
+          onClick={onClose}
+        >
+          <span className={`av ${seatEngine === "codex" ? "codex" : "claude"}`} aria-hidden>
+            <Bot />
+          </span>
+          <i className={`rail-dot ${signal.tone}`} title={signal.label} data-seat-rail-state={signal.tone} />
+          {unreadReply ? <i className="rail-dot unread" title={t("orchPanel.seatUnreadReply")} data-seat-unread="" /> : null}
+          <span className="grow" />
+          <span className="rail-expand" aria-hidden><ChevronRight /></span>
+        </button>
+      ) : variant === "seat" ? (
+        <header className="seat-head" data-seat-head={collapsed ? "strip" : "full"}>
+          <RoleFrameMark role="orchestrator" />
+          <span className={`av ${seatEngine === "codex" ? "codex" : "claude"}`} aria-hidden>
             <Bot />
           </span>
           <span className="seat-title">
             <strong>{t("orchPanel.title")}</strong>
-            <span className="proj" title={projectName}>{projectName}</span>
+            {collapsed ? null : <span className="proj" title={projectName}>{projectName}</span>}
             <StateBadge state={state} file={file} word />
           </span>
-          <span className="lock" title={t("orchPanel.seatStaysTitle")}>
-            <Lock aria-hidden />
-            <span>{t("orchPanel.seatStays")}</span>
-          </span>
-          {/* The seat is short on purpose: who holds it and its host control
-              ride this row instead of rows of their own under it. */}
-          {state.kind === "live" && !rotating && !collapsed ? (
-            <IncumbentHeader
-              inline
-              project={project}
-              projectName={projectName}
-              incumbent={incumbent}
-              file={file}
-              catalog={catalog}
-              predecessorConversationId={state.seat.predecessorConversationId}
-              promptVersion={state.seat.promptVersion}
-              rotating={rotating}
-              opening={rotateOpening}
-              onRotate={() => void openRotate(state.conversationId)}
-            />
-          ) : (
-            <span className="grow" />
+          {state.kind === "loading" || failed ? null : (
+            <PreviousSeatsControl status={status} tasks={seatTasks} compact={collapsed || placement === "side"} currentEngine={seatEngine} />
           )}
-          {state.kind === "live" && file && !collapsed ? <ProcessStatusControls file={file} hideChip compact /> : null}
+          {/* Who holds the seat and its host control: the header's second
+              row, under the title, in both placements. On one row they drew
+              the context meter and the stale-mandate chip over Stop host and
+              Rotate: the title, Previous seats and Fold already take most of
+              the seat's at most 1040 px, and the incumbent needs about 600
+              more in Ukrainian. */}
+          {state.kind === "live" && !rotating && !collapsed ? (
+            <span className="seat-meta">
+              <IncumbentHeader
+                inline
+                project={project}
+                projectName={projectName}
+                incumbent={incumbent}
+                file={file}
+                catalog={catalog}
+                predecessorConversationId={state.seat.predecessorConversationId}
+                promptVersion={state.seat.promptVersion}
+                rotating={rotating}
+                opening={rotateOpening}
+                onRotate={() => void openRotate(state.conversationId)}
+                hostControls={file ? <ProcessStatusControls file={file} hideChip compact /> : null}
+              />
+            </span>
+          ) : null}
+          {state.kind === "live" && !collapsed && file && rotating ? <ProcessStatusControls file={file} hideChip compact /> : null}
+          <span className="grow" />
           {unreadReply ? (
             <span className="seat-unread" data-seat-unread="" title={t("orchPanel.seatUnreadReply")}>
               <i aria-hidden />
               <span>{t("orchPanel.seatUnreadReply")}</span>
             </span>
+          ) : null}
+          {onTogglePlacement ? (
+            <button
+              type="button"
+              className="icon-btn seat-dock"
+              data-seat-placement={placement}
+              onClick={onTogglePlacement}
+              aria-label={t(placement === "side" ? "orchPanel.dockTop" : "orchPanel.dockSide")}
+              title={t(placement === "side" ? "orchPanel.dockTop" : "orchPanel.dockSide")}
+            >
+              {placement === "side" ? <PanelTop aria-hidden /> : <PanelLeft aria-hidden />}
+            </button>
           ) : null}
           {/* The fold is the control the operator reaches for before a stream,
               so it is a labelled button rather than a bare chevron (#1802). */}
@@ -436,15 +506,19 @@ export function OrchestratorPanel({
             data-seat-collapse
             onClick={onClose}
             aria-expanded={!collapsed}
+            aria-keyshortcuts="O"
             aria-label={t(collapsed ? "orchPanel.seatExpand" : "orchPanel.seatCollapse")}
             title={t(collapsed ? "orchPanel.seatExpand" : "orchPanel.seatCollapse")}
           >
-            {collapsed ? <ChevronDown aria-hidden /> : <ChevronUp aria-hidden />}
+            {/* The arrow points where the panel goes: up into the strip on top,
+                left into the rail at the side. */}
+            {collapsed ? <ChevronDown aria-hidden /> : placement === "side" ? <ChevronLeft aria-hidden /> : <ChevronUp aria-hidden />}
             <span>{t(collapsed ? "orchPanel.seatUnfoldWord" : "orchPanel.seatFoldWord")}</span>
           </button>
         </header>
       ) : (
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+        <RoleFrameMark role="orchestrator" />
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent" aria-hidden>
           <Bot className="h-4 w-4" />
         </span>
@@ -466,10 +540,8 @@ export function OrchestratorPanel({
       )}
 
       {state.kind === "loading" ? (
-        <Centered>
-          <LoaderCircle className="h-5 w-5 animate-spin text-muted" aria-hidden />
-          <p className="text-ui text-muted" role="status">{t("orchPanel.loading")}</p>
-        </Centered>
+        /* The conversation it will show, in its shape (#2071). */
+        <FeedSkeleton />
       ) : state.kind === "unavailable" ? (
         <Centered>
           <TriangleAlert className="h-6 w-6 text-warning" aria-hidden />
@@ -611,6 +683,7 @@ export function OrchestratorPanel({
       ) : (
         <OrchestratorDraft
           mode="create"
+          project={project}
           state={state}
           mandate={mandate}
           edited={mandate !== ORCHESTRATOR_SYSTEM_PROMPT}
@@ -758,6 +831,7 @@ function RotateDraft({
  */
 function OrchestratorDraft({
   mode,
+  project,
   state,
   mandate,
   edited,
@@ -775,6 +849,8 @@ function OrchestratorDraft({
   onCancel,
 }: {
   mode: "create" | "rotate";
+  /** Set on the create draft: the setup guide's hand-off reveals its launch choices. */
+  project?: string;
   state: Extract<OrchestratorPanelState, { kind: "draft" } | { kind: "intent-error" }>;
   mandate: string;
   /** The text differs from what the draft started with — the built-in default,
@@ -817,6 +893,8 @@ function OrchestratorDraft({
      already true when the designation fails, the effect never re-runs, and the
      text the error is about stays behind a click. */
   const rules = useRef<HTMLDetailsElement>(null);
+  const launchChoices = useRef<HTMLDivElement>(null);
+  useOrchestratorDraftReveal(project ?? "", launchChoices);
   useEffect(() => {
     if (edited && rules.current) rules.current.open = true;
   }, [edited]);
@@ -891,7 +969,7 @@ function OrchestratorDraft({
           {t(viewerMcpRegistered ? "orchPanel.viewerMcpRegistered" : "orchPanel.viewerMcpMissing")}
         </p>
 
-        <div className="shrink-0">
+        <div ref={launchChoices} className="shrink-0" data-orchestrator-launch-choices>
           <AgentLaunchControls draft={launch} disabled={submitting} stacked />
         </div>
 
@@ -994,7 +1072,7 @@ function OrchestratorDraft({
             type="submit"
             data-orchestrator-confirm
             disabled={submitting}
-            className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-body font-semibold text-white shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
           >
             {submitting
               ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
@@ -1039,6 +1117,41 @@ const SEAT_BADGE: Record<SeatBadge, { tone: string; key: MessageKey }> = {
  * island popover read, so the dock can never name a wait differently from the
  * surfaces the operator reached it through.
  */
+/** The seat's state as the head, the side rail and the header toggle show it. */
+export interface SeatSignal {
+  tone: SeatWordTone;
+  label: string;
+  /** A reply landed while the seat was collapsed. */
+  unread: boolean;
+}
+
+export type SeatWordTone = "working" | "needs" | "failed" | "accent" | "quiet";
+
+/** The seat's one state word and its tone: success is working, warning needs
+    the operator, danger failed, muted is idle. */
+export function seatWordOf(t: (key: MessageKey) => string, state: OrchestratorPanelState): { label: string; tone: SeatWordTone } {
+  const seatBadge = state.kind === "live" ? seatBadgeOf(state) : null;
+  const badge = seatBadge ? SEAT_BADGE[seatBadge] : null;
+  const tone = badge
+    ? badge.tone
+    : state.kind === "intent-error"
+      ? DANGER_BADGE
+      : state.kind === "creating"
+        ? "border-accent/45 bg-accent-soft text-accent"
+        : QUIET_BADGE;
+  const label = badge
+    ? t(badge.key)
+    : t(state.kind === "creating"
+      ? "orchPanel.badgeCreating"
+      : state.kind === "intent-error"
+        ? "orchPanel.badgeFailed"
+        : state.kind === "draft"
+          ? "orchPanel.badgeNone"
+          : "orchPanel.badgeReading");
+  const wordTone: SeatWordTone = tone.includes("success") ? "working" : tone.includes("warning") ? "needs" : tone.includes("danger") ? "failed" : tone.includes("accent") ? "accent" : "quiet";
+  return { label, tone: wordTone };
+}
+
 function StateBadge({ state, file, word = false }: { state: OrchestratorPanelState; file: FileEntry | null; word?: boolean }) {
   const { t, locale } = useLocale();
   const seatBadge = state.kind === "live" ? seatBadgeOf(state) : null;

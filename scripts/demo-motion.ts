@@ -167,7 +167,7 @@ export const STORYBOARDS: Storyboard[] = [
       { do: "waitText", text: "forge" },
     ],
     steps: [
-      { do: "card", title: "Agent Log Viewer", subtitle: "Every coding agent on your machine — one live board.", note: "bunx agent-log-viewer", ms: 2800 },
+      { do: "card", title: "Delegatus", subtitle: "Every coding agent on your machine — one live board.", note: "bunx delegatus-cli", ms: 2800 },
     ],
     pixels: null,
   },
@@ -284,7 +284,7 @@ export const STORYBOARDS: Storyboard[] = [
       { do: "waitText", text: "atlas" },
     ],
     steps: [
-      { do: "card", title: "bunx agent-log-viewer", subtitle: "Local-first. No database. Reads ~/.claude and ~/.codex.", note: "github.com/Latand/live-log-viewer-next", ms: 3200 },
+      { do: "card", title: "bunx agent-log-viewer", subtitle: "Local-first. No database. Reads ~/.claude and ~/.codex.", note: "github.com/Latand/delegatus", ms: 3200 },
     ],
     pixels: null,
   },

@@ -1,5 +1,9 @@
 import type { NextConfig } from "next";
 
+/* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
+   read below (docs/design/rename-delegatus.md §5). */
+import "./bin/envAlias.mjs";
+
 const nextConfig: NextConfig = {
   // Conditional standalone output keeps `bun run build && bun start` warning-free while packaging can still opt in.
   output: process.env.LLV_STANDALONE === "1" ? "standalone" : undefined,
@@ -22,6 +26,7 @@ const nextConfig: NextConfig = {
       ".next/server/resource-collector-worker.js",
       ".next/server/account-migration-controller-worker.js",
       ".next/server/wakatime-sync-worker.js",
+      ".next/server/state-backup-worker.js",
       ".next/server/chunks/**",
     ],
   },
@@ -35,6 +40,7 @@ const nextConfig: NextConfig = {
         "resource-collector-worker": "./src/lib/resourceCollector.worker.ts",
         "account-migration-controller-worker": "./src/lib/accountMigrationController.worker.ts",
         "wakatime-sync-worker": "./src/lib/wakatimeSync.worker.ts",
+        "state-backup-worker": "./src/lib/stateBackup.worker.ts",
       });
     }
     return config;

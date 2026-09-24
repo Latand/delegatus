@@ -151,13 +151,13 @@ const file = {
   lastTurn: { startedAt: Date.parse(AT(0)), endedAt: null },
 } as FileEntry;
 
-function render(): HTMLElement {
+function render(feedFile: FileEntry = file): HTMLElement {
   const host = dom.document.createElement("div");
   dom.document.body.append(host);
   const root = createRoot(host as unknown as Element);
   roots.add(root);
   flushSync(() => root.render(
-    <LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow setFollow={() => undefined} compact />,
+    <LogFeed file={feedFile} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow setFollow={() => undefined} compact />,
   ));
   return host as unknown as HTMLElement;
 }
@@ -208,4 +208,81 @@ test("«back to live» survives on the phone: it is the only way back once the t
   /* And leaving the tail still does not bring the removed rows back. */
   expect(host.querySelector("[data-live-tail-pill]")).toBeNull();
   expect(host.querySelector("[data-turn-status]")).toBeNull();
+});
+
+/** Its own conversation, so no scroll position another test left behind is
+    restored into it. */
+const conversation = (name: string): FileEntry => ({
+  ...file,
+  path: `/fixtures/claude/projects/-repo/${name}.jsonl`,
+  name: `${name}.jsonl`,
+  conversationId: `conversation_${name.replaceAll("-", "_")}`,
+});
+
+/*
+ * #2072 defect D: the «down» control sat over the feed, centred at its bottom
+ * edge, and it only exists while the reader is away from the tail — exactly
+ * when a line of text is under it. It now takes its own 44 px row below the
+ * feed, in flow: the feed's viewport ends above it, so no text can sit under
+ * it, and the same row serves the desktop readers.
+ */
+async function releaseTail(host: HTMLElement): Promise<{ scroller: HTMLElement; jump: HTMLButtonElement }> {
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  const geometry = setScrollerGeometry(scroller, 1_200, 200, 1_000);
+  flushSync(() => {
+    scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -200 }) as unknown as Event);
+    geometry.setTop(600);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+  });
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline && !host.querySelector('button[aria-label="Back to the live tail"]')) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return { scroller, jump: host.querySelector('button[aria-label="Back to the live tail"]') as HTMLButtonElement };
+}
+
+for (const surface of ["phone", "desktop"] as const) {
+  test(`${surface}: the jump control is a row of its own below the feed, never over it`, async () => {
+    mobile = surface === "phone";
+    const host = render(conversation(`jump-strip-${surface}`));
+    expect(host.querySelector("[data-feed-jump-strip]")).toBeNull();
+    const { scroller, jump } = await releaseTail(host);
+
+    expect(jump).toBeTruthy();
+    const strip = jump.closest("[data-feed-jump-strip]") as HTMLElement | null;
+    expect(strip).toBeTruthy();
+    /* Not inside the box that overlays the scroller, and after it in flow. */
+    expect(scroller.parentElement!.contains(strip)).toBe(false);
+    expect(scroller.compareDocumentPosition(strip!) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    for (const element of [strip!, jump]) {
+      expect(element.className.split(/\s+/)).not.toContain("absolute");
+    }
+    /* A 44 px row and a 44 px target around the 32 px pill. */
+    expect(strip!.className.split(/\s+/)).toEqual(expect.arrayContaining(["h-11", "shrink-0"]));
+    expect(jump.className.split(/\s+/)).toEqual(expect.arrayContaining(["h-11", "min-w-11"]));
+    expect(jump.querySelector("[data-feed-jump-pill]")?.className.split(/\s+/)).toContain("h-8");
+    expect(jump.textContent).toContain("down");
+
+    flushSync(() => { jump.click(); });
+    expect(host.querySelector("[data-feed-jump-strip]")).toBeNull();
+  });
+}
+
+test("uk: the strip keeps the existing words", async () => {
+  setLocale("uk");
+  const host = render(conversation("jump-strip-uk"));
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  const geometry = setScrollerGeometry(scroller, 1_200, 200, 1_000);
+  flushSync(() => {
+    scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -200 }) as unknown as Event);
+    geometry.setTop(600);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+  });
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline && !host.querySelector("[data-feed-jump-strip] button")) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const jump = host.querySelector("[data-feed-jump-strip] button");
+  expect(jump?.getAttribute("aria-label")).toBe("Повернутись до живого хвоста");
+  expect(jump?.textContent).toContain("вниз");
 });

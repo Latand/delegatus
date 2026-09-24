@@ -60,20 +60,22 @@ test("causal revisions are durable and survive a restart", () => {
   const file = temporaryFile();
   mutateBoard("proj", 0, [{ kind: "set-favorite", id: "conv-1", favorite: true }], file);
   mutateBoard("proj", 1, [{ kind: "set-favorite", id: "conv-1", favorite: false }], file);
-  /* `boardFor` re-reads the file, so this is the restart: the fence cannot be
-     rebuilt from memory after a redeploy and must come off disk. */
+  /* `boardFor` re-reads the persisted row, so this is the restart: the fence
+     cannot be rebuilt from memory after a redeploy and must come off disk. */
   expect(boardFor("proj", file).keyRevisions).toEqual({ "favorite:conv-1": 2 });
 
   /* A board written before this metadata existed reads back with an empty map —
      every key then looks never-written, which is right: no client can hold
-     intent that predates a revision nobody recorded. */
-  fs.writeFileSync(file, JSON.stringify({ projects: { proj: {
+     intent that predates a revision nobody recorded. Seeded in its own
+     directory, because the store imports a legacy file once (#1870). */
+  const legacy = temporaryFile();
+  fs.writeFileSync(legacy, JSON.stringify({ projects: { proj: {
     schemaVersion: 1, revision: 7, updatedAt: "2026-07-10T00:00:00.000Z",
     prefs: { manual: ["/a"], hidden: [], expanded: [], viewMode: null, taskPanelOpen: false },
   } } }), "utf8");
-  expect(boardFor("proj", file).keyRevisions).toEqual({});
-  mutateBoard("proj", 7, [{ kind: "close", path: "/a" }], file);
-  expect(at(file, pathKey("/a"))).toBe(8);
+  expect(boardFor("proj", legacy).keyRevisions).toEqual({});
+  mutateBoard("proj", 7, [{ kind: "close", path: "/a" }], legacy);
+  expect(at(legacy, pathKey("/a"))).toBe(8);
 });
 
 test("a remap unifies the two names onto one clock without burning it", () => {

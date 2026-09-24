@@ -5,7 +5,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
-import { translate } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 
 import { toolEvent } from "../__fixtures__/readableTools";
 import type { CmdGroupItem, ToolEvent, ToolOutputBlock } from "../parse";
@@ -13,12 +13,13 @@ import { CmdGroupCard } from "./CmdGroupCard";
 import { ToolCard } from "./ToolCard";
 
 /*
- * #1498: an image an agent reads is a block of its tool result, and the tool
- * card draws it with the feed's ImageCard — among the result's text, in order.
- * Nothing decodes until the operator asks: the block renders as the collapsed
- * chip (dimensions · size · show), and the data URI enters the DOM only when
- * the chip is opened. One frame is ~400 KB of base64 and a capture run makes
- * dozens, so the phone (390 × 844) and the desktop both start collapsed.
+ * #1498, #2075: an image an agent looks at is a block of its tool result, and
+ * the tool line draws it with the feed's ImageCard, the card that draws an
+ * operator's attachment: a thumbnail under the line, outside its disclosure,
+ * so it shows while the line is closed on the phone (390 × 844) and on the
+ * desktop alike. A tap opens the full-screen viewer. A picture the transcript
+ * references by path loads through the artifact route, and a file that cannot
+ * be drawn becomes a pill naming it and why.
  */
 
 let narrowViewport = false;
@@ -47,6 +48,7 @@ Object.assign(globalThis, {
   HTMLElement: dom.HTMLElement,
   HTMLButtonElement: dom.HTMLButtonElement,
   HTMLDetailsElement: dom.HTMLDetailsElement,
+  HTMLImageElement: dom.HTMLImageElement,
   Event: dom.Event,
   MouseEvent: dom.MouseEvent,
   matchMedia: matchMediaStub,
@@ -55,10 +57,13 @@ Object.assign(globalThis, {
 const en = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate("en", key, params);
 
 let root: Root | null = null;
+const realFetch = globalThis.fetch;
 afterEach(() => {
   if (root) flushSync(() => root!.unmount());
   root = null;
   narrowViewport = false;
+  globalThis.fetch = realFetch;
+  setLocale("en");
   dom.document.body.replaceChildren();
 });
 
@@ -100,75 +105,85 @@ function frameRead(over: Partial<ToolEvent> = {}): ToolEvent {
 
 const chipOf = (host: Element) => [...host.querySelectorAll("button")].find((button) => button.textContent?.includes(en("common.show"))) ?? null;
 const order = (text: string, ...needles: string[]) => needles.map((needle) => text.indexOf(needle));
+const images = (host: Element) => [...host.querySelectorAll("img")];
 
-test("desktop: the picture renders as a collapsed chip among the result's text, in order, with nothing decoded", () => {
+async function settle(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  flushSync(() => {});
+}
+
+test("desktop: the picture is a thumbnail under the line, the body keeps the text in order, and a click opens the viewer", () => {
   const host = mount(<ToolCard event={frameRead()} />);
   const body = host.querySelector("details > div")!;
   expect(body).toBeTruthy();
-  /* No data URI in the DOM until the operator opens the chip. */
-  expect(host.querySelector("img")).toBeNull();
-  expect(host.innerHTML).not.toContain(FRAME_DATA);
-  const chip = chipOf(host)!;
-  expect(chip).toBeTruthy();
-  expect(chip.textContent).toContain("1999×1161");
-  expect(chip.textContent).toContain(`297 ${en("common.kb")}`);
-  /* Text, picture, text — the transcript's order, and the placeholder text is gone. */
-  const [before, picture, after] = order(body.textContent ?? "", "before the frame", "1999×1161", "after the frame");
+  const [before, after] = order(body.textContent ?? "", "before the frame", "after the frame");
   expect(before).toBeGreaterThanOrEqual(0);
-  expect(picture).toBeGreaterThan(before);
-  expect(after).toBeGreaterThan(picture);
+  expect(after).toBeGreaterThan(before);
   expect(body.textContent).not.toContain(`[${en("render.imageOutput")}]`);
-  /* Inside the sunken body there is no feed-gutter indent to double up. */
-  expect(chip.getAttribute("class")).not.toContain("ml-9");
-  /* Opening the chip is what inserts the data URI. */
-  click(chip);
-  const img = host.querySelector("img")!;
-  expect(img).toBeTruthy();
-  expect(img.getAttribute("src")).toBe(FRAME_URI);
-  expect(img.getAttribute("class")).not.toContain("ml-9");
+  /* One thumbnail, outside the disclosure, and no "show" chip in front of it. */
+  const [img, ...rest] = images(host);
+  expect(rest).toHaveLength(0);
+  expect(img!.getAttribute("src")).toBe(FRAME_URI);
+  expect(img!.closest("details")).toBeNull();
+  expect(img!.closest("[data-tool-images]")).toBeTruthy();
+  expect(chipOf(host)).toBeNull();
+  /* Dimensions and size, quietly. */
+  expect(host.querySelector("[data-image-caption]")!.textContent).toBe(`1999×1161 · 297 ${en("common.kb")}`);
+  /* Under a tool line there is no second feed-gutter indent. */
+  expect(img!.parentElement!.getAttribute("class")).not.toContain("ml-9");
+  click(img!);
+  const viewer = dom.document.querySelector("[role=dialog]")!;
+  expect(viewer).toBeTruthy();
+  expect(viewer.querySelector("img")!.getAttribute("src")).toBe(FRAME_URI);
 });
 
-test("phone at 390 px: the line is closed until tapped, then the picture is a 44 px chip that expands in place", () => {
+test("phone at 390 px: the line stays one closed line and the thumbnail shows under it without a tap", () => {
   narrowViewport = true;
   const host = mount(<ToolCard event={frameRead()} />);
   const details = host.querySelector("details")!;
   expect((details as unknown as { open: boolean }).open).toBe(false);
   expect(host.querySelector("details > div")).toBeNull();
-  expect(host.innerHTML).not.toContain(FRAME_DATA);
-  toggle(details, true);
-  expect(host.querySelector("img")).toBeNull();
-  const chip = chipOf(host)!;
-  expect(chip).toBeTruthy();
-  expect(chip.getAttribute("class")).toContain("min-h-11");
-  expect(chip.getAttribute("class")).not.toContain("ml-9");
-  click(chip);
-  const img = host.querySelector("img")!;
-  expect(img.getAttribute("src")).toBe(FRAME_URI);
+  const [img] = images(host);
+  expect(img!.getAttribute("src")).toBe(FRAME_URI);
+  expect(chipOf(host)).toBeNull();
   /* The thumbnail never forces the 390 px document sideways. */
-  expect(img.getAttribute("class")).toContain("max-w-full");
+  expect(img!.getAttribute("class")).toContain("max-w-full");
+  /* Opening the line adds the text and never a second picture. */
+  toggle(details, true);
+  expect(host.querySelector("details > div")!.textContent).toContain("before the frame");
+  expect(images(host)).toHaveLength(1);
+  /* "Collapse" is the operator's choice, and it folds to the chip. */
+  const collapse = [...host.querySelectorAll("button")].find((button) => button.textContent === en("common.collapse"))!;
+  expect(collapse.getAttribute("class")).toContain("[@media(pointer:coarse)]:min-h-11");
+  click(collapse);
+  expect(images(host)).toHaveLength(0);
+  expect(chipOf(host)!.getAttribute("class")).toContain("min-h-11");
 });
 
-test("a live run block shows every picture as a chip and still decodes none of them", () => {
-  const calls = [1, 2, 3].map((n) =>
-    frameRead({ id: `read-frame-${n}`, summary: `Read op-image-${n}.jpg`, outputPreview: `[${en("render.imageOutput")}]`, outputBlocks: [frame] }),
-  );
+test("several pictures on one call all show, wrapping under the line", () => {
+  const host = mount(<ToolCard event={frameRead({ outputPreview: "", outputBlocks: [frame, frame, frame] })} />);
+  expect(images(host)).toHaveLength(3);
+  const row = host.querySelector("[data-tool-images]")!;
+  expect(row.getAttribute("class")).toContain("flex-wrap");
+  expect(row.getAttribute("class")).toContain("max-w-full");
+});
+
+test("a readable block inside an opened run draws its pictures too", () => {
+  const calls = [1, 2].map((n) => frameRead({ id: `read-frame-${n}`, summary: `Read op-image-${n}.jpg`, outputPreview: "", outputBlocks: [frame] }));
   const group: CmdGroupItem = {
     kind: "cmd-group",
     ids: calls.map((call) => call.id),
     calls,
     t0: calls[0]!.ts,
-    t1: calls[2]!.ts,
-    byTool: { Read: 3 },
-    okCount: 3,
+    t1: calls[1]!.ts,
+    byTool: { Read: 2 },
+    okCount: 2,
     errCount: 0,
     hasErr: false,
     active: true,
   };
   const host = mount(<CmdGroupCard item={group} />);
-  const chips = [...host.querySelectorAll("button")].filter((button) => button.textContent?.includes(en("common.show")));
-  expect(chips).toHaveLength(3);
-  expect(host.querySelectorAll("img")).toHaveLength(0);
-  expect(host.innerHTML).not.toContain(FRAME_DATA);
+  expect(images(host)).toHaveLength(2);
 });
 
 test("a picture block without data falls back to the text placeholder and never blanks the card", () => {
@@ -181,45 +196,46 @@ test("a picture block without data falls back to the text placeholder and never 
   expect(body.textContent).toContain("captured");
   expect(body.textContent).toContain(en("render.imageOutput"));
   expect(chipOf(host)).toBeNull();
-  expect(host.querySelector("img")).toBeNull();
+  expect(images(host)).toHaveLength(0);
 });
 
-test("phone at 390 px: a folded run of image Reads opens into readable blocks whose pictures are chips, decoding none until one is opened", () => {
-  narrowViewport = true;
-  const calls = [1, 2, 3].map((n) =>
-    frameRead({ id: `read-frame-${n}`, summary: `Read op-image-${n}.jpg`, outputPreview: `[${en("render.imageOutput")}]`, outputBlocks: [frame], open: false }),
-  );
-  const group: CmdGroupItem = {
-    kind: "cmd-group",
-    ids: calls.map((call) => call.id),
-    calls,
-    t0: calls[0]!.ts,
-    t1: calls[2]!.ts,
-    byTool: { Read: 3 },
-    okCount: 3,
-    errCount: 0,
-    hasErr: false,
-    active: false,
-  };
-  const host = mount(<CmdGroupCard item={group} />);
-  /* The phone folds a settled run to one line; nothing of the pictures is in the DOM yet. */
-  const fold = host.querySelector("[data-mobile-run-fold]")!;
-  expect(fold).toBeTruthy();
-  expect(fold.getAttribute("aria-expanded")).toBe("false");
-  expect(fold.textContent).toContain("Read ×3");
-  expect(chipOf(host)).toBeNull();
-  expect(host.innerHTML).not.toContain(FRAME_DATA);
-  /* Opening the run shows every picture as a chip and still decodes none of them. */
-  click(fold);
-  const chips = [...host.querySelectorAll("button")].filter((button) => button.textContent?.includes(en("common.show")));
-  expect(chips).toHaveLength(3);
-  expect(chips.every((chip) => chip.getAttribute("class")?.includes("min-h-11"))).toBe(true);
-  expect(host.querySelectorAll("img")).toHaveLength(0);
-  expect(host.innerHTML).not.toContain(FRAME_DATA);
-  /* One tap decodes exactly that picture, width-bounded so the 390 px page never scrolls sideways. */
-  click(chips[1]!);
-  const imgs = host.querySelectorAll("img");
-  expect(imgs).toHaveLength(1);
-  expect(imgs[0]!.getAttribute("src")).toBe(FRAME_URI);
-  expect(imgs[0]!.getAttribute("class")).toContain("max-w-full");
+const pathView = () => frameRead({ id: "view-path", tool: "imageView", summary: "imageView · /w/shot.png", outputPreview: `[${en("render.imageOutput")}]`, outputBlocks: [{ type: "image", path: "/w/shot.png" }] });
+
+test("a picture referenced by path loads lazily through the artifact route", () => {
+  const host = mount(<ToolCard event={pathView()} />);
+  const [img] = images(host);
+  expect(img!.getAttribute("src")).toBe("/api/artifact?path=%2Fw%2Fshot.png");
+  expect(img!.getAttribute("loading")).toBe("lazy");
+  expect(img!.getAttribute("decoding")).toBe("async");
+  expect(host.innerHTML).not.toContain("base64");
 });
+
+for (const [status, code, key] of [
+  [404, "not-found", "render.imageGone"],
+  [403, "access-denied", "render.imageOutsideRoots"],
+  [415, "unsupported", "render.imageUnavailable"],
+] as const) {
+  for (const locale of ["en", "uk"] as const) {
+    test(`a file that cannot be drawn (${code}) becomes a pill naming it and why, in ${locale}`, async () => {
+      setLocale(locale);
+      const asked: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        asked.push(String(input));
+        return new Response(JSON.stringify({ error: "fixture", code }), { status, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const host = mount(<ToolCard event={pathView()} />);
+      const [img] = images(host);
+      flushSync(() => img!.dispatchEvent(new dom.Event("error") as unknown as Event));
+      await settle();
+      expect(asked).toEqual(["/api/artifact?path=%2Fw%2Fshot.png&mode=meta"]);
+      const pill = host.querySelector("[data-image-unavailable]")!;
+      expect(pill).toBeTruthy();
+      expect(pill.textContent).toContain("shot.png");
+      expect(pill.textContent).toContain(translate(locale, key));
+      /* The full path lives only in the tooltip, never in the row's text. */
+      expect(pill.textContent).not.toContain("/w/");
+      expect(pill.getAttribute("title")).toBe("/w/shot.png");
+      expect(images(host)).toHaveLength(0);
+    });
+  }
+}

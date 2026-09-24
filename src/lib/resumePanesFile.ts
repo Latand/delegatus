@@ -12,7 +12,7 @@ export interface ResumePaneRecord {
   windowName: string;
   /** Engine that created the resume pane. Older records omit it and are not
       eligible for live-host reuse. */
-  engine?: "claude" | "codex";
+  engine?: "claude" | "codex" | "copilot";
 }
 
 export interface ResumePanesFile {

@@ -74,6 +74,8 @@ export interface CreateTaskInput {
   dueTz?: string;
   attachments?: TaskAttachment[];
   clientRequestId?: string;
+  /** A lucide icon name (#2102); one lucide does not have creates the task without one. */
+  icon?: string;
 }
 
 /** A per-commit-gesture id: stable across retries of one gesture (so two rapid
@@ -137,6 +139,9 @@ export function updateTask(
   id: string,
   patch: {
     text?: string;
+    /** Agent-facing context (#1834); `null` or an empty string clears it, and
+        it is written on its own — `text` is left exactly as stored. */
+    details?: string | null;
     status?: TaskStatus;
     placement?: "pinned" | "unplaced";
     pos?: { x: number; y: number };
@@ -145,6 +150,8 @@ export function updateTask(
     dueTz?: string;
     /** Band membership. Reversible; the task itself is never removed. */
     board?: TaskBoardVisibility;
+    /** A lucide icon name (#2102); "none" clears it. */
+    icon?: string;
   },
 ): Promise<string | null> {
   /* Text patches chain behind the previous in-flight one: an autosave and a

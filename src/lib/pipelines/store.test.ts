@@ -1,13 +1,112 @@
 import { Database } from "bun:sqlite";
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
+import { createPipelineWithDelivery, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
+
+const deliveryTarget = { repository: "repo-delivery-fixture", remote: "", branch: "refs/heads/review-target", pr: 637, rejectedHead: "a".repeat(40) };
+function deliveryFixture(id: string): Pipeline {
+  const record = buildPipeline({ id, task: "Delivery fixture", project: "viewer", repoDir: "/repo", stages: [
+    { id: "build", kind: "run", prompt: "build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } },
+  ], srcPath: null,
+    srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft", publication: "remote-branch" });
+  record.creationRequest = { key: `request-${id}`, digest: "original-arguments" };
+  return record;
+}
+
+async function isolatedDelivery(run: (root: string) => Promise<void> | void): Promise<void> {
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-store-"));
+  process.env.LLV_STATE_DIR = root;
+  try { await run(root); }
+  finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("delivery ownership survives concurrent processes and original-key replay after restart", async () => isolatedDelivery(async (root) => {
+  savePipelines([]);
+  const modulePath = path.join(import.meta.dir, "store.ts");
+  const script = `import { createPipelineWithDelivery } from ${JSON.stringify(modulePath)};
+    const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
+    console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));`;
+  const run = (record: Pipeline) => Bun.spawn([process.execPath, "-e", script], {
+    env: { ...process.env, LLV_STATE_DIR: root, DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const children = [run(deliveryFixture("owner-a")), run(deliveryFixture("owner-b"))];
+  const results = await Promise.all(children.map(async (child) => {
+    const output = await new Response(child.stdout).text();
+    const errors = await new Response(child.stderr).text();
+    expect({ exit: await child.exited, errors }).toEqual({ exit: 0, errors: "" });
+    return JSON.parse(output) as Pipeline;
+  }));
+  const owner = results.find((record) => record.delivery?.active)!;
+  const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
+  expect(results.filter((record) => record.delivery?.active)).toHaveLength(1);
+  expect(comparison).toMatchObject({ publication: "internal", delivery: { publish: "disabled", ownerId: owner.id, epoch: 1 } });
+  const replay = run(deliveryFixture(owner.id));
+  expect(JSON.parse(await new Response(replay.stdout).text()).id).toBe(owner.id);
+  expect(await replay.exited).toBe(0);
+  expect(loadPipelines()).toHaveLength(2);
+  const database = new Database(path.join(root, "state.sqlite"));
+  try {
+    const duplicate = { ...owner, id: "uncoordinated-owner", creationRequest: { key: "independent-request", digest: "different" } };
+    expect(() => database.query("INSERT INTO state_rows SELECT collection, ?, ?, row_order, row_revision, controller_active FROM state_rows WHERE collection='pipelines' AND row_key=?")
+      .run(duplicate.id, JSON.stringify(duplicate), owner.id)).toThrow();
+  } finally { database.close(); }
+}));
+
+test("a process crash inside the claim transaction leaves no partial owner", async () => isolatedDelivery(async (root) => {
+  savePipelines([]);
+  const script = `import { withDeliveryMutation, assignPipelineDelivery } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+    const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
+    withDeliveryMutation(tx => { assignPipelineDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET), false, tx.pipelineLookup); tx.put(pipeline); process.exit(19); });`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, LLV_STATE_DIR: root,
+    DELIVERY_FIXTURE: JSON.stringify(deliveryFixture("crashed")), DELIVERY_TARGET: JSON.stringify(deliveryTarget) }, stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(19);
+  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
+  const recovered = await createPipelineWithDelivery(deliveryFixture("crashed"), deliveryTarget);
+  expect(recovered.delivery).toMatchObject({ active: true, epoch: 1 });
+}));
+
+test("terminal release retains receipts through archive and takeover fences epochs and in-flight writes", async () => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("owner"), deliveryTarget);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("comparison"), deliveryTarget);
+  withDeliveryMutation((tx) => {
+    const record = tx.get(owner.id)!;
+    record.delivery!.operation = { id: "write", sha: "b".repeat(40), epoch: 1, state: "running" };
+    tx.put(record);
+  });
+  expect((await takeoverPipelineDelivery(comparison.id, owner.id, 1, "take over", "conversation_builder")).error).toContain("in flight");
+  withDeliveryMutation((tx) => {
+    const record = tx.get(owner.id)!;
+    record.delivery!.operation = undefined;
+    record.state = "closed";
+    record.cursor = null;
+    record.closedAt = "2026-07-02T00:00:00.000Z";
+    tx.put(record);
+  });
+  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
+  expect((await createPipelineWithDelivery(deliveryFixture(owner.id), deliveryTarget)).id).toBe(owner.id);
+  expect((await takeoverPipelineDelivery(comparison.id, owner.id, 99, "take over", "conversation_builder")).status).toBe(409);
+  const taken = await takeoverPipelineDelivery(comparison.id, owner.id, 1, "previous owner settled", "conversation_builder");
+  expect(taken.pipeline?.delivery).toMatchObject({ active: true, disposition: "owner", epoch: 2, ownerId: comparison.id });
+  expect(taken.pipeline?.delivery?.journal.at(-1)?.conversationId).toBe("conversation_builder");
+  const changed = deliveryFixture(owner.id);
+  changed.creationRequest!.digest = "changed";
+  await expect(createPipelineWithDelivery(changed, deliveryTarget)).rejects.toThrow("idempotency_conflict");
+}));
 
 test.each([false, true])("archive enabled=%s lets the same event loop settle startup admission before moving rows", async (enabled) => {
   const previous = process.env.LLV_STATE_DIR;
@@ -258,6 +357,53 @@ test("current production records without verdict recovery metadata load and roun
   });
 });
 
+/* #1938: a needs_review record with its grants round-trips, a #1868 budget
+   handoff recorded before reviewed heads existed still loads, and a malformed
+   review record is refused. */
+test("needs_review records, continue-review grants and pre-#1938 budget handoffs load and round-trip (#1938)", () => {
+  sandboxed((sandbox) => {
+    const build = (id: string) => {
+      const record = buildPipeline({
+        id, task: "task", project: "viewer", repoDir: "/repo", stages: v3Stages(),
+        srcPath: null, srcConversationId: null, now: "2026-09-20T00:00:00.000Z",
+      });
+      record.stages[1]!.onFail = { to: "build", maxRounds: 1 };
+      record.state = "running";
+      record.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+      return record;
+    };
+    const attempt = (n: number, state: "passed" | "failed", over: Record<string, unknown> = {}) => ({
+      n, state, effectiveRole: { ...v3Role }, launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null,
+      flowId: null, startedAt: null, completedAt: "2026-09-20T00:00:00.000Z", input: null, activatedBy: null, output: null, verdict: null, error: null, ...over,
+    });
+    /* The old handoff: budgetSpent with no reviewedHead. */
+    const legacy = build("review1938");
+    legacy.runs[1]!.attempts.push(attempt(1, "failed", { budgetSpent: true, verdict: { status: "fail", findings: ["P1 x"] } }) as never);
+    const parked = build("review1938b");
+    parked.runs[1]!.attempts.push(attempt(1, "failed", { budgetSpent: true, reviewedHead: "1".repeat(40), verdict: { status: "fail", findings: ["P1 x"] } }) as never);
+    parked.state = "needs_review";
+    parked.cursor = null;
+    parked.reviewPending = {
+      stageId: "verify", attempt: 1, fixStageId: "build", fixAttempt: 1,
+      reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), verdict: "fail", findings: 1, at: "2026-09-20T00:00:00.000Z",
+    };
+    parked.reviewGrants = [{
+      clientRequestId: "grant", expectedRevision: "0".repeat(64), stageId: "verify", rounds: 2,
+      reviewedHead: null, currentHead: "2".repeat(40), actor: { kind: "operator" }, at: "2026-09-20T00:00:00.000Z",
+    }];
+    fs.writeFileSync(path.join(sandbox, "pipelines.json"), JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [legacy, parked] }), "utf8");
+    const loaded = loadPipelines();
+    expect(loaded.map((record) => record.state)).toEqual(["running", "needs_review"]);
+    expect(loaded[0]!.runs[1]!.attempts[0]!.reviewedHead).toBeUndefined();
+    savePipelines(loaded);
+    expect(loadPipelines()).toEqual(loaded);
+
+    const malformed = structuredClone(parked);
+    malformed.reviewGrants![0]!.rounds = 0;
+    expect(() => savePipelines([malformed])).toThrow();
+  });
+});
+
 test("a settled legacy terminal reap protects the attempts it already inspected", () => {
   sandboxed((sandbox) => {
     const pipeline = buildPipeline({
@@ -455,12 +601,14 @@ test("v3 validation: acyclic pass edges, valid fail edges, 1–8 stage bounds (#
     expect(() => savePipelines([buildPipeline({ id: "wide0008", task: "task", project: "viewer", repoDir: "/repo", stages: wide(8), srcPath: null, srcConversationId: null, now: "now" })])).not.toThrow();
     expect(() => savePipelines([buildPipeline({ id: "wide0009", task: "task", project: "viewer", repoDir: "/repo", stages: wide(9), srcPath: null, srcConversationId: null, now: "now" })])).toThrow("malformed pipeline record");
 
-    /* A review-loop must stay pass-reachable from a run stage. */
+    /* A legacy review-loop no run reaches is still decoded (retire-flows §3):
+       the store never drops a stored definition; every edit and start refuse it. */
     const orphanReview = buildPipeline({ id: "bad00004", task: "task", project: "viewer", repoDir: "/repo", stages: [
       { id: "review", kind: "review-loop", prompt: "review", next: null, effectiveRole: { ...v3Role, access: "read-only" } },
       { id: "build", kind: "run", prompt: "build", next: null, effectiveRole: { ...v3Role } },
     ], srcPath: null, srcConversationId: null, now: "now" });
-    expect(() => savePipelines([orphanReview])).toThrow("malformed pipeline record");
+    expect(() => savePipelines([orphanReview])).not.toThrow();
+    expect(pipelineGraphError(orphanReview.stages)).toContain("review-loop stage review is unreachable");
 
     /* Review verdict recovery belongs to the bound flow, so a persisted
        review-loop fail edge is rejected before it can become unreachable. */
@@ -691,3 +839,49 @@ test.each(["pipelines.json", "pipelines-archive.json"])("ordinary legacy %s read
     expect(fs.readFileSync(path.join(sandbox, filename), "utf8")).toBe("null");
   });
 });
+
+
+test("pending close custody retains publication ownership and stays out of the archive", async () => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("close-custody-owner"), deliveryTarget);
+  await withPipelineMutation((pipelines, persist) => {
+    const record = pipelines.find((item) => item.id === owner.id)!;
+    record.state = "closed";
+    record.cursor = null;
+    record.closedAt = "2026-07-02T00:00:00.000Z";
+    record.closeTeardown = { id: "close-obligation", phase: "pending", waitingForActivation: false, acknowledgeHosts: false, flow: null };
+    record.closeReport = { status: "pending", pending: [], stopped: [], alreadyStopped: [], unconfirmed: [], acknowledged: [],
+      reviewers: [], stillRunning: [], notes: [], worktree: null };
+    persist([record]);
+  });
+  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })?.id).toBe(owner.id);
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(0);
+  const borrowed = loadPipelines()[0]!;
+  borrowed.closeTeardown!.waitingForActivation = true;
+  borrowed.closeReport!.notes.push({ stageId: "build", attempt: 1, conversationId: null, agentPath: null, paneId: null, detail: "borrowed copy" });
+  expect(loadPipelines()[0]!.closeTeardown!.waitingForActivation).toBeFalse();
+  expect(loadPipelines()[0]!.closeReport!.notes).toEqual([]);
+  await withPipelineMutation((pipelines, persist) => {
+    const record = pipelines.find((item) => item.id === owner.id)!;
+    record.closeTeardown!.phase = "settled";
+    record.closeReport!.status = "settled";
+    persist([record]);
+  });
+  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
+  expect(findPipelineRecord(owner.id)?.closeReport?.status).toBe("settled");
+}));
+
+test("startup admission warns with its phase when one hold exceeds 100 ms", async () => isolatedDelivery(async () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await withPipelineStartupAdmission(async (available) => {
+      expect(available).toBe(true);
+      await Bun.sleep(125);
+    }, "fixture startup phase");
+    expect(warn).toHaveBeenCalledWith("[structured hosts] state lease exceeded budget", {
+      phase: "fixture startup phase", collection: "pipelines", budgetMs: 100, heldMs: expect.any(Number),
+    });
+    const fields = warn.mock.calls[0]![1] as { heldMs: number };
+    expect(fields.heldMs).toBeGreaterThanOrEqual(100);
+  } finally { warn.mockRestore(); }
+}));

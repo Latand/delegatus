@@ -1,5 +1,6 @@
 "use client";
 
+import { ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
@@ -7,32 +8,40 @@ import { conversationIdentity, formatConversationHash } from "@/lib/accounts/ide
 import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import { admissionSnapshot, type SeatRefs } from "@/lib/tasks/groupHide";
+import type { SeatRefs } from "@/lib/tasks/groupHide";
+import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
-import { compactPipelineLayoutFlows, latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
+import type { PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
 import type { BranchGroup } from "@/components/projectModel";
-import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
-import { reconcileLayoutNodes } from "@/components/scheme/layoutIdentity";
-import { buildTaskBands } from "@/components/scheme/taskBands";
-import { isPlacedTask } from "@/components/scheme/taskGeometry";
+import type { SchemeLayout } from "@/components/scheme/layout";
 import { updateTask } from "@/components/tasks/taskApi";
-import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
+import { TaskIcon } from "@/components/tasks/TaskIcon";
+import { TaskIconPicker } from "@/components/tasks/TaskIconPicker";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
-import { useOrchestratorSeat, type OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
+import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
+import { KanbanColumnsSkeleton } from "@/components/skeletons";
+import { reachLineText, useServerReach } from "@/hooks/serverReach";
+import { useKanbanSeat } from "./kanbanSeatStore";
+import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
+import { BAR_WIDE_MIN, BarCreateGroup, BarIslandSlot } from "@/components/ProjectBar";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
+import type { CardEditField } from "./CardInlineText";
 import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./KanbanCard";
 import { MoreGlyph } from "./kanbanGlyphs";
 import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
+import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
+import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
-import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
+import { drawnTasks, useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
 import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
@@ -43,15 +52,18 @@ import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
+import { textField, withField } from "./taskText";
 import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
 import { usePipelineActions } from "./usePipelineActions";
+import { useBands } from "./useBands";
 
 /**
  * The desktop kanban board (#1695 K2): the approved prototype's columns and
  * cards over the project's complete task inventory.
  *
  * Cards come from the same band projection the scheme board draws
- * (`buildSchemeLayout` → `buildTaskBands`, same inputs), so identity and
+ * (`useBands`: `buildSchemeLayout` → `buildTaskBands`, same inputs, and the
+ * phone's columns read it too), so identity and
  * grouping never differ between the two boards while both exist. Status moves
  * are optimistic and revision-guarded (`useTaskMutations`); every other write
  * this slice offers goes through an existing route.
@@ -63,17 +75,7 @@ import { usePipelineActions } from "./usePipelineActions";
  * and a hidden group that needs the operator again comes back with its reason.
  */
 
-export type KanbanLayoutMode = "wide" | "narrow" | "scroll" | "tabs";
-
-/** Prototype `layoutMode`, measured on the board's own width. Below 768 px the
-    desktop board is tabbed; the phone layout starts below 640 px and never
-    mounts this component. */
-export function kanbanLayoutMode(width: number): KanbanLayoutMode {
-  if (width >= 1400) return "wide";
-  if (width >= 1200) return "narrow";
-  if (width >= 768) return "scroll";
-  return "tabs";
-}
+export { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
 
 /**
  * Cross-project mode (#1820). Present ⇒ this board's columns carry the cards
@@ -120,12 +122,23 @@ export interface KanbanBoardProps {
   /** Board clock, epoch seconds. */
   now: number;
   loaded: boolean;
+  /** The files drawn are a restored answer being confirmed (#2071): the bar
+      says «updating…» beside the count. */
+  updating?: boolean;
   catalogFailures: number;
   selection: ReadonlySet<string>;
-  viewSwitch?: ReactNode;
+  /** The Board / Conversations switch, given whether the bar is wide enough for labels. */
+  viewSwitch?: ReactNode | ((wide: boolean) => ReactNode);
+  /** The bar's first group (the project's name and accounts), given the bar's tier (#1801). */
+  barLead?: (wide: boolean) => ReactNode;
+  /** The bar's last groups (the panel toggles and the ⋯ menu), given the bar's tier (#1801). */
+  barTrail?: (wide: boolean) => ReactNode;
+  /** A panel beside the board and under the bar (the project's Tasks panel), so the bar spans it
+      and the attention island lands over the bar instead of the panel's own header (#1801). */
+  aside?: ReactNode;
   /** The orchestrator seat above the columns (#1695 K3), given the id of the
       board region its skip link lands on. */
-  seat?: (boardId: string, seatRead: OrchestratorSeatRead | null) => ReactNode;
+  seat?: (boardId: string) => ReactNode;
   /** A conversation or task the Viewer was asked to open while this board
       shows: its card is revealed, and a conversation opens as a reader. */
   focus?: string | null;
@@ -153,11 +166,13 @@ export interface KanbanBoardProps {
   closedPaths?: readonly string[];
   /** Restore a closed conversation to the board. */
   onRestoreConversation?: (file: FileEntry) => void;
-  /** The project's checkout, for the orchestrator seat read. */
+  /** The project's checkout, carried into the seat the board draws. */
   projectCwd?: string;
-  /** The project's seat as a caller already knows it; read from the seat
-      route when absent. */
-  seatRefs?: SeatRefs | null;
+  /** The project's seat as its owner read it: every conversation the seat
+      record names, or null while that is unknown. Required, because the board
+      does not read the seat itself — the page that owns the Tasks panel does
+      (#1841), and a second reader here would poll the same route twice. */
+  seatRefs: SeatRefs | null;
   mutationPorts?: TaskMutationPorts;
   assignmentPorts?: AssignmentPorts;
   /** Where open readers are remembered; this browser's storage by default. */
@@ -185,10 +200,9 @@ interface SheetTarget {
 }
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
-const EMPTY_FLOWS: Flow[] = [];
-const EMPTY_PIPELINES: Pipeline[] = [];
-const EMPTY_MAP: ReadonlyMap<string, string> = new Map();
 const NO_READERS: readonly OpenReader[] = [];
+/** Parts of the board's root that belong to the Viewer, where the board answers no key. */
+const VIEWER_OWNED = ".kb-aside, [data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
 const NO_CREATED: ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }> = [];
 
 function browserStorage(): Pick<Storage, "getItem" | "setItem"> | null {
@@ -204,22 +218,7 @@ function cardMatchesShown(model: KanbanModel, card: KanbanCardModel): boolean {
   return model.columns[card.status].shown.some((shown) => shown.id === card.id) || model.unlinkedShown.some((shown) => shown.id === card.id);
 }
 
-type EditField = "title" | "description";
-
-/** The title (first line) or description (the rest) of a task's text. */
-function textField(text: string, field: EditField): string {
-  const newline = text.search(/\r?\n/);
-  if (field === "title") return (newline < 0 ? text : text.slice(0, newline)).trim();
-  return newline < 0 ? "" : text.slice(newline).trim();
-}
-
-/** The task's text with one of its fields replaced, the other kept byte for byte. */
-function withField(text: string, field: EditField, value: string): string {
-  const newline = text.search(/\r?\n/);
-  if (field === "title") return newline < 0 ? value : value + text.slice(newline);
-  const first = newline < 0 ? text : text.slice(0, newline);
-  return value ? `${first}\n${value}` : first;
-}
+type EditField = CardEditField;
 
 function withEntry<V>(map: ReadonlyMap<string, V>, key: string, value: V | undefined): ReadonlyMap<string, V> {
   if (value === undefined && !map.has(key)) return map;
@@ -242,39 +241,16 @@ function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-function useBands(props: KanbanBoardProps) {
-  const { t } = useLocale();
-  const { groups, manual, files, flows, reviewGroups = EMPTY_FLOWS, pipelines, surfacePipelines = EMPTY_PIPELINES, tasks, allTasks, drafts, favorites = EMPTY_SET, isolatedManualPaths = EMPTY_SET, draftBands = EMPTY_MAP, now, project } = props;
-  const deckFlows = useMemo(() => (reviewGroups.length ? [...flows, ...reviewGroups] : flows), [flows, reviewGroups]);
-  const layoutFlows = useMemo(() => compactPipelineLayoutFlows(pipelines, deckFlows), [pipelines, deckFlows]);
-  const placedTasks = useMemo(() => tasks.filter(isPlacedTask), [tasks]);
-  const previousLayout = useRef<SchemeLayout | null>(null);
-  const layout = useMemo(() => {
-    const built = reconcileLayoutNodes(
-      previousLayout.current,
-      props.layout ?? buildSchemeLayout(groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, EMPTY_SET, { now }),
-    );
-    previousLayout.current = built;
-    return built;
-  }, [props.layout, groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, now]);
-  /* The projection's `project` only fences its UNLINKED buckets to one
-     project; omitting it is already the cross-project answer, so the Overview
-     passes nothing rather than calling this once per project. */
-  const projectionProject = props.overview ? undefined : project;
-  const projection = useMemo(
-    () => projectTaskWorkflows([...allTasks], pipelines, flows, files, projectionProject),
-    [allTasks, pipelines, flows, files, projectionProject],
-  );
-  const bands = useMemo(
-    () => buildTaskBands(layout, { tasks: allTasks, projection, draftBands, untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow") }),
-    [layout, allTasks, projection, draftBands, t],
-  );
-  return { bands, projection };
-}
-
 export function KanbanBoard(props: KanbanBoardProps) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
+  const workLinks = useWorkLinks();
+  /* The bar's word on the server (#2071 D7): a reconnect in progress is a
+     quiet note, a long outage the red alert it always was. */
+  const reach = useServerReach();
+  const reachStatus = reach.kind === "reconnecting"
+    ? <span className="bar-note" data-bar-reach="reconnecting">{reachLineText(t, locale, reach)}</span>
+    : catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : null;
   /* `+ Task` (K9a): a task this board created is drawn at once, on the tasks it was created against. The next
      tasks payload is the authority: it carries the task, or the task is gone (deleted, moved to another project)
      and so is its card. */
@@ -295,16 +271,22 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const assignments = props.assignmentPorts ?? browserAssignmentPorts;
   const boardId = `kb-board-${useId().replace(/:/g, "")}`;
   const rootRef = useRef<HTMLDivElement>(null);
+  const asideRef = useRef<HTMLDivElement>(null);
+  const hasAside = Boolean(props.aside);
   const [mode, setMode] = useState<KanbanLayoutMode>("wide");
+  /* The header bar's tier (#1801): labelled controls from BAR_WIDE_MIN of bar, icons below. */
+  const [barWide, setBarWide] = useState(true);
+  const [barWrap, setBarWrap] = useState(false);
   const [tab, setTab] = useState<TaskStatus>("assigned");
   const [query, setQuery] = useState("");
   const [linkQuery, setLinkQuery] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
   const [dragHint, setDragHint] = useState(false);
   const menu = useOverlay<
-    { kind: "status" | "card" | "colour"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
+    { kind: "status" | "card" | "colour" | "icon"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "create" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
     | { kind: "account"; target: AccountTarget }
+    | { kind: "links"; target: WorkLinkTarget }
   >();
   const { receipts, show, dismiss } = useReceipts();
   const latestUndo = useRef<{ receiptId: number; run: () => void } | null>(null);
@@ -334,57 +316,44 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The board draws the edits it has sent ahead of the poll: a new title or
      colour at once, and a hidden group gone at once with a hide stamped now. */
   const hideStamps = useRef(new Map<string, string>());
-  const effectiveTasks = useMemo(() => {
-    if (!edits.size) {
-      hideStamps.current.clear();
-      return allTasks;
-    }
-    return allTasks.map((task) => {
-      const edit = edits.get(task.id);
-      if (!edit) {
-        hideStamps.current.delete(task.id);
-        return task;
-      }
-      const next: BoardTask = { ...task };
-      if ("color" in edit) {
-        if (edit.color) next.color = edit.color;
-        else delete next.color;
-      }
-      if (edit.hide === true) {
-        let at = hideStamps.current.get(task.id);
-        if (!at) hideStamps.current.set(task.id, (at = new Date().toISOString()));
-        next.groupHidden = { at, by: "operator", admitted: admissionSnapshot(task.assignments) };
-      } else {
-        hideStamps.current.delete(task.id);
-        if (edit.hide === false) delete next.groupHidden;
-      }
-      if (typeof edit.text === "string") {
-        next.text = edit.text;
-        if (next.origin?.refinement === "pending") next.origin = { ...next.origin, refinement: "titled" };
-      }
-      return next;
-    });
-  }, [allTasks, edits]);
+  const effectiveTasks = useMemo(() => drawnTasks(allTasks, edits, hideStamps.current), [allTasks, edits]);
   const { bands, projection } = useBands({ ...props, allTasks: effectiveTasks });
-  /* The seat as its route reports it, active and pending. While it is unknown
-     the board guesses nothing: the × stays, and the server decides. This is
-     the page's one read of the seat: the orchestrator panel above the columns
-     is handed the same read and polls nothing of its own. */
-  const seatRead = useOrchestratorSeat(props.seatRefs === undefined ? project : null, props.projectCwd);
-  const seatKey = props.seatRefs !== undefined
-    ? (props.seatRefs ? JSON.stringify(props.seatRefs) : "")
-    : (seatRead.status ? JSON.stringify([seatRead.status.seat, seatRead.status.pending].map((seat) => [seat?.conversationId ?? null, seat?.path ?? null])) : "");
-  const seatRefs = useMemo<SeatRefs | null>(() => {
-    if (props.seatRefs !== undefined) return props.seatRefs;
-    const status = seatRead.status;
-    if (!status) return null;
-    const seats = [status.seat, status.pending];
-    return {
-      conversationIds: seats.flatMap((seat) => (seat?.conversationId ? [seat.conversationId] : [])),
-      paths: seats.flatMap((seat) => (seat?.path ? [seat.path] : [])),
+  /* Every conversation the project's seat record names leaves the bands
+     (#1841), as the page that read it reports them. Null is «not known yet»:
+     the board hides nothing on a guess, and a failed read arrives here as the
+     current seat alone, so work never disappears behind a record nobody could
+     read. Re-keyed by what the seat names, so a fresh answer with the same
+     content does not rebuild the model. */
+  const seatKey = props.seatRefs ? JSON.stringify(props.seatRefs) : "";
+  const seatRefs = useMemo<SeatRefs | null>(
+    () => (seatKey ? (JSON.parse(seatKey) as SeatRefs) : null),
+    [seatKey],
+  );
+  /* The orchestrator seat sits above the columns or, docked at the side,
+     between the rail and them (#1841): one choice per browser. */
+  const seatFrame = useKanbanSeat(project);
+  const wideColumns = useKanbanWide();
+  const workInAssignedRef = useRef(wideColumns.workInAssigned);
+  workInAssignedRef.current = wideColumns.workInAssigned;
+  /* A wide shelf gives the space back when the operator goes back to work in
+     Assigned: a pointer down or a focus landing on a card there. Reading,
+     scrolling or opening a card inside the wide column never narrows it. */
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onWork = (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('.column[data-status="assigned"] .card')) workInAssignedRef.current();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by what the seat names
-  }, [seatKey]);
+    root.addEventListener("pointerdown", onWork, true);
+    root.addEventListener("focusin", onWork);
+    return () => {
+      root.removeEventListener("pointerdown", onWork, true);
+      root.removeEventListener("focusin", onWork);
+    };
+  }, []);
+  const seatView = props.seat ? props.seat(boardId) : null;
+  const seatSide = Boolean(seatView) && seatFrame.placement === "side";
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */
   const modelNow = Math.floor(props.now / 15) * 15;
@@ -580,13 +549,24 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useLayoutEffect(() => {
     const element = rootRef.current;
     if (!element) return;
-    const apply = () => setMode(kanbanLayoutMode(element.getBoundingClientRect().width));
+    /* The bar spans the board, its aside and a seat docked at the side; the
+       columns' mode follows what those leave them (#1841). */
+    const aside = asideRef.current;
+    const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
+    const apply = () => {
+      const barWidth = element.getBoundingClientRect().width;
+      setMode(kanbanLayoutModeBeside(barWidth - (aside?.getBoundingClientRect().width ?? 0), seat?.getBoundingClientRect().width ?? 0));
+      setBarWide(barWidth >= BAR_WIDE_MIN);
+      setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
+    };
     apply();
     if (typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(apply);
     observer.observe(element);
+    if (aside) observer.observe(aside);
+    if (seat) observer.observe(seat);
     return () => observer.disconnect();
-  }, []);
+  }, [hasAside, seatSide]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
@@ -720,7 +700,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const startEdit = useCallback((card: KanbanCardModel, field: EditField) => {
     const task = card.task ? effectiveById.current.get(card.task.id) : undefined;
     if (!task) return;
-    const base = textField(task.text, field);
+    const base = field === "details" ? (task.details ?? "") : textField(task.text, field);
     /* A draft a refused save kept is what the field reopens with. */
     const kept = failedRef.current.get(card.id);
     const retained = kept?.field === field ? kept : null;
@@ -729,7 +709,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     setEditing((current) => withEntry(current, card.id, retained
       ? { field, draft: retained.draft, base: retained.base }
       : { field, draft: field === "title" && card.titlePending ? "" : base, base }));
-    if (field === "description") {
+    if (field === "description" || field === "details") {
       setCollapsed((current) => {
         if (!current.has(card.id)) return current;
         const next = new Set(current);
@@ -745,6 +725,31 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const raw = card?.task ? tasksById.current.get(card.task.id) : undefined;
     if (!card || !raw) return;
     const value = draft.trim();
+    if (field === "details") {
+      /* Its own field: this write carries `details` and nothing else, so the
+         task's text is left exactly as stored (#1834). An empty draft clears
+         it, and the card's row then disappears. */
+      const stored = effectiveById.current.get(raw.id)?.details ?? raw.details ?? "";
+      const found = base ?? stored;
+      if (stored === value) {
+        setFailedEdits((current) => withEntry(current, cardId, undefined));
+        return;
+      }
+      setFailedEdits((current) => withEntry(current, cardId, undefined));
+      const outcome: FieldEditOutcome = await controller.edit(raw, { field: "details", value });
+      if (outcome.kind === "failed") {
+        flash(cardId);
+        setFailedEdits((current) => withEntry(current, cardId, { field, draft, base: found, message: /[.!?…]$/.test(outcome.error.trim()) ? outcome.error.trim() : `${outcome.error.trim()}.` }));
+      } else if (outcome.kind === "conflict") {
+        const theirs = typeof outcome.serverValue === "string" ? outcome.serverValue : "";
+        if (theirs === value) return;
+        setEditing((current) => withEntry(current, cardId, { field, draft, base: theirs }));
+        setIncomingEdits((current) => withEntry(current, cardId, { field, value: theirs }));
+      } else {
+        setIncomingEdits((current) => withEntry(current, cardId, undefined));
+      }
+      return;
+    }
     const currentText = effectiveById.current.get(raw.id)?.text ?? raw.text;
     const found = base ?? textField(currentText, field);
     if (field === "title" && !value) {
@@ -831,8 +836,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const card = cardsByIdRef.current.get(cardId);
       const raw = card?.task ? allTasks.find((task) => task.id === card.task!.id) : undefined;
       /* A write of this device still ahead of the poll is not an agent's text. */
-      if (!raw || controller.pending(raw.id) || controller.edits().get(raw.id)?.text !== undefined) continue;
-      const theirs = textField(raw.text, entry.field);
+      if (!raw || controller.pending(raw.id)) continue;
+      const shown = controller.edits().get(raw.id);
+      if (entry.field === "details" ? shown?.details !== undefined : shown?.text !== undefined) continue;
+      const theirs = entry.field === "details" ? (raw.details ?? "") : textField(raw.text, entry.field);
       if (theirs === entry.base) continue;
       nextEditing.set(cardId, { ...entry, base: theirs });
       changed = true;
@@ -861,6 +868,25 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- shortTitle reads the card it is given
   }, [controller, flash, show, t]);
+
+  /* ── Icon (#2102) ─────────────────────────────────────────────────────── */
+  const setIcon = useCallback((card: KanbanCardModel, icon: string | null) => {
+    const raw = card.task ? tasksById.current.get(card.task.id) : undefined;
+    if (!raw) return;
+    void controller.edit(raw, { field: "icon", value: icon }).then((outcome) => {
+      if (outcome.kind !== "failed") return;
+      flash(card.id);
+      show(t("kanban.iconFailed", { title: shortTitle(card), error: outcome.error }), {
+        label: t("kanban.retry"),
+        run: () => {
+          const current = cardsByIdRef.current.get(card.id);
+          if (current) setIcon(current, icon);
+        },
+      }, { error: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shortTitle reads the card it is given
+  }, [controller, flash, show, t]);
+  const openIconMenu = useCallback((card: KanbanCardModel, anchor: HTMLElement) => menu.setOpen({ anchor, value: { kind: "icon", cardId: card.id } }), [menu]);
 
   /* ── Group hide, one card or a column's worth (prototype `hideTask`/`hideMany`) ── */
   /* Showing a hidden group again: the inverse write, through the same queue. */
@@ -1023,6 +1049,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const menuFor = (): { label: string; items: KanbanMenuItem[] } | null => {
     const open = menu.open;
     if (!open) return null;
+    if (open.value.kind === "create") {
+      const items: KanbanMenuItem[] = [{ type: "item", label: t("dash.newTask"), icon: <ListPlus className="ico" aria-hidden />, onSelect: () => openNewTask() }];
+      if (props.onNewAgent) {
+        const onNewAgent = props.onNewAgent;
+        items.push({ type: "item", label: t("dash.newConvo"), icon: <MessageSquarePlus className="ico" aria-hidden />, disabled: !loaded, onSelect: () => onNewAgent() });
+      }
+      return { label: t("dash.create"), items };
+    }
     if (open.value.kind === "column") {
       const status = open.value.status;
       const column = model.columns[status];
@@ -1055,7 +1089,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       });
       return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
     }
-    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account") return null;
+    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon") return null;
     if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
     if (open.value.kind === "pipeline" || open.value.kind === "stage") return pipelineMenu(open.value);
     const value = open.value;
@@ -1088,14 +1122,39 @@ export function KanbanBoard(props: KanbanBoardProps) {
         { type: "head", label: t("kanban.colour") },
         swatches,
         { type: "sep" },
+        ...(card.task ? [iconItem(card)] : []),
         { type: "item", label: collapsed.has(card.id) ? t("kanban.expandCardShort") : t("kanban.collapseCardShort"), onSelect: () => toggleCollapsed(card.id) },
         { type: "item", label: t("kanban.rename"), kbd: "Enter", keepFocus: true, onSelect: () => startEdit(card, "title") },
         { type: "item", label: card.description ? t("kanban.editDescription") : t("kanban.addDescription"), kbd: "E", keepFocus: true, onSelect: () => startEdit(card, "description") },
+        ...(card.task ? [linksItem({ kind: "task", id: card.task.id })] : []),
         { type: "sep" },
         card.holdsSeat
           ? { type: "item", label: t("kanban.hideFromBoard"), why: t("kanban.seatProtected"), disabled: true, onSelect: () => {} }
           : { type: "item", label: t("kanban.hideFromBoard"), kbd: "H", why: card.working ? t("kanban.hideWhyWorking", { count: card.working }) : t("kanban.hideWhy"), keepFocus: true, onSelect: () => hideCard(card) },
       ],
+    };
+  };
+  /* #2102: the icon picker opens from the card's own icon, where the eye goes. */
+  const iconItem = (card: KanbanCardModel): KanbanMenuItem => ({
+    type: "item",
+    label: t("kanban.icon"),
+    kbd: "I",
+    keepFocus: true,
+    onSelect: () => {
+      const own = [...(rootRef.current?.querySelectorAll<HTMLElement>("[data-icon-menu]") ?? [])].find((element) => element.dataset.iconMenu === card.id);
+      const anchor = own ?? menu.open?.anchor;
+      if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "icon", cardId: card.id } }));
+    },
+  });
+  /* #2059: the attach form opens where the menu was, over the same anchor. */
+  const linksItem = (target: WorkLinkTarget): KanbanMenuItem => {
+    const anchor = menu.open?.anchor;
+    return {
+      type: "item",
+      label: t("workLinks.attach"),
+      keepFocus: true,
+      disabled: !anchor,
+      onSelect: () => { if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "links", target } })); },
     };
   };
   /* ── A pipeline's actions, and a stage's (prototype `openPipelineMenu`, pane ⋯) ─ */
@@ -1168,6 +1227,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       items: [
         { type: "head", label: t("kanban.pipelineAct.menu") },
         { type: "item", label: t("kanban.stages.expandTitle"), keepFocus: true, onSelect: () => openSheet(card.id, pipeline) },
+        linksItem({ kind: "pipeline", id: pipeline.id }),
         item(pauseOrResume, t(`kanban.pipelineAct.label.${pauseOrResume.action}`, { title, stage: "" }), pauseOrResume.action === "pause" ? t("kanban.pipelineAct.pauseWhy") : null),
         item(retry, decision ? t("kanban.pipelineAct.retryStage", { stage: decision }) : t("kanban.pipelineAct.retryAny"), t("kanban.pipelineAct.retryWhy")),
         item(skip, decision ? t("kanban.pipelineAct.skipStage", { stage: decision }) : t("kanban.pipelineAct.skipAny"), t("kanban.pipelineAct.skipWhy")),
@@ -1291,6 +1351,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const more = element.querySelector<HTMLElement>("[data-menu]");
       if (more) menu.setOpen({ anchor: more, value: { kind: "colour", cardId: card.id } });
     }
+    else if ((key === "i" || key === "I") && card.task) {
+      event.preventDefault();
+      const icon = element.querySelector<HTMLElement>("[data-icon-menu]");
+      if (icon) openIconMenu(card, icon);
+    }
     else if ((key === "s" || key === "S") && card.task) {
       event.preventDefault();
       const pill = element.querySelector<HTMLElement>(".pill");
@@ -1322,7 +1387,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* ── Pointer drag to a column ────────────────────────────────────────── */
   const onCardPointerDown = useCallback((card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || event.pointerType === "touch" || !card.task) return;
-    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .stage-section, .reader-slot, .stage-detail")) return;
+    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .pblock, .reader-slot, .stage-detail")) return;
     const element = event.currentTarget;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -1394,12 +1459,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
      board answers reaches behind it. */
   const sheetOpen = useRef(false);
   sheetOpen.current = sheet !== null;
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menu.open !== null;
+  const seatToggleRef = useRef<(() => void) | null>(null);
+  seatToggleRef.current = seatView ? seatFrame.toggle : null;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
-      const inBoard = Boolean(target && rootRef.current?.contains(target));
+      /* The bar's two ends and the island slot hold the Viewer's own controls (the project, its
+         accounts, the panel toggles, ⋯ and the attention island): the board's keys stay out of
+         them, as they stay out of the aside, so `/` and `u` mean there what they mean outside. */
+      const inBoard = Boolean(target && rootRef.current?.contains(target) && !target.closest(VIEWER_OWNED));
       if (event.key === "/") {
         /* Outside the board `/` stays the Viewer's global search. Inside it,
            it finds a task, and the Viewer's window listener must not open
@@ -1409,6 +1481,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
         event.preventDefault();
         event.stopPropagation();
         if (!sheetOpen.current) rootRef.current?.querySelector<HTMLInputElement>("[data-kanban-search]")?.focus();
+      } else if (event.key === "o" || event.key === "O") {
+        /* `O` collapses and expands the orchestrator seat (#1841), in either
+           placement, unless a sheet, a menu or a popover holds the keys. */
+        if (!seatToggleRef.current || sheetOpen.current || menuOpenRef.current) return;
+        if (!inBoard && target !== document.body) return;
+        if (target?.closest("[role='dialog'], [role='menu']")) return;
+        event.preventDefault();
+        seatToggleRef.current();
       } else if (event.key === "u" || event.key === "U") {
         if (sheetOpen.current) return;
         if (!inBoard && target !== document.body) return;
@@ -1654,6 +1734,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const flowsById = useMemo(() => new Map(props.flows.map((flow) => [flow.id, flow] as const)), [props.flows]);
   const openPipelineMenu = useCallback((cardId: string, pipeline: Pipeline, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "pipeline", cardId, pipelineId: pipeline.id } });
+  }, [menu]);
+  /* A lane row's answer in place (#2072): the same intent the ⋯ menu sends,
+     with Skip and Close held for their receipt's window. */
+  const answerPipeline = useCallback((_cardId: string, title: string, pipeline: Pipeline, answer: PipelineAnswer) => {
+    startPipelineAction(
+      { pipelineId: pipeline.id, title, action: answer.action, stageId: answer.stageId, stageName: answer.stageName, expectedAttempt: answer.expectedAttempt },
+      { hold: answer.action === "skip-stage" || answer.action === "close" },
+    );
+  }, [startPipelineAction]);
+  const openWorkLinks = useCallback((target: WorkLinkTarget, anchor: HTMLElement) => {
+    menu.setOpen({ anchor, value: { kind: "links", target } });
   }, [menu]);
   const foldReaderFor = useCallback((key: string, folded: boolean) => {
     disown(key);
@@ -1905,7 +1996,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
   }, [show, t]);
 
-  const onboardCount = model.totals.onBoard;
+  const viewSwitch = typeof props.viewSwitch === "function" ? props.viewSwitch(barWide) : props.viewSwitch;
   /* The Overview narrows permanently, so its columns read «3 of 41» and an
      empty one says so, exactly as they do under a search. */
   const searching = query.trim().length > 0;
@@ -1924,6 +2015,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const linkOpen = menu.open?.value.kind === "link" ? menu.open : null;
   const stopOpen = menu.open?.value.kind === "stop" ? menu.open : null;
   const accountOpen = menu.open?.value.kind === "account" ? menu.open : null;
+  const linksOpen = menu.open?.value.kind === "links" ? menu.open.value.target : null;
+  const iconOpen = menu.open?.value.kind === "icon" ? menu.open : null;
+  const iconCard = iconOpen && iconOpen.value.kind === "icon" ? cardsById.get(iconOpen.value.cardId) ?? null : null;
   /* The picker reads the pipeline and the conversation as the board holds them now. */
   const accountOverlay = (target: AccountTarget, anchor: HTMLElement) => {
     if (target.kind === "stage") {
@@ -1959,9 +2053,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (card.drafts.length && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
   }
   if (composingTask) readingStatuses.add("inbox");
-  const readingStyle = (mode === "wide" || mode === "narrow") && readingStatuses.size
-    ? ({ "--c-assigned": "minmax(440px, 1fr)", ...Object.fromEntries([...readingStatuses].map((status) => [`--c-${status}`, "minmax(420px, 460px)"])) } as CSSProperties)
-    : undefined;
+  /* One column holds the wide share (#1841): Assigned, or the shelf the
+     operator widened. Tabs already show one column at full width, and the
+     cross-project Overview keeps its fixed shares and reads no pin. */
+  const widthControls = mode !== "tabs" && !props.overview;
+  const wideShelf = widthControls ? wideColumns.wide : null;
+  const columnTracks = kanbanColumnTracks(mode, { overview: Boolean(props.overview), wide: wideShelf, reading: readingStatuses });
+  const boardStyle = columnTracks ? (columnTracks as CSSProperties) : undefined;
 
   /* ── K9a: + Task, + Agent and the drafts cards hold ─────────────────── */
   const openNewTask = () => {
@@ -1971,7 +2069,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   };
   const closeNewTask = useCallback(() => {
     setComposingTask(false);
-    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>("[data-new-task]")?.focus({ preventScroll: true }));
+    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>("[data-new-task], [data-bar-create]")?.focus({ preventScroll: true }));
   }, []);
   const taskCreated = useCallback((task: BoardTask) => {
     setComposingTask(false);
@@ -2019,6 +2117,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       incomingEdits={incomingEdits}
       onHideIdle={() => hideIdle(status)}
       reading={readingStatuses.has(status)}
+      widths={widthControls ? { state: wideColumns, wide: wideShelf } : null}
       readerKeysByCard={readerKeysByCard}
       panelsByCard={panelsByCard}
       actingByCard={actingByCard}
@@ -2044,6 +2143,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onUseTheirs: takeTheirs,
         onKeepMine: keepMine,
         onHide: hideCard,
+        onIconMenu: openIconMenu,
         graphChoices,
         onToggleGraph: toggleGraph,
         onOpenAttempt: openRecorded,
@@ -2051,6 +2151,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
         pipelinePorts,
         onOpenSheet: openSheet,
         onPipelineMenu: openPipelineMenu,
+        onWorkLinks: openWorkLinks,
+        onAnswer: answerPipeline,
         onStagePanelFold: foldStagePanel,
         onStagePanelClose: closeStagePanel,
         onStagePanelMenu: openStagePanelMenu,
@@ -2082,76 +2184,118 @@ export function KanbanBoard(props: KanbanBoardProps) {
     />
   ) : null;
 
+  /* The search field and the Hidden pill, shared by the project's bar and the Overview's. */
+  const searchField = (group?: string) => (
+    <label className="search" data-bar-group={group}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+      <input
+        type="search"
+        placeholder={t("kanban.find")}
+        aria-label={t("kanban.find")}
+        data-kanban-search=""
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+    </label>
+  );
+  /* Narrow, the project's pill is icon and count, the shape Tasks has (#1801), and its name moves to the tooltip. */
+  const hiddenPill = (labelled: boolean) => (
+    <button
+      type="button"
+      className="btn hidden-pill"
+      data-count={hiddenCount}
+      data-hidden-pill=""
+      aria-label={t("kanban.hiddenAria", { count: hiddenCount })}
+      title={labelled ? undefined : t("kanban.hiddenAria", { count: hiddenCount })}
+      onClick={(event) => menu.setOpen({ anchor: event.currentTarget, value: { kind: "tray" } })}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6 0 10 8 10 8a17.7 17.7 0 0 1-3.2 4.1" /><path d="M6.6 6.6C3.9 8.5 2 12 2 12s4 8 10 8a10.9 10.9 0 0 0 4.4-.9" /></svg>
+      {labelled ? <>{t("kanban.hidden")} </> : null}<span className="count num">{hiddenCount}</span>
+    </button>
+  );
+
   return (
     <AccountChoiceContext.Provider value={accountChoice}>
     <KanbanDraftContext.Provider value={draftActions}>
     <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode}>
-      <header className="bar">
-        <span className="summary">
-          <span className="dot" aria-hidden="true" />
-          <span className="num">{t("kanban.summaryWorking", { count: model.totals.working })}</span>
-          {model.totals.needsYou ? (
-            <>
-              <span aria-hidden="true">·</span>
-              <span className="dot warn" aria-hidden="true" />
-              <span className="num">{t("kanban.summaryNeeds", { count: model.totals.needsYou })}</span>
-            </>
-          ) : null}
-          <span aria-hidden="true">·</span>
-          <span className="num">{t("kanban.summaryTasks", { count: onboardCount })}</span>
-        </span>
-        {catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : null}
-        <span className="grow" />
-        <div className="bar-tools">
-          <label className="search">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
-            <input
-              type="search"
-              placeholder={t("kanban.find")}
-              aria-label={t("kanban.find")}
-              data-kanban-search=""
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </label>
-          <button
-            type="button"
-            className="btn hidden-pill"
-            data-count={hiddenCount}
-            data-hidden-pill=""
-            aria-label={t("kanban.hiddenAria", { count: hiddenCount })}
-            onClick={(event) => menu.setOpen({ anchor: event.currentTarget, value: { kind: "tray" } })}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6 0 10 8 10 8a17.7 17.7 0 0 1-3.2 4.1" /><path d="M6.6 6.6C3.9 8.5 2 12 2 12s4 8 10 8a10.9 10.9 0 0 0 4.4-.9" /></svg>
-            {t("kanban.hidden")} <span className="count num">{hiddenCount}</span>
-          </button>
-          {props.viewSwitch ? <span className="view-switch">{props.viewSwitch}</span> : null}
-        </div>
-        {/* Both creation surfaces write into ONE project's board. The Overview
-            has no single project to write into, so it offers neither rather
-            than picking one for the operator — and the slot itself goes with
-            them, so the bar keeps no empty cell where they were (#1820). */}
-        {props.overview && !props.onNewAgent ? null : (
-          <div className="bar-create">
-            {props.overview ? null : (
-              <button type="button" className="btn" data-new-task="" aria-label={t("dash.newTask")} aria-expanded={composingTask} onClick={openNewTask}>
-                <span className="plus" aria-hidden="true">+</span> {t("dash.task")}
-              </button>
-            )}
-            {props.onNewAgent ? (
+      {/* The project board's one header bar (#1801, docs/design/board-header.md): where am I, what is
+          happening, one spacer, find, view, create, panels, more. The two ends are the project's own
+          (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}
+      {props.overview ? (
+        /* The Overview keeps the bar it had before the project board's header was put in order
+           (#1801 was the project board only): its three facts, and the tools wrapping under the
+           island on its narrow faces. */
+        <header className="bar" data-bar="overview">
+          <span className="summary">
+            <span className="dot" aria-hidden="true" />
+            <span className="num">{t("kanban.overviewWorking", { count: model.totals.working })}</span>
+            {model.totals.needsYou ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="dot warn" aria-hidden="true" />
+                <span className="num">{t("kanban.overviewNeeds", { count: model.totals.needsYou })}</span>
+              </>
+            ) : null}
+            <span aria-hidden="true">·</span>
+            <span className="num">{t("kanban.overviewTasks", { count: model.totals.onBoard })}</span>
+          </span>
+          {reachStatus}
+          <span className="grow" />
+          <div className="bar-tools">
+            {searchField()}
+            {hiddenPill(true)}
+            {viewSwitch ? <span className="view-switch">{viewSwitch}</span> : null}
+          </div>
+          {props.onNewAgent ? (
+            <div className="bar-create">
               <button type="button" className="btn" data-new-agent="" aria-label={t("dash.newConvo")} disabled={!loaded} onClick={props.onNewAgent}>
                 <span className="plus" aria-hidden="true">+</span> {t("dash.agent")}
               </button>
-            ) : null}
+            </div>
+          ) : null}
+        </header>
+      ) : (
+        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined}>
+          {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
+          <span className="summary" data-bar-group="status">
+            {reachStatus ?? (
+              <>
+                <span className="dot" aria-hidden="true" />
+                <span className="num" data-bar-working="">{t("kanban.summaryWorking", { count: model.totals.working })}</span>
+                {props.updating ? <span className="bar-note" data-bar-updating="">{t("dash.updating")}</span> : null}
+              </>
+            )}
+          </span>
+          <span className="grow" />
+          {searchField("find")}
+          <div className="bar-group" data-bar-group="view">
+            {hiddenPill(barWide)}
+            {viewSwitch ? <span className="bar-slot view-switch">{viewSwitch}</span> : null}
           </div>
-        )}
-      </header>
+          {/* Both creation surfaces write into this project's board. Narrow, the two are one `+`
+              with a two-row menu. */}
+          <div className="bar-slot">
+            <BarCreateGroup
+              wide={barWide}
+              task={{ onClick: openNewTask, expanded: composingTask }}
+              agent={props.onNewAgent ? { onClick: props.onNewAgent, disabled: !loaded } : null}
+              onMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "create" } })}
+              menuOpen={menu.open?.value.kind === "create" || composingTask}
+            />
+          </div>
+          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barWide)}</div> : null}
+          <BarIslandSlot />
+        </header>
+      )}
 
+      <div className={`kb-body${seatSide ? " seat-side" : ""}`}>
+      {seatSide && seatView}
       <div className="kb-page">
-      {props.seat ? props.seat(boardId, props.seatRefs === undefined ? seatRead : null) : null}
+      {seatSide ? null : seatView}
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
       {!loaded ? (
-        <div className="board-loading" role="status">{t("kanban.loading")}</div>
+        /* The columns it is loading, in the tracks this width gives them (#2071). */
+        <KanbanColumnsSkeleton mode={mode} style={boardStyle} />
       ) : (
         /* One tree for every width: the navigation above the columns changes with the mode and the columns
            stay mounted, so crossing a breakpoint keeps every card, its draft panes and their launches. */
@@ -2192,13 +2336,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
             className={`board${mode === "tabs" ? " tabs" : mode === "scroll" ? " scroll" : mode === "narrow" ? " narrow" : ""}${(mode === "wide" || mode === "narrow") && readingStatuses.size ? " reading" : ""}`}
             data-board=""
             data-mode={mode}
-            style={readingStyle}
+            style={boardStyle}
           >
             {columnsView}
           </div>
         </div>
       )}
       </div>
+      </div>
+      {props.aside ? <div ref={asideRef} className="kb-aside">{props.aside}</div> : null}
       </div>
       <div ref={parkRef} className="reader-park" hidden aria-hidden="true" />
       {sheetView}
@@ -2216,6 +2362,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onFull={toggleFull}
         onMenu={openReaderMenu}
         onSpawnRetry={props.onSpawnRetry ? spawnRetry : undefined}
+        onCloseConversation={props.onCloseConversation}
       />
 
       {openMenu && menu.open ? (
@@ -2250,6 +2397,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
               onClick={() => { menu.close(true); linkTo(linkView, task); }}
             >
               <span className="pill" data-status={task.status} style={{ pointerEvents: "none" }}>{statusLabel(t, task.status)}</span>
+              <TaskIcon icon={task.icon} title={task.text.split(/\r?\n/, 1)[0]?.trim() ?? ""} size={14} />
               <span className="t"><span className="title">{task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled")}</span></span>
             </button>
           )) : <p className="note">{t("kanban.linkPickerEmpty")}</p>}
@@ -2269,6 +2417,39 @@ export function KanbanBoard(props: KanbanBoardProps) {
           onRestore={restoreConversation}
         />
       ) : null}
+      {linksOpen && menu.open ? (
+        <KanbanPopover
+          anchor={menu.open.anchor}
+          label={t("workLinks.listTitle")}
+          onClose={menu.close}
+          initialFocus="input"
+          className="links-popover"
+        >
+          <div className="head">{t("workLinks.listTitle")}</div>
+          <WorkLinksPanel target={linksOpen} resolved={workLinks.of(linksOpen)} />
+        </KanbanPopover>
+      ) : null}
+      {iconOpen && iconCard ? (
+        <KanbanPopover
+          anchor={iconOpen.anchor}
+          /* Opens under the icon, over its own card, never over the column beside it. */
+          within={iconOpen.anchor.closest<HTMLElement>(".card")}
+          label={t("kanban.iconChange", { title: shortTitle(iconCard) })}
+          onClose={menu.close}
+          initialFocus="input"
+          className="icon-popover"
+        >
+          <TaskIconPicker
+            value={iconCard.icon}
+            suggestion={iconCard.titlePending ? null : suggestTaskIcon(iconCard.title)}
+            autoFocus={false}
+            onPick={(icon) => {
+              menu.close(true);
+              setIcon(iconCard, icon);
+            }}
+          />
+        </KanbanPopover>
+      ) : null}
       {dragHint ? <div className="drag-hint">{t("kanban.dragHint")}</div> : null}
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
       <KanbanReceipts receipts={receipts} onDismiss={dismiss} />
@@ -2281,14 +2462,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
 type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
   | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
-  | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
+  | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onIconMenu"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
-  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
+  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
   | "projectNames" | "onOpenProject"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
+  /** Which column holds the wide share and the controls that move it (#1841);
+      null where every column is already full width. */
+  widths: { state: KanbanWideState; wide: TaskStatus | null } | null;
   /** `+ Task`'s inline card, drawn first in Inbox. */
   newTask: ReactNode;
   editing: ReadonlyMap<string, { field: EditField; draft: string }>;
@@ -2341,20 +2525,51 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   const idle = shown.slice(split);
   const unlinked = status === "inbox" ? model.unlinkedShown : [];
   const empty = shown.length === 0 && unlinked.length === 0 && !newTask;
+  /* This column holds the wide share, or gave it to a widened shelf. */
+  const isWide = widths ? (widths.wide ? widths.wide === status : status === "assigned") : false;
+  const gaveShare = widths !== null && widths.wide !== null && status === "assigned";
+  const label = statusLabel(t, status);
   return (
     <section
-      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}`}
+      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}${widths?.wide && isWide ? " wide" : ""}${gaveShare ? " shelf" : ""}`}
+      data-wide={widths ? (isWide ? "1" : "0") : undefined}
       data-status={status}
       id={`kb-col-${status}`}
       aria-labelledby={`kb-h-${status}`}
       role={mode === "tabs" ? "tabpanel" : "region"}
     >
       <div className="col-head">
-        <h2 id={`kb-h-${status}`}>{statusLabel(t, status)}</h2>
+        <h2 id={`kb-h-${status}`} title={label}>{label}</h2>
         <span className="n num">{filtering ? t("kanban.columnCount", { shown: shown.length, total: column.cards.length }) : column.cards.length}</span>
-        {column.working ? <span className="live num">{t("kanban.columnWorking", { count: column.working })}</span> : null}
-        {column.needsYou ? <span className="needs num">{t("kanban.columnNeeds", { count: column.needsYou })}</span> : null}
+        {column.working ? <span className="live num" data-count={column.working} title={t("kanban.columnWorking", { count: column.working })}><span className="ct">{t("kanban.columnWorking", { count: column.working })}</span></span> : null}
+        {column.needsYou ? <span className="needs num" data-count={column.needsYou} title={t("kanban.columnNeeds", { count: column.needsYou })}><span className="ct">{t("kanban.columnNeeds", { count: column.needsYou })}</span></span> : null}
         <span className="spacer" />
+        {widths && widths.wide === status ? (
+          <button
+            type="button"
+            className="icon-btn col-pin"
+            aria-pressed={widths.state.pinned === status}
+            aria-label={t(widths.state.pinned === status ? "kanban.columnUnpin" : "kanban.columnPin")}
+            title={t(widths.state.pinned === status ? "kanban.columnUnpin" : "kanban.columnPin")}
+            data-col-pin={status}
+            onClick={widths.state.togglePin}
+          >
+            <Pin aria-hidden />
+          </button>
+        ) : null}
+        {widths && !(status === "assigned" && widths.wide === null) ? (
+          <button
+            type="button"
+            className="icon-btn col-width"
+            aria-label={isWide ? t("kanban.columnNarrow") : t("kanban.columnWiden", { column: label })}
+            title={isWide ? t("kanban.columnNarrow") : t("kanban.columnWiden", { column: label })}
+            data-col-width={status}
+            data-col-width-action={isWide ? "narrow" : "widen"}
+            onClick={() => (isWide ? widths.state.narrow() : widths.state.widen(status))}
+          >
+            {isWide ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
+          </button>
+        ) : null}
         <button
           type="button"
           className="icon-btn"

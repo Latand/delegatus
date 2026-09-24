@@ -9,12 +9,16 @@ export type AgentModelOption = {
 };
 
 export const CODEX_ASTRA_MODEL = "gpt-6-astra";
+export const CODEX_GPT6_SOL_MODEL = "gpt-6-sol";
+export const CODEX_GPT6_LUNA_MODEL = "gpt-6-luna";
 export const CODEX_SOL_MODEL = "gpt-5.6-sol";
 export const CODEX_TERRA_MODEL = "gpt-5.6-terra";
 export const CODEX_LUNA_MODEL = "gpt-5.6-luna";
 
 const CODEX_IMAGE_INPUT_MODELS = new Set([
   CODEX_ASTRA_MODEL,
+  CODEX_GPT6_SOL_MODEL,
+  CODEX_GPT6_LUNA_MODEL,
   CODEX_SOL_MODEL,
   CODEX_TERRA_MODEL,
   CODEX_LUNA_MODEL,
@@ -29,9 +33,18 @@ export function codexModelSupportsImages(model: string | null | undefined): bool
   return CODEX_IMAGE_INPUT_MODELS.has(model.trim());
 }
 
-export const ENGINE_MODELS: Record<"claude" | "codex", readonly AgentModelOption[]> = {
+export const COPILOT_AUTO_MODEL = "auto";
+
+/* A Copilot model id as the CLI takes it: dotted, lower case (`gpt-5.4`,
+   `claude-sonnet-5`). The CLI is the arbiter of whether the account's plan
+   offers it; a refused id fails the spawn with the CLI's own message. */
+const COPILOT_MODEL_ID = /^[a-z0-9][a-z0-9.-]*$/;
+
+export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly AgentModelOption[]> = {
   claude: [
-    { id: "opus", label: "Opus 5", shortLabel: "Opus 5", use: "review" },
+    // Claude Code 2.1.280 resolves the `opus` alias to claude-opus-5-5 on
+    // first-party auth, so the alias row names what it launches.
+    { id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" },
     { id: "fable", label: "Fable", shortLabel: "Fable", use: "general" },
     { id: "sonnet", label: "Sonnet", shortLabel: "Sonnet", use: "implement" },
     { id: "haiku", label: "Haiku", shortLabel: "Haiku", use: "general" },
@@ -42,11 +55,25 @@ export const ENGINE_MODELS: Record<"claude" | "codex", readonly AgentModelOption
     // uncatalogued model — it agrees with defaultModelFor below. Its `review`
     // use is shared with Sol on purpose: the account describes Astra as its
     // most capable model, and Sol keeps the role it already held, having been
-    // left in the list with no upgrade target.
+    // left in the list with no upgrade target. The GPT-6 Sol and Luna rows
+    // follow Astra and mirror the uses of their 5.6 namesakes.
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
+    { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review" },
+    { id: CODEX_GPT6_LUNA_MODEL, label: "GPT-6-Luna", shortLabel: "6-Luna", use: "general" },
     { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review" },
     { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement" },
     { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general" },
+  ],
+  // `auto` heads the list because it is the one value every Copilot plan
+  // accepts, Free included. The ids after it are unverified against a
+  // logged-in catalogue (docs/design/copilot-engine.md 3.8); slice 2 reads
+  // the account's real one.
+  copilot: [
+    { id: COPILOT_AUTO_MODEL, label: "Auto", shortLabel: "Auto", use: "general" },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5", shortLabel: "Sonnet 5", use: "implement" },
+    { id: "gpt-5.4", label: "GPT-5.4", shortLabel: "5.4", use: "review" },
+    { id: "claude-haiku-4.5", label: "Claude Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
+    { id: "gpt-5-mini", label: "GPT-5 mini", shortLabel: "5 mini", use: "general" },
   ],
 };
 
@@ -54,10 +81,11 @@ export type LaunchModelValidation = { model: string } | { error: string };
 
 /** Validate a fresh-launch model against the catalog rendered by the Viewer.
     Resume and migration paths deliberately do not call this helper. */
-export function validateLaunchModel(engine: "claude" | "codex", model: string): LaunchModelValidation {
+export function validateLaunchModel(engine: "claude" | "codex" | "copilot", model: string): LaunchModelValidation {
   const requested = model.trim();
   const validIds = ENGINE_MODELS[engine].map((option) => option.id);
   if (validIds.includes(requested)) return { model: requested };
+  if (engine === "copilot" && requested.length <= 128 && COPILOT_MODEL_ID.test(requested)) return { model: requested };
   return {
     error: `invalid ${engine} model id ${JSON.stringify(requested)}; valid ${engine} model ids: ${validIds.join(", ")}`,
   };
@@ -65,7 +93,8 @@ export function validateLaunchModel(engine: "claude" | "codex", model: string): 
 
 /** A fresh Codex conversation starts on the architecture/review profile —
     the model the account itself reports as default. */
-export function defaultModelFor(engine: "claude" | "codex"): string {
+export function defaultModelFor(engine: "claude" | "codex" | "copilot"): string {
+  if (engine === "copilot") return COPILOT_AUTO_MODEL;
   return engine === "codex" ? CODEX_ASTRA_MODEL : "opus";
 }
 
@@ -88,6 +117,25 @@ export function normalizeClaudeLaunchModel(value: string | null | undefined): Cl
   return null;
 }
 
+/* A versioned Claude id as the scanner keeps it (`opus-5-5`, `claude-opus-5`,
+   `fable-5-1[1m]`), dated suffixes already stripped. Older family-last ids
+   (`3-7-sonnet`) and provider-prefixed ones do not match and read as stored. */
+const CLAUDE_VERSIONED_MODEL = /^(?:claude-)?(fable|mythos|opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(\[1m\])?$/;
+
+/** The name a card shows for the model a conversation ran on. Claude ids read
+    as the CLI's own display names (`opus-5-5` → "Opus 5.5", `opus-5` →
+    "Opus 5", `sonnet-4-0` → "Sonnet 4"); anything else, Codex ids included,
+    is shown as stored. */
+export function modelDisplayName(engine: string, model: string): string {
+  if (engine !== "claude") return model;
+  const match = CLAUDE_VERSIONED_MODEL.exec(model.trim().toLowerCase());
+  if (!match) return model;
+  const [, family, major, minor, tagged1m] = match;
+  const version = minor && Number(minor) !== 0 ? `${major}.${minor}` : major;
+  const name = `${family.charAt(0).toUpperCase()}${family.slice(1)} ${version}`;
+  return tagged1m ? `${name} (1M)` : name;
+}
+
 /** The provider tier bucket a Claude spawn of `model` draws on (issues #1796,
     #1431). The families the Viewer launches are named exactly as the provider
     spells its `seven_day_<tier>` buckets, so the family IS the tier: a Fable
@@ -102,12 +150,19 @@ export function claudeSpawnTier(model: string | null | undefined): string | null
 
 const CLAUDE_TIER_DISPLAY: Record<string, string> = { fable: "Fable", mythos: "Mythos", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" };
 
-/** Display name of a provider tier bucket (`opus` → "Opus"); unknown tiers
-    are capitalised as spelled so a new bucket still reads as a name. */
-export function claudeTierDisplayName(tier: string): string {
+/** Display name of a provider tier bucket. The provider's own label wins when
+    it sends one (issue #1839): several of its buckets are filed under codenames
+    like `nimbus_quill`, and a codename is never what the operator reads while a
+    human label exists. Without a label, a known tier key renders as its name
+    (`opus` → "Opus") and any other key is spelled out word by word, so a bucket
+    nobody has seen yet still reads as a name. */
+export function claudeTierDisplayName(tier: string, label?: string | null): string {
+  const named = label?.trim();
+  if (named) return named;
   const key = tier.trim().toLowerCase();
   if (CLAUDE_TIER_DISPLAY[key]) return CLAUDE_TIER_DISPLAY[key];
-  return key ? key.charAt(0).toUpperCase() + key.slice(1) : tier;
+  if (!key) return tier;
+  return key.split(/[-_\s]+/).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
 }
 
 /** True when a model id is a valid codex launch model: a `gpt-*` id, printable

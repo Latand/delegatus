@@ -80,8 +80,8 @@ describe("runtime image permission determinism (#76)", () => {
 
 describe("runtime-host Docker credentials (#102)", () => {
   test("runtime UID 1000 retains the host Docker socket group through nsenter", () => {
-    expect(compose).toContain('"user": "${LLV_UID:-1000}:${LLV_GID:-1000}"');
-    expect(compose).toContain('group_add:\n    - "${LLV_DOCKER_GID:-957}"');
+    expect(compose).toContain('"user": "${DELEGATUS_UID:-${LLV_UID:-1000}}:${DELEGATUS_GID:-${LLV_GID:-1000}}"');
+    expect(compose).toContain('group_add:\n    - "${DELEGATUS_DOCKER_GID:-${LLV_DOCKER_GID:-957}}"');
     const wrapper = dockerfile.match(/cat > \/usr\/local\/bin\/docker <<'WRAPPER'([\s\S]*?)WRAPPER/)?.[1];
     expect(wrapper).toBeDefined();
     expect(wrapper).toContain("nsenter -t 1 -m -p --");
@@ -132,5 +132,11 @@ describe("SQLite registry Viewer runtime (#187)", () => {
   test("host CLI shims derive the mounted home from the runtime environment", () => {
     expect(dockerfile).toContain("make_nsenter_shim claude '$HOME/.bun/bin/claude'");
     expect(dockerfile).toContain('"$HOME"|"$HOME"/*');
+  });
+
+  test("the phone step reaches the host's own Tailscale through a shim (#2024)", () => {
+    /* The container has no tailscaled; without this shim the Setup guide
+       reads a running host Tailscale as not installed. */
+    expect(dockerfile).toContain("make_nsenter_shim tailscale /usr/bin/tailscale");
   });
 });

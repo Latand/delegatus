@@ -1,9 +1,12 @@
 {
-  "name": "agent-log-viewer",
-  "version": "1.1.0",
+  "name": "delegatus-cli",
+  "version": "1.3.0",
   "bin": {
-    "agent-log-viewer": "bin/cli.mjs",
-    "agent-log-viewer-mcp": "bin/mcp-server.mjs"
+    "delegatus": "bin/cli.mjs",
+    "dlg": "bin/cli.mjs",
+    "delegatus-mcp": "bin/mcp-server.mjs",
+    "agent-log-viewer": "bin/legacy-cli.mjs",
+    "agent-log-viewer-mcp": "bin/legacy-mcp-server.mjs"
   },
   "exports": {
     "./mcp-server": "./bin/mcp-server.mjs",
@@ -24,14 +27,14 @@
     "win32"
   ],
   "scripts": {
-    "dev": "NODE_ENV=development bun --bun node_modules/.bin/next dev --webpack --hostname 127.0.0.1",
+    "dev": "LLV_STATE_OWNER=viewer NODE_ENV=development bun --bun node_modules/.bin/next dev --webpack --hostname 127.0.0.1",
     "build": "next build --webpack && bun run build:mcp",
     "build:mcp": "bun scripts/build-mcp.ts",
     "demo:capture": "bun scripts/demo-capture.ts",
     "deploy:staging": "bun scripts/deploy-staging.ts",
     "bootstrap:runtime-host": "bun scripts/bootstrap-runtime-host.ts",
     "demo:motion": "bun scripts/demo-motion.ts",
-    "start": "bun --bun node_modules/.bin/next start",
+    "start": "LLV_STATE_OWNER=viewer bun --bun node_modules/.bin/next start",
     "lint": "eslint",
     "prepack": "node scripts/prepack.mjs",
     "privacy:check": "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json LLV_PRIVACY_OCR_LANGUAGES=eng+ukr bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main",
@@ -79,7 +82,11 @@
   "description": "Local web UI that renders Codex / Claude Code agent logs as a live chat-style feed with a session parentage tree",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Latand/live-log-viewer-next.git"
+    "url": "git+https://github.com/Latand/delegatus.git"
+  },
+  "homepage": "https://github.com/Latand/delegatus#readme",
+  "bugs": {
+    "url": "https://github.com/Latand/delegatus/issues"
   },
   "license": "MIT",
   "overrides": {

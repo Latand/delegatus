@@ -191,12 +191,12 @@ export const FOCUS_TARGET_SHAPES: readonly FocusTargetShape[] = [
   {
     kind: "region",
     fields: "project (non-empty string) and rect {x, y, w, h} (finite numbers; w and h 0 or more)",
-    example: '{"kind":"region","project":"live-log-viewer-next","rect":{"x":0,"y":0,"w":800,"h":600}}',
+    example: '{"kind":"region","project":"delegatus","rect":{"x":0,"y":0,"w":800,"h":600}}',
   },
   {
     kind: "point",
     fields: "project (non-empty string), x and y (finite numbers), and an optional zoom (greater than 0)",
-    example: '{"kind":"point","project":"live-log-viewer-next","x":1200,"y":480}',
+    example: '{"kind":"point","project":"delegatus","x":1200,"y":480}',
   },
 ];
 

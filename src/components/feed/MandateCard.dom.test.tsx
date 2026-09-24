@@ -92,6 +92,8 @@ test("the delivered mandate renders as a card in place of the operator's bubble"
   const container = renderRow(text, { origin: "agent", mandate: { kind: "version", version: 9 } });
 
   expect(container.querySelector("[data-mandate-card]")).not.toBeNull();
+  /* Delegatus wrote the mandate, so the card carries its mark. */
+  expect(container.querySelector("[data-mandate-card] [data-brand-mark]")).not.toBeNull();
   /* The user bubble's own surface is gone: this is not the operator talking. */
   expect(container.innerHTML).not.toContain("bg-user");
   /* And the 180-character teaser with a character count is gone with it. */

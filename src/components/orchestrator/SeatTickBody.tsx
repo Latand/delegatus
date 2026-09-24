@@ -161,7 +161,7 @@ export function SeatTickActions({ read, state, offDefault, surface }: {
           if (!state.dirty || read.saving) return;
           void read.save(state.change);
         }}
-        className={`${button} ${phone ? "flex-1" : ""} min-w-0 border border-accent bg-accent text-white shadow-1 active:opacity-90`}
+        className={`${button} ${phone ? "flex-1" : ""} min-w-0 border border-brand bg-brand text-on-brand shadow-1 active:opacity-90`}
       >
         {read.saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
         <span className="truncate">{t(read.saving ? "seatTick.saving" : "seatTick.save")}</span>

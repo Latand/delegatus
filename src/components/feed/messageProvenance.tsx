@@ -9,6 +9,7 @@ import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 import { assignDeliveredOccurrences, candidateDigests, occurrenceCandidate } from "./deliveredOccurrences";
 import type { FeedEntry, Item } from "./parse";
 import { BoundedLru } from "./scrollMemory";
+import { useStructuredUserProvenance } from "./structuredUserProvenance";
 
 /**
  * Delivery-evidence provenance for the feed (#1117): a delivered Claude
@@ -31,9 +32,52 @@ export interface ProvenanceLookup {
   /** Delivery evidence for one feed row — the Claude ledger's id join first,
       then the occurrence join — or null when nothing proves its authorship. */
   forItem(item: Item): DeliveredMessageProvenance | null;
+  /**
+   * WHICH submission a delivery identity belongs to (#1950 round 2): the
+   * `dedup` token a structured Codex record carries in its own marker,
+   * resolved to the client message id that admitted it — the id of the outbox
+   * row the operator is looking at.
+   *
+   * Null is the honest answer and it binds nothing. A token that resolves to
+   * nothing is a delivery this browser cannot name, which is precisely NOT a
+   * reason to hand the record to whichever row happens to share its words.
+   */
+  submissionFor(dedup: string | undefined): string | null;
+  /**
+   * Whether the evidence that could name this delivery is still being read.
+   *
+   * There is exactly one delivery this browser cannot name by itself: the one
+   * whose acknowledgement never came back, so no operation id was ever put in
+   * its hands. Only the registry can join that record to the row it belongs
+   * to, and until it answers the feed knows the record belongs to SOME
+   * submission and cannot say which. Painting it then is what put the message
+   * on screen twice for as long as a round trip took.
+   *
+   * So this is the difference between "not yet" and "never": while it is
+   * true, the record waits; once the lookup has answered — with a name or
+   * without one — it renders on whatever the answer was. It is never a
+   * guess about whose the record is.
+   */
+  submissionPending(dedup: string | undefined): boolean;
+  /**
+   * The same question for a delivered Claude record's native id (#1950
+   * round 3): whether the evidence that could name it is still being read.
+   *
+   * A Claude record carries no token this browser can compute — only the
+   * engine's own id, which the broker's ledger joins to the submission, and
+   * which the ledger may record only after the record is already visible.
+   * Until the first read AND its bounded revalidations have answered for the
+   * id, it is "not yet"; after that it is whatever they said.
+   */
+  messagePending(engineMessageId: string | null | undefined): boolean;
 }
 
-export const NO_PROVENANCE: ProvenanceLookup = { forItem: () => null };
+export const NO_PROVENANCE: ProvenanceLookup = {
+  forItem: () => null,
+  submissionFor: () => null,
+  submissionPending: () => false,
+  messagePending: () => false,
+};
 const ProvenanceContext = createContext<ProvenanceLookup>(NO_PROVENANCE);
 export const MessageProvenanceProvider = ProvenanceContext.Provider;
 
@@ -45,6 +89,9 @@ type ProvenanceMap = Record<string, DeliveredMessageProvenance>;
 interface PathProvenance {
   messages: ProvenanceMap;
   occurrences: DeliveredMessageOccurrence[];
+  /** `dedup token → submission id`, straight from the registry's own record
+      of which client message id admitted which delivery operation. */
+  submissions: Record<string, string>;
 }
 
 /* Browser-wide, so a revisited conversation answers from memory and a pane
@@ -89,6 +136,14 @@ function parseMandate(value: unknown): MandateDelivery | null {
     : { kind: "unqualified" };
 }
 
+/** A submission id is this browser's own idempotency key travelling back to
+    it. Bounded and marker-safe so a corrupt record can only cost the join. */
+const SUBMISSION_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function parseSubmissionId(value: unknown): string | undefined {
+  return typeof value === "string" && SUBMISSION_ID.test(value) ? value : undefined;
+}
+
 function parseProvenance(entry: unknown): DeliveredMessageProvenance | null {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
   const body = entry as Record<string, unknown>;
@@ -96,12 +151,27 @@ function parseProvenance(entry: unknown): DeliveredMessageProvenance | null {
   const senderRole = messageOriginRole(body.senderRole);
   const selectedContext = parseSelectedContextRef(body.selectedContext);
   const mandate = parseMandate(body.mandate);
+  const submissionId = parseSubmissionId(body.submissionId);
   return {
     origin: body.origin,
     ...(senderRole ? { senderRole } : {}),
     ...(selectedContext ? { selectedContext } : {}),
     ...(mandate ? { mandate } : {}),
+    ...(submissionId ? { submissionId } : {}),
   };
+}
+
+const DEDUP_TOKEN = /^[a-f0-9]{64}$/;
+
+function parseSubmissions(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const parsed: Record<string, string> = {};
+  for (const [token, id] of Object.entries(value as Record<string, unknown>)) {
+    if (!DEDUP_TOKEN.test(token)) continue;
+    const submissionId = parseSubmissionId(id);
+    if (submissionId) parsed[token] = submissionId;
+  }
+  return parsed;
 }
 
 function parseProvenanceMessages(value: unknown): ProvenanceMap {
@@ -152,6 +222,11 @@ interface WantedDriver {
   /** Bounded trigger token; collisions only cost a skipped refetch, never a
       wrong join — resolution always compares the full digest. */
   token: string;
+  /** The record's own delivery identity, when it carries one (#1950 round 2).
+      Unresolved until the registry names its submission, and a row whose
+      submission is unnamed is exactly the row that must not be bound by its
+      words — so it drives a fetch on its own. */
+  dedup?: string;
 }
 
 interface WantedEvidence {
@@ -161,12 +236,25 @@ interface WantedEvidence {
   /** Every row that can consume an occurrence (see occurrenceCandidate),
       including rows already attributed by the parser or the ledger. */
   candidates: Item[];
+  /**
+   * The submissions this window is still waiting on, by id (#1950 round 2).
+   *
+   * They are a fetch trigger in their own right, and the reason is timing,
+   * not evidence: the registry writes a delivery's owner row when it ADMITS
+   * the message, long before the engine journals anything. Asking then means
+   * the join from the record's own identity to this row is already in hand
+   * when the record finally appears — so the record is bound in the render it
+   * first appears in, rather than painting a second copy of the message for
+   * as long as a round trip takes.
+   */
+  pending: readonly string[];
 }
 
-function wantedEvidence(items: readonly FeedEntry[]): WantedEvidence {
+function wantedEvidence(items: readonly FeedEntry[], pending: readonly string[]): WantedEvidence {
   const drivers: WantedDriver[] = [];
   const candidates: Item[] = [];
-  for (const { item } of items) {
+  const seenDedup = new Set<string>();
+  for (const { item, submissionDedup } of items) {
     const candidate = occurrenceCandidate(item);
     if (candidate) candidates.push(item);
     const token = candidate ? candidateDigests(candidate)[0].slice(0, 16) : "";
@@ -175,18 +263,35 @@ function wantedEvidence(items: readonly FeedEntry[]): WantedEvidence {
     } else if (item.kind === "user" && !item.selectedContext && candidate) {
       drivers.push({ item, engineMessageId: null, tsMs: candidate.tsMs, token });
     }
+    /* One driver per RECORD, not per row: an image-only send paints several
+       attachment rows that share one identity, and they need one answer. */
+    if (submissionDedup && !seenDedup.has(submissionDedup)) {
+      seenDedup.add(submissionDedup);
+      drivers.push({ item, engineMessageId: null, tsMs: candidate?.tsMs ?? Number.NaN, token, dedup: submissionDedup });
+    }
   }
-  return { drivers, candidates };
+  return { drivers, candidates, pending };
 }
 
 /** Whether some driver row still lacks evidence. `recentRowsOnly` is the
     revalidation rule: a ledger id revalidates regardless of age, a row
     without one only while it is fresh enough to be racing its receipt. */
 function unresolvedDrivers(wanted: WantedEvidence, data: PathProvenance | null, recentRowsOnly: boolean, nowMs: number): boolean {
-  if (wanted.drivers.length === 0) return false;
+  if (wanted.drivers.length === 0 && wanted.pending.length === 0) return false;
   if (!data) return true;
+  /* A submission the server has not named yet. Answering it early is the
+     whole point; once every live submission is named there is nothing left
+     to ask for on their account. */
+  const named = new Set(Object.values(data.submissions));
+  if (wanted.pending.some((id) => !named.has(id))) return true;
+  if (wanted.drivers.length === 0) return false;
   const assigned = assignDeliveredOccurrences(wanted.candidates, data.occurrences);
   return wanted.drivers.some((driver) => {
+    /* A delivery identity revalidates on its own terms: the registry writes
+       the owner row at admission, so an unresolved token is either a send
+       this conversation never made or one whose record has not been read
+       back yet — and only a refetch can tell those apart. */
+    if (driver.dedup) return !(driver.dedup in data.submissions);
     if (driver.engineMessageId && driver.engineMessageId in data.messages) return false;
     if (assigned.has(driver.item)) return false;
     if (driver.engineMessageId) return true;
@@ -209,8 +314,19 @@ function itemSerial(item: Item): number {
   return serial;
 }
 
-function lookupFor(data: PathProvenance | null, assignment: Map<Item, DeliveredMessageProvenance>): ProvenanceLookup {
-  if (!data) return NO_PROVENANCE;
+function lookupFor(
+  data: PathProvenance | null,
+  assignment: Map<Item, DeliveredMessageProvenance>,
+  resolving: boolean,
+  settledMessages?: ReadonlySet<string>,
+): ProvenanceLookup {
+  const pending = (dedup: string | undefined) =>
+    Boolean(dedup) && resolving && !(data && dedup! in data.submissions);
+  /* Without a settled set (a fixed lookup built for tests and replays) there
+     is no read in flight to wait for. */
+  const messagePending = (id: string | null | undefined) =>
+    Boolean(id) && settledMessages !== undefined && !settledMessages.has(id!) && !(data && id! in data.messages);
+  if (!data) return { ...NO_PROVENANCE, submissionPending: pending, messagePending };
   return {
     forItem: (item) => {
       if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId) {
@@ -219,6 +335,9 @@ function lookupFor(data: PathProvenance | null, assignment: Map<Item, DeliveredM
       }
       return assignment.get(item) ?? null;
     },
+    submissionFor: (dedup) => (dedup ? data.submissions[dedup] ?? null : null),
+    submissionPending: pending,
+    messagePending,
   };
 }
 
@@ -228,14 +347,26 @@ function lookupFor(data: PathProvenance | null, assignment: Map<Item, DeliveredM
  * and the renderer without a fetch.
  */
 export function provenanceLookupFor(
-  data: { messages?: ProvenanceMap; occurrences?: readonly DeliveredMessageOccurrence[] },
+  data: {
+    messages?: ProvenanceMap;
+    occurrences?: readonly DeliveredMessageOccurrence[];
+    submissions?: Record<string, string>;
+    /** The path's evidence is still being read; see
+        {@link ProvenanceLookup.submissionPending}. */
+    resolving?: boolean;
+  },
   items: Iterable<Item>,
 ): ProvenanceLookup {
   const occurrences = [...(data.occurrences ?? [])];
-  return lookupFor({ messages: data.messages ?? {}, occurrences }, assignDeliveredOccurrences(items, occurrences));
+  return lookupFor(
+    { messages: data.messages ?? {}, occurrences, submissions: data.submissions ?? {} },
+    assignDeliveredOccurrences(items, occurrences),
+    Boolean(data.resolving),
+  );
 }
 
 const NO_OCCURRENCES: readonly DeliveredMessageOccurrence[] = [];
+const NO_PENDING: readonly string[] = [];
 
 /**
  * Fetches `/api/log/provenance` whenever the window shows a row the cache
@@ -243,13 +374,23 @@ const NO_OCCURRENCES: readonly DeliveredMessageOccurrence[] = [];
  * row could still be racing its own receipt. Failures stay quiet — a row
  * without evidence renders exactly as it does today.
  */
-export function useDeliveredMessageProvenance(path: string | null, items: readonly FeedEntry[]): ProvenanceLookup {
+export function useDeliveredMessageProvenance(
+  path: string | null,
+  items: readonly FeedEntry[],
+  pending: readonly string[] = NO_PENDING,
+): ProvenanceLookup {
+  const structuredForItem = useStructuredUserProvenance(items);
+  const pendingKey = pending.join("\n");
   const wanted = useMemo<WantedEvidence>(
-    () => (path ? wantedEvidence(items) : { drivers: [], candidates: [] }),
-    [path, items],
+    () => (path ? wantedEvidence(items, pending) : { drivers: [], candidates: [], pending: NO_PENDING }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `pending` is keyed by its content, so a same-content array keeps the evidence
+    [path, items, pendingKey],
   );
   const wantedKey = useMemo(
-    () => wanted.drivers.map((driver) => driver.engineMessageId ?? driver.token).join("\n"),
+    () => [
+      ...wanted.drivers.map((driver) => driver.dedup ?? driver.engineMessageId ?? driver.token),
+      ...wanted.pending,
+    ].join("\n"),
     [wanted],
   );
   /* The fetch effect keys on the bounded `wantedKey` alone — `wanted` changes
@@ -260,34 +401,70 @@ export function useDeliveredMessageProvenance(path: string | null, items: readon
     wantedRef.current = wanted;
   }, [wanted]);
   const [data, setData] = useState<PathProvenance | null>(() => (path ? provenanceCache.get(path) ?? null : null));
+  /* Whether this path's evidence has not answered yet since the window last
+     asked. A record whose delivery nothing here can name waits on THIS, and
+     only on this: the first answer — a name, no name, a refusal — ends the
+     wait whatever it said. One answer is enough because the registry writes a
+     delivery's owner row when it ADMITS the send, before any record of it can
+     exist; the retries below keep asking for the other evidence, and a record
+     is never held behind them. See {@link ProvenanceLookup.submissionPending}. */
+  const [resolving, setResolving] = useState(false);
+  /* Native ids whose reads are over: the first answer and every bounded
+     revalidation after it ran, or nothing was left to ask. Only grows for a
+     path; see {@link ProvenanceLookup.messagePending}. */
+  const [settledMessages, setSettledMessages] = useState<ReadonlySet<string>>(() => new Set());
+  const settleMessages = (wanted: WantedEvidence): void => {
+    const ids = wanted.drivers.flatMap((driver) => driver.engineMessageId ? [driver.engineMessageId] : []);
+    if (!ids.length) return;
+    setSettledMessages((previous) => ids.every((id) => previous.has(id)) ? previous : new Set([...previous, ...ids]));
+  };
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a new path starts with nothing settled
+    setSettledMessages(new Set());
+  }, [path]);
   useEffect(() => {
     if (!path) return;
     const cached = provenanceCache.get(path) ?? null;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync to the path's cache entry on path change
     setData(cached);
-    if (!wantedKey) return;
     const wanted = wantedRef.current;
-    if (!unresolvedDrivers(wanted, cached, false, Date.now())) return;
+    if (!wantedKey || !unresolvedDrivers(wanted, cached, false, Date.now())) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- nothing is outstanding for this path
+      setResolving(false);
+      settleMessages(wanted);
+      return;
+    }
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a read of this path starts here
+    setResolving(true);
     const attempt = async (retry: number): Promise<void> => {
+      let revalidating = false;
       try {
         const res = await fetch(`/api/log/provenance?path=${encodeURIComponent(path)}`);
         if (!res.ok) return;
-        const json = (await res.json()) as { messages?: unknown; occurrences?: unknown };
+        const json = (await res.json()) as { messages?: unknown; occurrences?: unknown; submissions?: unknown };
         const previous = provenanceCache.get(path);
         const merged: PathProvenance = {
           messages: { ...(previous?.messages ?? {}), ...parseProvenanceMessages(json.messages) },
           occurrences: mergeOccurrences(previous?.occurrences ?? [], parseOccurrences(json.occurrences)),
+          /* Only grows: a delivery's owner row is immutable once written, and
+             the registry compacting it later must not unbind a row the
+             operator is already looking at. */
+          submissions: { ...(previous?.submissions ?? {}), ...parseSubmissions(json.submissions) },
         };
         provenanceCache.set(path, merged);
         if (!alive) return;
         setData(merged);
         if (retry < retryDelaysMs.length && unresolvedDrivers(wanted, merged, true, Date.now())) {
+          revalidating = true;
           timer = setTimeout(() => void attempt(retry + 1), retryDelaysMs[retry]);
         }
       } catch {
         /* quiet: absence renders as today's row */
+      } finally {
+        if (alive && retry === 0) setResolving(false);
+        if (alive && !revalidating) settleMessages(wanted);
       }
     };
     void attempt(0);
@@ -303,6 +480,10 @@ export function useDeliveredMessageProvenance(path: string | null, items: readon
   /* Every feed re-parse yields a new assignment map over the SAME row objects;
      the lookup only changes identity — re-rendering every memoized row — when
      a row's resolution actually changed. */
+  const submissionsKey = useMemo(
+    () => Object.keys(data?.submissions ?? {}).sort().join("\n"),
+    [data],
+  );
   const assignmentKey = useMemo(() => {
     const parts: string[] = [];
     for (const [item, provenance] of assignment) {
@@ -314,8 +495,12 @@ export function useDeliveredMessageProvenance(path: string | null, items: readon
     return parts.join("\n");
   }, [assignment]);
   return useMemo(
-    () => lookupFor(data, assignment),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the assignment's CONTENT (assignmentKey); a same-content map keeps the lookup
-    [data, assignmentKey],
+    () => {
+      const lookup = lookupFor(data, assignment, resolving, settledMessages);
+      return { ...lookup, forItem: (item: Item) => item.structuredUserRef
+        ? structuredForItem(item) : lookup.forItem(item) };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the assignment's CONTENT (assignmentKey) and the submissions it can resolve; a same-content map keeps the lookup
+    [data, assignmentKey, submissionsKey, resolving, settledMessages, structuredForItem],
   );
 }

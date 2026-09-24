@@ -47,7 +47,7 @@ function controlStub(responses: Record<string, Record<string, unknown>> = {}) {
   const control: ViewerControlDependencies = {
     post: async (pathname, body, headers) => {
       posts.push({ pathname, body, headers: headers ?? {} });
-      return responses[pathname] ?? { ok: true, outcome: "delivered" };
+      return responses[pathname] ?? { ok: true, outcome: "delivered", operationId: "fixture-operation" };
     },
   };
   return { posts, control };
@@ -89,7 +89,7 @@ function gatedControlStub() {
 }
 
 function bindingsWith(control: ViewerControlDependencies) {
-  return viewerMcpBindings(undefined, control, {} as never);
+  return viewerMcpBindings(undefined, control, { registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }) } as never);
 }
 
 test("get_orchestrator with nothing designated says so and names the current default prompt version", async () => {
@@ -102,7 +102,9 @@ test("get_orchestrator with nothing designated says so and names the current def
     health: null,
     rotation: null,
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
-    lineage: [],
+    pendingIntent: null,
+    intentHistoryCount: 0,
+    lineageCount: 0,
   });
 });
 
@@ -166,7 +168,12 @@ test("get_orchestrator surfaces bidirectional predecessor lineage after a replac
   completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "seed_0000002", conversationId: SEATED_ID, path: null, now: AT });
 
   const { control } = controlStub();
-  const result = await bindingsWith(control).get_orchestrator({ clientRequestId: "get-3", project: "proj-a" }) as Record<string, unknown>;
+  const compact = await bindingsWith(control).get_orchestrator({ clientRequestId: "get-3", project: "proj-a" }) as Record<string, unknown>;
+  expect(compact.predecessorConversationId).toBe("conversation_old");
+  expect(compact.lineageCount).toBe(1);
+  expect(compact.lineage).toBeUndefined();
+
+  const result = await bindingsWith(control).get_orchestrator({ clientRequestId: "get-3-full", project: "proj-a", full: true }) as Record<string, unknown>;
   expect(result.predecessorConversationId).toBe("conversation_old");
   expect(result.lineage).toEqual([{
     conversationId: "conversation_old",
@@ -288,7 +295,7 @@ test("send_message_to_orchestrator resolves the seat server-side and delivers wi
   expect(posts[0]!.body).toMatchObject({
     conversationId: SEATED_ID,
     path: "/tmp/o.jsonl",
-    clientMessageId: "send-1",
+    clientMessageId: expect.stringMatching(/^mcp_orchestrator_/),
     text: "status?",
   });
   expect(result).toMatchObject({ conversationId: SEATED_ID, created: false });
@@ -309,7 +316,7 @@ test("send_message_to_orchestrator with nothing designated creates one first, th
      side effects instead of creating a second orchestrator. */
   expect(posts[0]!.body.clientRequestId).not.toBe("send-2");
   expect(posts[0]!.body).toMatchObject({ mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
-  expect(posts[1]!.body).toMatchObject({ conversationId: SEATED_ID, clientMessageId: "send-2", text: "kick off" });
+  expect(posts[1]!.body).toMatchObject({ conversationId: SEATED_ID, clientMessageId: expect.stringMatching(/^mcp_orchestrator_/), text: "kick off" });
   expect(result).toMatchObject({ created: true, conversationId: SEATED_ID, seatEpoch: 1 });
 });
 
@@ -411,16 +418,17 @@ test("the adoption target reaches the authorized seat route while prompt provena
   expect(rotate!.body).not.toHaveProperty("promptVersion");
 });
 
-/* #1452: the route's own default is the incumbent's text, which is how a seat
-   created under mandate v3 («you do not talk to the user») rotated v3 into
-   every successor. The tool decides the default from the incumbent's recorded
-   version, and the incumbent's text stays one explicit argument away. */
-test("rotate_orchestrator over a STALE seat sends the current default mandate (#1452)", async () => {
+/* #1452, #2030: a seat created under mandate v3 («you do not talk to the user»)
+   once rotated v3 into every successor. The ROUTE now rebuilds a stale core
+   from the current default and keeps the rotation history behind it
+   (`seatCommand.test.ts`), so the tool names no mandate: sending the default
+   from here replaced the whole mandate and dropped that history. */
+test("rotate_orchestrator over a STALE seat leaves the core rebuild to the route (#1452, #2030)", async () => {
   seatActive("proj-a", SEATED_ID, null, 3);
   const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
   await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-stale", project: "proj-a" });
   expect(posts).toHaveLength(1);
-  expect(posts[0]!.body.mandate).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(posts[0]!.body).not.toHaveProperty("mandate");
   expect(posts[0]!.body).not.toHaveProperty("keepIncumbentMandate");
 });
 
@@ -443,7 +451,7 @@ test("keepIncumbentMandate carries a STALE incumbent's text forward explicitly, 
   const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
   await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-keep", project: "proj-a", keepIncumbentMandate: true });
   expect(posts[0]!.body).not.toHaveProperty("mandate");
-  expect(posts[0]!.body).not.toHaveProperty("keepIncumbentMandate");
+  expect(posts[0]!.body.keepIncumbentMandate).toBe(true);
 
   await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-named", project: "proj-a", mandate: "run it my way" });
   expect(posts[1]!.body.mandate).toBe("run it my way");

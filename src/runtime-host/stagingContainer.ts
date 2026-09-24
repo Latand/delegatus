@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import { APP_DIR_NAMES } from "../../bin/appDir.mjs";
+
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import {
@@ -9,6 +11,7 @@ import {
   type ViewerCandidateContainerOverrides,
   type ViewerComposeService,
 } from "./candidateContainer";
+import { DOCKER_NAMES } from "./dockerNames";
 
 /**
  * Staging deployment target (#659). One fixed pair of containers serves the
@@ -47,7 +50,7 @@ export function stagingStatePaths(stateDir: string): StagingStatePaths {
 
 export function stagingImageName(revision: string): string {
   if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("staging image revision must be a full commit SHA");
-  return `agent-log-viewer:staging-${revision.slice(0, 12)}`;
+  return `${DOCKER_NAMES.imageRepository}:staging-${revision.slice(0, 12)}`;
 }
 
 /** The image build for a staging revision. The build arg sets the container
@@ -90,8 +93,7 @@ function assertIsolatedStateDir(context: StagingContainerContext): void {
   if (!home) throw new Error("Viewer Compose service HOME is required");
   const configRoot = context.service.environment.XDG_CONFIG_HOME || path.join(home, ".config");
   const prodDirs = [
-    path.join(configRoot, "agent-log-viewer", "state"),
-    path.join(configRoot, "live-log-viewer", "state"),
+    ...APP_DIR_NAMES.map((name) => path.join(configRoot, name, "state")),
     path.join(home, ".claude", "viewer-state"),
   ];
   const resolved = path.resolve(context.paths.stateDir);

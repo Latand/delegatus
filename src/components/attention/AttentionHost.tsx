@@ -5,11 +5,13 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { viewBus } from "@/hooks/viewPresenceBus";
 import { stableDeviceId } from "@/hooks/useViewPresence";
 import { playCue } from "@/lib/audio/app";
+import { focusTargetAnchorKeys } from "@/lib/attention/targets";
 import type { AttentionRequestV1, FocusResolutionKind, ReturnPoint } from "@/lib/attention/types";
 import { useLocale } from "@/lib/i18n";
 import { useAttentionOffers, type PostOutcome, type ViewportCapture } from "@/components/overlay/useAttentionOffers";
 
-import { FocusReturnChip } from "./FocusReturnChip";
+import { cancelArrivalPulse, startArrivalPulse } from "./arrivalPulse";
+import { FocusReturnChip, LaneWithdrawnNote } from "./FocusReturnChip";
 import { focusHandoffBus, type FocusHandoffBus } from "./focusHandoffBus";
 import { claimHandoff, clearHandoffClaim, readHandoffClaim } from "./handoffClaim";
 import { restoreFocusPoint, runFocusTransaction, type FocusObservation, type HandoffTiming } from "./navigate";
@@ -59,6 +61,9 @@ export interface AttentionHostProps {
   pollMs?: number;
   timing?: HandoffTiming;
   observe?: () => FocusObservation;
+  /** How long the arrival pulse stays on the landed target. Production uses
+      {@link ARRIVAL_PULSE_MS}. */
+  pulseMs?: number;
 }
 
 /**
@@ -133,7 +138,7 @@ function observeLiveView(): FocusObservation {
 
 const subscribeIdentity = (listener: () => void) => viewBus.subscribe(listener);
 
-export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedDeviceId, viewSessionId: forcedViewSessionId, claimStorage, fetchFn, pollMs, timing, observe }: AttentionHostProps) {
+export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedDeviceId, viewSessionId: forcedViewSessionId, claimStorage, fetchFn, pollMs, timing, observe, pulseMs }: AttentionHostProps) {
   const { t } = useLocale();
   const [resolvedDeviceId, setResolvedDeviceId] = useState<string | null>(forcedDeviceId ?? null);
   useEffect(() => {
@@ -210,6 +215,9 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
 
   const offers = useAttentionOffers({
     deviceId,
+    /* The phone still draws the board, so it still gets a lane the moment the
+       server admits it (#1836) — the rows alone, never an offer. */
+    recordsOnly: mobile,
     captureViewport,
     ...(fetchFn ? { fetchFn } : {}),
     ...(pollMs ? { pollMs } : {}),
@@ -250,6 +258,24 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
       if (outcome.resolution !== "lost" && generation === arrivalGeneration.current) {
         setLandedId(request.id);
       }
+      /* WHERE the view was taken (#1836 item 4). The camera has landed or the
+         reader has opened, and on a board of a hundred cards neither says
+         which one was the point — so the target itself says so, for a few
+         seconds, and then settles on its own.
+
+         Never for a move the operator made themselves: they know where they
+         went, and marking it would make their own navigation look like
+         something asking to be looked at. The board answers which element it
+         drew the anchor as; a surface that draws none marks nothing. */
+      if (outcome.resolution !== "lost" && !outcome.aborted && request.origin !== "operator") {
+        const index = bus.board()?.index;
+        const anchors = outcome.destination?.anchorKeys.length
+          ? outcome.destination.anchorKeys
+          : focusTargetAnchorKeys(request.target);
+        if (index?.pulseSelectorFor) {
+          startArrivalPulse(anchors.map((key) => index.pulseSelectorFor!(key)), pulseMs === undefined ? {} : { durationMs: pulseMs });
+        }
+      }
       const arrival = await offers.arrive(request, outcome.resolution);
       /* The record says `following` only when the server said so. A move that
          happened on this screen but never reached the record is NOT a follow:
@@ -277,7 +303,7 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
       if (!unconfirmedArrivals.current.has(request.id)) leaving.current.delete(request.id);
       if (!keepReturnPoint) forgetReturnProject(browserStorage(), deviceId, request.id);
     }
-  }, [offers, bus, deviceId, timing, claimStore, observeView]);
+  }, [offers, bus, deviceId, timing, claimStore, observeView, pulseMs]);
 
   const onAccept = useCallback(async (request: AttentionRequestV1) => {
     const before = currentViewport();
@@ -327,6 +353,9 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
   }, [deviceId, completeHandoff, claimStore]);
 
   const onReturn = useCallback(async (request: AttentionRequestV1) => {
+    /* Going back is not an arrival: whatever is still lit was marking the
+       place being left, and it must not follow the operator home. */
+    cancelArrivalPulse();
     const point = request.returnPoints.find((entry) => entry.deviceId === deviceId);
     if (point) {
       const restored = await restoreFocusPoint(point, readReturnProject(browserStorage(), deviceId, request.id), bus, timing ?? {}, request.id);
@@ -462,13 +491,24 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
     return () => clearTimeout(timer);
   }, [arrivalId]);
 
-  if (!following) return null;
+  /* A lane this board drew from a pushed row that the server turned out not to
+     hold (#1836 item 1). It is already off the board — this is the "says why",
+     and it takes itself off after the same bounded moment a refusal stands. */
+  const withdrawn = offers.withdrawals[offers.withdrawals.length - 1] ?? null;
+  if (!following && !withdrawn) return null;
   return (
-    <FocusReturnChip
-      onReturn={onReturnClick}
-      precise={following.returnAvailable}
-      arrival={arrival?.id === arrivalId ? t("attention.arrival", { reason: following.request.reason }) : undefined}
-      t={t}
-    />
+    <>
+      {withdrawn ? (
+        <LaneWithdrawnNote text={t("attention.laneWithdrawn", { title: withdrawn.title })} />
+      ) : null}
+      {following ? (
+        <FocusReturnChip
+          onReturn={onReturnClick}
+          precise={following.returnAvailable}
+          arrival={arrival?.id === arrivalId ? t("attention.arrival", { reason: following.request.reason }) : undefined}
+          t={t}
+        />
+      ) : null}
+    </>
   );
 }

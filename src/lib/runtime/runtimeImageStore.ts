@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { Database as BunDatabase } from "bun:sqlite";
 
+import { publishedRegistryBackendMode } from "@/lib/agent/registryBackendIdentity";
 import { stateDir, statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
 
@@ -28,7 +29,7 @@ export interface RuntimeImageUpload {
   mime: string;
 }
 
-export function runtimeImageCapability(engine: "claude" | "codex", protocolAdvertised: boolean): RuntimeImageCapability {
+export function runtimeImageCapability(engine: "claude" | "codex" | "copilot", protocolAdvertised: boolean): RuntimeImageCapability {
   const supported = protocolAdvertised;
   const reason = supported
     ? null
@@ -409,13 +410,28 @@ export interface RuntimeImageReachabilityOptions {
   retiredGraceMs?: number;
 }
 
+function registryLivesInSqlite(registryJson: string): boolean {
+  try {
+    const mode = publishedRegistryBackendMode(registryJson);
+    return mode === "sqlite" || mode === "read";
+  } catch {
+    return false;
+  }
+}
+
 export function collectRuntimeImageReachableDigests(
   root = stateDir(),
   options: RuntimeImageReachabilityOptions = {},
 ): ReadonlySet<string> {
   const retireBefore = (options.now ?? Date.now()) - (options.retiredGraceMs ?? DELIVERED_REF_RETIREMENT_GRACE_MS);
   const digests = new Set<string>();
-  collectJsonFile(path.join(root, "agent-registry.json"), digests, retireBefore);
+  /* The registry lives in SQLite (#1870). Once the published backend says so,
+     a JSON beside the store is a leftover mirror and is not read. Anywhere
+     else (no descriptor, a JSON mode, an unreadable descriptor) the JSON may
+     be the authority, and a collection that under-counts deletes blobs, so
+     both files count. */
+  const registryJson = path.join(root, "agent-registry.json");
+  if (!registryLivesInSqlite(registryJson)) collectJsonFile(registryJson, digests, retireBefore);
   collectRegistrySqliteDigests(path.join(root, "agent-registry.sqlite"), digests, retireBefore);
   collectClaudeLedgerDigests(path.join(root, "claude-delivery-ledger"), digests, retireBefore);
   collectJsonDirectory(path.join(root, "structured-host-events"), digests, retireBefore);

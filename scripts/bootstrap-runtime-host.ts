@@ -21,11 +21,18 @@
  * running across all three modes.
  */
 
+/* FIRST, and before every other import: the claim has to precede the modules
+   below, which resolve the operator's state directory while they load (#1905).
+   See `src/lib/state/owner/tool.ts`. */
+import "../src/lib/state/owner/tool";
+
 import fs from "node:fs";
 import path from "node:path";
 
+import { appDirIn } from "../bin/appDir.mjs";
 import type { ViewerReleaseIdentity } from "../src/lib/runtime/contracts";
 import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-host/canonicalMirror";
+import { DOCKER_NAMES, runtimeHostServiceImageTag } from "../src/runtime-host/dockerNames";
 import {
   executeRuntimeHostBootstrap,
   planRuntimeHostBootstrap,
@@ -51,12 +58,12 @@ import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 const USAGE = "usage: bun scripts/bootstrap-runtime-host.ts [origin/main|<40-hex sha>] [--stage|--hand-over]";
 
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "", ".config");
-const stateDir = process.env.LLV_STATE_DIR || path.join(defaultConfigDir, "agent-log-viewer", "state");
+const stateDir = process.env.LLV_STATE_DIR || path.join(appDirIn(defaultConfigDir), "state");
 const deploymentDir = path.join(stateDir, "deployments");
 const mirrorDir = path.join(deploymentDir, "canonical.git");
-const canonicalRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/live-log-viewer-next.git";
+const canonicalRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/delegatus.git";
 const runtimeSocket = process.env.LLV_RUNTIME_HOST_SOCKET || path.join(stateDir, "runtime-host.sock");
-const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || "agent-log-viewer:node22";
+const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || runtimeHostServiceImageTag();
 const stableEndpoint = `http://127.0.0.1:${Number(process.env.LLV_VIEWER_PORT || 8898)}`;
 const PREDECESSOR_STOP_GRACE_SECONDS = 40;
 
@@ -179,7 +186,7 @@ async function main(): Promise<number> {
       ensureMirror: () => ensureCanonicalMirror({ deploymentDir, mirrorDir, remote: canonicalRemote }, { run: command }),
     },
   );
-  const image = `agent-log-viewer:hostboot-${revision}`;
+  const image = `${DOCKER_NAMES.imageRepository}:hostboot-${revision}`;
   const predecessor = await findRuntimeHostPredecessor({ docker, fenceOwnerPid });
   const plan = planRuntimeHostBootstrap({ mode, revision, image, predecessor, stableEndpoint });
   console.log(renderRuntimeHostBootstrapPlan(plan));

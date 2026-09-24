@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 
 import { seatTickProposalRef } from "./cards";
-import { SEAT_TICK_CONTRACT, SEAT_TICK_PROMPT_PREVIEW_LIMIT, seatTickProposalMessage, seatTickWakeMessage } from "./report";
+import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } from "@/lib/orchestrator/prompt";
+
+import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_NO_SELF_SCHEDULE, SEAT_TICK_PROMPT_PREVIEW_LIMIT, seatTickProposalMessage, seatTickWakeMessage } from "./report";
 
 /**
  * The seat tick's two briefs (#1245), rendered by the module that already
@@ -10,7 +12,16 @@ import { SEAT_TICK_CONTRACT, SEAT_TICK_PROMPT_PREVIEW_LIMIT, seatTickProposalMes
 
 const PROJECT = "viewer";
 
-test("a wake says why, lists the items, and carries the contract every clause of which answers a real failure", () => {
+/** A wake to a seat whose mandate may not state the contract ends with every
+    clause, the last of them last, so nothing was lopped off the foot. */
+function expectContractClauses(text: string): void {
+  expect(text).toContain(`\nContract:\n- ${SEAT_TICK_NO_SELF_SCHEDULE}\n`);
+  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(text.split(clause)).toHaveLength(2);
+  expect(text.endsWith(`- ${ORCHESTRATOR_SEAT_TICK_CONTRACT.at(-1)}`)).toBe(true);
+  expect(text).not.toContain(SEAT_TICK_CONTRACT_POINTER);
+}
+
+test("a wake says why, lists the items, and names the mandate section holding its contract (#2030)", () => {
   const text = seatTickWakeMessage({
     project: PROJECT,
     reasons: [{ kind: "stalled", detail: "pipeline pipeline_a1 stage review is parked" }],
@@ -27,12 +38,23 @@ test("a wake says why, lists the items, and carries the contract every clause of
      replaces the assertion: the wording of what stands in its place is the
      operator's to change without a test to update. */
   expect(text).not.toContain("Act on the listed items only");
-  expect(text).toContain("mark its task blocked with the reason");
-  expect(text).toContain("Do not schedule yourself");
-  /* #1275: the brief that forbids self-scheduling has to name the lever on the
-     schedule the Viewer arms instead, or the seat has one half of a rule. */
-  expect(text).toContain("seat_tick_settings");
-  expect(text).toContain("Do not wait on the operator inside this turn");
+  /* A seat whose mandate may not state the contract gets its clauses. */
+  expectContractClauses(text);
+  /* One whose delivered mandate states them (#2030) gets a line naming the
+     section, and none of the clauses. */
+  const named = seatTickWakeMessage({
+    project: PROJECT,
+    reasons: [{ kind: "stalled", detail: "pipeline pipeline_a1 stage review is parked" }],
+    items: [{ kind: "pipeline", id: "pipeline_a1", label: "ship the exporter — parked" }],
+    deferred: 2,
+    signals: [{ id: "deploy", label: "the last deployment ended rolled-back" }],
+    mandateCarriesContract: true,
+  });
+  expect(named.endsWith(SEAT_TICK_CONTRACT_POINTER)).toBe(true);
+  expect(ORCHESTRATOR_VIEWER_CLOCK_HEADING).toContain(SEAT_TICK_CONTRACT_POINTER.split('"')[1]!);
+  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(named).not.toContain(clause);
+  expect(named).not.toContain(SEAT_TICK_NO_SELF_SCHEDULE);
+  expect(named).toBe(`${text.slice(0, text.indexOf("\n\nContract:\n"))}\n\n${SEAT_TICK_CONTRACT_POINTER}`);
 });
 
 test("a wake with nothing deferred and no signals says neither", () => {
@@ -61,7 +83,7 @@ test("the skipped-child summary describes the children, not an outcome they may 
      neither owes an outcome. Each line says what is true of the CHILD, and
      each count is a count of children. */
   expect(text).toContain("(3 spawned child(ren) not listed: their last activity predates this seat's designation, or an earlier seat epoch already harvested them.)");
-  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read them.)");
+  expect(text).toContain("(2 more spawned child(ren) whose transcript the Viewer cannot resolve, named by a later wake.)");
   expect(text).toContain("(1 spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)");
   expect(text).not.toContain("their outcomes predate");
   expect(text).not.toContain("harvest their outcome");
@@ -111,7 +133,7 @@ test("a wake names the evidence it could not read, above the items and below the
   expect(text.indexOf("Evidence unavailable:")).toBeLessThan(text.indexOf("Items:"));
   expect(text.indexOf("stalled: pipeline")).toBeLessThan(text.indexOf("Evidence unavailable:"));
   /* And the contract is untouched, as it is by everything else. */
-  expect(text).toContain("Do not wait on the operator inside this turn");
+  expectContractClauses(text);
 });
 
 test("a wake with every source readable says nothing about evidence at all", () => {
@@ -164,8 +186,7 @@ test("a wake carries the project's own monitor prompt beside what the tick deriv
   expect(text).toContain("[pipeline] pipeline_a1 — ship the exporter — running");
   expect(text).toContain("the last deployment ended rolled-back");
   expect(text).not.toContain("Act on the listed items only");
-  expect(text).toContain("Do not schedule yourself");
-  expect(text).toContain("Do not wait on the operator inside this turn");
+  expectContractClauses(text);
   /* And the contract has the last word, so a prompt cannot read as the thing
      that governs what the turn may do. */
   expect(text.indexOf(HEADING)).toBeLessThan(text.indexOf("Contract:"));
@@ -239,7 +260,7 @@ function fullAgenda(monitorPrompt?: string) {
   };
 }
 
-test("a maximum-length prompt on a full agenda keeps every contract clause, and shortens the agenda instead", () => {
+test("a maximum-length prompt on a full agenda keeps the contract line, and shortens the agenda instead", () => {
   expect(MAX_PROMPT).toHaveLength(1_000);
   const agenda = seatTickWakeMessage(fullAgenda());
   /* The fixture is genuinely over budget: without the reservation the prompt
@@ -248,10 +269,9 @@ test("a maximum-length prompt on a full agenda keeps every contract clause, and 
 
   const text = seatTickWakeMessage(fullAgenda(MAX_PROMPT));
   expect(text.length).toBeLessThanOrEqual(4_000);
-  /* Every clause, including the ones a hand-written list would miss — and the
-     last of them is the last thing the seat reads, so nothing was lopped off. */
-  for (const clause of SEAT_TICK_CONTRACT) expect(text).toContain(clause);
-  expect(text.endsWith(`- ${SEAT_TICK_CONTRACT.at(-1)}`)).toBe(true);
+  /* Every clause, and the last of them is the last thing the seat reads, so
+     nothing was lopped off the foot. */
+  expectContractClauses(text);
   /* The prompt is reserved whole too: half an instruction is its own hazard. */
   expect(text).toContain(MAX_PROMPT);
   /* And the agenda is what gave way, with the ellipsis that says so. */
@@ -277,7 +297,7 @@ test("a long issue list cannot cost the proposal its ref line, its prompt or its
      asked for; losing it to a long backlog would mint a second proposal. */
   expect(text).toContain(`monitor-ref: ${seatTickProposalRef("20693")}`);
   expect(text).toContain(MAX_PROMPT);
-  for (const clause of SEAT_TICK_CONTRACT) expect(text).toContain(clause);
+  expectContractClauses(text);
 });
 
 test("a note longer than the wake can carry is shown as a preview that says so and where the rest is (#1450)", () => {
@@ -292,8 +312,26 @@ test("a note longer than the wake can carry is shown as a preview that says so a
     /* Never a bare ellipsis: the marker carries the full length and names the
        tool that returns the whole note. */
     expect(text).toContain(`… [preview, ${note.length} chars; seat_tick_settings returns the full note]`);
-    for (const clause of SEAT_TICK_CONTRACT) expect(text).toContain(clause);
+    expectContractClauses(text);
   }
   /* A note within the preview bound is carried whole, with no marker. */
   expect(seatTickWakeMessage(fullAgenda("short note"))).not.toContain("[preview,");
+});
+
+/* #2030: a note the seat's last landed wake already carried is one line, on
+   both briefs, and says where the note is. */
+test("an unchanged note is one line naming its length and the read that returns it", () => {
+  const note = "lane a: waiting on review; lane b: building. ".repeat(40);
+  const shown = seatTickWakeMessage(fullAgenda(note));
+  const unchanged = seatTickWakeMessage({ ...fullAgenda(note), monitorPromptUnchanged: true, mandateCarriesContract: true });
+  expect(shown).toContain(HEADING);
+  expect(unchanged).not.toContain(HEADING);
+  expect(unchanged).not.toContain("lane a: waiting on review");
+  expect(unchanged).toContain(`Standing monitor note unchanged since your last wake (${note.length} chars; seat_tick_settings with verbose:true reads it).`);
+  expect(unchanged.endsWith(SEAT_TICK_CONTRACT_POINTER)).toBe(true);
+  const proposal = seatTickProposalMessage({ project: PROJECT, issues: [], signals: [], items: 5, slot: "20693", monitorPrompt: note, monitorPromptUnchanged: true });
+  expect(proposal).toContain("Standing monitor note unchanged since your last wake");
+  expect(proposal).not.toContain("lane a: waiting on review");
+  /* With no note, "unchanged" says nothing at all. */
+  expect(seatTickWakeMessage({ ...fullAgenda(), monitorPromptUnchanged: true })).toBe(seatTickWakeMessage(fullAgenda()));
 });

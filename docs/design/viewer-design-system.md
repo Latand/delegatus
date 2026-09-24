@@ -130,13 +130,15 @@ surface; 3–10 → control; user bubble `rounded-2xl` → surface).
 ## 1.4 Surfaces & elevation
 
 Four surface levels; the shadow belongs to the level, never applied à la carte.
+Light surfaces are the Delegatus warm paper; dark ones lean towards the
+emblem's slate.
 
 | token | light | dark | use |
 | --- | --- | --- | --- |
-| `--surface-canvas` | `#f3f3f6` | `#101014` | app background; slightly darker than today so cards actually lift |
-| `--surface-card` | `#ffffff` | `#17171c` | panes, list rows, composer — the ONE primary surface |
-| `--surface-sunken` | `#f7f7fa` | `#121216` | code blocks, raw output, collapsed strips, canvas-docked bands |
-| `--surface-raised` | `#ffffff` | `#1d1d24` | menus, popovers, sheets, toasts |
+| `--surface-canvas` | `#f4f1ec` | `#111218` | app background; slightly darker than today so cards actually lift |
+| `--surface-card` | `#fffdfa` | `#191b23` | panes, list rows, composer — the ONE primary surface |
+| `--surface-sunken` | `#f8f5f0` | `#14151b` | code blocks, raw output, collapsed strips, canvas-docked bands |
+| `--surface-raised` | `#fffdfa` | `#20232c` | menus, popovers, sheets, toasts |
 
 The scheme board adds a three-level depth ladder (issue #962): board canvas →
 container well → card. Dark mode dips the board below the app canvas so wells
@@ -147,9 +149,9 @@ surfaces above (pinned by `tokens.contrast.test.ts`).
 
 | token | light | dark | use |
 | --- | --- | --- | --- |
-| `--surface-board` | `#f3f3f6` | `#0d0d11` | scheme canvas behind the dot grid |
-| `--surface-well` | `#f0f0f4` | `#131318` | faint filled interior of a pipeline/branch container |
-| `--surface-quiet` | `#fafafb` | `#141419` | inactive card, no attention: recedes from the card white |
+| `--surface-board` | `#f4f1ec` | `#0d0e13` | scheme canvas behind the dot grid |
+| `--surface-well` | `#f2efe9` | `#15161d` | faint filled interior of a pipeline/branch container |
+| `--surface-quiet` | `#faf8f4` | `#16181e` | inactive card, no attention: recedes from the card white |
 
 ```css
 --shadow-1: 0 1px 2px rgb(20 20 30 / 0.05);                      /* card   */
@@ -172,10 +174,12 @@ role                 light      dark       replaces (examples)
 text-primary         #1c1c22    #e8e8ec    --color-ink
 text-secondary       #55555f    #a2a2ae    #555 / #333 / --color-faint
 text-muted           #6c6c79    #8b8b98    --color-dim
-border-default       #e6e6ea    #26262e    --color-line
-border-strong        #c9c9d1    #3a3a44    done-state edges, drag handles
+border-default       #e5dfd5    #292c36    --color-line
+border-strong        #cbc3b7    #3c404c    done-state edges, drag handles
 accent               #5a51e0    #8f88ff    --color-accent
 accent-soft          #ecebfb    #262347    accent/10 backgrounds, tmsg cards
+brand                #262a36    #fbebdd    filled primary actions (Delegatus slate / cream)
+on-brand             #fbebdd    #262a36    label ink on a brand fill
 success              #177a37    #4fc36f    --color-ok
 success-soft         #e5f6ea    #14261a    #eef8f0, #f2faf4, #e5f6ea
 warning              #8a5f00    #e0ae45    #b3831d #b8860b #8a5a00 #7a5300 (text-safe on soft)

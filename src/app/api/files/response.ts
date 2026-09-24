@@ -20,15 +20,16 @@ import {
 import { projectLaunchConversations } from "@/lib/agent/spawnProjection";
 import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 import { pidAlive, readPpid } from "@/lib/scanner/process";
-import { repositoryForProjectRoot } from "@/lib/flows/git";
-import { reviewOutcomeFor } from "@/lib/flows/reviewOutcome";
+import { repositoryForProjectRoot } from "@/lib/projects/git";
+import { reviewOutcomeFor } from "@/lib/review/reviewOutcome";
 import { overlayPromptDisplayTitles, projectDisplayName } from "@/lib/displayNames";
 import { projectAliasSnapshot } from "@/lib/projects/aliases";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { isCanonicalProjectId, isRepositoryProjectId, projectIdentityFromRepositoryRoot, UNRESOLVED_PROJECT, UNRESOLVED_PROJECT_NAME } from "@/lib/projects/identity";
-import { projectRestoredFlows } from "@/lib/flows/visibility";
+import { projectRestoredFlows } from "@/lib/reviewHistory/visibility";
 import { reconcileEmbeddedReviewFlows } from "@/lib/pipelines/engine";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { workLinksForBoard } from "@/lib/forge/resolve";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { projectSupersededTaskHandoffs } from "@/lib/tasks/supersedence";
 import { reportRunIdFromAttemptId, TELEGRAM_REPORT_PROJECT } from "@/lib/telegram/reportLineage";
@@ -44,6 +45,8 @@ import { claudeProjectRootFor, codexSessionRootFor } from "@/lib/scanner/roots";
 import { projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
 import { projectDirectoryFallbacks } from "@/lib/scanner/projectDirectories";
 import type { FilesResponse, ProjectCatalogEntry, StuckDelivery } from "@/lib/types";
+import { stateDir } from "@/lib/configDir";
+import { readStorageIncidents } from "@/lib/state/durability";
 import { filesResponseDependencies } from "./dependencies";
 
 interface FilesRouteDependencies {
@@ -313,7 +316,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       : claudeProjectRootFor(parentPath);
     const placeholder = {
       path: parentPath,
-      root: parentConversation.engine === "codex" ? "codex-sessions" as const : "claude-projects" as const,
+      root: parentConversation.engine === "codex" ? "codex-sessions" as const
+        : parentConversation.engine === "copilot" ? "copilot-sessions" as const : "claude-projects" as const,
       name: rootPath ? path.relative(rootPath, parentPath) : path.basename(parentPath),
       /* Cross-project lineage stub: the foreign parent groups under ITS owning
          project (ownership → canonical cwd → profile hint), falling back to
@@ -551,6 +555,16 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     if (latest?.path === file.path && !conversation.supersededBy) {
       const owed = owedDeliveries.get(conversation.id);
       if (owed) file.stuckDelivery = owed;
+    }
+    if (conversation.switchHold && latest?.path === file.path) {
+      file.switchHold = {
+        targetAccountId: conversation.switchHold.accountId,
+        reason: conversation.switchHold.reason,
+        since: conversation.switchHold.at,
+      };
+    }
+    if (conversation.reconfigure?.status === "applying" && latest?.path === file.path) {
+      file.switchApplying = { operationId: conversation.reconfigure.operationId };
     }
     if (conversation.migration && conversation.migration.phase !== "committed") {
       const intent = registrySnapshot.migrationIntents[conversation.migration.intentId];
@@ -839,6 +853,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     mirrorCheckpointAtMs: registryDiagnostics.mirrorCheckpointAtMs,
     mirrorDirty: registryDiagnostics.mirrorDirty,
   };
+  const storageIncidents = readStorageIncidents(stateDir());
   const effectiveProjectAliases = { ...projectAliases.aliases };
   for (const [source, target] of consolidated.projectRemap) {
     delete effectiveProjectAliases[target];
@@ -881,7 +896,14 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
     tasks: tasks.tasks,
-    systemHealth: { tmux: routeDependencies.tmuxEndpointHealth(), registry: registryHealth },
+    /* #2059: map lookups against the forge cache only; the sweep, not this
+       request, talks to GitHub. */
+    workLinks: workLinksForBoard(pipelines, tasks.tasks),
+    systemHealth: {
+      tmux: routeDependencies.tmuxEndpointHealth(),
+      registry: registryHealth,
+      ...(storageIncidents.length ? { storage: { incidents: storageIncidents } } : {}),
+    },
     conversationAliases: registrySnapshot.conversationAliases,
     ...(Object.keys(launchProjection.routes).length ? { launchRoutes: launchProjection.routes } : {}),
     ...(pipelinesError ? { pipelinesError } : {}),

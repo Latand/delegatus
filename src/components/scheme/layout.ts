@@ -1050,7 +1050,7 @@ export function buildSchemeLayout(
     const owner = groupKeyOfPath.get(file.path);
     if (owner?.startsWith("pipe:")) {
       const pipeline = pipelines.find((candidate) => candidate.id === owner.slice(5));
-      if (pipeline?.state === "needs_decision" || pipeline?.state === "paused") return 4;
+      if (pipeline?.state === "needs_decision" || pipeline?.state === "needs_review" || pipeline?.state === "paused") return 4;
     }
     if (owner?.startsWith("flow:")) {
       const flow = actionableFlows.find((candidate) => candidate.id === owner.slice(5));

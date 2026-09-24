@@ -2,18 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { Loader2 } from "@/components/icons";
-import { TaskSheet, type TaskSheetView } from "@/components/tasks/TaskSheet";
 import { taskRelationsByPath } from "@/components/tasks/taskRelations";
+import { accountIdFromPath } from "@/lib/accounts/badge";
+import { useIntendedAccount } from "@/lib/accounts/intendedAccount";
+import { useAccountName } from "@/hooks/useEngineAccounts";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
-import { useRuntimeBusState } from "@/hooks/useRuntime";
+import { useRuntimeBusState, useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { projectDisplayName } from "@/lib/displayNames";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { useLocale } from "@/lib/i18n";
+import { conversationFrameRole } from "@/lib/roleFrames";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -22,12 +24,14 @@ import { DraftAgentPane } from "@/components/DraftAgentPane";
 import { isWorkflowDraftId } from "@/components/workflows/workflowModel";
 import { WorkflowDraftPane } from "@/components/workflows/WorkflowDraftPane";
 import { RoundDeck } from "@/components/flows/RoundDeck";
+import { useServerReach } from "@/hooks/serverReach";
+import { BoardRowsSkeleton } from "../skeletons";
 import { MIN_TRANSCRIPT_SHARE } from "./chatBudget";
 import { ChatEngineMark } from "./chatEngineMark";
 import { paneState, type PaneState } from "@/components/paneState";
 import type { BranchGroup } from "@/components/projectModel";
 import { draftWorkingDirectory } from "@/components/projectModel";
-import { cleanTitle, engineBadge, effortTitle } from "@/components/utils";
+import { cleanTitle, engineBadge, effortTitle, fileModelLabel } from "@/components/utils";
 
 import { compactPipelineLayoutFlows } from "@/components/pipelines/pipelineModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -44,7 +48,8 @@ import type { SubagentTrayApi } from "@/components/scheme/SubagentTrayView";
 
 import { WakeupChip, wakeupChipKey } from "@/components/WakeupChip";
 
-import { MobileBarTitle, MobileShell, useMobileShellChrome, type MobileShellHost, type SheetRenderer } from "./MobileShell";
+import { MobileBarTitle, MobileShell, ReachLine, useMobileShellChrome, type MobileShellHost, type SheetRenderer } from "./MobileShell";
+import { RoleFrameMark } from "../RoleFrameMark";
 import { MobileConversationMenu } from "./MobileConversationMenu";
 import { MobileOrchestratorSheet } from "./MobileOrchestratorSheet";
 import { MobileSwitchSheet, switchList, swipeTarget, type SwitchCandidate, type SwitchEntry } from "./MobileSwitchSheet";
@@ -145,6 +150,8 @@ interface Props {
   /** Drops a draft that continues a conversation, for the menu's «Hand off»
       row (§4.2). The board owns the draft, so the screen only asks for it. */
   onHandoff?: (file: FileEntry) => void;
+  /** The task screen's opener, for the conversation's task strip (#2072 slice 5). */
+  onOpenTask?: (task: BoardTask) => void;
   /** In-flow alert the project board renders above the leaf. */
   alert?: React.ReactNode;
   /** Engine-native subagent tray surface (issue #142). The DOCKED tray is gone
@@ -176,7 +183,7 @@ interface Props {
  * not loaded — the same shell renders the board leaf, which lane 2 fills with
  * the board list.
  */
-export function MobileFocusView({ project, projectName, groups, manual, files, flows, reviewGroups = [], pipelines, surfacePipelines = [], tasks, sheetTasks, drafts, favorites, isolatedManualPaths = EMPTY_PATHS, loaded, focus, onSelect, onClose, onDraftClose, onDraftSpawned, onConversationOpened, shellHost = null, renderBoardSheet, onOpenSearch, hostTaskCount = 0, onHandoff, alert }: Props) {
+export function MobileFocusView({ project, projectName, groups, manual, files, flows, reviewGroups = [], pipelines, surfacePipelines = [], tasks, sheetTasks, drafts, favorites, isolatedManualPaths = EMPTY_PATHS, loaded, focus, onSelect, onClose, onDraftClose, onDraftSpawned, onConversationOpened, shellHost = null, renderBoardSheet, onOpenSearch, hostTaskCount = 0, onHandoff, onOpenTask, alert }: Props) {
   const { t } = useLocale();
   /* The screen is mounted INSIDE the project board's shell (lane 2 pushes it
      when a conversation reaches the top of the stack), so the badge, the
@@ -218,7 +225,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   if (focusState.project !== project) setFocusState({ project, key: focus ?? rememberedFocus(project) });
   const focusPath = focusState.key;
   const setFocusPath = useCallback((key: string | null) => setFocusState((prev) => (prev.key === key ? prev : { project: prev.project, key })), []);
-  const [taskSheet, setTaskSheet] = useState<TaskSheetView | null>(null);
   /* Bumped by the menu's Rename row: the editor opens over the bar, where the
      title cell is (§4.2, #1348). The editor reports the effective title back,
      so the cell under it shows an optimistic rename at once instead of waiting
@@ -343,7 +349,9 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   /* Conversation-side relation strip (issue #292). */
   const relatedTasksByPath = useMemo(() => taskRelationsByPath(files, sheetTasks ?? tasks), [files, sheetTasks, tasks]);
 
-  const openPipelineTask = useCallback((task: BoardTask) => setTaskSheet({ taskId: task.id }), []);
+  /* A task the conversation belongs to opens on the task screen, pushed
+     above this one (#2072 slice 5). */
+  const openPipelineTask = useCallback((task: BoardTask) => onOpenTask?.(task), [onOpenTask]);
 
   /* Pin a pane the layout already holds, as the phone's OPEN gesture (#1244).
      A switcher row and a map/attention pick are the same deliberate act as
@@ -511,19 +519,31 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 
   /* ── The bar's title cell ──────────────────────────────────────────────── */
   const displayName = projectDisplayName(project, projectName);
+  /* The role frame: the seat's conversation is the orchestrator,
+     a stage attempt wears its stage's role, a review deck is a review. */
+  const frameRole = activeFile
+    ? conversationFrameRole({ seat: holdsSeat, stage: stage?.stage ?? null, file: activeFile })
+    : activeDeck ? "reviewer" as const : null;
+  const frameMark = frameRole ? <RoleFrameMark role={frameRole} /> : null;
   const title = activeFile ? (
-    <ChatBarTitle
-      file={activeFile}
-      offline={offline}
-      stage={stage}
-      bump={bumpPulse?.side ?? null}
-      renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
-    />
+    <>
+      {frameMark}
+      <ChatBarTitle
+        file={activeFile}
+        offline={offline}
+        stage={stage}
+        bump={bumpPulse?.side ?? null}
+        renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
+      />
+    </>
   ) : activeEntry ? (
     /* A deck or a draft names itself exactly as its switcher row does, so the
        cell the operator taps to leave says the same thing as the row that
        brought them here. */
-    <EntryBarTitle entry={activeEntry} offline={offline} bump={bumpPulse?.side ?? null} />
+    <>
+      {frameMark}
+      <EntryBarTitle entry={activeEntry} offline={offline} bump={bumpPulse?.side ?? null} />
+    </>
   ) : (
     <MobileBarTitle>{displayName}</MobileBarTitle>
   );
@@ -638,10 +658,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
        the dock that used to fill this branch went with lane 10. */
     <div className="flex flex-1 items-center justify-center text-center text-body text-muted">{t("mobile.noConvos")}</div>
   ) : (
-    <div className="flex flex-1 items-center justify-center gap-2 text-center text-body text-muted">
-      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-      {t("common.loading")}
-    </div>
+    <BoardRowsSkeleton variant="list" />
   );
 
   return (
@@ -658,6 +675,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     <div
       data-testid="mobile-chat-shell"
       data-chat-min-share={MIN_TRANSCRIPT_SHARE}
+      {...(frameRole ? { "data-role-host": "phone", "data-role": frameRole } : {})}
       className="relative flex h-full max-h-[100dvh] min-h-0 min-w-0 max-w-[100dvw] flex-1 flex-col overflow-hidden overflow-x-clip"
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
@@ -732,10 +750,83 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         />
       ) : null}
 
-      {taskSheet ? (
-        <TaskSheet project={project} projectName={projectName} tasks={sheetTasks ?? tasks} files={files} initialView={taskSheet} onClose={() => setTaskSheet(null)} />
-      ) : null}
     </div>
+  );
+}
+
+/**
+ * The identity half of a bar meta line: the engine mark and the model with its
+ * reasoning tier. One cell for both title cells — a conversation's own and a
+ * review round's — because a round opened from the board said only
+ * «working 6:44» while the sheet it opens changes exactly these things (#1795).
+ *
+ * The model and its tier are ONE reading and do not yield; the state phrase
+ * before them still outranks everything.
+ */
+function ChatIdentity({ file }: { file: FileEntry }) {
+  const { t } = useLocale();
+  const badge = engineBadge(file);
+  const modelName = fileModelLabel(file);
+  const model = modelName
+    ? file.effort ? t("mobile2.chat.identity", { model: modelName, effort: file.effort }) : modelName
+    : badge.label;
+  return (
+    <>
+      <span aria-hidden className="shrink-0 text-muted">·</span>
+      <ChatEngineMark file={file} />
+      <span data-mobile2-chat-model className="shrink-0 whitespace-nowrap" title={effortTitle(file)}>{model}</span>
+    </>
+  );
+}
+
+/**
+ * The account the conversation runs on, at the end of the TITLE line.
+ *
+ * It was on the meta line under it, and at 390 px that line has no room left:
+ * the state phrase with its timer and the model with its tier need 116 px of
+ * the 197 px the line has, and what was left could not hold «@ spare» — the
+ * cell rendered «@ s…» on every phone surface (#1795, second critique). The
+ * title line is one long sentence that already truncates, so a few pixels there
+ * cost a word of a title instead of the whole answer to «which account is
+ * this». A long account id still yields, at the cap below, before the title is
+ * left with nothing.
+ *
+ * Read off the live transcript path, as every other account surface reads it.
+ * The legacy home is named too — «default» is the answer to that question, and
+ * the runtime sheet answers it with the same word.
+ */
+function ChatAccountTag({ file }: { file: FileEntry }) {
+  const { t } = useLocale();
+  const account = accountIdFromPath(file.path);
+  /* #1846: a pick waiting for the next message is named here too, in the frame the sheet names it, so
+     the conversation says where the next message goes with the sheet closed. */
+  const runtime = useRuntimeSessionForConversation(file.conversationId, file.path);
+  const { next } = useIntendedAccount(conversationIdentity(file), account, runtime?.session.pendingReconfigure?.accountId);
+  /* Named by label, as the sheet's rows and the board name the same account. */
+  const nameOf = useAccountName(file.engine === "codex" ? "codex" : "claude");
+  const moving = next !== account;
+  if (!moving) {
+    return (
+      <span data-mobile2-chat-account className="max-w-[45%] shrink-0 truncate text-label font-medium leading-tight text-muted" title={nameOf(account)}>
+        <span data-mobile2-chat-account-runs>@ {nameOf(account)}</span>
+      </span>
+    );
+  }
+  /* While a pick waits, the account the next message goes to is the new information, so it is laid first and
+     keeps the line; the running account sits before it only when both fit whole, and otherwise wraps onto a
+     second line the tag clips, rather than showing a sliver. The sheet, one tap away, names both in full
+     (#1846 critique). The tag stops short of the title's 6rem, so the title always keeps that minimum width,
+     and a short title leaves no gap before the tag the way a min-width on the title would. */
+  return (
+    <span
+      data-mobile2-chat-account
+      data-mobile2-chat-account-next={next}
+      className="flex h-[1lh] max-w-[min(64%,calc(100%-6rem-0.375rem))] shrink-0 flex-row-reverse flex-wrap justify-end gap-x-1 overflow-hidden text-label font-medium leading-tight text-muted"
+      title={t("mobile2.composer.accountRunsOnNext", { account: nameOf(account), next: nameOf(next) })}
+    >
+      <span data-mobile2-chat-account-to className="min-w-0 max-w-full truncate text-accent">→ {nameOf(next)}</span>
+      <span data-mobile2-chat-account-runs className="whitespace-nowrap">@ {nameOf(account)}</span>
+    </span>
   );
 }
 
@@ -753,10 +844,10 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null }) {
   const { t } = useLocale();
   const bits = chatStateBits(t, file, { offline });
-  const badge = engineBadge(file);
-  const model = file.model
-    ? file.effort ? t("mobile2.chat.identity", { model: file.model, effort: file.effort }) : file.model
-    : badge.label;
+  /* While the server is being reconnected (#2071 D7) the quiet reconnecting
+     line takes the meta line's place: the state it would show is the state
+     from before the outage. */
+  const reach = useServerReach();
   return (
     <span
       data-mobile2-chat-title
@@ -764,17 +855,19 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
         bump === "right" ? "-translate-x-3" : bump === "left" ? "translate-x-3" : ""
       }`}
     >
-      <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
-        {cleanTitle(renamed ?? file.title, 90)}
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
+          {cleanTitle(renamed ?? file.title, 90)}
+        </span>
+        <ChatAccountTag file={file} />
       </span>
-      <span className="flex min-w-0 items-center gap-1 text-label font-medium leading-tight text-secondary">
+      {reach.kind === "reconnecting" ? <ReachLine reach={reach} /> : (
+      <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
         <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
         {offline ? null : (
           <>
-            <span aria-hidden className="shrink-0 text-muted">·</span>
-            <ChatEngineMark file={file} />
-            <span className="min-w-0 truncate" title={effortTitle(file)}>{model}</span>
+            <ChatIdentity file={file} />
             {stage?.current ? (
               <>
                 <span aria-hidden className="shrink-0 text-muted">·</span>
@@ -795,6 +888,7 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
           <WakeupChip key={wakeupChipKey(file.pendingWakeup)} wakeup={file.pendingWakeup} interactive={false} className="ml-0.5" />
         ) : null}
       </span>
+      )}
     </span>
   );
 }
@@ -821,16 +915,22 @@ export function EntryBarTitle({ entry, offline, bump }: { entry: SwitchEntry; of
         bump === "right" ? "-translate-x-3" : bump === "left" ? "translate-x-3" : ""
       }`}
     >
-      <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
-        {entry.label}
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
+          {entry.label}
+        </span>
+        {entry.file ? <ChatAccountTag file={entry.file} /> : null}
       </span>
-      <span className="flex min-w-0 items-center gap-1 text-label font-medium leading-tight text-secondary">
+      <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits ? CHAT_TONE_DOT[bits.tone] : "bg-strong"}`} aria-hidden />
         {bits ? (
           <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
         ) : (
           <span data-mobile2-chat-state className="min-w-0 truncate">{entry.meta}</span>
         )}
+        {/* The round on screen is a conversation like any other: it says which
+            model, tier and account the sheet on this surface would change. */}
+        {!offline && entry.file ? <ChatIdentity file={entry.file} /> : null}
         {/* The same standing contract as the conversation's own cell (#165). */}
         {entry.file?.pendingWakeup ? (
           <WakeupChip key={wakeupChipKey(entry.file.pendingWakeup)} wakeup={entry.file.pendingWakeup} interactive={false} className="ml-0.5" />

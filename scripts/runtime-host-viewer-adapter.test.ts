@@ -18,6 +18,7 @@ import {
 } from "../src/runtime-host/mcpHealthProbeAdmissionChannel";
 import { probeMcpRuntime } from "../src/runtime-host/mcpRuntimeProbe";
 import { RuntimeHostFence } from "../src/runtime-host/runtimeHostFence";
+import { HostCommandViewerDeploymentAdapter } from "../src/runtime-host/deploymentAdapter";
 import { serveRuntimeHost } from "../src/runtime-host/socket";
 import {
   completeHotStatePreparation,
@@ -333,6 +334,45 @@ function composeSnapshot(): string {
     },
   });
 }
+
+test("bounded promoted verification retains the real 503 startup phase and category through a failed probe", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-promoted-startup-bound-"));
+  const state = path.join(sandbox, "state");
+  const bin = path.join(sandbox, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(path.join(state, "deployments", "compose"), { recursive: true });
+  let capabilityProbes = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (new URL(request.url).pathname === "/api/runtime/deployments/capabilities/v1") {
+      if (++capabilityProbes > 1) return new Response("temporary probe failure", { status: 500 });
+      return Response.json({ releaseReady: false, structuredHostStartup: {
+        state: "failed", phase: "adopting Codex hosts", completedHosts: 0, totalHosts: 2,
+        failureCategory: "runtime-host-unavailable",
+      } }, { status: 503 });
+    }
+    return new Response('<script src="/_next/static/fixture.js"></script>');
+  } });
+  const candidate = { ...release, endpoint: `http://127.0.0.1:${server.port}` };
+  fs.writeFileSync(path.join(state, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), composeSnapshot());
+  fs.writeFileSync(path.join(bin, "docker"), '#!/bin/sh\nif [ "$1 $2" = "container inspect" ]; then exit 0; fi\nif [ "$1" = inspect ]; then echo running; exit 0; fi\nexit 1\n', { mode: 0o755 });
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const executable = path.join(bin, "adapter");
+  fs.writeFileSync(executable, `#!/bin/sh\nexport PATH=${quote(bin)}:"$PATH"\nexport LLV_STATE_DIR=${quote(state)}\nexport LLV_VIEWER_PORT=${server.port}\nexec ${quote(process.execPath)} ${quote(adapter)} "$@"\n`, { mode: 0o755 });
+  const processFile = path.join(state, "adapter-process.json");
+  const bounded = HostCommandViewerDeploymentAdapter.fromExecutable(executable, {
+    stateFile: processFile, timeouts: { "verify-promoted": 3_000 },
+  });
+  try {
+    await expect(bounded.verifyPromoted(candidate)).rejects.toThrow(
+      "adoption 0 of 2 - adopting Codex hosts - runtime-host-unavailable",
+    );
+    expect(capabilityProbes).toBeGreaterThan(1);
+    expect(fs.existsSync(processFile)).toBe(false);
+  } finally {
+    await server.stop(true);
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+});
 
 async function runAction(options: {
   action: "promote" | "retain-only" | "rollback" | "complete-host-handoff" | "reconcile-mcp-runtime" | "verify-candidate";
@@ -685,7 +725,9 @@ function successorPackage(prefix: string, options: { revision: string; bundle?: 
   fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
   fs.mkdirSync(state, { recursive: true });
   fs.copyFileSync(path.join(root, "bin", "mcp-server.mjs"), path.join(packageRoot, "bin", "mcp-server.mjs"));
-  fs.copyFileSync(path.join(root, "bin", "server-runtime.mjs"), path.join(packageRoot, "bin", "server-runtime.mjs"));
+  for (const name of ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs"]) {
+    fs.copyFileSync(path.join(root, "bin", name), path.join(packageRoot, "bin", name));
+  }
   if (options.bundle === undefined) fs.copyFileSync(path.join(root, "dist", "mcp-server.mjs"), path.join(packageRoot, "dist", "mcp-server.mjs"));
   else fs.writeFileSync(path.join(packageRoot, "dist", "mcp-server.mjs"), options.bundle);
   fs.copyFileSync(path.join(root, "package.json"), path.join(packageRoot, "package.json"));
@@ -875,6 +917,8 @@ test("candidate build stages the matching MCP package and stable dispatcher", as
   fs.mkdirSync(path.join(template, "bin"), { recursive: true });
   fs.writeFileSync(path.join(template, "bin", "mcp-server.mjs"), "process.stdout.write('dispatcher\\n');\n");
   fs.writeFileSync(path.join(template, "bin", "server-runtime.mjs"), "export const runtime = true;\n");
+  fs.writeFileSync(path.join(template, "bin", "appDir.mjs"), "export const appDir = true;\n");
+  fs.writeFileSync(path.join(template, "bin", "envAlias.mjs"), "export const envAlias = true;\n");
   fs.writeFileSync(path.join(template, "package.json"), JSON.stringify({
     name: "mcp-build-fixture",
     type: "module",
@@ -1120,7 +1164,7 @@ test("rollback starts and health-checks the retained release before switching th
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
         return Response.json(
-          { capability: "viewer-deployments", version: 1, registryBackendMode: "off" },
+          { capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" },
           { headers: { connection: "close" } },
         );
       }
@@ -1181,7 +1225,7 @@ test("rollback checkpoints hot state before publishing a legacy target", async (
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
         return Response.json(
-          { capability: "viewer-deployments", version: 1, registryBackendMode: "off" },
+          { capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" },
           { headers: { connection: "close" } },
         );
       }
@@ -1243,7 +1287,7 @@ test("rollback publishes destination authority before changing the stable target
     fetch(request) {
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
-        return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "off" });
+        return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" });
       }
       if (pathname === "/_next/static/app.js") return new Response("self.__viewer=true");
       return new Response('<script src="/_next/static/app.js"></script>', { headers: { "content-type": "text/html" } });
@@ -1298,7 +1342,7 @@ test("rollback resumes after a crash between destination authority and target pu
     fetch(request) {
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
-        return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "off" });
+        return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" });
       }
       if (pathname === "/_next/static/app.js") return new Response("self.__viewer=true");
       return new Response('<script src="/_next/static/app.js"></script>', { headers: { "content-type": "text/html" } });
@@ -1361,7 +1405,7 @@ test("SQLite rollback recovers an interrupted promotion before health and keeps 
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
         return Response.json(
-          { capability: "viewer-deployments", version: 1, registryBackendMode: "off" },
+          { capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" },
           { status: previousWriterReady() ? 200 : 503 },
         );
       }
@@ -1470,7 +1514,7 @@ test("rollback retains the SQLite target when mirror checkpointing fails", async
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
         return Response.json(
-          { capability: "viewer-deployments", version: 1, registryBackendMode: "off" },
+          { capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" },
           { headers: { connection: "close" } },
         );
       }

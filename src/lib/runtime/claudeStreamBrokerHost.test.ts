@@ -12,6 +12,7 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
+import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
 import { saveTelegramSession, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import {
@@ -22,6 +23,7 @@ import {
   type ClaudeDeliveryLedger,
   type ClaudeDeliveryState,
 } from "./claudeStreamBrokerHost";
+
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { normalizeQueueEntry, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
 import { structuredContent, type StructuredImageRef } from "./structuredContent";
@@ -34,6 +36,19 @@ import {
   structuredHostsEnabled,
 } from "./registry";
 import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
+
+/* #1905: the config and state root a spawned agent runs under, plus the `gh`
+   configuration pinned for it because it no longer inherits XDG_CONFIG_HOME.
+   Built from the same inputs the boundary uses, never from its code. */
+function agentSandboxEnv(home?: string): Record<string, string> {
+  const key = home ? path.basename(home) : "default";
+  const config = path.join(os.tmpdir(), "llv-spawn-sandbox", key, "config");
+  return {
+    XDG_CONFIG_HOME: config,
+    LLV_STATE_DIR: path.join(config, "agent-log-viewer", "state"),
+    GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
+  };
+}
 
 class MemoryEventStore implements RuntimeEventStore {
   private readonly events = new Map<string, RuntimeEvent[]>();
@@ -242,7 +257,7 @@ describe("ClaudeStreamBrokerHost", () => {
 
     expect(captured.args).toContain("--strict-mcp-config");
     expect(captured.options?.env).toMatchObject({
-      LLV_STATE_DIR: "fixture-state",
+      ...agentSandboxEnv(home),
       LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
       LLV_VIEWER_PORT: "8898",
     });
@@ -252,10 +267,58 @@ describe("ClaudeStreamBrokerHost", () => {
     /* Only granted servers are copied into the exclusive file; the grant bound
        admits none beyond the Viewer baseline this tranche (#739). */
     expect(mcpConfig.mcpServers).toEqual({
-      viewer: { type: "stdio", command: "viewer-mcp" },
+      viewer: { type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() },
     });
     await host.release();
     expect(child.signals).toContain("SIGTERM");
+  });
+
+  test("with the HTTP flag, only a host whose environment carries a capability is pointed at the shared endpoint", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-structured-http-"));
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { viewer: { type: "stdio", command: "viewer-mcp" } } }));
+    const previous = { transport: process.env.LLV_MCP_TRANSPORT, token: process.env.LLV_TOKEN };
+    process.env.LLV_MCP_TRANSPORT = "http";
+    delete process.env.LLV_TOKEN;
+    const viewerEntry = async (env: Record<string, string>, resume: boolean) => {
+      const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+      const options = {
+        cwd: "/repo",
+        claudeConfigDir: home,
+        env: { NODE_ENV: "test", ...env } as NodeJS.ProcessEnv,
+        eventStore: new MemoryEventStore(),
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai" as const, subscriptionType: "max" }),
+        readTranscript: () => [],
+        spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+      };
+      const host = resume
+        ? await ClaudeStreamBrokerHost.adopt(crypto.randomUUID(), options)
+        : await ClaudeStreamBrokerHost.start(options);
+      const mcpConfigPath = captured.args![captured.args!.indexOf("--mcp-config") + 1]!;
+      const viewer = (JSON.parse(fs.readFileSync(mcpConfigPath, "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers.viewer;
+      await host.release();
+      return viewer;
+    };
+    const httpEntry = {
+      type: "http",
+      url: "http://127.0.0.1:8898/api/mcp",
+      headers: { "x-llv-spawn-capability": "${LLV_SPAWN_CAPABILITY}" },
+    };
+    try {
+      const capability = crypto.randomBytes(32).toString("base64url");
+      /* A spawn, and a resume the Viewer drives, both hand the host its capability. */
+      expect(await viewerEntry({ LLV_SPAWN_CAPABILITY: capability }, false)).toEqual(httpEntry);
+      expect(await viewerEntry({ LLV_SPAWN_CAPABILITY: capability }, true)).toEqual(httpEntry);
+      /* A host started with none (an account-migration successor the registry
+         could not match) keeps the stdio launcher, which finds it by process
+         ancestry, instead of an endpoint that would refuse every call. */
+      expect(await viewerEntry({}, true)).toEqual({ type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() });
+    } finally {
+      for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_TOKEN", previous.token]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("defaults writable pane-less Claude processes to bypassPermissions", async () => {
@@ -370,6 +433,7 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(captured.options?.env).toEqual({
       NODE_ENV: "test",
       PATH: process.env.PATH,
+      ...agentSandboxEnv(),
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
     expect(captured.args).toContain("--input-format");
@@ -428,8 +492,11 @@ describe("ClaudeStreamBrokerHost", () => {
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
         spawnProcess: fakeSpawn(child, captured),
       });
+      /* A forwarded value still wins; without one the boundary pins the
+         operator's own, which the agent used to reach through
+         XDG_CONFIG_HOME (#1905). */
       expect(captured.options?.env?.GH_CONFIG_DIR).toBe(
-        forwardGitHubConfig ? "/shared/config/gh" : undefined,
+        forwardGitHubConfig ? "/shared/config/gh" : path.join(os.homedir(), ".config", "gh"),
       );
       await host.release();
     }
@@ -766,7 +833,7 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(adoptedCapture.args).toContain("--strict-mcp-config");
     expect(adoptedMcp).toEqual(freshMcp);
     expect(freshMcp).toEqual({ mcpServers: {
-      viewer: { type: "stdio", command: "viewer-mcp" },
+      viewer: { type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() },
     } });
     await adopted.release();
 
@@ -1171,6 +1238,7 @@ describe("ClaudeStreamBrokerHost", () => {
       NODE_ENV: "test",
       PATH: process.env.PATH,
       CLAUDE_CONFIG_DIR: configDir,
+      ...agentSandboxEnv(configDir),
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
     expect(await host.send({ id: "managed-entry", text: "managed prompt" })).toEqual({ outcome: "turn-started", turnId: "managed-entry" });
@@ -1596,11 +1664,11 @@ describe("ClaudeStreamBrokerHost", () => {
     const mcpConfigPath = captured.args![captured.args!.indexOf("--mcp-config") + 1]!;
     expect(JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"))).toEqual({
       mcpServers: {
-        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"] },
+        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"], env: viewerMcpServerEnv() },
       },
     });
     expect(captured.options?.env).toMatchObject({
-      LLV_STATE_DIR: "fixture-state",
+      LLV_STATE_DIR: agentSandboxEnv(captured.options?.env?.CLAUDE_CONFIG_DIR).LLV_STATE_DIR,
       LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
       LLV_VIEWER_PORT: "8898",
     });
@@ -1651,7 +1719,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const restartMcpConfigPath = restartCaptured.args![restartCaptured.args!.indexOf("--mcp-config") + 1]!;
     expect(JSON.parse(fs.readFileSync(restartMcpConfigPath, "utf8"))).toEqual({
       mcpServers: {
-        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"] },
+        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"], env: viewerMcpServerEnv() },
       },
     });
     expect(restartedRegistry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
@@ -1742,12 +1810,12 @@ describe("ClaudeStreamBrokerHost", () => {
     const mcpConfigPath = captured.args![captured.args!.indexOf("--mcp-config") + 1]!;
     expect(JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"))).toEqual({
       mcpServers: {
-        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"] },
+        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"], env: viewerMcpServerEnv() },
       },
     });
     expect(captured.options?.env).toMatchObject({
       CLAUDE_CONFIG_DIR: accountHome,
-      LLV_STATE_DIR: "fixture-state",
+      LLV_STATE_DIR: agentSandboxEnv(accountHome).LLV_STATE_DIR,
       LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
       LLV_VIEWER_PORT: "8898",
     });

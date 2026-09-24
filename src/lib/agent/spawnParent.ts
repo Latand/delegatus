@@ -7,7 +7,7 @@ import { REVIEWER_REQUIRES_REVIEWS_ERROR, REVIEWS_REQUIRE_REVIEWER_ERROR } from 
 
 export interface ResolvedSpawnParent {
   conversationId: `conversation_${string}`;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   artifactPath: string;
   sessionKey: ReturnType<typeof sessionKeyFromTranscript>;
 }

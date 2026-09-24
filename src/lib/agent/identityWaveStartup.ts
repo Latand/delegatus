@@ -9,7 +9,8 @@ import { searchTextForTranscript } from "@/lib/scanner/describe";
 import { durableSemanticTitle } from "@/lib/title";
 
 import { agentRegistry, normalizeRegistry, RegistryReadError, type AgentRegistry, type RegistryFile } from "./registry";
-import { resolveRegistryBackend } from "./registryBackendIdentity";
+import { defaultRegistrySqliteFilename, resolveRegistryBackend } from "./registryBackendIdentity";
+import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 import { reboundAssembledMcpGrants } from "./mcpAllowlist";
 import {
   applyIdentityWaveMigration,
@@ -33,7 +34,7 @@ function durableEvidenceHead(value: string | null | undefined): string | null {
   return durableSemanticTitle(firstNonEmptyLine, 120);
 }
 
-export function titleFromTranscriptHead(pathname: string, engine: "claude" | "codex"): string | null {
+export function titleFromTranscriptHead(pathname: string, engine: "claude" | "codex" | "copilot"): string | null {
   try {
     const stat = fs.statSync(pathname);
     if (!stat.isFile()) return null;
@@ -86,7 +87,7 @@ export interface IdentityWaveStartupDependencies {
   registry: Pick<AgentRegistry, "runIdentityWaveMigration">;
   seats(): readonly IdentityWaveSeat[];
   now(): string;
-  transcriptTitle(pathname: string, engine: "claude" | "codex"): string | null;
+  transcriptTitle(pathname: string, engine: "claude" | "codex" | "copilot"): string | null;
   sharedPath(pathname: string): IdentityWaveSharedPathCandidate | null;
   commitExternalPathRekeys(rekeys: readonly IdentityWavePathRekey[]): void;
   log(message: string, detail: Record<string, unknown>): void;
@@ -106,45 +107,48 @@ function readRegistryPayload(filename: string): string | null {
 
 /** The registry as a dry-run is allowed to see it. Constructing `AgentRegistry`
     is a write path even for a reader: the process-wide instance publishes its
-    backend identity descriptor, compacts `agent-registry.json` at startup,
-    creates the SQLite store on its first boot and refreshes the rollback
-    mirror. A preview of the operator's state must do none of that, so this
-    takes the writer's identity gate (an unprovable backend identity refuses
-    here exactly as `agentRegistry()` refuses) and then parses the JSON file the
-    way the JSON reader does. In the SQLite-authoritative modes that file is the
-    revision-stamped rollback mirror the writer refreshes at every start and on
-    its checkpoint cadence; an absent or unstamped mirror is refused, because a
-    preview built from it would describe stale state as current. */
+    backend identity descriptor, creates the SQLite store and imports a JSON
+    install on its first boot, and retires a leftover JSON mirror. A preview of
+    the operator's state must do none of that, so this takes the writer's
+    identity gate (an unprovable backend identity refuses here exactly as
+    `agentRegistry()` refuses) and then reads the authority directly: the
+    SQLite store, opened read-only, when it is authoritative, and the JSON file
+    when the install is still on JSON (including one whose migration has not
+    run yet). */
 export function readIdentityWaveRegistrySnapshot(
   filename = statePath("agent-registry.json"),
   env: StartupEnvironment = process.env,
 ): RegistryFile {
   const backend = resolveRegistryBackend(filename, env);
-  const sqliteAuthoritative = backend.mode === "read" || backend.mode === "sqlite";
-  const payload = readRegistryPayload(filename);
-  if (payload === null) {
-    if (sqliteAuthoritative) {
+  const sqliteAuthoritative = (backend.mode === "read" || backend.mode === "sqlite") && !backend.pendingJsonImport;
+  if (sqliteAuthoritative) {
+    const store = backend.sqliteFilename ?? defaultRegistrySqliteFilename(filename);
+    if (!fs.existsSync(store)) return normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+    let reader: SqliteAgentRegistryStore;
+    try {
+      reader = new SqliteAgentRegistryStore(store, {
+        readOnly: true,
+        initialSnapshot: () => { throw new Error("a read-only registry preview never imports"); },
+        normalize: (value) => normalizeRegistry(value),
+      });
+    } catch (error) {
       throw new RegistryReadError(
-        `agent registry dry-run cannot preview the ${backend.mode} backend: the JSON rollback mirror is absent;`
-        + " start the registry writer once so it refreshes the mirror",
+        `agent registry dry-run cannot preview the ${backend.mode} backend: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    return normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+    try {
+      return reader.snapshot().file;
+    } finally {
+      reader.close();
+    }
   }
+  const payload = readRegistryPayload(filename);
+  if (payload === null) return normalizeRegistry({ version: 2, entries: {}, receipts: {} });
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
   } catch (error) {
     throw new RegistryReadError(`agent registry cannot be read: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (sqliteAuthoritative) {
-    const revision = (parsed as { _sqliteRevision?: unknown } | null)?._sqliteRevision;
-    if (!Number.isInteger(revision) || Number(revision) < 0) {
-      throw new RegistryReadError(
-        `agent registry dry-run cannot preview the ${backend.mode} backend: the JSON rollback mirror carries no SQLite revision stamp;`
-        + " start the registry writer once so it refreshes the mirror",
-      );
-    }
   }
   return reboundAssembledMcpGrants(normalizeRegistry(parsed));
 }
@@ -167,8 +171,8 @@ export function runIdentityWaveMigrationAtStartup(
 ): IdentityWaveMigrationResult {
   const env = overrides.env ?? process.env;
   /* Decided before the registry is chosen. The default writer construction is
-     itself a state mutation (identity publish, startup compaction, first
-     SQLite boot, mirror refresh), which a dry-run must never trigger. */
+     itself a state mutation (identity publish, first SQLite boot and JSON
+     import, mirror retirement), which a dry-run must never trigger. */
   const dryRun = env.LLV_IDENTITY_WAVE_DRY_RUN === "1";
   const dependencies: IdentityWaveStartupDependencies = {
     registry: overrides.registry ?? (dryRun ? readOnlyIdentityWaveRegistry(undefined, env) : agentRegistry()),

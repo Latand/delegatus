@@ -15,6 +15,7 @@ import type {
   PipelineAction,
   PipelineAttemptState,
   PipelineEdgeKind,
+  PipelineFailEdgeExhaustion,
   PipelineRepoPreflight,
   PipelineRepoPreflightErrorCode,
   PipelineStage,
@@ -27,7 +28,7 @@ import type {
   StageVerdictStatus,
 } from "@/lib/pipelines/types";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
-import { failEdgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
+import { failEdgeMaxRounds, failEdgeRoundsUsed, pipelineReviewSummary, type PipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 
 import { PIPELINES_CHANGED_EVENT } from "./pipelineEvents";
 
@@ -139,7 +140,20 @@ export function pipelineStateLabel(t: TFunction, state: PipelineState): string {
 }
 
 export const PIPELINE_BUSY_STATES: ReadonlySet<PipelineState> = new Set(["provisioning", "running"]);
-export const PIPELINE_ATTENTION_STATES: ReadonlySet<PipelineState> = new Set(["needs_decision", "paused"]);
+export const PIPELINE_ATTENTION_STATES: ReadonlySet<PipelineState> = new Set(["needs_decision", "needs_review", "paused"]);
+
+/** The line a needs_review lane carries on every card (#1938): the last
+    verdict, the head it judged, and the current head nobody reviewed. */
+export function pipelineReviewHeads(t: TFunction, source: Pick<Pipeline, "reviewPending" | "state" | "pausedState"> | PipelineReviewSummary | null): string | null {
+  const review = source && "lastVerdict" in source ? source : source ? pipelineReviewSummary(source) : null;
+  if (!review) return null;
+  const short = (sha: string | null) => sha ? sha.slice(0, 8) : t("pipelineReview.unknownHead");
+  return t("pipelineReview.heads", {
+    verdict: t(`kanban.past.stageVerdict.${review.lastVerdict}`),
+    reviewed: short(review.reviewedHead),
+    current: short(review.currentHead),
+  });
+}
 
 /**
  * Is the pipeline actively working its cursor stage? Pausing a running pipeline
@@ -774,6 +788,97 @@ export function stageChipLabel(t: TFunction, stage: PipelineStage): string {
   return stage.id;
 }
 
+/** A stage id that names nothing the role does not already say. */
+const GENERIC_STAGE_ID = /^(?:stage|step|s|run|task)[-_ ]?\d*$/i;
+/** A stage id that is an identifier rather than a word: never drawn as a name. */
+const OPAQUE_STAGE_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$|^[0-9a-f]{8,}$|^\d+$/i;
+
+/**
+ * A stage's name: its own id where the id says more than the role — `critique`,
+ * `fix`, `diagnose` — and the role's name where the id only repeats the role or
+ * names nothing (`stage-2`) (#1765). Stage ids are unique inside a pipeline, so
+ * two stages of one pipeline never read alike.
+ */
+export function stageDisplayName(t: TFunction, stage: PipelineStage): string {
+  const role = stageChipLabel(t, stage);
+  const words = stage.id.replace(/[-_]+/g, " ").trim();
+  if (!words || GENERIC_STAGE_ID.test(stage.id) || OPAQUE_STAGE_ID.test(stage.id)) return role;
+  const humanized = words[0]!.toUpperCase() + words.slice(1);
+  /* An id that IS the role (however it is cased) says nothing more; a role-less
+     stage falls back to its own id anyway, and reads better capitalized. */
+  if (stage.role?.roleId && stage.id.toLowerCase() === stage.role.roleId.toLowerCase()) return role;
+  return humanized;
+}
+
+export function stageNames(t: TFunction, pipeline: Pipeline): Map<string, string> {
+  return new Map(pipeline.stages.map((stage) => [stage.id, stageDisplayName(t, stage)] as const));
+}
+
+/** Which of its stage's own attempts a conversation is: `attempt` is its
+    1-based place among the operational attempts (lineage-adopted history never
+    counts), null when the pipeline record does not list it as one of them. */
+export interface StageAttemptPlace {
+  attempt: number | null;
+  attempts: number;
+}
+
+export function stageAttemptPlace(
+  pipeline: Pipeline,
+  stageId: string,
+  conversation: { path: string; conversationId?: string | null } | null,
+): StageAttemptPlace {
+  const own = stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical);
+  const index = conversation
+    ? own.findIndex((attempt) => attempt.agentPath === conversation.path
+      || (!!conversation.conversationId && attempt.conversationId === conversation.conversationId))
+    : -1;
+  return { attempt: index < 0 ? null : index + 1, attempts: own.length };
+}
+
+/** The place of a stage's latest own attempt: the stage as it stands now. */
+export function stageLatestAttemptPlace(pipeline: Pipeline, stageId: string): StageAttemptPlace {
+  const attempts = stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical).length;
+  return { attempt: attempts ? attempts : null, attempts };
+}
+
+/**
+ * The label a stage's conversation carries on every surface (#1865): the
+ * stage's name, and once the stage has run twice or more, which attempt this
+ * one is — «Critique · 2». A stage that ran once, or an attempt the record no
+ * longer lists, reads as the name alone.
+ */
+export function stageCardLabel(t: TFunction, stage: PipelineStage, place: StageAttemptPlace): string {
+  const { name, attempt } = stageCardLabelParts(t, stage, place);
+  return attempt !== null ? t("kanban.stageAttempt", { stage: name, n: attempt }) : name;
+}
+
+/** The same label in its two parts, for a surface that sets the attempt number
+    apart from the name (a muted suffix that survives the name's truncation):
+    `attempt` is null where the label is the name alone. */
+export function stageCardLabelParts(t: TFunction, stage: PipelineStage, place: StageAttemptPlace): { name: string; attempt: number | null } {
+  const name = stageDisplayName(t, stage);
+  return { name, attempt: place.attempt !== null && place.attempts > 1 ? place.attempt : null };
+}
+
+/**
+ * The tooltip a stage label carries (#1865): the stage, which attempt of how
+ * many, then the role preset the label gave up and the engine —
+ * «Critique, attempt 2 of 2 · Architect · Claude». The role is left out where it
+ * only repeats the stage's name.
+ */
+export function stageLabelTitle(t: TFunction, stage: PipelineStage, place: StageAttemptPlace, engine: string | null): string {
+  const name = stageDisplayName(t, stage);
+  const lead = place.attempt !== null && place.attempts > 1 ? t("kanban.stageAttemptOf", { stage: name, n: place.attempt, total: place.attempts }) : name;
+  return [lead, stageRoleAside(t, stage), engine].filter(Boolean).join(" · ");
+}
+
+/** The role preset a stage label no longer carries, for a tooltip: null when
+    it would only repeat the label's name. */
+export function stageRoleAside(t: TFunction, stage: PipelineStage): string | null {
+  const role = stageChipLabel(t, stage);
+  return role === stageDisplayName(t, stage) ? null : role;
+}
+
 /**
  * The title a stage's surface carries on the board (#658): role first, then the
  * stage id, then the chain position — «Builder · integrate_v3_voice · stage 2/3».
@@ -1401,7 +1506,7 @@ export function pipelineBoardEdges(pipeline: Pipeline): PipelineBoardEdge[] {
         to: stage.onFail.to,
         kind: "fail",
         usedRounds: failEdgeRoundsUsed(pipeline, stage),
-        maxRounds: stage.onFail.maxRounds,
+        maxRounds: failEdgeMaxRounds(pipeline, stage),
         isNext: false,
       });
     }
@@ -1556,13 +1661,14 @@ export function optimisticSetEdge(
   edge: PipelineEdgeKind,
   to: string | null,
   maxRounds?: number,
+  onExhausted?: PipelineFailEdgeExhaustion,
 ): Pipeline {
   return {
     ...pipeline,
     stages: pipeline.stages.map((stage) => {
       if (stage.id !== stageId) return stage;
       if (edge === "pass") return { ...stage, next: to };
-      return { ...stage, onFail: to === null ? null : { to, maxRounds: maxRounds ?? 5 } };
+      return { ...stage, onFail: to === null ? null : { to, maxRounds: maxRounds ?? 5, ...(onExhausted ? { onExhausted } : {}) } };
     }),
   };
 }
@@ -1574,12 +1680,13 @@ export async function setPipelineEdge(
   edge: PipelineEdgeKind,
   to: string | null,
   maxRounds?: number,
+  onExhausted?: PipelineFailEdgeExhaustion,
 ): Promise<string | null> {
   return patchPipeline(
     pipeline.id,
     "set-edge",
-    { stageId, edge, to, ...(maxRounds !== undefined ? { maxRounds } : {}) },
-    optimisticSetEdge(pipeline, stageId, edge, to, maxRounds),
+    { stageId, edge, to, ...(maxRounds !== undefined ? { maxRounds } : {}), ...(onExhausted !== undefined ? { onExhausted } : {}) },
+    optimisticSetEdge(pipeline, stageId, edge, to, maxRounds, onExhausted),
   );
 }
 

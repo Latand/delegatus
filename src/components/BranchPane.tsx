@@ -37,7 +37,7 @@ import { TaskRelationStrip } from "./tasks/TaskRelationStrip";
 import type { TaskRelation } from "./tasks/taskRelations";
 import { WakeupChip, wakeupChipKey } from "./WakeupChip";
 import { EngineBadge } from "./EngineMark";
-import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, fmtAge } from "./utils";
+import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, fileModelLabel, fmtAge } from "./utils";
 
 const noop = () => undefined;
 
@@ -183,6 +183,7 @@ interface Props {
 }
 
 export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome }: Props) {
+  const neverStarted = file.path.startsWith("spawn:") && file.spawn?.state === "failed";
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const paneRef = useRef<HTMLElement | null>(null);
@@ -328,7 +329,7 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
                   {cleanTitle(file.title, 90)}
                 </span>
               )}
-              <ProcessStatusControls file={file} compact />
+              {neverStarted ? null : <ProcessStatusControls file={file} compact />}
               {showFavorite ? <FavoriteCrown id={cardId} cardRef={paneRef} /> : null}
               {onToggleExpand ? (
                 <button
@@ -345,7 +346,8 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
               {onClose ? (
                 <button
                   className={"inline-flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
-                  aria-label={t("branch.removeColumn", { title: cleanTitle(file.title, 60) })}
+                  data-launch-dismiss={neverStarted || undefined}
+                  aria-label={neverStarted ? t("runtime.receipt.dismiss") : t("branch.removeColumn", { title: cleanTitle(file.title, 60) })}
                   onClick={onClose}
                 >
                   <X className="h-3 w-3" aria-hidden />
@@ -364,7 +366,7 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
                     style={{ backgroundColor: effortTint(file).soft, color: effortTint(file).color }}
                     title={[badge.label, effortTitle(file)].filter(Boolean).join(" · ")}
                   >
-                    {file.model}
+                    {fileModelLabel(file)}
                   </span>
                 ) : (
                   <EngineBadge engine={file.engine} className="px-2 py-0.5 text-[10px] font-bold" title={effortTitle(file)} />
@@ -404,7 +406,7 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
                     the id is read from the live transcript path so a migrated
                     conversation reflects its current account. OpenClaw skips it
                     for the same reason: the Viewer owns no OpenClaw account. */}
-                {file.engine === "shell" || file.engine === "openclaw" ? null : (
+                {file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? null : (
                   <AccountBadge
                     engine={file.engine}
                     accountId={runtime?.session.accountId ?? file.spawn?.accountId ?? accountIdFromPath(file.path)}
@@ -486,9 +488,9 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
             no control applies. Dormant far-zoom board nodes suppress it entirely
             (the dormant-node contract): the strip returns on activation, and
             active review panes keep it regardless of `noComposer`. */}
-        {dormant || isMobile ? null : <AgentControlStrip file={file} />}
-        {composerMount && !superseded ? <div ref={composerMount} className="contents" /> : null}
-        {noComposer || superseded ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} />}
+        {dormant || isMobile || neverStarted ? null : <AgentControlStrip file={file} />}
+        {composerMount && !superseded && !neverStarted ? <div ref={composerMount} className="contents" /> : null}
+        {noComposer || superseded || neverStarted ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} />}
       </section>
     </div>
   );

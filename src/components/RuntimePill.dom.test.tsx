@@ -9,7 +9,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { RuntimePill } from "./RuntimePill";
 import type { RuntimeSession } from "./runtime/runtimeModel";
-import { sendRuntimeFrom } from "./runtimeProfile";
+import { resumeKey, sendRuntimeFrom } from "./runtimeProfile";
 
 const dom = new Window();
 installActEnv();
@@ -22,7 +22,11 @@ Object.assign(globalThis, {
 });
 let mobile = false;
 const requests: Array<Record<string, unknown>> = [];
+let copilotModelCatalogResponse: unknown = null;
 globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  if (String(_input).includes("/api/accounts/copilot/models")) {
+    return new Response(JSON.stringify(copilotModelCatalogResponse ?? { models: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  }
   requests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
   return new Response(JSON.stringify({
     ok: true,
@@ -49,7 +53,16 @@ const claudeFile: FileEntry = {
   path: "/claude.jsonl", root: "claude-projects", name: "claude.jsonl", fmt: "claude",
   engine: "claude", conversationId: "conversation_claude", model: "sonnet", effort: "high",
 };
+function copilotFile(model: string, effort: string): FileEntry {
+  return {
+    ...codexFile,
+    path: "/fixture/config/agent-log-viewer/accounts/copilot/copilot-fixture/session-state/session/events.jsonl",
+    root: "copilot-sessions", name: "events.jsonl", fmt: "copilot", engine: "copilot",
+    conversationId: "conversation_copilot", model, effort,
+  };
+}
 const key = "llvAgentRuntime:conversation_runtime";
+const copilotResumeKey = resumeKey(copilotFile("auto", "medium"));
 
 const CODEX_STRUCTURED: RuntimeSettingsCapability = { perTurnEffort: true, perTurnModel: false };
 const CLAUDE_STRUCTURED: RuntimeSettingsCapability = { perTurnEffort: false, perTurnModel: false };
@@ -124,6 +137,7 @@ afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
   requests.length = 0;
+  copilotModelCatalogResponse = null;
 });
 
 test("the pill face reads shortLabel · tier and opens a menu with the active tier checked", async () => {
@@ -403,14 +417,14 @@ test("the model drill-down keeps model rows available for turn-boundary reconfig
   );
   await click(host.querySelector("[data-runtime-pill]")!);
   const submenu = [...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')];
-  expect(submenu.map((row) => row.getAttribute("data-runtime-value"))).toEqual(["model", "speed"]);
+  expect(submenu.map((row) => row.getAttribute("data-runtime-value"))).toEqual(["model", "speed", "account"]);
   await click(submenu[0]!);
   // One anchored surface — the root panel is gone, the model panel is in place.
   const modelRows = [...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')];
-  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6-Astra", "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna"]);
+  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6-Astra", "GPT-6-Sol", "GPT-6-Luna", "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna"]);
   // The conversation runs on Sol, so its row is the checked one wherever the
   // catalog puts it; the others stay selectable.
-  expect(modelRows[1]!.getAttribute("aria-checked")).toBe("true");
+  expect(modelRows[3]!.getAttribute("aria-checked")).toBe("true");
   expect(modelRows[0]!.getAttribute("aria-checked")).toBe("false");
   expect(modelRows[0]!.hasAttribute("disabled")).toBe(false);
   // The back row returns to the root panel; its accessible name is the wired
@@ -419,6 +433,54 @@ test("the model drill-down keeps model rows available for turn-boundary reconfig
   expect(backRow.getAttribute("aria-label")).toBe("Back — Model");
   await click(backRow);
   expect(host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]').length).toBe(6);
+  await act(async () => root.unmount());
+});
+
+test("Copilot runtime effort rows refresh from the selected account model catalogue", async () => {
+  copilotModelCatalogResponse = {
+    accountId: "copilot-fixture",
+    capturedAt: "2026-09-23T00:00:00.000Z",
+    source: "acp-config",
+    models: [
+      { id: "auto", name: "Auto", efforts: null, pickerEnabled: true },
+      { id: "catalogue-specific-runtime-fixture", name: "Fixture Model", efforts: ["low", "high"], pickerEnabled: true },
+    ],
+  };
+  const file = copilotFile("catalogue-specific-runtime-fixture", "xhigh");
+  const { host, root } = await renderPill(<RuntimePill file={file} surface="resume" />);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  await click(host.querySelector("[data-runtime-pill]")!);
+  const tiers = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')];
+  expect(tiers.map((row) => row.textContent)).toEqual(["Light", "High"]);
+  expect(tiers.find((row) => row.getAttribute("aria-checked") === "true")?.textContent).toBe("Light");
+  await act(async () => root.unmount());
+});
+
+test("choosing a Copilot catalogue model clamps the saved effort to that model's ladder", async () => {
+  copilotModelCatalogResponse = {
+    accountId: "copilot-fixture",
+    capturedAt: "2026-09-23T00:00:00.000Z",
+    source: "acp-config",
+    models: [
+      { id: "auto", name: "Auto", efforts: null, pickerEnabled: true },
+      { id: "catalogue-specific-runtime-fixture", name: "Fixture Model", efforts: ["low", "high"], pickerEnabled: true },
+    ],
+  };
+  const file = copilotFile("auto", "xhigh");
+  const { host, root } = await renderPill(<RuntimePill file={file} surface="resume" />);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await click(host.querySelector("[data-runtime-pill]")!);
+  const modelMenu = [...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')]
+    .find((row) => row.getAttribute("data-runtime-value") === "model")!;
+  await click(modelMenu);
+  const model = [...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')]
+    .find((row) => row.getAttribute("data-runtime-value") === "catalogue-specific-runtime-fixture")!;
+  await click(model);
+
+  expect(JSON.parse(localStorage.getItem(copilotResumeKey)!)).toEqual({
+    model: "catalogue-specific-runtime-fixture", effort: "low", fast: false,
+  });
   await act(async () => root.unmount());
 });
 
@@ -442,7 +504,7 @@ test("speed rows exist only for codex and remain available on the structured sur
   await click(claude.host.querySelector("[data-runtime-pill]")!);
   const values = [...claude.host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')]
     .map((row) => row.getAttribute("data-runtime-value"));
-  expect(values).toEqual(["model"]);
+  expect(values).toEqual(["model", "account"]);
   await act(async () => claude.root.unmount());
 });
 
@@ -495,12 +557,14 @@ test("at 390px the chip opens the «Next message» sheet, which stays open acros
   const chip = host.querySelector("[data-runtime-pill]")!;
   expect(chip.getAttribute("data-mobile2-open")).toBe("model");
   await click(chip);
-  const sheet = host.querySelector('[role="dialog"][data-runtime-sheet]')!;
+  /* Portalled to the body (#1795), like the popover beside it, so it is looked
+     for in the document rather than under the mount. */
+  const sheet = document.querySelector('[role="dialog"][data-runtime-sheet]')!;
   expect(sheet.getAttribute("aria-modal")).toBe("true");
   expect(sheet.getAttribute("aria-label")).toBe("Model and reasoning — applies to your next message");
   expect(sheet.getAttribute("data-mobile2-sheet")).toBe("model");
   /* It says what it applies to, and in the operator's own tier words (§7 Q5). */
-  expect(host.querySelector("[data-mobile2-next-message]")!.textContent)
+  expect(document.querySelector("[data-mobile2-next-message]")!.textContent)
     .toBe("Applies to your next message: 5.6-Sol · high");
   const sections = [...sheet.querySelectorAll('[role="radiogroup"]')];
   expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["Model", "Reasoning", "Speed"]);
@@ -513,7 +577,67 @@ test("at 390px the chip opens the «Next message» sheet, which stays open acros
   const ultra = rows.find((row) => row.textContent === "ultra")!;
   await click(ultra);
   expect(JSON.parse(localStorage.getItem(key + ":profile")!)).toEqual({ effort: "ultra" });
-  expect(host.querySelector("[data-runtime-sheet]")).not.toBeNull();
+  expect(document.querySelector("[data-runtime-sheet]")).not.toBeNull();
+  await act(async () => root.unmount());
+});
+
+/* #1795: the operator tapped `high` on a conversation already running `high`
+   and the Viewer tried to move it to a "new" reasoning tier. A patch equal to
+   the face is not a change: nothing is applied, nothing is sent, and the sheet
+   the tap was made in closes. */
+test("re-selecting the tier, the model or the speed the conversation already runs on sends nothing and closes the sheet", async () => {
+  mobile = true;
+  const { host, root } = await renderPill(
+    <RuntimePill file={codexFile} surface="live-root" runtimeSettings={CODEX_STRUCTURED} />,
+  );
+  const chip = host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
+  const openSheet = async () => {
+    await click(chip);
+    return document.querySelector("[data-runtime-sheet]")!;
+  };
+  const rowFor = (sheet: Element, label: string) =>
+    [...sheet.querySelectorAll("[data-runtime-sheet-row]")].find((row) => row.textContent === label)!;
+
+  const tier = rowFor(await openSheet(), "high");
+  expect(tier.getAttribute("aria-checked")).toBe("true");
+  await click(tier);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector("[data-runtime-sheet]")).toBeNull();
+
+  const model = rowFor(await openSheet(), "GPT-5.6-Sol");
+  expect(model.getAttribute("aria-checked")).toBe("true");
+  await click(model);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector("[data-runtime-sheet]")).toBeNull();
+
+  const speed = rowFor(await openSheet(), "Standard");
+  expect(speed.getAttribute("aria-checked")).toBe("true");
+  await click(speed);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector("[data-runtime-sheet]")).toBeNull();
+
+  /* The stored draft is untouched too — a no-op writes no profile. */
+  expect(localStorage.getItem(key)).toBeNull();
+
+  /* And a row that IS a change still goes out, so the guard is about equality
+     and nothing else. */
+  await click(rowFor(await openSheet(), "low"));
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({ action: "reconfigure", effort: "low" });
+  await act(async () => root.unmount());
+});
+
+test("on the desktop, re-selecting the checked tier closes the menu and sends nothing", async () => {
+  const { host, root } = await renderPill(
+    <RuntimePill file={codexFile} surface="live-root" runtimeSettings={CODEX_STRUCTURED} />,
+  );
+  const pill = host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
+  await click(pill);
+  const checked = [...document.querySelectorAll("[data-runtime-row=\"tier\"]")]
+    .find((row) => row.getAttribute("aria-checked") === "true")!;
+  await click(checked);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector("[data-runtime-popover]")).toBeNull();
   await act(async () => root.unmount());
 });
 

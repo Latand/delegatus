@@ -65,7 +65,12 @@ export function readHistory(): HistoryFile {
 function writeHistory(history: HistoryFile): void {
   try {
     fs.mkdirSync(path.dirname(historyFile()), { recursive: true });
-    fs.writeFileSync(historyFile(), JSON.stringify(history, null, 2) + "\n", "utf8");
+    // Written whole and renamed into place: the Viewer and the account-controller
+    // sidecar both record samples, and a torn read parses as an empty history
+    // that the reader would then write back over the whole week.
+    const temporary = `${historyFile()}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(history, null, 2) + "\n", "utf8");
+    fs.renameSync(temporary, historyFile());
   } catch (err) {
     console.warn("[limits] failed to persist history", err);
   }

@@ -28,6 +28,7 @@ import {
   resetFilesRouteCacheForTests,
   setFileScanRunnerForTests,
 } from "@/lib/scanner/scanCache";
+import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
 
 let scans = 0;
@@ -422,7 +423,7 @@ test("repeated files reads reuse the pure read snapshot and retain ETag behavior
   expect(first.headers.get("server-timing")).toMatch(/files-role-titles;dur=\d+(?:\.\d+)?/);
 });
 
-test("SQLite health exposes authoritative and mirror revisions without conditional-response churn", async () => {
+test("SQLite health exposes the authoritative revision and no mirror, without conditional-response churn", async () => {
   scannedFiles = [];
   const registry = new AgentRegistry(path.join(registryRoot, "sqlite-health.json"), undefined, undefined, {
     sqliteMode: "sqlite",
@@ -431,7 +432,7 @@ test("SQLite health exposes authoritative and mirror revisions without condition
 
   const first = await GET(new Request("http://127.0.0.1/api/files"));
   const body = await first.json() as {
-    systemHealth: { registry: { revision: number; mirrorRevision: number } };
+    systemHealth: { registry: { revision: number; mirrorRevision: number | null } };
   };
   const etag = first.headers.get("etag");
   const second = await GET(new Request("http://127.0.0.1/api/files", {
@@ -439,9 +440,51 @@ test("SQLite health exposes authoritative and mirror revisions without condition
   }));
 
   expect(body.systemHealth.registry.revision).toBe(registry.storageDiagnostics().revision!);
-  expect(body.systemHealth.registry.mirrorRevision).toBe(body.systemHealth.registry.revision);
+  /* SQLite is the only store: there is no JSON mirror to report (#1870). */
+  expect(body.systemHealth.registry.mirrorRevision).toBeNull();
   expect(second.status).toBe(304);
   expect(second.headers.get("x-llv-files-projection-cache")).toBe("hit");
+});
+
+test("a state database incident reaches systemHealth.storage on the next read (#1870)", async () => {
+  scannedFiles = [];
+  const first = await GET(new Request("http://127.0.0.1/api/files"));
+  const warm = await GET(new Request("http://127.0.0.1/api/files"));
+  expect((await first.json() as { systemHealth: Record<string, unknown> }).systemHealth).not.toHaveProperty("storage");
+  expect(warm.headers.get("x-llv-files-projection-cache")).toBe("hit");
+  const incident = {
+    kind: "database-restored",
+    database: "state.sqlite",
+    at: new Date().toISOString(),
+    message: "restored from the backup taken at 2026-09-19T10:00:00.000Z",
+    corruptFiles: ["state.sqlite.corrupt-2026-09-19T10-30-00-000Z"],
+    backup: "state-2026-09-19T10-00-00-000Z.sqlite",
+    backupAt: "2026-09-19T10:00:00.000Z",
+    backupAgeMs: 1_800_000,
+    detail: "SQLITE_CORRUPT",
+  };
+  fs.writeFileSync(path.join(stateDir, "storage-incidents.json"), JSON.stringify({ version: 1, incidents: [incident] }));
+
+  const refreshed = await GET(new Request("http://127.0.0.1/api/files"));
+
+  expect(refreshed.headers.get("x-llv-files-projection-cache")).toBe("miss");
+  expect((await refreshed.json() as { systemHealth: { storage?: unknown } }).systemHealth.storage).toEqual({ incidents: [incident] });
+});
+
+test("a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)", async () => {
+  scannedFiles = [];
+  recordManagerReport({ key: "warm-up", class: "status", at: new Date().toISOString(), body: "warm" });
+  await GET(new Request("http://127.0.0.1/api/files"));
+  const warm = await GET(new Request("http://127.0.0.1/api/files"));
+  expect(warm.headers.get("x-llv-files-projection-cache")).toBe("hit");
+  const revision = readStateCollectionRevision(path.join(stateDir, "state.sqlite"), "bridge_reports");
+  expect(revision).not.toBeNull();
+
+  recordManagerReport({ key: "filed-between-scans", class: "question", at: new Date().toISOString(), body: "which branch?" });
+
+  expect(readStateCollectionRevision(path.join(stateDir, "state.sqlite"), "bridge_reports")).toBe(revision! + 1);
+  const refreshed = await GET(new Request("http://127.0.0.1/api/files"));
+  expect(refreshed.headers.get("x-llv-files-projection-cache")).toBe("miss");
 });
 
 test("a cross-process SQLite pipeline commit invalidates a warm files projection", async () => {
@@ -550,6 +593,93 @@ test("a stable scope serves its prior conditional representation while projectio
   expect(second.headers.get("x-llv-files-generation")).toBe("1");
   expect(second.headers.get("x-llv-files-projection-cache")).toBe("stale");
 });
+
+/* #2072: a stale answer used to carry only the live scan's generation, so the
+   client could not tell it from a current one and painted the board as it stood
+   minutes earlier. Each projection now names what it was built from. */
+test("a stale projection answer carries the generation its own body was built from", async () => {
+  const store = globalThis as typeof globalThis & {
+    __llvFilesProjectionInflight?: Map<string, Promise<unknown>>;
+  };
+  const builtOf = (response: Response) => {
+    const match = /^([0-9a-z]+)\.(\d+)\.(\d+)$/.exec(response.headers.get("x-llv-files-built") ?? "");
+    return match ? { epoch: match[1], generation: Number(match[2]), sequence: Number(match[3]) } : null;
+  };
+  scannedFiles = [file("/sessions/generation-1.jsonl")];
+  const first = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  const firstBody = await first.text();
+  expect(first.headers.get("x-llv-files-generation")).toBe("1");
+  expect(builtOf(first)?.generation).toBe(1);
+
+  scannedFiles = [file("/sessions/generation-2.jsonl")];
+  await currentFileScan({ fresh: true });
+  const stale = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "if-none-match": '"a-representation-this-scope-never-served"' },
+  }));
+
+  expect(stale.status).toBe(200);
+  expect(stale.headers.get("x-llv-files-projection-cache")).toBe("stale");
+  expect(stale.headers.get("x-llv-files-generation")).toBe("2");
+  expect(await stale.text()).toBe(firstBody);
+  expect(builtOf(stale)).toEqual(builtOf(first));
+
+  await Promise.all([...(store.__llvFilesProjectionInflight?.values() ?? [])]);
+  const rebuilt = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  const rebuiltStamp = builtOf(rebuilt);
+  expect(rebuilt.headers.get("x-llv-files-projection-cache")).toBe("hit");
+  expect(await rebuilt.text()).toContain("generation-2.jsonl");
+  expect(rebuiltStamp?.epoch).toBe(builtOf(first)?.epoch);
+  expect(rebuiltStamp?.generation).toBe(2);
+  expect(rebuiltStamp!.sequence).toBeGreaterThan(builtOf(first)!.sequence);
+
+  /* A 304 names the representation it confirms, which is the client's own. */
+  const confirmed = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "if-none-match": rebuilt.headers.get("etag")! },
+  }));
+  expect(confirmed.status).toBe(304);
+  expect(builtOf(confirmed)).toEqual(rebuiltStamp);
+});
+
+/* #2072: the worker reads the persisted scan snapshot when its turn in the
+   projection queue comes. A newer scan can replace that file while the build
+   waits, and the rows it projects are then newer than the scan the request
+   carried: they are dated by the file the worker read. */
+test("a worker-built projection is dated by the scan snapshot the worker actually read", async () => {
+  const store = globalThis as typeof globalThis & {
+    __llvFilesProjectionInflight?: Map<string, Promise<unknown>>;
+    __llvFilesProjectionWorkerTail?: Promise<void>;
+  };
+  setFilesResponseWorkerRuntimeForTests({
+    launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") },
+    env: { ...process.env, NODE_ENV: "production", LLV_STATE_DIR: stateDir, LLV_AGENT_REGISTRY_SQLITE: "off", LLV_FILES_RESPONSE_WORKER: "1" },
+    timeoutMs: 30_000,
+  });
+  let release!: () => void;
+  try {
+    scannedFiles = [file("/sessions/generation-1.jsonl")];
+    await cachedFileScan();
+    /* The build waits its turn behind another projection. */
+    store.__llvFilesProjectionWorkerTail = new Promise<void>((resolve) => { release = resolve; });
+    const pending = GET(new Request("http://127.0.0.1/api/files?view=summary"));
+    for (let attempt = 0; attempt < 500 && !store.__llvFilesProjectionInflight?.size; attempt += 1) await Bun.sleep(2);
+    expect(store.__llvFilesProjectionInflight?.size).toBe(1);
+
+    scannedFiles = [file("/sessions/generation-2.jsonl")];
+    await currentFileScan({ fresh: true });
+    release();
+    const response = await pending;
+    const match = /^([0-9a-z]+)\.(\d+)\.(\d+)$/.exec(response.headers.get("x-llv-files-built") ?? "");
+
+    /* The request carried generation 1; the worker read generation 2's rows. */
+    expect(response.headers.get("x-llv-files-generation")).toBe("1");
+    expect(await response.text()).toContain("generation-2.jsonl");
+    expect(match?.[2]).toBe("2");
+  } finally {
+    release?.();
+    setFilesResponseWorkerRuntimeForTests(null);
+    shutdownFilesResponseWorker("test");
+  }
+}, 60_000);
 
 test("generation completion retries skip the stale projection while its refresh is running", async () => {
   scannedFiles = [file("/sessions/generation-1.jsonl")];
@@ -3470,4 +3600,170 @@ test("a project-scoped burst keeps its own representation without rebuilding the
   expect(builds).toBe(2);
   expect(unscopedAgain.headers.get("x-llv-files-projection-cache")).toBe("hit");
   expect(unscopedAgain.headers.get("etag")).toBe(unscoped.headers.get("etag"));
+});
+
+/* #1994: a changed revision of a board with megabytes of retained history
+   must not send that history again. */
+function retainedHistory(count: number, changed = -1): FileEntry[] {
+  return Array.from({ length: count }, (_, index) => ({
+    ...file(`/sessions/retained-${index}.jsonl`),
+    title: `retained conversation ${index} `.repeat(20),
+    mtime: index === changed ? 9_999 : index,
+  }));
+}
+
+test("#1994: a changed board revision reaches a delta-capable client as the changed rows only", async () => {
+  scannedFiles = retainedHistory(2_000);
+  const responses: Array<{ status: number; bytes: number; delta: boolean }> = [];
+  const cache = createFilesClientCache(async (input, init) => {
+    const response = await GET(new Request(`http://127.0.0.1${input}`, init));
+    const body = await response.clone().text();
+    responses.push({ status: response.status, bytes: body.length, delta: response.headers.has("x-llv-files-delta-base") });
+    return response;
+  });
+  const unsubscribe = cache.subscribe(() => {});
+  try {
+    await cache.revalidate();
+    const cold = responses.at(-1)!;
+    expect(cold).toMatchObject({ status: 200, delta: false });
+    expect(cold.bytes).toBeGreaterThan(1_000_000);
+
+    const before = cache.read().files;
+    scannedFiles = retainedHistory(2_000, 1_234);
+    await cache.revalidate(undefined, 2);
+    for (let attempt = 0; attempt < 200 && cache.read().files === before; attempt += 1) await Bun.sleep(10);
+    const warm = responses.findLast((response) => response.status === 200)!;
+    expect(warm).toMatchObject({ status: 200, delta: true });
+    expect(warm.bytes).toBeLessThan(cold.bytes * 0.01);
+
+    const after = cache.read().files;
+    expect(after.find((entry) => entry.path === "/sessions/retained-1234.jsonl")?.mtime).toBe(9_999);
+    // Unchanged rows keep their identity; only the changed row is new.
+    expect(after.filter((entry) => !before.includes(entry)).map((entry) => entry.path)).toEqual(["/sessions/retained-1234.jsonl"]);
+
+    // The delta-built representation is exactly what a cold client receives.
+    const fresh = createFilesClientCache((input, init) => GET(new Request(`http://127.0.0.1${input}`, init)));
+    const freshUnsubscribe = fresh.subscribe(() => {});
+    await fresh.revalidate();
+    expect(JSON.stringify(after)).toBe(JSON.stringify(fresh.read().files));
+    freshUnsubscribe();
+    fresh.dispose();
+
+    // Unchanged: bodyless.
+    await cache.revalidate();
+    expect(responses.at(-1)).toMatchObject({ status: 304, bytes: 0 });
+  } finally {
+    unsubscribe();
+    cache.dispose();
+  }
+});
+
+test("#1994: a client without delta support, or behind the retained chain, gets the full body", async () => {
+  scannedFiles = retainedHistory(200);
+  const first = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  const etag = first.headers.get("etag")!;
+  const full = await first.text();
+  scannedFiles = retainedHistory(200, 7);
+  await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-revision": "2" } }));
+  let delta = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "if-none-match": etag, "x-llv-files-delta": "1" },
+  }));
+  for (let attempt = 0; attempt < 200 && delta.status === 304; attempt += 1) {
+    await Bun.sleep(10);
+    delta = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+      headers: { "if-none-match": etag, "x-llv-files-delta": "1" },
+    }));
+  }
+  expect(delta.headers.get("x-llv-files-delta-base")).toBe(etag);
+  expect(delta.headers.get("cache-control")).toBe("no-store");
+
+  const legacy = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "if-none-match": etag } }));
+  expect(legacy.status).toBe(200);
+  expect(legacy.headers.has("x-llv-files-delta-base")).toBe(false);
+  expect((await legacy.text()).length).toBeGreaterThan(full.length * 0.9);
+
+  const unknownBase = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "if-none-match": "\"0000000000000000000000000000000000000000\"", "x-llv-files-delta": "1" },
+  }));
+  expect(unknownBase.status).toBe(200);
+  expect(unknownBase.headers.has("x-llv-files-delta-base")).toBe(false);
+});
+
+test("#1994: board bodies are gzip-encoded for a caller that accepts gzip", async () => {
+  scannedFiles = retainedHistory(500);
+  const plain = await (await GET(new Request("http://127.0.0.1/api/files?view=summary"))).text();
+  const response = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "accept-encoding": "gzip, deflate, br" } }));
+  expect(response.headers.get("content-encoding")).toBe("gzip");
+  const compressed = new Uint8Array(await response.arrayBuffer());
+  expect(compressed.length).toBeLessThan(plain.length / 5);
+  expect(Buffer.from(Bun.gunzipSync(compressed)).toString("utf8")).toBe(plain);
+});
+
+test("#1994: deltas are negotiated only within the exact summary scope that certified the base", async () => {
+  const pinnedPath = "/sessions/retained-3.jsonl";
+  scannedFiles = retainedHistory(200);
+  const global = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  const globalEtag = global.headers.get("etag")!;
+  expect(global.headers.get("vary")).toBe("accept-encoding, x-llv-files-delta");
+  const full = await GET(new Request("http://127.0.0.1/api/files"));
+  const fullEtag = full.headers.get("etag")!;
+  scannedFiles = retainedHistory(200, 9);
+  await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-revision": "2" } }));
+  let summary = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "if-none-match": globalEtag, "x-llv-files-delta": "1" } }));
+  for (let attempt = 0; attempt < 200 && summary.status === 304; attempt += 1) {
+    await Bun.sleep(10);
+    summary = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "if-none-match": globalEtag, "x-llv-files-delta": "1" } }));
+  }
+  expect(summary.headers.get("x-llv-files-delta-base")).toBe(globalEtag);
+
+  // The same base offered to another scope is a stranger there.
+  const pinned = await GET(new Request(`http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(pinnedPath)}`, {
+    headers: { "if-none-match": globalEtag, "x-llv-files-delta": "1" },
+  }));
+  expect(pinned.headers.has("x-llv-files-delta-base")).toBe(false);
+  // The unsummarised read never answers with a delta.
+  const unsummarised = await GET(new Request("http://127.0.0.1/api/files", { headers: { "if-none-match": fullEtag, "x-llv-files-delta": "1" } }));
+  expect(unsummarised.headers.has("x-llv-files-delta-base")).toBe(false);
+  // Without a certified base there is nothing to apply a delta to.
+  const unconditional = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-delta": "1" } }));
+  expect(unconditional.status).toBe(200);
+  expect(unconditional.headers.has("x-llv-files-delta-base")).toBe(false);
+  // The current ETag is still a bodyless 304, delta or not.
+  const current = unconditional.headers.get("etag")!;
+  const unchanged = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "if-none-match": current, "x-llv-files-delta": "1" } }));
+  expect(unchanged.status).toBe(304);
+  expect(await unchanged.text()).toBe("");
+});
+
+test("the board carries each record's resolved PR and issue links, and leaves out records with none (#2059)", async () => {
+  const lane = (id: string, remote: string, taskIds: string[]) => ({
+    id, task: id, project: "repo-fixture", state: "running", branch: `pipeline/${id}`, createdAt: "2026-09-21T00:00:00Z", taskIds, runs: [], stages: [],
+    delivery: { target: { repository: "repo-fixture", remote, branch: `refs/heads/pipeline/${id}` } },
+  });
+  fs.writeFileSync(path.join(stateDir, "forge-links.json"), JSON.stringify({ schemaVersion: 1, repositories: { "acme/widgets": {
+    canonical: "acme/widgets", completeSince: "2026-09-22T00:00:00Z", lastSweepAt: "2026-09-23T00:00:00Z", lastAttemptAt: null, lastError: null, issues: {},
+    prs: { 31: { url: "https://github.com/acme/widgets/pull/31", headRefName: "pipeline/with-pr", createdAt: "2026-09-22T00:00:00Z", state: "merged", closes: [30], checkedAt: "2026-09-23T00:00:00Z" } },
+  } } }));
+  pipelinesStore = () => [
+    lane("with-pr", "https://github.com/acme/widgets.git", ["task-a"]),
+    lane("no-pr", "https://github.com/acme/widgets.git", ["task-a"]),
+    lane("elsewhere", "/srv/git/local.git", []),
+  ];
+  pipelineVisibility = (pipelines) => pipelines;
+  boardTasksStore = () => [
+    { id: "task-a", project: "repo-fixture", text: "Chips", status: "assigned", placement: "unplaced", assignments: [], createdAt: "2026-09-21T00:00:00Z", updatedAt: "2026-09-21T00:00:00Z" },
+    { id: "task-b", project: "repo-fixture", text: "Chat", status: "inbox", placement: "unplaced", assignments: [], createdAt: "2026-09-21T00:00:00Z", updatedAt: "2026-09-21T00:00:00Z" },
+  ];
+  try {
+    const response = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+    const body = await response.json() as { workLinks: { pipelines: Record<string, { links: Array<{ number: number; state: string | null }>; noPr: boolean }>; tasks: Record<string, unknown> } };
+    expect(Object.keys(body.workLinks.pipelines).sort()).toEqual(["no-pr", "with-pr"]);
+    expect(body.workLinks.pipelines["with-pr"]!.links.map((link) => [link.number, link.state])).toEqual([[31, "merged"], [30, null]]);
+    expect(body.workLinks.pipelines["no-pr"]).toEqual({ links: [], noPr: true });
+    expect(Object.keys(body.workLinks.tasks)).toEqual(["task-a"]);
+  } finally {
+    pipelinesStore = () => [];
+    pipelineVisibility = () => [];
+    boardTasksStore = () => [];
+  }
 });

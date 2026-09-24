@@ -48,6 +48,11 @@ export type FilesResponseRepresentation = {
   contentType: string;
   etag: string;
   timing: string;
+  /** Serialised delta from the scope's previous representation (#1994). */
+  delta?: { base: string; body: string };
+  /** The scan the worker read from `snapshotFile`, when the file names one
+      (#2072). Absent for an inline snapshot, which the caller already knows. */
+  snapshotRead?: { epoch: string; generation: number };
 };
 
 export type FilesResponseWorkerRequest = {
@@ -56,6 +61,8 @@ export type FilesResponseWorkerRequest = {
   headers: Array<[string, string]>;
   snapshot?: FileCatalogScan;
   snapshotFile?: string;
+  /** Hash of the board scope; asks for a delta from its previous build. */
+  deltaScope?: string;
 };
 
 export interface FilesResponseWorkerRuntime {
@@ -83,8 +90,12 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type FilesResponseWorkerWireRepresentation = Omit<FilesResponseRepresentation, "body"> & {
+type FilesResponseWorkerWireRepresentation = Omit<FilesResponseRepresentation, "body" | "delta" | "snapshotRead"> & {
   bodyFile: string;
+  deltaFile?: string;
+  deltaBase?: string;
+  snapshotEpoch?: string;
+  snapshotGeneration?: string;
 };
 
 function representation(value: unknown): FilesResponseWorkerWireRepresentation | null {
@@ -92,7 +103,11 @@ function representation(value: unknown): FilesResponseWorkerWireRepresentation |
     || typeof value.bodyFile !== "string"
     || typeof value.contentType !== "string"
     || typeof value.etag !== "string"
-    || typeof value.timing !== "string") return null;
+    || typeof value.timing !== "string"
+    || (value.deltaFile !== undefined && typeof value.deltaFile !== "string")
+    || (value.deltaBase !== undefined && typeof value.deltaBase !== "string")
+    || (value.snapshotEpoch !== undefined && typeof value.snapshotEpoch !== "string")
+    || (value.snapshotGeneration !== undefined && typeof value.snapshotGeneration !== "string")) return null;
   return value as unknown as FilesResponseWorkerWireRepresentation;
 }
 
@@ -109,9 +124,17 @@ function workerLaunch(cwd = process.cwd()): { executable: string; workerPath: st
   return { executable: process.execPath, workerPath: source };
 }
 
+/* A test that drives the files route through a real worker names the worker
+   it launches; while one is named, the route projects through it. */
+let testRuntime: FilesResponseWorkerRuntime | null = null;
+export function setFilesResponseWorkerRuntimeForTests(runtime: FilesResponseWorkerRuntime | null): void {
+  testRuntime = runtime;
+}
+
 export function filesResponseWorkerEnabled(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {
+  if (testRuntime) return true;
   return env.NODE_ENV !== "test"
     && env.LLV_FILES_RESPONSE_WORKER !== "1"
     && env.LLV_FILES_RESPONSE_WORKER_DISABLED !== "1";
@@ -385,8 +408,8 @@ function askWorker(
   });
 }
 
-function readBody(worker: ResidentWorker, result: FilesResponseWorkerWireRepresentation): string {
-  const bodyFile = path.resolve(result.bodyFile);
+function readBody(worker: ResidentWorker, file: string): string {
+  const bodyFile = path.resolve(file);
   if (path.dirname(bodyFile) !== worker.resultDirectory) {
     throw new Error("files response worker returned an invalid body path");
   }
@@ -402,9 +425,15 @@ async function dispatch(
   const worker = residentWorker(runtime);
   try {
     const result = await askWorker(worker, request, runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS);
-    const body = readBody(worker, result);
+    const { bodyFile, deltaFile, deltaBase, snapshotEpoch, snapshotGeneration, ...metadata } = result;
+    const body = readBody(worker, bodyFile);
+    const delta = deltaFile && deltaBase ? { base: deltaBase, body: readBody(worker, deltaFile) } : undefined;
+    const generation = snapshotGeneration !== undefined && /^\d+$/.test(snapshotGeneration) ? Number(snapshotGeneration) : undefined;
+    const snapshotRead = snapshotEpoch && generation !== undefined && Number.isSafeInteger(generation)
+      ? { epoch: snapshotEpoch, generation }
+      : undefined;
     pool.__llvFilesResponseWorkerBuilds = (pool.__llvFilesResponseWorkerBuilds ?? 0) + 1;
-    return { ...result, body };
+    return { ...metadata, body, ...(delta ? { delta } : {}), ...(snapshotRead ? { snapshotRead } : {}) };
   } finally {
     if (!worker.retired) {
       if (worker.rssBytes > residentLimitBytes()) retire(worker, "size");
@@ -421,7 +450,7 @@ async function dispatch(
  */
 export function buildFilesResponseInWorker(
   request: FilesResponseWorkerRequest,
-  runtime: FilesResponseWorkerRuntime = {},
+  runtime: FilesResponseWorkerRuntime = testRuntime ?? {},
 ): Promise<FilesResponseRepresentation> {
   const previous = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(() => dispatch(request, runtime));

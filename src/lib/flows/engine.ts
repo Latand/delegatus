@@ -1,7 +1,10 @@
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
+import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, stepBackgroundWait } from "@/lib/pipelines/backgroundTasks";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { freshSpecFor, resumeSpecFor } from "@/lib/agent/cli";
 import { accountManager, resolveResumeAccountId } from "@/lib/accounts/manager";
@@ -42,6 +45,9 @@ import { relayPrompt, reviewerPrompt } from "./prompts";
 import { atomicWriteText, findingsPathFor, loadFlows, loadFlowsForTick, loadPresets, patchFlowRows, saveFlows } from "./store";
 import type { Flow, FlowPreset, FlowState, RelayDeliveryTransport, RoleConfig, Round } from "./types";
 import { chooseHeadlessReviewer, rateLimitStateDetail } from "./reviewerPolicy";
+
+// Temporary compatibility export while flow callers migrate to review history.
+export { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
 
 const TERMINAL_STATES = new Set<FlowState>(["approved", "done_comment", "needs_decision", "closed"]);
 const READY_RE = /^REVIEW_READY:\s*(.*)$/m;
@@ -295,6 +301,42 @@ function markNeedsDecision(flow: Flow, detail: string): void {
   flow.stateDetail = detail;
 }
 
+/**
+ * Bounds a review flow's wait on background work its implementer still holds
+ * (#1441) with the same two bounds the pipeline controller uses. While the
+ * work is out the flow shows what it waits for; at a bound it answers
+ * "parked" with the reason naming the work, and the caller parks the flow.
+ * Nothing is stopped either way. A turn the agent is actually running is left
+ * alone, so the whole-wait bound keeps counting across its re-invocations.
+ */
+function holdForBackgroundWork(
+  flow: Flow,
+  evidence: Awaited<ReturnType<typeof flowTurn>>,
+): { outcome: "none" | "waiting" } | { outcome: "parked"; reason: string } {
+  if (!evidence || evidence.backgroundTasks === undefined) return { outcome: "none" };
+  const now = isoNow();
+  if (evidence.backgroundTasks === null) {
+    return { outcome: flow.backgroundWait && now < flow.backgroundWait.until ? "waiting" : "none" };
+  }
+  if (evidence.backgroundTasks.length === 0) {
+    if (flow.backgroundWait) {
+      flow.backgroundWait = null;
+      if (flow.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) flow.stateDetail = null;
+    }
+    return { outcome: "none" };
+  }
+  const step = stepBackgroundWait(flow.backgroundWait, evidence.backgroundTasks, evidence.lastRecordAt ?? null, now,
+    "the flow reads the implementer's turn after it reports");
+  flow.backgroundWait = step.wait;
+  if (step.expired) {
+    /* An operator who resumes the parked flow grants the work a fresh bound. */
+    flow.backgroundWait = null;
+    return { outcome: "parked", reason: step.reason };
+  }
+  flow.stateDetail = step.detail;
+  return { outcome: "waiting" };
+}
+
 function markRoundError(round: Round, error: string): string {
   round.error = error;
   round.terminalAt = isoNow();
@@ -362,17 +404,6 @@ export interface RelayDeliveryOverrides {
   /** Reports the selected transport before either structured or legacy
       actuation can begin, allowing the caller to checkpoint it. */
   onTransportSelected?: (transport: RelayDeliveryTransport) => void;
-}
-
-/** The durable structured-delivery identity of a round's relay — the current
-    round's by default, or any settled round's when given, so provenance can
-    name the reservation each round's relay settled under (#1117). Exported so
-    a test can address the exact reservation the delivery journal settles. */
-export function relayClientMessageId(flow: Flow, round: Round | undefined = flow.rounds?.at(-1)): string {
-  const deliveryAttempt = round?.relayDeliveryAttempt ?? 0;
-  const identity = `${flow.id}:${round?.n ?? "legacy"}:${round?.reviewerBindingId ?? "legacy"}`
-    + (deliveryAttempt > 0 ? `:retry:${deliveryAttempt}` : "");
-  return `flow_relay_${crypto.createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
 }
 
 export async function sendToImplementer(
@@ -1060,6 +1091,11 @@ export async function tickFlow(
       refuse("accepted agent decision lost its owner, generation, stage attempt or turn fence");
       return true;
     }
+    const held = holdForBackgroundWork(flow, evidence);
+    if (held.outcome === "parked") {
+      refuse(held.reason);
+      return true;
+    }
     if (!evidence || evidence.state !== "terminal") return JSON.stringify(flow) !== before;
     if (!evidence.successful) {
       refuse("agent decision turn ended without successful completion");
@@ -1106,6 +1142,12 @@ export async function tickFlow(
 
   if (flow.state === "waiting_ready" || flow.state === "fixing") {
     const evidence = await flowTurn(flow);
+    const held = holdForBackgroundWork(flow, evidence);
+    if (held.outcome === "parked") {
+      flow.decisionRequired = true;
+      markNeedsDecision(flow, held.reason);
+      return true;
+    }
     const note = detectReadyMarker(flow, evidence);
     if (note !== null) {
       if (flow.roundLimit > 0 && flow.rounds.length >= flow.roundLimit) {
@@ -1182,7 +1224,10 @@ export async function tickFlow(
       const prepared = prepareReviewerLaunch(flow, round);
       captureReviewHead(flow, round);
       round.spawnStartedAt = isoNow();
-      const reservation = reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId);
+      const reservation = await withAccountMutationLockAsync(
+        () => reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId),
+        { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
+      );
       round.launchLeaseUntil = new Date(Date.now() + REVIEWER_LAUNCH_LEASE_MS).toISOString();
       persistCheckpoint();
       /* launchReviewer persists again after spawning (for the ownership/orphan

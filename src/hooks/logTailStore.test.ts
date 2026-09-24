@@ -1,0 +1,595 @@
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { Window } from "happy-dom";
+
+const dom = new Window({ url: "http://localhost/" });
+const G = globalThis as Record<string, unknown>;
+const OVERRIDES: Record<string, unknown> = { window: dom, document: dom.document };
+const HAS: Record<string, boolean> = {};
+const SAVED: Record<string, unknown> = {};
+
+beforeAll(() => {
+  for (const key of Object.keys(OVERRIDES)) {
+    HAS[key] = key in G;
+    SAVED[key] = G[key];
+    G[key] = OVERRIDES[key];
+  }
+});
+afterAll(() => {
+  for (const key of Object.keys(OVERRIDES)) {
+    if (HAS[key]) G[key] = SAVED[key];
+    else delete G[key];
+  }
+});
+
+const store = await import("./logTailStore");
+const {
+  flushTailSnapshots,
+  forgetTailSnapshot,
+  persistableLine,
+  persistableSnapshot,
+  persistTailSnapshot,
+  persistedTailPathsForTests,
+  resetTailStoreForTests,
+  restoreTailSnapshot,
+  resumableSnapshot,
+  tailStoreMemoryForTests,
+  TAIL_STORE_BOUNDS_FOR_TESTS: BOUNDS,
+} = store;
+type TailSnapshot = import("./logTailStore").TailSnapshot;
+
+beforeEach(() => resetTailStoreForTests());
+afterEach(() => resetTailStoreForTests());
+
+const encoder = new TextEncoder();
+const bytesOf = (lines: string[]) => lines.reduce((total, line) => total + encoder.encode(line).length + 1, 0);
+
+/** A window whose transport state is self-consistent: the lines end exactly
+    at `offset`, which is what a real forward read always leaves behind. */
+function snapshot(lines: string[], overrides: Partial<TailSnapshot> = {}): TailSnapshot {
+  const historyStart = overrides.historyStart ?? 0;
+  const bytes = bytesOf(lines);
+  return {
+    win: { lines, start: 0 },
+    size: historyStart + bytes,
+    offset: historyStart + bytes,
+    historyStart,
+    partial: "",
+    first: false,
+    hasMore: false,
+    tickTime: null,
+    ...overrides,
+  };
+}
+
+/** What the store rewinds a restored read by: the WHOLE window, up to the
+    per-path bounds, which the next forward chunks have to replay. */
+function anchorBytesOf(lines: string[]): number {
+  let bytes = 0;
+  let kept = 0;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const cost = encoder.encode(lines[index]!).length + 1;
+    if (kept > 0 && (bytes + cost > BOUNDS.MAX_BYTES_PER_PATH || kept + 1 > BOUNDS.MAX_LINES_PER_PATH)) break;
+    bytes += cost;
+    kept += 1;
+  }
+  return bytes;
+}
+
+const record = (index: number, text: string) => JSON.stringify({ type: "assistant", uuid: `r-${index}`, message: { role: "assistant", content: [{ type: "text", text }] } });
+
+/* Credential- and attachment-SHAPED values, all assembled at runtime from
+   parts: what these cases need is the SHAPE the filter has to recognise, and a
+   key-with-a-value literal in a published file is itself a privacy violation.
+   `SENTINEL` is what must never appear anywhere in the store afterwards. */
+const credentialShaped = (key: string) => `${key}${"="} ${"z".repeat(24)}`;
+const SENTINEL = ["sentinel", "value", "z".repeat(28)].join("-");
+const PAYLOAD = "QUFB".repeat(64);
+const keyNamed = (...parts: string[]) => parts.join("_");
+
+/** Every byte the store holds, values and index alike. */
+function storedText(): string {
+  const all: string[] = [];
+  for (let index = 0; index < dom.localStorage.length; index += 1) {
+    const key = dom.localStorage.key(index)!;
+    all.push(key, dom.localStorage.getItem(key) ?? "");
+  }
+  return all.join("\n");
+}
+
+/* `persistTailSnapshot` never writes in the caller's call stack — see the
+   paint-path test below — so a test that wants a stored tail flushes. */
+function write(path: string, snap: TailSnapshot): void {
+  persistTailSnapshot(path, snap);
+  flushTailSnapshots();
+}
+
+test("a persisted tail comes back with the transport position it ended at, so the next read appends", () => {
+  const lines = [record(0, "one"), record(1, "two")];
+  const snap = snapshot(lines, { historyStart: 40, hasMore: true, size: 900, offset: 860 });
+  write("/sessions/a.jsonl", snap);
+
+  const restored = restoreTailSnapshot("/sessions/a.jsonl", 900);
+  expect(restored?.win.lines).toEqual(lines);
+  expect(restored?.win.start).toBe(0);
+  /* The read resumes at the window's first byte, and the anchor is every byte
+     of the window: the next chunks replay them or the window is not this
+     file's tail. */
+  expect(restored?.resumeAnchor).toBe(lines.join("\n") + "\n");
+  expect(restored?.offset).toBe(860 - anchorBytesOf(lines));
+  expect(restored?.historyStart).toBe(40);
+  expect(restored?.hasMore).toBe(true);
+  /* Never a first read: a first read replaces the window instead of appending. */
+  expect(restored?.first).toBe(false);
+  /* No half record is ever restored. */
+  expect(restored?.partial).toBe("");
+});
+
+test("the decoder's partial line is dropped and the offset rewound to that record's first byte", () => {
+  const lines = [record(0, "one")];
+  const partial = '{"type":"assistant","uuid":"r-1"';
+  const snap = snapshot(lines, { partial, offset: bytesOf(lines) + encoder.encode(partial).length });
+  write("/sessions/partial.jsonl", snap);
+
+  const restored = restoreTailSnapshot("/sessions/partial.jsonl", 10_000);
+  expect(restored?.partial).toBe("");
+  expect((restored?.offset ?? 0) + anchorBytesOf(lines)).toBe(bytesOf(lines));
+});
+
+test("the stored slice is a contiguous suffix: history start and window start move with it", () => {
+  const long = record(0, "x".repeat(BOUNDS.MAX_LINE_BYTES + 200));
+  const keep = [record(1, "after"), record(2, "the attachment")];
+  const snap = snapshot([long, ...keep], { win: { lines: [long, ...keep], start: 100 }, historyStart: 1_000 });
+  const stored = persistableSnapshot(snap);
+  expect(stored?.lines).toEqual(keep);
+  expect(stored?.start).toBe(101);
+  expect(stored?.historyStart).toBe(1_000 + bytesOf([long]));
+  /* Bytes were cut off the front, so there IS older history to page back to. */
+  expect(stored?.hasMore).toBe(true);
+});
+
+test("a line carrying a credential value or an attachment's bytes is never written", () => {
+  expect(persistableLine(record(0, "ordinary prose about a token budget"))).toBe(true);
+  expect(persistableLine(JSON.stringify({ message: { content: `export ${credentialShaped("API_KEY")}` } }))).toBe(false);
+  expect(persistableLine(JSON.stringify({ message: { content: [{ type: "image", source: { data: "AAAA" } }] } }))).toBe(false);
+  expect(persistableLine(JSON.stringify({ message: { content: "data:image/png;base64,AAAA" } }))).toBe(false);
+  expect(persistableLine(record(0, "y".repeat(BOUNDS.MAX_LINE_BYTES + 1)))).toBe(false);
+
+  const guarded = JSON.stringify({ message: { content: credentialShaped("access_token") } });
+  write("/sessions/guarded.jsonl", snapshot([guarded, record(1, "and then prose")]));
+  const restored = restoreTailSnapshot("/sessions/guarded.jsonl", 10_000);
+  expect(restored?.win.lines).toEqual([record(1, "and then prose")]);
+});
+
+test("nothing is written when the whole window is unwritable", () => {
+  const guarded = JSON.stringify({ message: { content: credentialShaped("password") } });
+  expect(persistableSnapshot(snapshot([guarded]))).toBeNull();
+  write("/sessions/only-guarded.jsonl", snapshot([guarded]));
+  expect(persistedTailPathsForTests()).toEqual([]);
+  expect(restoreTailSnapshot("/sessions/only-guarded.jsonl", 10_000)).toBeNull();
+});
+
+test("a snapshot is bounded in lines and in bytes", () => {
+  const many = Array.from({ length: BOUNDS.MAX_LINES_PER_PATH + 50 }, (_, index) => record(index, `line ${index}`));
+  const stored = persistableSnapshot(snapshot(many));
+  expect(stored!.lines.length).toBeLessThanOrEqual(BOUNDS.MAX_LINES_PER_PATH);
+  expect(stored!.bytes).toBeLessThanOrEqual(BOUNDS.MAX_BYTES_PER_PATH);
+  /* The suffix is kept: the newest record is the one on screen. */
+  expect(stored!.lines.at(-1)).toBe(many.at(-1));
+
+  const fat = Array.from({ length: 200 }, (_, index) => record(index, `paragraph ${index} `.repeat(120)));
+  const fatStored = persistableSnapshot(snapshot(fat));
+  expect(fatStored!.bytes).toBeLessThanOrEqual(BOUNDS.MAX_BYTES_PER_PATH);
+  expect(fatStored!.lines.length).toBeLessThan(200);
+});
+
+test("the store keeps the most recent conversations only, least recently written evicted first", () => {
+  for (let index = 0; index < BOUNDS.MAX_PATHS + 3; index += 1) {
+    write(`/sessions/p${index}.jsonl`, snapshot([record(index, `conversation ${index}`)]));
+  }
+  const paths = persistedTailPathsForTests();
+  expect(paths.length).toBe(BOUNDS.MAX_PATHS);
+  expect(paths).toContain(`/sessions/p${BOUNDS.MAX_PATHS + 2}.jsonl`);
+  expect(paths).not.toContain("/sessions/p0.jsonl");
+  expect(restoreTailSnapshot("/sessions/p0.jsonl", 10_000)).toBeNull();
+});
+
+test("a transcript that shrank, was emptied, or grew past the live tail window is not restored", () => {
+  const lines = [record(0, "one")];
+  write("/sessions/rotated.jsonl", snapshot(lines, { size: 5_000, offset: 5_000 }));
+  /* Rotated or rewritten: what is stored is not this file's suffix. */
+  expect(restoreTailSnapshot("/sessions/rotated.jsonl", 900)).toBeNull();
+
+  /* Truncated to nothing. A zero the catalog reports is a size like any
+     other, and the shortest possible proof that the tail is gone. */
+  write("/sessions/emptied.jsonl", snapshot(lines, { size: 5_000, offset: 5_000 }));
+  expect(restoreTailSnapshot("/sessions/emptied.jsonl", 0)).toBeNull();
+
+  /* A forward read that far behind is bounded to the live window and would
+     skip whole records, leaving a hole between the restored rows and the new
+     ones; so it loads fresh instead. The distance is measured from where the
+     read RESUMES, at the window's first byte, because that is the
+     offset the server is asked for. */
+  const resumeFrom = 5_000 - anchorBytesOf(lines);
+  write("/sessions/grown.jsonl", snapshot(lines, { size: 5_000, offset: 5_000 }));
+  expect(restoreTailSnapshot("/sessions/grown.jsonl", resumeFrom + BOUNDS.MAX_BEHIND_BYTES + 1)).toBeNull();
+  write("/sessions/grown.jsonl", snapshot(lines, { size: 5_000, offset: 5_000 }));
+  expect(restoreTailSnapshot("/sessions/grown.jsonl", resumeFrom + BOUNDS.MAX_BEHIND_BYTES)?.win.lines).toEqual(lines);
+});
+
+test("a snapshot older than a week is dropped on read", () => {
+  const lines = [record(0, "one")];
+  write("/sessions/old.jsonl", snapshot(lines));
+  const key = "llvTail:v1:/sessions/old.jsonl";
+  const raw = JSON.parse(dom.localStorage.getItem(key)!) as { savedAt: number };
+  raw.savedAt = Date.now() - BOUNDS.MAX_AGE_MS - 1;
+  dom.localStorage.setItem(key, JSON.stringify(raw));
+  expect(restoreTailSnapshot("/sessions/old.jsonl", 10_000)).toBeNull();
+  expect(dom.localStorage.getItem(key)).toBeNull();
+});
+
+test("forgetting a conversation removes its snapshot and its index row", () => {
+  write("/sessions/forget.jsonl", snapshot([record(0, "one")]));
+  expect(persistedTailPathsForTests()).toEqual(["/sessions/forget.jsonl"]);
+  forgetTailSnapshot("/sessions/forget.jsonl");
+  expect(persistedTailPathsForTests()).toEqual([]);
+  expect(restoreTailSnapshot("/sessions/forget.jsonl", 10_000)).toBeNull();
+});
+
+test("a garbled entry is dropped rather than painted", () => {
+  dom.localStorage.setItem("llvTail:v1:/sessions/garbled.jsonl", "{not json");
+  expect(restoreTailSnapshot("/sessions/garbled.jsonl", 10_000)).toBeNull();
+  dom.localStorage.setItem("llvTail:v1:/sessions/wrongversion.jsonl", JSON.stringify({ v: 9, lines: ["x"] }));
+  expect(restoreTailSnapshot("/sessions/wrongversion.jsonl", 10_000)).toBeNull();
+});
+
+test("recording a tail writes nothing in the caller's call stack", () => {
+  /* The caller is the chunk handler of a pane the reader is waiting on. Every
+     byte of the writing — inspecting the window, serialising it, handing a
+     synchronous store ninety kilobytes — happens in idle time or at page hide,
+     never between the bytes arriving and the frame that shows them. */
+  const lines = Array.from({ length: 300 }, (_, index) => record(index, `line ${index} ${"prose ".repeat(20)}`));
+  persistTailSnapshot("/sessions/paint-path.jsonl", snapshot(lines));
+  expect(persistedTailPathsForTests()).toEqual([]);
+  expect(restoreTailSnapshot("/sessions/paint-path.jsonl", 10_000_000)).toBeNull();
+  /* It is queued, and bounded, and the flush is what commits it. */
+  expect(tailStoreMemoryForTests().pending).toBe(1);
+  flushTailSnapshots();
+  expect(persistedTailPathsForTests()).toEqual(["/sessions/paint-path.jsonl"]);
+});
+
+test("pagehide writes what is waiting — the last moment a page going away gets", () => {
+  const first = snapshot([record(0, "one")]);
+  const second = snapshot([record(0, "one"), record(1, "two")]);
+  persistTailSnapshot("/sessions/hidden.jsonl", first);
+  persistTailSnapshot("/sessions/hidden.jsonl", second);
+  expect(restoreTailSnapshot("/sessions/hidden.jsonl", 10_000)).toBeNull();
+
+  dom.dispatchEvent(new dom.Event("pagehide"));
+  expect(restoreTailSnapshot("/sessions/hidden.jsonl", 10_000)?.win.lines.length).toBe(2);
+});
+
+test("the hidden transition writes too — the last moment a phone tab gets", () => {
+  persistTailSnapshot("/sessions/frozen.jsonl", snapshot([record(0, "one"), record(1, "two")]));
+  expect(restoreTailSnapshot("/sessions/frozen.jsonl", 10_000)).toBeNull();
+
+  /* A document that is merely re-rendered must not spend the queue. */
+  dom.document.dispatchEvent(new dom.Event("visibilitychange"));
+  expect(restoreTailSnapshot("/sessions/frozen.jsonl", 10_000)).toBeNull();
+
+  const descriptor = Object.getOwnPropertyDescriptor(dom.document, "visibilityState");
+  Object.defineProperty(dom.document, "visibilityState", { value: "hidden", configurable: true });
+  try {
+    dom.document.dispatchEvent(new dom.Event("visibilitychange"));
+    expect(restoreTailSnapshot("/sessions/frozen.jsonl", 10_000)?.win.lines.length).toBe(2);
+  } finally {
+    if (descriptor) Object.defineProperty(dom.document, "visibilityState", descriptor);
+    else delete (dom.document as unknown as Record<string, unknown>).visibilityState;
+  }
+});
+
+test("a bounded flush keeps the conversations last looked at, and the newest of them survives eviction", () => {
+  /* More panes than the store keeps, each recorded twice, and then the page
+     goes away: the flush spends its budget on the ones last looked at. */
+  const paths = Array.from({ length: BOUNDS.MAX_PATHS + 4 }, (_, index) => `/sessions/burst${index}.jsonl`);
+  for (const [index, path] of paths.entries()) persistTailSnapshot(path, snapshot([record(index, `first ${index}`)]));
+  for (const [index, path] of paths.entries()) persistTailSnapshot(path, snapshot([record(index, `pending ${index}`)]));
+
+  const newest = paths.at(-1)!;
+  const newestIndex = paths.length - 1;
+  expect(tailStoreMemoryForTests().pending).toBeLessThanOrEqual(BOUNDS.MAX_PENDING_PATHS);
+
+  flushTailSnapshots();
+  const stored = persistedTailPathsForTests();
+  expect(stored.length).toBeLessThanOrEqual(BOUNDS.MAX_PATHS);
+  /* The conversation last looked at carries its newest tail, and the older
+     panes in the same burst did not evict it. */
+  expect(restoreTailSnapshot(newest, 10_000)?.win.lines).toEqual([record(newestIndex, `pending ${newestIndex}`)]);
+  expect(stored).not.toContain(paths[0]!);
+});
+
+test("a credential value is refused however it is written, and never reaches the store", () => {
+  /* The keys a transcript writes are QUOTED, which is what a text redactor
+     alone cannot see; and one record routinely carries another JSON document
+     as an escaped string, which puts the same field one level further down. */
+  const quoted = JSON.stringify({ type: "user", [keyNamed("api", "key")]: SENTINEL });
+  const escaped = JSON.stringify({ type: "user", message: { content: JSON.stringify({ [["pass", "word"].join("")]: SENTINEL }) } });
+  const nested = JSON.stringify({ type: "user", tool: { input: { headers: { [keyNamed("access", "token")]: SENTINEL } } } });
+  const bearer = record(0, `and then it answered with ${"Bear" + "er"} ${SENTINEL}`);
+  const inline = JSON.stringify({ message: { content: `export ${credentialShaped(keyNamed("API", "KEY"))}` } });
+  for (const line of [quoted, escaped, nested, bearer, inline]) expect(persistableLine(line)).toBe(false);
+
+  /* A record that only COUNTS tokens is ordinary prose about a number, and
+     the cache would be useless if it refused those. */
+  expect(persistableLine(JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 512, cache_read_input_tokens: 20_480 } } }))).toBe(true);
+
+  write("/sessions/credentials.jsonl", snapshot([quoted, escaped, nested, bearer, inline, record(9, "and then ordinary prose")]));
+  expect(restoreTailSnapshot("/sessions/credentials.jsonl", 10_000)?.win.lines).toEqual([record(9, "and then ordinary prose")]);
+  expect(storedText()).not.toContain(SENTINEL);
+});
+
+test("an attachment's bytes are refused in every shape a transcript writes them", () => {
+  const document_ = JSON.stringify({ type: "user", message: { content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: PAYLOAD } }] } });
+  const image = JSON.stringify({ type: "user", message: { content: [{ type: "image", source: { type: "base64", data: PAYLOAD } }] } });
+  const audio = JSON.stringify({ type: "user", message: { content: [{ type: "input_audio", input_audio: { format: "wav", data: PAYLOAD } }] } });
+  const uri = JSON.stringify({ type: "user", message: { content: `see ${"data:image/png;base64,"}${PAYLOAD}` } });
+  const loose = JSON.stringify({ type: "tool_result", output: { [keyNamed("b64", "json")]: PAYLOAD } });
+  for (const line of [document_, image, audio, uri, loose]) expect(persistableLine(line)).toBe(false);
+
+  /* A short `data` field is a field, not a payload. */
+  expect(persistableLine(JSON.stringify({ type: "custom", data: "ok" }))).toBe(true);
+
+  write("/sessions/attachments.jsonl", snapshot([document_, image, audio, uri, loose, record(9, "and then ordinary prose")]));
+  expect(restoreTailSnapshot("/sessions/attachments.jsonl", 10_000)?.win.lines).toEqual([record(9, "and then ordinary prose")]);
+  expect(storedText()).not.toContain(PAYLOAD);
+});
+
+test("a thinking block's signature is kept, so a real transcript still has a tail to cache", () => {
+  /* The record most of a Claude transcript is made of: a thinking block, and
+     the opaque attestation over it that every one of them carries. Judged as
+     raw text that attestation reads as encoded bytes, and refusing it refused
+     nearly every assistant record — the store then held a handful of lines
+     where its budget is four hundred, which is not a first paint. */
+  const signed = (index: number) => JSON.stringify({
+    type: "assistant",
+    uuid: `t-${index}`,
+    message: { role: "assistant", content: [{ type: "thinking", thinking: `weighing option ${index}`, signature: "Er".repeat(600) }, { type: "text", text: `answer ${index}` }] },
+  });
+  expect(persistableLine(signed(0))).toBe(true);
+
+  const window_ = Array.from({ length: 40 }, (_, index) => signed(index));
+  write("/sessions/thinking.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/thinking.jsonl", bytesOf(window_))?.win.lines.length).toBe(40);
+
+  /* The exemption is the KEY, and it is only the encoded-run test that it
+     lifts: the same bytes under any other key are still a payload, a key that
+     is itself a payload is refused, and a signature below a credential key
+     stays refused because its ancestor marked it. */
+  expect(persistableLine(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", note: "Er".repeat(600) }] } }))).toBe(false);
+  expect(persistableLine(JSON.stringify({ type: "assistant", ["Er".repeat(600)]: 1 }))).toBe(false);
+  expect(persistableLine(JSON.stringify({ type: "assistant", [keyNamed("access", "token")]: { signature: SENTINEL } }))).toBe(false);
+});
+
+test("a NUMBER under a credential key, and attachment bytes written as numbers, never reach the store", () => {
+  /* A value's key says what it is before its type does: a password that
+     happens to be digits is still a password, a secret below an
+     authorization header is still a secret, and an attachment's bytes
+     written out as an array of numbers are still the attachment. */
+  const NUMERIC = 739182465021;
+  const BYTE_RUN = [217, 183, 251, 199, 142, 233, 177, 205];
+  const digitsLine = JSON.stringify({ type: "user", [["pass", "word"].join("")]: NUMERIC });
+  const headerLine = JSON.stringify({ type: "user", request: { headers: { [["author", "ization"].join("")]: { [["sec", "ret"].join("")]: NUMERIC } } } });
+  const attachmentBytes = JSON.stringify({ type: "user", message: { attachment: { name: "scan.bin", bytes: BYTE_RUN } } });
+  for (const line of [digitsLine, headerLine, attachmentBytes]) expect(persistableLine(line)).toBe(false);
+
+  /* What a record legitimately counts stays: both engines' usage counters,
+     whose keys happen to spell "token", and a size written under `bytes`.
+     Every one of these shapes is in real transcripts' tails. */
+  const claudeUsage = JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 512, output_tokens: 64, cache_read_input_tokens: 20_480, cache_creation: { ephemeral_5m_input_tokens: 0 } } } });
+  const codexUsage = JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 9, cached_input_tokens: 4, output_tokens: 2, reasoning_output_tokens: 1, total_tokens: 11 }, last_token_usage: { input_tokens: 9, output_tokens: 2, total_tokens: 11 }, model_context_window: 272_000 } } });
+  const counters = JSON.stringify({ type: "response_item", payload: { time_to_first_token_ms: 812, output: [{ text: JSON.stringify({ original_token_count: 4096, goal: { tokensUsed: 12 }, remainingTokens: { total: 3 }, scanned: { bytes: 20_480 } }) }] }, metadata: { fallback_token_limit_override: 128_000 } });
+  for (const line of [claudeUsage, codexUsage, counters]) expect(persistableLine(line)).toBe(true);
+
+  /* Storage-wide: write, flush, restore, then scan every byte the store holds. */
+  const window_ = [digitsLine, headerLine, attachmentBytes, claudeUsage, codexUsage, counters, record(9, "and then ordinary prose")];
+  write("/sessions/numeric.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/numeric.jsonl", bytesOf(window_))?.win.lines).toEqual([claudeUsage, codexUsage, counters, record(9, "and then ordinary prose")]);
+  const stored = storedText();
+  expect(stored).not.toContain(String(NUMERIC));
+  expect(stored).not.toContain(BYTE_RUN.join(","));
+});
+
+test("a numeric credential inside fenced, prefixed or trailing JSON output never reaches the store", () => {
+  /* A tool result is text, and the JSON a command printed sits in it behind a
+     code fence, after a line of prose, or before the command's own trailing
+     output — so it never starts with a brace and is never decoded. The key is
+     still quoted, the value is digits, and no text redactor matched it. */
+  const NUMERIC = 604417293858;
+  const PASSWORD = ["pass", "word"].join("");
+  const SECRET = ["sec", "ret"].join("");
+  const printed = JSON.stringify({ user: "svc", [PASSWORD]: NUMERIC }, null, 2);
+  const toolResult = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content }] } });
+  const fenced = toolResult("```json\n" + printed + "\n```");
+  const prefixed = toolResult("Here is the config it read:\n" + printed);
+  const trailing = toolResult(printed + "\n\nexit code 0");
+  const pythonRepr = toolResult(`{'user': 'svc', '${SECRET}': ${NUMERIC}}`);
+  const nestedObject = toolResult("result:\n" + JSON.stringify({ auth: { [keyNamed("client", SECRET)]: { value: NUMERIC } } }));
+  for (const line of [fenced, prefixed, trailing, pythonRepr, nestedObject]) expect(persistableLine(line)).toBe(false);
+
+  /* The same forms around counters and absent fields stay: usage printed in a
+     fence is not a credential, and neither is a credential key holding null or a flag. */
+  const fencedCounters = toolResult("```json\n" + JSON.stringify({ input_tokens: 512, total_tokens: 600, max_output_tokens: 4096 }, null, 2) + "\n```");
+  const emptyFields = toolResult("config:\n" + JSON.stringify({ [PASSWORD]: null, [SECRET]: {}, [keyNamed("api", "key")]: false }));
+  for (const line of [fencedCounters, emptyFields]) expect(persistableLine(line)).toBe(true);
+
+  const window_ = [fenced, prefixed, trailing, pythonRepr, nestedObject, fencedCounters, emptyFields, record(9, "and then ordinary prose")];
+  write("/sessions/printed.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/printed.jsonl", bytesOf(window_))?.win.lines).toEqual([fencedCounters, emptyFields, record(9, "and then ordinary prose")]);
+  expect(storedText()).not.toContain(String(NUMERIC));
+});
+
+test("attachment bytes inside fenced, prefixed, trailing, nested or escaped JSON output never reach the store", () => {
+  /* The printed-JSON forms again, now around an attachment: a string that is
+     not a document by itself is never decoded, so the key that names the bytes
+     has to be read in the text. The sentinel is a PNG signature. */
+  const BYTE_RUN = [137, 80, 78, 71, 13, 10, 26, 10];
+  const printed = JSON.stringify({ attachment: { bytes: BYTE_RUN } });
+  const toolResult = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content }] } });
+  const fenced = toolResult("```json\n" + printed + "\n```");
+  const prefixed = toolResult("tool output: " + printed);
+  const trailing = toolResult(printed + "\nfinished");
+  const pretty = toolResult("```\n" + JSON.stringify({ attachment: { bytes: BYTE_RUN } }, null, 2) + "\n```");
+  const nested = toolResult("result: " + JSON.stringify({ message: { content: [{ file: { data: { b64: BYTE_RUN } } }] } }));
+  /* One more level of escaping: the printed JSON is itself a string in the JSON a tool relayed. */
+  const escaped = toolResult("relay: " + JSON.stringify({ body: printed }));
+  const pythonBytes = toolResult(`{'name': 'scan.png', 'bytes': b'\\x89PNG\\r\\n'}`);
+  const blocked = [fenced, prefixed, trailing, pretty, nested, escaped, pythonBytes];
+  for (const line of blocked) expect(persistableLine(line)).toBe(false);
+
+  /* A size under `bytes` is a counter, and an absent or empty attachment carries nothing. */
+  const sizes = toolResult("```json\n" + JSON.stringify({ scanned: { bytes: 20_480 }, input_tokens: 512, total_tokens: 600 }, null, 2) + "\n```");
+  const empty = toolResult("upload: " + JSON.stringify({ attachment: { bytes: [], b64: null, image_data: "" } }) + "\ndone");
+  for (const line of [sizes, empty]) expect(persistableLine(line)).toBe(true);
+
+  const window_ = [...blocked, sizes, empty, record(9, "and then ordinary prose")];
+  write("/sessions/printed-attachment.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/printed-attachment.jsonl", bytesOf(window_))?.win.lines).toEqual([sizes, empty, record(9, "and then ordinary prose")]);
+  const stored = storedText();
+  expect(stored).not.toContain(BYTE_RUN.join(","));
+  expect(stored).not.toContain("x89PNG");
+  /* Each wrapper alone, round-tripped: a tail ending on it keeps nothing. */
+  for (const line of blocked) {
+    resetTailStoreForTests();
+    write("/sessions/one.jsonl", snapshot([line]));
+    expect(restoreTailSnapshot("/sessions/one.jsonl", bytesOf([line]))).toBeNull();
+    expect(storedText()).not.toContain(BYTE_RUN.slice(0, 4).join(","));
+  }
+});
+
+test("typed attachment blocks and Unicode-escaped keys inside embedded JSON text never reach the store", () => {
+  /* Printed JSON inside a tool's text again, in the forms the literal-key
+     reading missed: a content block whose `type` says it is an attachment
+     (its `data` short, or bytes written as numbers), and keys spelled with
+     `\u` escapes, which a decoder reads as the plain word and a pattern over
+     the text does not. Every sentinel below must be absent from the store. */
+  const PNG_B64 = ["iVBOR", "w0KGgo="].join("");
+  const BYTE_RUN = [137, 80, 78, 71, 13, 10, 26, 10];
+  const NUMERIC = 827364951;
+  const escapedBytesKey = ["by", "\\u0074", "es"].join("");
+  const escapedPasswordKey = ["pass", "\\u0077", "ord"].join("");
+  const escapedImageType = ["im", "\\u0061", "ge"].join("");
+  const imageBlock = JSON.stringify({ type: "image", source: { type: "base64", media_type: "image/png", data: PNG_B64 } });
+  const typedBytes = JSON.stringify({ type: "image", data: BYTE_RUN });
+  const escapedBytes = `{"attachment":{"${escapedBytesKey}":[${BYTE_RUN.join(",")}]}}`;
+  const escapedPassword = `{"${escapedPasswordKey}":${NUMERIC}}`;
+  const escapedType = `{"type":"${escapedImageType}","source":{"type":"base64","data":"${PNG_B64}"}}`;
+  const toolResult = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content }] } });
+  const codexOutput = (output: string) => JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "call_01", output } });
+  const blocked = [
+    codexOutput("prefix " + imageBlock),
+    toolResult("prefix " + imageBlock + "\ntrailing text"),
+    toolResult("```json\n" + typedBytes + "\n```"),
+    codexOutput("prefix " + escapedBytes),
+    toolResult("```\n" + escapedBytes + "\n```\ndone"),
+    codexOutput("prefix " + escapedPassword),
+    toolResult(escapedPassword + "\nexit code 0"),
+    toolResult("prefix " + escapedType + " trailing"),
+    /* Nested wrappers: the printed JSON is a string inside printed JSON. */
+    toolResult("relay: " + JSON.stringify({ body: "prefix " + imageBlock })),
+    toolResult("relay: " + JSON.stringify({ body: "prefix " + escapedBytes + " trailing" })),
+    codexOutput("relay: " + JSON.stringify({ body: { inner: "x " + escapedPassword } }) + "\nok"),
+    /* Cut off mid-block: a decoder cannot read it, so the text reading must. */
+    codexOutput("prefix " + imageBlock.slice(0, -3)),
+  ];
+  expect(blocked.map((line) => persistableLine(line))).toEqual(blocked.map(() => false));
+
+  /* Printed JSON that carries nothing stays: counters, a text block, a size
+     under an escaped key, an array of plain numbers in prose. */
+  const legit = [
+    toolResult("```json\n" + JSON.stringify({ input_tokens: 512, total_tokens: 600 }) + "\n```"),
+    codexOutput("prefix " + JSON.stringify({ type: "text", text: "hello" }) + " trailing"),
+    codexOutput(`prefix {"scanned":{"${escapedBytesKey}":20480}} trailing`),
+    toolResult("indices [1, 2, 3] and {not json} done"),
+  ];
+  for (const line of legit) expect(persistableLine(line)).toBe(true);
+
+  const window_ = [...blocked, ...legit, record(9, "and then ordinary prose")];
+  write("/sessions/typed-escaped.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/typed-escaped.jsonl", bytesOf(window_))?.win.lines).toEqual([...legit, record(9, "and then ordinary prose")]);
+  const stored = storedText();
+  for (const sentinel of [PNG_B64, BYTE_RUN.join(","), String(NUMERIC)]) expect(stored).not.toContain(sentinel);
+  /* Each form alone, round-tripped: a tail ending on it keeps nothing. */
+  for (const line of blocked) {
+    resetTailStoreForTests();
+    write("/sessions/one.jsonl", snapshot([line]));
+    expect(restoreTailSnapshot("/sessions/one.jsonl", bytesOf([line]))).toBeNull();
+    const alone = storedText();
+    for (const sentinel of [PNG_B64, BYTE_RUN.join(","), String(NUMERIC)]) expect(alone).not.toContain(sentinel);
+  }
+});
+
+test("a structure this cannot finish reading is refused rather than assumed safe", () => {
+  /* Wider and deeper than the inspection budget: "not inspected" is not
+     "safe", so the line stays out. */
+  let deep: unknown = SENTINEL;
+  for (let level = 0; level < 40; level += 1) deep = { level, child: deep };
+  expect(persistableLine(JSON.stringify({ type: "user", deep }))).toBe(false);
+  /* Wider than the NODE budget while staying well inside the line bound, so
+     it is the inspection that refuses this one and not the record's size. */
+  const wide = Array.from({ length: BOUNDS.MAX_INSPECTED_NODES + 100 }, () => 0);
+  const wideLine = JSON.stringify({ type: "user", wide });
+  expect(wideLine.length).toBeLessThan(BOUNDS.MAX_LINE_BYTES);
+  expect(persistableLine(wideLine)).toBe(false);
+  /* Text full of unclosed brackets would make the search for embedded JSON
+     walk the rest of the text from every one of them; past its budget the
+     search stops and the line stays out. */
+  const brackets = JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "{".repeat(12_000) }] } });
+  expect(brackets.length).toBeLessThan(BOUNDS.MAX_LINE_BYTES);
+  expect(persistableLine(brackets)).toBe(false);
+});
+
+test("the throttle's own memory is bounded, before a flush as well as after", () => {
+  /* Big windows, many conversations, twice each: the second round is what
+     waits on the throttle, and what the review found unbounded. */
+  const window_ = (index: number) => Array.from({ length: 600 }, (_, line) => record(line, `conversation ${index} line ${line} ${"prose ".repeat(30)}`));
+  const paths = Array.from({ length: 20 }, (_, index) => `/sessions/stress${index}.jsonl`);
+  for (const [index, path] of paths.entries()) persistTailSnapshot(path, snapshot(window_(index)));
+  for (const [index, path] of paths.entries()) persistTailSnapshot(path, snapshot(window_(index)));
+
+  const queued = tailStoreMemoryForTests();
+  expect(queued.pending).toBeLessThanOrEqual(BOUNDS.MAX_PENDING_PATHS);
+  expect(queued.pendingBytes).toBeLessThanOrEqual(BOUNDS.MAX_BYTES_TOTAL);
+  expect(queued.writeMarks).toBeLessThanOrEqual(BOUNDS.MAX_WRITE_MARKS);
+  expect(queued.stored).toBeLessThanOrEqual(BOUNDS.MAX_PATHS);
+  expect(queued.storedBytes).toBeLessThanOrEqual(BOUNDS.MAX_BYTES_TOTAL);
+
+  flushTailSnapshots();
+  const flushed = tailStoreMemoryForTests();
+  expect(flushed.pending).toBe(0);
+  expect(flushed.pendingBytes).toBe(0);
+  expect(flushed.stored).toBeLessThanOrEqual(BOUNDS.MAX_PATHS);
+  expect(flushed.storedBytes).toBeLessThanOrEqual(BOUNDS.MAX_BYTES_TOTAL);
+  expect(flushed.writeMarks).toBeLessThanOrEqual(BOUNDS.MAX_WRITE_MARKS);
+  /* Every entry is a real, restorable tail — the bound is not an empty store.
+     Each is read against the size its own window was written at. */
+  for (const path of persistedTailPathsForTests()) {
+    const index = Number(path.match(/stress(\d+)/)![1]);
+    expect(restoreTailSnapshot(path, bytesOf(window_(index)))?.win.lines.length ?? 0).toBeGreaterThan(0);
+  }
+});
+
+test("a resume replays the whole window, and a window longer than the stored bounds is cut forward to them first", () => {
+  /* A window this tab held in memory can be far longer than a stored one. */
+  const lines = Array.from({ length: BOUNDS.MAX_LINES_PER_PATH + 150 }, (_, index) => record(index, `message ${index}`));
+  const size = bytesOf(lines);
+  const resumed = resumableSnapshot(snapshot(lines, { size, offset: size, historyStart: 0 }), size);
+  const kept = lines.slice(-BOUNDS.MAX_LINES_PER_PATH);
+  expect(resumed?.win.lines).toEqual(kept);
+  expect(resumed?.win.start).toBe(150);
+  /* Every retained row is replayed, not only the last few kilobytes: a
+     transcript rewritten above an unchanged suffix is caught. */
+  expect(resumed?.resumeAnchor).toBe(kept.join("\n") + "\n");
+  expect(resumed?.offset).toBe(size - bytesOf(kept));
+  /* What was cut is ordinary history, reachable through loadOlder. */
+  expect(resumed?.historyStart).toBe(size - bytesOf(kept));
+  expect(resumed?.hasMore).toBe(true);
+});

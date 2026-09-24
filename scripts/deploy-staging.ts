@@ -30,6 +30,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { appDirIn } from "../bin/appDir.mjs";
+import { viewerBootGateKey } from "../src/lib/access/phoneAccessBootGate";
 import { viewerControlOrigin, viewerControlToken } from "../src/lib/mcp/controlEndpoint";
 import type { ViewerMcpRuntimeIdentity, ViewerReleaseIdentity } from "../src/lib/runtime/contracts";
 import { stagingReleaseRecord, STAGING_RELEASE_FILE, type StagingReleaseRecord } from "../src/lib/staging";
@@ -58,9 +60,9 @@ import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 /** Prod state families the issue forbids staging from touching. */
 export const PROD_STATE_EVIDENCE_FILES: ReadonlySet<string> = new Set([
   "viewer-release.json",
-  "agent-registry.json",
+  "agent-registry.sqlite",
   "runtime-events.sqlite",
-  "board.json",
+  "state.sqlite",
   "pipelines.json",
   "flows.json",
 ]);
@@ -253,14 +255,14 @@ async function containerGone(container: string): Promise<void> {
 async function waitForStagingRevision(
   endpoint: string,
   revision: string,
-  headers: Record<string, string>,
+  headers: () => Record<string, string>,
   timeoutMs = 180_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let last = "staging endpoint did not answer";
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${endpoint}/api/staging`, { headers, signal: AbortSignal.timeout(5_000) });
+      const response = await fetch(`${endpoint}/api/staging`, { headers: headers(), signal: AbortSignal.timeout(5_000) });
       if (response.ok) {
         const payload = await response.json() as { staging?: unknown; revision?: unknown };
         if (payload.staging === true && payload.revision === revision) return;
@@ -279,10 +281,10 @@ async function waitForStagingRevision(
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const configRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  const prodStateDir = path.join(configRoot, "agent-log-viewer", "state");
-  const stagingStateDir = process.env.LLV_STAGING_STATE_DIR || path.join(configRoot, "agent-log-viewer", "state-staging");
+  const prodStateDir = path.join(appDirIn(configRoot), "state");
+  const stagingStateDir = process.env.LLV_STAGING_STATE_DIR || path.join(appDirIn(configRoot), "state-staging");
   const paths = stagingStatePaths(stagingStateDir);
-  const remote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/live-log-viewer-next.git";
+  const remote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/delegatus.git";
   const endpoint = `http://127.0.0.1:${STAGING_FRONT_PORT}`;
 
   const before = collectProdState(prodStateDir);
@@ -370,13 +372,17 @@ async function main(): Promise<void> {
   };
   writeReleaseRecord(path.join(stagingStateDir, STAGING_RELEASE_FILE), record);
 
-  await waitForStagingRevision(endpoint, revision, stagingRequestHeaders(service.environment.LLV_TOKEN));
+  /* The staging Viewer shares the operator's config root, so with phone
+     access remembered its boot gates on the key file even when the Compose
+     config sets no key (#2024); read per attempt, after that boot. */
+  const stagingKey = () => viewerBootGateKey(service.environment);
+  await waitForStagingRevision(endpoint, revision, () => stagingRequestHeaders(stagingKey()));
 
   const agentControl = stagingAgentControl(stagingAgentViewerMcpEnvironment(context), endpoint);
-  if (service.environment.LLV_TOKEN?.trim() && !agentControl.authenticated) {
+  if (stagingKey()?.trim() && !agentControl.authenticated) {
     throw new Error("staging agent Viewer MCP control resolved no credential for the staging Viewer");
   }
-  await waitForStagingRevision(agentControl.origin, revision, agentControl.headers, 30_000);
+  await waitForStagingRevision(agentControl.origin, revision, () => agentControl.headers, 30_000);
 
   const changes = prodStateChanges(before, collectProdState(prodStateDir));
   if (changes.violation) {

@@ -5,10 +5,14 @@ import { taskRevision } from "./revision";
 import { isoNow } from "./helpers";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { admissionSnapshot } from "./groupHide";
+import { readTaskIconInput } from "./taskIcon";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
-import { TASK_COLORS, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
+import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
+import { TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
-export const TASK_TEXT_LIMIT = 6000;
+/* The caps live beside the type, which a client component can import without
+   pulling this module's node dependencies into the browser bundle. */
+export { TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT } from "./types";
 /**
  * How many bands one project's board may carry (#1627).
  *
@@ -31,7 +35,8 @@ export const RECENT_CREATES_CAP = 100;
 export type TaskRefusal = { ok: false; error: string; status: number; code?: string; field?: string };
 
 export type TaskCommandResult =
-  | { ok: true; tasks: BoardTask[]; task: BoardTask }
+  /* `notes` says what a write clamped instead of refusing (an unknown icon). */
+  | { ok: true; tasks: BoardTask[]; task: BoardTask; notes?: string[] }
   | TaskRefusal;
 
 /** A `clientRequestId → taskId` receipt, persisted in `tasks.json` so a replay
@@ -42,12 +47,15 @@ export interface RecentCreate {
 }
 
 export type CreateTaskResult =
-  | { ok: true; tasks: BoardTask[]; task: BoardTask; recentCreates: RecentCreate[]; replay: boolean }
+  | { ok: true; tasks: BoardTask[]; task: BoardTask; recentCreates: RecentCreate[]; replay: boolean; notes?: string[] }
   | TaskRefusal;
 
 export interface CreateTaskInput {
   project?: unknown;
   text?: unknown;
+  /** Agent-facing context, kept out of the human description (#1834). An
+      absent or blank value creates a task with no details at all. */
+  details?: unknown;
   placement?: unknown;
   pos?: unknown;
   dueAt?: unknown;
@@ -59,12 +67,19 @@ export interface CreateTaskInput {
       the board shows; `"hidden"` creates it off the board, which is how a
       caller records work while the board is full. */
   board?: unknown;
+  /** A lucide icon name (#2102), read by `readTaskIconInput`: one that names
+      no icon creates the task without one and adds a note to the answer. */
+  icon?: unknown;
 }
 
 export interface PatchTaskInput {
   expectedProject?: unknown;
   expectedRevision?: unknown;
   text?: unknown;
+  /** Agent-facing context (#1834). A string sets or replaces it; `null` or an
+      empty string clears it. Omitted leaves it exactly as stored, so an update
+      carrying only `details` never touches `text` and the reverse. */
+  details?: unknown;
   status?: unknown;
   placement?: unknown;
   pos?: unknown;
@@ -74,10 +89,33 @@ export interface PatchTaskInput {
   /** One of `TASK_COLORS`, or "none" to clear the label. Leaves `updatedAt`
       unchanged when it is the whole patch (with `hide`). */
   color?: unknown;
+  /** A lucide icon name (#2102); `null`, "" or "none" clears it. A name that
+      is no lucide icon clears it too, with a note in the answer, never a
+      refusal. Presentation, like `color`: `updatedAt` stays. */
+  icon?: unknown;
   /** `true` hides the task's whole group from the kanban board, `false` shows
       it again. Requires the revision fence. Leaves `updatedAt` unchanged when
       it is the whole patch (with `color`). */
   hide?: unknown;
+  /** PRs or issues to attach by hand (#2059): `#123`, `123`, `PR 123`,
+      `owner/repo#123` or a github.com URL, one or a list. Add and remove sets,
+      so two writers never replace each other's list. Presentation only, with
+      `color` and `hide`. */
+  attachLinks?: unknown;
+  detachLinks?: unknown;
+  /** `pr` or `issue`: overrides the guess for every attached link. */
+  linkKind?: unknown;
+}
+
+/** What `attachLinks`/`detachLinks` need to know about the task's repository
+    and the forge cache; the command itself stays pure. */
+export interface TaskWorkLinkContext {
+  repository: string | null;
+  kindOf?: (repository: string, number: number) => WorkLinkKind | null;
+  canonical?: (repository: string) => string;
+  /** The evidence a link the task's pipelines discovered carries, so detaching
+      it answers why nothing changed. */
+  autoVia?: (link: NormalizedWorkLink) => WorkLinkVia[] | null;
 }
 
 /** What a hide asks of the caller that can see the orchestrator seats: whether
@@ -92,6 +130,8 @@ export interface PatchTaskOptions {
   actor?: TaskGroupHidden["by"];
   /** Required for `hide: true`; without it the hide is refused. */
   seatHolding?: (task: BoardTask) => SeatHolding;
+  /** For attachLinks/detachLinks; without it a bare number cannot be resolved. */
+  workLinks?: (task: BoardTask) => TaskWorkLinkContext;
 }
 
 /** Injected so the pure command can ask the store whether an attachment ref's
@@ -227,6 +267,23 @@ function textLimitError(): { ok: false; error: string; status: number } {
   return { ok: false, error: `Task text must be no longer than ${TASK_TEXT_LIMIT} characters`, status: 400 };
 }
 
+type DetailsResult = { ok: true; details?: string } | TaskRefusal;
+
+/** Agent-facing `details` (#1834): a string is trimmed and capped, and a blank
+    one is no details at all — the same value an absent field leaves. */
+function normalizeDetails(value: unknown): DetailsResult {
+  if (value === undefined || value === null) return { ok: true };
+  if (typeof value !== "string") {
+    return { ok: false, error: "details must be a string", status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+  }
+  const details = value.trim();
+  if (!details) return { ok: true };
+  if (details.length > TASK_DETAILS_LIMIT) {
+    return { ok: false, error: `Task details must be no longer than ${TASK_DETAILS_LIMIT} characters`, status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+  }
+  return { ok: true, details };
+}
+
 export function createTask(
   existing: BoardTask[],
   input: CreateTaskInput,
@@ -238,6 +295,8 @@ export function createTask(
   const text = normalizeText(input.text);
   if (!text) return { ok: false, error: "task text is required", status: 400 };
   if (text.length > TASK_TEXT_LIMIT) return textLimitError();
+  const details = normalizeDetails(input.details);
+  if (!details.ok) return details;
 
   /* Idempotency: a replayed create (double-tap, retry after a lost response)
      returns the task the first attempt made instead of minting a twin. */
@@ -271,6 +330,7 @@ export function createTask(
 
   const source = normalizeSource(input.source);
   if (source === null) return { ok: false, error: "invalid task source", status: 400 };
+  const icon = Object.hasOwn(input, "icon") ? readTaskIconInput(input.icon) : { kind: "clear" as const };
 
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
@@ -288,20 +348,57 @@ export function createTask(
     project,
     status: "inbox",
     text,
+    ...(details.details ? { details: details.details } : {}),
     placement,
     ...(placement === "pinned" && pos ? { pos } : {}),
     ...(due.dueAt ? { dueAt: due.dueAt, dueTz: due.dueTz } : {}),
     ...(attachments.attachments ? { attachments: attachments.attachments } : {}),
     ...(source ? { source } : {}),
     ...(board ? { board } : {}),
+    ...(icon.kind === "set" ? { icon: icon.icon } : {}),
     assignments: [],
     createdAt: now,
     updatedAt: now,
   };
   const nextRecent = clientRequestId
-    ? [...recentCreates, { clientRequestId, taskId: id }].slice(-RECENT_CREATES_CAP)
+    ? [...recentCreates.filter((entry) => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId: id }].slice(-RECENT_CREATES_CAP)
     : recentCreates;
-  return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false };
+  return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(icon.kind === "clamped" ? { notes: [icon.note] } : {}) };
+}
+
+/** Presentation of a task, never work on it: `updatedAt` stays (see below). */
+const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "hide", "attachLinks", "detachLinks", "linkKind"]);
+
+function editTaskWorkLinks(
+  task: BoardTask,
+  input: PatchTaskInput,
+  now: string,
+  options: PatchTaskOptions,
+): { ok: true; links: StoredWorkLink[]; changed: boolean } | TaskRefusal {
+  const refusal = (error: string, field: string, status = 400, code = "TASK_INVALID_FIELD"): TaskRefusal => ({ ok: false, error, status, code, field });
+  if (input.linkKind !== undefined && input.linkKind !== "pr" && input.linkKind !== "issue") return refusal("linkKind must be pr or issue", "linkKind");
+  const context = options.workLinks?.(task) ?? { repository: null };
+  const normalize = (field: "attachLinks" | "detachLinks") => {
+    const links: NormalizedWorkLink[] = [];
+    for (const raw of workLinkInputs(input[field])) {
+      const normalized = normalizeWorkLinkInput(raw, {
+        repository: context.repository,
+        kind: field === "attachLinks" ? input.linkKind as WorkLinkKind | undefined : undefined,
+        kindOf: context.kindOf,
+      });
+      if (!normalized.ok) return refusal(normalized.error, field);
+      links.push(normalized.link);
+    }
+    return links;
+  };
+  const attach = normalize("attachLinks");
+  if (!Array.isArray(attach)) return attach;
+  const detach = normalize("detachLinks");
+  if (!Array.isArray(detach)) return detach;
+  if (!attach.length && !detach.length) return { ok: true, links: task.workLinks ?? [], changed: false };
+  const edit = editStoredWorkLinks(task.workLinks, attach, detach, { now, addedBy: options.actor ?? "operator", canonical: context.canonical }, context.autoVia);
+  if (!edit.ok) return refusal(edit.error, edit.code === "WORK_LINK_AUTO" ? "detachLinks" : "attachLinks", edit.status, edit.code);
+  return { ok: true, links: edit.links, changed: edit.changed };
 }
 
 export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: PatchTaskOptions = {}): TaskCommandResult {
@@ -337,6 +434,14 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (existing[index]!.origin?.refinement === "pending" && text !== existing[index]!.text) {
       patch.origin = { ...existing[index]!.origin!, refinement: "titled" };
     }
+  }
+  /* Its own field, so it is set, replaced and cleared on its own: a patch
+     carrying only `details` leaves `text` byte for byte, and a patch carrying
+     only `text` leaves `details` (#1834). */
+  if (Object.hasOwn(input, "details")) {
+    const details = normalizeDetails(input.details);
+    if (!details.ok) return details;
+    patch.details = details.details;
   }
   if (Object.hasOwn(input, "status")) {
     const status = normalizeStatus(input.status);
@@ -376,6 +481,12 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (!color) return { ok: false, error: `color must be one of none, ${TASK_COLORS.join(", ")}`, status: 400, code: "TASK_INVALID_FIELD", field: "color" };
     patch.color = color === "none" ? undefined : color;
   }
+  const notes: string[] = [];
+  if (Object.hasOwn(input, "icon")) {
+    const icon = readTaskIconInput(input.icon);
+    patch.icon = icon.kind === "set" ? icon.icon : undefined;
+    if (icon.kind === "clamped") notes.push(icon.note);
+  }
   /* Hiding a group writes the hide and nothing else: no assignment, runtime,
      pipeline, flow, delivery or process state is touched, by design. */
   if (Object.hasOwn(input, "hide")) {
@@ -402,6 +513,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
     patch.placement = placement;
   }
+  if (Object.hasOwn(input, "attachLinks") || Object.hasOwn(input, "detachLinks")) {
+    const edited = editTaskWorkLinks(task, input, now, options);
+    if (!edited.ok) return edited;
+    if (edited.changed) patch.workLinks = edited.links.length ? edited.links : undefined;
+  }
   /* Deadline: `{dueAt:null}` clears both fields; `{dueAt,dueTz}` sets them
      (both-or-neither, validated). Touching only one is a 400. */
   if (Object.hasOwn(input, "dueAt") || Object.hasOwn(input, "dueTz")) {
@@ -416,14 +532,14 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
 
-  /* A colour label or a group hide is presentation of the task, never work on
-     it: `updatedAt` stays, so the board's ranking and age and the seat tick's
+  /* A colour label, an icon or a group hide is presentation of the task, never
+     work on it: `updatedAt` stays, so the board's ranking and age and the seat tick's
      reading of card movement (its quiet guard, its "assigned, nothing started
      it" window) are unchanged by them. The revision still moves, because it
      hashes every field, so the fence and board freshness keep working, and a
      hide records its own instant in `groupHidden.at`. */
-  const presentationOnly = Object.keys(input).every((key) => key === "color" || key === "hide" || key === "expectedProject" || key === "expectedRevision")
-    && (Object.hasOwn(input, "color") || Object.hasOwn(input, "hide"));
+  const presentationOnly = Object.keys(input).every((key) => PRESENTATION_KEYS.has(key) || key === "expectedProject" || key === "expectedRevision")
+    && Object.keys(input).some((key) => PRESENTATION_KEYS.has(key));
   const updated: BoardTask = { ...task, ...patch, updatedAt: presentationOnly ? task.updatedAt : now };
   /* An explicit clear leaves `undefined` fields on the spread; drop them so the
      persisted row and its validator agree that the deadline is gone. */
@@ -432,11 +548,14 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.dueTz;
   }
   if (updated.placement === "unplaced") delete updated.pos;
+  if (Object.hasOwn(patch, "details") && patch.details === undefined) delete updated.details;
   if (Object.hasOwn(patch, "color") && patch.color === undefined) delete updated.color;
+  if (Object.hasOwn(patch, "icon") && patch.icon === undefined) delete updated.icon;
   if (Object.hasOwn(patch, "groupHidden") && patch.groupHidden === undefined) delete updated.groupHidden;
+  if (Object.hasOwn(patch, "workLinks") && patch.workLinks === undefined) delete updated.workLinks;
   const tasks = existing.slice();
   tasks[index] = updated;
-  return { ok: true, tasks, task: updated };
+  return { ok: true, tasks, task: updated, ...(notes.length ? { notes } : {}) };
 }
 
 export interface MembershipDeps {

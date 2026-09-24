@@ -1,19 +1,41 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 
-import { commitPipelineStage, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import type { Pipeline } from "./types";
+import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
+let previousState: string | undefined;
+let publicationState: string;
+beforeEach(() => {
+  previousState = process.env.LLV_STATE_DIR;
+  publicationState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-git-state-"));
+  process.env.LLV_STATE_DIR = publicationState;
+});
+afterEach(() => {
+  if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = previousState;
+  fs.rmSync(publicationState, { recursive: true, force: true });
+});
+
 function pipeline(): Pipeline {
-  return {
+  const subject: Pipeline = {
     id: "12345678", task: "task", taskIds: [], project: "viewer", repoDir: "/repo", worktreeDir: "/repo-pipeline-12345678",
     branch: "pipeline/task-12345678", baseBranch: "", baseRef: "", lastPassedCommit: "base",
-    stages: [], runs: [], cursor: null, state: "running", pausedState: null, stateDetail: null,
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    runs: [{ stageId: "build", attempts: [] }], cursor: null, state: "running", pausedState: null, stateDetail: null,
     srcPath: null, srcConversationId: null, createdAt: "now", closedAt: null,
   };
+  subject.delivery = { target: { repository: "repo-fixture", remote: "origin", branch: `refs/heads/${subject.branch}` },
+    disposition: "owner", publish: "enabled", active: true, ownerId: subject.id, epoch: 1, journal: [] };
+  if (!findPipelineRecord(subject.id)) savePipelines([subject]);
+  return subject;
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -65,6 +87,144 @@ test("a real stale dirty checkout provisions from the freshly fetched origin/mai
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("async provisioning preserves the synchronous base and adoption decisions", async () => {
+  const sha = "a".repeat(40);
+  for (const input of [{}, { baseBranch: "release" }, { baseBranch: "release", baseRef: sha }, { baseBranch: "../bad" }]) {
+    for (const fetchCode of [0, 1, 124, 137]) {
+      const commands: string[] = [];
+      const exec: ExecPort = (command, args) => {
+        commands.push([command, ...args].join(" "));
+        return args.includes("fetch") ? { code: fetchCode, stdout: "", stderr: "fetch error" }
+          : { code: 0, stdout: sha, stderr: "" };
+      };
+      const expected = resolvePipelineBase("/repo", input, exec);
+      const expectedCommands = commands.splice(0);
+      expect(await resolvePipelineBaseAsync("/repo", input, async (command, args, cwd) => exec(command, args, cwd))).toEqual(expected);
+      expect(commands).toEqual(expectedCommands);
+    }
+  }
+  const subject = { ...pipeline(), baseBranch: "main", baseRef: sha };
+  for (const addCode of [0, 1]) {
+    for (const head of [sha, "b".repeat(40)]) {
+      const exec: ExecPort = (_command, args) => args[0] === "worktree" && args[1] === "list"
+        ? { code: 0, stdout: `worktree ${subject.worktreeDir}\0HEAD ${head}\0branch refs/heads/${subject.branch}\0\0`, stderr: "" }
+        : args[0] === "worktree" ? { code: addCode, stdout: "", stderr: "exists" }
+        : { code: 0, stdout: args.includes("--abbrev-ref") ? subject.branch : head, stderr: "" };
+      expect(await provisionPipelineWorktreeAsync(subject, async (command, args, cwd) => exec(command, args, cwd)))
+        .toEqual(provisionPipelineWorktree(subject, exec));
+    }
+  }
+});
+
+test("async Git fetch and checkout pin a real advanced remote and adopt only that head", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-async-base-"));
+  try {
+    const origin = path.join(root, "origin.git");
+    const source = path.join(root, "source");
+    git(root, "init", "--bare", "--initial-branch=main", origin);
+    git(root, "clone", origin, source);
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "base");
+    git(source, "push", "origin", "main");
+    const previous = git(source, "rev-parse", "HEAD");
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "advance");
+    git(source, "push", "origin", "main");
+    const current = git(source, "rev-parse", "HEAD");
+    git(source, "checkout", "--detach", previous);
+    fs.writeFileSync(path.join(source, "dirty.txt"), "preserve");
+    const base = await resolvePipelineBaseAsync(source, {}, realProvisionExec);
+    expect(base).toEqual({ ok: true, baseBranch: "main", baseRef: current });
+    const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: current };
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: current, baseBranch: "main" });
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: current, baseBranch: "main" });
+    expect((await provisionPipelineWorktreeAsync({ ...subject, baseRef: previous }, realProvisionExec)).ok).toBe(false);
+    expect(git(source, "rev-parse", "HEAD")).toBe(previous);
+    expect(fs.readFileSync(path.join(source, "dirty.txt"), "utf8")).toBe("preserve");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("async exec reports launch errors, pre-abort, and a killed timeout without continuing", async () => {
+  expect((await realProvisionExec("missing-provision-command", [], publicationState)).code).not.toBe(0);
+  const abort = new AbortController();
+  abort.abort();
+  const marker = path.join(publicationState, "must-not-exist");
+  const result = await realProvisionExec("touch", [marker], publicationState, abort.signal);
+  expect(result.stderr).toBe("pipeline provisioning cancelled");
+  expect(fs.existsSync(marker)).toBe(false);
+  const calls: string[] = [];
+  const base = await resolvePipelineBaseAsync(publicationState, {}, async (command, args, cwd) => {
+    calls.push(args.join(" "));
+    return realProvisionExec(command, [args[0]!, "0.05s", process.execPath, "-e", "setTimeout(() => {}, 5000)"], cwd);
+  });
+  expect(base).toEqual({ ok: false, error: "fetching origin/main: git fetch timed out after 60s" });
+  expect(calls).toHaveLength(1);
+});
+
+for (const interruption of ["timeout", "cancellation"] as const) {
+  test(`async checkout rejects ${interruption} and cannot adopt its incomplete worktree on retry`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interrupted-checkout-"));
+    const source = path.join(root, "source");
+    const marker = path.join(root, "smudge-started");
+    const abort = new AbortController();
+    let pending: ReturnType<typeof provisionPipelineWorktreeAsync> | undefined;
+    try {
+      fs.mkdirSync(source);
+      git(source, "init", "--initial-branch=main");
+      fs.writeFileSync(path.join(source, ".gitattributes"), "tracked.txt filter=slow\n");
+      fs.writeFileSync(path.join(source, "tracked.txt"), "complete file\n");
+      git(source, "add", ".");
+      git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "-m", "base");
+      git(source, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
+      git(source, "config", "filter.slow.required", "true");
+      const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: git(source, "rev-parse", "HEAD") };
+      pending = provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal) => {
+        // Exercise a real killed checkout without making this regression wait
+        // sixty seconds. All probes still use the production asynchronous port.
+        if (interruption === "timeout" && args[0] === "worktree" && args[1] === "add") {
+          return realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal);
+        }
+        return realProvisionExec(command, args, cwd, signal);
+      }, abort.signal);
+      for (let attempt = 0; attempt < 200 && !fs.existsSync(marker); attempt += 1) await Bun.sleep(10);
+      expect(fs.existsSync(marker)).toBe(true);
+      if (interruption === "cancellation") abort.abort();
+      const result = await pending;
+      expect(git(subject.worktreeDir, "branch", "--show-current")).toBe(subject.branch);
+      expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(subject.baseRef);
+      expect(git(source, "worktree", "list", "--porcelain")).toContain("locked initializing");
+      expect(fs.existsSync(path.join(subject.worktreeDir, "tracked.txt"))).toBe(false);
+      fs.writeFileSync(path.join(subject.worktreeDir, "keep.txt"), "preserve partial checkout\n");
+      const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+      expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve partial checkout\n");
+      expect(result.ok).toBe(false);
+      expect(retry.ok).toBe(false);
+    } finally {
+      abort.abort();
+      await pending;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 10_000);
+}
+
+test("async adoption rejects missing tracked files and retains a complete checkout with untracked files", async () => {
+  const source = path.join(publicationState, "source");
+  fs.mkdirSync(source);
+  git(source, "init", "--initial-branch=main");
+  fs.writeFileSync(path.join(source, "tracked.txt"), "complete file\n");
+  git(source, "add", ".");
+  git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "-m", "base");
+  const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(publicationState, "lane"), baseBranch: "main", baseRef: git(source, "rev-parse", "HEAD") };
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  fs.writeFileSync(path.join(subject.worktreeDir, "keep.txt"), "preserve\n");
+  git(source, "worktree", "lock", "--reason", "initializing", subject.worktreeDir);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(false);
+  git(source, "worktree", "unlock", subject.worktreeDir);
+  git(source, "worktree", "lock", "--reason", "preserve checkout", subject.worktreeDir);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  fs.unlinkSync(path.join(subject.worktreeDir, "tracked.txt"));
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(false);
+  expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve\n");
 });
 
 test("default base fetches and resolves origin/main without inspecting a dirty stale checkout", () => {
@@ -424,6 +584,8 @@ function publishSandbox(withOrigin = true): PublishSandbox {
   subject.lastPassedCommit = subject.baseRef;
   const provisioned = provisionPipelineWorktree(subject, realExec);
   if (!provisioned.ok) throw new Error(provisioned.error);
+  subject.delivery!.target.remote = withOrigin ? origin : "";
+  savePipelines([subject]);
 
   return {
     root,
@@ -443,38 +605,73 @@ function publishSandbox(withOrigin = true): PublishSandbox {
   };
 }
 
-test("publishPipelineBranch pushes the passed commit and confirms origin carries it", () => {
+test("publishPipelineBranch pushes the passed commit and confirms origin carries it", async () => {
   const box = publishSandbox();
   try {
     const passed = box.commit("stage.txt", "stage work\n");
     expect(box.originHead()).toBe("");
 
-    expect(publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toEqual({ ok: true, sha: passed, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toEqual({ ok: true, sha: passed, remote: "published" });
     expect(box.originHead()).toBe(passed);
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
   }
 });
 
-test("publishPipelineBranch fast-forwards a branch it already published", () => {
+test("publishPipelineBranch fast-forwards a branch it already published", async () => {
   const box = publishSandbox();
   try {
     const first = box.commit("one.txt", "one\n");
-    expect(publishPipelineBranch(box.subject, realExec, { acceptedSha: first })).toMatchObject({ ok: true, sha: first });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: first })).toMatchObject({ ok: true, sha: first });
     const second = box.commit("two.txt", "two\n");
 
-    expect(publishPipelineBranch(box.subject, realExec, { acceptedSha: second, publishedSha: first })).toEqual({ ok: true, sha: second, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: second, publishedSha: first })).toEqual({ ok: true, sha: second, remote: "published" });
     expect(box.originHead()).toBe(second);
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
   }
 });
 
-test("publishPipelineBranch refuses a diverged remote and leaves both revisions intact", () => {
+test("an independent internal lane cannot publish a fast-forward to another lane's target", async () => {
+  const box = publishSandbox();
+  try {
+    const ownerHead = box.commit("owner.txt", "owner work\n");
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: ownerHead })).toMatchObject({ ok: true });
+    const comparisonDirectory = path.join(box.root, "repo-pipeline-comparison-lane");
+    git(box.root, "clone", "--branch", box.subject.branch, box.origin, comparisonDirectory);
+    git(comparisonDirectory, "checkout", "-b", "pipeline/task-comparison-lane");
+    git(comparisonDirectory, "config", "user.name", "Comparison Test");
+    git(comparisonDirectory, "config", "user.email", "comparison-test");
+    git(comparisonDirectory, "config", "commit.gpgSign", "false");
+    fs.writeFileSync(path.join(comparisonDirectory, "comparison.txt"), "local comparison\n");
+    git(comparisonDirectory, "add", "comparison.txt");
+    git(comparisonDirectory, "commit", "-m", "local comparison");
+    const comparisonHead = git(comparisonDirectory, "rev-parse", "HEAD");
+    const comparison: Pipeline = {
+      ...box.subject,
+      id: "comparison-lane",
+      publication: "internal",
+      repoDir: box.repo,
+      branch: "pipeline/task-comparison-lane",
+      worktreeDir: comparisonDirectory,
+    };
+    await createPipelineWithDelivery(comparison, box.subject.delivery!.target);
+
+    // Ancestry alone admits this write. Delivery ownership must refuse it.
+    git(comparisonDirectory, "merge-base", "--is-ancestor", ownerHead, comparisonHead);
+    const result = await publishPipelineBranch(comparison, realExec, { acceptedSha: comparisonHead });
+    expect({ allowed: result.ok, remoteHead: box.originHead() }).toEqual({ allowed: false, remoteHead: ownerHead });
+    expect(git(comparisonDirectory, "rev-parse", "HEAD")).toBe(comparisonHead);
+  } finally {
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("publishPipelineBranch refuses a diverged remote and leaves both revisions intact", async () => {
   const box = publishSandbox();
   try {
     const shared = box.commit("shared.txt", "shared\n");
-    expect(publishPipelineBranch(box.subject, realExec, { acceptedSha: shared })).toMatchObject({ ok: true, sha: shared });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: shared })).toMatchObject({ ok: true, sha: shared });
 
     /* Someone else's repair lands on the remote branch; the local head does not
        contain it. Publishing it away would destroy that work. */
@@ -490,7 +687,7 @@ test("publishPipelineBranch refuses a diverged remote and leaves both revisions 
     const remoteRepair = git(other, "rev-parse", "HEAD");
 
     const local = box.commit("local.txt", "local\n");
-    const refused = publishPipelineBranch(box.subject, realExec, { acceptedSha: local, publishedSha: shared });
+    const refused = await publishPipelineBranch(box.subject, realExec, { acceptedSha: local, publishedSha: shared });
 
     expect(refused).toEqual({
       ok: false,
@@ -503,23 +700,181 @@ test("publishPipelineBranch refuses a diverged remote and leaves both revisions 
   }
 });
 
-test("publishPipelineBranch reports a repo with no origin as unavailable rather than a failure", () => {
+test("publication releases the SQLite lease during Git and refuses an in-flight takeover", async () => {
+  const box = publishSandbox();
+  try {
+    const comparison = { ...box.subject, id: "comparison", branch: "pipeline/task-comparison", worktreeDir: path.join(box.root, "repo-pipeline-comparison") };
+    await createPipelineWithDelivery(comparison, box.subject.delivery!.target);
+    const head = box.commit("reserved.txt", "accepted\n");
+    let takeover: ReturnType<typeof takeoverPipelineDelivery> | undefined;
+    const racing: ExecPort = (command, args, cwd) => {
+      if (command === "git" && args[0] === "push") {
+        const db = new Database(path.join(publicationState, "state.sqlite"), { readonly: true });
+        try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: 0 }); }
+        finally { db.close(); }
+        expect(findPipelineRecord(box.subject.id)?.delivery?.operation?.state).toBe("running");
+        const lock = findPipelineRecord(box.subject.id)!.delivery!.operation!.executor!.lock;
+        expect(realExec("flock", ["-n", lock, "true"], cwd).code).not.toBe(0);
+        takeover = takeoverPipelineDelivery(comparison.id, box.subject.id, 1, "select comparison", "conversation_builder");
+      }
+      return realExec(command, args, cwd);
+    };
+    expect(await publishPipelineBranch(box.subject, racing, { acceptedSha: head })).toMatchObject({ ok: true, sha: head });
+    expect((await takeover)?.error).toContain("in flight");
+    expect(box.originHead()).toBe(head);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("a same-owner adapter retry waits on its running reservation without executing Git (#1939)", async () => {
+  const subject = pipeline();
+  const head = "7".repeat(40);
+  await publishPipelineBranch(subject, () => { throw new Error("lost publication reply"); }, { acceptedSha: head });
+  const running = findPipelineRecord(subject.id)!;
+  const descriptor = fs.openSync(running.delivery!.operation!.executor!.lock, "a");
+  let execCalls = 0;
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    expect(await publishPipelineBranch(running, () => { execCalls++; throw new Error("duplicate Git call"); }, { acceptedSha: head }))
+      .toMatchObject({ ok: true, remote: "unreachable", detail: expect.stringContaining("in progress since") });
+    expect(findPipelineRecord(subject.id)!.delivery!.operation!.id).toBe(running.delivery!.operation!.id);
+    const staleEpoch = { ...running, delivery: { ...running.delivery!, epoch: 0 } };
+    expect(await publishPipelineBranch(staleEpoch, () => { execCalls++; throw new Error("foreign Git call"); }, { acceptedSha: head }))
+      .toMatchObject({ ok: false, error: "publication owner or epoch changed" });
+    expect(execCalls).toBe(0);
+  } finally { fs.closeSync(descriptor); }
+  const result = await publishPipelineBranch(running, () => { throw new Error("must not reserve or execute again"); }, { acceptedSha: head });
+  expect(result).toMatchObject({ ok: true, remote: "unreachable", detail: expect.stringContaining("in progress since") });
+  expect(findPipelineRecord(subject.id)!.delivery!.operation!.id).toBe(running.delivery!.operation!.id);
+  const stale = new Date(Date.now() - 120_000);
+  fs.utimesSync(running.delivery!.operation!.executor!.lock, stale, stale);
+  expect(await publishPipelineBranch(running, () => { throw new Error("must not execute stale publication"); }, { acceptedSha: head }))
+    .toMatchObject({ ok: false, error: expect.stringContaining(`publication ${running.delivery!.operation!.id} has no progress for 120s`) });
+});
+
+test("a lost push reply is reconciled before explicit takeover and stale owner publication is refused", async () => {
+  const box = publishSandbox();
+  try {
+    const comparison = { ...box.subject, id: "comparison", branch: "pipeline/task-comparison", worktreeDir: path.join(box.root, "repo-pipeline-comparison") };
+    await createPipelineWithDelivery(comparison, box.subject.delivery!.target);
+    const head = box.commit("reply.txt", "accepted\n");
+    let pushed = false;
+    const lostReply: ExecPort = (command, args, cwd) => {
+      if (pushed && command === "timeout") return { code: 124, stdout: "", stderr: "reply lost" };
+      const result = realExec(command, args, cwd);
+      if (command === "git" && args[0] === "push") pushed = true;
+      return result;
+    };
+    expect(await publishPipelineBranch(box.subject, lostReply, { acceptedSha: head })).toMatchObject({ remote: "unreachable", uncertain: true });
+    expect((await takeoverPipelineDelivery(comparison.id, box.subject.id, 1, "select comparison", "conversation_builder")).error).toContain("uncertain");
+    expect(await reconcilePipelinePublication(box.subject.id, 1, realExec, "conversation_builder")).toBeNull();
+    expect((await takeoverPipelineDelivery(comparison.id, box.subject.id, 1, "select comparison", "conversation_builder")).pipeline?.delivery?.epoch).toBe(2);
+    const denied = await publishPipelineBranch(box.subject, realExec, { acceptedSha: head, publishedSha: head });
+    expect(denied).toMatchObject({ ok: false });
+    expect(!denied.ok && denied.error).toContain(comparison.id);
+    expect(box.originHead()).toBe(head);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("a Git child retains the publication fence after its Viewer executor dies", async () => {
+  const box = publishSandbox();
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  const release = path.join(box.root, "release-push");
+  const ready = path.join(box.root, "push-ready");
+  try {
+    const head = box.commit("orphan.txt", "accepted\n");
+    const hooks = path.join(box.root, "hooks");
+    fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf ready > "$DELIVERY_READY"\nwhile [ ! -f "$DELIVERY_RELEASE" ]; do sleep 0.02; done\n', { mode: 0o700 });
+    git(box.repo, "config", "core.hooksPath", hooks);
+    const script = `import { publishPipelineBranch } from ${JSON.stringify(path.join(import.meta.dir, "git.ts"))};
+      import { findPipelineRecord } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+      import { realExec } from ${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))};
+      await publishPipelineBranch(findPipelineRecord(process.env.DELIVERY_ID), realExec, { acceptedSha: process.env.DELIVERY_HEAD });`;
+    child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, DELIVERY_ID: box.subject.id,
+      DELIVERY_HEAD: head, DELIVERY_READY: ready, DELIVERY_RELEASE: release }, stdout: "pipe", stderr: "pipe" });
+    const deadline = Date.now() + 10_000;
+    while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(10);
+    expect(fs.existsSync(ready)).toBe(true);
+    child.kill("SIGKILL");
+    await child.exited;
+    expect(await reconcilePipelinePublication(box.subject.id, 1, realExec, "conversation_recovery")).toContain("child is still in flight");
+    fs.writeFileSync(release, "continue");
+    let reconciled: string | null = "waiting";
+    while (reconciled !== null && Date.now() < deadline) {
+      await Bun.sleep(10);
+      reconciled = await reconcilePipelinePublication(box.subject.id, 1, realExec, "conversation_recovery");
+    }
+    expect(reconciled).toBeNull();
+    expect(box.originHead()).toBe(head);
+    expect(findPipelineRecord(box.subject.id)?.delivery?.operation?.state).toBe("settled");
+  } finally {
+    fs.writeFileSync(release, "continue");
+    if (child && child.exitCode === null) { child.kill(); await child.exited; }
+    if (child) await Promise.all([new Response(child.stdout as ReadableStream).text(), new Response(child.stderr as ReadableStream).text()]);
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+}, 15_000);
+
+test("post-push settlement contention stays recoverable in the same live Viewer", async () => {
+  const box = publishSandbox();
+  const previousWait = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  process.env.LLV_PIPELINE_LOCK_WAIT_MS = "20";
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let held: Promise<void> | undefined;
+  try {
+    const head = box.commit("contention.txt", "accepted\n");
+    const racing: ExecPort = (command, args, cwd) => {
+      const result = realExec(command, args, cwd);
+      if (command === "git" && args[0] === "push") held = withPipelineMutation(async () => { await gate; });
+      return result;
+    };
+    const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
+    expect(result).toMatchObject({ ok: true, remote: "unreachable", uncertain: true });
+    expect(box.originHead()).toBe(head);
+    expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "running", executor: { pid: process.pid } });
+    release();
+    await held;
+    expect(await reconcilePipelinePublication(box.subject.id, 1, realExec, "conversation_recovery")).toBeNull();
+    expect(findPipelineRecord(box.subject.id)?.delivery?.operation?.state).toBe("settled");
+  } finally {
+    release();
+    await held;
+    if (previousWait === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+    else process.env.LLV_PIPELINE_LOCK_WAIT_MS = previousWait;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("publishPipelineBranch reports a repo with no origin as unavailable rather than a failure", async () => {
   const box = publishSandbox(false);
   try {
     const passed = box.commit("stage.txt", "stage work\n");
-    expect(publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toEqual({ ok: true, sha: passed, remote: "unavailable" });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toEqual({ ok: true, sha: passed, remote: "unavailable" });
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
   }
 });
 
-test("publishPipelineBranch refuses a dirty worktree and preserves the uncommitted work", () => {
+test("adding an origin cannot redirect a delivery claim made without a remote", async () => {
+  const box = publishSandbox(false);
+  try {
+    const head = box.commit("local.txt", "local work\n");
+    git(box.root, "init", "--bare", "--initial-branch=main", box.origin);
+    git(box.repo, "remote", "add", "origin", box.origin);
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "unavailable" });
+    expect(box.originHead()).toBe("");
+    expect(findPipelineRecord(box.subject.id)?.delivery?.target.remote).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("publishPipelineBranch refuses a dirty worktree and preserves the uncommitted work", async () => {
   const box = publishSandbox();
   try {
     const passed = box.commit("stage.txt", "stage work\n");
     fs.writeFileSync(path.join(box.subject.worktreeDir, "in-progress.txt"), "unfinished\n");
 
-    expect(publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toEqual({
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toEqual({
       ok: false,
       error: "the pipeline worktree has uncommitted changes; choose whether to commit or discard them before retrying review",
     });
@@ -530,7 +885,7 @@ test("publishPipelineBranch refuses a dirty worktree and preserves the uncommitt
   }
 });
 
-test("a head already recorded as published costs no remote probe at all", () => {
+test("a head already recorded as published costs no remote probe at all", async () => {
   const head = "a".repeat(40);
   const calls: string[] = [];
   const exec: ExecPort = (command, args) => {
@@ -541,13 +896,16 @@ test("a head already recorded as published costs no remote probe at all", () => 
     return { code: 0, stdout: "", stderr: "" };
   };
 
-  expect(publishPipelineBranch(pipeline(), exec, { acceptedSha: head, publishedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+  const subject = pipeline();
+  subject.publishedCommit = head;
+  savePipelines([subject]);
+  expect(await publishPipelineBranch(subject, exec, { acceptedSha: head, publishedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
   expect(calls.some((call) => call.includes("ls-remote"))).toBe(false);
   expect(calls.some((call) => call.includes("push"))).toBe(false);
   expect(calls.some((call) => call.includes("remote get-url"))).toBe(false);
 });
 
-test("an unreachable remote gets one time-bounded read per publication call (#999)", () => {
+test("an unreachable remote gets one time-bounded read per publication call (#999)", async () => {
   const head = "a".repeat(40);
   const calls: string[] = [];
   const exec: ExecPort = (command, args) => {
@@ -560,7 +918,7 @@ test("an unreachable remote gets one time-bounded read per publication call (#99
     return { code: 128, stdout: "", stderr: "remote read must be bounded" };
   };
 
-  expect(publishPipelineBranch(pipeline(), exec, { acceptedSha: head })).toEqual({
+  expect(await publishPipelineBranch(pipeline(), exec, { acceptedSha: head })).toEqual({
     ok: true,
     sha: head,
     remote: "unreachable",
@@ -572,7 +930,7 @@ test("an unreachable remote gets one time-bounded read per publication call (#99
   expect(calls.some((call) => call.startsWith("sleep "))).toBe(false);
 });
 
-test("the approval's remote head read is time-bounded and tells transport failures from the rest (#1692)", () => {
+test("the approval's remote head read is time-bounded and tells transport failures from the rest (#1692)", async () => {
   const head = "a".repeat(40);
   const answer = (result: { code: number | null; stdout?: string; stderr?: string }) => {
     const calls: string[] = [];
@@ -612,7 +970,7 @@ test("the approval's remote head read is time-bounded and tells transport failur
   expect(answer({ code: 0, stdout: "" }).result).toEqual({ ok: false, transient: false, error: "the remote pipeline branch has no exact commit SHA" });
 });
 
-test("a real remote read that hangs is killed at the bound and reads as a network timeout (#1692)", () => {
+test("a real remote read that hangs is killed at the bound and reads as a network timeout (#1692)", async () => {
   /* `timeout --signal=KILL` takes itself down with the command, so the child
      ends on a signal with no exit status. An SSH transport that never answers
      is the incident's shape, reproduced here without a network. */
@@ -634,7 +992,7 @@ test("a real remote read that hangs is killed at the bound and reads as a networ
   }
 }, 30_000);
 
-test("publication pushes only the immutable accepted revision when the branch advances mid-publish", () => {
+test("publication pushes only the immutable accepted revision when the branch advances mid-publish", async () => {
   const box = publishSandbox();
   try {
     const accepted = box.commit("accepted.txt", "accepted\n");
@@ -652,7 +1010,7 @@ test("publication pushes only the immutable accepted revision when the branch ad
       return realExec(command, args, cwd);
     };
 
-    const published = publishPipelineBranch(box.subject, racing, { acceptedSha: accepted });
+    const published = await publishPipelineBranch(box.subject, racing, { acceptedSha: accepted });
 
     expect(racy).not.toBeNull();
     expect(racy).not.toBe(accepted);
@@ -666,13 +1024,13 @@ test("publication pushes only the immutable accepted revision when the branch ad
   }
 });
 
-test("a worktree that has moved past the accepted revision publishes nothing", () => {
+test("a worktree that has moved past the accepted revision publishes nothing", async () => {
   const box = publishSandbox();
   try {
     const accepted = box.commit("accepted.txt", "accepted\n");
     const advanced = box.commit("later.txt", "later\n");
 
-    const result = publishPipelineBranch(box.subject, realExec, { acceptedSha: accepted });
+    const result = await publishPipelineBranch(box.subject, realExec, { acceptedSha: accepted });
 
     expect(result).toEqual({
       ok: false,
@@ -684,14 +1042,14 @@ test("a worktree that has moved past the accepted revision publishes nothing", (
   }
 });
 
-test("publication refuses an accepted revision that is not an exact commit SHA", () => {
+test("publication refuses an accepted revision that is not an exact commit SHA", async () => {
   const calls: string[] = [];
   const exec: ExecPort = (command, args) => {
     calls.push(`${command} ${args.join(" ")}`);
     return { code: 0, stdout: "", stderr: "" };
   };
 
-  expect(publishPipelineBranch(pipeline(), exec, { acceptedSha: "HEAD" })).toEqual({
+  expect(await publishPipelineBranch(pipeline(), exec, { acceptedSha: "HEAD" })).toEqual({
     ok: false,
     error: "the accepted pipeline revision is not an exact commit SHA: HEAD",
   });

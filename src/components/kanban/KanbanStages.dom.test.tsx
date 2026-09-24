@@ -124,8 +124,9 @@ const mergeStarted = () => searchPipeline({}, { stageId: "merge", attempts: [att
 
 const flows = [{ id: "flow-review", rounds: [{ n: 1, verdict: "REQUEST_CHANGES", reviewerPath: null, reviewerConversationId: null, startedAt: iso(3500) }, { n: 2, verdict: "APPROVE", reviewerPath: null, reviewerConversationId: null, startedAt: iso(3000) }] }] as unknown as Flow[];
 
-function task(id: string, status: TaskStatus, text: string): BoardTask {
-  return { id, project: "fixture", text, status, placement: "unplaced", assignments: [], createdAt: iso(9000), updatedAt: iso(600), revision: REV(1) } as BoardTask;
+function task(id: string, status: TaskStatus, text: string, assigned: readonly FileEntry[] = []): BoardTask {
+  const assignments = assigned.map((file) => ({ path: file.path, conversationId: file.conversationId, panePid: null, state: "handoff", error: null, at: iso(600) }));
+  return { id, project: "fixture", text, status, placement: "unplaced", assignments, createdAt: iso(9000), updatedAt: iso(600), revision: REV(1) } as BoardTask;
 }
 
 const idlePorts: TaskMutationPorts = { patch: async () => ({ ok: false, status: 500, error: "unused" }), read: async () => null, changed: () => {} };
@@ -147,6 +148,9 @@ function guardRefusal(pipeline: Pipeline, body: PatchPipelineRequest): PipelineW
   return null;
 }
 
+/* The record revision a read answers with; one more review round names it. */
+const REVISION = "a".repeat(64);
+
 /* The pipeline route, answered by the test: each write waits for `release`
    when `hold` is set, so the pending state can be read. Queued answers win;
    otherwise the engine's guards decide against the record as it is then, and
@@ -167,7 +171,7 @@ function pipelineRoute(stored: () => Pipeline) {
     read: async (id) => {
       reads.push(id);
       const pipeline = state.record ?? stored();
-      return { pipeline, stageDigests: state.omitDigests ? {} : stageDigests(pipeline.stages) };
+      return { pipeline, stageDigests: state.omitDigests ? {} : stageDigests(pipeline.stages), revision: REVISION };
     },
     patch: async (id, body) => {
       patches.push({ id, body });
@@ -184,7 +188,7 @@ function pipelineRoute(stored: () => Pipeline) {
   return { ports, patches, reads, state };
 }
 
-function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: TaskStatus } = {}) {
+function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: TaskStatus; assigned?: FileEntry[] } = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -196,12 +200,12 @@ function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: Task
     <KanbanBoard
       project="fixture"
       groups={[]}
-      manual={[]}
+      manual={options.assigned ?? []}
       files={currentFiles}
       flows={flows}
       pipelines={current ? [current] : []}
       tasks={[]}
-      allTasks={[task("t-search", options.status ?? "assigned", "Restore search results after the index rebuild")]}
+      allTasks={[task("t-search", options.status ?? "assigned", "Restore search results after the index rebuild", options.assigned)]}
       drafts={[]}
       now={NOW}
       loaded
@@ -257,15 +261,17 @@ const pane = (host: HTMLElement, stageId: string) => sheet(host)?.querySelector<
 const same = (actual: unknown, expected: unknown) => expect(actual === expected && expected !== null && expected !== undefined).toBe(true);
 const readerIn = (element: Element | null): string | null => element?.querySelector<HTMLElement>("[data-kanban-reader]")?.getAttribute("data-kanban-reader") ?? null;
 
-test("the card's pipeline header carries Stages and the pipeline actions, each with the engine's own refusal", async () => {
+test("the lane row's head opens Stages and carries the pipeline actions, each with the engine's own refusal", async () => {
   const { host } = mount(searchPipeline());
   await tick();
-  const head = card(host).querySelector(".stage-section .sec-head")!;
-  expect(head.querySelector("[data-open-stages]")?.textContent).toBe("Stages");
-  expect(head.querySelector("[data-open-stages]")?.getAttribute("aria-label")).toBe("Expand all 4 stages");
+  const head = card(host).querySelector(".pblock .pb-head")!;
+  /* The whole head is the way into Stages (#2072, variant B): no separate button. */
+  expect(head.querySelector("[data-open-stages] .pb-title")?.textContent).toBe("Restore search results");
+  expect(head.querySelector("[data-open-stages]")?.getAttribute("aria-label")).toMatch(/^Restore search results: .+\. Expand stages$/);
   click(head.querySelector("[data-pipeline-menu]"));
   expect(menuLabels(host)).toEqual([
     ["Expand stages", false, null],
+    ["Attach PR or issue…", false, null],
     ["Pause", false, "The pipeline does not advance until you resume it."],
     ["Retry a stage", true, "Only while the pipeline waits on a stage for a decision"],
     ["Skip a stage", true, "Only while the pipeline waits on a stage for a decision"],
@@ -367,7 +373,7 @@ test("Stages opens the sheet on the live stage: navigator, loop, graph, and a pa
 test("a reader open on the card moves into its pane and back, the same mounted conversation throughout", async () => {
   const { host } = mount(searchPipeline());
   await tick();
-  click(card(host).querySelector('.psummary [data-stage="verify"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="verify"]'));
   await tick();
   const container = card(host).querySelector<HTMLElement>(`.reader-host[data-reader-key="${verify2.conversationId}"]`);
   expect(container).toBeTruthy();
@@ -386,7 +392,7 @@ test("a shelf column widens for a reader on its card, and narrows again while th
   const { host } = mount(searchPipeline(), { status: "blocked" });
   await tick();
   const column = () => host.querySelector<HTMLElement>('.column[data-status="blocked"]')!;
-  click(card(host).querySelector('.psummary [data-stage="verify"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="verify"]'));
   await tick();
   expect(column().classList.contains("reading")).toBe(true);
   press(card(host).querySelector("[data-open-stages]"));
@@ -455,13 +461,13 @@ test("a pane's actions offer retry and skip only for the stage the pipeline wait
 test("a waiting node opens its first message on the card; Save re-reads the stage and writes the words into the stage's own wiring", async () => {
   const { host, route } = mount(searchPipeline());
   await tick();
-  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
   const panel = card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
   same(document.activeElement, panel);
   expect(panel.querySelector(".ch-title")?.textContent).toBe("Merge · Restore search results after the index rebuild");
   expect(panel.querySelector(".ch-stage")?.textContent).toBe("stage 4/4");
-  expect(card(host).querySelector('.psummary [data-stage="merge"]')?.classList.contains("selected")).toBe(true);
+  expect(card(host).querySelector('.pb-pills [data-stage="merge"]')?.classList.contains("selected")).toBe(true);
   click(panel.querySelector("[data-draft-edit]"));
   const field = panel.querySelector<HTMLTextAreaElement>("textarea.draft-edit")!;
   same(document.activeElement, field);
@@ -480,7 +486,7 @@ test("a waiting node opens its first message on the card; Save re-reads the stag
 test("words saved elsewhere since the edit began stop the save; Use theirs keeps them, Keep mine saves over them", async () => {
   const { host, route } = mount(searchPipeline());
   await tick();
-  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
   const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
   click(panel().querySelector("[data-draft-edit]"));
@@ -501,7 +507,7 @@ test("words saved elsewhere since the edit began stop the save; Use theirs keeps
 test("a stage that starts between the check and the write answers 409: the text stays, marked not delivered, and the panel becomes the conversation once it is let go", async () => {
   const { host, route, update } = mount(searchPipeline());
   await tick();
-  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
   const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]");
   click(panel()!.querySelector("[data-draft-edit]"));
@@ -526,7 +532,7 @@ test("a stage that starts between the check and the write answers 409: the text 
 test("Escape cancels an edit and hands focus back to Edit; a panel with nothing unsaved becomes the stage's reader when it starts, folded as it was", async () => {
   const { host, route, update } = mount(searchPipeline());
   await tick();
-  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
   const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]");
   click(panel()!.querySelector("[data-draft-edit]"));
@@ -611,7 +617,7 @@ test("a retry chosen on a stale menu is refused by the engine when another stage
 test("a stage another client changes between the save's read and its write is refused by the engine and keeps that client's words, which the notice shows", async () => {
   const { host, route } = mount(searchPipeline());
   await tick();
-  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
   const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
   click(panel().querySelector("[data-draft-edit]"));
@@ -629,7 +635,7 @@ test("a stage another client changes between the save's read and its write is re
 test("when only the stage's account changed in between, the words are the same: the notice says so, and Keep mine saves against the new digest", async () => {
   const { host, route } = mount(searchPipeline());
   await tick();
-  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
   const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
   click(panel().querySelector("[data-draft-edit]"));
@@ -652,7 +658,7 @@ test("when only the stage's account changed in between, the words are the same: 
 test("a read without the stage's digest sends no unguarded write", async () => {
   const { host, route } = mount(searchPipeline());
   await tick();
-  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
   const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
   click(panel().querySelector("[data-draft-edit]"));
@@ -688,7 +694,7 @@ test("an action with no answer is not confirmed, never refused; Check again only
 });
 
 const openMergePanel = async (host: HTMLElement) => {
-  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
   return () => card(host).querySelector<HTMLElement>("[data-stage-detail]");
 };
@@ -824,3 +830,130 @@ test("a stage waiting before any attempt of its own is expected as attempt 0, an
   expect(route.patches.at(-1)?.body).toEqual({ action: "retry-stage", expectedStageId: "merge", expectedAttempt: 0 });
   expect(receiptTexts(host).at(-1)).toBe("Retrying Merge in «Restore search results after the index rebuild»");
 });
+
+/* Stage cards say which stage they are (#1865): a design stage and a critique
+   stage share the architect preset, and critique ran twice. A stage's reader
+   names the stage the way the stage list does, with the attempt once there are
+   two; the preset moves to the header's tooltip. */
+test("readers of stages that share a role preset carry the stage's name and attempt, as the stage list names them", async () => {
+  const design1 = conversation("design-1");
+  const critique1 = conversation("critique-1");
+  const critique2 = conversation("critique-2");
+  const record = {
+    ...searchPipeline(),
+    stages: [stage("design", "architect", "critique"), stage("critique", "architect", null, { onFail: { to: "design", maxRounds: 2 } })],
+    runs: [
+      { stageId: "design", attempts: [attempt(1, "passed", design1, 7200)] },
+      { stageId: "critique", attempts: [attempt(1, "failed", critique1, 5000), attempt(2, "running", critique2, 1200)] },
+    ],
+    cursor: { stageId: "critique", state: "running", input: null, activatedBy: null },
+  } as unknown as Pipeline;
+  const { host } = mount(record, { files: [design1, critique1, critique2] });
+  await tick();
+  const title = "Restore search results after the index rebuild";
+  const headers = () => [...card(host).querySelectorAll<HTMLElement>(".conv-head .ch-title")];
+
+  click(card(host).querySelector('.pb-pills [data-stage="design"]'));
+  await tick();
+  click(card(host).querySelector('.pb-pills [data-stage="critique"]'));
+  await tick();
+  /* The earlier critique opens from the card's past attempts. */
+  click([...card(host).querySelectorAll<HTMLElement>("[data-past] .hopen")].find((button) => button.closest("[data-past]")?.querySelector(".lbl")?.textContent?.startsWith("Critique")));
+  await tick();
+  expect(headers().map((header) => header.textContent).sort()).toEqual([`Critique · 1 · ${title}`, `Critique · 2 · ${title}`, `Design · ${title}`]);
+  /* The preset is secondary: in the tooltip only, and left out nowhere it adds. */
+  expect(headers().some((header) => header.textContent?.includes("Architect"))).toBe(false);
+  const hint = (label: string) => headers().find((header) => header.textContent === `${label} · ${title}`)?.getAttribute("title");
+  expect(hint("Critique · 2")).toBe(`Critique, attempt 2 of 2 · Architect · Claude · ${title}`);
+  expect(hint("Critique · 1")).toBe(`Critique, attempt 1 of 2 · Architect · Claude · ${title}`);
+  expect(hint("Design")).toBe(`Design · Architect · Claude · ${title}`);
+
+  /* The names are the stage list's, letter for letter. */
+  press(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  expect([...sheet(host)!.querySelectorAll<HTMLElement>(".pane .pname")].map((name) => name.textContent)).toEqual(["1. Design", "2. Critique"]);
+});
+
+/* ── #2072: the lane row answers in place ─────────────────────────────────── */
+
+/* Verify's second attempt came back failed and the lane waits on the operator. */
+const parkedOnVerify = () => searchPipeline({
+  state: "needs_decision",
+  runs: searchPipeline().runs.map((run) => (run.stageId === "verify"
+    ? { ...run, attempts: [run.attempts[0]!, { ...run.attempts[1]!, state: "failed", completedAt: iso(600), verdict: { status: "fail", findings: ["P1 — the alias swaps before the new index answers"], rankedFindings: [{ severity: "P1", text: "the alias swaps before the new index answers" }] } }] }
+    : run)),
+} as Partial<Pipeline>);
+const answer = (host: HTMLElement, action: string) => card(host).querySelector<HTMLButtonElement>(`.pblock [data-answer-action="${action}"]`);
+
+test("a lane that waits on a decision is answered on the card, and Retry sends exactly what the ⋯ menu's Retry sends", async () => {
+  const onCard = mount(parkedOnVerify());
+  await tick();
+  expect(answer(onCard.host, "skip-stage")?.textContent).toBe("Skip Verify");
+  expect(answer(onCard.host, "retry-stage")?.textContent).toBe("Retry Verify");
+  /* What it stopped on, in place: the parked stage's first finding. */
+  expect(card(onCard.host).querySelector(".pb-answer .stage-findings li")?.textContent).toBe("P1the alias swaps before the new index answers");
+  click(answer(onCard.host, "retry-stage"));
+  await tick();
+
+  const fromMenu = mount(parkedOnVerify());
+  await tick();
+  click(card(fromMenu.host).querySelector("[data-pipeline-menu]"));
+  click(menuItem(fromMenu.host, "Retry Verify"));
+  await tick();
+
+  expect(onCard.route.patches).toEqual([{ id: "p-search", body: { action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
+  expect(onCard.route.patches).toEqual(fromMenu.route.patches);
+  expect(receiptTexts(onCard.host).at(-1)).toBe("Retrying Verify in «Restore search results after the index rebuild»");
+});
+
+test("Skip on the card waits out its receipt before anything is sent, and its Undo sends nothing", async () => {
+  const { host, route } = mount(parkedOnVerify());
+  await tick();
+  click(answer(host, "skip-stage"));
+  await tick();
+  expect(route.patches).toEqual([]);
+  expect(receiptTexts(host).at(-1)).toBe("Skipping Verify in «Restore search results after the index rebuild»");
+  expect(card(host).querySelector("[data-pipeline-acting]")?.textContent).toBe("Skipping…");
+  /* One answer at a time. */
+  expect(answer(host, "retry-stage")?.disabled).toBe(true);
+  const undo = [...host.querySelectorAll<HTMLElement>("[data-kanban-receipt] .act")].find((button) => button.textContent === "Undo");
+  click(undo);
+  await tick();
+  expect(card(host).querySelector("[data-pipeline-acting]")).toBeNull();
+  expect(answer(host, "retry-stage")?.disabled).toBe(false);
+  expect(route.patches).toEqual([]);
+
+  /* Left alone, the window closes and the same guarded skip the menu sends goes out. */
+  click(answer(host, "skip-stage"));
+  await tick(4_300);
+  expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
+});
+
+test("a spent review budget offers Close and One more round; One more round reads the revision and grants exactly one round", async () => {
+  const spent = searchPipeline({
+    state: "needs_review",
+    cursor: null,
+    reviewPending: { stageId: "verify", attempt: 2, fixStageId: "implement", fixAttempt: 2, reviewedHead: "4f1c2a9d00", currentHead: "9b2e7d4c11", verdict: "fail", findings: 1, at: iso(600) },
+  } as Partial<Pipeline>);
+  const { host, route } = mount(spent);
+  await tick();
+  expect(card(host).querySelector(".pb-answer [data-review-heads]")?.textContent).toBe("last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed");
+  expect(answer(host, "close")?.textContent).toBe("Close the pipeline");
+  expect(answer(host, "continue-review")?.textContent).toBe("One more round");
+  /* The lane's state word is the warning one, not the grey of an idle lane (#2080). */
+  expect(card(host).querySelector('.pb-head .pstate-word[data-pstate="needs_review"]')?.textContent).toBe("needs review");
+  click(answer(host, "continue-review"));
+  await tick(20);
+  expect(route.reads).toEqual(["p-search"]);
+  expect(route.patches).toHaveLength(1);
+  const body = route.patches[0]!.body as PatchPipelineRequest & { clientRequestId: string };
+  expect({ ...body, clientRequestId: body.clientRequestId.startsWith("board-") }).toEqual({ action: "continue-review", addRounds: 1, expectedRevision: REVISION, clientRequestId: true });
+  expect(receiptTexts(host).at(-1)).toBe("One more review round for «Restore search results after the index rebuild»");
+
+  /* Close is one of the two acts the engine cannot take back: it waits too. */
+  click(answer(host, "close"));
+  await tick();
+  expect(route.patches).toHaveLength(1);
+  expect(receiptTexts(host).at(-1)).toBe("Closing «Restore search results after the index rebuild»");
+});
+

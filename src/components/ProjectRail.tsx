@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { DelegatusMark } from "@/components/brand/BrandMark";
 import { Badge } from "@/components/ui/Badge";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/useProjectCuration";
 import { projectMatchesQuery } from "@/lib/displayNames";
+import { PRODUCT_NAME } from "@/lib/brand";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -15,13 +17,17 @@ import { AccessQrButton } from "./AccessQrButton";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
-import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, Loader2, MoreHorizontal } from "./icons";
+import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal } from "./icons";
+import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
+import { openOnboarding } from "./onboarding/useOnboarding";
+import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
 import { PushBell } from "./PushBell";
 import { ResourcesFooter } from "./ResourcesFooter";
 import { fmtAge } from "./utils";
+import { Z } from "@/components/layers";
 
 /**
  * Asks the rail to open the create-project form it already owns (issue #1162).
@@ -185,7 +191,8 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
              that maximum still fits without clipping in the ~86px it is allotted. */
           <>
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-              <span className="min-w-0 truncate">{t("rail.title")}</span>
+              <DelegatusMark size={20} />
+              <span className="min-w-0 truncate" data-rail-brand="">{PRODUCT_NAME}</span>
               {totalLive ? (
                 <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted">{totalLive > 99 ? "99+" : totalLive}</span>
               ) : null}
@@ -199,12 +206,16 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           </>
         ) : (
           /* Six unexplained things in 240px was the complaint (issue #1819).
-             The desktop header keeps the title, the control that puts the rail
-             away, and ONE menu; the counts are gone from here, because the
-             rows below carry their own marks and the board header already says
-             how many agents work and how many need the operator. */
+             The desktop header keeps the product's mark and name, the control
+             that puts the rail away, and ONE menu; the counts are gone from
+             here, because the rows below carry their own marks and the board
+             header already says how many agents work and how many need the
+             operator. */
           <>
-            <span className="min-w-0 flex-1 truncate">{t("rail.title")}</span>
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              <DelegatusMark size={20} />
+              <span className="min-w-0 truncate" data-rail-brand="">{PRODUCT_NAME}</span>
+            </span>
             {onHide ? (
               <button
                 type="button"
@@ -338,10 +349,8 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
               <div className="px-3 py-4 text-center text-[12px] text-muted">{t("common.nothingFound")}</div>
             ) : null
           ) : (
-            <div className="flex items-center justify-center gap-2 px-3 py-4 text-[12px] text-muted">
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-              {t("common.loading")}
-            </div>
+            /* Rows in the shape of the project rows that are coming (#2071). */
+            <BoardRowsSkeleton variant="rail" rows={6} className="flex-none" />
           )
         ) : null}
       </nav>
@@ -404,7 +413,7 @@ function RailHeaderMenu() {
       {open ? (
         <div
           data-rail-menu-panel=""
-          className="absolute right-0 top-[30px] z-40 w-[232px] rounded-[10px] border border-border bg-card p-1 shadow-2"
+          className={`absolute right-0 top-[30px] ${Z.popover} w-[232px] rounded-[10px] border border-border bg-card p-1 shadow-2`}
         >
           <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
             <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">
@@ -420,6 +429,41 @@ function RailHeaderMenu() {
             <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{pushLabel}</span>
             <PushBell onStatus={onPushStatus} />
           </div>
+          {/* #1876: the setup guide, its agent mapping and dictation, reachable again. */}
+          <div className="my-1 border-t border-border" />
+          <button
+            type="button"
+            data-rail-menu-setup-guide=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); openOnboarding("guide"); }}
+          >
+            {t("onboarding.menu.guide")}
+          </button>
+          <button
+            type="button"
+            data-rail-menu-agent-mapping=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); openOnboarding("mapping"); }}
+          >
+            {t("onboarding.menu.mapping")}
+          </button>
+          <button
+            type="button"
+            data-rail-menu-dictation=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); openOnboarding("voice"); }}
+          >
+            {t("onboarding.menu.voice")}
+          </button>
+          {/* #2007: how this install updates itself. */}
+          <button
+            type="button"
+            data-rail-menu-update=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); openSelfUpdate(); }}
+          >
+            {t("selfUpdate.menu")}
+          </button>
         </div>
       ) : null}
     </div>

@@ -29,7 +29,7 @@ import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplateP
 import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
 import { StageCompletedCard } from "@/components/pipelines/StageCompletedCard";
 import { StageStatusRow } from "@/components/pipelines/StageStatusRow";
-import { STAGE_TONES, attemptStateLabel, attemptNavTarget, canSourcePipeline, createDraftPipeline, optimisticAddStage, patchPipeline, pipelineStagePosition, pipelineStateLabel, renderableFlowIds, resolveStageNavFile, reviewLoopChainValid, stageChipLabel, stageChipState, pipelineStageByAgentPath, stagePaneTitleOf, type PipelineStagePane } from "@/components/pipelines/pipelineModel";
+import { STAGE_TONES, attemptStateLabel, attemptNavTarget, canSourcePipeline, createDraftPipeline, optimisticAddStage, patchPipeline, pipelineStagePosition, pipelineStateLabel, renderableFlowIds, resolveStageNavFile, reviewLoopChainValid, stageAttemptPlace, stageCardLabel, stageChipState, stageLabelTitle, pipelineStageByAgentPath, stagePaneTitleOf, type PipelineStagePane } from "@/components/pipelines/pipelineModel";
 import { pushTaskToast } from "@/components/tasks/taskToast";
 import type { TaskRelation } from "@/components/tasks/taskRelations";
 import { MAX_PIPELINE_STAGES } from "@/lib/pipelines/limits";
@@ -74,6 +74,7 @@ import {
   type SchemeRect,
   type StageSlot,
 } from "./layout";
+import { Z } from "@/components/layers";
 
 const EMPTY_RELATIONS: readonly TaskRelation[] = [];
 const EMPTY_TASKS: BoardTask[] = [];
@@ -649,7 +650,7 @@ export const GroupsLayer = memo(function GroupsLayer({
           just under its group's label chip. */}
       {openGroup ? (
         <div
-          className="pointer-events-auto absolute left-0 top-0 z-[45]"
+          className={`pointer-events-auto absolute left-0 top-0 ${Z.popover}`}
           style={{ transform: `translate(${openGroup.x + 20}px, ${openGroup.y + 16}px)`, transition: GROUP_MOVE_TRANSITION }}
           onKeyDown={(event) => {
             if (event.key !== "Escape") return;
@@ -1182,7 +1183,7 @@ const NodeChrome = memo(function NodeChrome({
       data-pipeline-stage-state={pipelineStage ? stageChipState(pipelineStage.pipeline, pipelineStage.stage) : undefined}
       data-lasso-selected={marked ? "true" : undefined}
       data-select-check-hover={checkHover ? "true" : undefined}
-      className={`scheme-enter absolute ${badgesExpanded ? "z-[60]" : underOpen || flowOpen ? "z-20" : ""}${dimClass(dimmed)}`}
+      className={`scheme-enter absolute ${badgesExpanded ? Z.popover : underOpen || flowOpen ? Z.lifted : ""}${dimClass(dimmed)}`}
       style={{ transform: `translate(${node.x}px, ${node.y}px)`, width: node.w, height: node.h, transition: MOVE_TRANSITION }}
     >
       {onToggleMember ? (
@@ -1207,9 +1208,9 @@ const NodeChrome = memo(function NodeChrome({
           data-pipeline-stage-label
           style={node.presentation ? { fontSize: 10.5, height: "2.3em", paddingInline: ".75em", gap: ".5em", top: -26, right: 0 } : undefined}
           className="pointer-events-none absolute -top-3 right-3 z-[7] inline-flex h-6 max-w-[78%] items-center gap-1.5 rounded-full border border-accent/35 bg-card px-2 text-[10.5px] font-bold text-accent shadow-1"
-          title={stageChipLabel(t, pipelineStage.stage)}
+          title={stageLabelTitle(t, pipelineStage.stage, stageAttemptPlace(pipelineStage.pipeline, pipelineStage.stage.id, node.file), null)}
         >
-          <span className="truncate">{stageChipLabel(t, pipelineStage.stage)}</span>
+          <span className="truncate">{stageCardLabel(t, pipelineStage.stage, stageAttemptPlace(pipelineStage.pipeline, pipelineStage.stage.id, node.file))}</span>
           <span className="shrink-0 text-muted">{pipelineStage.index + 1}/{pipelineStage.total}</span>
         </span>
       ) : null}
@@ -1258,7 +1259,7 @@ const NodeChrome = memo(function NodeChrome({
         </div>
       ) : null}
       {flowOpen ? (
-        <div className="absolute left-0 top-[-8px] z-40 -translate-y-full">
+        <div className={`absolute left-0 top-[-8px] ${Z.popover} -translate-y-full`}>
           <FlowDialog file={node.file} onClose={() => setFlowOpen(false)} />
         </div>
       ) : null}
@@ -1351,7 +1352,7 @@ const NodeChrome = memo(function NodeChrome({
         </button>
       ) : null}
       {underOpen ? (
-        <div className="absolute left-0 top-[calc(100%+52px)] z-30 max-h-[280px] w-full overflow-y-auto rounded-[10px] border border-border bg-card p-1.5 shadow-2">
+        <div className={`absolute left-0 top-[calc(100%+52px)] ${Z.popover} max-h-[280px] w-full overflow-y-auto rounded-[10px] border border-border bg-card p-1.5 shadow-2`}>
           {node.under.map((file) => (
             <UnderRow key={file.path} file={file} onSelect={onSelect} />
           ))}
@@ -1502,7 +1503,7 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
     return (
       <div
         data-scheme-node={slot.key}
-        className={`scheme-enter absolute${dimClass(dimmed)} ${rowOpen ? "z-30" : ""}`}
+        className={`scheme-enter absolute${dimClass(dimmed)} ${rowOpen ? Z.popover : ""}`}
         style={fittedShellStyle(slot)}
       >
         {slot.incoming ? (
@@ -1531,7 +1532,7 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
           <div
             id={cardId}
             data-stage-row-card
-            className="absolute left-0 top-[calc(100%+8px)] z-30 flex"
+            className={`absolute left-0 top-[calc(100%+8px)] ${Z.popover} flex`}
             style={{ width: slot.w, height: SLOT_H }}
           >
             <EscapeToClose onClose={() => setRowOpen(false)} />

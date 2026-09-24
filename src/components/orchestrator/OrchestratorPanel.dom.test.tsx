@@ -1471,8 +1471,12 @@ test("the dock renders the delivered mandate as the seat's own card, not as the 
      which is why the board's pane names the same mandate the same way. */
   expect(card!.textContent).toContain(`Mandate v${ORCHESTRATOR_PROMPT_VERSION}`);
   expect(card!.textContent).toContain("sent at seat creation");
-  /* Folded away, and the rotation handoff is a section of the SAME card. */
-  expect(host.textContent).not.toContain("You are the viewer's built-in Manager");
+  /* Folded away, and the rotation handoff is a section of the SAME card. The
+     opening is read off the prompt itself, so a reworded mandate keeps this
+     check able to fail. */
+  const mandateOpening = ORCHESTRATOR_SYSTEM_PROMPT.split(" (issues")[0]!;
+  expect(mandateOpening.length).toBeGreaterThan(20);
+  expect(host.textContent).not.toContain(mandateOpening);
   expect(host.textContent).not.toContain("You are replacing orchestrator conversation");
   expect(card!.textContent).toContain("Rotation handoff");
   /* The operator's bubble is gone from the row entirely. */
@@ -1590,7 +1594,12 @@ test("the badge is localized with the rest of the dock", async () => {
 });
 
 
-test.each(["ultra", "max"])("Astra/%s to Luna submits the displayed effort", async (effort) => {
+test.each([
+  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
+  ["gpt-6-astra", "max", "gpt-5.6-luna"],
+  ["gpt-6-sol", "ultra", "gpt-6-luna"],
+  ["gpt-6-sol", "max", "gpt-6-luna"],
+] as const)("%s/%s to %s submits the displayed effort", async (from, effort, to) => {
   const host = mount();
   await settle();
   const codex = [...host.querySelectorAll('[role="radio"]')].find((node) => node.textContent === "Codex") as HTMLButtonElement;
@@ -1601,11 +1610,11 @@ test.each(["ultra", "max"])("Astra/%s to Luna submits the displayed effort", asy
     field.value = value;
     field.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
   });
-  select(modelSelect, "gpt-6-astra");
+  select(modelSelect, from);
   select(effortSelect, effort);
   expect(effortSelect.value).toBe(effort);
-  select(modelSelect, "gpt-5.6-luna");
-  expect(modelSelect.value).toBe("gpt-5.6-luna");
+  select(modelSelect, to);
+  expect(modelSelect.value).toBe(to);
   const expected = effort === "ultra" ? "" : effort;
   expect(effortSelect.value).toBe(expected);
   expect(effortSelect.selectedOptions[0]?.textContent).toBe(expected || "effort: default");
@@ -1613,14 +1622,13 @@ test.each(["ultra", "max"])("Astra/%s to Luna submits the displayed effort", asy
   flushSync(() => confirmButton(host).click());
   await settle();
   expect(seatPosts).toHaveLength(1);
-  expect(seatPosts[0]?.model).toBe("gpt-5.6-luna");
+  expect(seatPosts[0]?.model).toBe(to);
   expect(seatPosts[0]?.effort).toBe(expected || undefined);
 });
 
 test("the kanban seat's inline header draws the predecessor link as a glyph, with its words on the name and the title (#1681)", async () => {
-  /* `.kb .seat-head` is one flex row that does not wrap, and the identity
-     beside this link has a flex-basis of 0 — so a label here does not shrink,
-     it takes the model name and the account badge away. Inline the link is the
+  /* The identity beside this link has a flex-basis of 0 — so a label here
+     does not shrink, it takes the model name and the account badge away. Inline the link is the
      glyph alone; the dock's row wraps, so there it keeps its words. */
   incumbentStatus = incumbent({ predecessorConversationId: "conversation_predecessor" });
   const read = {

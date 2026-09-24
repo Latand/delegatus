@@ -1,6 +1,7 @@
 "use client";
 
 import { CornerDownRight, LoaderCircle, RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import { EngineBadge } from "@/components/EngineMark";
@@ -44,6 +45,7 @@ export function IncumbentHeader({
   rotating,
   opening,
   onRotate,
+  hostControls = null,
   inline = false,
 }: {
   /** The canonical project this seat holds. The tick is per project, and the
@@ -68,6 +70,9 @@ export function IncumbentHeader({
       draft below opens PREFILLED rather than on the generic defaults. */
   opening: boolean;
   onRotate: () => void;
+  /** The host's own control (Stop host, on the kanban seat), drawn after
+      Rotate in the same group so the two actions wrap together. */
+  hostControls?: ReactNode;
   /** One row inside a header that already names the seat (the kanban seat,
       #1695): no band of its own, and the predecessor link rides the row as its
       glyph rather than as a line under it. */
@@ -101,7 +106,7 @@ export function IncumbentHeader({
     >
       <div
         data-orchestrator-identity
-        className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${inline ? "flex-1" : "flex-wrap"}`}
+        className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${inline ? "flex-1" : ""}`}
       >
         {engine ? <EngineBadge engine={engine} className="min-h-5 px-2 py-0.5 text-caption font-semibold leading-none" /> : null}
         {model ? (
@@ -128,18 +133,21 @@ export function IncumbentHeader({
         {orchestratorMandateStale(promptVersion) ? (
           <span
             data-orchestrator-mandate-version={String(promptVersion)}
-            className="shrink-0 text-caption font-semibold text-warning"
+            className="min-w-0 truncate text-caption font-semibold text-warning"
             title={t("orchPanel.mandateStaleTitle", { version: promptVersion, current: ORCHESTRATOR_PROMPT_VERSION })}
           >
             {t("orchPanel.mandateStale", { version: promptVersion, current: ORCHESTRATOR_PROMPT_VERSION })}
           </span>
         ) : null}
-        {/* The row's two CONTROLS, in one group at its right edge. The group
-            is what carries the auto margin and what wraps: with the margin on
+        {/* The row's CONTROLS, in one group at its right edge. The group is
+            what carries the auto margin and what wraps: with the margin on
             the chip alone, a tight row (the dock at its 360 px floor) sent
             Rotate to a second line by itself while the chip stayed on the
             first — measured at 640 px, `issue1681Evidence.browser.test.tsx`.
-            Together they wrap together, and they stay adjacent. */}
+            Together they wrap together, and they stay adjacent. Both hosts'
+            rows wrap: the kanban seat's used not to, and there the context
+            meter and the stale-mandate chip were drawn over this group and
+            Stop host. */}
         <span className="ml-auto flex shrink-0 items-center gap-2" data-orchestrator-controls>
           <SeatTickChip project={project} projectName={projectName} />
           <button
@@ -155,6 +163,7 @@ export function IncumbentHeader({
               : <RefreshCw className="h-3 w-3" aria-hidden />}
             {t("orchPanel.rotate")}
           </button>
+          {hostControls}
         </span>
       </div>
       {predecessorConversationId ? (

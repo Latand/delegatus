@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+/* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
+   environment (docs/design/rename-delegatus.md §5). */
+import "./envAlias.mjs";
+
 import { spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import http from "node:http";
@@ -8,7 +12,18 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { detectTailscale, getToken, readStatus, serve as serveTailscale, TailscaleError } from "./tailscale.mjs";
+import {
+  detectTailscale,
+  getToken,
+  OPERATOR_HINT,
+  OPERATOR_PATTERN,
+  phoneAccessFlagPath,
+  readPhoneAccessFlag,
+  readStatus,
+  serve as serveTailscale,
+  serveBackground,
+  TailscaleError,
+} from "./tailscale.mjs";
 import {
   browserOpenCommand,
   cliRuntimeHostConfig,
@@ -19,8 +34,25 @@ import {
   viewerChildProcessOptions,
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
+import {
+  createLauncherRecord,
+  exitError,
+  hostEntrypoint,
+  installedRelease,
+  isGitCheckout,
+  probePageAndChunk,
+  selfUpdatePaths,
+  watchRestartRequests,
+} from "./self-update-supervisor.mjs";
+import { findLegacySystemdUnits, legacySystemdNotice } from "./legacySystemd.mjs";
 
 discardWakatimeEnvironmentCredential();
+
+/* The launcher is one of the process kinds that may resolve the operator's own
+   config and state directories (#1905); everything it starts inherits the
+   claim, and the Viewer child below upgrades it to `viewer`. Set it before any
+   state is read so the claim is never late. */
+if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "launcher";
 
 const DEFAULT_PORT = 8898;
 const DEFAULT_HOSTNAME = "127.0.0.1";
@@ -37,6 +69,9 @@ const RUNTIME_HOST_READINESS_INTERVAL_MS = 100;
 const RUNTIME_HOST_RESTART_BASE_MS = 500;
 const RUNTIME_HOST_RESTART_MAX_MS = 10_000;
 const RUNTIME_HOST_STABLE_UPTIME_MS = 30_000;
+/* A restart onto a freshly built release starts `next start` cold, which
+   takes 10–30 s on a full checkout (#2007); the first start keeps its budget. */
+const RESTART_READINESS_TIMEOUT_MS = 90_000;
 
 const cliPath = fileURLToPath(import.meta.url);
 const cliDir = dirname(cliPath);
@@ -54,12 +89,14 @@ const LANG = detectLang();
 
 const MESSAGES = {
   en: {
-    usage: () => `Usage: agent-log-viewer [options]
+    usage: () => `Usage: delegatus [options]
 
 Options:
   -p, --port <n>       Port for the local server (default ${DEFAULT_PORT})
   -H, --hostname <h>   Bind address (default ${DEFAULT_HOSTNAME})
       --tailscale      Access over Tailscale
+                       (also on while ${phoneAccessFlagPath()} exists; the
+                       setup guide's phone step writes it)
       --no-open        Don't open the browser
       --new-token      Create a new access key
       --new-operator-token  Rotate the operator spawn capability
@@ -69,11 +106,11 @@ Options:
     flagNeedsValue: (flag) => `Option ${flag} requires a value.`,
     hostnameNeedsValue: () => "Option --hostname requires a value.",
     unknownOption: (arg) => `Unknown option: ${arg}`,
-    noPackageJson: () => "Couldn't find package.json for agent-log-viewer.",
+    noPackageJson: () => "Couldn't find package.json for delegatus-cli.",
     readPackageJsonErr: (detail) => `Couldn't read package.json: ${detail}`,
     readPackageJsonErrGeneric: () => "Couldn't read package.json.",
     noServer: () => "No standalone server.js or local next found.",
-    portBusy: (port) => `Port ${port} is busy. Try: bunx agent-log-viewer --port ${port + 1}`,
+    portBusy: (port) => `Port ${port} is busy. Try: bunx delegatus-cli --port ${port + 1}`,
     serverStartFail: (detail) => `Couldn't start the server: ${detail}`,
     serverTimeout: (seconds) => `The server didn't respond within ${seconds} seconds.`,
     bannerOpened: (url) => `  Opened:    ${url}`,
@@ -86,21 +123,26 @@ Options:
     bindCheckFail: (detail) => `Couldn't verify the server bind: ${detail}. Startup was stopped.`,
     bindCheckSkipped: (addresses) => `Warning: the exposure check skipped addresses this machine would not answer for: ${addresses}.`,
     serverNotReady: () => "Server not ready.",
-    runtimeHostEntryMissing: () => "The runtime host is missing from this install. Reinstall agent-log-viewer and try again.",
+    runtimeHostEntryMissing: () => "The runtime host is missing from this install. Reinstall delegatus-cli and try again.",
     runtimeHostStartFail: (detail) => `Couldn't start the structured runtime host: ${detail}`,
     runtimeHostTimeout: (socketPath) => `the runtime host did not bind ${socketPath} within ${RUNTIME_HOST_READINESS_TIMEOUT_MS / 1_000} seconds; check the socket directory permissions`,
     runtimeHostExited: (detail) => `the runtime host exited before its socket was ready${detail ? `: ${detail}` : ""}`,
-    runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other agent-log-viewer instance for this installation and try again`,
+    runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other delegatus instance for this installation and try again`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; restarting in ${delay}ms`,
     runtimeHostRestartFail: (detail) => `[runtime host] restart failed: ${detail}`,
+    phoneAccessSkipped: (detail) => `Phone access is turned on in the setup guide, and Tailscale is not ready, so this start is local only:\n${detail}`,
+    phoneAccessUngated: (detail) => `Warning: the access key could not be read, so this start asks no key: ${detail}`,
+    phoneServeFailed: (detail) => `Phone access is turned on in the setup guide, and publishing in the tailnet failed: ${detail}`,
   },
   uk: {
-    usage: () => `Використання: agent-log-viewer [опції]
+    usage: () => `Використання: delegatus [опції]
 
 Опції:
   -p, --port <n>       Порт для локального сервера (типово ${DEFAULT_PORT})
   -H, --hostname <h>   Адреса прив'язки (типово ${DEFAULT_HOSTNAME})
       --tailscale      Доступ через Tailscale
+                       (також увімкнено, поки існує ${phoneAccessFlagPath()};
+                       його записує крок «Телефон» посібника з налаштування)
       --no-open        Не відкривати браузер
       --new-token      Створити новий ключ доступу
       --new-operator-token  Оновити операторський ключ запуску агентів
@@ -110,11 +152,11 @@ Options:
     flagNeedsValue: (flag) => `Опція ${flag} потребує значення.`,
     hostnameNeedsValue: () => "Опція --hostname потребує значення.",
     unknownOption: (arg) => `Невідома опція: ${arg}`,
-    noPackageJson: () => "Не вдалося знайти package.json для agent-log-viewer.",
+    noPackageJson: () => "Не вдалося знайти package.json для delegatus-cli.",
     readPackageJsonErr: (detail) => `Не вдалося прочитати package.json: ${detail}`,
     readPackageJsonErrGeneric: () => "Не вдалося прочитати package.json.",
     noServer: () => "Не знайдено standalone server.js або локальний next.",
-    portBusy: (port) => `Порт ${port} зайнятий. Спробуйте: bunx agent-log-viewer --port ${port + 1}`,
+    portBusy: (port) => `Порт ${port} зайнятий. Спробуйте: bunx delegatus-cli --port ${port + 1}`,
     serverStartFail: (detail) => `Не вдалося запустити сервер: ${detail}`,
     serverTimeout: (seconds) => `Сервер не відповів за ${seconds} секунд.`,
     bannerOpened: (url) => `  Відкрито:  ${url}`,
@@ -127,13 +169,16 @@ Options:
     bindCheckFail: (detail) => `Не вдалося перевірити адресу сервера: ${detail}. Запуск зупинено.`,
     bindCheckSkipped: (addresses) => `Увага: перевірка на відкритість пропустила адреси, на які ця машина не відповідає: ${addresses}.`,
     serverNotReady: () => "Сервер не готовий.",
-    runtimeHostEntryMissing: () => "У цьому пакеті немає runtime host. Перевстановіть agent-log-viewer і повторіть спробу.",
+    runtimeHostEntryMissing: () => "У цьому пакеті немає runtime host. Перевстановіть delegatus-cli і повторіть спробу.",
     runtimeHostStartFail: (detail) => `Не вдалося запустити structured runtime host: ${detail}`,
     runtimeHostTimeout: (socketPath) => `runtime host не створив ${socketPath} за ${RUNTIME_HOST_READINESS_TIMEOUT_MS / 1_000} секунд; перевірте права каталогу сокета`,
     runtimeHostExited: (detail) => `runtime host завершився до готовності сокета${detail ? `: ${detail}` : ""}`,
-    runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший agent-log-viewer для цієї інсталяції та повторіть спробу`,
+    runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший delegatus для цієї інсталяції та повторіть спробу`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; повторний запуск за ${delay} мс`,
     runtimeHostRestartFail: (detail) => `[runtime host] помилка повторного запуску: ${detail}`,
+    phoneAccessSkipped: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але Tailscale не готовий, тому цей запуск лише локальний:\n${detail}`,
+    phoneAccessUngated: (detail) => `Увага: не вдалося прочитати ключ доступу, тому цей запуск не питає ключа: ${detail}`,
+    phoneServeFailed: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але опублікувати в tailnet не вдалося: ${detail}`,
   },
 };
 
@@ -293,9 +338,13 @@ function resolveServer(packageRoot, hostname) {
   };
 }
 
-function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment) {
+function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment, extraEnv = {}) {
   const env = {
     ...runtimeHostEnvironment,
+    ...extraEnv,
+    /* This child IS the serving Viewer: it alone may run the state-mutating
+       startup steps (imports, migrations, backups) that #1905 fenced off. */
+    LLV_STATE_OWNER: "viewer",
     PORT: String(options.port),
     // zsh exports HOSTNAME with the machine name on this user's machine; setting it here keeps standalone bound to the requested address.
     HOSTNAME: options.hostname,
@@ -325,6 +374,14 @@ function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment) {
     env.LLV_TELEGRAM_PROVISIONER = telegramProvisioner;
   }
 
+  /* A local-only start never advertises a tailnet link it inherited from the
+     shell that launched it. */
+  if (runtime.tailnetSkipped) {
+    delete env.LLV_TOKEN;
+    delete env.LLV_TS_HOST;
+    delete env.LLV_TS_URL;
+  }
+
   if (runtime.llvToken) {
     env.LLV_TOKEN = runtime.llvToken;
   }
@@ -344,16 +401,20 @@ function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment) {
   return env;
 }
 
-function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostSupervisor, packageRoot, runtimeHostEnvironment) {
+/* `launch.restarting` marks a web process started by a self-update restart
+   (#2007): until it is ready, its exit is the restart's failure to handle,
+   never a reason to stop the whole launcher. */
+function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostSupervisor, packageRoot, runtimeHostEnvironment, launch = {}) {
   const child = spawn(server.command, server.args, viewerChildProcessOptions({
     cwd: server.cwd,
-    env: buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment),
+    env: buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment, launch.extraEnv),
     stdio: ["ignore", "inherit", "pipe"],
   }));
 
   const state = {
     sawAddressInUse: false,
     stopping: false,
+    restarting: launch.restarting === true,
   };
 
   child.stderr.on("data", (chunk) => {
@@ -379,9 +440,10 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
   });
 
   child.on("exit", async (code, signal) => {
-    if (state.stopping) {
+    if (state.stopping || state.restarting) {
       return;
     }
+    launch.onUnexpectedExit?.(child);
 
     // The server dying on its own (crash, EADDRINUSE) still leaves `tailscale
     // serve` running as our child; stop it through the bounded path (SIGTERM,
@@ -479,13 +541,21 @@ async function waitForRuntimeHost(socketPath, fencePath, processHandle = null) {
   throw new Error(m.runtimeHostTimeout(socketPath));
 }
 
-function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoot) {
+/* `hooks.release()` names the release each launch runs from (#2007): the
+   installed self-update release, or the package root. The other hooks report
+   to the self-update record; none of them decides anything. */
+function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoot, hooks = {}) {
   let current = null;
+  let currentRelease = null;
   let restartTimer = null;
   let restartFailures = 0;
   let stopping = false;
+  const releaseFor = () => hooks.release?.() ?? { dir: packageRoot, sha: null };
 
-  const scheduleRestart = (detail, uptimeMs = 0) => {
+  /* `release`, when given, is the release the retries start (a self-update
+     restart whose new and previous releases both failed retries the previous
+     one); otherwise each retry reads the installed release. */
+  const scheduleRestart = (detail, uptimeMs = 0, release = null) => {
     if (stopping || restartTimer) return;
     restartFailures = uptimeMs >= RUNTIME_HOST_STABLE_UPTIME_MS ? 1 : restartFailures + 1;
     const delay = Math.min(
@@ -495,30 +565,34 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     console.error(m.runtimeHostRestart(delay, detail));
     restartTimer = setTimeout(() => {
       restartTimer = null;
-      void launch(false).catch((error) => {
+      void launch(false, release ?? undefined).catch((error) => {
         if (stopping) return;
         const message = error instanceof Error ? error.message : String(error);
         console.error(m.runtimeHostRestartFail(message));
-        scheduleRestart(message);
+        scheduleRestart(message, 0, release);
       });
     }, delay);
   };
 
-  const spawnHost = () => {
-    const child = spawn(bunRuntime, ["--bun", config.entrypoint], viewerChildProcessOptions({
-      cwd: packageRoot,
+  const spawnHost = (release) => {
+    const packaged = release.dir === packageRoot;
+    const child = spawn(bunRuntime, ["--bun", packaged ? config.entrypoint : hostEntrypoint(release.dir)], viewerChildProcessOptions({
+      cwd: release.dir,
       env: environment,
       stdio: ["ignore", "inherit", "pipe"],
     }));
     const state = {
       command: bunRuntime,
       readyAt: null,
+      spawnedAt: Date.now(),
       spawnError: null,
       stderrTail: "",
       stopping: false,
     };
     const processHandle = { child, state };
     current = processHandle;
+    currentRelease = release;
+    hooks.onStarted?.(child, release);
     child.stderr.on("data", (chunk) => {
       state.stderrTail = `${state.stderrTail}${chunk}`.slice(-8_192);
       process.stderr.write(chunk);
@@ -528,22 +602,29 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     });
     child.once("exit", () => {
       if (current !== processHandle || stopping || state.stopping || state.readyAt === null) return;
+      hooks.onExit?.(child, state.spawnedAt);
       scheduleRestart(runtimeHostExitDetail(processHandle), Date.now() - state.readyAt);
     });
     return processHandle;
   };
 
-  const launch = async (initial) => {
-    const processHandle = spawnHost();
+  const launch = async (initial, release = releaseFor()) => {
+    const processHandle = spawnHost(release);
     try {
       await waitForRuntimeHost(config.socketPath, config.fencePath, processHandle);
       processHandle.state.readyAt = Date.now();
       if (processHandle.child.exitCode !== null || processHandle.child.signalCode !== null) {
         throw new Error(m.runtimeHostExited(runtimeHostExitDetail(processHandle)));
       }
+      hooks.onReady?.(processHandle.child);
     } catch (error) {
+      /* A host that ended on its own is reported with its exit; one this
+         supervisor had to stop (no socket in time, another fence owner) with
+         the reason it was stopped. Either way it is failed, never left
+         reading as "starting" under a PID that is gone. */
+      const exitedOnItsOwn = processHandle.child.exitCode !== null || processHandle.child.signalCode !== null;
       await stopChild(processHandle);
-      if (initial) throw error;
+      hooks.onLaunchFailed?.(processHandle.child, processHandle.state.spawnedAt, exitedOnItsOwn, error instanceof Error ? error.message : String(error));
       throw error;
     }
   };
@@ -560,6 +641,42 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
         restartTimer = null;
       }
       if (current) await stopChild(current);
+    },
+    /* A restart the operator asked for from the Update surface (#2007): stop
+       the host this supervisor started, start it from the installed release,
+       and when that one does not become ready, start the release it replaced.
+       When that fails too, the crash backoff takes over and keeps starting
+       the previous release, as it does for a host that dies on its own, and
+       the restart rejects so the record says it failed. Resolves with the
+       release that failed and why when the fallback ran, else null. */
+    async restart() {
+      if (stopping) return null;
+      if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+      }
+      const previous = current;
+      const previousRelease = currentRelease ?? { dir: packageRoot, sha: null };
+      if (previous) {
+        hooks.onStopping?.();
+        await stopChild(previous);
+      }
+      const attempted = releaseFor();
+      try {
+        await launch(false, attempted);
+        restartFailures = 0;
+        return null;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        try {
+          await launch(false, previousRelease);
+        } catch (fallbackError) {
+          const fallbackDetail = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          scheduleRestart(`${detail}; the previous release did not start either: ${fallbackDetail}`, 0, previousRelease);
+          throw fallbackError;
+        }
+        return { sha: attempted.sha, detail };
+      }
     },
   };
 }
@@ -586,11 +703,16 @@ async function portAlreadyResponds(port) {
   return probe(`http://127.0.0.1:${port}/api/files`);
 }
 
-async function waitForReadiness(port) {
-  const deadline = Date.now() + READINESS_TIMEOUT_MS;
+/* `processHandle`, when given, is the child the readiness belongs to: its exit
+   ends the wait at once, since a port answered by anyone else is no proof. */
+async function waitForReadiness(port, timeoutMs = READINESS_TIMEOUT_MS, processHandle = null) {
+  const deadline = Date.now() + timeoutMs;
   const url = `http://127.0.0.1:${port}/api/files`;
 
   while (Date.now() < deadline) {
+    if (processHandle && (processHandle.child.exitCode !== null || processHandle.child.signalCode !== null)) {
+      throw new Error(`exited before it answered (${processHandle.child.signalCode ? `signal ${processHandle.child.signalCode}` : `exit code ${processHandle.child.exitCode}`})`);
+    }
     if (await probe(url)) {
       return;
     }
@@ -598,17 +720,21 @@ async function waitForReadiness(port) {
     await wait(READINESS_INTERVAL_MS);
   }
 
-  throw new Error(m.serverTimeout(READINESS_TIMEOUT_MS / 1000));
+  throw new Error(m.serverTimeout(timeoutMs / 1000));
 }
 
-function localUrl(options) {
+/* The key rides in the local link too when this start gates on one: the
+   Viewer asks every connection for it, loopback included, and the terminal
+   that started it is the one place the operator can read it. */
+function localUrl(options, runtime) {
   const host = options.hostname === "::1" ? "[::1]" : options.hostname;
-  return `http://${host}:${options.port}/`;
+  const key = runtime?.llvToken ? `?k=${runtime.llvToken}` : "";
+  return `http://${host}:${options.port}/${key}`;
 }
 
-function printBanner(version, options) {
-  console.log(`  ✳ Agent Log Viewer v${version}`);
-  console.log(m.bannerOpened(localUrl(options)));
+function printBanner(version, options, runtime) {
+  console.log(`  ✳ Delegatus v${version}`);
+  console.log(m.bannerOpened(localUrl(options, runtime)));
   console.log(m.bannerReads());
   console.log(m.bannerStop());
 }
@@ -685,9 +811,12 @@ async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor) {
   ]);
 }
 
-function installSignalHandlers(serverProcess, tailscaleProcessRef, runtimeHostSupervisor) {
+/* `serverRef.current` is whichever web process runs at shutdown: a
+   self-update restart (#2007) replaces the one startup launched. */
+function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, onShutdown = () => {}) {
   const shutdown = async () => {
-    await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
+    onShutdown();
+    await stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
     process.exit(0);
   };
 
@@ -701,6 +830,8 @@ async function prepareRuntime(options) {
     llvTsHost: undefined,
     tailnetUrl: undefined,
     tailscalePath: undefined,
+    /* Set when the remembered choice fell back to a local start. */
+    tailnetSkipped: false,
   };
 
   const nonLoopbackBind = !isLoopbackHostname(options.hostname);
@@ -709,8 +840,32 @@ async function prepareRuntime(options) {
   }
 
   if (options.tailscale) {
-    const tailscalePath = await detectTailscale();
-    const status = await readStatus(tailscalePath);
+    let tailscalePath;
+    let status;
+    try {
+      tailscalePath = await detectTailscale();
+      status = await readStatus(tailscalePath);
+    } catch (error) {
+      /* The remembered choice never stops the Viewer from starting: a
+         Tailscale that went away since starts locally, and says why. */
+      if (!(options.tailscaleFromFlag && error instanceof TailscaleError)) throw error;
+      console.error(m.phoneAccessSkipped(error.message));
+      options.tailscale = false;
+      options.tailscaleFromFlag = false;
+      runtime.tailnetSkipped = true;
+      /* The gate still goes on. A background mapping a previous tailnet start
+         published belongs to tailscaled, not to this process: it resumes when
+         tailscaled comes back, and it would otherwise proxy the whole tailnet
+         into a Viewer that asks for nothing. The link itself stays unset, so
+         nothing advertises an address this start does not serve. */
+      try {
+        const { token } = await getToken({ rotate: options.newToken });
+        runtime.llvToken = token;
+      } catch (tokenError) {
+        console.error(m.phoneAccessUngated(tokenError instanceof Error ? tokenError.message : String(tokenError)));
+      }
+      return runtime;
+    }
     const { token } = await getToken({ rotate: options.newToken });
     runtime.llvToken = token;
     runtime.llvTsHost = status.dnsName;
@@ -792,6 +947,12 @@ function linkSkills(packageRoot) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  /* Phone access turned on from the setup guide is remembered as a file; its
+     presence stands for --tailscale. */
+  if (!options.tailscale && !options.help && !options.version && await readPhoneAccessFlag()) {
+    options.tailscale = true;
+    options.tailscaleFromFlag = true;
+  }
   const packageRoot = findPackageRoot(cliDir);
   try {
     linkSkills(packageRoot);
@@ -810,6 +971,10 @@ async function main() {
     console.log(version);
     return;
   }
+
+  /* Before anything can fail on a port the old unit still holds. */
+  const legacyNotice = legacySystemdNotice(findLegacySystemdUnits(), LANG);
+  if (legacyNotice) console.error(`${legacyNotice}\n`);
 
   let runtime;
   try {
@@ -840,35 +1005,91 @@ async function main() {
     }
   }
 
-  const server = resolveServer(packageRoot, options.hostname);
   const runtimeHostConfig = cliRuntimeHostConfig(packageRoot);
   const runtimeHostEnvironment = cliRuntimeHostEnvironment(process.env, runtimeHostConfig);
+
+  /* Self-update (#2007). A git checkout starts each child from the release
+     the Viewer's Update surface last published (or from the package root),
+     records what it started, and restarts one child when the surface asks.
+     A packaged install records its children too, and the surface reads the
+     record's missing checkout as "updates come from the package manager". */
+  const checkout = isGitCheckout(packageRoot);
+  const selfUpdate = selfUpdatePaths({
+    stateDirectory: runtimeHostConfig.stateDirectory,
+    cacheDirectory: process.env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache"),
+    installId: runtimeHostConfig.installId,
+  });
+  const releaseNow = () => (checkout
+    ? installedRelease(selfUpdate.releasePointer, packageRoot)
+    : { dir: packageRoot, sha: null, published: false });
+  const record = createLauncherRecord(selfUpdate.record, {
+    checkout: checkout ? packageRoot : null,
+    releasesDir: selfUpdate.releasesDir,
+    releasePointer: selfUpdate.releasePointer,
+    requestFile: selfUpdate.request,
+    port: options.port,
+    socket: runtimeHostConfig.socketPath,
+  });
+
   const runtimeHostSupervisor = createRuntimeHostSupervisor(
     runtimeHostConfig,
     viewerServerBunRuntime(),
     runtimeHostEnvironment,
     packageRoot,
+    {
+      release: releaseNow,
+      onStarted: (child, release) => record.started("runtimeHost", child, release),
+      onReady: () => record.set("runtimeHost", { state: "healthy", error: null }),
+      onStopping: () => record.set("runtimeHost", { state: "stopping" }),
+      onExit: (child, spawnedAt) => record.set("runtimeHost", { state: "failed", error: exitError(child, spawnedAt) }),
+      onLaunchFailed: (child, spawnedAt, exitedOnItsOwn, detail) => record.set("runtimeHost", {
+        state: "failed",
+        error: exitedOnItsOwn ? exitError(child, spawnedAt) : { kind: "message", text: detail },
+      }),
+    },
   );
   try {
     await runtimeHostSupervisor.start();
   } catch (error) {
     await runtimeHostSupervisor.stop();
+    record.remove();
     fail(m.runtimeHostStartFail(error instanceof Error ? error.message : String(error)));
   }
 
   const tailscaleProcessRef = { current: null };
-  const serverProcess = startServer(
-    server,
-    options,
-    runtime,
-    tailscaleProcessRef,
-    runtimeHostSupervisor,
-    packageRoot,
-    runtimeHostEnvironment,
-  );
-  installSignalHandlers(serverProcess, tailscaleProcessRef, runtimeHostSupervisor);
+  const serverRef = { current: null, release: releaseNow() };
+  const launchWeb = (release, restarting) => {
+    const handle = startServer(
+      resolveServer(release.dir, options.hostname),
+      options,
+      runtime,
+      tailscaleProcessRef,
+      runtimeHostSupervisor,
+      release.dir,
+      runtimeHostEnvironment,
+      {
+        restarting,
+        extraEnv: { LLV_SELF_UPDATE_RECORD: selfUpdate.record },
+        onUnexpectedExit: (child) => record.set("web", { state: "failed", error: exitError(child, handle.startedAt) }),
+      },
+    );
+    handle.startedAt = Date.now();
+    serverRef.current = handle;
+    serverRef.release = release;
+    record.started("web", handle.child, release);
+    return handle;
+  };
+  const serverProcess = launchWeb(serverRef.release, false);
+  let restartRequests = null;
+  installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, () => {
+    restartRequests?.stop();
+    record.remove();
+  });
 
-  if (options.tailscale && runtime.tailscalePath) {
+  /* The --tailscale switch keeps its foreground serve, which stops with the
+     Viewer. The remembered choice publishes in the background once the
+     server answers, and leaves the mapping to tailscaled at exit. */
+  if (options.tailscale && runtime.tailscalePath && !options.tailscaleFromFlag) {
     tailscaleProcessRef.current = serveTailscale(runtime.tailscalePath, options.port);
   }
 
@@ -910,14 +1131,85 @@ async function main() {
   ) {
     process.exit(serverProcess.state.sawAddressInUse ? 1 : (serverProcess.child.exitCode ?? 1));
   }
+  record.set("web", { state: "healthy", error: null });
 
-  printBanner(version, options);
+  /* Restart requests are taken only once startup has finished, and only from
+     a checkout: a packaged install is updated by its package manager. */
+  if (checkout) {
+    const restartWeb = async () => {
+      const previous = serverRef.current;
+      const previousRelease = serverRef.release;
+      record.set("web", { state: "stopping" });
+      await stopChild(previous);
+      const attempt = async (release) => {
+        const handle = launchWeb(release, true);
+        try {
+          await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
+          const page = await probePageAndChunk(options.port);
+          if (page) throw new Error(page);
+          handle.state.restarting = false;
+          if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");
+          return null;
+        } catch (error) {
+          await stopChild(handle);
+          return error instanceof Error ? error.message : String(error);
+        }
+      };
+      const next = releaseNow();
+      const failure = await attempt(next);
+      if (failure === null) {
+        record.set("web", { state: "healthy", error: null });
+        return;
+      }
+      /* The web process is the page the operator restarts from: a release
+         that does not come up gives way to the one it replaced. */
+      const fallbackFailure = await attempt(previousRelease);
+      if (fallbackFailure === null) {
+        record.set("web", { state: "healthy", error: { kind: "fell-back", revision: next.sha ? next.sha.slice(0, 7) : null, detail: failure } });
+        return;
+      }
+      record.set("web", { state: "failed", error: { kind: "message", text: fallbackFailure } });
+      restartRequests?.stop();
+      await stopAll(null, tailscaleProcessRef.current, runtimeHostSupervisor);
+      fail(fallbackFailure);
+    };
+    const restartHost = async () => {
+      try {
+        const fellBack = await runtimeHostSupervisor.restart();
+        if (fellBack) {
+          record.set("runtimeHost", { state: "healthy", error: { kind: "fell-back", revision: fellBack.sha ? fellBack.sha.slice(0, 7) : null, detail: fellBack.detail } });
+        }
+      } catch (error) {
+        record.set("runtimeHost", { state: "failed", error: { kind: "message", text: error instanceof Error ? error.message : String(error) } });
+      }
+    };
+    restartRequests = watchRestartRequests(selfUpdate.request, async ({ requestId, role }) => {
+      const key = role === "web" ? "web" : "runtimeHost";
+      record.set(key, { requestId });
+      if (role === "web") await restartWeb();
+      else await restartHost();
+    });
+  }
+
+  if (options.tailscaleFromFlag && runtime.tailscalePath) {
+    const published = await serveBackground(runtime.tailscalePath, options.port);
+    if (published.timedOut || published.code !== 0) {
+      const detail = published.timedOut ? "timeout" : published.stderr.trim() || `exit ${published.code}`;
+      console.error(OPERATOR_PATTERN.test(published.stderr) ? OPERATOR_HINT : m.phoneServeFailed(detail));
+      /* Nothing is published, so the tailnet address answers nothing: the
+         banner and its QR would be an invitation to a link that is not
+         there. The gate stays on — the key was minted for this start. */
+      runtime.tailnetUrl = undefined;
+    }
+  }
+
+  printBanner(version, options, runtime);
   if (options.tailscale) {
     await printTailscaleBanner(runtime);
   }
 
   if (!options.noOpen && process.stdout.isTTY) {
-    openBrowser(localUrl(options));
+    openBrowser(localUrl(options, runtime));
   }
 }
 

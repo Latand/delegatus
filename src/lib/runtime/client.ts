@@ -1,7 +1,12 @@
 import type { NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "./nativeQueueContracts";
 import net from "node:net";
+import fs from "node:fs";
+import { isNamedPipePath } from "./localEndpoint";
+import { parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit, viewerDeploymentStartedAt, viewerDeploymentSummary,
+  type ViewerDeploymentList, type ViewerDeploymentListOptions } from "./contracts";
 
-import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
+
+import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionDetails, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
 import { runtimeHostSocket } from "./flags";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
@@ -85,12 +90,15 @@ export function isRuntimeHostTransportFailure(error: unknown): boolean {
 }
 
 export interface RuntimeHostClient {
+  /** Stable listener identity; reconnecting to the same socket preserves it. */
+  startupGeneration?(): Promise<string | null>;
   nativeQueueRead?(conversationId: string): Promise<NativeQueueRecord[]>;
   nativeQueueTransition?(operationId: string, transition: NativeQueueTransition): Promise<RuntimeOperationResult>;
   /** Canonical proof for an entry whose add operation was compacted (#1664).
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
-  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot>;
+  readSession?(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null>;
+  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   append(event: RuntimeEventInput): Promise<unknown>;
@@ -104,7 +112,7 @@ export interface RuntimeHostClient {
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
-    details?: { turnId?: string | null; queuePosition?: number | null; reason?: string | null },
+    details?: RuntimeTransitionDetails,
     options?: RuntimeTransitionOptions,
   ): Promise<RuntimeOperationResult>;
   /** Releases the retention a terminal transition took out under
@@ -116,8 +124,23 @@ export interface RuntimeHostClient {
   requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt>;
   cancelViewerDeployment?(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
+  listViewerDeployments?(options?: ViewerDeploymentListOptions): Promise<ViewerDeploymentList>;
   admitMcpHealthProbe?(capability: string): Promise<boolean>;
+  /** The host's own startup evidence: its PID and the generation (image and
+      revision) it booted from. Read by the Update surface (#2007). */
+  runtimeHostHealth?(): Promise<RuntimeHostHealth>;
 }
+
+export interface RuntimeHostHealth {
+  pid: number;
+  startIdentity: string;
+  hostEpoch: number;
+  generation?: { image?: string; revision?: string; container?: string };
+}
+
+type DeploymentListCapability = { generation: string; supported?: boolean; probe?: Promise<void> };
+// Route handlers create fresh clients. Share only capability evidence, never data.
+const deploymentListCapabilities = new Map<string, DeploymentListCapability>();
 
 export class UnixRuntimeHostClient implements RuntimeHostClient {
   constructor(
@@ -136,7 +159,16 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   nativeQueueSettleCompacted(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement> {
     return this.call("native-queue-settle-compacted", { ...request }) as Promise<NativeQueueCompactedSettlement>;
   }
-  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot> { return this.call("snapshot", options, this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>; }
+  readSession(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null> {
+    // Startup can wait for a slow host without changing interactive deadlines
+    // or sending the caller's transport policy over the wire.
+    return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs) as Promise<RuntimeSession | null>;
+  }
+  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot> {
+    // The deadline belongs to this caller, never to the wire protocol.
+    const params = options?.voiceBodiesFor ? { voiceBodiesFor: options.voiceBodiesFor } : undefined;
+    return this.call("snapshot", params, options?.timeoutMs ?? this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>;
+  }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
   append(event: RuntimeEventInput): Promise<unknown> { return this.call("append", { event }); }
@@ -171,7 +203,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
-    details?: { turnId?: string | null; queuePosition?: number | null; reason?: string | null },
+    details?: RuntimeTransitionDetails,
     options: RuntimeTransitionOptions = {},
   ): Promise<RuntimeOperationResult> {
     return this.call("operation-transition", {
@@ -188,14 +220,75 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs) as Promise<ViewerDeploymentReceipt>; }
   cancelViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-cancel", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-read", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
+  runtimeHostHealth(): Promise<RuntimeHostHealth> { return this.call("runtime-host-health") as Promise<RuntimeHostHealth>; }
+  startupGeneration(): Promise<string | null> { return this.deploymentListGeneration(); }
+  private async deploymentListGeneration(): Promise<string | null> {
+    try {
+      const stat = fs.statSync(this.socketPath, { bigint: true });
+      return `${stat.dev}:${stat.ino}:${stat.ctimeNs}`;
+    } catch {
+      // Named pipes have no filesystem inode. Use the existing host identity RPC.
+      if (!isNamedPipePath(this.socketPath)) return null;
+      const health = await this.call("runtime-host-health") as { pid: number; startIdentity: string; hostEpoch: number };
+      return JSON.stringify([health.pid, health.startIdentity, health.hostEpoch]);
+    }
+  }
+
+  async listViewerDeployments(options: ViewerDeploymentListOptions = {}): Promise<ViewerDeploymentList> {
+    const limit = viewerDeploymentListLimit(options.limit);
+    const cursor = parseViewerDeploymentListCursor(options.cursor);
+    const generation = await this.deploymentListGeneration();
+    let capability = deploymentListCapabilities.get(this.socketPath);
+    if (!generation || capability?.generation !== generation) {
+      capability = { generation: generation ?? "unknown" };
+      if (generation) {
+        if (deploymentListCapabilities.size >= 32) deploymentListCapabilities.delete(deploymentListCapabilities.keys().next().value!);
+        deploymentListCapabilities.set(this.socketPath, capability);
+      }
+    }
+    if (capability.probe) await capability.probe;
+    if (capability.supported !== false) {
+      let finishProbe: (() => void) | undefined;
+      if (capability.supported === undefined) capability.probe = new Promise<void>(resolve => { finishProbe = resolve; });
+      try {
+        const result = await this.call("viewer-deployment-list", { ...options, limit }) as ViewerDeploymentList;
+        capability.supported = true;
+        return result;
+      } catch (error) {
+        // Timeouts, malformed replies and domain refusals retain their meaning.
+        if (!(error instanceof RuntimeHostUnavailableError) || error.message !== "runtime request method is unsupported") throw error;
+        capability.supported = false;
+      } finally {
+        finishProbe?.();
+        capability.probe = undefined;
+      }
+    }
+    // A new-host cursor can name history the old snapshot never retained.
+    // Refuse that continuation instead of falsely reporting complete history.
+    if (cursor && !cursor[2]) throw new RuntimeHostUnavailableError("deployment list cursor requires the current host; restart the list after hand-over");
+    const rows = (await this.snapshot()).deployments
+      .sort((a, b) => viewerDeploymentStartedAt(b) - viewerDeploymentStartedAt(a) || b.deploymentId.localeCompare(a.deploymentId))
+      .filter(row => !cursor || viewerDeploymentStartedAt(row) < cursor[0]
+        || (viewerDeploymentStartedAt(row) === cursor[0] && row.deploymentId < cursor[1]));
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return { deployments: options.compact ? page.map(viewerDeploymentSummary) : page, legacySnapshot: true,
+      hasMore: rows.length > limit,
+      nextCursor: rows.length > limit && last ? viewerDeploymentListCursor(viewerDeploymentStartedAt(last), last.deploymentId, true) : null };
+  }
+
   admitMcpHealthProbe(capability: string): Promise<boolean> { return this.call("mcp-health-probe-admission", { capability }) as Promise<boolean>; }
 
   private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, ...(params ? { params } : {}) };
       const socket = net.createConnection(this.socketPath);
+      // Decode across chunk boundaries; a split multibyte character belongs
+      // to the same session response and must survive a large frame intact.
+      socket.setEncoding("utf8");
       const startedAt = performance.now();
       let frame = "";
+      let frameBytes = 0;
       let settled = false;
       const timer = setTimeout(() => {
         const elapsedMs = performance.now() - startedAt;
@@ -217,10 +310,16 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       signal?.addEventListener("abort", onAbort, { once: true });
       socket.once("error", () => finish(new RuntimeHostUnavailableError("runtime host is unavailable")));
       socket.on("data", (chunk: Buffer | string) => {
-        frame += String(chunk);
-        if (Buffer.byteLength(frame) > MAX_RESPONSE_FRAME_BYTES) return finish(new RuntimeHostUnavailableError("runtime host response exceeds limit"));
-        const newline = frame.indexOf("\n");
-        if (newline < 0) return;
+        /* Measure and search only the chunk that arrived. Re-measuring and
+           re-scanning the whole frame on every chunk made a snapshot-sized
+           answer quadratic, hundreds of milliseconds on the event loop (#1987). */
+        const text = String(chunk);
+        frame += text;
+        frameBytes += Buffer.byteLength(text);
+        if (frameBytes > MAX_RESPONSE_FRAME_BYTES) return finish(new RuntimeHostUnavailableError("runtime host response exceeds limit"));
+        const newlineInChunk = text.indexOf("\n");
+        if (newlineInChunk < 0) return;
+        const newline = frame.length - text.length + newlineInChunk;
         try {
           const response = JSON.parse(frame.slice(0, newline)) as RuntimeSocketResponse;
           if (response.id !== request.id) return finish(new RuntimeHostUnavailableError("runtime host response id mismatch"));
@@ -237,4 +336,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
 export function runtimeHostClient(env: NodeJS.ProcessEnv = process.env): RuntimeHostClient | null {
   const socket = runtimeHostSocket(env);
   return socket ? new UnixRuntimeHostClient(socket) : null;
+}
+
+/** A missing keyed capability is unavailable evidence; admission must keep its
+    reservation recoverable instead of falling back to a population read. */
+export function readRuntimeSession(client: RuntimeHostClient, identity: RuntimeSessionRead): Promise<RuntimeSession | null> {
+  if (!client.readSession) throw new RuntimeHostUnavailableError("runtime session read is unavailable");
+  return client.readSession(identity);
 }

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 
+import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -123,19 +124,22 @@ function task(id: string, status: TaskStatus, text: string, files: readonly File
 const idlePorts: TaskMutationPorts = { patch: async () => ({ ok: false, status: 500, error: "unused" }), read: async () => null, changed: () => {} };
 const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function mount(options: { tasks: BoardTask[]; files: FileEntry[]; assignments?: AssignmentPorts; focus?: string | null; readerStorage?: Pick<Storage, "getItem" | "setItem"> }) {
+function mount(options: { tasks: BoardTask[]; files: FileEntry[]; assignments?: AssignmentPorts; focus?: string | null; readerStorage?: Pick<Storage, "getItem" | "setItem">; pipelines?: Pipeline[]; onSpawnRetry?: (file: FileEntry) => void; onCloseConversation?: (file: FileEntry) => void }) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   roots.push(root);
+  const closedPaths: string[] = [];
   const render = (next: { tasks?: BoardTask[]; focus?: string | null } = {}) => flushSync(() => root.render(
     <KanbanBoard
       project="fixture"
+      /* No seat in play here, and known to be none: the board reads none itself. */
+      seatRefs={null}
       groups={[]}
       manual={options.files}
       files={options.files}
       flows={[]}
-      pipelines={[]}
+      pipelines={options.pipelines ?? []}
       tasks={[]}
       allTasks={next.tasks ?? options.tasks}
       drafts={[]}
@@ -145,6 +149,13 @@ function mount(options: { tasks: BoardTask[]; files: FileEntry[]; assignments?: 
       selection={new Set()}
       focus={next.focus ?? options.focus ?? null}
       onOpenConversations={() => {}}
+      onSpawnRetry={options.onSpawnRetry}
+      closedPaths={closedPaths}
+      onCloseConversation={options.onCloseConversation ? (file) => {
+        options.onCloseConversation!(file);
+        closedPaths.push(file.path);
+        render();
+      } : undefined}
       mutationPorts={idlePorts}
       {...(options.assignments ? { assignmentPorts: options.assignments } : {})}
       {...(options.readerStorage ? { readerStorage: options.readerStorage } : {})}
@@ -471,4 +482,69 @@ test("a conversation the Viewer is asked to open while the kanban shows opens as
   view.render({ focus: file.path });
   await tick();
   expect(readerIn(view.host)?.closest(".card")?.getAttribute("data-id")).toBe("task:a");
+});
+
+function stoppedLaunch(state: Pipeline["state"], stale = false) {
+  const file = conversation(70, {
+    path: "spawn:launch-stopped", activityReason: "structured_spawn_failed",
+    spawn: { launchId: "launch-stopped", clientAttemptId: null, accountId: null,
+      state: "failed", initialMessage: "failed", retrySafe: true,
+      error: "stage launch never started: runtime host recovery exhausted after 2 checks" },
+    durableLineage: { kind: "spawn", role: "builder", parentConversationId: null,
+      reviewsConversationId: null, memberships: [{ kind: "pipeline", containerId: "p-stopped",
+        role: "builder", slot: "build", stageId: "build", stageOrder: 0, round: null, parentConversationId: null }] },
+  });
+  const effectiveRole = { roleId: "builder", engine: "claude", model: "opus", effort: "high", access: "read-write", promptScaffold: null };
+  const pipeline = {
+    id: "p-stopped", task: "Recover stopped launch", taskIds: ["stopped"], project: "fixture", state,
+    stages: [{ id: "build", kind: "run", title: "Build", roleId: "builder", effectiveRole, next: null, onFail: null }],
+    runs: [{ stageId: "build", attempts: [{ n: 1, effectiveRole, state: "failed", agentPath: null,
+      conversationId: file.conversationId, launchId: file.spawn!.launchId, paneId: null, sessionId: null,
+      startedAt: new Date(NOW * 1000).toISOString(), completedAt: new Date(NOW * 1000).toISOString() },
+      ...(stale ? [{ n: 2, effectiveRole, state: "needs_decision", launchId: "launch-newer", conversationId: "conversation_newer" }] : [])] }],
+    cursor: { stageId: "build", state: "needs_decision", input: null, activatedBy: null },
+    worktreeDir: "/fixture/worktree", createdAt: new Date(NOW * 1000).toISOString(),
+  } as unknown as Pipeline;
+  return { file, pipeline };
+}
+
+test("closed never-started launch is dismissible through the task reader's normal chrome (#1972)", async () => {
+  const { file, pipeline } = stoppedLaunch("closed");
+  const other = conversation(71);
+  const dismissed: string[] = [];
+  const retried: string[] = [];
+  localStorage.setItem(`${READER_STORAGE_PREFIX}fixture`, JSON.stringify([{ key: file.conversationId, path: file.path, folded: false }]));
+  const view = mount({ tasks: [task("stopped", "done", "Recover stopped launch", [file, other])],
+    files: [file, other], pipelines: [pipeline],
+    onSpawnRetry: (entry) => retried.push(entry.path),
+    onCloseConversation: (entry) => dismissed.push(entry.path) });
+  await tick();
+  const reader = readerIn(view.host);
+  expect(reader).toBeTruthy();
+  expect(reader?.textContent).toContain("never started");
+  expect(Boolean(reader?.querySelector("[data-launch-retry]"))).toBe(false);
+  expect(reader?.querySelector("textarea")).toBeNull();
+  click(reader?.querySelector("[data-launch-dismiss]"));
+  await tick();
+  expect(dismissed).toEqual([file.path]);
+  expect(retried).toEqual([]);
+  expect(view.host.querySelector(`[data-reader-path="${file.path}"]`)).toBeNull();
+  expect(cardEl(view.host, "task:stopped")?.textContent).toContain(other.title);
+  expect(cardEl(view.host, "task:stopped")?.textContent).not.toContain("never started");
+});
+
+test.each([false, true])("parked task reader offers Retry only for its current launch (stale=%s, #1972)", async (stale) => {
+  const { file, pipeline } = stoppedLaunch("needs_decision", stale);
+  const retried: string[] = [];
+  localStorage.setItem(`${READER_STORAGE_PREFIX}fixture`, JSON.stringify([{ key: file.conversationId, path: file.path, folded: false }]));
+  const view = mount({ tasks: [task("stopped", "blocked", "Recover stopped launch", [file])],
+    files: [file], pipelines: [pipeline],
+    onSpawnRetry: (entry) => retried.push(entry.spawn!.launchId) });
+  await tick();
+  const retry = readerIn(view.host)?.querySelector("[data-launch-retry]");
+  if (stale) expect(Boolean(retry)).toBe(false);
+  else {
+    click(retry);
+    expect(retried).toEqual([file.spawn!.launchId]);
+  }
 });

@@ -62,6 +62,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
 const { KanbanBoard } = await import("./KanbanBoard");
+const { setLocale } = await import("@/lib/i18n");
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -159,17 +160,17 @@ const helperAttempt = (n: number, file: FileEntry, startedAgo: number) => attemp
 test("every card starts on the compact summary, the active Assigned card included; the toggle opens the graph, pressed, and the choice outlives a re-render", async () => {
   const { host, render } = mount([searchPipeline()]);
   await tick();
-  const section = () => card(host).querySelector(".stage-section")!;
-  expect(section().classList.contains("compact")).toBe(true);
+  const section = () => card(host).querySelector(".pblock")!;
+  expect(section().querySelector(".pb-graph")).toBeNull();
   expect(card(host).querySelector(".pnode")).toBeNull();
   expect(toggle(host)?.getAttribute("aria-pressed")).toBe("false");
-  expect([...card(host).querySelectorAll(".psummary .pchip")].map((chip) => chip.getAttribute("data-stage"))).toEqual(["implement", "review", "verify", "merge"]);
-  /* The fail edge is an arc under the row, never a chip in it (#1798). */
-  expect(card(host).querySelector(".psummary .ploop")).toBeNull();
-  expect(card(host).querySelector('.psummary [data-loop-arc="verify:fail:implement"]')?.getAttribute("data-arc-fired")).toBe("1");
+  expect([...card(host).querySelectorAll(".pb-pills .pb-pill")].map((chip) => chip.getAttribute("data-stage"))).toEqual(["implement", "review", "verify", "merge"]);
+  /* The fail edge rides the failing pill, never a chip of its own in the row (#1798, #2072). */
+  expect(card(host).querySelector(".pb-pills .ploop")).toBeNull();
+  expect(card(host).querySelector('.pb-pills [data-stage="verify"] [data-stage-return="verify:fail:implement"]')?.getAttribute("data-arc-fired")).toBe("1");
   click(toggle(host));
   await tick();
-  expect(section().classList.contains("open")).toBe(true);
+  expect(section().querySelector('.pb-graph[data-open="1"]')).toBeTruthy();
   expect(toggle(host)?.getAttribute("aria-pressed")).toBe("true");
   expect(card(host).querySelectorAll(".pnode")).toHaveLength(4);
   render([searchPipeline()]);
@@ -182,7 +183,7 @@ test("the opened graph shows each stage's state, the pass edges, the fail edge b
   await tick();
   click(toggle(host));
   await tick();
-  const section = card(host).querySelector(".stage-section")!;
+  const section = card(host).querySelector(".pblock")!;
   const nodes = [...section.querySelectorAll<HTMLElement>(".pnode")];
   expect(nodes.map((node) => node.dataset.stage)).toEqual(["implement", "review", "verify", "merge"]);
   expect(nodes.map((node) => node.querySelector(".pstate")?.textContent)).toEqual(["passed", "passed", "running", "waiting"]);
@@ -213,8 +214,8 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
     record.runs[0]!.attempts.push(helperAttempt(3, helper, 3000) as never);
     const { host } = mount([record]);
     await tick();
-    /* The summary's return arc reads the same budget. */
-    expect(card(host).querySelector('.psummary [data-loop-arc="verify:fail:implement"]')?.getAttribute("data-arc-fired")).toBe("1");
+    /* The failing pill's suffix reads the same budget. */
+    expect(card(host).querySelector('.pb-pills [data-stage-return="verify:fail:implement"]')?.getAttribute("data-arc-fired")).toBe("1");
     click(toggle(host));
     await tick();
     expect(card(host).querySelector<HTMLElement>('[data-edge-label="verify:fail:implement"]')?.dataset.edgeFired).toBe("1");
@@ -316,7 +317,7 @@ test("a summary chip is a control only when the stage's latest own attempt has a
   record.runs[2]!.attempts.push(attempt(3, "spawning", null, 1, { activatedBy: { stageId: "review", attempt: 1, edge: "pass" } }) as never);
   const { host } = mount([record]);
   await tick();
-  const chip = (stage: string) => card(host).querySelector<HTMLElement>(`.psummary [data-stage="${stage}"]`)!;
+  const chip = (stage: string) => card(host).querySelector<HTMLElement>(`.pb-pills [data-stage="${stage}"]`)!;
   expect(chip("verify").tagName).toBe("SPAN");
   expect(chip("implement").tagName).toBe("BUTTON");
 });
@@ -421,23 +422,23 @@ const manyPipelines = (): Pipeline[] => [
 test("every pipeline row leads with its own title, truncated to the first line, with the whole task on hover (#1765)", async () => {
   const { host } = mount(manyPipelines());
   await tick();
-  const titles = [...card(host).querySelectorAll<HTMLElement>(".stage-section .ptitle")];
+  const titles = [...card(host).querySelectorAll<HTMLElement>(".pblock .pb-title")];
   expect(titles.map((node) => node.textContent)).toEqual([
     "Rework the stage pills so a row says what it does",
     "Remove the legacy drawers under the columns",
   ]);
   /* The generic «Pipeline» chip is gone, and the full task is the hover text. */
-  expect(card(host).querySelector(".stage-section .kind")).toBeNull();
-  expect(titles[0]!.getAttribute("title")).toContain("Second line nobody reads on the card.");
+  expect(card(host).querySelector(".pblock .kind")).toBeNull();
+  expect(titles[0]!.closest(".pb-open")!.getAttribute("title")).toContain("Second line nobody reads on the card.");
   /* Stage pills read by stage id, which says more than the role here. */
-  expect([...card(host).querySelectorAll(".stage-section .psummary .pname")].map((pill) => pill.textContent))
+  expect([...card(host).querySelectorAll(".pblock .pb-pills .pb-name")].map((pill) => pill.textContent))
     .toEqual(["Critique", "Fix", "Critique", "Fix"]);
 });
 
 test("past three rows a task folds its completed pipelines behind one count, newest first, running ones on top (#1765)", async () => {
   const { host } = mount(manyPipelines());
   await tick();
-  const rows = () => [...card(host).querySelectorAll<HTMLElement>(".stage-section")].map((row) => row.dataset.pipeline);
+  const rows = () => [...card(host).querySelectorAll<HTMLElement>(".pblock")].map((row) => row.dataset.pipeline);
   expect(rows()).toEqual(["p-live-1", "p-live-2"]);
   const disclosure = card(host).querySelector<HTMLElement>("[data-completed-toggle]")!;
   expect(disclosure.textContent).toBe("3 completed");
@@ -453,16 +454,17 @@ test("past three rows a task folds its completed pipelines behind one count, new
 test("three rows or fewer stay unfolded, whatever their state (#1765)", async () => {
   const { host } = mount(manyPipelines().slice(0, 3));
   await tick();
-  expect([...card(host).querySelectorAll<HTMLElement>(".stage-section")].map((row) => row.dataset.pipeline))
+  expect([...card(host).querySelectorAll<HTMLElement>(".pblock")].map((row) => row.dataset.pipeline))
     .toEqual(["p-live-1", "p-live-2", "p-done-1"]);
   expect(card(host).querySelector("[data-completed-toggle]")).toBeNull();
 });
 
-/* #1798: the collapsed row draws a fail edge as a return arc under the stages,
-   never as a chip among them. The same three-stage lane, with its fail edge in
-   each of the states the arc has to tell apart. A round is counted from the
-   target's activations, so a round is one further Fix attempt naming the source
-   attempt that sent the work back. */
+/* #1798, #2072 variant B: a fail edge is never a chip among the stages. Once it
+   has fired, the failing stage's own pill carries it as a suffix; at rest the
+   row says nothing and the sentence stays in that pill's tooltip. The same
+   three-stage lane, with its fail edge in each of the states the suffix has to
+   tell apart. A round is counted from the target's activations, so a round is
+   one further Fix attempt naming the source attempt that sent the work back. */
 function arcPipeline(over: { max: number; fired: number; running?: boolean; fromCritique?: boolean; parked?: boolean }): Pipeline {
   const attempts: unknown[] = [attempt(1, "passed", implement1, 7200)];
   for (let round = 1; round <= over.fired; round += 1) {
@@ -472,7 +474,7 @@ function arcPipeline(over: { max: number; fired: number; running?: boolean; from
     }));
   }
   return {
-    id: "p-search", task: "Fail edges as arcs", taskIds: ["t-search"], project: "fixture", state: "running",
+    id: "p-search", task: "Fail edges as suffixes", taskIds: ["t-search"], project: "fixture", state: "running",
     stages: [
       stage("fix", "builder", "critique"),
       stage("critique", "verifier", "review", over.fromCritique ? { onFail: { to: "fix", maxRounds: over.max } } : {}),
@@ -489,164 +491,136 @@ function arcPipeline(over: { max: number; fired: number; running?: boolean; from
   } as unknown as Pipeline;
 }
 
-const arc = (host: HTMLElement, id: string) => card(host).querySelector<HTMLElement>(`.psummary [data-loop-arc="${id}"]`);
+const pill = (host: HTMLElement, stageId: string) => card(host).querySelector<HTMLElement>(`.pb-pills .pb-pill[data-stage="${stageId}"]`);
 
-test("a fail edge takes no slot in the collapsed row: it is a return arc, silent at rest and counted once it fires (#1798)", async () => {
-  /* At rest the row is the stages and nothing else: no chip for the edge, and
-     the arc that carries it prints no count — only the sentence in its title. */
+test("a fail edge takes no slot in the lane row: silent at rest, and a suffix on the failing pill once it fires (#1798, #2072)", async () => {
+  /* At rest the row is the stages and nothing else, and the budget is in the
+     failing pill's tooltip. */
   const rest = mount([arcPipeline({ max: 3, fired: 0 })]);
   await tick();
-  expect([...card(rest.host).querySelectorAll<HTMLElement>(".psummary .pchip")].map((chip) => chip.dataset.stage)).toEqual(["fix", "critique", "review"]);
-  expect(card(rest.host).querySelector(".psummary .ploop")).toBeNull();
-  expect(card(rest.host).querySelector<HTMLElement>(".psummary")?.dataset.arcs).toBe("arcs");
-  const atRest = arc(rest.host, "review:fail:fix")!;
-  expect(atRest.dataset.arcState).toBe("rest");
-  expect(atRest.dataset.arcFired).toBe("0");
-  expect(atRest.dataset.arcMax).toBe("3");
-  expect(atRest.querySelector(".parc-count")).toBeNull();
-  expect(atRest.querySelector("title")?.textContent).toContain("up to 3 rounds");
-  /* Nothing at rest reaches the pills either: the suffix is the wrapped row's. */
-  expect(card(rest.host).querySelector(".psummary .pret")).toBeNull();
+  expect([...card(rest.host).querySelectorAll<HTMLElement>(".pb-pills .pb-pill")].map((chip) => chip.dataset.stage)).toEqual(["fix", "critique", "review"]);
+  expect(card(rest.host).querySelector(".pb-pills .ploop")).toBeNull();
+  expect(card(rest.host).querySelector(".pb-pills .pret")).toBeNull();
+  expect(card(rest.host).querySelector("[data-loop-arc], .parcs")).toBeNull();
+  expect(pill(rest.host, "review")?.title).toContain("up to 3 rounds");
 
   /* One round of three spent, and the returned stage running because of it. */
   const fired = mount([arcPipeline({ max: 3, fired: 1, running: true })]);
   await tick();
-  const once = arc(fired.host, "review:fail:fix")!;
+  const once = pill(fired.host, "review")!.querySelector<HTMLElement>(".pret")!;
+  expect(once.dataset.stageReturn).toBe("review:fail:fix");
   expect(once.dataset.arcState).toBe("fired");
-  expect(once.dataset.arcFired).toBe("1");
   expect(once.dataset.arcLive).toBe("1");
-  expect(once.querySelector(".parc-count")?.textContent).toBe("1/3");
+  expect(once.textContent).toBe("↺1/3");
+  expect(pill(fired.host, "review")?.title).toContain("Fired 1 of 3 times");
+  /* A return that is over is not marked as one still running. */
+  const over = mount([arcPipeline({ max: 3, fired: 1 })]);
+  await tick();
+  expect(pill(over.host, "review")?.querySelector<HTMLElement>(".pret")?.dataset.arcLive).toBe("0");
 
-  /* The budget spent: the arc turns danger and its title says what that costs. */
+  /* The budget spent: the suffix says so, and its sentence says what that costs. */
   const spent = mount([arcPipeline({ max: 2, fired: 2 })]);
   await tick();
-  const gone = arc(spent.host, "review:fail:fix")!;
+  const gone = pill(spent.host, "review")!.querySelector<HTMLElement>(".pret")!;
   expect(gone.dataset.arcState).toBe("exhausted");
-  expect(gone.dataset.arcLive).toBe("0");
-  expect(gone.querySelector(".parc-count")?.textContent).toBe("2/2");
-  expect(gone.querySelector("title")?.textContent).toContain("No rounds left");
+  expect(gone.textContent).toBe("↺2/2");
+  expect(gone.title).toContain("No rounds left");
   /* Spent but still alive: the sentence is about what a FURTHER failure costs. */
-  expect(gone.querySelector("title")?.textContent).toContain("another failure");
+  expect(gone.title).toContain("another failure");
 
-  /* The same budget after the lane actually stopped on it: the sentence says
-     what happened, not what a failure that can no longer happen would cost. */
+  /* The same budget after the lane stopped on it: the sentence says what
+     happened, first. */
   const parked = mount([arcPipeline({ max: 2, fired: 2, parked: true })]);
   await tick();
-  const stopped = arc(parked.host, "review:fail:fix")!;
+  const stopped = pill(parked.host, "review")!.querySelector<HTMLElement>(".pret")!;
   expect(stopped.dataset.arcState).toBe("exhausted");
-  /* And it says it FIRST: that is what the arc was opened to find out, and
-     behind the budget clause it is the last line of a four-line note. */
-  expect(stopped.querySelector("title")?.textContent).toMatch(/^No rounds left/);
-  expect(stopped.querySelector("title")?.textContent).toContain("parked here");
-  expect(stopped.querySelector("title")?.textContent).not.toContain("another failure");
+  expect(stopped.title).toMatch(/^No rounds left/);
+  expect(stopped.title).toContain("parked here");
+  expect(stopped.title).not.toContain("another failure");
 
-  /* Two edges into one target are two arcs, each with its own count. */
+  /* Two edges into one target are two suffixes, each on its own failing pill. */
   const both = mount([arcPipeline({ max: 3, fired: 2, fromCritique: true })]);
   await tick();
-  expect([...card(both.host).querySelectorAll<HTMLElement>(".psummary [data-loop-arc]")].map((node) => [node.dataset.loopArc, node.dataset.arcFired]))
+  expect([...card(both.host).querySelectorAll<HTMLElement>(".pb-pills .pret")].map((node) => [node.dataset.stageReturn, node.dataset.arcFired]))
     .toEqual([["critique:fail:fix", "1"], ["review:fail:fix", "1"]]);
-  expect(card(both.host).querySelectorAll(".psummary .pchip")).toHaveLength(3);
+  expect(card(both.host).querySelectorAll(".pb-pills .pb-pill")).toHaveLength(3);
 });
 
-/* happy-dom lays nothing out and the arcs are drawn from the pills' own boxes,
-   so a case about the drawing has to hand the row a layout: three pills of
-   70 px on one line, which is the shape of a real collapsed row. */
-const PILL_BOX: Record<string, [number, number]> = { fix: [0, 60], critique: [70, 140], review: [150, 220] };
-const box = (left: number, right: number, top = 10) => ({
-  left, right, top, bottom: top + 24, width: right - left, height: 24, x: left, y: top, toJSON() { return this; },
-});
-/** All three pills on one line, which is what an arc is drawn under. `wrapped`
-    drops the last one onto a second line instead: a row of four stages does
-    that in every column this board has, and there the arcs give way to a count
-    on the failing stage's own pill. */
-function withRowLayout(wrapped = false): () => void {
-  const original = dom.HTMLElement.prototype.getBoundingClientRect;
-  Object.defineProperty(dom.HTMLElement.prototype, "getBoundingClientRect", {
-    configurable: true,
-    value(this: HTMLElement) {
-      const stage = this.getAttribute?.("data-stage");
-      if (stage && PILL_BOX[stage]) return box(...PILL_BOX[stage]!, wrapped && stage === "review" ? 44 : 10);
-      if (this.classList?.contains("psummary")) return box(0, 240);
-      return original.call(this);
-    },
-  });
-  return () => Object.defineProperty(dom.HTMLElement.prototype, "getBoundingClientRect", { configurable: true, value: original });
+/* A lane row's head states its state once, as a word in its tone (#2072,
+   variant B): "stages running" is left to the live pill, and no stage name is
+   said beside the word — the chain below already names where the work is. On
+   f5626046 the rows the operator read said it twice: «етапи виконуються» then
+   «Green виконується», «потребує рішення» then «Banter trigger round2 чекає на
+   вас», «чернетка» then «чернетка». */
+function headPipeline(state: string, stageId: string, attemptState: string | null, over: Record<string, unknown> = {}): Pipeline {
+  return {
+    id: "p-search", task: "Keep the header to one statement of state", taskIds: ["t-search"], project: "fixture", state,
+    stages: [stage(stageId, "builder", "review"), stage("review", "reviewer", null, { onFail: { to: stageId, maxRounds: 2 } })],
+    runs: attemptState ? [{ stageId, attempts: [attempt(1, attemptState, implement1, 1200)] }] : [],
+    cursor: attemptState ? { stageId, state: attemptState === "needs_decision" ? "running" : attemptState, input: null, activatedBy: null } : null,
+    worktreeDir: "/fixture/worktree", createdAt: iso(9000), ...over,
+  } as unknown as Pipeline;
 }
-/* The arrowhead's tip, which is where the polygon starts. */
-const headX = (group: Element) => Number.parseFloat((group.querySelector(".parc-head")!.getAttribute("points") ?? "").split(",")[0]!);
-const tap = (element: Element) => flushSync(() => { element.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as MouseEvent); });
 
-test("two arcs into one pill nest instead of crossing, and every arc carries a hit stroke a pointer can meet (#1798)", async () => {
-  const restore = withRowLayout();
-  try {
-    const { host } = mount([arcPipeline({ max: 3, fired: 2, fromCritique: true })]);
-    await tick();
-    const near = arc(host, "critique:fail:fix")!;
-    const far = arc(host, "review:fail:fix")!;
-    /* Both land on Fix, and both sources are to its right. The shallow arc
-       takes the pill's centre; the deeper one steps AWAY from the sources, so
-       the two nest. Fanned the other way the deep arc's rising leg cuts through
-       the shallow one just under the tips and the heads smudge into one. */
-    expect(headX(far)).toBeLessThan(headX(near));
-    /* 7 px heads, so the step leaves clear air between the two tips. */
-    expect(headX(near) - headX(far)).toBeGreaterThanOrEqual(9);
-    /* And they hang at different depths, or one hides under the other. */
-    const depth = (group: Element) => Number.parseFloat(group.querySelector(".parc")!.getAttribute("d")!.split(/[ C]+/)[4]!);
-    expect(depth(far)).toBeGreaterThan(depth(near));
+const head = (host: HTMLElement) => {
+  const row = card(host).querySelector<HTMLElement>(".pblock .pb-head")!;
+  return {
+    word: row.querySelector(".pstate-word")?.textContent ?? null,
+    text: row.querySelector(".pb-open")?.textContent ?? "",
+    title: row.querySelector(".pb-title")?.textContent ?? null,
+  };
+};
 
-    /* The drawn arc is 1.5 px of dashes, so what the pointer meets is a wide
-       transparent stroke on the same path — the same path, or the sentence
-       opens somewhere the arc is not. */
-    const hit = far.querySelector<SVGPathElement>(".parc-hit")!;
-    expect(hit.getAttribute("data-arc-hit")).toBe("review:fail:fix");
-    expect(hit.getAttribute("d")).toBe(far.querySelector(".parc")!.getAttribute("d"));
-    /* A tooltip has no long-press, so a tap is the touch surface's answer. */
-    expect(card(host).querySelector("[data-arc-note]")).toBeNull();
-    tap(hit);
-    await tick();
-    const note = card(host).querySelector<HTMLElement>("[data-arc-note]")!;
-    expect(note.dataset.arcNote).toBe("review:fail:fix");
-    expect(note.textContent).toBe(far.querySelector("title")!.textContent);
-    tap(hit);
-    await tick();
-    expect(card(host).querySelector("[data-arc-note]")).toBeNull();
-  } finally {
-    restore();
+const HEAD_CASES: Array<{ name: string; pipeline: () => Pipeline; en: string | null; uk: string | null; stage: string }> = [
+  { name: "running", pipeline: () => headPipeline("running", "green", "running"), en: null, uk: null, stage: "Green" },
+  { name: "needs_decision", pipeline: () => headPipeline("needs_decision", "banter-trigger-round2", "needs_decision"), en: "needs a decision", uk: "потребує рішення", stage: "Banter trigger round2" },
+  { name: "draft", pipeline: () => headPipeline("draft", "build", null), en: "draft", uk: "чернетка", stage: "Build" },
+  { name: "paused", pipeline: () => headPipeline("paused", "green", "running", { pausedState: "running" }), en: "paused", uk: "пауза", stage: "Green" },
+  { name: "completed", pipeline: () => headPipeline("completed", "build", "passed", { cursor: null, closedAt: iso(300) }), en: "completed", uk: "завершено", stage: "Build" },
+  { name: "closed", pipeline: () => headPipeline("closed", "build", "failed", { cursor: null, closedAt: iso(300), restored: true }), en: "closed", uk: "закрито", stage: "Build" },
+  { name: "failed-stage", pipeline: () => headPipeline("paused", "build", "failed", { cursor: null, pausedState: null }), en: "paused", uk: "пауза", stage: "Build" },
+  /* A stage parked on the operator under a paused pipeline, and a stage on its second attempt. */
+  { name: "paused-decision", pipeline: () => headPipeline("paused", "build", "needs_decision", { pausedState: "running" }), en: "paused", uk: "пауза", stage: "Build" },
+  { name: "second-attempt", pipeline: () => ({ ...headPipeline("running", "green", "running"), runs: [{ stageId: "green", attempts: [attempt(1, "failed", implement1, 2400), attempt(2, "running", implement1, 1200)] }] }) as unknown as Pipeline, en: null, uk: null, stage: "Green" },
+];
+
+for (const locale of ["en", "uk"] as const) {
+  for (const entry of HEAD_CASES) {
+    test(`a ${entry.name} pipeline's head states its state once, in ${locale}`, async () => {
+      setLocale(locale);
+      try {
+        const { host } = mount([entry.pipeline()]);
+        await tick();
+        const word = entry[locale];
+        const read = head(host);
+        expect(read.word).toBe(word);
+        if (word) expect(read.text.split(word)).toHaveLength(2);
+        /* The stage the work stands on is the chain's to name, not the head's. */
+        expect(read.text).not.toContain(entry.stage);
+        expect(read.title).toBe("Keep the header to one statement of state");
+      } finally {
+        setLocale("en");
+      }
+    });
   }
-});
+}
 
-test("a row that wraps drops the arcs and puts the same count on the failing pill, marked while the return is in flight (#1798)", async () => {
-  const restore = withRowLayout(true);
-  try {
-    /* At rest a wrapped row says nothing extra at all: the budget stays in the
-       sentence the pill already carries. */
-    const rest = mount([arcPipeline({ max: 3, fired: 0 })]);
-    await tick();
-    expect(card(rest.host).querySelector<HTMLElement>(".psummary")?.dataset.arcs).toBe("suffix");
-    expect(card(rest.host).querySelectorAll(".psummary [data-loop-arc]")).toHaveLength(0);
-    expect(card(rest.host).querySelector(".psummary .pret")).toBeNull();
+/* #2072 variant B: the card is the only frame. What the activity line said
+   moved: "needs you" to the card's edge and the lane's own state word, the
+   working and conversation counts to the footer. */
+test("the card draws no activity line: the footer counts the conversations, and a lane that waits on the operator colours the card's edge", async () => {
+  const running = mount([searchPipeline()]);
+  await tick();
+  expect(card(running.host).querySelector(".activity")).toBeNull();
+  expect(card(running.host).dataset.attention).toBeUndefined();
+  expect(card(running.host).querySelector(".foot [data-foot-conversations]")?.textContent).toBe("5 conversations");
+  /* The lane row is frameless: a hairline above it, and no box of its own. */
+  expect(card(running.host).querySelector(".pblock")?.getAttribute("data-density")).toBe("task");
 
-    /* Once it has fired the count rides the failing stage's own pill. A row of
-       four stages wraps in every column this board has, so this — not the arc
-       — is the rendering most lanes get, and it carries the same readings: the
-       state, and that the return is in flight. With no arc to make live, the
-       mark is the only thing left that can say so. */
-    const fired = mount([arcPipeline({ max: 3, fired: 1, running: true })]);
-    await tick();
-    expect(card(fired.host).querySelectorAll(".psummary [data-loop-arc]")).toHaveLength(0);
-    const mark = card(fired.host).querySelector<HTMLElement>('.pchip[data-stage="review"] .pret')!;
-    expect(mark.dataset.stageReturn).toBe("review:fail:fix");
-    expect(mark.dataset.arcState).toBe("fired");
-    expect(mark.dataset.arcLive).toBe("1");
-    expect(mark.textContent).toContain("1/3");
-    /* The sentence the arc would have kept is on the pill that carries it. */
-    expect(card(fired.host).querySelector<HTMLElement>('.pchip[data-stage="review"]')?.title).toContain("Fired 1 of 3 times");
-
-    /* A return that is over is not marked as one still running. */
-    const over = mount([arcPipeline({ max: 3, fired: 1 })]);
-    await tick();
-    expect(card(over.host).querySelector<HTMLElement>(".psummary .pret")?.dataset.arcLive).toBe("0");
-  } finally {
-    restore();
-  }
+  const parked = mount([{ ...searchPipeline(), state: "needs_decision" } as Pipeline]);
+  await tick();
+  expect(card(parked.host).dataset.attention).toBe("needs");
+  /* The lane says it in its own amber word, so the footer does not say it again. */
+  expect(card(parked.host).querySelector(".pb-head .pstate-word")?.textContent).toBe("needs a decision");
+  expect(card(parked.host).querySelector("[data-foot-needs]")).toBeNull();
 });

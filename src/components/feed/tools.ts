@@ -3,8 +3,10 @@ import { redactSecrets } from "@/lib/review";
 import { harnessKind } from "@/lib/wakeup";
 
 import type { GlyphName } from "../icons";
+import { feedCopy, taskText } from "./toolMeaning";
 import { formatStdinKeys } from "./ansi";
 import { normalizeEdit, type DiffModel } from "./diff";
+import { boundedToolArguments, SENSITIVE_RECORD_KEY } from "./toolRedaction";
 
 /* The source-agnostic tool taxonomy (issue #9 §3). One pure summarizer turns a
    raw (tool, args) pair from any engine into a canonical family, an icon, a
@@ -13,8 +15,8 @@ import { normalizeEdit, type DiffModel } from "./diff";
 
 /** The engines a rendered row can be attributed to. Background-task job logs
     render Codex-shaped rows under the `shell` engine, so `shell` is not a
-    member: every row this taxonomy produces belongs to one of these three. */
-export type FeedEngine = "claude" | "codex" | "openclaw";
+    member: every row this taxonomy produces belongs to one of these. */
+export type FeedEngine = "claude" | "codex" | "openclaw" | "copilot";
 
 export type ToolFamily = "shell" | "read" | "write" | "edit" | "search" | "web" | "spawn" | "plan" | "mcp" | "other";
 
@@ -93,28 +95,156 @@ function summaryOf(text: string): string {
 }
 
 function chip(value: string, label?: string): ArgChip {
-  const redacted = cap(redactSecrets(value), CHIP_MAX);
+  const protectedValue = label ? redactSecrets(`${label}=${value}`) : redactSecrets(value);
+  const redacted = cap(label && protectedValue.startsWith(`${label}=`) ? protectedValue.slice(label.length + 1) : protectedValue, CHIP_MAX);
   return label ? { label, value: redacted } : { value: redacted };
 }
 
-/* Strips launcher boilerplate (PATH exports, `cd … &&`, the zsh wrapper, an
-   outer quote pair, heredoc bodies) from a shell command for the summary line.
-   The full command is retained separately by the caller for the expanded view. */
+/* The leading boilerplate a one-line label folds away so the real command reads
+   first (#1938): PATH exports, `cd … &&`, a shell wrapper (`sh -c`, `bash -lc`,
+   `/usr/bin/zsh -lc`), a proxy in front of one (`<tool> proxy sh -c '…'`), the
+   outer quote pair such a wrapper leaves behind, and the environment
+   assignments in front of the program (`env A=1 B=2 cmd`, `A=1 cmd`).
+
+   Purely lexical: nothing here evaluates a shell, every pattern is anchored at
+   the head of what is left, and a value whose syntax the scanner cannot read
+   with certainty is refused outright, so `env T=$(mktemp -d) bun test` keeps
+   its whole label instead of being cut at the space inside the substitution.
+
+   Bounded by budget, not only by termination, because the caller hands this
+   uncapped commands and the display limits are applied after it: every prefix
+   pattern carries its own length bound, an assignment is scanned inside a
+   FOLD_PREFIX_WINDOW, at most FOLD_PASSES prefixes are folded in all, and the
+   one scan that can span a whole region — the outer quote pair — draws on a
+   single FOLD_CHAR_BUDGET. Exhausting a budget stops the fold where it stands:
+   what was folded before that point was read in full, and everything left is
+   kept verbatim. */
+const FOLD_PASSES = 24;
+const FOLD_PREFIX_WINDOW = 512;
+const FOLD_CHAR_BUDGET = 1 << 16;
+
+const EXPORT_PATH = /export PATH=[^;\n]{1,256};\s{0,8}/y;
+const CD_PREFIX = /cd\s{1,8}\S{1,256}\s{0,8}&&\s{0,8}/y;
+const SHELL_WRAPPER = /\/?(?:[\w.-]{1,64}\/){0,8}(?:ba|z|da|k|c)?sh\s{1,8}-[a-zA-Z]{0,8}c\s{1,8}/y;
+const PROXY_WRAPPER = /[\w.@-]{1,64}\s{1,8}proxy\s{1,8}(?=\/?(?:[\w.-]{1,64}\/){0,8}(?:ba|z|da|k|c)?sh\s{1,8}-[a-zA-Z]{0,8}c\s)/y;
+const ENV_KEYWORD = /env\s{1,8}/y;
+const ASSIGNMENT_NAME = /[A-Za-z_][A-Za-z0-9_]{0,255}=/y;
+const HEREDOC = /^([\w./-]{1,128}(?:\s+-)?)\s*<<\s*['"]?(\w{1,64})['"]?/;
+
+/** Index just past a sticky pattern matched at `at`, or -1 when it is not there. */
+function matchAt(pattern: RegExp, cmd: string, at: number): number {
+  pattern.lastIndex = at;
+  const hit = pattern.exec(cmd);
+  return hit ? at + hit[0].length : -1;
+}
+
+/** Index just past the quote run opened at `at`, or -1 when it never closes
+    inside the window — or when a backslash inside a double-quoted run makes the
+    next character's meaning an interpretation this scanner will not make. A
+    single-quoted run has no escapes in the shell, so a backslash inside one is
+    an ordinary character and the first `'` still closes it. */
+function quoteRunEnd(cmd: string, at: number, limit: number): number {
+  const quote = cmd[at];
+  for (let i = at + 1; i < limit; i += 1) {
+    if (quote === '"' && cmd[i] === "\\") return -1;
+    if (cmd[i] === quote) return i + 1;
+  }
+  return -1;
+}
+
+/** Index just past a balanced `(…)` or `{…}` opened at `at`, skipping quoted
+    runs, or -1 when it does not close inside the window or holds a backslash
+    escape or a backquote — the same syntax `envAssignmentEnd` refuses outside a
+    substitution, refused inside one too rather than counted as a bracket. */
+function balancedEnd(cmd: string, at: number, limit: number, open: string, close: string): number {
+  let depth = 0;
+  for (let i = at; i < limit; i += 1) {
+    const ch = cmd[i];
+    if (ch === open) depth += 1;
+    else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    } else if (ch === "\\" || ch === "`") return -1;
+    else if (ch === "'" || ch === '"') {
+      const closed = quoteRunEnd(cmd, i, limit);
+      if (closed < 0) return -1;
+      i = closed - 1;
+    }
+  }
+  return -1;
+}
+
+/** Index just past one `NAME=value` assignment and the whitespace behind it, or
+    -1 when there is no assignment at `at`, when its value uses syntax this
+    scanner will not guess at (a backquote, a backslash escape, an unterminated
+    quote, substitution or expansion), or when nothing follows it inside the
+    window. Refusing is what leaves the raw command as the label. */
+function envAssignmentEnd(cmd: string, at: number, limit: number): number {
+  const named = matchAt(ASSIGNMENT_NAME, cmd, at);
+  if (named < 0 || named > limit) return -1;
+  let i = named;
+  while (i < limit) {
+    const ch = cmd[i];
+    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") break;
+    if (ch === "'" || ch === '"') {
+      const closed = quoteRunEnd(cmd, i, limit);
+      if (closed < 0) return -1;
+      i = closed;
+      continue;
+    }
+    if (ch === "$" && (cmd[i + 1] === "(" || cmd[i + 1] === "{")) {
+      const closed = cmd[i + 1] === "(" ? balancedEnd(cmd, i + 1, limit, "(", ")") : balancedEnd(cmd, i + 1, limit, "{", "}");
+      if (closed < 0) return -1;
+      i = closed;
+      continue;
+    }
+    if (ch === "`" || ch === "\\") return -1;
+    i += 1;
+  }
+  if (i >= limit) return -1;
+  let after = i;
+  while (after < limit && /\s/.test(cmd[after])) after += 1;
+  return after < limit ? after : -1;
+}
+
+/* Strips that boilerplate from a shell command for the summary line. The full
+   command is retained separately by the caller for the expanded view, and a
+   fold that consumes everything (an unfamiliar shape the patterns read wrong)
+   falls back to the raw command rather than to an empty label. */
 export function cleanShellCommand(cmd: string): string {
-  let body = cmd;
-  let prev: string;
-  do {
-    prev = body;
-    body = body.replace(/^export PATH=[^;]+;\s*/, "");
-    body = body.replace(/^cd\s+\S+\s*&&\s*/, "");
-    body = body.replace(/^\/usr\/bin\/zsh -lc\s+/, "");
-    body = body.replace(/^(["'])([\s\S]*)\1$/, (whole: string, quote: string, inner: string) =>
-      new RegExp(`(?<!\\\\)${quote}`).test(inner) ? whole : inner,
-    );
-  } while (body !== prev);
-  const heredoc = body.match(/^([\w./-]+(?:\s+-)?)\s*<<\s*['"]?(\w+)['"]?/);
-  if (heredoc) body = `${heredoc[1].trim()} «heredoc»`;
-  return body.replace(/\s+/g, " ").trim();
+  let start = 0;
+  let end = cmd.length;
+  let budget = FOLD_CHAR_BUDGET;
+  for (let pass = 0; pass < FOLD_PASSES; pass += 1) {
+    const fromStart = start;
+    const fromEnd = end;
+    for (const pattern of [EXPORT_PATH, CD_PREFIX, PROXY_WRAPPER, SHELL_WRAPPER]) {
+      const next = matchAt(pattern, cmd, start);
+      if (next > start && next <= end) start = next;
+    }
+    // The outer quote pair a wrapper leaves behind, dropped only when that
+    // quote never reappears unescaped inside it.
+    const quote = cmd[start];
+    if (end - start >= 2 && (quote === '"' || quote === "'") && cmd[end - 1] === quote && end - start <= budget) {
+      budget -= end - start;
+      let reopened = false;
+      for (let i = start + 1; i < end - 1 && !reopened; i += 1) reopened = cmd[i] === quote && cmd[i - 1] !== "\\";
+      if (!reopened) {
+        start += 1;
+        end -= 1;
+      }
+    }
+    // `env` counts as boilerplate only when assignments actually follow it.
+    const afterEnv = matchAt(ENV_KEYWORD, cmd, start);
+    if (afterEnv > start && afterEnv <= end && envAssignmentEnd(cmd, afterEnv, Math.min(end, afterEnv + FOLD_PREFIX_WINDOW)) > 0) start = afterEnv;
+    const afterAssignment = envAssignmentEnd(cmd, start, Math.min(end, start + FOLD_PREFIX_WINDOW));
+    if (afterAssignment > start && afterAssignment <= end) start = afterAssignment;
+    if (start === fromStart && end === fromEnd) break;
+  }
+  const body = cmd.slice(start, end);
+  const heredoc = body.match(HEREDOC);
+  const label = heredoc ? `${heredoc[1].trim()} «heredoc»` : body;
+  return label.replace(/\s+/g, " ").trim() || cmd.replace(/\s+/g, " ").trim();
 }
 
 const SHELL_TOOLS = new Set(["Bash", "exec_command", "shell", "local_shell", "run_command"]);
@@ -123,7 +253,7 @@ const WRITE_TOOLS = new Set(["Write"]);
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "NotebookEdit", "apply_patch"]);
 const SEARCH_TOOLS = new Set(["Grep", "Glob"]);
 const WEB_TOOLS = new Set(["WebFetch", "WebSearch"]);
-const SPAWN_TOOLS = new Set(["Task", "Agent", "Workflow", "Skill"]);
+const SPAWN_TOOLS = new Set(["Task", "Agent", "Workflow", "Skill", "spawn_agent", "followup_task", "send_message", "wait_agent", "subagent_activity"]);
 const PLAN_TOOLS = new Set(["TodoWrite", "TaskCreate", "TaskUpdate", "EnterPlanMode", "ExitPlanMode"]);
 
 export function familyOf(tool: string): ToolFamily {
@@ -195,6 +325,17 @@ export function summarizeTool(
   const family = familyOf(tool);
   const icon = FAMILY_ICON[family];
   const build = (summary: string, chips: ArgChip[] = []): ToolSummary => ({ family, icon, summary: summaryOf(summary), chips: chips.slice(0, 4) });
+
+  if (["spawn_agent", "followup_task", "send_message", "subagent_activity", "wait_agent"].includes(tool)) {
+    const target = str(args.target ?? args.task_name ?? args.agent_path ?? args.id);
+    const message = taskText(args.message ?? args.prompt);
+    const action = tool === "followup_task" ? feedCopy("Follow up", "Продовжити завдання")
+      : tool === "spawn_agent" ? feedCopy("Start agent", "Запустити агента")
+      : tool === "send_message" ? feedCopy("Message agent", "Написати агенту")
+      : tool === "wait_agent" ? feedCopy("Wait for agents", "Очікування агентів")
+      : feedCopy("Agent", "Агент");
+    return build([action, target, message].filter(Boolean).join(" · "), target ? [chip(target)] : []);
+  }
 
   /* Codex interactive-shell control tools (issue #141): render as shell-family
      cards. write_stdin shows the actual keys sent; wait shows the session it is
@@ -297,9 +438,12 @@ export function summarizeTool(
       const parts = tool.replace(/^mcp__/, "").split("__");
       const server = parts[0] ?? tool;
       const name = parts.slice(1).join("__") || tool;
-      const key = firstStringArg(args);
+      const meaningful = Object.entries(boundedToolArguments(args)).filter(([key, value]) =>
+        !["clientRequestId", "request_id", "call_id"].includes(key) && value !== null && value !== undefined);
+      const key = meaningful.find(([name, value]) => typeof value === "string" && !SENSITIVE_RECORD_KEY.test(name))?.[1];
       const summary = `${server} · ${name}${key ? ` · ${key}` : ""}`;
-      return build(summary, key ? [chip(key)] : []);
+      return build(summary, meaningful.slice(0, 4).map(([key, value]) =>
+        chip(typeof value === "string" ? value : JSON.stringify(value), key)));
     }
     default: {
       const first = firstStringArg(args);

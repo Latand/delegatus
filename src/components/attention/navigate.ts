@@ -205,6 +205,28 @@ export async function runFocusHandoff(
      became the SECOND move of two, at a different zoom, each fighting the
      other for the same camera. The operator saw the view arrive somewhere and
      then slide off it. Placement here, navigation once, further down. */
+  /* A lane the server has admitted and this board has not drawn yet (#1836).
+     The record behind it is pushed to the client WITH the request and layered
+     into the board's data layer by the poll that delivered it, so what is owed
+     here is only the moment it takes React to render the new card and republish
+     the index. Waiting for the ANCHOR rather than for the board is the whole
+     change: a board was always there within milliseconds, answered "I do not
+     hold that key", and the request was closed as lost while the server knew
+     perfectly well the pipeline existed.
+
+     Bounded by the same wait as everything else here, so a target that truly
+     does not exist still reports `lost` well inside the landing grace — which
+     is what keeps TARGET_LOST meaning "there is no such thing". */
+  if (board && resolved.resolution === "lost" && !isGeometricTarget(request.target) && request.target.kind !== "conversation") {
+    const keys = focusTargetAnchorKeys(request.target);
+    board = await waitForBoard(
+      bus,
+      timing,
+      (candidate) => candidate.project === project && keys.some((key) => candidate.index.rectFor(key) !== null),
+    ) ?? board;
+    resolved = resolveFocusTarget(request.target, usableFrame(request.frameAtCreation), board.index);
+  }
+
   let asked = false;
   if (board && resolved.resolution === "lost" && request.target.kind === "conversation" && shell) {
     const wanted = request.target.path;

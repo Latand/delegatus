@@ -22,8 +22,35 @@ export interface RuntimeScope {
 export type RuntimeScopeString = `${RuntimeScopeKind}:${string}`;
 export type RuntimeScopeInput = RuntimeScope | RuntimeScopeString;
 
-export type RuntimeEngine = "codex" | "claude";
-export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "tmux-legacy" | "unhosted";
+export type RuntimeEngine = "codex" | "claude" | "copilot";
+export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "tmux-legacy" | "unhosted";
+
+/** The structured host kind each engine runs under. */
+export function runtimeHostKindForEngine(engine: RuntimeEngine): Extract<RuntimeHostKind, "codex-app-server" | "claude-broker" | "copilot-acp"> {
+  return engine === "codex" ? "codex-app-server" : engine === "copilot" ? "copilot-acp" : "claude-broker";
+}
+
+/** Whether a host kind is a structured (pane-less) engine host. */
+export function isStructuredHostKind(kind: string | null | undefined): kind is "codex-app-server" | "claude-broker" | "copilot-acp" {
+  return kind === "codex-app-server" || kind === "claude-broker" || kind === "copilot-acp";
+}
+
+/** The engine a structured host kind belongs to, or null for a non-structured one. */
+export function runtimeEngineForHostKind(kind: string | null | undefined): RuntimeEngine | null {
+  return kind === "codex-app-server" ? "codex" : kind === "copilot-acp" ? "copilot" : kind === "claude-broker" ? "claude" : null;
+}
+
+/**
+ * How a message for a running turn reaches this engine (docs/design/copilot-engine.md 3.4).
+ * Codex steers into the turn. Copilot's ACP has no steer, so a steer is
+ * delivered by interrupt-and-resend. Claude's broker declares neither and
+ * refuses a steer.
+ */
+export function runtimeSteerCapability(engine: RuntimeEngine): { steer: boolean; steerMode?: "interrupt" } {
+  if (engine === "codex") return { steer: true };
+  if (engine === "copilot") return { steer: false, steerMode: "interrupt" };
+  return { steer: false };
+}
 export type RuntimeHostAxis = "registering" | "hosted" | "recovering" | "unhosted" | "conflict" | "dead";
 export type RuntimeTurnAxis = "unknown" | "idle" | "running" | "interrupt_requested";
 export type RuntimeProvenance = "structured" | "derived" | "replayed";
@@ -160,7 +187,7 @@ export interface RuntimeAttentionRequest {
     multiSelect?: boolean;
   }>;
   protocol?: {
-    engine: "codex" | "claude";
+    engine: RuntimeEngine;
     method: string;
     questionId?: string;
     questionIds?: string[];
@@ -219,9 +246,31 @@ export interface RuntimeOperationReceipt {
   /** Retry guidance from the durable delivery settlement. `verify-first`
       selects the explicit same-identity retry path for an unknown fate. */
   resend?: "not-needed" | "safe" | "verify-first";
+  /** How a delivered message reached the engine, when it took more than a
+      plain send. Never `steered`: an engine without steer (Copilot) delivers
+      a message for a running turn by interrupt-and-resend. Recorded with the
+      `delivering` transition that precedes the interrupt; null once withdrawn
+      because the interrupt did not happen. */
+  delivery?: RuntimeDeliveryMode | null;
+  /** The running turn the delivery interrupted to make room for this one. */
+  interruptedTurnId?: string | null;
   revision: number;
 }
 export type RuntimeReceipt = RuntimeOperationReceipt;
+
+/** `interrupt-then-turn-started`: the running turn was interrupted and this
+    message started the next one (docs/design/copilot-engine.md 3.4). */
+export type RuntimeDeliveryMode = "interrupt-then-turn-started";
+
+/** What a receipt transition may record beside its status. */
+export interface RuntimeTransitionDetails {
+  turnId?: string | null;
+  queuePosition?: number | null;
+  reason?: string | null;
+  /** null withdraws a route recorded by an earlier transition. */
+  delivery?: RuntimeDeliveryMode | null;
+  interruptedTurnId?: string | null;
+}
 
 export interface RuntimeTransitionOptions {
   /** Compare-and-set fence evaluated inside the journal write transaction. */
@@ -400,6 +449,9 @@ export interface RuntimeControlCapability {
  * button that lies about the engine.
  */
 export function runtimeCompactCapability(engine: RuntimeEngine): RuntimeControlCapability {
+  if (engine === "copilot") {
+    return { control: "compact", engine, supported: false, reason: "the Copilot ACP host exposes no compact control" };
+  }
   return engine === "codex"
     ? { control: "compact", engine, supported: true, confirmation: "observed" }
     : { control: "compact", engine, supported: true, confirmation: "best-effort" };
@@ -500,7 +552,9 @@ export interface RuntimeSession {
   workflowId: string | null;
   cwd: string | null;
   artifactPath: string | null;
-  capabilities: { steer: boolean; structuredAttention: boolean; nativeQueue?: boolean; inject?: boolean; imageInput?: RuntimeImageCapability; runtimeSettings?: RuntimeSettingsCapability };
+  /** `steerMode: "interrupt"` marks an engine without steer whose steer is
+      delivered by interrupt-and-resend (Copilot). */
+  capabilities: { steer: boolean; steerMode?: "interrupt"; structuredAttention: boolean; nativeQueue?: boolean; inject?: boolean; imageInput?: RuntimeImageCapability; runtimeSettings?: RuntimeSettingsCapability };
   activeTurnId: string | null;
   pendingReconfigure?: RuntimePendingReconfigure | null;
   drift?: RuntimeDrift | null;
@@ -660,10 +714,26 @@ export interface ViewerRuntimeHostHealthEvidence {
   listener: ViewerRuntimeHostListenerEvidence;
   /** The runtime socket, whose answers are the large ones. */
   socket: ViewerRuntimeHostProbeEvidence;
+  /** The rollback the successor carried out at boot, when the rehearsal
+      staged one (docs/design/rename-delegatus.md §6.6). */
+  recovery?: ViewerRuntimeHostRecoveryEvidence;
   ok: boolean;
   detail?: string;
   /** Bounded tail of the failing generation's own output. */
   log?: string[];
+}
+
+/** A runtime-host rollback across the two Docker spellings: the generation that
+    served under one name failed, and the retained one under the other name
+    found it, stopped it and removed it. */
+export interface ViewerRuntimeHostRecoveryEvidence {
+  /** The generation the rollback kept; the host that did the work ran as it. */
+  retained: RuntimeHostGenerationIdentity;
+  /** The generation that failed, which the retained one stopped and removed. */
+  failed: RuntimeHostGenerationIdentity;
+  /** Every Docker call a generation made, in order, as the stub on its PATH
+      recorded it. */
+  docker: string[];
 }
 
 export interface RuntimeHostGenerationIdentity {
@@ -793,6 +863,66 @@ export interface ViewerDeploymentRequest {
   idempotencyKey: string;
 }
 
+export interface ViewerDeploymentListOptions {
+  limit?: number;
+  cursor?: string;
+  compact?: boolean;
+}
+
+export interface ViewerDeploymentSummary {
+  deploymentId: string;
+  phase: ViewerDeploymentPhase;
+  sha: string;
+  terminal: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+
+export interface ViewerDeploymentList {
+  deployments: Array<ViewerDeploymentStatus | ViewerDeploymentSummary>;
+  nextCursor: string | null;
+  hasMore: boolean;
+  /** Older hosts expose only their retained snapshot window. */
+  legacySnapshot?: true;
+}
+
+export function viewerDeploymentListLimit(limit?: number): number {
+  return typeof limit === "number" && Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 25;
+}
+
+/** Stable keyset cursor; creation time is immutable across deployment updates. */
+export function viewerDeploymentListCursor(startedAt: number, id: string, legacySnapshot = false): string {
+  return Buffer.from(JSON.stringify([1, startedAt, id, ...(legacySnapshot ? ["snapshot"] : [])])).toString("base64url");
+}
+
+export function parseViewerDeploymentListCursor(cursor?: string): [number, string, boolean] | null {
+  if (cursor === undefined) return null;
+  try {
+    if (typeof cursor !== "string" || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw new Error();
+    const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString());
+    if (!Array.isArray(value) || (value.length !== 3 && !(value.length === 4 && value[3] === "snapshot")) || value[0] !== 1 || !Number.isSafeInteger(value[1])
+      || typeof value[2] !== "string" || !value[2] || value[2].length > 512) throw new Error();
+    return [value[1], value[2], value[3] === "snapshot"];
+  } catch { throw new Error("deployment list cursor is invalid"); }
+}
+
+export function viewerDeploymentStartedAt(row: ViewerDeploymentStatus): number {
+  const created = Date.parse(row.createdAt);
+  const updated = Date.parse(row.updatedAt);
+  return Number.isFinite(created) ? created : Number.isFinite(updated) ? updated : -8640000000000000;
+}
+
+export function compactViewerDeploymentError(error: string | null): string | null {
+  return error == null ? null : error.length > 300 ? error.slice(0, 300) + "…" : error;
+}
+
+export function viewerDeploymentSummary(row: ViewerDeploymentStatus): ViewerDeploymentSummary {
+  return { deploymentId: row.deploymentId, phase: row.phase, sha: row.revision, terminal: row.terminal,
+    startedAt: row.createdAt ?? null, finishedAt: row.terminal ? row.updatedAt ?? null : null,
+    error: compactViewerDeploymentError(row.error) };
+}
+
 export type ViewerDeploymentReceipt =
   | { state: "accepted"; deploymentId: string; revision: string; replayed: boolean }
   | { state: "busy"; deploymentId: string; revision: string };
@@ -805,7 +935,7 @@ export interface RuntimeReplay {
 
 export interface RuntimeSocketRequest {
   id: string;
-  method: "runtime-host-health" | "snapshot" | "events" | "wait" | "append" | "operation" | "command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "session-read" | "snapshot" | "events" | "wait" | "append" | "operation" | "command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 
@@ -933,4 +1063,10 @@ export function assertRuntimeEvent(input: RuntimeEventInput): void {
       ? "runtime terminal response payload exceeds 16 MiB"
       : "runtime event payload exceeds 16 KiB");
   }
+}
+
+/** Identity precedence matches snapshot admission: conversation first, artifact fallback. */
+export interface RuntimeSessionRead {
+  conversationId?: string;
+  artifactPath?: string;
 }

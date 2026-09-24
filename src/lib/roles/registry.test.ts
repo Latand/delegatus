@@ -30,7 +30,7 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
 
   const orchestrator = resolveRole("orchestrator", {
     mode: "backlog-campaign",
-    repo: "Latand/live-log-viewer-next",
+    repo: "Latand/delegatus",
     issueQuery: "is:open",
     urgent: "#35",
     maxWorkers: 2,
@@ -39,7 +39,7 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
   });
   expect(orchestrator.ok && orchestrator.value.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
   expect(orchestrator.ok && orchestrator.value.prompt).not.toMatch(/(?:https?:\/\/)?(?:127\.0\.0\.1|localhost|\[::1\]):\d+/);
-  expect(orchestrator.ok && orchestrator.value.prompt).toContain("Repository: Latand/live-log-viewer-next");
+  expect(orchestrator.ok && orchestrator.value.prompt).toContain("Repository: Latand/delegatus");
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Issue query: is:open");
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Urgent list: #35");
 
@@ -67,6 +67,7 @@ test("builder parameters select the cheap fixer and the frontend implementation 
   const frontend = resolveRole("builder", { mode: "plain", domain: "frontend" });
   expect(frontend).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "opus", effort: "high" } } });
   expect(frontend.ok && frontend.value.prompt).toContain("UI/frontend implementation guidance");
+  expect(frontend.ok && frontend.value.prompt).toContain("add no new colour, font, pill or card shape");
 });
 
 test("role registry rejects unknown and missing required parameters with bounded errors", () => {
@@ -89,6 +90,7 @@ test("role registry rejects unknown and missing required parameters with bounded
 test("the reviewer scaffold names the typecheck command, and a cross-engine inherited model is rejected", () => {
   const reviewer = resolveRole("reviewer", { diffSource: "origin/main...HEAD", lens: "all" });
   expect(reviewer.ok && reviewer.value.prompt).toContain("bunx tsc --noEmit --incremental false");
+  expect(reviewer.ok && reviewer.value.prompt).toContain("how to show it fails");
 
   expect(resolveSpawnRole({ role: "builder", roleParams: { mode: "plain" }, engine: "claude" })).toEqual({
     ok: false,
@@ -155,6 +157,21 @@ test("spawn role resolution injects the scaffold and requires deploy confirmatio
   if (!spawn.ok || !spawn.value) throw new Error("expected resolved builder role");
   expect(spawn.value.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
   expect(spawn.value.scaffold).toContain("Builder in tdd mode");
+});
+
+test("explicit spawn fields accept GPT-6-Sol at ultra and GPT-6-Luna up to max", () => {
+  expect(resolveRole("builder", { mode: "plain" }, { engine: "codex", model: "gpt-6-sol", effort: "ultra" })).toMatchObject({
+    ok: true,
+    value: { config: { engine: "codex", model: "gpt-6-sol", effort: "ultra" } },
+  });
+  expect(resolveRole("builder", { mode: "plain" }, { engine: "codex", model: "gpt-6-luna", effort: "max" })).toMatchObject({
+    ok: true,
+    value: { config: { engine: "codex", model: "gpt-6-luna", effort: "max" } },
+  });
+  expect(resolveRole("builder", { mode: "plain" }, { engine: "codex", model: "gpt-6-luna", effort: "ultra" })).toEqual({
+    ok: false,
+    error: "effort for codex must be one of: low, medium, high, xhigh, max",
+  });
 });
 
 test("spawn role resolution enumerates the selected engine catalog for an invalid explicit model", () => {

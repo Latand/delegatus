@@ -34,6 +34,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { appDirIn } from "../bin/appDir.mjs";
 import { GET as searchRoute } from "@/app/api/search/transcripts/route";
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { indexTranscriptSources, searchTranscripts, type TranscriptIndexSource, type TranscriptSpeaker } from "@/lib/search/transcriptSearch";
@@ -66,7 +67,7 @@ function median(values: number[]): number {
 const args = process.argv.slice(2);
 const fixtureDir = args.find((arg) => !arg.startsWith("--") && !args.includes(`--${arg}`) && !/^\d+$/.test(arg) && !arg.endsWith(".json"));
 const stateDir = process.env.LLV_STATE_DIR;
-const defaultStateDir = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "agent-log-viewer", "state");
+const defaultStateDir = path.join(appDirIn(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config")), "state");
 if (!fixtureDir || !stateDir || path.resolve(stateDir) === defaultStateDir) {
   console.error("usage: LLV_STATE_DIR=<scratch> bun scripts/transcript-search-bench.ts <fixtureDir> [--repeat 5] [--json <file>] [--skip-mcp] [--skip-ui]");
   process.exit(2);

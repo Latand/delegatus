@@ -1,8 +1,15 @@
 #!/usr/bin/env bun-container
 
+/* FIRST, and before every other import: the claim has to precede the modules
+   below, which resolve the operator's state directory while they load (#1905).
+   In production the runtime host has already exported its own owner, and the
+   adapter inherits it; this admits a standalone run. */
+import "../src/lib/state/owner/deployAdapter";
+
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { appDirIn } from "../bin/appDir.mjs";
 import { processIdentityStatus } from "../src/lib/processIdentity";
 
 import type {
@@ -26,8 +33,8 @@ import {
 } from "../src/lib/state/hotStateAuthority";
 import {
   obsoleteManagedViewerContainers,
-  viewerAuthenticationTokenFromConfig,
   viewerCandidateDockerArgs,
+  viewerCandidateGateKey,
   viewerCandidateTmuxEnvironment,
   viewerComposeSnapshotWithoutWakatimeCredential,
   viewerComposeServiceFromConfig,
@@ -38,6 +45,7 @@ import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-
 import { allocateBuiltCandidatePort, candidatePortsFromEnvironmentLists, isCandidatePortAvailable } from "../src/runtime-host/candidatePort";
 import { withBootstrapMcpHealthProbeAdmission } from "../src/runtime-host/bootstrapMcpHealthProbeAdmission";
 import { viewerCandidateContainerName, viewerCandidateImageName, viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
+import { runtimeHostServiceImageTag } from "../src/runtime-host/dockerNames";
 import { bootstrapViewerRelease } from "../src/runtime-host/deploymentBootstrap";
 import {
   parseRuntimeHostRehearsalReport,
@@ -47,7 +55,7 @@ import { McpHealthProbeAdmissions } from "../src/runtime-host/mcpHealthProbeAdmi
 import type { McpHealthProbeAdmissionConsumer } from "../src/runtime-host/mcpHealthProbeAdmissionChannel";
 import { VIEWER_CONTROL_TOKEN_ENV } from "../src/lib/mcp/controlEndpoint";
 import { probeControlUrl, probeMcpRuntime } from "../src/runtime-host/mcpRuntimeProbe";
-import { McpRuntimeReleaseStore } from "../src/runtime-host/mcpRuntimeRelease";
+import { McpRuntimeReleaseStore, stableMcpRuntimeRoot } from "../src/runtime-host/mcpRuntimeRelease";
 import {
   clearRuntimeHostHandoffIntent,
   readRuntimeHostHandoffIntent,
@@ -99,15 +107,15 @@ import {
 import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "/home/user", ".config");
-const stateDir = process.env.LLV_STATE_DIR || path.join(defaultConfigDir, "agent-log-viewer", "state");
+const stateDir = process.env.LLV_STATE_DIR || path.join(appDirIn(defaultConfigDir), "state");
 const deploymentDir = path.join(stateDir, "deployments");
 const mirrorDir = path.join(deploymentDir, "canonical.git");
 const targetFile = process.env.LLV_VIEWER_DEPLOY_TARGET || path.join(stateDir, "viewer-release.json");
-const canonicalRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/live-log-viewer-next.git";
+const canonicalRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/delegatus.git";
 const runtimeSocket = process.env.LLV_RUNTIME_HOST_SOCKET || path.join(stateDir, "runtime-host.sock");
 const stableEndpoint = `http://127.0.0.1:${Number(process.env.LLV_VIEWER_PORT || 8898)}`;
-const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || "agent-log-viewer:node22";
-const mcpRuntimeRoot = process.env.LLV_MCP_RUNTIME_ROOT || path.join(process.env.HOME || "/home/user", ".agents", "tools", "llv-mcp-runtime");
+const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || runtimeHostServiceImageTag();
+const mcpRuntimeRoot = stableMcpRuntimeRoot();
 const mcpRuntimeStore = new McpRuntimeReleaseStore({ stateDir, stableRuntimeRoot: mcpRuntimeRoot });
 const deploymentPackageRoot = process.env.LLV_DEPLOYMENT_PACKAGE_ROOT || path.resolve(import.meta.dir, "..");
 const releaseSwitchIntentFile = path.join(stateDir, "viewer-release-switch-intent.json");
@@ -376,7 +384,7 @@ async function retainOnly(releases: ViewerReleaseIdentity[]): Promise<void> {
 }
 
 function serviceToken(candidate: ViewerReleaseIdentity): string | null {
-  return viewerAuthenticationTokenFromConfig(fs.readFileSync(composeConfigFile(candidate.container), "utf8"));
+  return viewerCandidateGateKey(fs.readFileSync(composeConfigFile(candidate.container), "utf8"));
 }
 
 /** The same credential where the release may predate Compose snapshots: a
@@ -532,10 +540,11 @@ async function probeRoutes(
     && releaseReady
     && expectedAssetsMatch;
   if (expectedAssetsEndpoint !== undefined) {
-    const detail = viewerHealthFailureDetail({ observations, assets, deploymentCapable,
-      registryBackendMatches, expectedRegistryBackendMode, observedRegistryBackendMode,
-      releaseReady, expectedAssetsMatch });
-    reportPhase?.(`${promotedViewerReadinessPhase(viewerDeploymentStructuredHostStartup(capability.status, capability.text))}${detail ? `; ${detail}` : ""}`);
+    const startup = viewerDeploymentStructuredHostStartup(capability.status, capability.text);
+    // Keep the last readable startup phase through transient probe failures.
+    // The host's bounded phase reader accepts this fixed diagnostic vocabulary;
+    // appending HTTP detail made it reject the entire timeout diagnostic.
+    if (startup) reportPhase?.(promotedViewerReadinessPhase(startup));
   }
   return {
     checkedAt: new Date().toISOString(), endpoint, processReady, rootStatus: root.status,
@@ -567,8 +576,9 @@ async function verifyViewer(
     inspect: () => containerState(candidate.container),
     probe: () => probeRoutes(candidate, endpoint, expectedAssetsEndpoint, reportPhase),
     ...(expectedAssetsEndpoint ? {
+      // The host bounds the entire verify-promoted action, including MCP
+      // retries. Individual probes can keep retrying while startup progresses.
       timeoutMs: null,
-      reportPending: reportPhase,
     } : {}),
   });
   if (evidence.ok) return evidence;
@@ -976,9 +986,11 @@ async function checkpointHotStateFence(
   process.env[HOT_STATE_RELEASE_REVISION_ENV] = revision;
   try {
     const { checkpointHotStateRollbackMirrorsForDemotion } = await import("../src/lib/viewerInstrumentation");
-    const revisions = await checkpointHotStateRollbackMirrorsForDemotion();
-    const { agentRegistry } = await import("../src/lib/agent/registry");
-    agentRegistry().checkpointRollbackMirrorForDemotion();
+    const { withStateMutationActivation } = await import("../src/lib/state/stateMutationBarrier");
+    /* The adapter reaches this only for a Viewer it has established is dead,
+       carrying that release's own revision. It owns the fence for this step,
+       so the barrier (#1905) admits the mirror writes — and only these. */
+    const revisions = await withStateMutationActivation(checkpointHotStateRollbackMirrorsForDemotion);
     const current = readHotStateAuthority(stateDir);
     if (current?.mode === "fencing"
       && current.epoch === request.epoch
@@ -1301,7 +1313,7 @@ async function main(): Promise<unknown> {
         ...(admissions ? { healthProbeCapability: admissions.issue(), healthProbeAdmissions: admissions } : {}),
       });
       if (health.ok || !health.processReady) return health;
-      reportAdapterPhase(action, health.detail ?? "waiting for promoted MCP readiness");
+      reportAdapterPhase(action, "waiting for promoted MCP readiness");
       await Bun.sleep(1_000);
     }
   }

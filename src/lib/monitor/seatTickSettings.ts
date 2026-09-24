@@ -1,8 +1,8 @@
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
-import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
+import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 
 import { redactBounded, redactMonitorText } from "./redact";
 
@@ -218,43 +218,93 @@ interface SeatTickSettingsFile {
   projects: Record<string, SeatTickSettings>;
 }
 
-function readFile(filePath: string): SeatTickSettingsFile {
+function emptySettingsFile(): SeatTickSettingsFile {
+  return { version: SEAT_TICK_SETTINGS_SCHEMA_VERSION, projects: {} };
+}
+
+function parseSettingsBody(parsed: unknown): SeatTickSettingsFile {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return emptySettingsFile();
+  const projects = ((parsed as Partial<SeatTickSettingsFile>).projects ?? {}) as Record<string, unknown>;
+  return {
+    version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
+    projects: Object.fromEntries(Object.entries(projects).map(([project, row]) => [project, normalizeRow(project, row)])),
+  };
+}
+
+/** `seat-tick-settings.json` as the store read it before #1870, for a release
+    that may not import yet. */
+function readLegacySettingsFile(filePath: string): SeatTickSettingsFile {
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { version: SEAT_TICK_SETTINGS_SCHEMA_VERSION, projects: {} };
-    }
-    const projects = ((parsed as Partial<SeatTickSettingsFile>).projects ?? {}) as Record<string, unknown>;
-    return {
-      version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
-      projects: Object.fromEntries(Object.entries(projects).map(([project, row]) => [project, normalizeRow(project, row)])),
-    };
+    return parseSettingsBody(JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown);
   } catch {
     /* An unreadable settings file reads as "nothing is configured", which is
        the tick as it shipped. Failing the check instead would let one corrupt
-       row stop every project's seat from ever being woken again. */
-    return { version: SEAT_TICK_SETTINGS_SCHEMA_VERSION, projects: {} };
+       row stop every project's seat from ever being woken again. This covers
+       the legacy file only: a read of the SQLite collection that finds it busy
+       throws the store's busy error, as the board and task reads the tick
+       makes already do, and the tick's per-project handling bounds it. */
+    return emptySettingsFile();
   }
 }
 
+const projectKey = (project: string) => `p:${project}`;
+
+/**
+ * The settings in `state.sqlite` (#1870 slice 5): one `p:<project>` row per
+ * configured project. `seat_tick_settings` answers a revision derived from the
+ * row itself, so the row is stored exactly as it was normalized from the file.
+ */
+const settingsStore = new LegacyDocumentStore<SeatTickSettingsFile>({
+  collection: "seat_tick_settings",
+  migrationId: "seat-tick-settings-json-v1",
+  busyMessage: "seat tick settings are busy",
+  parse: parseSettingsBody,
+  toRows: (file) => Object.entries(file.projects).map(([project, row]) => ({ key: projectKey(project), value: row })),
+  fromRows: (rows) => ({
+    version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
+    projects: Object.fromEntries(rows.map((row) => {
+      const settings = row.value as SeatTickSettings;
+      return [settings.project, settings] as const;
+    })),
+  }),
+  toFile: (file) => file,
+  readLegacy: readLegacySettingsFile,
+  error: (message, cause) => new Error(message, { cause }),
+});
+
+/** The store's legacy import spec, for the import driver and its tests. */
+export function seatTickSettingsLegacyCollection(filePath = seatTickSettingsPath()) {
+  return settingsStore.legacyCollection(filePath);
+}
+
+/** Import `seat-tick-settings.json` into SQLite now (the Viewer's activation). */
+export function importLegacySeatTickSettings(
+  filePath = seatTickSettingsPath(),
+  options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
+): LegacyImportOutcome {
+  return settingsStore.importLegacy(filePath, options);
+}
+
+/** Write `seat-tick-settings.json` from SQLite for a rollback release that predates #1870. */
+export function checkpointSeatTickSettingsRollbackMirrorForDemotion(filePath = seatTickSettingsPath()): void {
+  settingsStore.checkpointRollbackMirror(filePath);
+}
+
 export function readSeatTickSettings(project: string, filePath = seatTickSettingsPath()): SeatTickSettings {
-  return readFile(filePath).projects[project] ?? defaultSeatTickSettings(project);
+  return settingsStore.read(filePath).projects[project] ?? defaultSeatTickSettings(project);
 }
 
 export function readSeatTickSettingsFile(filePath = seatTickSettingsPath()): Record<string, SeatTickSettings> {
-  return readFile(filePath).projects;
+  return settingsStore.read(filePath).projects;
 }
 
-/** Serialized read-modify-write of one project's row; every other project's row
-    is re-read inside the transaction, so two writers cannot clobber. */
+/** Serialized read-modify-write of one project's row. Only that row is
+    written, so two writers of different projects cannot clobber each other. */
 export function writeSeatTickSettings(project: string, settings: SeatTickSettings, filePath = seatTickSettingsPath()): void {
-  withFileTransactionSync(filePath, "seat tick settings are busy", () => {
-    const file = readFile(filePath);
-    writeJsonDurably(filePath, {
-      version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
-      projects: { ...file.projects, [project]: { ...settings, project } },
-    });
-  });
+  settingsStore.mutate(filePath, (file) => ({
+    next: { ...file, projects: { ...file.projects, [project]: { ...settings, project } } },
+    result: undefined,
+  }));
 }
 
 /**
@@ -427,4 +477,75 @@ export function applySeatTickSettingsChange(
     return { ok: true, settings: { ...next, wakeIntervalMinutes: null, reason: null, until: null } };
   }
   return { ok: true, settings: next };
+}
+
+/** Where a line edit lands in the note: the one line starting with `prefix`
+    (leading whitespace ignored on both sides), or the line at the zero-based
+    `index`. Given both, the line at `index` must start with `prefix`, so an
+    index read off an older copy of the note cannot edit the wrong lane. */
+export interface SeatTickNoteLineTarget {
+  prefix?: string;
+  index?: number;
+}
+
+/**
+ * Edits to one line of the monitor note (#2030), so a seat keeping its lane
+ * ledger there changes a lane line by sending that line, never the whole note:
+ * rewriting a 2.3 KB note to change one line cost one seat 337 KB of input.
+ * Applied in this order, each against the note as the previous one left it.
+ */
+export interface SeatTickNoteLineEdits {
+  replaceLine?: SeatTickNoteLineTarget & { text: string };
+  removeLine?: SeatTickNoteLineTarget;
+  appendLine?: string;
+}
+
+function locateNoteLine(lines: readonly string[], target: SeatTickNoteLineTarget, edit: string): { ok: true; index: number } | { ok: false; error: string } {
+  const prefix = typeof target.prefix === "string" ? target.prefix.trimStart() : "";
+  if (target.index !== undefined) {
+    if (!Number.isInteger(target.index) || target.index < 0 || target.index >= lines.length) {
+      return { ok: false, error: `${edit}.index ${target.index} is outside the note, which has ${lines.length} line(s) numbered from 0. Nothing was stored` };
+    }
+    if (prefix && !lines[target.index]!.trimStart().startsWith(prefix)) {
+      return { ok: false, error: `${edit}: line ${target.index} of the note does not start with the prefix given beside it. Nothing was stored` };
+    }
+    return { ok: true, index: target.index };
+  }
+  if (!prefix) return { ok: false, error: `${edit} needs a non-empty prefix or an index` };
+  const matches = lines.flatMap((line, index) => (line.trimStart().startsWith(prefix) ? [index] : []));
+  if (matches.length !== 1) {
+    return { ok: false, error: `${edit}.prefix matches ${matches.length} lines of the note; it must match exactly one. Nothing was stored` };
+  }
+  return { ok: true, index: matches[0]! };
+}
+
+/** The note after its line edits, or why they were refused. Pure: the stored
+    note is handed in, and the result is written through
+    {@link applySeatTickSettingsChange} like a whole new note, under the same
+    limit and redaction. An edit that leaves nothing clears the note. */
+export function applySeatTickNoteLineEdits(
+  note: string | null,
+  edits: SeatTickNoteLineEdits,
+): { ok: true; monitorPrompt: string | null } | { ok: false; error: string } {
+  const lines = note ? note.split("\n") : [];
+  if (edits.replaceLine !== undefined) {
+    const { text, ...target } = edits.replaceLine;
+    if (typeof text !== "string") return { ok: false, error: "replaceLine.text must be a string" };
+    if (text.includes("\n")) return { ok: false, error: "replaceLine.text must be one line" };
+    const found = locateNoteLine(lines, target, "replaceLine");
+    if (!found.ok) return found;
+    lines[found.index] = text;
+  }
+  if (edits.removeLine !== undefined) {
+    const found = locateNoteLine(lines, edits.removeLine, "removeLine");
+    if (!found.ok) return found;
+    lines.splice(found.index, 1);
+  }
+  if (edits.appendLine !== undefined) {
+    if (typeof edits.appendLine !== "string") return { ok: false, error: "appendLine must be a string" };
+    if (edits.appendLine.includes("\n")) return { ok: false, error: "appendLine must be one line" };
+    lines.push(edits.appendLine);
+  }
+  const next = lines.join("\n");
+  return { ok: true, monitorPrompt: next.trim() ? next : null };
 }

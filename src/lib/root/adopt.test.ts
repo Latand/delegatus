@@ -70,6 +70,7 @@ function conversation(input: {
     projectOwnership: null,
     migration: null,
     migrationOptOut: null,
+    deliveryEvidenceTracked: true,
     supersededBy: null,
     agentRole: input.agentRole ?? null,
     delegationDepth: null,

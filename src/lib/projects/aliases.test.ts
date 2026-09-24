@@ -9,9 +9,10 @@ import {
   durableProjectAliasCandidates,
   persistProjectAliases,
   projectAliasSnapshot,
+  recordedProjectRemote,
   resetProjectAliasesForTests,
 } from "./aliases";
-import { projectIdentityFromRepositoryRoot } from "./identity";
+import { localRepositoryProjectId, projectIdentityFromRepositoryRoot } from "./identity";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-project-aliases-"));
 const ORIGINAL_STATE = process.env.LLV_STATE_DIR;
@@ -83,6 +84,7 @@ test("current-production durable records provide repository-backed aliases", () 
       displayName: "shared-repository",
     }],
     conflicts: [],
+    remoteMoves: [],
   });
 });
 
@@ -106,6 +108,7 @@ test("one legacy key resolving to two repositories is reported as a conflict", (
   expect(durableProjectAliasCandidates()).toEqual({
     registrations: [],
     conflicts: ["ambiguous-legacy-key"],
+    remoteMoves: [],
   });
 });
 
@@ -142,6 +145,7 @@ test("one poisoned record cannot block a majority-backed legacy source", () => {
       displayName: "shared-repository",
     }],
     conflicts: [],
+    remoteMoves: [],
   });
 });
 
@@ -170,6 +174,7 @@ test("a canonical repository id with foreign records never aliases to another re
   expect(durableProjectAliasCandidates()).toEqual({
     registrations: [],
     conflicts: [current.project],
+    remoteMoves: [],
   });
 });
 
@@ -200,6 +205,7 @@ test("a durable alias from a deleted worktree checkout resolves through the work
       displayName: "shared-repository",
     }],
     conflicts: [],
+    remoteMoves: [],
   });
 });
 
@@ -234,5 +240,38 @@ test("id collisions defer only the colliding sources, never the clean batch", ()
       displayName: "clean-repository",
     }],
     conflicts: ["pipelines id collision"],
+    remoteMoves: [],
   });
+});
+
+test("#2035: a re-pointed remote is handed to the forge, never registered, and a path-derived source still is", () => {
+  const repository = path.join(SANDBOX, "repointed-remote");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(repository, ".git", "HEAD"), "ref: refs/heads/main\n");
+  const origin = (name: string) => fs.writeFileSync(path.join(repository, ".git", "config"), [
+    '[remote "origin"]',
+    `\turl = https://github.com/team/${name}.git`,
+    "",
+  ].join("\n"));
+  origin("original-repository");
+  const before = projectIdentityFromRepositoryRoot(repository)!;
+  const local = localRepositoryProjectId(repository)!;
+  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "pipelines.json"), JSON.stringify({
+    pipelines: [
+      { id: "pipe-remote", project: before.project, repoDir: repository },
+      { id: "pipe-local", project: local, repoDir: repository },
+    ],
+  }));
+
+  /* While the checkout still mints the recorded key, the pass only fills the
+     ledger with the remote behind it. */
+  expect(durableProjectAliasCandidates().remoteMoves).toEqual([]);
+  expect(recordedProjectRemote(before.project)).toBe("github.com/team/original-repository");
+
+  origin("unrelated-fork");
+  const after = projectIdentityFromRepositoryRoot(repository)!;
+  const candidates = durableProjectAliasCandidates();
+  expect(candidates.registrations).toEqual([{ source: local, target: after.project, displayName: "unrelated-fork" }]);
+  expect(candidates.remoteMoves).toEqual([{ source: before.project, target: after }]);
 });

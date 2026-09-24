@@ -1,4 +1,4 @@
-export const MODEL_REGISTRY_VERSION = "2026-09-01";
+export const MODEL_REGISTRY_VERSION = "2026-09-22";
 
 interface RegistryEntry {
   standard: number;
@@ -15,6 +15,8 @@ const MODEL_REGISTRY: Readonly<Record<string, RegistryEntry>> = {
   "fable-5": { standard: ONE_MILLION },
   "mythos-5": { standard: ONE_MILLION },
   "mythos-preview": { standard: ONE_MILLION },
+  "opus-5-5": { standard: ONE_MILLION },
+  "opus-5": { standard: ONE_MILLION },
   "opus-4-8": { standard: ONE_MILLION },
   "opus-4-7": { standard: ONE_MILLION },
   "opus-4-6": { standard: ONE_MILLION },
@@ -29,7 +31,7 @@ const MODEL_REGISTRY: Readonly<Record<string, RegistryEntry>> = {
 
 const MODEL_REGISTRY_ALIASES: Readonly<Record<string, string>> = {
   fable: "fable-5-1",
-  opus: "opus-4-8",
+  opus: "opus-5-5",
   sonnet: "sonnet-5",
   haiku: "haiku-4-5",
 };

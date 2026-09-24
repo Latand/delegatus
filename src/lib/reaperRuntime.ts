@@ -27,6 +27,7 @@ import {
   ROLLED_BACK_MIGRATION_DELIVERY_REASON,
 } from "@/lib/accounts/migration/intentLiveness";
 import { procBackend } from "@/lib/proc";
+import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { reconcileDeadStructuredRegistryHosts } from "@/lib/runtime/registry";
 import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
@@ -460,7 +461,7 @@ async function authorshipEvidence(
      board-exempt regardless and its mtime advances every write, so scanning it
      would churn without ever producing a usable stamp. */
   const fileByPath = new Map<string, FileEntry>();
-  const targets = new Map<string, "claude" | "codex">();
+  const targets = new Map<string, "claude" | "codex" | "copilot">();
   await forEachCooperatively(files, (file) => {
     fileByPath.set(file.path, file);
   });
@@ -468,7 +469,7 @@ async function authorshipEvidence(
     if (host.primaryPath) targets.set(host.primaryPath, host.engine);
   });
   await forEachCooperatively(files, (file) => {
-    if (file.engine !== "claude" && file.engine !== "codex") return;
+    if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot") return;
     if (file.activity === "live" || targets.has(file.path)) return;
     /* Already clean-stamped at or past the current mtime — no need to re-scan;
        the persisted stamp still stands (the caller keeps prior state entries). */
@@ -1006,17 +1007,13 @@ export async function runReaperCycle(options: {
     actuate: (agent) => actuateCandidate(registry, options.files, state, agent, options.actuation),
     journal: appendJournal,
   });
-  atomicWrite(REPORT_FILE(), completed);
+  writeJsonDurably(REPORT_FILE(), completed);
   return completed;
 }
 
 export function readReaperReport(): ReaperReport | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(REPORT_FILE(), "utf8")) as ReaperReport;
-    return parsed && Array.isArray(parsed.agents) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const parsed = readJsonCache(REPORT_FILE()) as ReaperReport | undefined;
+  return parsed && typeof parsed === "object" && Array.isArray(parsed.agents) ? parsed : null;
 }
 
 export async function buildReaperReportOnDemand(): Promise<ReaperReport> {

@@ -28,12 +28,14 @@ function fingerprint(digest: string, mtimeMs: number): ProdStateFingerprint {
 }
 
 test("the prod evidence set covers every state family staging must not touch", () => {
+  /* The board moved into `state.sqlite` with #1870 slice 3, so that database is
+     what proves staging left prod's board alone. */
   expect([...PROD_STATE_EVIDENCE_FILES].sort()).toEqual([
-    "agent-registry.json",
-    "board.json",
+    "agent-registry.sqlite",
     "flows.json",
     "pipelines.json",
     "runtime-events.sqlite",
+    "state.sqlite",
     "viewer-release.json",
   ]);
 });
@@ -41,17 +43,17 @@ test("the prod evidence set covers every state family staging must not touch", (
 test("prod state changes distinguish untouched, changed and absent files", () => {
   const before = new Map<string, ProdStateFingerprint | null>([
     ["viewer-release.json", fingerprint("aa", 1)],
-    ["board.json", fingerprint("bb", 2)],
+    ["state.sqlite", fingerprint("bb", 2)],
     ["pipelines.json", null],
   ]);
   const after = new Map<string, ProdStateFingerprint | null>([
     ["viewer-release.json", fingerprint("aa", 1)],
-    ["board.json", fingerprint("cc", 3)],
+    ["state.sqlite", fingerprint("cc", 3)],
     ["pipelines.json", null],
   ]);
   const changes = prodStateChanges(before, after);
   expect(changes.unchanged).toEqual(["pipelines.json", "viewer-release.json"]);
-  expect(changes.changed).toEqual(["board.json"]);
+  expect(changes.changed).toEqual(["state.sqlite"]);
 });
 
 test("a viewer-release change is flagged as a deploy-machinery violation", () => {

@@ -7,6 +7,7 @@ import { scheduleTranscriptIndex, type TranscriptIndexFeed } from "@/lib/search/
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import type { FileCatalogScan, FileScanOptions } from "./index";
+import { transcriptIndexFeed } from "./discover";
 import {
   beginProjectCatalogScan,
   isProjectCatalogScanCurrent,
@@ -228,19 +229,9 @@ export function collectFileScanInWorker(
         const currentScan = isProjectCatalogScanCurrent(catalogScanToken);
         publishConversationCatalogForScan(completedConversationCatalog, catalogScanToken, completed.complete);
         if (currentScan) {
-          (runtime.transcriptIndexScheduler ?? scheduleTranscriptIndex)({
-            complete: completed.complete,
-            /* Same exclusion as `transcriptIndexFeed`: the full-text index has
-               no OpenClaw record parser and its engine column admits two
-               values. */
-            sources: completedConversationCatalog.flatMap((entry) => (entry.engine === "openclaw" ? [] : [{
-              path: entry.path,
-              project: entry.project,
-              engine: entry.engine,
-              size: entry.size,
-              mtimeMs: entry.mtime * 1_000,
-            }])),
-          });
+          (runtime.transcriptIndexScheduler ?? scheduleTranscriptIndex)(
+            transcriptIndexFeed(completedConversationCatalog, completed.complete),
+          );
         }
       }
       finish(undefined, completed);

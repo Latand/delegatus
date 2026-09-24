@@ -4,6 +4,7 @@ import path from "node:path";
 import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import { activeOrchestratorSeatsOrUnknown, revokedOrchestratorSeatConversationsOrUnknown } from "@/lib/orchestrator/seats";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
@@ -444,7 +445,7 @@ export interface StructuredHostRetirementReclaim {
 
 export interface StructuredHostRetirementRecord {
   key: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   sessionId: string;
   conversationId: string | null;
   title: string | null;
@@ -692,9 +693,7 @@ function safeReason(error: unknown): string {
 
 function atomicWrite(filename: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-  const temporary = `${filename}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(temporary, filename);
+  writeJsonDurably(filename, value);
 }
 
 /**

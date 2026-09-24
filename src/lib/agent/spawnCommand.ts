@@ -4,12 +4,14 @@ import path from "node:path";
 
 import { after, NextRequest, NextResponse } from "next/server";
 
+import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
 import { claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
-import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
-import { freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
+import { copilotBinaryGap, freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
+import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/accounts/copilot";
 import { agentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHEDULED_REPORT_SESSION_CLASS, type McpSessionClass } from "@/lib/agent/mcpAllowlist";
@@ -17,6 +19,7 @@ import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUG
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { resolveSpawnRole } from "@/lib/roles/registry";
+import { ENGINE_NOT_CONNECTED, engineNotConnectedDetails, engineNotConnectedMessage, engineReadiness, type EngineReadiness } from "@/lib/accounts/engineConnection";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { spawnAdmissionBodyDigest, spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
 import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
@@ -114,6 +117,13 @@ export interface SpawnCommandDependencies {
    */
   internalGrant?(): { sessionClass: McpSessionClass; mcpServers: readonly string[] } | null;
   recordOperatorActivity?: typeof recordDirectOperatorWakatimeActivity;
+  /** Whether an engine's command resolves and it has a signed-in account
+      (#1876). A role-shaped launch onto an engine that is not ready is refused
+      before any receipt exists; absent means no check. */
+  engineReadiness?(engine: AgentEngine, project: string | null): EngineReadiness;
+  /** Why a Copilot launch cannot start here (the CLI is missing), or null.
+      Injected by tests; production probes the binary. */
+  copilotBinaryGap?(): string | null;
 }
 
 class RuntimeImageStorageError extends Error {}
@@ -132,6 +142,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   adoptPipelineAttemptFromSource,
   pipelineAttemptTargetForSource,
   recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+  engineReadiness: (engine, project) => engine === "claude" || engine === "codex" ? engineReadiness(engine, project) : "connected",
 };
 
 /** Record a request-bound pre-reservation refusal. The shared durable fence is
@@ -167,6 +178,7 @@ interface SuggestResponse {
   imageInput: {
     claude: ReturnType<typeof runtimeImageCapability>;
     codex: ReturnType<typeof runtimeImageCapability>;
+    copilot: ReturnType<typeof runtimeImageCapability>;
   };
 }
 
@@ -209,6 +221,8 @@ export async function spawnSuggestions(req: NextRequest): Promise<NextResponse<S
     imageInput: {
       claude: runtimeImageCapability("claude", transport === "structured"),
       codex: runtimeImageCapability("codex", transport === "structured" && codexModelSupportsImages(null)),
+      /* ACP advertises `promptCapabilities.image` (CLI 1.0.87). */
+      copilot: runtimeImageCapability("copilot", transport === "structured"),
     },
   });
 }
@@ -286,10 +300,21 @@ export async function executeSpawnRequest(
   if (role.value && isSpawnDeniedRole(role.value.role) && body.allowSubagents === true) {
     return NextResponse.json({ error: `${role.value.role} launches cannot enable subagents: reviewer and verifier sessions run every check in-session` }, { status: 400 });
   }
-  const engine = body.engine === "claude" || body.engine === "codex"
+  const engine = body.engine === "claude" || body.engine === "codex" || body.engine === "copilot"
     ? (body.engine as AgentEngine)
     : (role.value?.config.engine ?? null);
-  if (!engine) return NextResponse.json({ error: "engine must be claude or codex" }, { status: 400 });
+  if (!engine) return NextResponse.json({ error: "engine must be claude, codex or copilot" }, { status: 400 });
+  /* #1876: a role's launch onto an engine nobody is signed in to is refused in
+     words, before a receipt exists, and never moved onto the other engine. */
+  const readiness = role.value && (engine === "claude" || engine === "codex")
+    ? dependencies.engineReadiness?.(engine, typeof body.project === "string" ? body.project : null) ?? "connected"
+    : "connected";
+  if (role.value && (engine === "claude" || engine === "codex") && readiness !== "connected") {
+    const refusal = { role: role.value.role, engine, reason: readiness };
+    const error = engineNotConnectedMessage(refusal);
+    if (!authenticatedCallerError) fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
+    return NextResponse.json({ error, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(refusal) }, { status: 409 });
+  }
   if (body.accountId !== undefined && typeof body.accountId !== "string") return NextResponse.json({ error: "accountId must be a string" }, { status: 400 });
   if (body.clientAttemptId !== undefined && (typeof body.clientAttemptId !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(body.clientAttemptId))) return NextResponse.json({ error: "clientAttemptId must be 8-128 URL-safe characters" }, { status: 400 });
 
@@ -328,6 +353,10 @@ export async function executeSpawnRequest(
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
+  /* Copilot has no tmux path (docs/design/copilot-engine.md 3.3). */
+  if (engine === "copilot" && transport !== "structured") {
+    return NextResponse.json({ error: "GitHub Copilot launches need the structured transport (a runtime host); it has no tmux path" }, { status: 409 });
+  }
   if (transport === "structured") {
     try {
       dependencies.assertStructuredRuntime();
@@ -339,7 +368,7 @@ export async function executeSpawnRequest(
       model: selectedModel.model,
       hasImages: images.length > 0,
       fast: reasoning.fast,
-    });
+    }) ?? (engine === "copilot" ? (dependencies.copilotBinaryGap ?? copilotBinaryGap)() : null);
     if (gap) return NextResponse.json({ error: gap }, { status: 409 });
     /* The scaffold-composed prompt rides structured first-message delivery.
        Enforce its UTF-8 envelope before the durable receipt, blob storage,
@@ -610,7 +639,8 @@ export async function executeSpawnRequest(
       /* Durable launch DISPLAY payload (issue #614/#615): the RAW operator
          draft and canonical delivered echo persist through scan lag. */
       launchDisplay,
-      memberships: pipelineAttemptTarget && pipelineSourceConversationId ? [{
+      /* Copilot is not a pipeline stage engine yet (design slice 4). */
+      memberships: pipelineAttemptTarget && pipelineSourceConversationId && engine !== "copilot" ? [{
         kind: "pipeline",
         containerId: pipelineAttemptTarget.pipelineId,
         role: pipelineAttemptTarget.role,
@@ -638,10 +668,10 @@ export async function executeSpawnRequest(
       title: requestProfileTitle,
       ...(explicitProject ? { project: explicitProject } : {}),
     });
-    const terminalizePinnedAccountFailure = (failure: unknown): NextResponse<SpawnResponse | ApiError> => {
+    const terminalizePinnedAccountFailure = async (failure: unknown): Promise<NextResponse<SpawnResponse | ApiError>> => {
       const accountId = body.accountId as string;
       const reason = (failure instanceof Error ? failure.message : String(failure)).slice(0, 240);
-      const begun = registry.beginSpawnRequest(canonicalSpawnRequest(
+      const begun = await registry.beginSpawnRequestAsync(canonicalSpawnRequest(
         accountId,
         preflightLaunchProfile,
         /* The digest binds this terminal preflight to the same canonical public
@@ -665,7 +695,7 @@ export async function executeSpawnRequest(
       && body.accountId !== undefined
       && existingAttempt.accountPin
       && (existingAttempt.state === "failed" || existingAttempt.state === "conflicted")) {
-      return terminalizePinnedAccountFailure(
+      return await terminalizePinnedAccountFailure(
         new Error(existingAttempt.error ?? "the requested account is not available for this launch"),
       );
     }
@@ -697,6 +727,10 @@ export async function executeSpawnRequest(
       if (error instanceof ProjectAccountRefusedError) {
         return NextResponse.json({ error: error.message }, { status: 409 });
       }
+      /* A Copilot launch with no account set up, or naming one that is gone. */
+      if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {
+        return NextResponse.json({ error: error.message }, { status: 409 });
+      }
       if (body.accountId === undefined) throw error;
       if (engine === "claude" && requestedAccountId) {
         try {
@@ -705,13 +739,13 @@ export async function executeSpawnRequest(
           if (admission.kind === "retry-at" || admission.kind === "admissible") {
             account = { ...pinned, admission, requestedAdmission: admission };
           } else {
-            return terminalizePinnedAccountFailure(error);
+            return await terminalizePinnedAccountFailure(error);
           }
         } catch {
-          return terminalizePinnedAccountFailure(error);
+          return await terminalizePinnedAccountFailure(error);
         }
       } else {
-        return terminalizePinnedAccountFailure(error);
+        return await terminalizePinnedAccountFailure(error);
       }
     }
     const requestedRetryAt = requestedAccountId && account.requestedAdmission?.kind === "retry-at"
@@ -747,7 +781,7 @@ export async function executeSpawnRequest(
         mcpServers: grantedServers,
         deferClaudeSpawnPolicy: true,
       });
-      const permissionMode = engine === "claude" && transport === "structured"
+      const permissionMode = (engine === "claude" || engine === "copilot") && transport === "structured"
         ? structuredClaudePermissionMode(specBase.launchProfile?.permissionMode, {
           agentInitiated,
           operatorAuthenticated: authenticatedCaller?.kind === "operator",
@@ -795,7 +829,11 @@ export async function executeSpawnRequest(
     const receiptAccountId = pinFallback && typeof body.accountId === "string"
       ? body.accountId
       : account.accountId;
-    const begun = await withAccountMutationLockAsync(async () => {
+    const admissionAccount = existingAttempt ? null : await accountProbeSnapshot(
+      () => dependencies.resolveSpawnAccount(engine, account.accountId),
+      { holder: "spawn catalog snapshot", caller: "spawn" },
+    );
+    const begun = await withAccountMutationLockAsync(() => {
       if (!existingAttempt && clientAttemptId) {
         /* The validation endpoint may have fenced this exact downstream key
            while an older request was between validation and reservation. Both
@@ -810,8 +848,11 @@ export async function executeSpawnRequest(
         }
       }
       if (!existingAttempt) {
-        const current = dependencies.resolveSpawnAccount(engine, account.accountId);
-        if (current.accountId !== account.accountId || current.kind !== account.kind) {
+        const current = admissionAccount!.account;
+        if (accountsCollectionRevision() !== admissionAccount!.revision
+          || accountProbeIdentity(current) !== admissionAccount!.identity
+          || current.accountId !== account.accountId || current.kind !== account.kind
+          || current.home !== account.home || current.transcriptRoot !== account.transcriptRoot) {
           throw new Error("spawn account changed during admission");
         }
       }
@@ -821,7 +862,7 @@ export async function executeSpawnRequest(
         digest,
         existingAttempt?.accountPin ?? (body.accountId !== undefined),
       ));
-    });
+    }, { holder: "spawn admission", caller: "spawn" });
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created") launchId = begun.receipt.launchId;
     /* ATTRIBUTION, not a gate (#1279's rule, launch seam). The binding no
@@ -838,7 +879,9 @@ export async function executeSpawnRequest(
        retried, an existing attempt resumed — is the same launch arriving twice,
        not a second choice, and the journal is capped: duplicates evict the
        older crossings it exists to keep. */
-    const accountOverride = begun.kind === "created" && requestedAccountId && account.accountId === requestedAccountId
+    /* Project account bindings cover Claude and Codex; a Copilot launch names
+       its account or uses the selected one, so there is no pool to cross. */
+    const accountOverride = begun.kind === "created" && engine !== "copilot" && requestedAccountId && account.accountId === requestedAccountId
       ? attributeNamedAccountChoice({
         engine,
         project: spawnProject,
@@ -912,6 +955,8 @@ export async function executeSpawnRequest(
     const adoptMaterializedAttempt = async (receipt: typeof begun.receipt, agentPath: string): Promise<void> => {
       if (!pipelineSourceConversationId || !dependencies.adoptPipelineAttemptFromSource) return;
       const materialized = registry.readOnlySnapshot().receipts[receipt.launchId] ?? receipt;
+      /* Copilot is not a pipeline stage engine yet (design slice 4). */
+      if (materialized.engine === "copilot") return;
       try {
         await dependencies.adoptPipelineAttemptFromSource(pipelineSourceConversationId, {
           launchId: materialized.launchId,

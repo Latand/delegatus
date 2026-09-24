@@ -342,11 +342,23 @@ function rerender(root: Root, file: FileEntry): void {
 
 /** Every rendering of the launch mandate the window can show at once. */
 function mandateRenderings(host: HTMLElement): number {
-  return host.querySelectorAll('[data-outbox-entry], [data-feed-kind="tmsg"], [data-feed-kind="user"]').length;
+  /* One row is one rendering. Since slice 3 the operator's own message is a
+     member of the feed's own list, so its `data-feed-kind="user"` wrapper and
+     the `data-outbox-entry` inside it are the SAME row — counting both would
+     report a double that is not on the screen. Only outermost nodes count. */
+  const nodes = [...host.querySelectorAll('[data-outbox-entry], [data-feed-kind="tmsg"], [data-feed-kind="user"]')];
+  return nodes.filter((node) => !nodes.some((other) => other !== node && other.contains(node))).length;
 }
 
 function outboxStatuses(host: HTMLElement): string[] {
   return [...host.querySelectorAll("[data-outbox-status]")].map((node) => node.textContent ?? "");
+}
+
+/** The transport evidence each row publishes under its progress affordance
+    (send-latency slice 3): the transport's own words moved there, off the
+    resting row, which now reads one stable sentence until arrival. */
+function outboxEvidence(host: HTMLElement): string[] {
+  return [...host.querySelectorAll("[data-outbox-progress]")].map((node) => node.getAttribute("title") ?? "");
 }
 
 /** The rendered tail of a seat already several turns into its work: the
@@ -371,7 +383,7 @@ test("issue 1793: a rotation launch whose receipt says delivered never reads Del
   const [card] = project(launch, [], now);
   const { host, root } = render(card!);
   expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(1);
-  expect(outboxStatuses(host).join(" ")).toContain("Delivering");
+  expect(outboxEvidence(host).join(" ")).toContain("Delivering");
   expect(mandateRenderings(host)).toBe(1);
 
   /* One poll later the seat is already working: the message reached the agent
@@ -388,6 +400,7 @@ test("issue 1793: a rotation launch whose receipt says delivered never reads Del
   expect(answered!.launch).toBeUndefined();
   rerender(root, answered!);
   expect(outboxStatuses(host).join(" ")).not.toContain("Delivering");
+  expect(outboxEvidence(host).join(" ")).not.toContain("Delivering");
   expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
   /* And the mandate is not rendered at all here: the transcript's own record
      for it is far above this tail, and a second bubble would be a duplicate. */

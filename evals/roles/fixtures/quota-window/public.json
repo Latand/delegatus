@@ -1,0 +1,73 @@
+[
+  {
+    "name": "weekly-only",
+    "input": {
+      "primary": {
+        "usedPercent": 73,
+        "windowMinutes": 10080
+      }
+    },
+    "expected": {
+      "session": null,
+      "weekly": 73
+    }
+  },
+  {
+    "name": "reversed",
+    "input": {
+      "primary": {
+        "usedPercent": 70,
+        "windowMinutes": 10080
+      },
+      "secondary": {
+        "usedPercent": 20,
+        "windowMinutes": 300
+      }
+    },
+    "expected": {
+      "session": 20,
+      "weekly": 70
+    }
+  },
+  {
+    "name": "dual",
+    "input": {
+      "primary": {
+        "usedPercent": 20,
+        "windowMinutes": 300
+      },
+      "secondary": {
+        "usedPercent": 70,
+        "windowMinutes": 10080
+      }
+    },
+    "expected": {
+      "session": 20,
+      "weekly": 70
+    }
+  },
+  {
+    "name": "absent",
+    "input": {},
+    "expected": {
+      "session": null,
+      "weekly": null
+    }
+  },
+  {
+    "name": "declared wins",
+    "input": {
+      "primary": {
+        "usedPercent": 0
+      },
+      "secondary": {
+        "usedPercent": 15,
+        "windowMinutes": 300
+      }
+    },
+    "expected": {
+      "session": 15,
+      "weekly": null
+    }
+  }
+]

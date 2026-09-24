@@ -1,0 +1,31 @@
+{
+  "fixture": "100 conversations with long Ukrainian titles and paths; default arguments",
+  "rows": [
+    {
+      "tool": "list_conversations",
+      "pageBytes": [
+        11181,
+        11181,
+        11180,
+        1815,
+        11181,
+        11181,
+        11180,
+        1816
+      ],
+      "returnedRows": 100,
+      "uniqueRows": 100,
+      "budget": 12000
+    },
+    {
+      "tool": "agent_activity",
+      "pageBytes": [
+        23778,
+        6399
+      ],
+      "returnedRows": 100,
+      "uniqueRows": 100,
+      "budget": 24000
+    }
+  ]
+}

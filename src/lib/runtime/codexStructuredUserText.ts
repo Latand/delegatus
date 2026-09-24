@@ -1,6 +1,5 @@
 import {
   decodeSelectedContextRef,
-  encodeSelectedContextRef,
   type SelectedContextRef,
 } from "@/lib/selection/selectedContext";
 
@@ -9,13 +8,14 @@ import { messageOriginRole, type MessageOrigin } from "./messageOrigin";
 /**
  * The marker line that makes a Codex app-server user record recognisably OURS.
  *
- * It is one HTML comment on the record's first line, carrying named attributes:
- * `sha256` (the structured content digest, when images make the echo lossy),
- * `ctx` (the selected-card reference, #844), `origin` (`operator` | `agent`)
- * with an optional `sender` role token, and `dedup` (the hashed durable
- * delivery operation, #1366). All attributes are optional and independent.
- * Every older form — bare marker, marker with only a digest — decodes
- * byte-identically to what it always did. Transcripts are not migrated.
+ * New deliveries carry `ctx` (a durable metadata handle). Its prefix records
+ * origin, followed by the full delivery hash and a metadata fingerprint, so
+ * browser rows retain their submission identity before metadata is fetched. The server
+ * record holds the selected card, sender role and image content digest.
+ *
+ * Legacy attributes remain independent: `sha256`, base64 JSON `ctx`, `origin`,
+ * `sender` and `dedup`. Bare, digest-only and long-context records decode
+ * byte-identically to their original shapes. Transcripts are not migrated.
  *
  * Attributes are `name=value` whose values may hold anything but a space and a
  * `>`, so the marker cannot be broken open by its own payload and stays on one
@@ -26,10 +26,35 @@ import { messageOriginRole, type MessageOrigin } from "./messageOrigin";
  * the prefix is only ever stripped once, from the front.
  */
 
-const STRUCTURED_USER_MARKER = "<!-- llv:structured-user -->\n";
-const MARKER_WITH_ATTRIBUTES = /^<!-- llv:structured-user((?: [a-z0-9]+=[^ >]+)+) -->\n/;
+/* The newline after the marker is what SEPARATES it from the message, so a
+   record with no message has nothing to separate: a send that carried only an
+   attachment is written as the marker and nothing else, and whatever handles
+   the record on the way back may trim the trailing newline off it. Accepting
+   end-of-string there is what stops such a record decoding as a message whose
+   text IS the marker — which is how an image-only send printed its own
+   delivery comment at the operator instead of being recognised as theirs. */
+const MARKER_WITH_ATTRIBUTES = /^<!-- llv:structured-user((?: [a-z0-9]+=[^ >]+)+) -->(?:\n|$)/;
+const BARE_MARKER = /^<!-- llv:structured-user -->(?:\n|$)/;
 const ATTRIBUTE = /(?:^| )([a-z0-9]+)=([^ >]+)/g;
 const SHA256 = /^[a-f0-9]{64}$/;
+
+/** A full 256-bit delivery key, encoded compactly. The prefix distinguishes
+ * durable references from every legacy base64 JSON context token. */
+export function structuredUserReferenceKey(value: string): string | null {
+  if (!/^(?:[oad]\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{16}|[dh]\.[A-Za-z0-9_-]{43})$/.test(value)) return null;
+  try {
+    const encodedKey = value.split(".")[1]!;
+    const binary = atob(encodedKey.replace(/-/g, "+").replace(/_/g, "/") + "=");
+    const key = Array.from(binary, (byte) => byte.charCodeAt(0).toString(16).padStart(2, "0")).join("");
+    return binary.length === 32 && structuredUserReference(key, true).slice(2) === encodedKey ? key : null;
+  } catch { return null; }
+}
+
+export function structuredUserReference(key: string, delivery: boolean): string {
+  if (!SHA256.test(key)) throw new Error("invalid structured-user reference key");
+  const binary = key.match(/../g)!.map((byte) => String.fromCharCode(parseInt(byte, 16))).join("");
+  return `${delivery ? "d" : "h"}.${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+}
 
 export interface DecodedCodexStructuredUserText {
   text: string;
@@ -46,26 +71,19 @@ export interface DecodedCodexStructuredUserText {
       convergence. Optional so every pre-#1366 transcript keeps its exact
       decoded shape. */
   deliveryDedup?: string;
+  /** Durable metadata reference. Present only on the compact wire form. */
+  metadataRef?: string;
 }
 
+/** Encode only a durable reference; delivery metadata never enters the prompt. */
 export function encodeCodexStructuredUserText(
   text: string,
-  contentDigest?: string,
-  selectedContext?: SelectedContextRef | null,
+  metadataRef: string,
   origin?: MessageOrigin | null,
-  deliveryDedup?: string | null,
 ): string {
-  const attributes: string[] = [];
-  if (contentDigest) attributes.push(`sha256=${contentDigest}`);
-  if (selectedContext) attributes.push(`ctx=${encodeSelectedContextRef(selectedContext)}`);
-  if (origin) {
-    attributes.push(`origin=${origin.kind}`);
-    const role = messageOriginRole(origin.role);
-    if (role) attributes.push(`sender=${role}`);
-  }
-  if (deliveryDedup && SHA256.test(deliveryDedup)) attributes.push(`dedup=${deliveryDedup}`);
-  if (attributes.length === 0) return STRUCTURED_USER_MARKER + text;
-  return `<!-- llv:structured-user ${attributes.join(" ")} -->\n${text}`;
+  if (!structuredUserReferenceKey(metadataRef)) throw new Error("invalid structured-user reference");
+  const originAttribute = metadataRef.split(".").length === 2 && origin ? ` origin=${origin.kind}` : "";
+  return `<!-- llv:structured-user ctx=${metadataRef}${originAttribute} -->\n${text}`;
 }
 
 export function decodeCodexStructuredUserText(value: string): DecodedCodexStructuredUserText {
@@ -76,9 +94,18 @@ export function decodeCodexStructuredUserText(value: string): DecodedCodexStruct
     let originKind: MessageOrigin["kind"] | null = null;
     let senderRole: string | undefined;
     let deliveryDedup: string | undefined;
+    let metadataRef: string | undefined;
     for (const [, name, attribute] of marker[1]!.matchAll(ATTRIBUTE)) {
       if (name === "sha256" && SHA256.test(attribute!)) contentDigest = attribute!;
-      if (name === "ctx") selectedContext = decodeSelectedContextRef(attribute!);
+      if (name === "ctx") {
+        const key = structuredUserReferenceKey(attribute!);
+        if (key) {
+          metadataRef = attribute!;
+          if (!attribute!.startsWith("h.")) deliveryDedup = key;
+          if (attribute!.startsWith("o.")) originKind = "operator";
+          if (attribute!.startsWith("a.")) originKind = "agent";
+        } else selectedContext = decodeSelectedContextRef(attribute!);
+      }
       if (name === "origin" && (attribute === "operator" || attribute === "agent")) originKind = attribute;
       if (name === "sender") senderRole = messageOriginRole(attribute);
       if (name === "dedup" && SHA256.test(attribute!)) deliveryDedup = attribute!;
@@ -93,13 +120,15 @@ export function decodeCodexStructuredUserText(value: string): DecodedCodexStruct
       selectedContext,
       origin,
       ...(deliveryDedup ? { deliveryDedup } : {}),
+      ...(metadataRef ? { metadataRef } : {}),
     };
   }
-  if (!value.startsWith(STRUCTURED_USER_MARKER)) {
+  const bare = value.match(BARE_MARKER);
+  if (!bare) {
     return { text: value, structured: false, contentDigest: null, selectedContext: null, origin: null };
   }
   return {
-    text: value.slice(STRUCTURED_USER_MARKER.length),
+    text: value.slice(bare[0].length),
     structured: true,
     contentDigest: null,
     selectedContext: null,

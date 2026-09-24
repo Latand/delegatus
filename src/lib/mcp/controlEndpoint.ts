@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { appDirIn } from "../../../bin/appDir.mjs";
 import { viewerComposeSnapshotPath } from "@/runtime-host/deploymentArtifacts";
 
 const DEFAULT_VIEWER_CONTROL_URL = "http://127.0.0.1:8898";
@@ -119,7 +120,7 @@ function configRoot(env: ControlEnvironment): string {
 }
 
 function stateDirectory(env: ControlEnvironment): string {
-  return env.LLV_STATE_DIR?.trim() || path.join(configRoot(env), "agent-log-viewer", "state");
+  return env.LLV_STATE_DIR?.trim() || path.join(appDirIn(configRoot(env)), "state");
 }
 
 function releaseTargetFile(env: ControlEnvironment, stateDir: string): string {
@@ -156,7 +157,7 @@ function releaseCredential(stateDir: string, target: Record<string, unknown> | n
     outside a deployment authenticates against. */
 function machineKey(env: ControlEnvironment): string | null {
   try {
-    return credential(fs.readFileSync(path.join(configRoot(env), "agent-log-viewer", "token"), "utf8"));
+    return credential(fs.readFileSync(path.join(appDirIn(configRoot(env)), "token"), "utf8"));
   } catch {
     return null;
   }

@@ -243,7 +243,7 @@ export function VerdictPopover({
         ) : null}
         {parked ? (
           <>
-            <button type="button" className={`ml-auto rounded-full border border-accent bg-accent px-2.5 py-1 text-[10px] font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 ${mobileTarget}`} disabled={busy} onClick={() => void act("retry-stage")}>
+            <button type="button" className={`ml-auto rounded-full border border-brand bg-brand px-2.5 py-1 text-[10px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 ${mobileTarget}`} disabled={busy} onClick={() => void act("retry-stage")}>
               {t("pipelineVerdict.retry")}
             </button>
             <button type="button" className={`rounded-full border border-border bg-canvas px-2.5 py-1 text-[10px] font-bold text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 ${mobileTarget}`} disabled={busy} onClick={() => void act("skip-stage")}>

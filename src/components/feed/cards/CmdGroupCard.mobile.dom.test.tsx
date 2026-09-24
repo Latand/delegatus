@@ -101,8 +101,7 @@ test("phone: a clean run of two folds to one 44 px line with counts and a time r
   expect(host.querySelectorAll("[data-mobile-run-fold]")).toHaveLength(1);
   expect(classOf(fold)).toContain("min-h-11");
   expect(classOf(fold)).toContain("w-full");
-  expect(fold.textContent).toContain(en("render.actions", { count: 2 }));
-  expect(fold.textContent).toContain("Bash ×2");
+  expect(fold.textContent).toContain("ran 2 commands");
   /* HH:MM (README §5): the two calls share a minute, so one clock, no seconds. */
   expect(fold.textContent).toMatch(/10:00$/);
   expect(fold.textContent).not.toMatch(/\d{2}:\d{2}:\d{2}/);
@@ -133,10 +132,9 @@ test("phone: the running tool stays its own last line under the folded settled c
   const host = mount(<CmdGroupCard item={runningGroup()} />);
   const run = host.querySelector("[data-mobile-run]")!;
   expect(run.getAttribute("data-mobile-run")).toBe("running");
-  /* The two settled reads fold; ×1 is dropped from the summary. */
+  /* The two settled reads fold into their shared meaning. */
   const fold = host.querySelector("[data-mobile-run-fold]")!;
-  expect(fold.textContent).toContain(en("render.actions", { count: 2 }));
-  expect(fold.textContent).toContain("Read ×2");
+  expect(fold.textContent).toContain("read 2 files");
   expect(fold.textContent).not.toContain("Edit");
   /* The running call is the last element, its own line, and says so. */
   const lines = host.querySelectorAll("[data-mobile-tool-line]");
@@ -158,13 +156,13 @@ test("phone: a run ending in the pending question shows the settled calls only �
   item.byTool = { Read: 2, AskUserQuestion: 1 };
   const host = mount(<CmdGroupCard item={item} />);
   const fold = host.querySelector("[data-mobile-run-fold]")!;
-  expect(fold.textContent).toContain(en("render.actions", { count: 2 }));
+  expect(fold.textContent).toContain("read 2 files");
   expect(host.querySelector("[data-mobile-tool-line]")).toBeNull();
   expect(host.textContent).not.toContain("AskUserQuestion");
   expect(host.textContent).not.toContain("Which format");
 });
 
-test("phone: a run with a failure is one sunken block of 36 px items with the detail under the failure", () => {
+test("phone: a run with a failure is one sunken block of 36 px items, each one compact line", () => {
   narrowViewport = true;
   const host = mount(<CmdGroupCard item={activeFailureGroup()} />);
   const blocks = host.querySelectorAll('[data-mobile-run="failed"]');
@@ -176,18 +174,23 @@ test("phone: a run with a failure is one sunken block of 36 px items with the de
   /* One 36 px list item per call. */
   const rows = block.querySelectorAll("[data-mobile-run-row]");
   expect(rows).toHaveLength(2);
-  for (const row of rows) expect(classOf(row)).toContain("h-9");
+  /* 36 px is the row's floor, never its ceiling: a fixed height is what let a
+     wrapping label paint over the row under it (#1938). */
+  for (const row of rows) expect(classOf(row)).toContain("min-h-9");
+  for (const row of rows) expect(classOf(row)).not.toContain(" h-9");
   expect(rows[0]!.getAttribute("data-mobile-run-row")).toBe("done");
   expect(rows[1]!.getAttribute("data-mobile-run-row")).toBe("failed");
-  expect(classOf(rows[1])).toContain("text-danger");
+  /* The failure reads as a danger glyph and an exit code in the trailing meta;
+     the command itself keeps the same quiet clipped label as every other row. */
+  expect(classOf(rows[1])).not.toContain("text-danger");
+  expect(classOf(rows[1]!.querySelector("span.flex-1"))).toContain("truncate");
   expect(rows[1]!.textContent).toContain("exit 3");
+  expect(classOf(rows[1]!.querySelector("span.text-caption"))).toContain("text-danger");
   for (const row of rows) expect(row.textContent).not.toMatch(/\d{2}:\d{2}:\d{2}/);
-  /* The detail sits under the failed row: the first lines of what it said. */
-  const detail = block.querySelector("[data-mobile-run-detail]")!;
-  expect(detail).toBeTruthy();
-  expect(detail.textContent).toContain("1 fail");
-  expect(detail.textContent).toContain("expected true to be false");
-  expect(rows[1]!.nextElementSibling).toBe(detail);
+  /* Nothing the tool said is on the collapsed block — output belongs to the
+     readable blocks the tap mounts. */
+  expect(block.querySelector("[data-mobile-run-detail]")).toBeNull();
+  expect(block.textContent).not.toContain("expected true to be false");
   expect(rows[0]!.nextElementSibling).toBe(rows[1]);
   /* The block itself is the target, and it expands in place. */
   const target = block.querySelector("button")!;
@@ -200,13 +203,15 @@ test("phone: a run with a failure is one sunken block of 36 px items with the de
   expect(host.textContent).toContain("git status --short");
 });
 
-test("phone: a failure detail is bounded to its first lines", () => {
+test("phone: a long failure output stays off the collapsed block and arrives with the tap", () => {
   narrowViewport = true;
   const long = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
   const item = activeFailureGroup({ calls: [{ ...execSuccess, id: "b-1" }, toolEvent({ id: "b-2", status: "err", statusLabel: "exit 1", exitCode: 1, outputPreview: long })] });
   const host = mount(<CmdGroupCard item={item} />);
-  const detail = host.querySelector("[data-mobile-run-detail]")!;
-  expect(detail.textContent).toBe("line 1\nline 2");
+  expect(host.textContent).not.toContain("line 1");
+  expect(host.textContent).toContain("exit 1");
+  click(host.querySelector("button")!);
+  expect(host.textContent).toContain("line 1");
 });
 
 test("desktop: the aggregate keeps its details/summary form and none of the phone markers", () => {
@@ -259,5 +264,5 @@ test("phone: a failed run ending in the pending question lists the settled calls
   const desktop = mount(<CmdGroupCard item={group()} />);
   expect(desktop.querySelectorAll("ol > li")).toHaveLength(3);
   expect(desktop.textContent).toContain("Which format");
-  expect(desktop.querySelector("summary")!.textContent).toContain(en("render.actions", { count: 3 }));
+  expect(desktop.querySelector("summary")!.textContent).toContain("ran 2 commands");
 });

@@ -2,6 +2,7 @@
 
 import path from "node:path";
 
+import { appDirIn } from "../bin/appDir.mjs";
 import {
   probeRuntimeHostSuccessor,
   runtimeHostGenerationFromEnvironment,
@@ -12,7 +13,7 @@ function runtimeHostSocket(environment: NodeJS.ProcessEnv): string {
   if (configured) return configured;
   const config = environment.XDG_CONFIG_HOME
     || path.join(environment.HOME || "/home/user", ".config");
-  return path.join(config, "agent-log-viewer", "state", "runtime-host.sock");
+  return path.join(appDirIn(config), "state", "runtime-host.sock");
 }
 
 export async function checkRuntimeHost(environment: NodeJS.ProcessEnv = process.env): Promise<void> {

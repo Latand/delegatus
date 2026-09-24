@@ -23,12 +23,16 @@ import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, 
 import { tierOfWindowKey, tierWindowKey, type TierWindowKey } from "@/lib/types";
 
 import { EngineMark } from "@/components/EngineMark";
+import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
+import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary } from "./AccountRemovalSummary";
 import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
+import { AccountRowsSkeleton } from "./skeletons";
 import { MobileMeter, meterTone, type MeterTone } from "./mobile/MobileMeter";
 import { receipts as tabReceipts, type ReceiptStore } from "./mobile/MobileReceipt";
 import { Badge } from "./ui/Badge";
 import { formatCheckedClock, formatQuotaAsOf, formatResetClock, formatResetEta, windowLabel } from "./rateLimit";
 import { engineTintOf } from "./utils";
+import { Z } from "@/components/layers";
 
 /** Amber that clears contrast on the panel background — state legibility never
     leans on color alone, so this pairs with the "needs sign-in" text chip. */
@@ -56,6 +60,13 @@ function accountQuota(account: AccountOption, now: number) {
   return reconcileQuotaReadings(null, quotaReadingFromAccountLimits(account.limits), now);
 }
 
+/** The provider's own label for one reported tier, when it sent one. A window
+    key carries only the bucket key, so the label is looked back up here rather
+    than shown as the codename the key spells (#1839). */
+function tierLabel(quota: ReconciledQuota, tier: string): string | null {
+  return quota.tiers.find((window) => window.value.tier === tier)?.value.label ?? null;
+}
+
 type LimitRowKey = "session" | "weekly" | TierWindowKey;
 
 /** The windows an account reports, in the order every surface lists them:
@@ -70,7 +81,7 @@ export function limitRows(quota: ReconciledQuota, t: TFunction): LimitRow[] {
     { key: "weekly", label: windowLabel(t, "weekly", quota.weekly?.value.windowMinutes), window: quota.weekly },
     ...quota.tiers.map((tier) => ({
       key: tierWindowKey(tier.value.tier),
-      label: t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier) }),
+      label: t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) }),
       window: tier as ReconciledQuotaWindow,
     })),
   ];
@@ -84,7 +95,7 @@ function CapacityChip({ quota, engine }: { quota: ReconciledQuota; engine: "clau
   const tint = engineTintOf(engine);
   const effectiveTier = tierOfWindowKey(effective.window);
   const window = effectiveTier
-    ? t("limits.windowTier", { tier: claudeTierDisplayName(effectiveTier) })
+    ? t("limits.windowTier", { tier: claudeTierDisplayName(effectiveTier, tierLabel(quota, effectiveTier)) })
     : t(effective.window === "weekly" ? "limits.windowWeekly" : "limits.windowSession");
   const stale = effective.stale;
   const color = capacityColor(effective.percent, tint.color);
@@ -303,18 +314,27 @@ function AuthIdentity({ account }: { account: AccountOption }) {
   );
 }
 
-function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCopyCommand, disabled, focused = false, children }: { account: AccountOption; engine: "claude" | "codex"; quota: ReconciledQuota; activeId: string; onSelect: () => void; onRemove: () => void; onCopyCommand: () => void; disabled: boolean; focused?: boolean; children?: React.ReactNode }) {
+/** How long an armed removal waits for its confirm before it disarms. */
+const REMOVE_ARM_MS = 10_000;
+
+function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCopyCommand, disabled, removing = false, refusal = null, focused = false, children }: { account: AccountOption; engine: "claude" | "codex"; quota: ReconciledQuota; activeId: string; onSelect: () => void; onRemove: () => void; onCopyCommand: () => void; disabled: boolean; removing?: boolean; refusal?: React.ReactNode; focused?: boolean; children?: React.ReactNode }) {
   const { t } = useLocale();
   const state = rowState(account, activeId);
   const isActive = account.id === activeId;
   const tint = engineTintOf(engine);
   const usable = account.authPresent && authHealth(account) !== "signed_out" && !account.loginPending;
   const selectionDisabled = disabled || !usable;
-  // Removal deletes the managed home (including its credentials) with no undo,
-  // so the unblocked path arms on the first click and only executes on a
-  // second, explicit confirm — mirroring the confirm step migration already
-  // requires for its far less destructive account switch.
+  // Removal moves the home into the shared archive, so the first click arms it
+  // and only a second, explicit confirm runs it. Escape or ten quiet seconds
+  // disarm it.
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!confirmingRemove) return;
+    confirmRef.current?.focus();
+    const timer = setTimeout(() => setConfirmingRemove(false), REMOVE_ARM_MS);
+    return () => clearTimeout(timer);
+  }, [confirmingRemove]);
   // A badge-driven open (issue #229) focuses one account: scroll it into view
   // and ring it so the panel lands on the conversation's account, not the top.
   const selectRef = useRef<HTMLButtonElement>(null);
@@ -323,7 +343,9 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
   }, [focused]);
   return (
     <div
-      className={`relative ${focused ? "ring-2 ring-inset ring-accent/50" : ""}`}
+      data-account-row={account.id}
+      aria-busy={removing || undefined}
+      className={`relative ${focused ? "ring-2 ring-inset ring-accent/50" : ""} ${removing ? "opacity-60" : ""}`}
       // The active account reads as a tinted wash + hairline identity bar —
       // no boxed borders, so the list stays one quiet column.
       style={isActive ? { background: `color-mix(in srgb, ${tint.color} 7%, transparent)`, boxShadow: `inset 2px 0 0 ${tint.color}` } : undefined}
@@ -355,47 +377,64 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
           <code className="select-all font-semibold text-primary">{account.deviceAuth.code}</code>
         </div>
       ) : null}
-      <div className="flex items-center gap-1 px-3.5 pb-2 pl-[30px]">
-        {/* Copies the account-bound CLI command — tmux/terminals live on the
-            operator's machine, so the panel hands over the command, always. */}
-        <button
-          type="button"
-          aria-label={t("accounts.copyCliAria", { label: account.label })}
-          disabled={disabled || !usable}
-          onClick={onCopyCommand}
-          className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas hover:text-primary disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
+      {confirmingRemove && account.kind === "managed" ? (
+        <div
+          data-account-remove-armed={account.id}
+          className="flex items-end gap-1 px-3.5 pb-2 pl-[30px]"
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.stopPropagation();
+            event.preventDefault();
+            setConfirmingRemove(false);
+          }}
         >
-          <SquareTerminal className="h-3.5 w-3.5 text-muted" aria-hidden />
-          {t("accounts.copyCli")}
-        </button>
-        <span className="min-w-0 flex-1" />
-        {account.kind === "managed" ? (
-          confirmingRemove ? (
-            <>
-              <span className="min-w-0 flex-1 text-right text-[10.5px] font-semibold text-danger">{t("accounts.removeConfirm")}</span>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => {
-                  setConfirmingRemove(false);
-                  onRemove();
-                }}
-                className="inline-flex min-h-[44px] shrink-0 items-center rounded-[6px] bg-danger px-2 py-0.5 text-[10.5px] font-semibold text-white hover:opacity-90 disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-              >
-                {t("accounts.removeConfirmCta")}
-              </button>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => setConfirmingRemove(false)}
-                className="inline-flex min-h-[44px] shrink-0 items-center rounded-[6px] px-2 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-              >
-                {t("accounts.removeConfirmCancel")}
-              </button>
-            </>
+          <span className="min-w-0 flex-1 text-[10.5px] font-semibold leading-snug text-danger">{t("accounts.removeConfirm", { label: account.label })}</span>
+          <button
+            ref={confirmRef}
+            type="button"
+            data-account-remove-confirm={account.id}
+            disabled={disabled}
+            onClick={() => {
+              setConfirmingRemove(false);
+              onRemove();
+            }}
+            className="inline-flex min-h-[44px] shrink-0 items-center rounded-[6px] bg-danger px-2 py-0.5 text-[10.5px] font-semibold text-white hover:opacity-90 disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
+          >
+            {t("accounts.removeConfirmCta")}
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => setConfirmingRemove(false)}
+            className="inline-flex min-h-[44px] shrink-0 items-center rounded-[6px] px-2 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
+          >
+            {t("accounts.removeConfirmCancel")}
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1 px-3.5 pb-2 pl-[30px]">
+          {/* Copies the account-bound CLI command — tmux/terminals live on the
+              operator's machine, so the panel hands over the command, always. */}
+          <button
+            type="button"
+            aria-label={t("accounts.copyCliAria", { label: account.label })}
+            disabled={disabled || !usable}
+            onClick={onCopyCommand}
+            className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas hover:text-primary disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
+          >
+            <SquareTerminal className="h-3.5 w-3.5 text-muted" aria-hidden />
+            {t("accounts.copyCli")}
+          </button>
+          <span className="min-w-0 flex-1" />
+          {account.kind !== "managed" ? null : removing ? (
+            <span role="status" className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 px-1.5 text-[10.5px] font-semibold text-secondary sm:min-h-[28px]">
+              <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden />
+              {t("accounts.removing")}
+            </span>
           ) : (
             <button
               type="button"
+              data-account-remove={account.id}
               aria-label={t("accounts.removeAria", { label: account.label })}
               disabled={disabled}
               onClick={() => setConfirmingRemove(true)}
@@ -404,9 +443,10 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
               <Trash2 className="h-3 w-3" aria-hidden />
               {t("accounts.remove")}
             </button>
-          )
-        ) : null}
-      </div>
+          )}
+        </div>
+      )}
+      {refusal}
     </div>
   );
 }
@@ -667,9 +707,47 @@ function operationText(operation: AccountOperation, t: TFunction): string {
     case "switch": return t("accounts.operation.switch");
     case "login": return t("accounts.operation.login");
     case "remove": return t("accounts.operation.remove");
+    case "cleanup": return t("accounts.operation.cleanup");
     case "terminal": return t("accounts.operation.terminal");
     case "refreshLimits": return t("accounts.operation.refreshLimits");
     case "resetCredit": return t("accounts.operation.resetCredit");
+  }
+}
+
+/** The refusal block for one account's row, when the last removal answer
+    refused that account (#1857 §5.2). */
+function rowRefusal(state: EngineAccountsState, accountId: string, phone = false): React.ReactNode {
+  const removal = state.removal;
+  if (removal?.kind !== "refused" || removal.refusal.accountId !== accountId) return null;
+  return (
+    <AccountRemovalRefusal
+      refusal={removal.refusal}
+      phone={phone}
+      disabled={state.mutation !== null}
+      onDismiss={state.dismissRemoval}
+      onRetry={() => void state.remove(accountId)}
+      onRefresh={() => void state.refresh()}
+    />
+  );
+}
+
+/** The footer slot's removal answer (#1857 §5.3, §5.4): the summary of what a
+    removal moved, the clean-up result, or a refusal whose row has left the
+    list. The phone draws it at the top of the engine section. */
+function RemovalOutcome({ state, phone = false }: { state: EngineAccountsState; phone?: boolean }) {
+  const removal = state.removal;
+  const busy = state.mutation !== null;
+  if (!removal) return null;
+  switch (removal.kind) {
+    case "removed":
+      return <AccountRemovalSummary summary={removal.summary} phone={phone} busy={busy} onDismiss={state.dismissRemoval} onFinishCleanup={() => void state.cleanupOrphans()} />;
+    case "cleanup":
+      return <AccountCleanupResult report={removal.report} phone={phone} onDismiss={state.dismissRemoval} />;
+    case "cleanupFailed":
+      return <AccountCleanupFailed phone={phone} busy={busy} onDismiss={state.dismissRemoval} onRetry={() => void state.cleanupOrphans()} />;
+    case "refused":
+      if (state.accounts.some((account) => account.id === removal.refusal.accountId)) return null;
+      return <div className={phone ? "mx-3" : "border-t border-border pt-2"}>{rowRefusal(state, removal.refusal.accountId, phone)}</div>;
   }
 }
 
@@ -734,6 +812,9 @@ export function AccountsPanel({
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
+  // A removal answer lasts until it is closed or the panel is.
+  const dismissRemoval = state.dismissRemoval;
+  useEffect(() => dismissRemoval, [dismissRemoval]);
 
   const onSelect = async (id: string) => {
     if (mutation) return;
@@ -769,14 +850,14 @@ export function AccountsPanel({
           event.stopPropagation();
           onClose();
         }}
-        className="fixed inset-0 z-40 cursor-default sm:hidden"
+        className={`fixed inset-0 ${Z.modal} cursor-default sm:hidden`}
       />
       <div
         role="dialog"
         aria-label={t("accounts.titleFor", { engine: engineName })}
         aria-busy={mutation !== null}
         onKeyDown={(event) => handleOverlayEscape(event, onClose)}
-        className={`fixed bottom-3 left-1/2 z-50 flex w-[min(400px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[14px] border border-border bg-card shadow-2 ${placementClass}`}
+        className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(400px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[14px] border border-border bg-card shadow-2 ${placementClass}`}
       >
         <header className="flex items-center gap-2 border-b border-border px-3 py-2">
           <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: engineTintOf(engine).color }} />
@@ -804,7 +885,7 @@ export function AccountsPanel({
         ) : null}
           <>
             <div className="max-h-[min(420px,60vh)] divide-y divide-border/40 overflow-y-auto">
-              {status === "loading" ? <div className="px-3.5 py-2 text-[11px] text-muted">{t("accounts.loading")}</div> : null}
+              {status === "loading" ? <AccountRowsSkeleton className="px-1.5 py-1" /> : null}
               {status === "error" && accounts.length === 0 ? <div className="px-3.5 py-2 text-[11px] text-muted">{t("accounts.noAccounts")}</div> : null}
               {rows.map(({ account, quota }) => {
                 // The limits block belongs to every account that can be read
@@ -813,7 +894,7 @@ export function AccountsPanel({
                 // shows neither numbers nor actions.
                 const showLimits = account.authPresent || Boolean(quota.session || quota.weekly || quota.tiers.length);
                 return (
-                  <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} disabled={mutation !== null} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
+                  <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} disabled={mutation !== null} removing={state.removing === account.id} refusal={rowRefusal(state, account.id)} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
                     {showLimits ? (
                       <AccountLimitsBlock
                         account={account}
@@ -850,13 +931,20 @@ export function AccountsPanel({
             <div className="flex justify-end border-t border-border px-3 py-1.5">
               <button
                 type="button"
+                data-account-cleanup
                 disabled={mutation !== null}
                 onClick={() => void state.cleanupOrphans()}
-                className="inline-flex min-h-[44px] items-center text-[10.5px] font-semibold text-muted underline underline-offset-2 hover:text-primary disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+                className="inline-flex min-h-[44px] items-center gap-1.5 text-[10.5px] font-semibold text-muted underline underline-offset-2 hover:text-primary disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
               >
-                {t("accounts.cleanupOrphans")}
+                {mutation === "cleanup" ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden />
+                    {t("accounts.cleanup.running")}
+                  </>
+                ) : t("accounts.cleanupOrphans")}
               </button>
             </div>
+            <RemovalOutcome state={state} />
             {notice ? (
               <div className="flex items-center gap-2 border-t border-border px-3 py-1.5">
                 {/* Failure text may carry the server's real error (`detail`), so it
@@ -871,11 +959,7 @@ export function AccountsPanel({
                     })}
                     className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
                   >
-                    {notice.action.kind === "forceRemove"
-                      ? t("accounts.forceRemove")
-                      : notice.action.kind === "cleanupOrphans"
-                        ? t("accounts.cleanupOrphans")
-                        : t("accounts.retry")}
+                    {t("accounts.retry")}
                   </button>
                 ) : null}
               </div>
@@ -930,7 +1014,7 @@ export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { lef
   if (!effective) return null;
   const effectiveTier = tierOfWindowKey(effective.window);
   const window = effectiveTier
-    ? t("limits.tierWeek", { tier: claudeTierDisplayName(effectiveTier) })
+    ? t("limits.tierWeek", { tier: claudeTierDisplayName(effectiveTier, tierLabel(quota, effectiveTier)) })
     : windowLabel(t, effective.window === "weekly" ? "weekly" : "session", effective.value.windowMinutes);
   const left = Math.round(effective.percent);
   return { left, window, tone: meterTone(left) };
@@ -1126,6 +1210,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
         {engine === "claude" && state === "needsSignIn" && account.login?.result?.status === "failure"
           ? <ClaudeLoginRow key={account.login.operationId} account={account} state={engineState} loginBusy={loginBusy} />
           : null}
+        {rowRefusal(engineState, account.id, true)}
       </div>
     );
   }
@@ -1200,6 +1285,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
           </button>
         ) : null}
       </div>
+      {rowRefusal(engineState, account.id, true)}
     </div>
   );
 }
@@ -1269,6 +1355,9 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
   const engineName = engineDisplay(engine);
   const loginBusy = engine === "claude" && accounts.some((account) => account.login != null && NONTERMINAL_CLAUDE_LOGIN_PHASES.has(account.login.phase));
   const [challenge, setChallenge] = useState<{ accountId: string; deviceAuth: DeviceAuth } | null>(null);
+  // A removal answer lasts until it is closed or the screen is.
+  const dismissRemoval = state.dismissRemoval;
+  useEffect(() => dismissRemoval, [dismissRemoval]);
   /* The active card leads; the rest keep the registry's order. */
   const ordered = [...accounts].sort((a, b) => Number(mobileAccountState(b, active) === "active") - Number(mobileAccountState(a, active) === "active"));
 
@@ -1298,7 +1387,9 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
         {engineName}
         <span className="text-caption font-semibold tabular-nums text-muted">{accounts.length}</span>
       </div>
-      {status === "loading" && accounts.length === 0 ? <div className="px-3 pb-2 text-label text-muted">{t("accounts.loading")}</div> : null}
+      {/* The phone has no footer slot: the removal answer leads the section. */}
+      <RemovalOutcome state={state} phone />
+      {status === "loading" && accounts.length === 0 ? <AccountRowsSkeleton className="px-1 pb-2" /> : null}
       {status !== "loading" && accounts.length === 0 ? <div className="px-3 pb-2 text-label text-muted">{t("mobile2.accounts.noAccounts", { engine: engineName })}</div> : null}
       {ordered.map((account) => (
         <MobileAccountCard
@@ -1322,7 +1413,7 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
           <span className="min-w-0 flex-1 leading-snug">{accountNoticeText(t, notice)}</span>
           {notice.action ? (
             <button type="button" disabled={state.mutation !== null} className={`${MOBILE_ACTION} shrink-0`} onClick={() => void state.retryNotice()}>
-              {notice.action.kind === "forceRemove" ? t("accounts.forceRemove") : notice.action.kind === "cleanupOrphans" ? t("accounts.cleanupOrphans") : t("accounts.retry")}
+              {t("accounts.retry")}
             </button>
           ) : null}
         </div>

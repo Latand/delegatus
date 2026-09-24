@@ -91,6 +91,9 @@ function accountState(select: EngineAccountsState["select"]): EngineAccountsStat
     useResetCredit: async () => true,
     limitsBusy: null,
     limitsVersion: 0,
+    removing: null,
+    removal: null,
+    dismissRemoval: () => {},
   };
 }
 

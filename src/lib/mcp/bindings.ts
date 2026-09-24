@@ -1,3 +1,5 @@
+import { boardSelection } from "./boardSelection";
+import { budgetPage } from "./budgetPage";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,11 +10,13 @@ import path from "node:path";
    it deploys (#1321). */
 import viewerPackageManifest from "../../../package.json";
 
-import { listClaudeAccounts } from "@/lib/accounts/claude";
-import { listCodexAccounts } from "@/lib/accounts/codex";
+import { activeClaudeAccountId, listClaudeAccounts } from "@/lib/accounts/claude";
+import { activeCodexAccountId, listCodexAccounts } from "@/lib/accounts/codex";
+import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
+  allowedAccountIdsForProject,
   bindAccountToProject,
   projectsForAccount,
   unbindAccountFromProject,
@@ -24,7 +28,7 @@ import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { applyConversationMigration } from "@/lib/accounts/migration/conversationCommand";
+import { currentMcpHttpCaller } from "./callerContext";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
@@ -49,6 +53,7 @@ import { MAX_BOARD_MUTATIONS_PER_REQUEST, MAX_BOARD_PATH_LIST_ITEMS } from "@/li
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { backoffDelayMs, DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { cancelRound, closeFlow, patchFlow } from "@/lib/flows/commands";
+import { flowSelectionSource } from "@/lib/flows/store";
 import { getFlowsWithPresets } from "@/lib/flows/engine";
 import type { PatchFlowRequest } from "@/lib/flows/types";
 import { pollLifecycleDigest, type LifecycleDigestRequest } from "@/lib/lifecycle/digest";
@@ -67,11 +72,13 @@ import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/li
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { isBridgeReportClass, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import {
+  applySeatTickNoteLineEdits,
   applySeatTickSettingsChange,
   defaultSeatTickSettings,
   effectiveSeatTickSettings,
   readSeatTickSettings,
   writeSeatTickSettings,
+  type SeatTickNoteLineEdits,
   type SeatTickSettingsActor,
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
@@ -79,32 +86,35 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "@/lib/orchestrator/seats";
-import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
+import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
+import { projectSuccessionFor } from "@/lib/projects/succession";
+import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { createPipelineFromRequest, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
+import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
-import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
-import { PIPELINE_LIST_DEFAULT_LIMIT, projectPipelineListRows } from "@/lib/pipelines/listProjection";
+import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
+import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
-import { loadPipelinesForList } from "@/lib/pipelines/store";
-import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
+import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup } from "@/lib/pipelines/store";
+import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
-import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan } from "@/lib/scanner/scanCache";
-import { readResources } from "@/lib/resources";
+import { readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
 import { listRoles, resolveSpawnRole } from "@/lib/roles/registry";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
 import { readSpawnAdmissionFence, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import type { RuntimeHostRequestHealth } from "@/lib/runtime/client";
-import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
+import type { ViewerDeploymentStatus, ViewerDeploymentSummary } from "@/lib/runtime/contracts";
 import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
 import { resolveOriginalSend, resolveSendReceipt, type SendSettlementPorts } from "@/lib/runtime/sendSettlement";
@@ -134,10 +144,11 @@ import { recordReplySuggestions } from "@/lib/suggestions/store";
 import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
+import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
-import { loadTasks, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
@@ -146,6 +157,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { validateSnapshotRequest } from "@/lib/view/validation";
 
 import {
+  requestDigest,
   McpDispatchNotExecutedError,
   McpDispatchUncertainError,
   McpDispatchVerdictError,
@@ -164,6 +176,19 @@ import {
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 
+import {
+  accountLimitRows,
+  compactDeployment,
+  compactLiveness,
+  newestDeploymentsFirst,
+  pipelineAcknowledgement,
+  pipelineActionAcknowledgement,
+  pipelineStageRead,
+  stageReportAcknowledgement,
+  type AccountLimitsInput,
+} from "./compactAnswers";
+import { changedFieldNames, fieldValues, compactFlow, compactTask, firstLine, fullAnswer, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
+
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import {
   productionSelectedContextDependencies,
@@ -175,9 +200,11 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
-import { mcpCallerIdentity, mcpToolPolicy, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
+import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
-const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage"]);
+const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review"]);
+/* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
+const PIPELINE_RECEIPT_ACTIONS = new Set<PipelineAction>(["resolve-decision", "continue-review", "convert-legacy-review", "revert-legacy-review"]);
 const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
 
 interface LinkTaskToPipelineDependencies {
@@ -512,6 +539,7 @@ async function dispatchViewerControl(
     throw new McpDispatchVerdictError(message, {
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
+      ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
     });
   }
   return result;
@@ -552,10 +580,15 @@ function viewerControlForCall(
   context?: McpToolCallContext,
 ): ViewerControlDependencies {
   if (!context) return control;
+  const timed = async (run: () => Promise<Record<string, unknown>>) => {
+    const startedAt = performance.now();
+    try { return await run(); }
+    finally { context.recordTiming?.("http", performance.now() - startedAt); }
+  };
   return {
-    ...(control.get ? { get: (pathname: string) => control.get!(pathname, context) } : {}),
-    post: (pathname, body, headers) => control.post(pathname, body, headers, context),
-    ...(control.dispatch ? { dispatch: (pathname, body, headers) => control.dispatch!(pathname, body, headers, context) } : {}),
+    ...(control.get ? { get: (pathname: string) => timed(() => control.get!(pathname, context)) } : {}),
+    post: (pathname, body, headers) => timed(() => control.post(pathname, body, headers, context)),
+    ...(control.dispatch ? { dispatch: (pathname, body, headers) => timed(() => control.dispatch!(pathname, body, headers, context)) } : {}),
   };
 }
 
@@ -585,6 +618,7 @@ export interface ViewerMcpDomainDependencies {
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
+  flowSelectionSource?: typeof flowSelectionSource;
   patchFlow: typeof patchFlow;
   cancelRound: typeof cancelRound;
   closeFlow: typeof closeFlow;
@@ -594,12 +628,16 @@ export interface ViewerMcpDomainDependencies {
       scalars and keeps nothing. Optional so partial test harnesses that stub
       only `getPipelines` still project from it. */
   listPipelineRecords?(): readonly Pipeline[];
+  pipelineSelectionSource?: typeof pipelineSelectionSource;
   patchPipeline: typeof patchPipeline;
+  readPipelineRecord?: typeof getPipelineRecord;
   reportStageCompletion: typeof reportStageCompletion;
   loadTasks: typeof loadTasks;
+  listTaskRecords?(): readonly import("@/lib/tasks/types").BoardTask[];
+  taskSelectionSource?: typeof taskSelectionSource;
   collectSnapshot: typeof collectSnapshot;
   readResources: typeof readResources;
-  applyConversationMigration: typeof applyConversationMigration;
+  readResourcesWithDiagnostic?: typeof readResourcesWithDiagnostic;
   /** Sources for the liveness read. The catalog seam travels in (#860) so a
       project-scoped `agent_activity` consumes the SAME completed generation
       `board_snapshot` reads instead of forcing a private whole-corpus sweep.
@@ -652,14 +690,19 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
-  /** The canonical project of the repository this Viewer deploys (#1321) — the
-      only project whose designated seat may execute a deploy. Production derives
-      it from the canonical Viewer remote, never from the caller's working
-      directory, because an MCP client launches inside the caller's own
-      repository. Optional so partial harnesses fall back to the production
-      resolver; null means the Viewer cannot name what it deploys, and the
-      deploy refusal then fails closed. */
-  viewerProject?(): string | null;
+  /** The canonical projects of the repository this Viewer deploys (#1321) —
+      the only projects whose designated seat may execute a deploy. Production
+      derives them from the canonical Viewer remote, never from the caller's
+      working directory, because an MCP client launches inside the caller's own
+      repository. More than one while the repository's GitHub rename has not
+      been folded into one key yet. Optional so partial harnesses fall back to
+      the production resolver; an empty list means the Viewer cannot name what
+      it deploys, and the deploy refusal then fails closed. */
+  viewerProjects?(): readonly string[];
+  /** Records which seat started an accepted deployment (#2063), so the seat
+      tick can wake that seat when it settles. Optional so partial harnesses
+      fall back to the production store. */
+  recordSeatDeployment?(record: SeatDeploymentRecord): void;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
       writes the durable record, and every answer is a read of it. */
@@ -669,6 +712,9 @@ export interface ViewerMcpDomainDependencies {
   /** Accounts the catalog holds, per engine, so a binding can be answered with
       labels and a caller can see what there is to bind. */
   listBindableAccounts?(engine: BindingEngine): { accountId: string; label: string }[];
+  /** #1845: what `account_limits` reads — the catalog, the active account per
+      engine and the durable quota observations. Absent means production. */
+  accountLimitsSource?(): Omit<AccountLimitsInput, "engine" | "accountId">;
   /** #1490: the ports the original-key send lookup settles through. Absent
       means production (the shared registry and the runtime host socket). */
   sendSettlementPorts?(): SendSettlementPorts;
@@ -696,7 +742,7 @@ function productionCallerProject(): string | null {
 }
 
 /**
- * The canonical project of the Agent Log Viewer this process IS — the one
+ * The canonical project of the Delegatus install this process IS — the one
  * question `deploy_exact_sha` refuses on (#1321), and the only caller there is.
  *
  * The cwd cannot answer it. An MCP client launches wherever the CALLER works,
@@ -711,13 +757,13 @@ function productionCallerProject(): string | null {
  *
  * Folded through the operator's project aliases because seats are stored
  * alias-resolved: comparing a raw repository id against an aliased seat project
- * would refuse the Viewer's own deploy.
+ * would refuse the Viewer's own deploy. Both GitHub names of this repository
+ * count until that alias exists (`viewerRepositoryProjects`).
  */
-function viewerOwnProject(): string | null {
+function viewerOwnProjects(): string[] {
   const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
   const remote = configured || viewerPackageManifest.repository.url.trim();
-  const project = projectIdentityFromRemote(remote, process.cwd())?.project ?? null;
-  return project ? canonicalOrchestratorProject(project) : null;
+  return [...new Set(viewerRepositoryProjects(remote, process.cwd()).map(canonicalOrchestratorProject))];
 }
 
 /**
@@ -897,13 +943,24 @@ const productionCanonicalSeatConversationId = seatIdentityResolver(
   (conversationId) => agentRegistry().canonicalConversationId(conversationId),
 );
 
+/** The spawn capability that names the current caller: the one an HTTP
+    request presented (see `./callerContext`), else the one this stdio process
+    inherited from the agent that launched it. */
+function callerCapability(): string | undefined {
+  return currentMcpHttpCaller()?.capability ?? process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+}
+
 function attentionCallerSources(): AttentionCallerSources {
+  const httpCaller = currentMcpHttpCaller();
   return {
-    ancestry: () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
+    /* An HTTP call is served from the Viewer's own process, whose ancestry
+       leads to no agent host; the capability alone names that caller, exactly
+       as it does for a stdio agent whose host pids were never recorded. */
+    ancestry: httpCaller ? () => [] : () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
     rootConversationId: () => liveRootSession(rootSessionSource())?.conversationId ?? null,
     hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot()),
     capabilityCallerConversationId: capabilityConversationResolver(
-      process.env[VIEWER_SPAWN_CAPABILITY_ENV],
+      callerCapability(),
       (digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest),
     ),
   };
@@ -1011,17 +1068,22 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   boardFor,
   applyBoardCommand: (input, snapshot) => applyBoardCommand(input, { registrySnapshot: () => snapshot }),
   getFlowsWithPresets,
+  flowSelectionSource,
   patchFlow,
   cancelRound,
   closeFlow,
   getPipelines,
   listPipelineRecords: loadPipelinesForList,
+  pipelineSelectionSource,
+  taskSelectionSource,
+  listTaskRecords: loadTasksForList,
   patchPipeline,
+  readPipelineRecord: getPipelineRecord,
   reportStageCompletion,
   loadTasks,
   collectSnapshot,
   readResources,
-  applyConversationMigration,
+  readResourcesWithDiagnostic,
   livenessSources: productionLivenessSources,
   queryLifecycleEvents,
   pollLifecycleDigest,
@@ -1034,7 +1096,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     (conversationId) => authorizedManagerSeats(productionManagerAuthoritySources())
       .some((seat) => seat.conversationId === conversationId),
   ),
-  viewerProject: viewerOwnProject,
+  viewerProjects: viewerOwnProjects,
 };
 
 function text(value: unknown): string {
@@ -1044,11 +1106,11 @@ function text(value: unknown): string {
 function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string): void {
   const model = text(args.model);
   if (!model) return;
-  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex") return;
+  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
   const roleId = text(args.role) || fallbackRole;
   const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams }) : null;
-  let engine: "claude" | "codex" | null = null;
-  if (args.engine === "claude" || args.engine === "codex") engine = args.engine;
+  let engine: "claude" | "codex" | "copilot" | null = null;
+  if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
   if (!engine) return;
   const validation = validateLaunchModel(engine, model);
@@ -1243,6 +1305,7 @@ async function sendMessage(
   dependencies: Pick<ViewerMcpDomainDependencies, "registrySnapshot"> &
     Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">>,
   context?: McpToolCallContext,
+  downstreamKey = sendDownstreamKey(requestId(args)),
 ): Promise<McpToolPayload> {
   const conversationId = text(args.conversationId);
   const transcriptPath = text(args.transcriptPath) || text(args.path);
@@ -1252,7 +1315,7 @@ async function sendMessage(
     pid: null,
     path: transcriptPath,
     ...(conversationId ? { conversationId } : {}),
-    clientMessageId: context?.binding?.downstreamKey ?? sendDownstreamKey(requestId(args)),
+    clientMessageId: context?.binding?.downstreamKey ?? downstreamKey,
     text: message,
     images: [],
     /* #1117: an MCP send is inter-agent traffic by definition; the sender role
@@ -1334,7 +1397,7 @@ async function createBoardTask(args: McpToolArgs): Promise<McpToolPayload> {
     };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
-  return { taskId: result.task.id, task: result.task, replay: result.replay };
+  return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay, ...(result.notes ? { notes: result.notes } : {}) };
 }
 
 /**
@@ -1352,25 +1415,38 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     throw new McpToolRefusal("refine needs an identified calling conversation; the Viewer MCP session carries it", { code: "TASK_INVALID_FIELD", field: "refine", status: 403 });
   }
   const taskId = typeof args.taskId === "string" && args.taskId.trim() ? args.taskId.trim() : null;
+  const changes: Record<string, string[]> = {};
   const result = mutateTasks((tasks) => {
+    const before = new Map(tasks.map(task => [task.id, fieldValues(task)]));
     const outcome = refineTask(tasks, { callerConversationId: caller.conversationId!, taskId, text });
+    if (outcome.ok) for (const entry of outcome.refined) {
+      const task = outcome.tasks.find(task => task.id === entry.taskId)!;
+      changes[entry.taskId] = changedFieldNames(before.get(entry.taskId) ?? new Map(), task);
+    }
     return { tasks: outcome.ok && outcome.refined.some((entry) => entry.result === "applied") ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD", field: "refine", status: result.status });
   const byId = new Map(result.tasks.map((task) => [task.id, task] as const));
-  return { refined: result.refined, tasks: result.refined.map((entry) => byId.get(entry.taskId)).filter(Boolean) };
+  return { refined: result.refined, changedFields: [...new Set(Object.values(changes).flat())], changedFieldsByTask: changes, tasks: result.refined.map((entry) => {
+    const task = byId.get(entry.taskId)!;
+    return fullAnswer(args) ? task : compactTask(task);
+  }), omittedRecordCount: fullAnswer(args) ? 0 : result.refined.length, readMore: "get_task(taskId) or update_task with full:true returns the full task." };
 }
 
 async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   if (args.refine !== undefined) return refineBoardTask(args, dependencies);
   const taskId = required(args, "taskId");
-  const patch = withoutKeys(args, ["taskId", "clientRequestId"]);
+  const patch = withoutKeys(args, ["taskId", "clientRequestId", "full", "compact"]);
+  let changedFields: string[] = [];
   const result = mutateTasks((tasks) => {
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding });
+    const before = fieldValues(tasks.find(task => task.id === taskId));
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding,
+      workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
+    if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
-  return { taskId, task: result.task };
+  return { ...taskAcknowledgement(result.task, args, changedFields), ...(result.notes ? { notes: result.notes } : {}) };
 }
 
 /**
@@ -1395,43 +1471,142 @@ async function unadmittedOnStoreBusy<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function createPipeline(args: McpToolArgs): Promise<McpToolPayload> {
-  const request = withoutKeys(args, ["clientRequestId"]);
-  const result = await createPipelineFromRequest(request as CreatePipelineRequest);
+function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipeline): McpToolPayload {
+  const delivery = pipeline.delivery!;
+  return { target: delivery.target, disposition: delivery.disposition, publish: delivery.publish,
+    ownerId: delivery.ownerId, epoch: delivery.epoch, active: delivery.active,
+    ...(delivery.disposition === "comparison" ? { conflict: `Target owned by ${delivery.ownerId} at epoch ${delivery.epoch}; comparison lane created with Viewer publication disabled` } : {}) };
+}
+
+async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolPayload> {
+  const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
+  if (context?.dispatch) context.dispatch.attempted = true;
+  const result = await createPipelineFromRequest(request as CreatePipelineRequest, undefined, {
+    creationRequest: { key: `create_pipeline:${requestId(args)}`, digest: requestDigest("create_pipeline", request) },
+  });
   if (!result.pipeline) {
+    if (context?.dispatch) context.dispatch.attempted = false;
     const message = result.error ?? "could not create pipeline";
     /* #1026: a rejected create carries every violated constraint with its field
        and expected shape, so an agent composing its first pipeline reads the
        whole contract from one answer — the same list an HTTP caller receives. */
+    /* #1876: an engine nobody is signed in to answers with its code and the
+       two ways out, so an agent relays the choice instead of retrying. */
+    if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
     throw result.violations?.length ? new McpToolRefusal(message, { violations: result.violations }) : new Error(message);
   }
   if (result.pipeline.state !== "draft") requestPipelineTick();
-  return { pipelineId: result.pipeline.id, pipeline: result.pipeline };
+  /* #1845: an acknowledgement, never the record. The record echoed the spec,
+     every stage prompt and every composed role scaffold back to the caller that
+     had just sent them — a median 10 KB per create. get_pipeline reads it. */
+  return redactPayload({
+    ...pipelineAcknowledgement(result.pipeline),
+    ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
+    ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+  });
+}
+
+/** A close report as counts (#2030). Each list keeps its name, so a caller
+    that sees `stillRunning: 1` knows which list to read on the record. The
+    three every close has are always counted; the lists that only an
+    exception fills appear when something is in them. */
+function closeReportCounts(report: PipelineCloseReport) {
+  const exceptions = {
+    unconfirmed: report.unconfirmed.length,
+    stillRunning: report.stillRunning.length,
+    reviewers: report.reviewers.length,
+    acknowledged: report.acknowledged.length,
+    notes: report.notes.length,
+    uncommitted: report.worktree?.uncommitted.length ?? 0,
+  };
+  return {
+    status: report.status,
+    pending: report.pending.length,
+    stopped: report.stopped.length,
+    alreadyStopped: report.alreadyStopped.length,
+    ...Object.fromEntries(Object.entries(exceptions).filter(([, count]) => count > 0)),
+    ...(report.worktree?.truncated ? { uncommittedTruncated: true } : {}),
+  };
 }
 
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
-  const request = withoutKeys(args, ["pipelineId", "clientRequestId"]);
-  /* Pause, resume and graph edits carry the calling agent as their actor. */
-  const result = action === "pause" || action === "resume" || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
+  const request = withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact"]);
+  const before = dependencies.readPipelineRecord
+    ? dependencies.readPipelineRecord(pipelineId)
+    : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
+  const beforeFields = fieldValues(before);
+  /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
+  const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
   if (!result.pipeline) {
     const message = result.error ?? "could not update pipeline";
     /* A refused close carries the hosts it stopped and the one it could not
        (#670); an agent driving the board must not get less than an HTTP caller. */
+    if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
+    /* A refused conversion carries its editable preview. */
+    if (result.legacyReviewPreview) throw new McpToolRefusal(message, { legacyReviewPreview: result.legacyReviewPreview });
+    if (action === "publish" || action === "takeover") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
+    if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
-  /* A close reports the stage hosts it terminated and the uncommitted work it
-     left behind (#670), so an agent driving the board sees it too. */
-  return {
-    pipelineId,
-    pipeline: result.pipeline,
+  /* A close reports what became of the stage hosts and the uncommitted work it
+     left behind (#670), as counts (#2030): the host list averaged 2.1 KB over
+     146 closes and is the record's, which get_pipeline reads. A closed lane
+     takes no guarded edit, so its digests are left out too. */
+  if (action === "close" && result.close && !fullAnswer(args)) {
+    return redactPayload({
+      pipelineId: result.pipeline.id,
+      state: result.pipeline.state,
+      closedAt: result.pipeline.closedAt ?? null,
+      revision: recordRevision(result.pipeline),
+      changedFields: changedFieldNames(beforeFields, result.pipeline),
+      close: closeReportCounts(result.close),
+      readMore: "get_pipeline(pipelineId) lists every host in closeReport.",
+    });
+  }
+  /* The pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
+  return redactPayload({
+    ...pipelineActionAcknowledgement(result.pipeline),
+    revision: recordRevision(result.pipeline),
+    changedFields: changedFieldNames(beforeFields, result.pipeline),
+    taskIds: result.pipeline.taskIds,
+    ...(fullAnswer(args) ? { pipeline: result.pipeline } : { omittedRecordCount: 1 }),
+    readMore: "get_pipeline(pipelineId) or pipeline_action with full:true returns the full record.",
+    ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
+    ...(action === "attach-link" || action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline), ...(result.unchanged ? { unchanged: true } : {}) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
-  };
+    ...(result.decisionAnswer ? { decisionAnswer: {
+      clientRequestId: result.decisionAnswer.clientRequestId,
+      stageId: result.decisionAnswer.stageId,
+      attempt: result.decisionAnswer.attempt,
+      nextAttempt: result.decisionAnswer.nextAttempt,
+      at: result.decisionAnswer.at,
+    }, replayed: result.replayed } : {}),
+    ...(result.reviewContinuation ? { reviewContinuation: {
+      clientRequestId: result.reviewContinuation.clientRequestId,
+      stageId: result.reviewContinuation.stageId,
+      rounds: result.reviewContinuation.rounds,
+      reviewedHead: result.reviewContinuation.reviewedHead,
+      currentHead: result.reviewContinuation.currentHead,
+      at: result.reviewContinuation.at,
+    }, replayed: result.replayed } : {}),
+    ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}),
+    ...(result.legacyReviewConversion ? { legacyReviewConversion: {
+      clientRequestId: result.legacyReviewConversion.clientRequestId,
+      stageId: result.legacyReviewConversion.stageId,
+      fixerStageId: result.legacyReviewConversion.fixerStageId,
+      implementerStageId: result.legacyReviewConversion.implementerStageId,
+      reviewLimit: result.legacyReviewConversion.reviewLimit,
+      reviewLimitSource: result.legacyReviewConversion.reviewLimitSource,
+      at: result.legacyReviewConversion.at,
+      ...(result.legacyReviewConversion.reverted ? { reverted: result.legacyReviewConversion.reverted } : {}),
+    }, replayed: result.replayed } : {}),
+  });
 }
 
 /**
@@ -1462,7 +1637,7 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     stageId: result.stageId,
     attempt: result.attempt,
     replaced: result.replaced ?? false,
-    report: result.report,
+    report: stageReportAcknowledgement(result.report),
   };
 }
 
@@ -1476,10 +1651,12 @@ async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPip
   const conversationId = member?.conversationId ?? pipeline.srcConversationId;
   if (!transcriptPath && !conversationId) throw new Error("pipeline has no conversation to link");
   const at = dependencies.isoNow();
+  let changedFields: string[] = [];
   /* The task lock is taken before the callback runs, so a busy refusal here
      proves the assignment was never written (#1766). */
   const result = await refuseBusyBeforeAdmission((admitted) => dependencies.mutateTasks((tasks) => {
     admitted();
+    const before = fieldValues(tasks.find(task => task.id === taskId));
     const outcome = applyAssignmentPatches(tasks, taskId, [{
       path: transcriptPath,
       conversationId,
@@ -1488,10 +1665,11 @@ async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPip
       error: null,
       at,
     }], at);
+    if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   }));
   if (!result.ok) throw new Error(result.error);
-  return { taskId, pipelineId, task: result.task, conversationId, transcriptPath };
+  return { ...taskAcknowledgement(result.task, args, changedFields), pipelineId, conversationId, transcriptPath };
 }
 
 function throwIfCallEnded(context: McpToolCallContext): void {
@@ -1847,6 +2025,7 @@ async function listConversations(
   if (project) params.set("project", project);
   if (query) params.set("q", query);
   params.set("limit", String(limit));
+  if (text(args.cursor)) params.set("cursor", text(args.cursor));
   /* The Viewer's conversation endpoint projects the uncapped catalog published
      by the scanner worker. Its scheme feed can omit projects beyond the board's
      recent-project window even while their catalog rows remain current. */
@@ -1878,17 +2057,20 @@ async function listConversations(
   const conversations = source.items
     .filter(objectRecord) as unknown as FileEntry[];
   const rows = conversations
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
     .slice(0, limit)
     .map((entry) => ({
       conversationId: entry.conversationId ?? null,
       transcriptPath: entry.path,
       project: entry.project,
-      title: entry.title,
+      title: fullAnswer(args) ? entry.title : firstLine(entry.title ?? ""),
       engine: entry.engine,
       activity: entry.activity,
     }));
-  return redactPayload({ count: rows.length, conversations: rows });
+  return redactPayload({ count: rows.length, total: source.total, conversations: rows,
+    nextCursor: source.nextCursor ?? null, hasMore: Boolean(source.nextCursor),
+    omittedCount: Math.max(0, source.total - rows.length), omittedRecordCount: fullAnswer(args) ? 0 : rows.length,
+    readMore: "Pass nextCursor as cursor with the same filters. compact:false retains the full title; get_conversation reads one conversation." });
 }
 
 async function searchTranscripts(
@@ -2042,9 +2224,10 @@ function conversationDeliverability(
 const CONVERSATION_MESSAGE_KINDS = ["message", "reasoning", "tool_call", "tool_result", "trace"] as const;
 const CONVERSATION_MESSAGE_ROLES = ["user", "assistant", "system", "tool"] as const;
 
-function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | null {
+function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | "copilot" | null {
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
+  if (rootName === "copilot-sessions") return "copilot";
   return null;
 }
 
@@ -2094,7 +2277,7 @@ async function conversationMessages(
 
   let transcriptPath = requestedPath;
   let conversationId: string | null = null;
-  let engine: "claude" | "codex" | null = null;
+  let engine: "claude" | "codex" | "copilot" | null = null;
   if (requestedId) {
     const target = selectedConversationTarget({ conversationId: requestedId }, selectedDependencies);
     transcriptPath = target.path!;
@@ -2113,7 +2296,7 @@ async function conversationMessages(
     if (!engine) {
       engine = conversationEngineForRoot(pinned.rootName);
       if (!engine) {
-        throw new McpToolRefusal("conversation_messages supports Claude and Codex transcripts only.", {
+        throw new McpToolRefusal("conversation_messages supports Claude, Codex and Copilot transcripts only.", {
           code: "conversation_messages_engine_unsupported",
         });
       }
@@ -2233,10 +2416,10 @@ async function deployExactSha(
      would otherwise learn only "revision not found" and go looking for a better
      SHA. Fails closed when the Viewer cannot name its own repository — a deploy
      whose target is unproven is the one this closes. */
-  const viewerProject = dependencies.viewerProject ? dependencies.viewerProject() : viewerOwnProject();
-  if (seat.project !== viewerProject) {
+  const viewerProjects = dependencies.viewerProjects ? dependencies.viewerProjects() : viewerOwnProjects();
+  if (!seat.project || !viewerProjects.includes(seat.project)) {
     throw new McpToolRefusal(
-      "this tool deploys the Agent Log Viewer application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Viewer surface can. Report the request over the bridge instead.",
+      "this tool deploys the Delegatus application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Delegatus surface can. Report the request over the bridge instead.",
       { code: "deploy_foreign_project", revision },
     );
   }
@@ -2245,11 +2428,34 @@ async function deployExactSha(
     revision,
     idempotencyKey: requestId(args),
   });
+  /* #2063: the ledger never learns who asked, and the seat ends its turn so
+     the promotion can replace its host. Recording the pair is what lets the
+     seat tick wake this seat when the deployment settles. A `busy` receipt
+     names someone else's deployment, which is not this seat's to be woken on.
+     A failed write costs the wake and nothing else: the deployment is
+     already admitted, so the answer says so rather than failing the call. */
+  let wakeOnSettle = false;
+  if (receipt.state === "accepted" && typeof receipt.deploymentId === "string" && receipt.deploymentId) {
+    try {
+      (dependencies.recordSeatDeployment ?? recordSeatDeployment)({
+        deploymentId: receipt.deploymentId,
+        conversationId: seat.conversationId,
+        project: seat.project,
+        revision: typeof receipt.revision === "string" ? receipt.revision : revision.toLowerCase(),
+        requestedAt: new Date().toISOString(),
+      });
+      wakeOnSettle = true;
+    } catch (error) {
+      console.error(`[deploy_exact_sha] could not record the seat for deployment ${receipt.deploymentId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   return {
     deploymentId: receipt.deploymentId,
     revision: receipt.revision,
     replayed: receipt.state === "accepted" && receipt.replayed === true,
     state: receipt.state,
+    /* Whether the seat tick will wake this seat when the deployment settles. */
+    wakeOnSettle,
   };
 }
 
@@ -2482,7 +2688,7 @@ function spawnControlHeaders(): Record<string, string> {
  * operator told to rotate performs it here and the shell fallback is gone.
  */
 function callerCapabilityHeaders(): Record<string, string> {
-  const capability = process.env[VIEWER_SPAWN_CAPABILITY_ENV]?.trim() ?? "";
+  const capability = callerCapability()?.trim() ?? "";
   return {
     ...internalServiceHeaders("mcp"),
     ...(/^[A-Za-z0-9_-]{43}$/.test(capability) ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {}),
@@ -2497,16 +2703,34 @@ function allowedSeatFields(args: McpToolArgs, keys: readonly string[]): Record<s
 }
 
 /**
+ * A seat record without its two long texts (#2064): the mandate (about 25 KB
+ * for the default one) and the role table. Their lengths stay, so a caller can
+ * see that they exist and ask for them with full:true.
+ */
+function compactOrchestratorSeat(seat: OrchestratorSeat | null): Record<string, unknown> | null {
+  if (!seat) return null;
+  const { mandate, roleTable, ...rest } = seat;
+  return { ...rest, mandateLength: mandate.length, roleTableLength: roleTable?.length ?? null };
+}
+
+/**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
  * labelled an estimate with its basis, and nothing here — or anywhere — may
  * act on the recommendation automatically.
+ *
+ * Compact by default (#2064), like the other read tools. The whole answer
+ * inlined the mandate, the role table, every terminalized intent with its own
+ * copy of the mandate and the full lineage, about 183 KB for a real seat, which
+ * the MCP client refuses. The default keeps what a seat asks this tool for and
+ * counts the history; full:true returns every record whole.
  */
 async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
+  const full = fullAnswer(args);
   const { active, pending, history } = orchestratorSeatFor(project);
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
-  const base = {
+  const base = full ? {
     project,
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: pending,
@@ -2524,6 +2748,13 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       triggeredBy: revocation.triggeredBy ?? null,
       successorConversationId: revocation.successorConversationId ?? null,
     })),
+  } : {
+    project,
+    defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
+    pendingIntent: compactOrchestratorSeat(pending),
+    intentHistoryCount: history.length,
+    lineageCount: revocations.length,
+    readMore: "get_orchestrator with full:true returns the mandate, the role table, the pending intent, intentHistory and lineage in full.",
   };
   if (!active?.conversationId) {
     return redactPayload({ ...base, designated: false, seat: null, health: null, rotation: null });
@@ -2572,7 +2803,8 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   return redactPayload({
     ...base,
     designated: true,
-    seat: active,
+    seat: full ? active : compactOrchestratorSeat(active),
+    seatEpoch: active.seatEpoch,
     conversationId: active.conversationId,
     transcriptPath,
     engine,
@@ -2642,6 +2874,12 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
  * replaced by the next one sent and cleared with `monitorPrompt: null`. Because it
  * cannot change whether or when a wake is sent, it needs no reason and leaves
  * the project on the default tick.
+ *
+ * #2030: seats keep their lane ledger in that note and changed it 117 times in
+ * 2.5 days, resending all of it each time and reading 1.2–1.7 KB back. So one
+ * line of it can be replaced, removed or appended on its own, and a write is
+ * acknowledged with `{changed, revision, changedFields, monitorPromptLength}`
+ * and nothing else. A verbose read carries the note once.
  */
 function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const attribution = attributionOf(dependencies);
@@ -2666,6 +2904,17 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (args.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = args.wakeIntervalMinutes as number | null;
   if (args.reason !== undefined) change.reason = args.reason as string | null;
   if (args.monitorPrompt !== undefined) change.monitorPrompt = args.monitorPrompt as string | null;
+  const lineEdits: SeatTickNoteLineEdits = {
+    ...(args.replaceLine !== undefined ? { replaceLine: args.replaceLine as SeatTickNoteLineEdits["replaceLine"] } : {}),
+    ...(args.removeLine !== undefined ? { removeLine: args.removeLine as SeatTickNoteLineEdits["removeLine"] } : {}),
+    ...(args.appendLine !== undefined ? { appendLine: args.appendLine as string } : {}),
+  };
+  if (Object.keys(lineEdits).length > 0) {
+    if (change.monitorPrompt !== undefined) throw new Error("send either monitorPrompt or line edits (replaceLine, removeLine, appendLine), not both");
+    const edited = applySeatTickNoteLineEdits(current.monitorPrompt, lineEdits);
+    if (!edited.ok) throw new Error(edited.error);
+    change.monitorPrompt = edited.monitorPrompt;
+  }
   if (args.untilMinutes !== undefined) {
     const minutes = args.untilMinutes as number | null;
     if (minutes === null) change.until = null;
@@ -2693,8 +2942,35 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     changed = true;
   }
 
+  const verbose = args.verbose === true || args.full === true;
+  const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
+  /* #2030: a write is acknowledged, never read back. The caller holds what it
+     sent; the revision and the stored length are what it needs to know the row
+     took it. A change to another project's tick still says so out loud. */
+  if (changed && !verbose) {
+    return redactPayload({
+      changed,
+      revision: recordRevision(settings),
+      changedFields: Object.keys(change),
+      monitorPromptLength: storedPrompt?.length ?? 0,
+      ...(own === project ? {} : { project, scope: "other-project", callerProject: own }),
+    });
+  }
+
   const now = Date.now();
   const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+  /* #1845: the note is the one large field here, and a seat changing its
+     cadence was reading its own note back three times on every call. It is
+     carried only on an explicit full/verbose read, and there once, as
+     `monitorPrompt` (#2030); every other answer carries its length, which is
+     how a caller sees it is there. */
+  const echoPrompt = verbose;
+  /* The same rule for the other repeats: the stored reason is carried once,
+     under `effective`, unless an expiry has already set the two apart, and the
+     defaults block and the fence sentence are a verbose read's. */
+  const compactSettings = storedReason === effective.reason ? settingsWithoutPrompt : { ...settingsWithoutPrompt, reason: storedReason };
+  const fenceAnswer = seatTickFenceAnswer(project, effective.wakeIntervalMs, now);
+  if (!verbose && fenceAnswer.fence) delete fenceAnswer.fenceDetail;
   return redactPayload({
     project,
     changed,
@@ -2702,35 +2978,43 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
        caller's own is allowed, and the answer says so out loud. */
     callerProject: own,
     scope: own === project ? "own-project" : "other-project",
-    settings,
-    /* The stored note in full and its length (#1450), so a seat can check what
-       persisted against what it sent without reading the file. The wake shows
+    settings: verbose ? { ...settingsWithoutPrompt, reason: storedReason } : compactSettings,
+    /* The stored note is an explicit read; its length acknowledges a write. The wake shows
        only a marked preview of a long note; this is the whole of it. */
-    monitorPrompt: settings.monitorPrompt,
-    monitorPromptLength: settings.monitorPrompt?.length ?? 0,
+    ...(echoPrompt ? { monitorPrompt: storedPrompt } : {}),
+    monitorPromptLength: storedPrompt?.length ?? 0,
+    revision: recordRevision(settings),
+    ...(changed ? { changedFields: Object.keys(change) } : {}),
+    /* A full read names nothing it left out (#2030). */
+    ...(echoPrompt ? {} : {
+      omittedFieldCount: 1,
+      readMore: "seat_tick_settings with verbose:true or full:true reads the complete stored note and settings.",
+    }),
     effective: {
       enabled: effective.enabled,
       wakeIntervalMinutes: Math.round(effective.wakeIntervalMs / 60_000),
       reason: effective.reason,
-      /* What the next scheduler-fired wake will carry (#1280). Returned on
-         both a read and a change, because the record read back — not the echo
-         of what was sent — is what tells a caller its prompt landed, was
-         replaced, or is gone. */
-      monitorPrompt: effective.monitorPrompt,
       until: effective.until,
       isDefault: effective.isDefault,
     },
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
-    defaults: defaultSeatTickSettings(project),
+    ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
        twenty-minute interval and receiving nothing was reading a settings
        answer that said everything was fine: the fence lived in the accounting
        row and no surface carried it. This says which attempt holds the
        project's wakes, since when and when it lapses on its own. */
-    ...seatTickFenceAnswer(project, effective.wakeIntervalMs, now),
+    ...fenceAnswer,
   });
+}
+
+/** The schedule a project nobody configured runs on — the fields a restore
+    resets, without the record's empty bookkeeping (#2030). */
+function seatTickScheduleDefaults(project: string) {
+  const { enabled, wakeIntervalMinutes, reason, until } = defaultSeatTickSettings(project);
+  return { enabled, wakeIntervalMinutes, reason, until };
 }
 
 /**
@@ -2791,7 +3075,6 @@ function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDom
   const requestedProject = text(args.project) || (action === "list" ? callerProject ?? "" : "");
   const project = requestedProject ? canonicalOrchestratorProject(requestedProject) : null;
 
-  let changed = false;
   if (action !== "list") {
     if (!project) throw new Error("project is required to add or remove a binding");
     const engine = text(args.engine);
@@ -2800,11 +3083,28 @@ function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDom
     if (!accountId) throw new Error("accountId is required to add or remove a binding");
     const result = action === "add" ? bind(engine, accountId, project) : unbind(engine, accountId, project);
     if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
-    changed = result.changed;
+    /* #1845: a write answers the row it changed and that project's pool for
+       that engine, still read AFTER the write from the store. The whole table
+       is `action: "list"`. */
+    const bindings = read();
+    const bound = (allowedAccountIdsForProject(project, engine, bindings) ?? []).includes(accountId);
+    if (bound !== (action === "add")) {
+      throw new Error(`the binding store does not show the ${action} of ${engine} account ${accountId} for ${project} after the write`);
+    }
+    return redactPayload({
+      action,
+      changed: result.changed,
+      project,
+      engine,
+      accountId,
+      bound,
+      allowed: projectEngineAccounts(project, engine, accountsFor(engine), bindings, []),
+    });
   }
 
-  /* Read AFTER the mutation, from the store, for both the record and the view
-     the fence will enforce — not from the mutation's own return value. */
+  /* Read from the store, for both the record and the view the fence will
+     enforce. */
+  const changed = false;
   const bindings = read();
   const engines = ["claude", "codex"] as const;
   return redactPayload({
@@ -2832,6 +3132,44 @@ function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDom
   });
 }
 
+/** The same records `GET /api/accounts` projects its limit rows from. */
+function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "accountId"> {
+  const snapshot = agentRegistry().readOnlySnapshot();
+  return {
+    accounts: {
+      claude: listClaudeAccounts().map((account) => ({ accountId: account.id })),
+      codex: listCodexAccounts().map((account) => ({ accountId: account.id })),
+      copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
+    },
+    active: {
+      claude: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
+      codex: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
+      copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
+    },
+    observations: snapshot.quotaObservations,
+    now: Date.now(),
+  };
+}
+
+/**
+ * account_limits (#1845 row 11): each account's last observed usage, so a seat
+ * choosing where to launch no longer reads three HTTP routes for it. A read of
+ * the durable observations only; it never asks a provider.
+ */
+function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+  const engine = text(args.engine);
+  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
+  const accountId = text(args.accountId);
+  const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
+  const accounts = accountLimitRows({
+    ...source,
+    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" } : {}),
+    ...(accountId ? { accountId } : {}),
+  });
+  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
+  return redactPayload({ count: accounts.length, accounts });
+}
+
 /** create_orchestrator: atomically create, designate and deliver the ONE
     approved versioned default mandate (or the caller's edited text based on
     it). The seat route owns the durable intent, so a retry replays. */
@@ -2846,7 +3184,11 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
     ...allowedSeatFields(args, ["conversationId", "cwd", "engine", "model", "effort", "accountId"]),
   }, callerCapabilityHeaders());
   return redactPayload({
-    project,
+    /* The key the seat was designated under, which the route resolves after
+       any identity succession its checkout owes (#1874). */
+    project: typeof (result.seat as { project?: unknown } | undefined)?.project === "string"
+      ? (result.seat as { project: string }).project
+      : project,
     conversationId: result.conversationId ?? null,
     transcriptPath: result.path ?? null,
     seat: result.seat ?? null,
@@ -2857,60 +3199,66 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
   });
 }
 
-/**
- * send_message_to_orchestrator: the selected session is resolved SERVER-SIDE.
- * A dead selected conversation is resumed by the delivery seam (the same
- * resume path the composer uses); with none designated, one is created via the
- * seat route first and the message delivered after. Both side effects derive
- * their idempotency keys from this call's, so a retry replays instead of
- * duplicating, and the response says which path ran.
- */
+/** Resolve once at claim time and dispatch through the shared send receipt path.
+    An existing claim always recovers its recorded recipient, including after
+    the project's seat rotates. Creating a missing seat is a separate effect;
+    any failure after that dispatch stays uncertain. */
 async function sendMessageToOrchestrator(
   args: McpToolArgs,
   control: ViewerControlDependencies,
-  dependencies: Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">> = {},
+  dependencies: ViewerMcpDomainDependencies,
+  context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
-  const message = requiredMessageText(args);
+  requiredMessageText(args);
   const key = requestId(args);
-
-  let seat: OrchestratorSeat | null = orchestratorSeatFor(project).active;
+  const bound = context?.binding;
+  let seat = orchestratorSeatFor(project).active;
+  let recipient = bound ? bound.target.identity : seat?.conversationId;
   let created = false;
-  if (!seat?.conversationId) {
-    const outcome = await control.post("/api/orchestrator/seat", {
-      project,
-      mandate: ORCHESTRATOR_SYSTEM_PROMPT,
-      promptVersion: ORCHESTRATOR_PROMPT_VERSION,
-      clientRequestId: derivedRequestId(key, "create"),
-    }, callerCapabilityHeaders());
-    created = true;
-    seat = (outcome.seat as OrchestratorSeat | undefined) ?? orchestratorSeatFor(project).active;
-    if (!seat?.conversationId) throw new Error("orchestrator creation did not settle a conversation to deliver to");
+  if (!recipient) {
+    try {
+      const outcome = await dispatchControl(control)("/api/orchestrator/seat", {
+        project,
+        mandate: ORCHESTRATOR_SYSTEM_PROMPT,
+        promptVersion: ORCHESTRATOR_PROMPT_VERSION,
+        clientRequestId: derivedRequestId(key, "create"),
+      }, callerCapabilityHeaders());
+      created = true;
+      // Never substitute the current seat for an absent creation response:
+      // that could be a rotation unrelated to this logical request.
+      seat = (outcome.seat as OrchestratorSeat | undefined) ?? null;
+      recipient = seat?.conversationId;
+      if (!recipient) throw new McpDispatchUncertainError("orchestrator creation has not returned a recipient; recover the original key");
+      if (bound) {
+        if (!context?.bindCreatedTarget) throw new McpDispatchUncertainError("the created recipient cannot be persisted; no message was dispatched");
+        await context.bindCreatedTarget(recipient);
+      }
+    } catch (error) {
+      if (error instanceof McpDispatchNotExecutedError && !created) throw error;
+      throw new McpDispatchUncertainError(error instanceof Error ? error.message : String(error));
+    }
   }
-
-  const outcome = await control.post("/api/tmux", {
-    pid: null,
-    path: seat.path,
-    conversationId: seat.conversationId,
-    clientMessageId: key,
-    text: message,
-    images: [],
-    origin: mcpSenderOrigin(dependencies),
-  }, callerCapabilityHeaders());
-  return redactPayload({
-    project,
-    conversationId: seat.conversationId,
-    transcriptPath: seat.path,
-    created,
-    seatEpoch: seat.seatEpoch,
-    predecessorConversationId: seat.predecessorConversationId,
-    operationId: outcome.operationId ?? (outcome.receipt as { operationId?: unknown } | undefined)?.operationId ?? null,
-    outcome: outcome.outcome ?? "delivered",
-    /* #1131: the same control path as `send_message`, so the same contract —
-       acceptance is not arrival, and `message_receipt` over the operation id is
-       what says which. */
-    settled: (outcome.outcome ?? "delivered") === "delivered",
-  });
+  try {
+    const outcome = await sendMessage({
+      ...args,
+      conversationId: recipient,
+      transcriptPath: seat?.conversationId === recipient ? seat.path : undefined,
+      path: undefined,
+    }, control, dependencies, context, orchestratorSendDownstreamKey(key));
+    return redactPayload({
+      ...outcome, project, created,
+      // Seat metadata describes only the recipient this dispatch actually used.
+      ...(seat?.conversationId === recipient ? {
+        seatEpoch: seat.seatEpoch,
+        predecessorConversationId: seat.predecessorConversationId,
+      } : {}),
+    });
+  } catch (error) {
+    // A refused second POST cannot prove the preceding creation had no effect.
+    if (created) throw new McpDispatchUncertainError(error instanceof Error ? error.message : String(error));
+    throw error;
+  }
 }
 
 /** rotate_orchestrator: explicit handoff to a successor. Never called by any
@@ -2922,17 +3270,13 @@ async function sendMessageToOrchestrator(
     name, so the caller reads the attribution its rotation was recorded under. */
 async function rotateOrchestrator(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
-  const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId"]);
-  /* #1452: with no mandate named, the successor gets the CURRENT default
-     whenever the incumbent's stored mandate is based on an older version. The
-     route's own default is the incumbent's text, which is how a v3 seat rotated
-     v3 into every successor. `keepIncumbentMandate: true` is the explicit way
-     to carry that text forward; a seat on the current version, or on bespoke
-     (unversioned) rules, keeps its own text as before. */
-  if (fields.mandate === undefined && args.keepIncumbentMandate !== true) {
-    const incumbent = orchestratorSeatFor(project).active;
-    if (incumbent && orchestratorMandateStale(incumbent.promptVersion)) fields.mandate = ORCHESTRATOR_SYSTEM_PROMPT;
-  }
+  /* #1452, #2030: with no mandate named, the route rebuilds the successor's
+     core from the CURRENT default whenever the incumbent's stored mandate is
+     based on an older version, and keeps its rotation history. Sending the
+     default from here instead dropped that history. `keepIncumbentMandate:
+     true` is the explicit way to carry the old text forward; a seat on the
+     current version, or on bespoke (unversioned) rules, keeps its own text. */
+  const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId", "keepIncumbentMandate"]);
   const result = await control.post("/api/orchestrator/rotate", {
     project,
     clientRequestId: spawnAttemptId(requestId(args)),
@@ -2953,12 +3297,37 @@ async function rotateOrchestrator(args: McpToolArgs, control: ViewerControlDepen
   });
 }
 
+/** #2059: a compact read names its PR in one string, and says nothing when
+    there is nothing to say; the full forms carry every resolved link. */
+function compactPullRequest(pipeline: Pipeline): { pr?: string } {
+  const pr = pullRequestSummary(pipelineWorkLinks(pipeline));
+  return pr ? { pr } : {};
+}
+
 async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const pipeline = getPipelineRecord(pipelineId);
   if (!pipeline) throw new Error("pipeline not found");
+  /* #1845: the two narrow reads. A stage read answers what one stage concluded;
+     a compact read answers the list row. Without either, the whole record. */
+  const stageId = text(args.stageId);
+  if (stageId) {
+    const attempt = typeof args.attempt === "number" ? args.attempt : undefined;
+    return redactPayload({ ...pipelineStageRead(pipeline, stageId, attempt), revision: recordRevision(pipeline) });
+  }
+  if (args.compact === true) {
+    return redactPayload({
+      pipelineId,
+      ...pipelineCompactRow(pipeline),
+      revision: recordRevision(pipeline),
+      taskIds: pipeline.taskIds,
+      stageDigests: stageDigests(pipeline.stages),
+      graphDigest: graphDigest(pipeline.stages),
+      ...compactPullRequest(pipeline),
+    });
+  }
   /* The digests a guarded graph edit names as expectedStageDigest. */
-  return { ...redactPayload({ pipelineId, pipeline }), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) };
+  return { ...redactPayload({ pipelineId, pipeline }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
 }
 
 const SENSITIVE_PAYLOAD_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|credential|password|passwd|secret)/i;
@@ -2987,7 +3356,7 @@ async function boardSnapshot(
   }
   const files = (await dependencies.completedFileScan()).snapshot.files;
   const conversations = files
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
     .filter((entry) => !project || entry.project === project)
     .filter((entry) => !activity || entry.activity === activity)
     .filter((entry) => !liveOnly || entry.activity === "live" || entry.activity === "stalled")
@@ -3025,21 +3394,32 @@ async function boardSnapshot(
 }
 
 function listFlows(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  const project = text(args.project);
-  const state = text(args.state);
-  const includeClosed = args.includeClosed === true;
+  const states = stringSet(args.state, ["waiting_ready", "spawn_pending", "spawning", "reviewing", "relay_pending", "relaying", "fixing", "approved", "done_comment", "needs_decision", "paused", "closed"]);
+  const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
+    ids: stringSet(args.ids), query: "", updatedSince: "" };
+  const source = dependencies.flowSelectionSource?.();
   const limit = Math.max(1, Math.min(200, integer(args.limit, 100)));
-  const flows = dependencies.getFlowsWithPresets().flows
-    .filter((flow) => !project || flow.project === project)
-    .filter((flow) => !state || flow.state === state)
-    .filter((flow) => includeClosed || (flow.state !== "closed" && flow.closedAt === null))
-    .slice(0, limit);
-  return redactPayload({ count: flows.length, flows });
+  const project = (flow: import("@/lib/flows/types").Flow) => fullAnswer(args) ? flow : compactFlow(flow);
+  const page = source ? boardSelection(source.filename, "flows").page(source, scope, args.cursor, limit, project)
+    : listPage(dependencies.getFlowsWithPresets().flows, {
+      scope, cursor: args.cursor, limit,
+      identity: flow => ({ id: flow.id, time: flow.createdAt ?? "" }),
+      matches: flow => (!scope.project || flow.project === scope.project)
+        && (!states.length || states.includes(flow.state))
+        && (scope.includeClosed || (flow.state !== "closed" && !flow.closedAt))
+        && (!scope.ids.length || scope.ids.includes(flow.id)),
+      project,
+    });
+  const { rows: flows, ...pagination } = page;
+  return redactPayload({ ...pagination, flows, compact: !fullAnswer(args),
+    omittedRecordCount: fullAnswer(args) ? 0 : flows.length,
+    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true, compact:false or get_flow(flowId) reads complete records." });
 }
 
 async function getFlow(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const flowId = required(args, "flowId");
-  const flow = dependencies.getFlowsWithPresets().flows.find((candidate) => candidate.id === flowId);
+  const source = dependencies.flowSelectionSource?.();
+  const flow = source ? source.read(flowId) : dependencies.getFlowsWithPresets().flows.find((candidate) => candidate.id === flowId);
   if (!flow) throw new Error("flow not found");
   const { flowDecisionContext } = await import("@/lib/flows/decisions");
   const caller = attributionOf(dependencies);
@@ -3076,49 +3456,126 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   return redactPayload({ flowId, flow: result.flow, ...mutationReceipt(operationId) });
 }
 
-/** #863: bounded board-card rows, never whole `Pipeline` records. The filters,
-    ordering and `limit` bound are unchanged — only what a surviving row carries
-    is, and `get_pipeline` remains the full-detail read. `context` reaches the
-    projection so a caller's deadline can abandon the call. */
+/** Lists reuse the store's immutable generation and materialize one page. */
 async function listPipelines(
   args: McpToolArgs,
   dependencies: ViewerMcpDomainDependencies,
   context: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
-  const pipelines = await projectPipelineListRows({
-    project: text(args.project),
-    state: text(args.state),
-    includeClosed: args.includeClosed === true,
-    limit: integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT),
-  }, {
-    checkpoint: () => throwIfCallEnded(context),
-    source: dependencies.listPipelineRecords ?? (() => dependencies.getPipelines().pipelines),
-  });
-  return redactPayload({ count: pipelines.length, pipelines });
+  throwIfCallEnded(context);
+  const states = stringSet(args.state, ["open", "draft", "provisioning", "running", "paused", "needs_decision", "needs_review", "completed", "closed"]);
+  const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
+    ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(), updatedSince: sinceTime(args.updatedSince) };
+  const source = dependencies.pipelineSelectionSource?.();
+  /* #2059: the compact row names its PR in one string, the full forms carry
+     every resolved link. */
+  const project = (pipeline: Pipeline) => {
+    if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline) };
+    if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline) };
+    return { ...pipelineCompactRow(pipeline), ...compactPullRequest(pipeline) };
+  };
+  const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
+    Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
+    : await listPageAsync(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
+    scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))),
+    identity: pipeline => ({ id: pipeline.id, time: pipeline.createdAt ?? "" }),
+    matches: pipeline => (!scope.project || pipeline.project === scope.project)
+      && (!states.length || states.includes(pipeline.state) || (states.includes("open") && !["completed", "closed"].includes(pipeline.state)))
+      && (scope.includeClosed || (pipeline.state !== "closed" && !pipeline.hiddenAt))
+      && (!scope.ids.length || scope.ids.includes(pipeline.id))
+      && (!scope.query || pipeline.task.toLowerCase().includes(scope.query))
+      && (!scope.updatedSince || pipeline.createdAt >= scope.updatedSince),
+    project,
+  }, () => throwIfCallEnded(context));
+  throwIfCallEnded(context);
+  const { rows: pipelines, ...pagination } = page;
+  return redactPayload({ ...pagination, pipelines, compact: !fullAnswer(args),
+    omittedRecordCount: args.full === true ? 0 : pipelines.length,
+    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true or get_pipeline reads complete records; compact:false returns the previous board-card projection." });
 }
 
+function taskWithLinks(task: import("@/lib/tasks/types").BoardTask, dependencies: ViewerMcpDomainDependencies): TaskPipelineReadModel {
+  const source = dependencies.pipelineSelectionSource?.();
+  const pipelineIds = source ? boardSelection(source.filename, "pipelines").links(task.id)
+    : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).filter(pipeline => pipeline.taskIds?.includes(task.id)).map(pipeline => pipeline.id);
+  return { ...task, pipelineIds };
+}
+
+const taskById = new WeakMap<object, Map<string, TaskPipelineReadModel>>();
+const taskModels = new WeakMap<object, WeakMap<object, TaskPipelineReadModel[]>>();
 function taskReadModel(dependencies: ViewerMcpDomainDependencies) {
-  return projectTaskPipelineIds(dependencies.loadTasks(), dependencies.getPipelines().pipelines);
+  const tasks = dependencies.listTaskRecords?.() ?? dependencies.loadTasks();
+  const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines;
+  let byPipelines = taskModels.get(tasks);
+  if (!byPipelines) { byPipelines = new WeakMap(); taskModels.set(tasks, byPipelines); }
+  let model = byPipelines.get(pipelines);
+  if (!model) {
+    const links = new Map<string, string[]>();
+    for (const pipeline of pipelines) for (const id of pipeline.taskIds ?? []) {
+      const ids = links.get(id) ?? [];
+      ids.push(pipeline.id); links.set(id, ids);
+    }
+    model = tasks.map(task => ({ ...task, pipelineIds: links.get(task.id) ?? [] }));
+    byPipelines.set(pipelines, model);
+    taskById.set(model, new Map(model.map(task => [task.id, task])));
+  }
+  return model;
+}
+
+/** Kept for callers explicitly requesting the previous list projection. */
+export const LIST_TASKS_DETAILS_CHARS = 400;
+function listTaskRow(task: TaskPipelineReadModel) {
+  const details = task.details;
+  return typeof details === "string" && details.length > LIST_TASKS_DETAILS_CHARS
+    ? { ...task, details: details.slice(0, LIST_TASKS_DETAILS_CHARS), detailsTruncated: true } : task;
 }
 
 function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  const project = text(args.project);
-  const status = text(args.status);
-  const placement = text(args.placement);
-  const limit = Math.max(1, Math.min(200, integer(args.limit, 100)));
-  const tasks = taskReadModel(dependencies)
-    .filter((task) => !project || task.project === project)
-    .filter((task) => !status || task.status === status)
-    .filter((task) => !placement || task.placement === placement)
-    .slice(0, limit);
-  return redactPayload({ count: tasks.length, tasks });
+  const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
+  const scope = { project: text(args.project), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
+    openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase() };
+  const source = dependencies.taskSelectionSource?.();
+  const project = (task: TaskPipelineReadModel) => args.full === true ? task : args.compact === false ? listTaskRow(task) : compactTask(task);
+  const page = source ? boardSelection(source.filename, "tasks").page(source, scope, args.cursor,
+    Math.max(1, Math.min(200, integer(args.limit, 100))), task => project(taskWithLinks(task, dependencies)))
+    : listPage(taskReadModel(dependencies), {
+    scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
+    identity: task => ({ id: task.id, time: task.updatedAt ?? "" }),
+    matches: task => (!scope.project || task.project === scope.project)
+      && (!statuses.length || statuses.includes(task.status)) && (!scope.openOnly || task.status !== "done")
+      && (!scope.placement || task.placement === scope.placement)
+      && (!scope.updatedSince || task.updatedAt >= scope.updatedSince)
+      && (!scope.ids.length || scope.ids.includes(task.id))
+      && (!scope.query || task.text.toLowerCase().includes(scope.query)),
+    project: task => args.full === true ? task : args.compact === false ? listTaskRow(task) : compactTask(task),
+  });
+  const { rows: tasks, ...pagination } = page;
+  return redactPayload({ ...pagination, tasks, compact: !fullAnswer(args),
+    omittedRecordCount: args.full === true ? 0 : tasks.length,
+    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. get_task(taskId) or full:true reads complete records; compact:false returns the previous truncated-details projection. Never write a truncated value back." });
+}
+
+/** The pipelines a task carries, read by id when the store can, so a task read
+    never loads the whole registry to name its PRs (#2059). */
+function carriedPipelines(ids: readonly string[], dependencies: ViewerMcpDomainDependencies): Pipeline[] {
+  if (!ids.length) return [];
+  const source = dependencies.pipelineSelectionSource?.();
+  if (source) return ids.flatMap((id) => source.read(id) ?? []);
+  if (dependencies.readPipelineRecord) return ids.flatMap((id) => dependencies.readPipelineRecord!(id) ?? []);
+  const wanted = new Set(ids);
+  return (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []).filter((pipeline) => wanted.has(pipeline.id));
 }
 
 function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const taskId = required(args, "taskId");
-  const task = taskReadModel(dependencies).find((candidate) => candidate.id === taskId);
+  const source = dependencies.taskSelectionSource?.();
+  const stored = source?.read(taskId);
+  const task = source ? (stored ? taskWithLinks(stored, dependencies) : null)
+    : taskById.get(taskReadModel(dependencies))!.get(taskId);
   if (!task) throw new Error("task not found");
-  return redactPayload({ taskId, task });
+  const workLinks = args.compact === true ? null : taskWorkLinks(task, carriedPipelines(task.pipelineIds, dependencies));
+  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : task, ...(workLinks ? { workLinks } : {}),
+    ...(args.compact === true ? { omittedRecordCount: 1, readMore: "get_task without compact reads the full task." } : {}) });
 }
 
 async function operatorSnapshot(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
@@ -3197,17 +3654,33 @@ function runtimeHostRequestHealth(value: unknown): RuntimeHostRequestHealth | nu
   };
 }
 
-function deploymentList(result: Record<string, unknown>): {
-  deployments: ViewerDeploymentStatus[];
+function isDeploymentSummary(value: unknown): value is ViewerDeploymentSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.deploymentId === "string" && typeof row.phase === "string" && typeof row.sha === "string"
+    && typeof row.terminal === "boolean" && (row.startedAt === null || typeof row.startedAt === "string")
+    && (row.finishedAt === null || typeof row.finishedAt === "string") && (row.error === null || typeof row.error === "string");
+}
+
+function deploymentList(result: Record<string, unknown>, compact = false): {
+  deployments: Array<ViewerDeploymentStatus | ViewerDeploymentSummary>;
+  nextCursor?: string | null;
+  hasMore?: boolean;
+  legacySnapshot?: true;
   runtimeHostRequests?: RuntimeHostRequestHealth;
 } {
   if (
     !Array.isArray(result.deployments)
-    || !result.deployments.every((deployment) => isDeploymentStatus(deployment))
+    || !result.deployments.every((deployment) => isDeploymentStatus(deployment) || (compact && isDeploymentSummary(deployment)))
     || !Number.isInteger(result.count)
     || result.count !== result.deployments.length
   ) {
     throw new ViewerControlResponseError("Viewer control returned a malformed deployment list");
+  }
+  if ((result.nextCursor !== undefined || result.hasMore !== undefined)
+    && (typeof result.hasMore !== "boolean" || !(result.nextCursor === null || typeof result.nextCursor === "string")
+      || result.hasMore !== (typeof result.nextCursor === "string" && result.nextCursor.length > 0))) {
+    throw new ViewerControlResponseError("Viewer control returned malformed deployment pagination");
   }
   const health = runtimeHostRequestHealth(result.runtimeHostRequests);
   if (result.runtimeHostRequests !== undefined && !health) {
@@ -3215,6 +3688,8 @@ function deploymentList(result: Record<string, unknown>): {
   }
   return {
     deployments: result.deployments,
+    ...(result.legacySnapshot === true ? { legacySnapshot: true } : {}),
+    ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor as string | null, hasMore: result.hasMore as boolean } : {}),
     ...(health ? { runtimeHostRequests: health } : {}),
   };
 }
@@ -3222,7 +3697,62 @@ function deploymentList(result: Record<string, unknown>): {
 async function deploymentStatus(
   args: McpToolArgs,
   control: ViewerControlDependencies,
+  dependencies: ViewerMcpDomainDependencies,
 ): Promise<McpToolPayload> {
+  if (args.kind === "host-retirement") {
+    if (args.operationId !== undefined || args.deploymentId !== undefined) {
+      throw new Error("retirement observation cannot be combined with an operation or deployment lookup");
+    }
+    const project = canonicalOrchestratorProject(required(args, "project"));
+    // The stdio server can attribute a session by ancestry even when the
+    // provider did not inherit LLV_SPAWN_CAPABILITY into its MCP environment.
+    const caller = attributionOf(dependencies);
+    if (!caller.conversationId || caller.kind === "unidentified") {
+      throw new McpToolRefusal("retirement observation requires an identified session", { code: "retirement_caller_unidentified" });
+    }
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    const seat = caller.kind === "manager" ? seats.find(candidate => candidate.conversationId === caller.conversationId) : undefined;
+    let authentication: { conversationId: string; seatProject: string } | { conversationId: string; launchId: string };
+    if (seat?.project) {
+      if (seat.project !== project) throw new McpToolRefusal("retirement observation is limited to the caller's own project", { code: "retirement_project_refused" });
+      authentication = { conversationId: caller.conversationId, seatProject: seat.project };
+    } else {
+      const snapshot = dependencies.registrySnapshot();
+      const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+      // An adopted seat keeps its spawn receipt after replacement. Its current
+      // revocation must fence that receipt; a newer designation lifts the fence.
+      const revoked = revokedOrchestratorSeatConversationsOrUnknown(
+        id => lookup.canonicalConversationId(id as `conversation_${string}`),
+      );
+      if (revoked === null) {
+        throw new McpToolRefusal("retirement observation cannot establish seat revocations", { code: "retirement_authority_unavailable" });
+      }
+      if (revoked.has(lookup.canonicalConversationId(caller.conversationId as `conversation_${string}`))) {
+        throw new McpToolRefusal("retirement observation is refused for a revoked seat", { code: "retirement_seat_revoked" });
+      }
+      const conversation = snapshot.conversations[caller.conversationId];
+      const ownProject = conversation?.projectOwnership?.project;
+      if (!ownProject || canonicalOrchestratorProject(ownProject) !== project) {
+        throw new McpToolRefusal("retirement observation is limited to the caller's own project", { code: "retirement_project_refused" });
+      }
+      const explicit = text(args.callerLaunchId);
+      const receipt = explicit ? snapshot.receipts[explicit] : Object.values(snapshot.receipts)
+        .filter(candidate => candidate.conversationId === caller.conversationId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.launchId.localeCompare(a.launchId))[0];
+      if (!receipt || receipt.conversationId !== caller.conversationId) {
+        throw new McpToolRefusal("retirement observation requires the authenticated caller's spawn receipt", { code: "retirement_receipt_refused" });
+      }
+      authentication = { conversationId: caller.conversationId, launchId: receipt.launchId };
+    }
+    // Only this server-derived identity crosses the trusted MCP control hop.
+    // The Viewer reads its own report; tool arguments cannot assert authority.
+    return redactPayload(await control.post("/api/runtime/deployments?kind=host-retirement", {
+      project, limit: Math.max(1, Math.min(100, integer(args.limit, 25))),
+      ...(text(args.cursor) ? { cursor: text(args.cursor) } : {}),
+      authentication,
+    }, spawnControlHeaders()));
+  }
+  if (args.kind !== undefined || (args.cursor !== undefined && (args.deploymentId !== undefined || args.operationId !== undefined))) throw new Error("unsupported deployment status query");
   const deploymentId = text(args.deploymentId);
   if (deploymentId) {
     const deployment = await readViewerControl(
@@ -3238,7 +3768,7 @@ async function deploymentStatus(
     if (!isDeploymentStatus(deployment, deploymentId)) {
       throw new ViewerControlResponseError("Viewer control returned a malformed deployment");
     }
-    return redactPayload({ deploymentId, deployment });
+    return redactPayload({ deploymentId, deployment: args.compact === true ? compactDeployment(deployment) : deployment });
   }
   const operationId = text(args.operationId);
   if (operationId) {
@@ -3263,24 +3793,45 @@ async function deploymentStatus(
     return redactPayload({ operationId, operation });
   }
   const limit = Math.max(1, Math.min(100, integer(args.limit, 25)));
-  const result = await readViewerControl(control, `/api/runtime/deployments?limit=${limit}`)
+  const cursor = text(args.cursor);
+  const query = `limit=${limit}${args.compact === true ? "&compact=true" : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+  const result = await readViewerControl(control, `/api/runtime/deployments?${query}`)
     .catch(async (error: unknown) => {
       if (!isUnservedControlRoute(error)) throw error;
+      if (cursor) throw new Error("Viewer deployment pagination is unavailable during hand-over; restart the list");
       const fromLedger = ledgerDeployments(limit);
       if (fromLedger.state === "unreadable") throw new Error(fromLedger.error);
       const deployments = fromLedger.value;
       return { count: deployments.length, deployments };
     });
-  const { deployments, runtimeHostRequests } = deploymentList(result);
+  const { deployments: listed, runtimeHostRequests, nextCursor, hasMore, legacySnapshot } = deploymentList(result, args.compact === true);
+  if (cursor && nextCursor === undefined) throw new Error("Viewer deployment pagination is unavailable during hand-over; restart the list");
+  /* #1845 defect C: newest first, whatever order the source answered in — a
+     Viewer revision that still serves the id-ordered list included. */
+  const deployments = listed.every(row => isDeploymentStatus(row)) ? newestDeploymentsFirst(listed) : listed;
   return redactPayload({
     count: deployments.length,
-    deployments,
+    deployments: args.compact === true ? deployments.map(row => isDeploymentSummary(row) ? row : compactDeployment(row)) : deployments,
+    ...(nextCursor !== undefined ? { nextCursor, hasMore } : {}),
+    ...(legacySnapshot ? { legacySnapshot } : {}),
     ...(runtimeHostRequests ? { runtimeHostRequests } : {}),
   });
 }
 
 async function resources(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  return redactPayload({ ...await dependencies.readResources(args.fresh === true) });
+  const requestedAt = new Date().toISOString();
+  const fresh = args.fresh === true;
+  const result = dependencies.readResourcesWithDiagnostic ? await dependencies.readResourcesWithDiagnostic(fresh) : null;
+  const payload = result?.payload ?? await dependencies.readResources(fresh);
+  const capturedAt = payload.system?.capturedAt ?? null;
+  const capturedMs = capturedAt === null ? NaN : Date.parse(capturedAt);
+  return redactPayload({ ...payload, freshness: {
+    requestedAt, capturedAt, capturedAtScope: "system", ageMs: Number.isFinite(capturedMs) ? Math.max(0, Date.now() - capturedMs) : null,
+    refreshRequested: fresh,
+    refreshSucceeded: fresh && result ? result.diagnostic.status === "complete" && result.diagnostic.cache.status === "miss" : null,
+    cache: result?.diagnostic.cache.status ?? "unknown",
+    reason: result?.diagnostic.degradedReason ?? null,
+  } });
 }
 
 type ConversationArchiveInput = {
@@ -3659,33 +4210,38 @@ async function conversationAction(
   });
 }
 
-async function conversationMigration(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function conversationMigration(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const conversationId = required(args, "conversationId");
   const operationId = mcpOperationId("conversation_migration", requestId(args));
-  const result = await dependencies.applyConversationMigration({
-    conversationId,
+  // The Viewer owns the runtime connection. Keep the request's identity separate
+  // from operationId, which names the existing switch for a withdrawal.
+  const body = await dispatchControl(control)(`/api/conversations/${encodeURIComponent(conversationId)}/migration`, {
+    requestOperationId: operationId,
     action: required(args, "action"),
     expectedRevision: typeof args.expectedRevision === "number" ? args.expectedRevision : undefined,
     path: text(args.transcriptPath) || text(args.path),
     ...(typeof args.operationId === "string" ? { operationId: args.operationId } : {}),
+    ...(args.accountId !== undefined ? { accountId: args.accountId } : {}),
+    ...(args.targetAccountId !== undefined ? { targetAccountId: args.targetAccountId } : {}),
+  }, callerCapabilityHeaders()).catch((error: unknown) => {
+    if (error instanceof McpDispatchUncertainError) {
+      throw new McpDispatchUncertainError(error.message, { operationId });
+    }
+    // A server error may follow runtime admission. Only these two codes prove
+    // that the migration owner refused before issuing any command.
+    if (error instanceof McpDispatchVerdictError && Number(error.details.status) >= 500
+      && error.details.code !== "runtime-host-unavailable" && error.details.code !== "RUNTIME_UNREADABLE") {
+      throw new McpDispatchUncertainError(error.message, { operationId });
+    }
+    throw error;
   });
-  if ("error" in result.body && typeof result.body.error === "string") {
-    /* #1705: a refusal carries what to do next, the claimed switch's code and the revision to cancel it by. */
-    const body = result.body as { error: string; code?: unknown; expectedRevision?: unknown };
-    throw new McpToolRefusal(body.error, {
-      error: body.error,
-      status: result.status,
-      ...(typeof body.code === "string" ? { code: body.code } : {}),
-      ...(typeof body.expectedRevision === "number" || body.expectedRevision === null ? { expectedRevision: body.expectedRevision } : {}),
-    });
-  }
-  const conversation = result.body.conversation
-    ?? (typeof result.body.id === "string" && result.body.id.startsWith("conversation_") ? result.body : undefined);
+  const conversation = body.conversation
+    ?? (typeof body.id === "string" && body.id.startsWith("conversation_") ? body : undefined);
   return redactPayload({
     conversationId,
-    ...result.body,
+    ...body,
     ...(conversation ? { conversation } : {}),
-    ...mutationReceipt(operationId),
+    ...(body.receipt ? {} : mutationReceipt(operationId)),
   });
 }
 
@@ -3720,7 +4276,7 @@ async function agentActivity(
       conversationId: text(args.conversationId) || undefined,
       transcriptPath: (text(args.transcriptPath) || text(args.path)) || undefined,
       project: text(args.project) || undefined,
-      liveOnly: args.liveOnly === true,
+      liveOnly: args.liveOnly === true && args.includeGone !== true,
       stallAfterMs: typeof args.stallAfterMs === "number" ? args.stallAfterMs : undefined,
       limit: typeof args.limit === "number" ? args.limit : undefined,
       signal: deadline.signal,
@@ -3732,7 +4288,16 @@ async function agentActivity(
         : {}),
     }, sources);
     const journal = dependencies.refreshLifecycleJournal({ liveness: snapshot.conversations });
-    return redactPayload({ ...snapshot, journaled: journal.appended });
+    const liveOnly = args.liveOnly === true && args.includeGone !== true;
+    const conversations = liveOnly ? snapshot.conversations.filter(row => row.lifecycle !== "gone" && row.host.state !== "gone" && row.reason !== "launch_unproven_expired") : snapshot.conversations;
+    const excludedGoneCount = snapshot.conversations.length - conversations.length;
+    const filtered = { ...snapshot, conversations, count: conversations.length,
+      stalledCount: conversations.filter(row => row.lifecycle === "stalled").length,
+      stalledConfirmedCount: conversations.filter(row => row.lifecycle === "stalled" && row.evidenceSource === "transcript").length };
+    return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(filtered)), journaled: journal.appended,
+      excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
+      unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
+      readMore: "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive." });
   } finally {
     deadline.release();
   }
@@ -3960,7 +4525,9 @@ async function requestAttention(
   if (zoom && zoom !== "inspect" && zoom !== "situate") throw new Error("zoom must be inspect or situate");
   const reason = required(args, "reason");
   const contextLabel = text(args.contextLabel);
-  const project = await focusTargetProject(target, text(args.project), dependencies);
+  /* Canonical, as every seat is: a target named by a key that has since moved
+     resolves to the key its seat is read under (#1874). */
+  const project = canonicalOrchestratorProject(await focusTargetProject(target, text(args.project), dependencies));
 
   /* The project half of the same gate: an orchestrator directs its OWN
      project's screen estate. A seat naming a different project is refused
@@ -4166,7 +4733,9 @@ function suggestReplies(args: McpToolArgs, dependencies: ViewerMcpDomainDependen
 function productionManagerAuthoritySources(): ManagerAuthoritySources {
   const registry = agentRegistry();
   return {
-    activeSeats: activeOrchestratorSeats,
+    /* Each seat under the project it serves now (#1874), so a seat keyed by
+       its folder's old identity directs the project its lanes are written to. */
+    activeSeats: () => activeSeatsByCurrentProject(),
     revocations: orchestratorRevocations,
     conversationFacts: (conversationId) => {
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
@@ -4174,7 +4743,13 @@ function productionManagerAuthoritySources(): ManagerAuthoritySources {
       return {
         superseded: conversation.supersededBy !== null,
         hasGeneration: conversation.generations.length > 0,
-        project: conversation.projectOwnership?.project ?? null,
+        /* Read the way the seat's own project is (#1874): canonical, and moved
+           with its folder, so an ownership recorded under the folder's old
+           identity does not read as a cross-project designation. */
+        project: conversation.projectOwnership?.project
+          ? canonicalOrchestratorProject(projectSuccessionFor(conversation.projectOwnership.project, seatLaunchCwd(conversationId))?.target
+            ?? conversation.projectOwnership.project)
+          : null,
       };
     },
     resolveAlias: (conversationId) => registry.conversation(conversationId as `conversation_${string}`)?.id ?? conversationId,
@@ -4196,11 +4771,20 @@ export function viewerMcpToolPolicy(
     seats: authorizedManagerSeats(managerAuthoritySources())
       .map((seat) => ({ conversationId: seat.conversationId, path: seat.path })),
   });
-  return mcpToolPolicy(
+  const policy = mcpToolPolicy(
     () => hostHealthProbe
       ? { kind: "health-probe" }
       : mcpCallerIdentity(domainDependencies.attentionAuthority(), callerManagerTarget()),
   );
+  return {
+    permit: (tool, args) => {
+      // An admitted agent's read surface is independent of role/seat identity.
+      // Resolve authority only where the policy uses it. Bindings still verify
+      // their own operation authority and recoverable receipts before dispatch.
+      if (!hostHealthProbe && !mcpToolNeedsCallerIdentity(tool, args)) return { allowed: true };
+      return policy.permit(tool, args);
+    },
+  };
 }
 
 /* ── ORIGINAL-KEY RECOVERY (#1490) ──────────────────────────────────────── */
@@ -4256,6 +4840,22 @@ function conversationProject(conversation: { projectOwnership?: { project?: stri
   if (conversation.projectOwnership?.project) return conversation.projectOwnership.project;
   const cwd = conversation.generations.at(-1)?.launchProfile?.cwd?.trim();
   return cwd ? projectForCwd(cwd) : null;
+}
+
+function orchestratorSendDownstreamKey(key: string): string {
+  return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
+}
+
+function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
+  const project = canonicalOrchestratorProject(required(args, "project"));
+  requiredMessageText(args);
+  return {
+    caller: recoveryCaller(dependencies),
+    target: { project, identity: orchestratorSeatFor(project).active?.conversationId ?? null },
+    // Separate from direct send: equal client keys on different tools are
+    // different logical instructions, even when their message text is equal.
+    downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
+  };
 }
 
 function bindSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
@@ -4504,9 +5104,25 @@ export function viewerMcpRecoverableTools(
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
+    create_pipeline: {
+      bind: (args) => ({ caller: recoveryCaller(domainDependencies),
+        target: { project: projectForCwd(required(args, "repoDir")), identity: path.resolve(required(args, "repoDir")) },
+        downstreamKey: `create_pipeline:${requestId(args)}` }),
+      recover: async (binding, options): Promise<McpRecoveryEvidence> => {
+        if (options.legacy) return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "creation has no caller-bound receipt", ids: {}, ownership: "unknown" };
+        const pipeline = pipelineDeliveryLookup({ requestKey: binding.downstreamKey });
+        if (!pipeline) return { outcome: "unknown", evidence: "pipeline-row", reason: RECOVERY_ABSENT_REASON, ids: {} };
+        return { outcome: "settled", evidence: "pipeline-row", reason: null,
+          ids: { pipelineId: pipeline.id }, facts: { ...pipelineAcknowledgement(pipeline), delivery: deliveryAcknowledgement(pipeline) } };
+      },
+    },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
+    },
+    send_message_to_orchestrator: {
+      bind: (args) => bindOrchestratorSend(args, domainDependencies),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },
     send_message: {
       bind: (args) => bindSend(args, domainDependencies),
@@ -4520,17 +5136,40 @@ export function viewerMcpBindings(
   controlDependencies: ViewerControlDependencies = productionViewerControlDependencies(),
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
 ): McpToolBindings {
+  const pageOwner = {};
+  const budgeted = (tool: string, args: McpToolArgs, budget: number, load: (cursor: string | null) => Promise<McpToolPayload>) =>
+    budgetPage(pageOwner, tool, args, budget, async cursor => {
+      const payload = await load(cursor);
+      const { conversations, nextCursor, ...meta } = payload;
+      return { rows: (conversations ?? []) as Record<string, unknown>[], meta, upstream: typeof nextCursor === "string" ? nextCursor : null };
+    }, fullAnswer(args));
   return {
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
     create_task: createBoardTask,
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: (args) => unadmittedOnStoreBusy(() => createPipeline(args)),
-    pipeline_action: (args) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
+    create_pipeline: (args, context) => unadmittedOnStoreBusy(() => createPipeline(args, context)),
+    pipeline_action: Object.assign(
+      (args: McpToolArgs) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
+      { authorizeReceipt: (args: McpToolArgs) => {
+        if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
+        const id = required(args, "pipelineId");
+        const pipeline = domainDependencies.readPipelineRecord
+          ? domainDependencies.readPipelineRecord(id)
+          : domainDependencies.getPipelines?.().pipelines.find((item) => item.id === id);
+        if (!pipeline) throw new Error("pipeline not found");
+        const refusal = args.action === "continue-review"
+          ? continueReviewActorRefusal(pipeline, pauseResumeActorOf(domainDependencies))
+          : args.action === "convert-legacy-review" || args.action === "revert-legacy-review"
+            ? legacyReviewActorRefusal(pipeline, pauseResumeActorOf(domainDependencies))
+            : decisionAnswerActorRefusal(pipeline, pauseResumeActorOf(domainDependencies), args.clientRequestId);
+        if (refusal) throw new Error(refusal.error);
+      } },
+    ),
     stage_report: (args) => stageReport(args, domainDependencies),
     link_task_to_pipeline: (args) => unadmittedOnStoreBusy(() => linkTaskToPipeline(args, linkTaskDependencies)),
-    list_conversations: (args, context) => listConversations(args, viewerControlForCall(controlDependencies, context)),
+    list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
@@ -4545,11 +5184,11 @@ export function viewerMcpBindings(
     list_tasks: (args) => Promise.resolve(listTasks(args, domainDependencies)),
     get_task: (args) => Promise.resolve(getTask(args, domainDependencies)),
     operator_snapshot: (args) => operatorSnapshot(args, domainDependencies),
-    deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context)),
+    deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     resources: (args) => resources(args, domainDependencies),
     conversation_action: (args, context) => conversationAction(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
-    conversation_migration: (args) => conversationMigration(args, domainDependencies),
-    agent_activity: (args, context) => agentActivity(args, domainDependencies, context),
+    conversation_migration: (args, context) => conversationMigration(args, viewerControlForCall(controlDependencies, context)),
+    agent_activity: (args, context) => budgeted("agent_activity", args, 24_000, () => agentActivity(args, domainDependencies, context)),
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     suggest_replies: (args) => Promise.resolve(suggestReplies(args, domainDependencies)),
@@ -4562,8 +5201,9 @@ export function viewerMcpBindings(
     seat_tick_settings: async (args) => seatTickSettingsTool(args, domainDependencies),
     /* Same reason as above: this binding refuses by throwing. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
+    account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
-    send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context)),
   };
 }

@@ -51,7 +51,8 @@ const { setCallerConversationResolverForTests } = await import("@/lib/agent/oper
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { appendSeatTickRecord } = await import("@/lib/monitor/journalStore");
-const { readSeatTickSettings, writeSeatTickSettings, SEAT_TICK_PROMPT_LIMIT, SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES } = await import("@/lib/monitor/seatTickSettings");
+const { readSeatTickSettings, readSeatTickSettingsFile, writeSeatTickSettings, SEAT_TICK_PROMPT_LIMIT, SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES } = await import("@/lib/monitor/seatTickSettings");
+const { readStateCollectionRevision } = await import("@/lib/state/sqliteStateStore");
 const { writeSeatTickState } = await import("@/lib/monitor/seatTickState");
 const { emptySeatTickState } = await import("@/lib/monitor/types");
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
@@ -66,9 +67,18 @@ const OTHER_PROJECT = "other-project";
 
 let settingsFile = "";
 
+/* The settings live in the `state.sqlite` beside the legacy path (#1870
+   slice 5); a read may import the (absent) file, which writes no row. */
+const settingsRevision = () => readStateCollectionRevision(path.join(path.dirname(settingsFile), "state.sqlite"), "seat_tick_settings");
+function expectNothingStored(): void {
+  expect(readSeatTickSettingsFile(settingsFile)).toEqual({});
+  expect(settingsRevision() ?? 0).toBe(0);
+}
+
 beforeEach(() => {
   const id = crypto.randomUUID();
-  settingsFile = path.join(SANDBOX, "settings", `${id}.json`);
+  /* Its own directory: the settings live in the `state.sqlite` beside it. */
+  settingsFile = path.join(SANDBOX, "settings", id, "seat-tick-settings.json");
   process.env.LLV_SEAT_TICK_SETTINGS_FILE = settingsFile;
   process.env.LLV_SEAT_TICK_STATE_FILE = path.join(SANDBOX, "state", `tick-${id}.json`);
   process.env.LLV_SEAT_TICK_AUDIT_FILE = path.join(SANDBOX, "journal", `${id}.ndjson`);
@@ -156,7 +166,7 @@ test("a read needs a project, answers the defaults for a project nobody configur
   expect(body.lastRun).toBeNull();
   expect(body.lastDelivery).toBeNull();
   expect(body.policy).toMatchObject({ checkIntervalMinutes: 5, staleAfterMinutes: 15 });
-  expect(fs.existsSync(settingsFile)).toBe(false);
+  expectNothingStored();
 });
 
 test("a browser change records as the operator's own session, whatever the body claims, and the answer is the stored record", async () => {
@@ -263,8 +273,8 @@ test("the module's rules hold verbatim, and a refusal stores nothing", async () 
     expect(response.status).toBe(400);
     expect((await response.json()).error).toContain(message);
   }
-  /* Byte-identical, because it was never created. */
-  expect(fs.existsSync(settingsFile)).toBe(false);
+  /* Nothing stored: no row, and the collection never moved past its import. */
+  expectNothingStored();
 });
 
 test("an expiry, and restoring the default with no reason, go through the same record", async () => {
@@ -272,14 +282,14 @@ test("an expiry, and restoring the default with no reason, go through the same r
   const off = readSeatTickSettings(PROJECT, settingsFile);
   expect(off.enabled).toBe(false);
   expect(Date.parse(off.until!) - Date.now()).toBeGreaterThan(89 * 60_000);
-  const before = fs.readFileSync(settingsFile, "utf8");
+  const before = settingsRevision();
 
   const restored = await (await put({ project: PROJECT, enabled: true, wakeIntervalMinutes: null, untilMinutes: null })).json() as SeatTickSettingsAnswer;
   expect(restored.changed).toBe(true);
   expect(restored.effective).toMatchObject({ isDefault: true, enabled: true, reason: null, until: null });
   expect(restored.cardText).toBeNull();
   expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ enabled: true, wakeIntervalMinutes: null, reason: null, until: null });
-  expect(fs.readFileSync(settingsFile, "utf8")).not.toBe(before);
+  expect(settingsRevision()).toBeGreaterThan(before!);
 });
 
 test("a change with no fields is a read, as the tool's is", async () => {
@@ -288,14 +298,14 @@ test("a change with no fields is a read, as the tool's is", async () => {
   const body = await response.json() as SeatTickSettingsAnswer;
   expect(body.changed).toBe(false);
   expect(body.settings.setBy).toBeNull();
-  expect(fs.existsSync(settingsFile)).toBe(false);
+  expectNothingStored();
 });
 
 test("a write from anything but the Viewer's own origin is refused before the body is read", async () => {
   const crossSite = await put({ project: PROJECT, enabled: false, reason: "from elsewhere" }, { ...browser, origin: "http://example.test", "sec-fetch-site": "cross-site" });
   expect(crossSite.status).toBe(403);
   expect((await crossSite.json()).error).toContain("cross-origin");
-  expect(fs.existsSync(settingsFile)).toBe(false);
+  expectNothingStored();
 });
 
 test("the actual state is the tick's own record and the journal, with the dispatch token never leaving the server", async () => {
@@ -356,18 +366,22 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
     callerProject: () => PROJECT,
     readTickSettings: (project: string) => readSeatTickSettings(project, settingsFile),
   } as never);
-  const tool = await bindings.seat_tick_settings({ clientRequestId: "tick-parity", project: PROJECT }) as unknown as {
-    settings: SeatTickSettingsAnswer["settings"];
+  /* The tool's full read carries the note once, at the top level (#2030); the
+     browser control reads it inside both records. */
+  const tool = await bindings.seat_tick_settings({ clientRequestId: "tick-parity", project: PROJECT, verbose: true }) as unknown as {
+    settings: Omit<SeatTickSettingsAnswer["settings"], "monitorPrompt">;
+    monitorPrompt: string | null;
     effective: Record<string, unknown>;
     defaultWakeIntervalMinutes: number;
     monitorPromptLength: number;
   };
-  expect(body.settings).toEqual(tool.settings);
+  expect(body.settings).toEqual({ ...tool.settings, monitorPrompt: tool.monitorPrompt });
   expect(body.defaultWakeIntervalMinutes).toBe(tool.defaultWakeIntervalMinutes);
   expect(body.monitorPromptLength).toBe(tool.monitorPromptLength);
-  for (const field of ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "isDefault"] as const) {
+  for (const field of ["enabled", "wakeIntervalMinutes", "reason", "until", "isDefault"] as const) {
     expect(body.effective[field] as unknown, field).toEqual(tool.effective[field]);
   }
+  expect(body.effective.monitorPrompt).toBe(tool.monitorPrompt);
   /* The card the board carries while this stands, in the card's own words. */
   expect(body.cardText).toContain("This project's seat tick is not on its default settings");
   expect(body.cardText).toContain("one every 240 minute(s)");

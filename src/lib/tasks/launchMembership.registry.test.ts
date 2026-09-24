@@ -132,10 +132,21 @@ test("an unavailable task store keeps a recovered queued launch from executing: 
   const registry = registryAt("queued-unavailable");
   const receipt = queuedTmuxReceipt(registry, "queued_unavailable_attempt", new Date(Date.now() - 1_000).toISOString());
   expect(loadTasks().length).toBe(1);
-  /* The store becomes unreadable between reservation and recovery. */
-  const backup = fs.readFileSync(TASKS_FILE);
-  fs.rmSync(TASKS_FILE);
-  fs.mkdirSync(TASKS_FILE);
+  /* The store becomes unreadable between reservation and recovery: a
+     malformed row lands under a new collection revision (#1870). */
+  const database = path.join(path.dirname(TASKS_FILE), "state.sqlite");
+  const corrupt = (sql: string) => {
+    const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+    const db = new Database(database);
+    try {
+      db.exec(sql);
+      db.exec("UPDATE state_collections SET revision = revision + 1 WHERE collection = 'tasks'");
+    } finally {
+      db.close();
+    }
+  };
+  corrupt(`INSERT INTO state_rows(collection, row_key, value_json, row_order, row_revision, controller_active)
+    VALUES ('tasks', 't:broken', '{"id":"broken","status":"inbox"}', 1000000, 0, 1)`);
   try {
     const spawned: string[] = [];
     const restarted = registryAt("queued-unavailable");
@@ -154,7 +165,6 @@ test("an unavailable task store keeps a recovered queued launch from executing: 
     expect(failed.state).toBe("failed");
     expect(failed.error).toContain("task membership could not be recorded");
   } finally {
-    fs.rmSync(TASKS_FILE, { recursive: true, force: true });
-    fs.writeFileSync(TASKS_FILE, backup);
+    corrupt("DELETE FROM state_rows WHERE collection = 'tasks' AND row_key = 't:broken'");
   }
 });

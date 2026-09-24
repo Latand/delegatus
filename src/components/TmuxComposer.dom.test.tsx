@@ -50,6 +50,28 @@ Object.assign(globalThis, {
  * only on the host's own evidence; without it the row says it is waiting
  * without claiming to know why.
  */
+/**
+ * An earlier message of the same conversation that failed for good.
+ *
+ * Since send-latency slice 3 the stack is not a routine status surface: a
+ * delivery that is merely moving paints nothing beside the composer, because
+ * the message's own row carries its one progress affordance. The stack is what
+ * the operator turns to once something needs a decision, so the cases below
+ * that describe a still-moving delivery mount it the way the operator meets
+ * it — with a settled failure already in the list.
+ */
+const DECIDED_FAILURE: RuntimeReceipt = {
+  operationId: "op-decided-failure",
+  idempotencyKey: "key-decided-failure",
+  conversationId: "conv-one",
+  kind: "send",
+  status: "failed",
+  reason: "dead-host",
+  text: "an earlier message of this conversation",
+  at: "2026-07-13T00:00:00.000Z",
+  revision: 1,
+};
+
 function Receipts(props: React.ComponentProps<typeof RuntimeComposerReceipts>) {
   const stamps = props.receipts.map((receipt) => Date.parse(receipt.at)).filter(Number.isFinite);
   const newest = stamps.length ? Math.max(...stamps) : 0;
@@ -446,7 +468,7 @@ test("collapsed receipt disclosure keeps live status exposed through keyboard an
         status,
         reason: status === "failed" ? "dead-host" : null,
         revision: status === "failed" ? 2 : 1,
-      }]}
+      }, DECIDED_FAILURE]}
       onRetry={() => {}}
       onEdit={() => {}}
     />,
@@ -467,7 +489,9 @@ test("collapsed receipt disclosure keeps live status exposed through keyboard an
     waited: translate("en", "runtime.receipt.waitedSec", { n: 1 }),
   }));
   expect(summary.getAttribute("aria-label")).toContain(translate("en", "runtime.receipt.showDetails"));
-  expect(summary.getAttribute("aria-label")).toContain(translate("en", "runtime.receipt.summary", { count: 1 }));
+  /* What brought the stack onto the screen is what its collapsed label names:
+     the settled failure, never the still-moving delivery beside it. */
+  expect(summary.getAttribute("aria-label")).toContain(translate("en", "receipt.human.deadHost"));
   expect(summary.className).toContain("max-h-");
   expect(stack.className).not.toContain("overflow-y-auto");
   expect(details.closest("details:not([open])")).toBe(stack);
@@ -497,7 +521,8 @@ test("collapsed receipt disclosure keeps live status exposed through keyboard an
   render("failed");
   expect(stack.contains(status)).toBe(false);
   expect(status.textContent).toContain("0 pending messages");
-  expect(status.textContent).toContain("1 issue");
+  /* Both failures now: the subject and the earlier one that opened the stack. */
+  expect(status.textContent).toContain("2 issues");
   expect(details.closest("details:not([open])")).toBe(stack);
   flushSync(() => root.unmount());
 });
@@ -520,7 +545,7 @@ test("the disclosure state agrees with the details element across an empty-to-po
     <Receipts receipts={receipts} onRetry={() => {}} onEdit={() => {}} />,
   ));
 
-  render([receipt("op-first", "queued")]);
+  render([receipt("op-first", "queued"), DECIDED_FAILURE]);
   const summary = host.querySelector("summary") as HTMLElement;
   flushSync(() => summary.click());
   expect((host.querySelector("details[data-runtime-receipt-stack]") as HTMLDetailsElement).open).toBe(true);
@@ -533,7 +558,7 @@ test("the disclosure state agrees with the details element across an empty-to-po
 
   // A new attempt repopulates the stack: the fresh details element and the
   // disclosure label must agree — the remembered open state is restored.
-  render([receipt("op-second", "queued")]);
+  render([receipt("op-second", "queued"), DECIDED_FAILURE]);
   const stack = host.querySelector("details[data-runtime-receipt-stack]") as HTMLDetailsElement;
   const reopenedSummary = stack.querySelector("summary")!;
   expect(stack.open).toBe(true);
@@ -573,6 +598,7 @@ test("receipt summary keeps the pending count beside busy retry feedback", () =>
           at: "2026-07-15T16:00:00.000Z",
           revision: 1,
         },
+        DECIDED_FAILURE,
       ]}
       onRetry={() => {}}
       onEdit={() => {}}
@@ -873,7 +899,7 @@ async function renderInterruptAutoRetry(locale: "en" | "uk") {
         text: "keep going",
         at: "2026-07-13T00:00:00.000Z",
         revision: 3,
-      }]}
+      }, DECIDED_FAILURE]}
       onRetry={() => {}}
       onEdit={() => {}}
     />,
@@ -888,7 +914,7 @@ function expectTransportDetailsHidden(host: HTMLElement) {
 
 test("interrupt automatic retry shows visible busy feedback in English", async () => {
   const { host, root } = await renderInterruptAutoRetry("en");
-  const status = host.querySelector('[role="status"]');
+  const status = host.querySelector("[data-runtime-receipt-status]");
   expect(status?.textContent).toContain(translate("en", "runtime.receipt.busyRetry"));
   expect(status?.querySelector(".sr-only")).toBeNull();
   expectTransportDetailsHidden(host);
@@ -897,7 +923,7 @@ test("interrupt automatic retry shows visible busy feedback in English", async (
 
 test("interrupt automatic retry shows visible busy feedback in Ukrainian", async () => {
   const { host, root } = await renderInterruptAutoRetry("uk");
-  const status = host.querySelector('[role="status"]');
+  const status = host.querySelector("[data-runtime-receipt-status]");
   expect(status?.textContent).toContain(translate("uk", "runtime.receipt.busyRetry"));
   expect(status?.querySelector(".sr-only")).toBeNull();
   expectTransportDetailsHidden(host);

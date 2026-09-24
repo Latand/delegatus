@@ -45,17 +45,8 @@ export function reviewerPrompt(flow: Flow, round: Round): string {
     "Output exactly this format:",
     "VERDICT: APPROVE | REQUEST_CHANGES | COMMENT",
     "",
-    "Then write findings in Markdown. For each finding include severity, file, line, title, and explanation. Use REQUEST_CHANGES for required fixes, COMMENT for non-blocking notes, and APPROVE only when no blocking issues remain.",
+    "Then write findings in Markdown. For each finding include severity, file, line, title, explanation, and how to show it fails. Use REQUEST_CHANGES for required fixes, COMMENT for non-blocking notes, and APPROVE only when no blocking issues remain.",
   ].join("\n");
 }
 
-export function relayPrompt(round: Round, findings: string): string {
-  return [
-    "Review round findings are below. Address every finding before the next review marker.",
-    "",
-    findings.trim(),
-    "",
-    "For each finding, respond with FIXED or REJECTED — <reason>. When the work is reviewable again, end your final assistant message with:",
-    "REVIEW_READY: <one-line note>",
-  ].join("\n");
-}
+export { relayPrompt } from "@/lib/reviewHistory/relayPrompt";

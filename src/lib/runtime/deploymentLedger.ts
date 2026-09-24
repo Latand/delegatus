@@ -70,8 +70,10 @@ function deploymentStatus(raw: string, expectedId: string): ViewerDeploymentStat
 }
 
 /**
- * The same tail the runtime snapshot exposes: deployment entities are ordered
- * by id, then the route slices the last `limit` entries from that ordering.
+ * The newest `limit` deployments, newest first (#1845 defect C) — the order the
+ * deployments route answers in. This used to mirror the runtime snapshot's id
+ * ordering, which is a random UUID per deployment and so named an arbitrary
+ * window rather than the latest deploys.
  */
 export function ledgerDeployments(
   limit: number,
@@ -81,10 +83,10 @@ export function ledgerDeployments(
   if (!db) return unreadable();
   try {
     const rows = db.query<{ id: string; state_json: string }, [string, number]>(
-      "SELECT id, state_json FROM entities WHERE kind = ? ORDER BY id DESC LIMIT ?",
+      `SELECT id, state_json FROM entities WHERE kind = ?${NEWEST_DEPLOYMENT_FIRST} LIMIT ?`,
     ).all("deployment", Math.max(1, limit));
     const deployments: ViewerDeploymentStatus[] = [];
-    for (const row of rows.reverse()) {
+    for (const row of rows) {
       const status = deploymentStatus(row.state_json, row.id);
       if (!status) return unreadable();
       deployments.push(status);
@@ -127,21 +129,16 @@ const NEWEST_DEPLOYMENT_FIRST = `
 /**
  * The most recently STARTED deployment, or null when the ledger has none.
  *
- * Separate from {@link ledgerDeployments} on purpose. That function mirrors the
- * runtime snapshot's ordering — entity id — which is a random UUID per
- * deployment and therefore says nothing about time; slicing a "tail" from it
- * and reading the last element answers with an arbitrary deployment. A caller
- * that reported the last deployment's outcome from it told an orchestrator that
- * production had rolled back while the four newest deploys had all succeeded
- * (#1262), which invites a rollback hunt against a healthy production.
- *
- * A window over that ordering would be the same defect with a larger constant:
- * whichever number it picked, a ledger whose newest record fell outside it
- * would answer with an older deployment again, and nothing about the store
- * makes such a number safe. So the store is asked for the newest record and
- * hands back exactly one — {@link NEWEST_DEPLOYMENT_FIRST} is the ordering it
- * decides on, and `LIMIT 1` is the whole of the read. Only that record has to
- * be readable: a corrupt row further down the ledger is not this answer.
+ * {@link ledgerDeployments} used to mirror the runtime snapshot's ordering —
+ * entity id — which is a random UUID per deployment and therefore says nothing
+ * about time; reading the last element of a "tail" sliced from it answered with
+ * an arbitrary deployment. A caller that reported the last deployment's outcome
+ * from it told an orchestrator that production had rolled back while the four
+ * newest deploys had all succeeded (#1262), which invites a rollback hunt
+ * against a healthy production. Both reads now order by
+ * {@link NEWEST_DEPLOYMENT_FIRST}; this one asks the store for exactly one
+ * record, so only that record has to be readable: a corrupt row further down
+ * the ledger is not this answer.
  */
 export function latestLedgerDeployment(
   env: NodeJS.ProcessEnv = process.env,

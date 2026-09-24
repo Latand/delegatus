@@ -10,6 +10,8 @@ export interface ArtifactMeta {
   size: number;
   mtimeMs: number;
   etag: string;
+  /** HTML only: the sandboxed frame URL the report renders from. */
+  frame?: string;
 }
 
 export type ArtifactFailure =

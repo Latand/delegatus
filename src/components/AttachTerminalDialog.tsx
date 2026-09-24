@@ -8,6 +8,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 import type { AttachCommand } from "@/lib/agent/attachCommand";
 import type { AttachMode } from "./agentCapabilities";
+import { Z } from "@/components/layers";
 
 async function copyText(value: string): Promise<boolean> {
   try {
@@ -100,7 +101,7 @@ export function AttachTerminalDialogView({
   ) : null;
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-3"
+      className={`fixed inset-0 ${Z.overlay} flex items-center justify-center bg-black/40 p-3`}
       role="presentation"
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
@@ -154,7 +155,7 @@ export function AttachTerminalDialogView({
               <button
                 type="button"
                 onClick={() => void copyText(live.command)}
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-label font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:min-h-9"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-label font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:min-h-9"
               >
                 <Copy className="h-3.5 w-3.5" aria-hidden /> {t("attach.copyFull")}
               </button>
@@ -177,7 +178,7 @@ export function AttachTerminalDialogView({
               <button
                 type="button"
                 onClick={() => void copyText(command.fullCommand)}
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-label font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:min-h-9"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-label font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:min-h-9"
               >
                 <Copy className="h-3.5 w-3.5" aria-hidden /> {t("attach.copyFull")}
               </button>

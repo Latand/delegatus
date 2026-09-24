@@ -14,6 +14,8 @@ import {
 
 import { viewerMcpBindings } from "./bindings";
 import { McpToolRefusal } from "./server";
+import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
+import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 
 /**
  * #844 §7 through the MCP surface: a turn's selected-card reference is enough to
@@ -72,6 +74,7 @@ function conversation(id: string, artifactPath: string): RegistryConversation {
     projectOwnership: { project: "atlas", source: "operator", setAt: "2026-08-01T08:00:00.000Z", operationId: "op-1" },
     migration: null,
     migrationOptOut: null,
+    deliveryEvidenceTracked: true,
     supersededBy: null,
     agentRole: null,
     delegationDepth: null,
@@ -129,6 +132,11 @@ function harness(options: { known?: Record<string, RegistryConversation>; pathAl
       return { ok: true, outcome: "delivered", target: "structured" };
     } },
     injected: {
+      pinnedTranscript: (candidate: string) => {
+        if (candidate !== transcriptPath) return undefined;
+        const descriptor = fs.openSync(candidate, "r");
+        return { descriptor, stat: fs.fstatSync(descriptor), rootName: "codex-sessions", root: path.dirname(candidate), sameIdentity: () => true };
+      },
       selectedContext: {
         selectedConversation: () => {
           counts.resolverCreations += 1;
@@ -154,6 +162,18 @@ async function refusal(run: Promise<unknown>): Promise<McpToolRefusal> {
   }
   throw new Error("expected a typed refusal");
 }
+
+test("compact delivery handles reach get_conversation and conversation_messages through production bindings", async () => {
+  const { injected, control, counts } = harness();
+  const bindings = viewerMcpBindings(undefined, control, injected);
+  const wire = encodeCodexStructuredUserText("Inspect the selected card", undefined, selectedRef(), { kind: "operator" }, "c".repeat(64));
+  const selectedContext = `ctx=${decodeCodexStructuredUserText(wire).metadataRef!}`;
+  const result = await bindings.get_conversation({ clientRequestId: "compact-get", selectedContext, tailLines: 2 });
+  expect(result).toMatchObject({ conversationId: SELECTED_ID, selectedContext: { conversationId: SELECTED_ID } });
+  const messages = await bindings.conversation_messages({ clientRequestId: "compact-messages", selectedContext, limit: 2 });
+  expect(messages).toMatchObject({ conversationId: SELECTED_ID, selectedContext: { conversationId: SELECTED_ID } });
+  expect(counts.pathLookups).toBe(0);
+});
 
 test("conversation_action acts on the selected card from its reference alone", async () => {
   const { injected, control, actions, counts } = harness();

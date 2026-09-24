@@ -8,9 +8,9 @@ import { MobileSheet } from "@/components/mobile/MobileSheet";
 import { useLocale } from "@/lib/i18n";
 
 import type { AttentionItem } from "../attention";
-import { stageChipLabel } from "../pipelines/pipelineModel";
+import { pipelineReviewHeads, stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
 import { humanizeDuration } from "../turnDuration";
-import { cleanTitle } from "../utils";
+import { cleanTitle, fileModelLabel } from "../utils";
 import { nextMobileAttention, type MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine } from "./decision";
 
@@ -130,7 +130,7 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
             <>
               {SEP}
               <ChatEngineMark file={item.file} />
-              <span className="min-w-0 truncate">{item.file.model}</span>
+              <span className="min-w-0 truncate">{fileModelLabel(item.file)}</span>
             </>
           ) : null}
         </span>
@@ -142,11 +142,12 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
 
 function PipelineRow({ row, current, onOpen }: { row: MobileBoardPipelineRow; current: boolean; onOpen?: () => void }) {
   const { t } = useLocale();
-  const stageName = row.stageRef ? stageChipLabel(t, row.stageRef).toLocaleLowerCase() : "";
+  const stageName = row.stageRef ? stageCardLabel(t, row.stageRef, stageLatestAttemptPlace(row.pipeline, row.stageRef.id)).toLocaleLowerCase() : "";
   const meta = [
     t("mobile2.attention.pipeline"),
     t(row.stageFailed ? "mobile2.board.pipelineStageFailed" : "mobile2.board.pipelineStage", { stage: row.stage, total: row.total, name: stageName }),
     row.findings ? t("mobile2.board.pipelineFindings", { count: row.findings }) : null,
+    pipelineReviewHeads(t, row.review),
   ].filter(Boolean).join(" · ");
   const Tag = onOpen ? "button" : "div";
   return (

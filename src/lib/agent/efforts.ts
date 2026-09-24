@@ -6,12 +6,15 @@
  * claude: `--effort <level>` per `claude --help`.
  * codex: `-c model_reasoning_effort=<level>`; the tier list mirrors
  * `supported_reasoning_levels` in ~/.codex/models_cache.json for current models.
+ * copilot: `--reasoning-effort <level>`, verbatim from `copilot --help` (1.0.87).
+ * There is no per-model scale; the CLI decides what a model supports.
  */
-export type AgentEngineName = "claude" | "codex";
+export type AgentEngineName = "claude" | "codex" | "copilot";
 
 export const ENGINE_EFFORTS: Record<AgentEngineName, readonly string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh"],
+  copilot: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
 };
 
 export function isEngineEffort(engine: AgentEngineName, value: string): boolean {
@@ -19,7 +22,7 @@ export function isEngineEffort(engine: AgentEngineName, value: string): boolean 
 }
 
 /** Canonical low→high ordering across every tier either CLI has ever recorded. */
-const EFFORT_ORDER: readonly string[] = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const EFFORT_ORDER: readonly string[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
 /** Whether a token belongs to the canonical CLI tier vocabulary at all —
     engine/model fit is the engine's own verdict (a per-model scale like
@@ -30,17 +33,32 @@ export function isKnownEffortTier(value: string): boolean {
 }
 
 /* Codex reasoning scales vary per model (`supported_reasoning_levels` in
-   ~/.codex/models_cache.json): gpt-6-astra and gpt-5.6 sol/terra add max+ultra
-   above xhigh, the rest of the 5.6 family adds max, and everything older (or
-   unknown) runs the classic low…xhigh. First matching prefix wins, and a model
+   ~/.codex/models_cache.json): gpt-6 astra/sol and gpt-5.6 sol/terra add
+   max+ultra above xhigh, gpt-6-luna and the rest of the 5.6 family add max,
+   and everything older (or unknown) runs the classic low…xhigh. First matching prefix wins, and a model
    the table has never been told about falls through to the classic scale — so
    every new flagship has to be added here, or its top tiers vanish from the
    selector without any error to notice. */
 const CODEX_MODEL_SCALES: readonly (readonly [RegExp, readonly string[]])[] = [
-  [/^gpt-6-astra\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],
+  [/^gpt-6-(astra|sol)\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],
+  [/^gpt-6-luna\b/, ["low", "medium", "high", "xhigh", "max"]],
   [/^gpt-5\.6-(sol|terra)\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],
   [/^gpt-5\.6\b/, ["low", "medium", "high", "xhigh", "max"]],
 ];
+
+/* Captured `modelInfo` effort ladders. Model catalogues can add more from
+   Copilot transcripts; this known background model remains useful to the
+   transcript/runtime helpers even though it is not picker-enabled. */
+const COPILOT_MODEL_SCALES: Readonly<Record<string, readonly string[]>> = {
+  "gpt-5.4-nano": ["none", "low", "medium", "high", "xhigh"],
+};
+const COPILOT_CATALOG_SCALES = new Map<string, readonly string[]>();
+
+/** Seed per-model ladders returned by a Copilot account catalogue. Model ids
+    are globally stable, so one account's observed ladder applies to the same id. */
+export function registerCopilotEffortScales(models: readonly { id: string; efforts: readonly string[] | null }[]): void {
+  for (const model of models) if (model.efforts?.length) COPILOT_CATALOG_SCALES.set(model.id, [...model.efforts]);
+}
 
 /* OpenClaw's `--thinking` ladder, kept out of ENGINE_EFFORTS because it is a
    display scale: the Viewer reads a recorded tier off the transcript and
@@ -54,9 +72,13 @@ const OPENCLAW_EFFORTS: readonly string[] = ["off", "minimal", "low", "medium", 
     for engines without a reasoning dial (shell). Model may be the viewer's
     display-shortened id — matching is prefix-based on the codex slug, and
     claude models all share one CLI scale. */
-export function effortScale(engine: string, model: string | null | undefined): readonly string[] | null {
+export function effortScale(engine: string, model: string | null | undefined, copilotModelEfforts?: readonly string[] | null): readonly string[] | null {
   if (engine === "claude") return ENGINE_EFFORTS.claude;
   if (engine === "openclaw") return OPENCLAW_EFFORTS;
+  if (engine === "copilot") {
+    const id = (model ?? "").trim().toLowerCase();
+    return copilotModelEfforts ?? COPILOT_CATALOG_SCALES.get(id) ?? COPILOT_MODEL_SCALES[id] ?? ENGINE_EFFORTS.copilot;
+  }
   if (engine !== "codex") return null;
   const id = (model ?? "").trim().toLowerCase();
   for (const [re, scale] of CODEX_MODEL_SCALES) {

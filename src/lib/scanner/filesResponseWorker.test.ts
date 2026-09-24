@@ -154,3 +154,66 @@ test("a worker that dies mid-build fails its build and the next one starts a fre
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+/* #1994: the delta from a scope's previous representation survives the
+   worker being retired between two revisions. */
+test("a retired worker still answers the next revision with a delta from its persisted base", async () => {
+  const stateDir = scratchState();
+  const deltaScope = "a".repeat(40);
+  const entry = (name: string, mtime: number) => ({
+    path: `/sessions/${name}.jsonl`, root: "codex-sessions", name, project: "repo", title: name, engine: "codex",
+    kind: "session", fmt: "codex", parent: null, mtime, size: 1, activity: "recent", proc: null, pid: null,
+    model: null, pendingQuestion: null, waitingInput: null,
+  });
+  const scoped = (mtime: number) => ({
+    ...request,
+    url: "http://127.0.0.1/api/files?view=summary",
+    deltaScope,
+    snapshot: { files: [entry("kept", 1), entry("changed", mtime)], projectCatalog: [], complete: true },
+  });
+  try {
+    const first = await buildFilesResponseInWorker(scoped(1) as never, runtimeFor(stateDir));
+    expect(first.delta).toBeUndefined();
+    shutdownFilesResponseWorker("test");
+
+    const second = await buildFilesResponseInWorker(scoped(2) as never, runtimeFor(stateDir));
+    expect(second.etag).not.toBe(first.etag);
+    expect(second.delta?.base).toBe(first.etag);
+    const delta = JSON.parse(second.delta!.body);
+    expect(delta).toMatchObject({ v: 1, base: first.etag, etag: second.etag });
+    expect(delta.rows).toEqual([["files", { count: 2, upsert: [["/sessions/changed.jsonl", expect.objectContaining({ mtime: 2 })]] }]]);
+
+    const repeated = await buildFilesResponseInWorker(scoped(2) as never, runtimeFor(stateDir));
+    expect(repeated.delta).toBeUndefined();
+    expect(fs.readdirSync(path.join(stateDir, "files-response-results")).filter((name) => !name.startsWith("delta-base-"))).toEqual([]);
+  } finally {
+    shutdownFilesResponseWorker("test");
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+/* #2072: the worker reads the persisted scan snapshot when its turn comes, and
+   a later scan may have replaced the file by then. It reports the generation
+   the file it read names, so the projection is dated by the rows it holds. */
+test("a projection from the snapshot file reports the scan generation that file holds", async () => {
+  const stateDir = scratchState();
+  const snapshotFile = path.join(stateDir, "files-scan-snapshot.json");
+  const snapshot = { files: [], projectCatalog: [], complete: true };
+  try {
+    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 12, epoch: "e1", generation: 15, snapshot }));
+    const fromFile = await buildFilesResponseInWorker({ ...request, snapshot: undefined, snapshotFile }, runtimeFor(stateDir));
+    expect(fromFile.snapshotRead).toEqual({ epoch: "e1", generation: 15 });
+
+    /* A file written before the scan named its generation dates nothing. */
+    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 12, snapshot }));
+    const undated = await buildFilesResponseInWorker({ ...request, snapshot: undefined, snapshotFile }, runtimeFor(stateDir));
+    expect(undated.snapshotRead).toBeUndefined();
+
+    /* An inline snapshot is the caller's own; it knows what it sent. */
+    const inline = await buildFilesResponseInWorker(request, runtimeFor(stateDir));
+    expect(inline.snapshotRead).toBeUndefined();
+  } finally {
+    shutdownFilesResponseWorker("test");
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});

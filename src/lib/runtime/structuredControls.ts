@@ -3,6 +3,8 @@ import { agentRegistry, type AgentRegistry, type ProcessIdentity } from "@/lib/a
 import { reconfigurationFromBody, type AgentReconfiguration } from "@/lib/agent/reconfigure";
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
+import { listCopilotAccounts } from "@/lib/accounts/copilot";
+import { copilotModelCatalog } from "@/lib/agent/copilotModels";
 import {
   attributeNamedAccountChoice,
   type AccountChoiceActor,
@@ -21,6 +23,9 @@ import { recoverDeadStructuredConversation, structuredHostProcessAlive } from ".
 export type StructuredControlResult =
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "delivered" } }
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "resumed"; spawned: boolean } }
+  /** Picking the account the conversation runs on while another pick waits (#1846): the waiting pick is
+      withdrawn, nothing was ever moved, and no new operation was needed. */
+  | { status: 200; body: { ok: true; structured: true; target: string; outcome: "withdrawn"; withdrawn: string | null } }
   | {
       status: 200 | 202;
       body: {
@@ -38,6 +43,8 @@ export type StructuredControlResult =
       caller can tell "this engine cannot" from "this attempt failed", and no
       prompt-based fallback is ever offered in its place. */
   | { status: 409; body: { error: string; code: "unsupported-capability"; capability: RuntimeControlCapability } }
+  /** Picking the account it runs on once a message engaged the pick (#1846): too late to take back here. */
+  | { status: 409; body: { error: string; code: "switch-applying"; applying: string } }
   /** The calling process has no structured control channel at all (no
       `LLV_RUNTIME_HOST_SOCKET`): the command was never sent. Typed so a caller
       can tell "this process cannot ask any host generation" from a host that
@@ -59,6 +66,67 @@ export interface StructuredControlRequest {
       Absent means the operator: an agent is the only caller that can name
       itself here, exactly as `requireOperatorAuthority` reads a request. */
   actor?: AccountChoiceActor;
+}
+
+/** An account pick for this conversation that has not settled (#1846). */
+interface WaitingSwitch {
+  operationId: string;
+  accountId: string;
+  /** `waiting`: admitted and not engaged, so it can still be taken back. `applying`: a message engaged it and the move is under way. */
+  phase: "waiting" | "applying";
+}
+
+/**
+ * The latest account pick for this conversation that has not settled:
+ * admitted or applying, and not withdrawn. An unreadable journal answers
+ * null, which leaves every reconfigure exactly as it was before this read.
+ */
+async function waitingSwitch(
+  client: RuntimeHostClient,
+  registry: AgentRegistry,
+  conversationId: `conversation_${string}`,
+): Promise<WaitingSwitch | null> {
+  if (typeof client.effectBatch !== "function" || typeof client.operationStatus !== "function") return null;
+  try {
+    let latest: { operationId: string; accountId: string; eventSeq: number } | null = null;
+    let afterEventSeq = 0;
+    while (true) {
+      const page = await client.effectBatch(["runtime.reconfigure"], afterEventSeq);
+      for (const effect of page) {
+        const payload = effect.payload;
+        if (typeof payload.operationId !== "string" || typeof payload.accountId !== "string") continue;
+        if (typeof payload.conversationId !== "string"
+          || !payload.conversationId.startsWith("conversation_")
+          || registry.canonicalConversationId(payload.conversationId as `conversation_${string}`) !== conversationId) continue;
+        if (!latest || effect.eventSeq > latest.eventSeq) {
+          latest = { operationId: payload.operationId, accountId: payload.accountId, eventSeq: effect.eventSeq };
+        }
+      }
+      if (page.length < 100) break;
+      const next = Math.max(...page.map((effect) => effect.eventSeq));
+      if (!Number.isSafeInteger(next) || next <= afterEventSeq) break;
+      afterEventSeq = next;
+    }
+    if (!latest || registry.reconfigureCancelled(conversationId, latest.operationId)) return null;
+    /* The registry's claim outlives the receipt's phase: a move that returned `pending` puts its receipt back
+       to `queued` while the claim still holds it applying, so the claim decides first. */
+    const claim = registry.conversation(conversationId)?.reconfigure;
+    if (claim?.operationId === latest.operationId && claim.status === "applying") {
+      return { operationId: latest.operationId, accountId: latest.accountId, phase: "applying" };
+    }
+    const status = (await client.operationStatus(latest.operationId))?.receipt.status;
+    if (status === "queued" || status === "pending") return { operationId: latest.operationId, accountId: latest.accountId, phase: "waiting" };
+    return status === "applying" ? { operationId: latest.operationId, accountId: latest.accountId, phase: "applying" } : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameProfile(
+  left: Pick<AgentReconfiguration, "model" | "effort" | "fast">,
+  right: { model: string | null; effort: string | null; fast: boolean | null },
+): boolean {
+  return left.model === right.model && left.effort === right.effort && (left.fast ?? null) === (right.fast ?? null);
 }
 
 export async function dispatchStructuredControl(
@@ -176,6 +244,11 @@ export async function dispatchStructuredControl(
     }
   }
 
+  /* Copilot model and effort changes restart its child at the next idle
+     boundary. Its session remains inside one COPILOT_HOME, so account changes
+     are refused before a durable reconfigure can be claimed. */
+  const reconfigurableEngine = conversation.engine;
+
   if (structuredKill
     && !entry.structuredHost?.process
     && (entry.status === "dead" || entry.status === "unhosted")) {
@@ -197,16 +270,75 @@ export async function dispatchStructuredControl(
      reconfigure the host then refused. */
   let attributeSwitch: (() => AccountOverrideNotice | undefined) | null = null;
   try {
+    const requestedCopilotModel = typeof request.reconfiguration?.model === "string" ? request.reconfiguration.model.trim() : "";
+    const copilotAccount = conversation.engine === "copilot"
+      ? listCopilotAccounts().find((account) => account.id === generation.accountId)
+      : undefined;
+    const copilotModelEfforts = copilotAccount && requestedCopilotModel
+      ? copilotModelCatalog(copilotAccount.id, copilotAccount.sessionStateDir).models.find((model) => model.id === requestedCopilotModel)?.efforts
+      : undefined;
     const reconfiguration = request.action === "reconfigure"
-      ? reconfigurationFromBody(conversation.engine, request.reconfiguration ?? {})
+      ? reconfigurationFromBody(reconfigurableEngine!, request.reconfiguration ?? {}, copilotModelEfforts)
       : null;
     if (reconfiguration && !reconfiguration.value) {
       return { status: 400, body: { error: reconfiguration.error ?? "invalid configuration" } };
     }
+    /* #1846: an account pick is the conversation's intended account, and the queue moves the conversation at
+       its next engagement. Three consequences are settled here, where every caller's pick arrives. */
+    if (reconfiguration?.value) {
+      const named = reconfiguration.value.accountId;
+      if (conversation.engine === "copilot" && named && named !== generation.accountId) {
+        return { status: 409, body: { error: "a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation", code: "unsupported-capability" } };
+      }
+      const unsettled = await waitingSwitch(client, registry, conversation.id);
+      const waiting = unsettled?.phase === "waiting" ? unsettled : null;
+      /* A message already engaged the pick and the conversation is moving: taking it back here would answer
+         success while the move carries on. Too late for this route; a claimed switch is cancelled through
+         the conversation migration (#1705). */
+      const switchApplying = (pick: { operationId: string; accountId: string }): StructuredControlResult => ({
+        status: 409,
+        body: {
+          error: `the switch to ${pick.accountId} is already applying and can no longer be taken back here`,
+          code: "switch-applying",
+          applying: pick.operationId,
+        },
+      });
+      if (named !== undefined && named === generation.accountId && unsettled?.phase === "applying") {
+        return switchApplying(unsettled);
+      }
+      if (named !== undefined && named === generation.accountId) {
+        /* Naming the account it runs on moves nothing (#1279), so it is no switch at all: it withdraws the
+           pick still waiting, and it is how a message held by a failed switch goes out on this account. */
+        const { accountId: _restated, ...profileOnly } = reconfiguration.value;
+        reconfiguration.value = profileOnly;
+        if (conversation.switchHold) registry.releaseSwitchHold(conversation.id);
+        if (waiting) {
+          const withdrawal = registry.withdrawConversationReconfigure(conversation.id, waiting.operationId);
+          /* The claim won the race with this withdrawal: the move is under way, and a profile-only reconfigure
+             in its place would supersede it while answering success. */
+          if (withdrawal.kind === "claimed") return switchApplying(waiting);
+          if ((withdrawal.kind === "withdrawn" || withdrawal.kind === "replayed")
+            && sameProfile(profileOnly, generation.launchProfile)) {
+            (dependencies.kick ?? kickStructuredDeliveryQueue)();
+            return {
+              status: 200,
+              body: { ok: true, structured: true, target: conversation.id, outcome: "withdrawn", withdrawn: waiting.operationId },
+            };
+          }
+        } else if (sameProfile(profileOnly, generation.launchProfile)) {
+          (dependencies.kick ?? kickStructuredDeliveryQueue)();
+          return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: "withdrawn", withdrawn: null } };
+        }
+      } else if (named === undefined && waiting) {
+        /* A settings change made while a pick waits keeps the pick: the newer reconfigure supersedes the older
+           one, so it carries the intended account forward instead of dropping it. */
+        reconfiguration.value = { ...reconfiguration.value, accountId: waiting.accountId };
+      }
+    }
     if (reconfiguration?.value?.accountId) {
       const accountExists = dependencies.accountExists ?? ((engine: "claude" | "codex", accountId: string) =>
         (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).some((account) => account.id === accountId));
-      if (!accountExists(conversation.engine, reconfiguration.value.accountId)) {
+      if (conversation.engine !== "copilot" && !accountExists(reconfigurableEngine as "claude" | "codex", reconfiguration.value.accountId)) {
         return { status: 400, body: { error: `account is not available for ${conversation.engine}` } };
       }
       /* #1279: a reconfigure that MOVES this conversation onto another account
@@ -225,7 +357,7 @@ export async function dispatchStructuredControl(
       if (reconfiguration.value.accountId !== generation.accountId) {
         const accountId = reconfiguration.value.accountId;
         attributeSwitch = () => (dependencies.attributeAccountChoice ?? attributeNamedAccountChoice)({
-          engine: conversation.engine,
+          engine: reconfigurableEngine as "claude" | "codex",
           project: conversationProjectKey(conversation.projectOwnership, generation.launchProfile, {
             /* A getter, so the transcript is read only for a conversation that
                names no project of its own — an ADOPTED one, whose launch

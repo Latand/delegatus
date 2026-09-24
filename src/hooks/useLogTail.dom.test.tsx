@@ -111,25 +111,29 @@ test("A to B to A restores cached tail lines before the delayed transport respon
   const a = entry("/sessions/project-a/session.jsonl");
   const b = entry("/sessions/project-b/session.jsonl");
 
+  const cachedA = '{"message":"cached A"}\n';
+  const liveA = '{"message":"live A"}\n';
   mount(a);
   const aSubscriber = await waitForSubscriber(a.path);
-  deliver(aSubscriber, { data: '{"message":"cached A"}\n', offset: 25, size: 25, start: 0 });
+  deliver(aSubscriber, { data: cachedA, offset: cachedA.length, size: cachedA.length, start: 0 });
   expect(dom.document.querySelector("output")?.textContent).toContain("cached A");
 
   flushSync(() => roots.pop()!.unmount());
   mount(b);
   const bSubscriber = await waitForSubscriber(b.path);
-  deliver(bSubscriber, { data: '{"message":"cached B"}\n', offset: 25, size: 25, start: 0 });
+  deliver(bSubscriber, { data: '{"message":"cached B"}\n', offset: 23, size: 23, start: 0 });
   expect(dom.document.querySelector("output")?.textContent).toContain("cached B");
 
   flushSync(() => roots.pop()!.unmount());
   mount(a);
   const resumed = await waitForSubscriber(a.path);
   expect(dom.document.querySelector("output")?.textContent).toContain("cached A");
-  expect(resumed.getOffset()).toBe(25);
-  deliver(resumed, { data: '{"message":"live A"}\n', offset: 48, size: 48, start: 25 });
-  expect(dom.document.querySelector("output")?.textContent).toContain("cached A");
-  expect(dom.document.querySelector("output")?.textContent).toContain("live A");
+  /* The cached window is painted at once and then proved: the read resumes at
+     the record it ends with (#1821), which the answer replays before the
+     fresh one. */
+  expect(resumed.getOffset()).toBe(0);
+  deliver(resumed, { data: cachedA + liveA, offset: cachedA.length + liveA.length, size: cachedA.length + liveA.length, start: 0 });
+  expect(dom.document.querySelector("output")?.textContent).toBe('{"message":"cached A"}|{"message":"live A"}');
 });
 
 /* #1498: a chunk that begins past where the window left off — the bounded

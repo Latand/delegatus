@@ -7,6 +7,259 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Removed
+- The systemd install path. Docker is the only install: the legacy tmux
+  supervisor unit (`deploy/systemd/agent-log-viewer-legacy-tmux.service`), its
+  installer and its session bootstrap script are gone, with the docs that
+  described them. When a retired unit file is still in
+  `~/.config/systemd/user`, `delegatus` prints how to stop and remove it and
+  how to install with Docker, then starts as usual.
+
+## [1.3.0] — 2026-09-23
+
+### Added
+- An **Update** surface, reached from the rail menu and the phone's board
+  menus beside the setup guide. It checks the canonical repository for a newer
+  `main`, shows the commits and changelog entries between the running release
+  and the new one, and updates the install in one of two ways, decided by the
+  server from what the install says about itself. A managed Docker install
+  (runtime host with Viewer deployments on) deploys the exact revision the
+  check showed through the runtime host's own deployment, and the surface
+  follows its phases until web has switched and the runtime host has handed
+  itself over. A git checkout started by `agent-log-viewer` builds the new
+  revision in a release directory of its own through five live steps (fetch,
+  check out, install, build, ready), never where the running processes serve
+  from, and then restarts web and the runtime host onto it as two separate
+  actions, the second behind an inline confirmation. The launcher performs
+  those restarts from PIDs it recorded, and falls back to the release it
+  replaced when the new one does not start. Only the operator can update or
+  restart: an agent presenting its capability is refused. English and
+  Ukrainian (#2007).
+
+### Changed
+- The product is Delegatus, published on npm as `delegatus-cli`. Its bins are
+  `delegatus` (also `dlg`) and `delegatus-mcp`. `agent-log-viewer` and
+  `agent-log-viewer-mcp` keep working and say once that the command was renamed. The repository moved to
+  `github.com/Latand/delegatus`; GitHub redirects the old name, so existing
+  clones, the self-update check and deploys keep working, and a seat recorded
+  under the old repository name still deploys the Viewer.
+- Board placements are stored in SQLite (`state.sqlite`, collection `board`),
+  one row per project, instead of `board.json`. A pin, a hidden group or a
+  view-mode change commits only that project's row in one transaction, so a
+  crash can no longer leave the whole board zero-filled or half-written, and one
+  project's write never rewrites another's bytes. On first start the existing
+  `board.json` is imported and verified by row count and digest, then kept as
+  `board.json.imported-<release>`; a directory with a README takes its place
+  (#1870).
+- A `board.json` that cannot be parsed at all (empty, NUL-filled or truncated)
+  is kept as `board.json.unreadable-<time>` and the board starts empty with a
+  logged incident, instead of every board request failing.
+- Account state is stored in SQLite (`state.sqlite`, collection `accounts`)
+  instead of eight JSON files: the Claude and Codex account registries with
+  their retirement and removal journals, the account↔project bindings, the
+  out-of-pool choice journal, the spawn admission fences, the in-flight Claude
+  and Codex login operations, and the account mutation revision. A write
+  commits only the rows it changed, in one transaction, so a crash can no
+  longer leave a zero-filled or half-written registry. On first start the
+  existing files are imported and verified by row count and digest, then kept
+  as `<name>.imported-<release>`; a directory with a README takes each of their
+  places (#1870).
+- Removing an account now commits its registry row, its retirement record and
+  its removal journal step in ONE transaction, together with the mutation
+  revision that admits them. The revision is the collection's own, so
+  `account-mutation-revision.json` is gone and a crash can no longer leave a
+  fence that moved without the write it admitted (#1857, #1870).
+- Conversation-migration operation journals move into the same database, one
+  collection per journal root. The roots stay directories, because the
+  per-operation lease that guards them has to be claimable while the database
+  is busy (#1870). A release rolled back through the fence gets every journal
+  written back as the file it knows, and whatever it journals while it runs is
+  folded back into the collection at roll-forward.
+- An account store whose file could not be read at the import is recorded as a
+  gap rather than imported as empty, and each owner answers as it always did: a
+  binding record refuses every read and names the file that was kept, a
+  registry reports itself corrupt and refuses mutations, and the out-of-pool
+  journal — which nothing consults to decide anything — reports nothing. The
+  first successful write clears the gap.
+- A state-mutating startup step — the first-boot import of any moved store, its
+  rollback mirror, the copy-once move of the legacy state directory — runs only
+  in the serving Viewer's release activation, or against a state directory the
+  caller named itself. It never runs while Next.js collects page data for a
+  build, whatever else is true. A build in a checkout used to resolve whatever
+  state directory it found and import it out from under the running Viewer
+  (#1905).
+- An import record that names no release, in a state directory that has a
+  release target, was written by a process that did not own the release, so the
+  legacy file still standing beside it is re-imported over those rows rather
+  than merged into them (#1905).
+- Attention requests, reply suggestions and per-project seat tick settings are
+  stored in SQLite (`state.sqlite`, collections `attention`,
+  `reply_suggestions` and `seat_tick_settings`) instead of `attention.json`,
+  `reply-suggestions.json` and `seat-tick-settings.json`. A write commits only
+  the rows it changed, one per request, set, admission receipt or project. The
+  attention and suggestion revisions carry on from the numbers the files held,
+  so `request_attention` never sees its revision move backwards, and replays
+  keyed by `clientRequestId` or by a message key still find their first answer
+  after the move. On first start each file is imported and verified by row
+  count and digest, then kept as `<name>.imported-<release>`; a directory with
+  a README takes its place. A file that cannot be parsed at all is kept as
+  `<name>.unreadable-<time>` and that store starts empty with a logged
+  incident (#1870).
+
+### Downgrading
+- A version older than this one cannot read the SQLite account state and fails
+  on the directories left where its files were, naming the path. Upgrade again
+  to recover. Replacing a directory with its `<name>.imported-*` copy also
+  works, but loses account changes made since the upgrade. Deployed releases
+  rolled back through the release fence get every file written back for them
+  automatically — the eight account stores and each conversation-migration
+  journal alike — and the changes they make are merged at roll-forward.
+- A version older than this one cannot read the SQLite board and fails on the
+  `board.json` directory, naming the path. Upgrade again to recover. Replacing
+  the directory with the `board.json.imported-*` copy also works, but loses
+  board changes made since the upgrade. Deployed releases rolled back through
+  the release fence get a fresh `board.json` written for them automatically.
+- A version older than this one cannot read the SQLite attention requests,
+  reply suggestions or seat tick settings, and each finds a directory where its
+  file was. Only attention fails at once: its reads error with EISDIR, naming
+  the path. The older reply-suggestion and seat tick readers treat any
+  unreadable file as empty, so that version shows no drafts and runs every
+  project on the default tick (a project whose tick was turned off ticks
+  again) until its next write fails on the directory. Upgrade again to recover. Replacing a directory with its
+  `<name>.imported-*` copy also works, but loses the changes made since the
+  upgrade. Deployed releases rolled back through the release fence get all
+  three files written back for them automatically, and the changes they make
+  are merged at roll-forward. The runtime host must run this release before
+  the Viewer is promoted to it, so that a rollback through the host's
+  deployment adapter writes those files back.
+
+## [1.2.2] — 2026-09-19
+
+### Changed
+- The task board is stored in SQLite (`state.sqlite`, collection `tasks`)
+  instead of `tasks.json`. A write commits only the tasks it changed, in one
+  transaction, so a crash can no longer leave a zero-filled or half-written
+  board. On first start the existing `tasks.json` is imported and verified by
+  row count and digest, then kept as `tasks.json.imported-<release>`; a
+  directory with a README takes its place (#1870).
+- A `tasks.json` that cannot be parsed at all (empty, NUL-filled or truncated)
+  is kept as `tasks.json.unreadable-<time>` and the board starts empty with a
+  logged incident, instead of every task request failing.
+
+### Downgrading
+- A version older than this one cannot read the SQLite board and fails on the
+  `tasks.json` directory, naming the path. Upgrade again to recover. Replacing
+  the directory with the `tasks.json.imported-*` copy also works, but loses
+  task changes made since the upgrade. Deployed releases rolled back through
+  the release fence get a fresh `tasks.json` written for them automatically.
+
+### Fixed
+- An orchestrator seat is woken when an agent it spawned outside a pipeline
+  finishes, within one check interval, and a child whose transcript cannot be
+  read is named with its reason instead of being counted silently (#1881).
+- The account removal dialog gives each refusal its own message and says what
+  was moved on success (#1857).
+
+### Added
+- First-run setup guide: connect engines, choose which engine, model and effort
+  each role runs on with cost hints, and a plain refusal when a stage names an
+  engine that has no signed-in account. Shipped defaults are unchanged (#1876).
+- The orchestrator mandate lists each role's engine, model, effort and access
+  from the live role registry (#1880).
+- Stage conversation cards lead with the stage and its attempt; the role preset
+  is secondary (#1865).
+
+### Upgrade and verification
+- Install with `npx agent-log-viewer@1.2.2 --no-open`, or
+  `bun install -g agent-log-viewer@1.2.2`.
+
+## [1.2.1] — 2026-09-19
+
+### Fixed
+- A project whose folder gains a git origin after first use keeps one identity:
+  the orchestrator seat, its tasks and its conversations follow the project from
+  its folder key to its repository key, so the seat is woken between stages and
+  `request_attention` is accepted. Before this the sidebar showed the project
+  twice and the seat was never woken (#1874).
+- A pipeline stage stays open while its agent still has a background task
+  running, instead of settling as failed and parking the lane (#1441).
+- Removing an account succeeds and moves its leftovers into a shared archive;
+  conversations stay readable (#1857, first slice).
+- Conversations a deploy cuts get one durable continuation (#1835, first slice).
+- One layering scale for every overlay: the composer's microphone menu and the
+  image preview opened from an expanded conversation are no longer covered
+  (#1858).
+
+### Changed
+- Account switches are instant and optimistic: the pick shows at once and the
+  conversation moves with its next message (#1846).
+- The project board header is one 48 px bar that says each fact once, with one
+  search and one control style; the close-only Undo/Redo buttons are gone
+  (#1801).
+
+### Upgrade and verification
+- Install with `npx agent-log-viewer@1.2.1 --no-open`, or
+  `bun install -g agent-log-viewer@1.2.1`.
+
+## [1.2.0] — 2026-09-19
+
+### Added
+- The kanban board is the desktop board: tasks as status columns, conversations
+  inside cards, pipeline summaries with stage graphs and past attempts, in-place
+  task editing, colours, group hide with a Hidden tray, account chips and
+  pickers on stages, and an Overview across every project (#1695, #1699–#1712,
+  #1768, #1820).
+- Task cards keep agent context in a collapsed Details field, separate from the
+  human description (#1834).
+- Pipelines are editable graphs: a started pipeline's stages and edges can be
+  edited, stages report completion through one MCP call, fail edges count their
+  traversals, and every stage shows who runs it (#1726, #1730, #1743, #1798).
+- The Viewer's own state decides pipeline stages; publishing to GitHub is opt-in
+  (#1692). `create_pipeline` answers at once while the controller provisions the
+  worktree (#1799).
+- Seat tick: the Viewer wakes a project's orchestrator seat when work is owed,
+  with controls on desktop and phone (#1681, #1749, #1783).
+- Model-tier usage limits: tier lines in the accounts dialog and the limits
+  footer, and spawns gated by the model they request (#1833, #1842, #1849).
+- Native Codex queue, steering and orchestrator Voice (#1636).
+- The phone's runtime sheet covers the screen and shows and picks the account
+  (#1795).
+- Durable, owner-bound review handoffs between agents (#1578).
+- MCP: conversation actions reach live hosts, transcript search returns newest
+  matches first with stable paging, and pipeline writes answer compactly with
+  stage-level reads (#1829, #1828, #1845).
+
+### Changed
+- One control hides the project rail, and one puts the footer and the
+  orchestrator panel away (#1819, #1802).
+- Role prompts name `stage_report` as the completion channel, carry one
+  process-cleanup rule, and tell agents when to stop and ask (#1797, #1770,
+  #1843).
+- A lane just created shows on the board at once, and `request_attention` lands
+  on it (#1836).
+
+### Fixed
+- Pipelines survive a deploy and a refused spawn: a cut turn resumes, a refused
+  spawn retries, a busy refusal never consumes the request id, and a stage whose
+  work is done never parks for an unreadable verdict (#1747, #1750, #1766,
+  #1756).
+- Message delivery: a refused send stays editable, an unconfirmed admission
+  reconciles, a queued message stays queued through account contention, and a
+  delivered launch prompt never reads as delivering (#1593, #1830, #1716, #1793).
+- Memory and speed: one resident worker serves a burst of file polls, finished
+  conversations are no longer re-hosted at boot, and opening a conversation does
+  less work (#1814, #1812, #1718).
+- Seat and rotation: a rotation that cannot seat a readable successor keeps the
+  previous seat, and a refused wake can no longer mute a seat (#1757, #1771).
+- Accounts: dead pinned receipts stop blocking removal, and manual account
+  choice is restored (#1595, #1618).
+- Next.js 16.3.3 security patch (#1588).
+
+### Upgrade and verification
+- Install with `npx agent-log-viewer@1.2.0 --no-open`, or
+  `bun install -g agent-log-viewer@1.2.0`. Node 20.9 or later and Bun 1.4.0 or
+  later are required; the launcher runs the server under Bun.
+
 ## [1.1.0] — 2026-09-08
 
 ### Added
@@ -543,7 +796,11 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/live-log-viewer-next/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Latand/delegatus/compare/v1.2.2...v1.3.0
+[1.2.2]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.1...v1.2.2
+[1.2.1]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/Latand/live-log-viewer-next/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Latand/live-log-viewer-next/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/Latand/live-log-viewer-next/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Latand/live-log-viewer-next/compare/v1.0.1...v1.0.2

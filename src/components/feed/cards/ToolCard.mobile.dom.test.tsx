@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligibility";
 import { diffFromApplyPatch } from "../diff";
 import { execFailure, toolEvent } from "../__fixtures__/readableTools";
 import type { ToolEvent } from "../parse";
@@ -17,11 +18,19 @@ import { ToolCard } from "./ToolCard";
  * desktop keeps the parser's `open`.
  */
 
-let narrowViewport = false;
+const VIEWPORTS = {
+  narrowPhone: { width: 390, height: 844 },
+  desktop: { width: 1280, height: 800 },
+  shortLandscape: { width: 844, height: 390 },
+} as const;
+type ViewportName = keyof typeof VIEWPORTS;
+let viewport: { width: number; height: number } = VIEWPORTS.desktop;
+
+const setViewport = (name: ViewportName) => { viewport = VIEWPORTS[name]; };
 
 const normalize = (query: string) => String(query).replace(/\s+/g, "");
 const matchMediaStub = (query: string) => ({
-  matches: normalize(query) === "(max-width:767px)" ? narrowViewport : false,
+  matches: normalize(query) === normalize(MOBILE_LAYOUT_QUERY) ? mobileLayoutViewport(viewport) : false,
   media: String(query),
   onchange: null,
   addEventListener() {},
@@ -50,7 +59,7 @@ let root: Root | null = null;
 afterEach(() => {
   if (root) flushSync(() => root!.unmount());
   root = null;
-  narrowViewport = false;
+  setViewport("desktop");
   dom.document.body.replaceChildren();
 });
 
@@ -90,7 +99,7 @@ function runningEdit(): ToolEvent {
 }
 
 test("phone: a running edit renders closed with no body until tapped, then opens in place", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<ToolCard event={runningEdit()} />);
   const details = host.querySelector("details")!;
   expect(details.getAttribute("class")).not.toContain("ml-9");
@@ -112,24 +121,35 @@ test("phone: a running edit renders closed with no body until tapped, then opens
 });
 
 test("phone: a lone failed exec renders closed with no body until tapped", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<ToolCard event={execFailure} />);
   const details = host.querySelector("details")!;
   expect(isOpen(details)).toBe(false);
   expect(body(host)).toBeNull();
   expect(host.textContent).not.toContain("expected true to be false");
-  /* The line is still never quiet about the failure itself. */
+  /* The line is still never quiet about the failure itself — but it says so
+     with a left rule and a small chip carrying the exit code, not by colouring
+     and emboldening the command over four wrapped lines (#1938). */
   const line = host.querySelector("[data-mobile-tool-line]")!;
+  const cls = (el: Element | null) => el?.getAttribute("class") ?? "";
   expect(line.getAttribute("data-mobile-tool-line")).toBe("failed");
-  expect(line.getAttribute("class")).toContain("text-danger");
+  expect(cls(line)).toContain("border-l-2");
+  expect(cls(line)).toContain("border-danger");
+  expect(cls(line)).not.toContain("text-danger");
   expect(line.textContent).toContain("exit 3");
+  const label = line.querySelector("span.flex-1")!;
+  expect(cls(label)).toContain("truncate");
+  expect(cls(label)).toContain("text-secondary");
+  expect(cls(label)).not.toContain("font-semibold");
+  /* One trailing verdict: the exit code, carried by the danger chip itself. */
+  expect(line.querySelectorAll("span.text-danger")).toHaveLength(1);
   toggle(details, true);
   expect(body(host)).toBeTruthy();
   expect(host.textContent).toContain("expected true to be false");
 });
 
 test("desktop: the parser's open stays — the edit's diff and the failure's output are mounted from the start", () => {
-  narrowViewport = false;
+  setViewport("desktop");
   const host = mount(
     <>
       <ToolCard event={runningEdit()} />
@@ -146,4 +166,12 @@ test("desktop: the parser's open stays — the edit's diff and the failure's out
   expect(host.textContent).toContain("stale");
   expect(host.textContent).toContain("expected true to be false");
   expect(host.querySelector("[data-mobile-tool-line]")).toBeNull();
+});
+
+test("short landscape: the height side of the production query selects the phone card", () => {
+  setViewport("shortLandscape");
+  const host = mount(<ToolCard event={runningEdit()} />);
+  const details = host.querySelector("details")!;
+  expect(details.getAttribute("class")).not.toContain("ml-9");
+  expect(isOpen(details)).toBe(false);
 });

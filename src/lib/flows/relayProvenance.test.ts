@@ -3,12 +3,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
+import ts from "typescript";
 
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 
-import { relayClientMessageId } from "./engine";
+import { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
 import { relayPrompt } from "./prompts";
-import { flowRelayedMessageOccurrences } from "./relayProvenance";
+import { flowRelayedMessageOccurrences } from "@/lib/reviewHistory/relayProvenance";
 import type { Flow, Round } from "./types";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-relay-provenance-"));
@@ -17,6 +18,15 @@ afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 const IMPLEMENTER_PATH = "/sessions/implementer-transcript.jsonl";
 const FINDINGS = "P1 — the held command drops its origin across the migration window.\n";
 const DELIVERED_AT = "2026-08-24T09:00:00.000Z";
+
+test("relay provenance imports identity directly without importing the flow engine", () => {
+  const source = fs.readFileSync(new URL("../reviewHistory/relayProvenance.ts", import.meta.url), "utf8");
+  const file = ts.createSourceFile("relayProvenance.ts", source, ts.ScriptTarget.Latest, true);
+  const imports = file.statements.filter(ts.isImportDeclaration)
+    .map((statement) => (statement.moduleSpecifier as ts.StringLiteral).text);
+  expect(imports).toContain("@/lib/reviewHistory/relayIdentity");
+  expect(imports.filter((specifier) => /(?:^|\/)engine(?:\.[cm]?[jt]s)?$/.test(specifier))).toEqual([]);
+});
 
 function flowWith(rounds: Array<Partial<Round>>, implementerPath = IMPLEMENTER_PATH): Flow {
   return { id: "flow-provenance", implementerPath, rounds } as unknown as Flow;

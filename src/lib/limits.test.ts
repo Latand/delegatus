@@ -1270,8 +1270,11 @@ test("a Claude success resets 429 backoff and preserves the fresh-cache fast pat
     expect(recovered.claude?.session?.usedPercent).toBe(21);
     await readLimits({ codexLiveReader, now: () => 4_080_000 });
     expect(fetches).toBe(2);
-    const limitedAgain = await readLimits({ codexLiveReader, now: () => 4_090_002 });
-    expect(limitedAgain.provenance.claude.retryAt).toBe(new Date(4_150_002).toISOString());
+    // Claude reads rest for the 50-second window both paths share (#1849).
+    await readLimits({ codexLiveReader, now: () => 4_110_000 });
+    expect(fetches).toBe(2);
+    const limitedAgain = await readLimits({ codexLiveReader, now: () => 4_110_002 });
+    expect(limitedAgain.provenance.claude.retryAt).toBe(new Date(4_170_002).toISOString());
     expect(fetches).toBe(3);
   } finally {
     globalThis.fetch = realFetch;
@@ -1523,7 +1526,7 @@ test("every model tier the provider meters becomes its own window, and a spawn i
 });
 
 
-test("pre-tier-list cached limits load without a provider read and keep recording history", async () => {
+test("pre-tier-list cached limits keep their bucket, and an older parser's entry never rests on the backoff (#1839)", async () => {
   resetLimitsCache();
   const now = Date.now();
   const legacy = {
@@ -1535,21 +1538,456 @@ test("pre-tier-list cached limits load without a provider read and keep recordin
   const file = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ version: 2, engines: {
-    claude: { default: { at: now, data: legacy, provenance: { source: "live", reason: null, staleSince: null } } }, codex: {},
+    claude: { default: { at: now, data: legacy, provenance: { source: "live", reason: null, staleSince: null }, retryAt: now + 15 * 60_000 } }, codex: {},
   } }));
-  const request = spyOn(globalThis, "fetch").mockImplementation((async () => { throw new Error("cached usage must not fetch"); }) as unknown as typeof fetch);
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => { throw new Error("offline"); }) as unknown as typeof fetch);
   try {
-    const payload = await readLimits({ codexLiveReader });
-    expect(payload.claude?.tiers).toEqual([legacy.flagship]);
-    expect(payload.claude?.weekly).toEqual(legacy.weekly);
-    expect(request).not.toHaveBeenCalled();
+    /* An entry no current parser wrote is re-read at once (#1839): neither its
+       age nor the provider backoff it carried can make it rest, because what it
+       says about tiers is an older parser's reading of the payload. While the
+       provider is unreachable its own numbers still serve, and its `flagship`
+       bucket still reads as the tier list. */
+    const cached = await readLimits({ codexLiveReader, now: () => now });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(cached.claude?.tiers).toEqual([legacy.flagship]);
+    expect(cached.claude?.weekly).toEqual(legacy.weekly);
     request.mockImplementation((async () => Response.json({
       five_hour: { utilization: 11 }, seven_day: { utilization: 30 }, seven_day_fable: { utilization: 88 },
     })) as unknown as typeof fetch);
-    const fresh = await readLimits({ codexLiveReader, now: () => now + 60_000 });
+    const fresh = await readLimits({ codexLiveReader, now: () => now + 16 * 60_000 });
     expect(fresh.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
     const { historySamples } = await import("./limitsHistoryStore");
     expect(historySamples("claude", "default", "weekly").at(-1)?.remaining).toBe(70);
+  } finally { request.mockRestore(); resetLimitsCache(); }
+});
+
+
+/* Issue #1839. The key set below is the live provider payload's, read once by
+   the seat at 08:42Z with key names and shapes only; every value here is
+   invented. What matters is what the provider does NOT send: there is no
+   `seven_day_fable` key, `seven_day_opus` and `seven_day_sonnet` arrive null,
+   and the third window the operator sees at the provider arrives under a
+   codenamed top-level bucket of the same shape as `seven_day`. A parser that
+   reads tiers out of `seven_day_<tier>` keys finds nothing here, which is why
+   production answered `claude.tiers: []` for every account.
+
+   The element shapes of `limits[]` and `seven_day_breakdown.rows[]` were
+   captured by one masked read per account on two accounts (key names and label
+   strings only): see `providerLimits` below. On both, the codenamed
+   `nimbus_quill` window matched neither the Fable entry's percent nor its
+   reset, so it is a separate pool. */
+function usagePayloadWithCodenamedTier(limits?: unknown[]): Record<string, unknown> {
+  const resets = "2026-09-26T08:00:00.000Z";
+  const window = (utilization: number) => ({
+    utilization,
+    resets_at: resets,
+    // Invented figures; the provider's own are never read into a transcript.
+    limit_dollars: 100,
+    used_dollars: utilization,
+    remaining_dollars: 100 - utilization,
+    locked_reason: null,
+  });
+  return {
+    five_hour: { ...window(12), resets_at: "2026-09-19T14:00:00.000Z" },
+    seven_day: window(30),
+    // Every tier-shaped key the provider sends for this account, all null.
+    seven_day_opus: null,
+    seven_day_sonnet: null,
+    seven_day_oauth_apps: null,
+    seven_day_cowork: null,
+    seven_day_omelette: null,
+    // The codenamed top-level buckets. Only one carries a window.
+    tangelo: null,
+    iguana_necktie: null,
+    omelette_promotional: null,
+    nimbus_quill: window(88),
+    cinder_cove: null,
+    copper_kite: null,
+    harbor_lantern: null,
+    wattle_ember: null,
+    amber_ladder: null,
+    juniper_tide: null,
+    cedar_ember: null,
+    amber_gauge: null,
+    ...(limits ? { limits } : {}),
+    seven_day_breakdown: {
+      as_of: resets,
+      // A window-shaped object nested here must never become a row: the scan
+      // is over top-level buckets, and per-model usage inside the week is not
+      // a window of its own.
+      rows: [
+        { key: "claude_code", display_name: "Claude Code", percent: 21 },
+        { key: "chat", display_name: "Chats", percent: 5 },
+        { key: "cowork", display_name: "Cowork", percent: 0 },
+        { key: "other", display_name: "Other", percent: 4 },
+      ],
+      window_started_at: "2026-09-19T08:00:00.000Z",
+    },
+    extra_usage: null,
+    spend: null,
+    member_dashboard_available: false,
+  };
+}
+
+/** `limits[]` as the provider sends it, captured live with every number masked:
+    the general session and week, then one `weekly_scoped` entry per metered
+    model, naming the model only by `display_name`. Values here are invented. */
+function providerLimits(fablePercent: number): unknown[] {
+  const week = "2026-09-26T08:00:00.000000+00:00";
+  return [
+    { kind: "session", group: "session", percent: 12, severity: "normal", resets_at: "2026-09-19T14:00:00.000000+00:00", scope: null, is_active: true },
+    { kind: "weekly_all", group: "weekly", percent: 30, severity: "normal", resets_at: week, scope: null, is_active: false },
+    { kind: "weekly_scoped", group: "weekly", percent: fablePercent, severity: "normal", resets_at: week, scope: { model: { id: null, display_name: "Fable" }, surface: null }, is_active: false },
+  ];
+}
+
+async function readUsage(payload: Record<string, unknown>) {
+  const credentials = path.join(process.env.LLV_CLAUDE_HOME!, ".credentials.json");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json(payload)) as unknown as typeof fetch;
+  try { return await fetchClaudeLimits(credentials); } finally { globalThis.fetch = realFetch; }
+}
+
+type UsageData = Awaited<ReturnType<typeof fetchClaudeLimits>>["data"];
+
+async function usageRowLabels(data: UsageData): Promise<string[]> {
+  const { limitRows } = await import("@/components/AccountsPanel");
+  const { reconcileQuotaReadings } = await import("./rateLimit");
+  const { translate } = await import("./i18n");
+  const quota = reconcileQuotaReadings({ limits: data, observedAt: Date.now() / 1000, stale: false, source: "live" }, null, Date.now() / 1000);
+  return limitRows(quota, (key, params) => translate("en", key, params)).map((row) => row.label);
+}
+
+function usageGate(data: UsageData, model: string) {
+  const now = Date.now();
+  return effectiveRemaining({
+    engine: "claude" as const,
+    accountId: "default",
+    authenticated: true,
+    limits: data,
+    provenance: { source: "live" as const, reason: null, staleSince: null },
+    observedAt: now,
+    authCheckedAt: now,
+  }, now, { model });
+}
+
+test("Fable's line is read from the provider's model-scoped limits entry, and a Fable spawn is gated on it (#1839)", async () => {
+  const resetsAt = Math.round(Date.parse("2026-09-26T08:00:00.000Z") / 1000);
+  const live = await readUsage(usagePayloadWithCodenamedTier(providerLimits(64)));
+  expect(live.source).toBe("live");
+  /* The Fable window is the scoped entry's; the codenamed bucket beside it is
+     another pool and does not become a row while the list names a model. */
+  expect(live.data?.tiers).toEqual([
+    { usedPercent: 64, resetsAt, windowMinutes: 10_080, tier: "fable", label: "Fable" },
+  ]);
+  expect(await usageRowLabels(live.data)).toEqual(["5h", "Week", "Fable · Week"]);
+  expect(usageGate(live.data, "fable")).toEqual({ percent: 36, window: "tier:fable" });
+  expect(usageGate(live.data, "opus")).toEqual({ percent: 70, window: "weekly" });
+});
+
+test("an accounting pool in limits[] never becomes a model tier or gates Fable, inline or through a bucket (#1839 review)", async () => {
+  const resetsAt = Math.round(Date.parse("2026-09-26T08:00:00.000Z") / 1000);
+  const legitimate = { kind: "weekly_scoped", group: "weekly", percent: 40, resets_at: "2026-09-26T08:00:00Z", scope: { model: { id: null, display_name: "Fable" }, surface: null } };
+  const cases: unknown[][] = [
+    // Inline: the pool carries its own exhausted window and names Fable.
+    [{ limit_type: "seven_day_oauth_apps", name: "Fable OAuth apps", model: "claude-fable", utilization: 100 }],
+    // Scoped to a pool surface rather than a model tier.
+    [{ kind: "weekly_scoped", group: "weekly", percent: 100, resets_at: "2026-09-26T08:00:00Z", scope: { model: { id: null, display_name: "Fable" }, surface: "oauth_apps" } }],
+    // Bucket-referencing: the pool points at the codenamed bucket's window.
+    [{ limit_type: "seven_day_oauth_apps", bucket: "nimbus_quill", model: "claude-fable" }],
+    [{ kind: "extra_usage", bucket: "nimbus_quill", scope: { model: { id: "claude-fable", display_name: "Fable" } } }],
+  ];
+  for (const limits of cases) {
+    const alone = await readUsage(usagePayloadWithCodenamedTier(limits));
+    expect(alone.data?.tiers?.map((tier) => tier.tier)).toEqual(["nimbus_quill"]);
+    expect(usageGate(alone.data, "fable")).toEqual({ percent: 70, window: "weekly" });
+    // Beside a legitimate Fable entry, the pool changes nothing about it.
+    const beside = await readUsage(usagePayloadWithCodenamedTier([...limits, legitimate]));
+    expect(beside.data?.tiers).toEqual([{ usedPercent: 40, resetsAt, windowMinutes: 10_080, tier: "fable", label: "Fable" }]);
+    expect(usageGate(beside.data, "fable")).toEqual({ percent: 60, window: "tier:fable" });
+  }
+});
+
+test("a human display name outranks a machine name, and a codename never reaches the row (#1839 review)", async () => {
+  const labelled = await readUsage(usagePayloadWithCodenamedTier([
+    { limit_type: "nimbus_quill", name: "nimbus_quill", display_name: "Fable", model: "claude-fable" },
+  ]));
+  expect(labelled.data?.tiers?.map((tier) => [tier.tier, tier.label])).toEqual([["fable", "Fable"]]);
+  expect(await usageRowLabels(labelled.data)).toEqual(["5h", "Week", "Fable · Week"]);
+  expect(usageGate(labelled.data, "fable")).toEqual({ percent: 12, window: "tier:fable" });
+  const { claudeTierDisplayName } = await import("./agent/models");
+  expect(claudeTierDisplayName(labelled.data!.tiers![0].tier, labelled.data!.tiers![0].label)).toBe("Fable");
+
+  // A machine name alone is no label: the model's own name stands.
+  const machineOnly = await readUsage(usagePayloadWithCodenamedTier([
+    { limit_type: "nimbus_quill", name: "nimbus_quill", model: "claude-fable" },
+  ]));
+  expect(machineOnly.data?.tiers?.map((tier) => [tier.tier, tier.label ?? null])).toEqual([["fable", null]]);
+  expect(await usageRowLabels(machineOnly.data)).toEqual(["5h", "Week", "Fable · Week"]);
+
+  // `name: "Fable"` is a human label and is kept.
+  const named = await readUsage(usagePayloadWithCodenamedTier([{ limit_type: "nimbus_quill", name: "Fable" }]));
+  expect(named.data?.tiers?.map((tier) => [tier.tier, tier.label])).toEqual([["fable", "Fable"]]);
+});
+
+test("a tier the provider meters under a codename becomes its own window, labelled and gated by the model it names (#1839)", async () => {
+  const resetsAt = Math.round(Date.parse("2026-09-26T08:00:00.000Z") / 1000);
+  const credentials = path.join(process.env.LLV_CLAUDE_HOME!, ".credentials.json");
+  const read = async (payload: Record<string, unknown>) => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json(payload)) as unknown as typeof fetch;
+    try { return await fetchClaudeLimits(credentials); } finally { globalThis.fetch = realFetch; }
+  };
+  const { limitRows } = await import("@/components/AccountsPanel");
+  const { reconcileQuotaReadings } = await import("./rateLimit");
+  const { translate } = await import("./i18n");
+  const rowLabels = (data: Awaited<ReturnType<typeof fetchClaudeLimits>>["data"]) => {
+    const quota = reconcileQuotaReadings({ limits: data, observedAt: Date.now() / 1000, stale: false, source: "live" }, null, Date.now() / 1000);
+    return limitRows(quota, (key, params) => translate("en", key, params)).map((row) => row.label);
+  };
+  const gate = (data: Awaited<ReturnType<typeof fetchClaudeLimits>>["data"], model: string) => {
+    const now = Date.now();
+    return effectiveRemaining({
+      engine: "claude" as const,
+      accountId: "default",
+      authenticated: true,
+      limits: data,
+      provenance: { source: "live" as const, reason: null, staleSince: null },
+      observedAt: now,
+      authCheckedAt: now,
+    }, now, { model });
+  };
+
+  /* The provider's own labelled list names the window and the model it meters,
+     so the row reads as the operator's model and the gate finds Fable's own
+     window under a bucket key that never says "fable". */
+  const labelled = await read(usagePayloadWithCodenamedTier([
+    { limit_type: "five_hour", name: "Session" },
+    { limit_type: "seven_day", name: "Weekly" },
+    { limit_type: "nimbus_quill", name: "Fable", model: "claude-fable-5-1" },
+  ]));
+  expect(labelled.source).toBe("live");
+  expect(labelled.data?.weekly).toMatchObject({ usedPercent: 30 });
+  expect(labelled.data?.tiers).toEqual([
+    { usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "fable", label: "Fable" },
+  ]);
+  expect(rowLabels(labelled.data)).toEqual(["5h", "Week", "Fable · Week"]);
+  expect(gate(labelled.data, "fable")).toEqual({ percent: 12, window: "tier:fable" });
+  expect(gate(labelled.data, "sonnet")).toEqual({ percent: 70, window: "weekly" });
+
+  /* The same payload whose `limits[]` says nothing this parser can use — the
+     shape was never captured, so it has to be allowed to be anything. The
+     window is still read from the bucket and still rendered; with nothing
+     attributing it to a model, it is named for its bucket rather than shown
+     raw as `nimbus_quill`, and no spawn is refused on another tier's number. */
+  const unattributed = await read(usagePayloadWithCodenamedTier([{ foo: 1 }, "opaque", null]));
+  expect(unattributed.data?.tiers).toEqual([
+    { usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "nimbus_quill" },
+  ]);
+  expect(rowLabels(unattributed.data)).toEqual(["5h", "Week", "Nimbus Quill · Week"]);
+  expect(gate(unattributed.data, "fable")).toEqual({ percent: 70, window: "weekly" });
+
+  /* An entry for one of the two general windows is never adopted as a tier,
+     however it is labelled: filing the 5-hour window under the model its label
+     names would show a session number as a week and gate that model on it. */
+  const generalNamed = await read(usagePayloadWithCodenamedTier([
+    { limit_type: "five_hour", name: "Opus session", model: "claude-opus-5" },
+    { limit_type: "nimbus_quill", name: "Fable" },
+  ]));
+  expect(generalNamed.data?.tiers).toEqual([
+    { usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "fable", label: "Fable" },
+  ]);
+  expect(generalNamed.data?.session).toMatchObject({ usedPercent: 12, windowMinutes: 300 });
+
+  // No `limits` key at all is the same story: the bucket scan stands alone.
+  const bucketsOnly = await read(usagePayloadWithCodenamedTier());
+  expect(bucketsOnly.data?.tiers?.map((tier) => tier.tier)).toEqual(["nimbus_quill"]);
+});
+
+test("a cached snapshot an older parser wrote never holds back a tier the live payload carries (#1839)", async () => {
+  resetLimitsCache();
+  const now = Date.now();
+  const cacheFile = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
+  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  /* What production was serving: a snapshot the pre-#1839 parser wrote, with an
+     empty tier list, held alive by the provider's 429 backoff. The backoff is
+     what made a correct parser show nothing — the read never happened. */
+  fs.writeFileSync(cacheFile, JSON.stringify({
+    version: 2,
+    engines: {
+      claude: {
+        default: {
+          at: now,
+          data: { session: { usedPercent: 11, resetsAt: Math.floor(now / 1000) + 3_600 }, weekly: { usedPercent: 30, resetsAt: Math.floor(now / 1000) + 86_400 }, tiers: [], plan: "max", capturedAt: Math.floor(now / 1000) },
+          provenance: { source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt: new Date(now + 15 * 60_000).toISOString() },
+          retryAt: now + 15 * 60_000,
+          consecutive429s: 4,
+        },
+      },
+      codex: {},
+    },
+  }));
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json(usagePayloadWithCodenamedTier(providerLimits(64)))) as unknown as typeof fetch);
+  try {
+    const payload = await readLimits({ codexLiveReader, now: () => now });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(payload.claude?.tiers?.map((tier) => [tier.tier, tier.label])).toEqual([["fable", "Fable"]]);
+    expect(payload.provenance.claude.source).toBe("live");
+    // The entry the new parser wrote carries its generation, so the next read
+    // rests on the backoff again rather than going live every poll.
+    const disk = JSON.parse(fs.readFileSync(cacheFile, "utf8")) as { engines: { claude: Record<string, { parser?: number }> } };
+    expect(disk.engines.claude.default.parser).toBe(2);
+  } finally { request.mockRestore(); resetLimitsCache(); }
+});
+
+/* ---- One usage snapshot per account, shared by the footer and the accounts path ---- */
+
+const { AgentRegistry } = await import("@/lib/agent/registry");
+const { QuotaController } = await import("@/lib/accounts/migration/quotaController");
+
+function claudeAccountFixture() {
+  return { id: "default", label: "Main", kind: "legacy" as const, home: process.env.LLV_CLAUDE_HOME!, projectsDir: path.join(process.env.LLV_CLAUDE_HOME!, "projects"), authPresent: true, createdAt: 0 };
+}
+
+/** The accounts path as production wires it: the quota controller over the
+    production Claude probe, with only the CLI's auth-status read stubbed. */
+async function accountsPath(registry: InstanceType<typeof AgentRegistry>) {
+  const { claudeQuotaObservation } = await import("@/lib/accounts/migration/quotaController");
+  const account = claudeAccountFixture();
+  const port = {
+    list: () => [account],
+    active: () => account.id,
+    probe: (_engine: "claude" | "codex", _candidate: unknown, now: number, options?: { force?: boolean }) =>
+      claudeQuotaObservation(account, now, { ...options, authStatus: async () => ({ loggedIn: true }) }),
+  };
+  return { port, controller: new QuotaController(registry, port as never) };
+}
+
+/** What production held: a snapshot the older parser wrote with no tiers,
+    resting on a 429 backoff that the footer path kept extending. */
+function writeTierlessThrottledCache(now: number): void {
+  const cacheFile = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
+  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  fs.writeFileSync(cacheFile, JSON.stringify({
+    version: 2,
+    engines: {
+      claude: {
+        default: {
+          at: now - 60_000,
+          data: { session: { usedPercent: 11, resetsAt: Math.floor(now / 1000) + 3_600 }, weekly: { usedPercent: 35, resetsAt: Math.floor(now / 1000) + 86_400 }, tiers: [], plan: "max", capturedAt: null },
+          provenance: { source: "cache", reason: "oauth-rate-limited", staleSince: new Date(now - 20 * 60_000).toISOString(), retryAt: new Date(now + 15 * 60_000).toISOString() },
+          retryAt: now + 15 * 60_000,
+          consecutive429s: 4,
+          parser: 2,
+        },
+      },
+      codex: {},
+    },
+  }));
+  delete (globalThis as { __llvLimitsCache?: unknown }).__llvLimitsCache;
+}
+
+test("the footer answers with the tier the accounts path recorded while its own path is rate-limited (#1849)", async () => {
+  resetLimitsCache();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-shared-snapshot-"));
+  const now = Date.now();
+  writeTierlessThrottledCache(now);
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => new Response(null, { status: 429 })) as unknown as typeof fetch);
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const account = claudeAccountFixture();
+    /* The accounts path already holds a live snapshot with the Fable tier. */
+    const live = await readUsage(usagePayloadWithCodenamedTier(providerLimits(16)));
+    await new QuotaController(registry, {
+      list: () => [account],
+      active: () => account.id,
+      probe: async (engine, candidate, observedAt) => ({ engine, accountId: candidate.id, authenticated: true, authCheckedAt: observedAt, limits: live.data, provenance: { source: "live", reason: null, staleSince: null }, observedAt }),
+    }, "boot", () => now).tick("claude");
+
+    const payload = await readLimits({ codexLiveReader, now: () => now + 1_000 });
+    expect(payload.claude?.tiers?.map((tier) => [tier.tier, tier.label, tier.usedPercent])).toEqual([["fable", "Fable", 16]]);
+
+    /* The next accounts tick meets the same backoff; the older tierless
+       snapshot does not replace the newer one with the tier on either path. */
+    await (await accountsPath(registry)).controller.tick("claude");
+    expect(registry.readOnlySnapshot().quotaObservations.claude.default?.limits?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    const later = await readLimits({ codexLiveReader, now: () => now + 2_000 });
+    expect(later.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    const { adoptClaudeLimitsSnapshot } = await import("./limits");
+    expect(adoptClaudeLimitsSnapshot("default", { ...live.data!, tiers: [] }, now - 1, now + 3_000)).toBeFalse();
+    expect((await readLimits({ codexLiveReader, now: () => now + 3_000 })).claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    expect(request).toHaveBeenCalledTimes(0);
+  } finally { request.mockRestore(); resetLimitsCache(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("both paths refreshing one account inside the window call the provider once, and share one backoff (#1849)", async () => {
+  resetLimitsCache();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-shared-snapshot-"));
+  const now = Date.now();
+  let status = 200;
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => status === 200
+    ? Response.json(usagePayloadWithCodenamedTier(providerLimits(16)))
+    : new Response(null, { status })) as unknown as typeof fetch);
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const { controller } = await accountsPath(registry);
+    await controller.tick("claude");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(registry.readOnlySnapshot().quotaObservations.claude.default?.limits?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    const footer = await readLimits({ codexLiveReader, now: () => Date.now() });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(footer.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+
+    /* The footer's read after the window meets a 429; the accounts path's
+       next tick rests on that backoff instead of calling again. */
+    status = 429;
+    const throttled = await readLimits({ codexLiveReader, now: () => now + 120_000 });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(throttled.provenance.claude.reason).toBe("oauth-rate-limited");
+    expect(throttled.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    await new QuotaController(registry, (await accountsPath(registry)).port as never, "boot", () => now + 125_000).tick("claude");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(registry.readOnlySnapshot().quotaObservations.claude.default?.limits?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+  } finally { request.mockRestore(); resetLimitsCache(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an operator's live re-read lands in the snapshot the footer answers from, with one provider read (#1849)", async () => {
+  resetLimitsCache();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-shared-snapshot-"));
+  const now = Date.now();
+  writeTierlessThrottledCache(now);
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json(usagePayloadWithCodenamedTier(providerLimits(16)))) as unknown as typeof fetch);
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
+    const result = await refreshAccountLimits("claude", "default", { registry, probe: (await accountsPath(registry)).port as never, now });
+    expect(result.kind).toBe("refreshed");
+    expect(request).toHaveBeenCalledTimes(1);
+    const footer = await readLimits({ codexLiveReader, now: () => now + 1_000 });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(footer.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    expect(footer.provenance.claude.source).toBe("live");
+  } finally { request.mockRestore(); resetLimitsCache(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a snapshot the other process wrote is what the next read answers from (#1849)", async () => {
+  resetLimitsCache();
+  const now = Date.now();
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json(usagePayloadWithCodenamedTier(providerLimits(16)))) as unknown as typeof fetch);
+  try {
+    await readLimits({ codexLiveReader, now: () => now });
+    expect(request).toHaveBeenCalledTimes(1);
+    /* The inventory sidecar's quota tick writes the same file from its own
+       process; this one's copy in memory must not outlive that write. */
+    const cacheFile = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
+    const written = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+    expect(written.engines.claude.default.data.weekly.usedPercent).not.toBe(77);
+    written.engines.claude.default.data.weekly.usedPercent = 77;
+    fs.writeFileSync(cacheFile, JSON.stringify(written));
+    fs.utimesSync(cacheFile, new Date(), new Date(Date.now() + 5_000));
+    const payload = await readLimits({ codexLiveReader, now: () => now + 2_000 });
+    expect(payload.claude?.weekly?.usedPercent).toBe(77);
+    expect(request).toHaveBeenCalledTimes(1);
   } finally { request.mockRestore(); resetLimitsCache(); }
 });

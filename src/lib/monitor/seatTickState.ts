@@ -6,7 +6,7 @@ import { statePath } from "@/lib/configDir";
 
 import {
   emptySeatTickState,
-  SEAT_TICK_ANNOUNCED_LANES_LIMIT,
+  SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -71,7 +71,19 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
        existed announces none, so nothing a landing could not have shown is
        recorded as having been shown. */
     announcedLanes: conversationIds(raw.announcedLanes),
+    /* Same direction for a settled deploy (#2063): a plan from before it
+       existed announces none. */
+    announcedDeploys: conversationIds(raw.announcedDeploys),
+    /* A plan from before #2030 records no note, so the next wake shows it. */
+    ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
   };
+}
+
+/** A recorded note revision: a bounded string, null for "no note", and
+    undefined for anything else, which records nothing (#2030). */
+function noteRevision(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  return typeof value === "string" && value.length > 0 && value.length <= 200 ? value : undefined;
 }
 
 /** Legacy identities have a bounded length; positive evidence is never
@@ -235,7 +247,13 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     childrenShown: conversationIds(raw.childrenShown).slice(-SEAT_TICK_CHILDREN_SHOWN_LIMIT),
     /* Absent on every row from before #1799, and absent reads as empty: a seat
        that has been told nothing about its lanes is told about all of them. */
-    announcedLanes: conversationIds(raw.announcedLanes).slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT),
+    announcedLanes: conversationIds(raw.announcedLanes),
+    /* Absent on every row from before #2063, and absent reads as empty: a
+       settled deploy nobody announced is announced. */
+    announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
+    /* Absent on every row from before #2030: a seat remembered as having been
+       shown no note is shown it. */
+    ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
   };
 }
 

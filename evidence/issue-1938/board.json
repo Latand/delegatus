@@ -1,0 +1,56 @@
+{
+  "frames": {
+    "390": {
+      "state": "needs_review",
+      "text": "Show the retry count in the bannerneeds reviewBuild→Critique↺1/1head 9b2e7d4c unreviewed · no rounds left · 20m",
+      "meta": "head 9b2e7d4c unreviewed · no rounds left · 20m",
+      "width": 366,
+      "overflows": false
+    },
+    "1280-light": {
+      "drawn": true,
+      "state": "needs_review",
+      "chip": "needs review",
+      "note": "last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
+      "label": "Show the retry count in the banner: needs review · last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
+      "cardText": "Show the retry count in the bannerThe last review failed, and the fix after it was never reviewed.needs review·20m agoBuild→Critique↺1/1last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewedClose the pipelineOne more roundPast attempts · 3last: Build · attempt 2 · passed · 20m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 2passed20m agoOpen conversationCritique · attempt 1failed · fail60m agoOpen conversationBuild · attempt 1passed2h agoOpen conversationAssigned 3m ago3 conversations+ Agent",
+      "chipBox": {
+        "x": 568,
+        "y": 469.28125,
+        "width": 64.9375,
+        "height": 15.9375
+      },
+      "noteBox": {
+        "x": 568,
+        "y": 523.25,
+        "width": 426,
+        "height": 15.9375
+      },
+      "noteClipped": false,
+      "titleClipped": null
+    },
+    "1280-dark": {
+      "drawn": true,
+      "state": "needs_review",
+      "chip": "needs review",
+      "note": "last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
+      "label": "Show the retry count in the banner: needs review · last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
+      "cardText": "Show the retry count in the bannerThe last review failed, and the fix after it was never reviewed.needs review·20m agoBuild→Critique↺1/1last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewedClose the pipelineOne more roundPast attempts · 3last: Build · attempt 2 · passed · 20m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 2passed20m agoOpen conversationCritique · attempt 1failed · fail60m agoOpen conversationBuild · attempt 1passed2h agoOpen conversationAssigned 3m ago3 conversations+ Agent",
+      "chipBox": {
+        "x": 568,
+        "y": 469.28125,
+        "width": 64.9375,
+        "height": 15.9375
+      },
+      "noteBox": {
+        "x": 568,
+        "y": 523.25,
+        "width": 426,
+        "height": 15.9375
+      },
+      "noteClipped": false,
+      "titleClipped": null
+    }
+  },
+  "failures": []
+}

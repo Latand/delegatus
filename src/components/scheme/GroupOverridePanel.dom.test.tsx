@@ -9,6 +9,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { GroupsLayer } from "./nodes";
 import { GroupOverridePanel } from "./GroupOverridePanel";
 import type { SchemeGroup } from "./layout";
+import { Z } from "@/components/layers";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -73,9 +74,8 @@ test("the override panel opens in a foreground layer, not nested in a halo stack
   /* The panel must NOT live inside a [data-scheme-group] halo wrapper — that
      wrapper's positioning context would paint it beneath the scheme cards. */
   expect(panel.closest("[data-scheme-group]")).toBeNull();
-  /* It sits in a high-z foreground container so it paints above the cards. */
-  const foreground = panel.closest(".z-\\[45\\]") ?? panel.parentElement;
-  expect(foreground?.className ?? "").toContain("z-[45]");
+  /* It sits in a foreground container on the popover layer, so it paints above the cards. */
+  expect(panel.closest(`[class~="${Z.popover}"]`)).toBeTruthy();
 
   flushSync(() => root.unmount());
   host.remove();
@@ -312,10 +312,15 @@ test("a parked pipeline offers retry and skip", async () => {
 });
 
 
-test.each(["ultra", "max"])("reviewer override reconciles Astra/%s to Luna before PATCH", (effort) => {
+test.each([
+  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
+  ["gpt-6-astra", "max", "gpt-5.6-luna"],
+  ["gpt-6-sol", "ultra", "gpt-6-luna"],
+  ["gpt-6-sol", "max", "gpt-6-luna"],
+] as const)("reviewer override reconciles %s/%s to %s before PATCH", (from, effort, to) => {
   const group: SchemeGroup = {
     ...flowGroup,
-    flow: { ...flowGroup.flow!, roles: { ...flowGroup.flow!.roles, reviewer: { engine: "codex", model: "gpt-6-astra", effort } } },
+    flow: { ...flowGroup.flow!, roles: { ...flowGroup.flow!.roles, reviewer: { engine: "codex", model: from, effort } } },
   };
   const { host, root } = mount(<GroupOverridePanel group={group} onClose={() => undefined} />);
   try {
@@ -323,12 +328,12 @@ test.each(["ultra", "max"])("reviewer override reconciles Astra/%s to Luna befor
     // happy-dom lacks React's text-input value tracker; use the input's handler.
     const propsKey = Object.keys(model).find((key) => key.startsWith("__reactProps$"))!;
     const props = (model as unknown as Record<string, { onChange: (event: unknown) => void }>)[propsKey]!;
-    flushSync(() => props.onChange({ target: { value: "gpt-5.6-luna" } }));
-    expect(model.value).toBe("gpt-5.6-luna");
+    flushSync(() => props.onChange({ target: { value: to } }));
+    expect(model.value).toBe(to);
     const expected = effort === "ultra" ? null : effort;
     expect((host.querySelectorAll("select")[1] as HTMLSelectElement).value).toBe(expected ?? "");
     flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent === "Update reviewer")!.click());
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.body).toMatchObject({ action: "set-roles", roles: { reviewer: { model: "gpt-5.6-luna", effort: expected } } });
+    expect(calls[0]?.body).toMatchObject({ action: "set-roles", roles: { reviewer: { model: to, effort: expected } } });
   } finally { flushSync(() => root.unmount()); }
 });

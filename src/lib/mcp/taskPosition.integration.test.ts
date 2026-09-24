@@ -19,6 +19,7 @@ process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent.sock");
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
 const { TASKS_FILE, loadTasks } = await import("@/lib/tasks/store");
+const { persistedTaskRows, persistedTaskState } = await import("@/lib/tasks/storeFixture");
 expect(TASKS_FILE.startsWith(sandbox + path.sep)).toBe(true);
 
 async function protocol() {
@@ -50,13 +51,13 @@ test.each([["foreign", "other-project"], ["stale", "fixture-project"]])("%s plac
     expect(created.ok).toBe(true);
     expect(loadTasks().find(task => task.id === created.task.id)!.pos).toEqual({ x: -0.5, y: 0 });
     const expectedRevision = key === "foreign" ? created.task.revision ?? "missing-baseline-token" : "task-v1:stale";
-      const before = fs.readFileSync(TASKS_FILE, "utf8");
+      const before = persistedTaskState(TASKS_FILE);
       const result = (await p.client.callTool({ name: "update_task", arguments: {
         clientRequestId: key, taskId: created.task.id, expectedProject, expectedRevision,
         pos: { x: 50, y: 60 }, text: "must not land", dueAt: "2026-10-01T00:00:00Z", dueTz: "UTC",
       } })).structuredContent;
       expect(result).toMatchObject({ ok: false, retryable: false });
-      expect(fs.readFileSync(TASKS_FILE, "utf8")).toBe(before);
+      expect(persistedTaskState(TASKS_FILE)).toBe(before);
   } finally { await p.close(); }
 });
 
@@ -70,7 +71,7 @@ test("completed SQLite receipts replay original coordinates and revisions after 
   expect(updated).toMatchObject({ ok: true });
   const { mutateTasks } = await import("@/lib/tasks/store");
   mutateTasks(tasks => ({ tasks: tasks.filter(t => t.id !== created.task.id), result: undefined }));
-  const before = fs.readFileSync(TASKS_FILE, "utf8");
+  const before = persistedTaskState(TASKS_FILE);
   await p.close(); p = await protocol();
   try {
     const replayCreate = (await p.client.callTool({ name: "create_task", arguments: createArgs })).structuredContent;
@@ -80,7 +81,7 @@ test("completed SQLite receipts replay original coordinates and revisions after 
     for (const [name, args] of [["create_task", { ...createArgs, text: "changed" }], ["update_task", { ...updateArgs, pos: { x: 9, y: 9 } }]] as const) {
       expect((await p.client.callTool({ name, arguments: args })).structuredContent).toMatchObject({ ok: false, code: "idempotency_conflict", retryable: false });
     }
-    expect(fs.readFileSync(TASKS_FILE, "utf8")).toBe(before);
+    expect(persistedTaskState(TASKS_FILE)).toBe(before);
   } finally { await p.close(); }
 });
 
@@ -121,9 +122,9 @@ test("MCP placement semantics and independent HTTP handlers share durable coordi
     const httpTask = (await http.json()).task;
     expect(httpTask.revision).not.toBe(oldToken);
     expect(await guarded({ pos: { x: 9, y: 9 } })).toMatchObject({ ok: false, code: "TASK_REVISION_MISMATCH", retryable: false });
-    const bytes = fs.readFileSync(TASKS_FILE, "utf8");
+    const bytes = persistedTaskState(TASKS_FILE);
     expect((await PATCH(request({ expectedProject: "foreign", expectedRevision: httpTask.revision, text: "wrong" }), { params: Promise.resolve({ id: task.id }) })).status).toBe(409);
-    expect(fs.readFileSync(TASKS_FILE, "utf8")).toBe(bytes);
+    expect(persistedTaskState(TASKS_FILE)).toBe(bytes);
     task = httpTask;
     task = (await guarded({ placement: "unplaced", pos: { x: 8, y: 9 } })).task;
     expect(task.placement).toBe("unplaced"); expect(task.pos).toBeUndefined();
@@ -196,13 +197,14 @@ test("canonical readback includes the persisted generation and placement preserv
       attachments: [{ id: crypto.randomUUID(), sha256: "a".repeat(64), ext: "png", mime: "image/png", bytes: 1, createdAt: "2026-09-01T00:00:00.000Z" }],
     });
     saveTasks(tasks);
-    const before = JSON.parse(fs.readFileSync(TASKS_FILE, "utf8")).tasks;
-    const current = before.find((t: { id: string }) => t.id === task.id);
-    const result = (await p.client.callTool({ name: "update_task", arguments: { clientRequestId: "preserve-move", taskId: task.id, expectedProject: task.project, expectedRevision: current.revision, pos: { x: -5.25, y: 0 } } })).structuredContent as { task: Record<string, unknown> };
+    type StoredRow = Record<string, unknown> & { id: string; revision: string };
+    const before = persistedTaskRows(TASKS_FILE) as StoredRow[];
+    const current = before.find((t) => t.id === task.id)!;
+    const result = (await p.client.callTool({ name: "update_task", arguments: { clientRequestId: "preserve-move", full: true, taskId: task.id, expectedProject: task.project, expectedRevision: current.revision, pos: { x: -5.25, y: 0 } } })).structuredContent as { task: Record<string, unknown> };
     expect(result).toMatchObject({ ok: true });
-    const after = JSON.parse(fs.readFileSync(TASKS_FILE, "utf8")).tasks;
-    expect(after.find((t: { id: string }) => t.id === task.id)).toEqual(result.task);
-    expect(after.filter((t: { id: string }) => t.id !== task.id)).toEqual(before.filter((t: { id: string }) => t.id !== task.id));
+    const after = persistedTaskRows(TASKS_FILE) as StoredRow[];
+    expect(after.find((t) => t.id === task.id) as Record<string, unknown> | undefined).toEqual(result.task);
+    expect(after.filter((t) => t.id !== task.id)).toEqual(before.filter((t) => t.id !== task.id));
     const { pos: _pos, revision: _revision, updatedAt: _updatedAt, ...preserved } = result.task;
     const { pos: _oldPos, revision: _oldRevision, updatedAt: _oldUpdatedAt, ...expected } = current;
     expect(preserved).toEqual(expected);

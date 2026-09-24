@@ -1,3 +1,4 @@
+import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
 import { NativeQueueJournal } from "./nativeQueueJournal";
 import type { NativeQueueCommand, NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
 import { parseRuntimeCommand } from "@/lib/runtime/commands";
@@ -9,6 +10,8 @@ import { Database } from "bun:sqlite";
 
 import {
   RUNTIME_SCHEMA_VERSION,
+  compactViewerDeploymentError, parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit,
+  type ViewerDeploymentList, type ViewerDeploymentListOptions,
   RUNTIME_DELIVERY_DISCARDED_REASON,
   assertRuntimeEvent,
   normalizeRuntimeEventInput,
@@ -26,6 +29,9 @@ import {
   RuntimeIdempotencyConflictError,
   newOperationId,
   runtimeCompactCapability,
+  isStructuredHostKind,
+  runtimeHostKindForEngine,
+  runtimeSteerCapability,
   type NormalizedRuntimeEventInput,
   type RuntimeOperationCommand,
   type RuntimeOperationReceipt,
@@ -34,6 +40,7 @@ import {
   type RuntimeReplay,
   type RuntimeRetryOptions,
   type RuntimeSession,
+  type RuntimeSessionRead,
   type RuntimeSnapshot,
   type RuntimeTransitionOptions,
   type ViewerDeploymentOwner,
@@ -86,6 +93,10 @@ export const RUNTIME_PENDING_EFFECT_STALE_MS = 60 * 60 * 1_000;
  * realistic outstanding set: production carries single digits of unprojected
  * terminal receipts at a time, and each row is a receipt, not a transcript. */
 export const RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT = 512;
+
+// This expression is shared by the index and both keyset query forms. SQLite
+// maintains it for old-host writes too, so a rollback needs no metadata repair.
+export const DEPLOYMENT_LIST_STARTED_AT = "COALESCE(CAST(round(unixepoch(json_extract(state_json, '$.createdAt'), 'subsec') * 1000) AS INTEGER), CAST(round(unixepoch(json_extract(state_json, '$.updatedAt'), 'subsec') * 1000) AS INTEGER), -8640000000000000)";
 
 export type RuntimeRegistryConversationRetentionState = "current" | "dead" | "superseded";
 
@@ -252,10 +263,12 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   return {
     conversationId: typeof payload.conversationId === "string" ? payload.conversationId : id,
     sessionKey: {
-      engine: key.engine === "claude" ? "claude" : "codex",
+      engine: key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex",
       sessionId: typeof key.sessionId === "string" ? key.sessionId : id,
     },
-    hostKind: payload.hostKind === "codex-app-server" || payload.hostKind === "claude-broker" || payload.hostKind === "tmux-legacy" ? payload.hostKind : "unhosted",
+    hostKind: isStructuredHostKind(typeof payload.hostKind === "string" ? payload.hostKind : null) || payload.hostKind === "tmux-legacy"
+      ? payload.hostKind as RuntimeSession["hostKind"]
+      : "unhosted",
     host: payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
     turn: payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
     provenance: payload.provenance === "derived" || payload.provenance === "replayed" ? payload.provenance : "structured",
@@ -271,6 +284,8 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
     artifactPath: typeof payload.artifactPath === "string" ? payload.artifactPath : null,
     capabilities: {
       steer: capabilities.steer === true,
+      /* Copilot: no steer; a message for the running turn interrupts and resends. */
+      ...(capabilities.steerMode === "interrupt" ? { steerMode: "interrupt" as const } : {}),
       structuredAttention: capabilities.structuredAttention === true,
       nativeQueue: capabilities.nativeQueue === true,
       /* #1560. Fail-closed like every other observed capability: a projection
@@ -283,7 +298,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
       } } : {}),
       imageInput: capabilities.imageInput && typeof capabilities.imageInput === "object"
         ? capabilities.imageInput as RuntimeSession["capabilities"]["imageInput"]
-        : runtimeImageCapability(key.engine === "claude" ? "claude" : "codex", false),
+        : runtimeImageCapability(key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex", false),
     },
     ...(payload.diagnostics && typeof payload.diagnostics === "object" ? { diagnostics: {
       executable: typeof record(payload.diagnostics).executable === "string" ? String(record(payload.diagnostics).executable).split(/[\\/]/).at(-1)!.slice(0, 80) : "unknown",
@@ -324,6 +339,7 @@ export interface RuntimeJournalOptions {
 export class RuntimeJournal {
   private readonly db: Database;
   private readonly nativeQueue: NativeQueueJournal;
+  private readonly sessionHostMetadata: SessionHostMetadata;
   private readonly maxEvents: number;
   private readonly now: () => number;
   private readonly structuredHosts: boolean;
@@ -378,6 +394,9 @@ export class RuntimeJournal {
         winner TEXT NOT NULL CHECK(winner IN ('discard', 'retry')),
         claimed_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS consumer_cursors (
+        consumer TEXT PRIMARY KEY, completed_seq INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS consumer_checkpoints (
         event_id TEXT NOT NULL, consumer TEXT NOT NULL, completed_at INTEGER NOT NULL,
         PRIMARY KEY(event_id, consumer)
@@ -395,6 +414,7 @@ export class RuntimeJournal {
     this.migrateOperationProjectionPending();
     this.migrateLegacyEvents();
     this.migrateEntityUpdatedAt();
+    this.db.exec(`CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`);
     for (const row of this.db.query<EventRow, []>("SELECT * FROM events WHERE producer_key IS NOT NULL").all()) {
       this.db.query("INSERT INTO producer_receipts(producer_kind, producer_key, event_json) VALUES (?, ?, ?) ON CONFLICT(producer_kind, producer_key) DO NOTHING")
         .run(row.producer_kind, row.producer_key, stableJson(toEvent(row)));
@@ -410,6 +430,11 @@ export class RuntimeJournal {
     this.metaSetDefault("health", "ready");
     this.metaSetDefault("files_revision", "0");
     this.verify();
+    this.sessionHostMetadata = new SessionHostMetadata(this.db);
+    if (!this.fault) {
+      this.db.exec(`CREATE INDEX IF NOT EXISTS session_artifact_path ON entities(json_extract(state_json, '$.artifactPath'), id) WHERE kind = 'session'`);
+      this.sessionHostMetadata.start();
+    }
   }
 
   append(rawInput: RuntimeEventInput): RuntimeEvent {
@@ -711,7 +736,7 @@ export class RuntimeJournal {
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
-    details: Partial<Pick<RuntimeOperationReceipt, "turnId" | "queuePosition" | "reason">> = {},
+    details: Partial<Pick<RuntimeOperationReceipt, "turnId" | "queuePosition" | "reason" | "delivery" | "interruptedTurnId">> = {},
     options: RuntimeTransitionOptions = {},
     nativeTransition?: NativeQueueTransition,
   ): RuntimeOperationResult {
@@ -926,7 +951,7 @@ export class RuntimeJournal {
           const session = this.entity<RuntimeSession>("session", options.requireHostedConversationId);
           if (!session
             || session.host !== "hosted"
-            || (session.hostKind !== "codex-app-server" && session.hostKind !== "claude-broker")) {
+            || !isStructuredHostKind(session.hostKind)) {
             throw new Error("structured recovery ownership changed before retry admission");
           }
         }
@@ -1014,6 +1039,24 @@ export class RuntimeJournal {
     }
   }
 
+  /** Primary-key lookup, with an indexed artifact fallback for path-only sends.
+      Reads inactive sessions too: global snapshot retention is a display bound. */
+  readSession(identity: RuntimeSessionRead): RuntimeSession | null {
+    const { conversationId, artifactPath } = identity;
+    if ((!conversationId && !artifactPath)
+      || (conversationId !== undefined && (typeof conversationId !== "string" || !conversationId.trim()))
+      || (artifactPath !== undefined && (typeof artifactPath !== "string" || !artifactPath.trim()))) {
+      throw new Error("runtime session identity is invalid");
+    }
+    const session = conversationId ? this.entity<RuntimeSession>("session", conversationId) : null;
+    if (session) return presentSession(session);
+    if (!artifactPath) return null;
+    const row = this.db.query<{ state_json: string }, [string]>(
+      "SELECT state_json FROM entities WHERE kind = 'session' AND json_extract(state_json, '$.artifactPath') = ? ORDER BY id LIMIT 1",
+    ).get(artifactPath);
+    return row ? presentSession(JSON.parse(row.state_json) as RuntimeSession) : null;
+  }
+
   snapshot(): RuntimeSnapshot {
     return this.snapshotAt(this.now());
   }
@@ -1028,16 +1071,7 @@ export class RuntimeJournal {
         serverTime: new Date(now).toISOString(),
         runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
         filesRevision: Number(this.meta("files_revision")),
-        sessions: this.snapshotSessionValues(voiceBodiesFor).map((session) => ({
-          ...session,
-          // Only a running turn has live text to resume. Re-normalizing here
-          // also caps legacy rows to the 64 KiB UTF-8 tail; omittedChars is the
-          // explicit marker that lets consumers disclose the clipped prefix.
-          liveTurn: session.turn === "running"
-            ? normalizeRuntimeLiveTurn(session.liveTurn)
-            : null,
-          recentReceipts: visibleReceipts(session.recentReceipts).map(runtimePresentationReceipt),
-        })),
+        sessions: this.snapshotSessionValues(voiceBodiesFor).map(presentSession),
         attentions: this.entityValues<RuntimeAttention>("attention"),
         recentOperations: visibleReceipts(
           this.recentEntityValues<RuntimeOperationReceipt>("operation", 100),
@@ -1062,8 +1096,9 @@ export class RuntimeJournal {
       every socket request exceeds the client's timeout and the retry storm
       keeps the host saturated (the 2026-08-04 spawn freeze). total_changes()
       counts every row this connection has written, so no mutation path needs
-      to remember to invalidate. The time expiry covers the only projection
-      whose visibility changes without a write. serverTime inside the cached
+      to remember to invalidate. Metadata backfill writes are excluded while
+      completion invalidates once to enable indexed selection. The time expiry
+      covers the only projection whose visibility changes without a write. serverTime inside the cached
       frame dates from the last rebuild; no consumer reads it. */
   snapshotJson(voiceBodiesFor?: readonly string[]): string {
     const scope = JSON.stringify(voiceBodiesFor ?? null);
@@ -1078,7 +1113,8 @@ export class RuntimeJournal {
   }
 
   private totalChanges(): number {
-    return Number(this.db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()?.changes ?? 0);
+    return Number(this.db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()?.changes ?? 0)
+      - this.sessionHostMetadata.excludedChanges + Number(this.sessionHostMetadata.ready);
   }
 
   replay(after: number, limit = 128): RuntimeReplay {
@@ -1177,6 +1213,37 @@ export class RuntimeJournal {
     }
   }
 
+  /** Read only the requested deployment page; never materialize a runtime snapshot. */
+  listViewerDeployments(options: ViewerDeploymentListOptions = {}): ViewerDeploymentList {
+    const limit = viewerDeploymentListLimit(options.limit);
+    const cursor = parseViewerDeploymentListCursor(options.cursor);
+    const projection = options.compact ? `json_object(
+      'deploymentId', json_extract(state_json, '$.deploymentId'),
+      'phase', json_extract(state_json, '$.phase'),
+      'sha', json_extract(state_json, '$.revision'),
+      'terminal', json(CASE WHEN json_extract(state_json, '$.terminal') THEN 'true' ELSE 'false' END),
+      'startedAt', json_extract(state_json, '$.createdAt'),
+      'finishedAt', CASE WHEN json_extract(state_json, '$.terminal') THEN json_extract(state_json, '$.updatedAt') ELSE NULL END,
+      'error', substr(json_extract(state_json, '$.error'), 1, 301)
+    )` : "state_json";
+    const rows = this.db.query<{ id: string; started_at: number; value: string }, [number, number, string, number] | [number]>(`
+      SELECT id, ${DEPLOYMENT_LIST_STARTED_AT} AS started_at, ${projection} AS value
+      FROM entities INDEXED BY deployment_list_recent WHERE kind = 'deployment'
+      ${cursor ? `AND ${DEPLOYMENT_LIST_STARTED_AT} <= ? AND (${DEPLOYMENT_LIST_STARTED_AT}, id) < (?, ?)` : ""}
+      ORDER BY ${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC LIMIT ?
+    `).all(...(cursor ? [cursor[0], cursor[0], cursor[1], limit + 1] as [number, number, string, number] : [limit + 1] as [number]));
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return { deployments: page.map(row => {
+      const value = JSON.parse(row.value);
+      // SQL bounds code points; presentation bounds UTF-16 units, including emoji.
+      if (options.compact) value.error = compactViewerDeploymentError(value.error);
+      return value;
+    }), hasMore,
+      nextCursor: hasMore && last ? viewerDeploymentListCursor(last.started_at, last.id) : null };
+  }
+
   viewerDeployment(deploymentId: string): ViewerDeploymentStatus | null {
     const row = this.db.query<{ status_json: string }, [string]>("SELECT status_json FROM viewer_deployments WHERE deployment_id = ?").get(deploymentId);
     return row ? JSON.parse(row.status_json) as ViewerDeploymentStatus : null;
@@ -1245,31 +1312,71 @@ export class RuntimeJournal {
     return this.fault === null;
   }
 
-  consumerCompleted(eventId: string, consumer: string): boolean {
+  /** Register before accepting publications. This durable prefix hold also
+   * protects appends made during restart before the consumer is reconstructed.
+   * A new consumer starts at the retained anchor; registration never resets it. */
+  registerConsumer(consumer: string): void {
     this.assertHealthy();
+    if (!consumer.trim()) throw new Error("runtime consumer name is required");
+    this.db.query(`INSERT INTO consumer_cursors(consumer, completed_seq)
+      VALUES (?, CAST((SELECT value FROM journal_meta WHERE key = 'anchor_seq') AS INTEGER))
+      ON CONFLICT(consumer) DO NOTHING`).run(consumer);
+  }
+
+  consumerCompleted(eventId: string, consumer: string, eventSeq?: number): boolean {
+    this.assertHealthy();
+    // A retried producer receipt can outlive its event and individual checkpoint.
+    if (eventSeq !== undefined && eventSeq <= this.consumerCursor(consumer)) return true;
     return Boolean(this.db.query<{ present: number }, [string, string]>("SELECT 1 AS present FROM consumer_checkpoints WHERE event_id = ? AND consumer = ?").get(eventId, consumer));
+  }
+
+  private consumerCursor(consumer: string): number {
+    return this.db.query<{ completed_seq: number }, [string]>(
+      "SELECT completed_seq FROM consumer_cursors WHERE consumer = ?",
+    ).get(consumer)?.completed_seq ?? 0;
   }
 
   markConsumerCompleted(eventId: string, consumer: string): void {
     this.assertHealthy();
-    this.db.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES (?, ?, ?) ON CONFLICT(event_id, consumer) DO NOTHING").run(eventId, consumer, this.now());
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.registerConsumer(consumer);
+      this.db.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES (?, ?, ?) ON CONFLICT(event_id, consumer) DO NOTHING").run(eventId, consumer, this.now());
+      // Recursive projections may finish before their parent. Only advance over
+      // a contiguous completed prefix, preserving every hole for ordered replay.
+      const pending = this.db.query<{ seq: number }, [number, string]>(`
+        SELECT seq FROM events WHERE seq > ? AND NOT EXISTS (
+          SELECT 1 FROM consumer_checkpoints WHERE event_id = events.event_id AND consumer = ?
+        ) ORDER BY seq LIMIT 1
+      `).get(this.consumerCursor(consumer), consumer);
+      this.db.query("UPDATE consumer_cursors SET completed_seq = ? WHERE consumer = ?")
+        .run(pending ? pending.seq - 1 : Number(this.meta("published_seq")), consumer);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
   }
 
   unconsumedEvents(consumer: string, limit = 128): RuntimeEvent[] {
     this.assertHealthy();
-    return this.db.query<EventRow, [string, number]>(`
+    return this.db.query<EventRow, [number, string, number]>(`
       SELECT events.* FROM events
-      WHERE NOT EXISTS (
+      WHERE events.seq > ? AND NOT EXISTS (
         SELECT 1 FROM consumer_checkpoints
         WHERE consumer_checkpoints.event_id = events.event_id
           AND consumer_checkpoints.consumer = ?
       )
       ORDER BY events.seq
       LIMIT ?
-    `).all(consumer, Math.min(Math.max(limit, 1), 128)).map(toEvent);
+    `).all(this.consumerCursor(consumer), consumer, Math.min(Math.max(limit, 1), 128)).map(toEvent);
   }
 
   claimHostEpoch(): number {
+    // Main claims the epoch before constructing RuntimeHost. A legacy journal
+    // has no orchestration cursor yet: establish its durable hold before epoch
+    // reconciliation can append and compact. Existing checkpoints stay intact.
+    this.registerConsumer("orchestration");
     const epoch = this.claimHostEpochInTransaction();
     /* Outside the epoch transaction on purpose: the sweep opens transactions of
        its own, and a claimed epoch must never be undone by a failure to settle
@@ -1537,8 +1644,15 @@ export class RuntimeJournal {
     const remove = count - maxEvents;
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const anchor = this.db.query<{ seq: number; hash: string }, [number]>("SELECT seq, hash FROM events ORDER BY seq LIMIT 1 OFFSET ?").get(remove - 1);
-      if (!anchor) throw new RuntimeJournalFault("journal compaction anchor is missing");
+      const target = this.db.query<{ seq: number }, [number]>("SELECT seq FROM events ORDER BY seq LIMIT 1 OFFSET ?").get(remove - 1);
+      if (!target) throw new RuntimeJournalFault("journal compaction anchor is missing");
+      // Keep a contiguous hash-verified tail through the slowest registered
+      // consumer. No retention cap may discard an outstanding replay obligation.
+      const consumed = this.db.query<{ seq: number | null }, []>("SELECT MIN(completed_seq) AS seq FROM consumer_cursors").get()?.seq;
+      const anchor = this.db.query<{ seq: number; hash: string }, [number]>(
+        "SELECT seq, hash FROM events WHERE seq <= ? ORDER BY seq DESC LIMIT 1",
+      ).get(Math.min(target.seq, consumed ?? target.seq));
+      if (!anchor) { this.db.exec("COMMIT"); return; }
       this.db.query("DELETE FROM events WHERE seq <= ?").run(anchor.seq);
       this.db.exec("DELETE FROM consumer_checkpoints WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)");
       this.db.query("DELETE FROM outbox WHERE state = 'completed' AND event_seq <= ?").run(anchor.seq);
@@ -1641,7 +1755,7 @@ export class RuntimeJournal {
     return { scanned: rows.length, deleted: stale.length, cycled };
   }
 
-  close(): void { this.db.close(); }
+  close(): void { this.sessionHostMetadata.close(); this.db.close(); }
 
   private appendInTransaction(input: NormalizedRuntimeEventInput): RuntimeEvent {
     const producerKey = input.producer.eventKey ?? null;
@@ -1839,8 +1953,8 @@ export class RuntimeJournal {
       }
     } else if (this.structuredHosts
       && command.kind === "send"
-      && (session?.hostKind === "codex-app-server" || session?.hostKind === "claude-broker")) {
-      if (command.policy === "queue" && session.hostKind === "codex-app-server"
+      && isStructuredHostKind(session?.hostKind)) {
+      if (command.policy === "queue" && session?.hostKind === "codex-app-server"
         && session.diagnostics?.queueCapability === "unknown") {
         status = "rejected";
         reason = "native-queue-capability-unknown";
@@ -1898,6 +2012,12 @@ export class RuntimeJournal {
       } else if ((command.kind === "steer" || command.policy !== "queue") && session.turn === "running" && session.capabilities.steer) {
         status = "pending";
         turnId = session.activeTurnId;
+      } else if (command.kind === "steer" && session.capabilities.steerMode === "interrupt" && (session.turn === "running" || session.turn === "idle")) {
+        /* No steer on this engine (Copilot): the delivery queue interrupts the
+           running turn and sends the message as the next one, and a turn that
+           already ended leaves it a plain new turn (docs/design/copilot-engine.md 3.4). */
+        status = "pending";
+        turnId = session.turn === "running" ? session.activeTurnId : null;
       } else if (command.kind === "steer") {
         status = "rejected";
         reason = "stale-turn";
@@ -2085,7 +2205,7 @@ export class RuntimeJournal {
         payload: {
           conversationId: command.conversationId,
           sessionKey: { engine: command.engine, sessionId: command.sessionId ?? command.conversationId },
-          hostKind: command.engine === "codex" ? "codex-app-server" : "claude-broker",
+          hostKind: runtimeHostKindForEngine(command.engine),
           host: "registering",
           turn: "unknown",
           provenance: "structured",
@@ -2094,7 +2214,7 @@ export class RuntimeJournal {
           cwd: command.cwd,
           artifactPath: null,
           capabilities: {
-            steer: command.engine === "codex",
+            ...runtimeSteerCapability(command.engine),
             structuredAttention: true,
             imageInput: runtimeImageCapability(command.engine, false),
           },
@@ -2486,13 +2606,24 @@ export class RuntimeJournal {
   private snapshotSessionValues(voiceBodiesFor?: readonly string[]): RuntimeSession[] {
     // SQLite removes the heavy bodies before they cross into JS. The original
     // entity, receipts, tombstones and full snapshot API remain unchanged.
-    const projection = voiceBodiesFor === undefined ? "state_json" : `CASE WHEN id = ? THEN state_json ELSE json_set(state_json,
+    const projection = voiceBodiesFor === undefined ? "state_json" : `CASE WHEN entities.id = ? THEN state_json ELSE json_set(state_json,
       '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
         '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
           FROM json_each(delivery.value, '$.responses') AS response), '[]'))))
         FROM json_each(state_json, '$.voiceDeliveries') AS delivery), '[]')),
       '$.voiceDeliverySnapshotRevision', json_extract(state_json, '$.revision')) END AS state_json`;
     const selected = voiceBodiesFor?.[0] ?? "";
+    if (this.sessionHostMetadata.ready) {
+      const parameters = voiceBodiesFor === undefined ? [] : [selected];
+      const active = this.db.query<{ state_json: string }, (string | number)[]>(
+        `SELECT ${projection} ${SESSION_HOST_ACTIVE_FROM}`,
+      ).all(...parameters);
+      const inactive = this.db.query<{ state_json: string }, (string | number)[]>(
+        `SELECT ${projection} ${SESSION_HOST_INACTIVE_FROM}`,
+      ).all(...parameters, RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT);
+      return [...active, ...inactive].map(row => JSON.parse(row.state_json) as RuntimeSession)
+        .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
+    }
     const active = this.db.query<{ state_json: string }, (string | number)[]>(`
       SELECT ${projection}
       FROM entities
@@ -2517,7 +2648,9 @@ export class RuntimeJournal {
   }
 
   private snapshotEdgeValues(now: number): RuntimeEdge[] {
-    const terminalSessions = new Map(this.db.query<{
+    const rows = this.sessionHostMetadata.ready
+      ? this.db.query<{ id: string; last_changed_at: number | null }, []>(SESSION_HOST_TERMINAL).all()
+      : this.db.query<{
       id: string;
       last_changed_at: number | null;
     }, [string, string, string]>(`
@@ -2525,7 +2658,8 @@ export class RuntimeJournal {
       FROM entities AS session
       WHERE session.kind = ?
         AND json_extract(session.state_json, '$.host') IN (?, ?)
-    `).all("session", "dead", "unhosted").map((row) => [row.id, row.last_changed_at]));
+    `).all("session", "dead", "unhosted");
+    const terminalSessions = new Map(rows.map(row => [row.id, row.last_changed_at]));
 
     return this.entityValues<RuntimeEdge>("edge").filter((edge) => {
       if (!terminalSessions.has(edge.childConversationId)) return true;
@@ -2537,6 +2671,11 @@ export class RuntimeJournal {
   }
 
   private snapshotEdgeExpiry(now: number): number | null {
+    if (this.sessionHostMetadata.ready) {
+      return this.db.query<{ expires_at: number | null }, [number, number, number]>(SESSION_HOST_EXPIRY).get(
+        RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS, RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS, now,
+      )?.expires_at ?? null;
+    }
     return this.db.query<{ expires_at: number | null }, [number, string, string, number, number]>(`
       SELECT MIN(session.updated_at + ? + 1) AS expires_at
       FROM entities AS edge
@@ -2637,7 +2776,7 @@ export class RuntimeJournal {
 
   private verify(): void {
     try {
-      for (const table of ["journal_meta", "events", "scope_revisions", "projections", "entities", "outbox", "operations", "delivery_operation_actions", "native_queue_entries", "native_queue_operation_holds", "consumer_checkpoints", "viewer_deployments"]) {
+      for (const table of ["journal_meta", "events", "scope_revisions", "projections", "entities", "outbox", "operations", "delivery_operation_actions", "native_queue_entries", "native_queue_operation_holds", "consumer_checkpoints", "consumer_cursors", "viewer_deployments"]) {
         const check = this.db.query<{ quick_check: string }, []>(`PRAGMA quick_check(${table})`).get();
         if (check?.quick_check !== "ok") throw new RuntimeJournalFault(`runtime journal SQLite check failed: ${table}`);
       }
@@ -2770,4 +2909,12 @@ export class RuntimeJournal {
 
   private metaSetDefault(key: string, value: string): void { this.db.query("INSERT INTO journal_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING").run(key, value); }
   private metaSet(key: string, value: string): void { this.db.query("INSERT INTO journal_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, value); }
+}
+
+function presentSession(session: RuntimeSession): RuntimeSession {
+  return {
+    ...session,
+    liveTurn: session.turn === "running" ? normalizeRuntimeLiveTurn(session.liveTurn) : null,
+    recentReceipts: visibleReceipts(session.recentReceipts).map(runtimePresentationReceipt),
+  };
 }

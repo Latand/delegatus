@@ -4,6 +4,8 @@ import net from "node:net";
 import { homedir, networkInterfaces } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
 
+import { appDirIn } from "./appDir.mjs";
+
 export const WAKATIME_CREDENTIAL_ENV = "WAKATIME_API_KEY";
 
 /** @param {Record<string, string | undefined>} environment */
@@ -72,7 +74,7 @@ export function cliRuntimeHostConfig(packageRoot, options = {}) {
   const home = options.home ?? homedir();
   const platform = options.platform ?? process.platform;
   const stateDirectory = env.LLV_STATE_DIR?.trim()
-    || join(env.XDG_CONFIG_HOME?.trim() || join(home, ".config"), "agent-log-viewer", "state");
+    || join(appDirIn(env.XDG_CONFIG_HOME?.trim() || join(home, ".config")), "state");
   const installId = createHash("sha256").update(resolve(packageRoot)).digest("hex").slice(0, 16);
   const bundled = join(packageRoot, "dist", "runtime-host.mjs");
   const source = join(packageRoot, "src", "runtime-host", "main.ts");
@@ -80,6 +82,10 @@ export function cliRuntimeHostConfig(packageRoot, options = {}) {
     ...cliRuntimeHostEndpoint(stateDirectory, installId, platform),
     journalPath: join(stateDirectory, `runtime-events-${installId}.sqlite`),
     entrypoint: existsSync(bundled) ? bundled : source,
+    /* Self-update (#2007) keys its launcher record and release pointer by the
+       same install. */
+    stateDirectory,
+    installId,
   };
 }
 

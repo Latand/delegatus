@@ -491,9 +491,9 @@ test("a needs_decision with findings fires the fail edge and hands the findings 
   expect(relayed).toContain("Fixable; my confidence in the call is partial.");
 });
 
-test("a needs_decision with findings parks once the fail edge's budget is spent (#1785)", async () => {
+test("a needs_decision with findings parks once a park edge's budget is spent (#1785)", async () => {
   const h = harness();
-  await reachedVerify(h, [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 1 } })]);
+  await reachedVerify(h, [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 1, onExhausted: "park" } })]);
 
   /* Round one: the only round this edge has. */
   await h.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "the fence is missing" }] });
@@ -515,6 +515,40 @@ test("a needs_decision with findings parks once the fail edge's budget is spent 
   expect(parked.state).toBe("needs_decision");
   expect(parked.decisionRequested).toBeUndefined();
   expect(attemptsOf("build")).toHaveLength(2);
+});
+
+test("a needs_decision with findings on a spent default edge is handed to the fix stage once, then follows the pass edge (#1868)", async () => {
+  const h = harness();
+  await reachedVerify(h, [
+    stage("build", "verify"),
+    stage("verify", "ship", { onFail: { to: "build", maxRounds: 1 } }),
+    stage("ship", null),
+  ]);
+
+  /* The edge's only review fails: the findings go to build as the last fix. */
+  await h.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "the fence is missing" }] });
+  await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+
+  const handed = attemptsOf("verify")[0]!;
+  expect(handed.state).toBe("needs_decision");
+  expect(handed.decisionRequested).toBe(true);
+  expect(handed.budgetSpent).toBe(true);
+  expect(current().state).toBe("running");
+  expect(current().cursor).toMatchObject({
+    stageId: "build",
+    state: "pending",
+    activatedBy: { stageId: "verify", attempt: 1, edge: "fail", budgetSpent: true },
+  });
+
+  await tickPipelines([], h.ports); // spawn build attempt 2
+  expect(attemptsOf("build")[1]!.input!).toContain("Needs-decision verdict findings:\n- P1 — the fence is missing");
+  await tickPipelines([h.endTurn(3, 'Fixed.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+  await tickPipelines([], h.ports);
+
+  /* verify is not asked again: the fix follows verify's pass edge to ship. */
+  expect(h.spawnedStages).toEqual(["build", "verify", "build", "ship"]);
+  expect(attemptsOf("verify")).toHaveLength(1);
+  expect(current().cursor?.stageId).toBe("ship");
 });
 
 test("a needs_decision parks with no fail edge, and parks with no findings (#1785)", async () => {
@@ -608,4 +642,78 @@ test("a routed needs_decision leaves no chip claiming the operator is needed, wh
   /* The parked decision is the stage's current work, listed nowhere as past. */
   expect(pastAttempts([current()], new Map()).map((row) => [row.stageId, row.n, row.state]))
     .toEqual([["build", 1, "passed"]]);
+});
+
+
+const uncertainDelivery = "delivery was started by an earlier executor; whether it reached the recipient is unverified; the stage transcript exists, so the prompt may already have reached the agent and is not sent again";
+
+test.each(["report", "fenced"] as const)("a delivered parked attempt accepts its %s verdict and takes the fail edge (#1979)", async (channel) => {
+  const h = harness();
+  const pathname = path.join(process.env.LLV_STATE_DIR!, `delivered-${channel}.jsonl`);
+  const at = 2_000_000;
+  fs.writeFileSync(pathname, JSON.stringify({ timestamp: new Date(at).toISOString(), type: "event_msg", payload: { type: "user_message", message: "Review this change" } }) + "\n");
+  const spawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, reserved) => {
+    await spawn(input, reserved);
+    // The prompt reached the agent before this executor lost its acknowledgement.
+    throw new Error(uncertainDelivery);
+  };
+  h.ports.transcriptPresent = (file) => fs.existsSync(file);
+  h.ports.pathForConversation = (id) => id === "conversation_stage_1" ? pathname : null;
+  h.ports.sourcePathAllowed = (file) => file === pathname || file.startsWith("/codex/");
+  h.ports.durableTurnEvidence = (engine, file) => import("./durableEvidence").then((module) => module.durableStageTurnEvidence(engine, file));
+  h.ports.spawnReceipt = (launchId) => ({ launchId, conversationId: "conversation_stage_1", state: "failed", sessionId: null, transcript: null, stagedTranscript: pathname, paneId: null, staged: true, error: uncertainDelivery });
+  await started(h.ports, [stage("review", null, { access: "read-only", onFail: { to: "repair", maxRounds: 2 } }), stage("repair", null)]);
+  expect(current().state).toBe("needs_decision");
+  h.ports.spawnAgent = spawn;
+  if (channel === "report") {
+    const accepted = await h.report(1, { verdict: "fail", findings: [{ severity: "P1", text: "Delivery admission rejected the received prompt." }] });
+    expect(accepted.error).toBeUndefined();
+  }
+  const verdict = '```json\n{"status":"fail","findings":["P1 — Delivery admission rejected the received prompt."],"confidence":0.95}\n```';
+  fs.appendFileSync(pathname, [
+    { timestamp: new Date(at + 1).toISOString(), type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: verdict }] } },
+    { timestamp: new Date(at + 2).toISOString(), type: "event_msg", payload: { type: "task_complete" } },
+  ].map((record) => JSON.stringify(record)).join("\n") + "\n");
+  await tickPipelines([], h.ports);
+  expect(attemptsOf("review")).toHaveLength(1);
+  expect(attemptsOf("review")[0]).toMatchObject({ state: "failed", verdict: { status: "fail" } });
+  expect(current().cursor?.stageId).toBe("repair");
+  await tickPipelines([], h.ports);
+  expect(h.spawnedStages).toEqual(["review", "repair"]);
+});
+
+
+test.each(["metadata", "unknown", "older-turn", "other-decision", "closed", "superseded"] as const)("unverified delivery does not reopen a %s attempt (#1979)", async (shape) => {
+  const h = harness();
+  await started(h.ports, [stage("review", null)]);
+  const parked = current();
+  parked.state = shape === "closed" ? "closed" : "needs_decision";
+  parked.stateDetail = uncertainDelivery;
+  const attempt = parked.runs[0]!.attempts[0]!;
+  Object.assign(attempt, { state: "needs_decision", error: shape === "other-decision" ? "Operator must select a requirement" : uncertainDelivery, paneId: null });
+  if (shape === "closed") parked.cursor = null;
+  if (shape === "superseded") parked.runs[0]!.attempts.push({ ...attempt, n: 2, conversationId: "conversation_replacement" });
+  savePipelines([parked]);
+  h.ports.durableTurnEvidence = async () => ({ turn: shape === "unknown" ? "unknown" : "busy", message: null, launchOnly: shape === "metadata", lastRecordAt: shape === "older-turn" ? 1 : 2_000_000 });
+  expect((await h.report(1, { verdict: "pass" })).code).toBe("STAGE_REPORT_SETTLED");
+  expect(attemptsOf("review")[0]!.report).toBeUndefined();
+});
+
+test("the PR a report looked up reaches the board's forge cache with no second forge call (#2059)", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  const lane = current();
+  savePipelines([{ ...lane, delivery: { ...lane.delivery!, target: { ...lane.delivery!.target, remote: "https://github.com/acme/widgets.git" } } }]);
+  h.worktree.pullRequest = '[{"url":"https://github.com/acme/widgets/pull/2059","number":2059,"state":"OPEN"}]';
+  const before = h.execCalls.length;
+
+  const accepted = await h.report(1, { verdict: "pass", summary: "Chips drawn." });
+  expect(accepted.error).toBeUndefined();
+  const { forgeCacheView } = await import("@/lib/forge/cache");
+  const { pipelineWorkLinks } = await import("@/lib/forge/resolve");
+  expect(forgeCacheView().repository("acme/widgets")?.pr(2059)).toMatchObject({ headRefName: current().branch, state: "open" });
+  expect(pipelineWorkLinks(current()).links).toEqual([expect.objectContaining({ number: 2059, kind: "pr", state: "open" })]);
+  /* The provenance read is the report's only forge call. */
+  expect(h.execCalls.slice(before).filter((call) => call.includes(" gh "))).toHaveLength(1);
 });

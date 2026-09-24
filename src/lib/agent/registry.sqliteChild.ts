@@ -11,16 +11,11 @@ function waitFor(pathname: string): void {
   while (!fs.existsSync(pathname)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
 }
 
-if (action === "sqlite-mirror-crash") {
-  new AgentRegistry(filename, undefined, undefined, {
-    sqliteMode: "sqlite",
-    beforeMirrorRename: () => {
-      if (label === "before") process.exit(75);
-    },
-    afterMirrorRename: () => {
-      if (label === "after") process.exit(76);
-    },
-  });
+if (action === "managed-open") {
+  fs.writeFileSync(ready, "ready");
+  waitFor(release);
+  const registry = new AgentRegistry(filename, undefined, undefined, { resolveBackendIdentity: true });
+  if (resultFile) fs.writeFileSync(resultFile, JSON.stringify(Object.keys(registry.readOnlySnapshot().conversations).sort()));
   process.exit(0);
 }
 

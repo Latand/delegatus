@@ -20,13 +20,18 @@ import type { ProcessIdentity } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, signalProcessGroup, type ProcessSignal } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
+import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
-import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { decodeCodexStructuredUserText as decodeStructuredUserWire } from "./codexStructuredUserText";
+import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
+import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
+import { deliveryDedupToken } from "./deliveryDedup";
 import { CodexReplayFrameReducer, ReplayFrameOverflowError, sanitizeCodexImageFrame, shrinkReducedReplayFrame, type ImageSink, type ReplayFrameBudgets } from "./codexImageFrames";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
+import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { withTelegramConnectorGrant } from "./telegramConnectorEnv";
 import {
   normalizeVoiceDeliveries,
@@ -483,6 +488,10 @@ function subscriptionEnv(
   }
   if (forwardGitHubConfig && source.GH_CONFIG_DIR !== undefined) env.GH_CONFIG_DIR = source.GH_CONFIG_DIR;
   if (codexHome) env.CODEX_HOME = codexHome;
+  /* The commands this agent runs resolve their own config and state root, not
+     the operator's (#1905). The account home above and the Viewer MCP server's
+     own environment are what keep pointing at the real installation. */
+  withAgentConfigSandbox(env, source, codexHome);
   /* Provenance the resources rail can verify later: `codex app-server` is a
      public command line, so only this stamp says the process is a host of
      ours rather than someone else's client (#1199). */
@@ -574,11 +583,15 @@ const ROLLOUT_TURNS_CACHE_LIMIT = 32;
 const ROLLOUT_DELIVERY_SCAN_CHUNK_BYTES = 1024 * 1024;
 const STRUCTURED_USER_MARKER_FRAGMENT = Buffer.from("llv:structured-user");
 
-function codexDeliveryDedup(operationId: string): string {
-  return createHash("sha256").update(operationId).digest("hex");
-}
+/* One definition, shared with the read-side join that resolves this token
+   back to the submission it belongs to (`submissionIdentity.ts`). Two copies
+   of the same hash is a join that silently stops matching. */
+const codexDeliveryDedup = deliveryDedupToken;
 type RolloutStructuredUserDelivery =
   | { payloadKind: "text" | "content"; payloadDigest: string }
+  /* A compact marker keeps its image digest in the metadata record, which is
+     read only when a queue entry is compared against it. */
+  | { payloadKind: "reference"; payloadDigest: string; metadataRef: string }
   | { payloadKind: "conflict"; payloadDigest: null };
 
 interface RolloutTurnsCacheEntry {
@@ -608,17 +621,21 @@ function rememberRolloutStructuredUser(
   deliveries: Map<string, RolloutStructuredUserDelivery>,
   wireText: string,
 ): void {
-  const decoded = decodeCodexStructuredUserText(wireText);
+  const decoded = decodeStructuredUserWire(wireText);
   if (!decoded.deliveryDedup) return;
   const current = deliveries.get(decoded.deliveryDedup);
-  const observed: RolloutStructuredUserDelivery = decoded.contentDigest
-    ? { payloadKind: "content", payloadDigest: decoded.contentDigest }
-    : { payloadKind: "text", payloadDigest: createHash("sha256").update(decoded.text).digest("hex") };
+  const textDigest = () => createHash("sha256").update(decoded.text).digest("hex");
+  const observed: RolloutStructuredUserDelivery = decoded.metadataRef
+    ? { payloadKind: "reference", payloadDigest: textDigest(), metadataRef: decoded.metadataRef }
+    : decoded.contentDigest
+      ? { payloadKind: "content", payloadDigest: decoded.contentDigest }
+      : { payloadKind: "text", payloadDigest: textDigest() };
   if (!current) {
     deliveries.set(decoded.deliveryDedup, observed);
     return;
   }
-  if (current.payloadKind !== observed.payloadKind || current.payloadDigest !== observed.payloadDigest) {
+  if (current.payloadKind !== observed.payloadKind || current.payloadDigest !== observed.payloadDigest
+    || (current.payloadKind === "reference" && observed.payloadKind === "reference" && current.metadataRef !== observed.metadataRef)) {
     deliveries.set(decoded.deliveryDedup, { payloadKind: "conflict", payloadDigest: null });
   }
 }
@@ -995,11 +1012,28 @@ async function rolloutDeliveryIndexFromDisk(
   return run;
 }
 
+/* Metadata written under another state directory, pruned or failing its
+   fingerprint costs only this record: it resolves to a conflict, which refuses
+   a duplicate write of its own operation and leaves every other record intact. */
+function resolveRolloutReference(
+  delivery: Extract<RolloutStructuredUserDelivery, { payloadKind: "reference" }>,
+): RolloutStructuredUserDelivery {
+  try {
+    const { contentDigest } = readStructuredUserMetadata(delivery.metadataRef);
+    return contentDigest
+      ? { payloadKind: "content", payloadDigest: contentDigest }
+      : { payloadKind: "text", payloadDigest: delivery.payloadDigest };
+  } catch {
+    return { payloadKind: "conflict", payloadDigest: null };
+  }
+}
+
 function rolloutDeliveryReceipt(
   entry: QueueEntry,
   delivery: RolloutStructuredUserDelivery | undefined,
 ): DeliveryReceipt | null {
   if (!delivery) return null;
+  if (delivery.payloadKind === "reference") delivery = resolveRolloutReference(delivery);
   let payloadMatches = false;
   if (delivery.payloadKind === "content") {
     payloadMatches = delivery.payloadDigest === entry.contentDigest;
@@ -1092,7 +1126,7 @@ function realtimeMessage(value: unknown): RealtimeInitialItem | null {
     ?? (message ? stringField(message, "text") ?? userMessageText(message) : null);
   if (!wireText) return null;
   return user
-    ? { role: "user", text: decodeCodexStructuredUserText(wireText).text }
+    ? { role: "user", text: decodeStructuredUserWire(wireText).text }
     : { role: "assistant", text: wireText };
 }
 
@@ -1258,6 +1292,7 @@ export class CodexAppServerHost implements EngineHost {
   private readonly preRestoreEvents: UnsequencedEvent[] = [];
   private readonly preRestoreMessages: Array<{ message: JsonObject; bytes: number }> = [];
   private readonly bufferedTerminalTurnIds = new Set<string>();
+  private bufferedActiveTurnId: string | null = null;
   private bufferedNotificationOverlap: string[] = [];
   private nextRpcId = 1;
   private stdoutBuffer = "";
@@ -1372,19 +1407,20 @@ export class CodexAppServerHost implements EngineHost {
       "realtime_conversation",
     ];
     const granted = grantedPlugins(options.plugins);
+    const childEnv = withTelegramConnectorGrant(
+      subscriptionEnv(
+        options.env ?? process.env,
+        options.codexHome,
+        granted.length > 0,
+        options.forwardGitHubConfig === true,
+      ),
+      options.mcpServers,
+    );
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawnProcess(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", args, {
         cwd: options.cwd,
-        env: withTelegramConnectorGrant(
-          subscriptionEnv(
-            options.env ?? process.env,
-            options.codexHome,
-            granted.length > 0,
-            options.forwardGitHubConfig === true,
-          ),
-          options.mcpServers,
-        ),
+        env: childEnv,
         detached: true,
       });
     } catch (error) {
@@ -1394,7 +1430,7 @@ export class CodexAppServerHost implements EngineHost {
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
     try {
       const initialized = record(await provisional.rpc("initialize", {
-        clientInfo: { name: "llv-structured-host", title: "Live Log Viewer", version: "0.11.7" },
+        clientInfo: { name: "llv-structured-host", title: "Delegatus", version: "0.11.7" },
         capabilities: { experimentalApi: true },
       }));
       provisional.protocolVersion = protocolVersionFromInitialize(initialized);
@@ -1421,6 +1457,10 @@ export class CodexAppServerHost implements EngineHost {
         options.allowSubagents === true,
         options.mcpServers,
         granted,
+        /* The app-server reads the capability header's value from its own
+           environment, so only a thread whose app-server holds one goes
+           over HTTP. */
+        viewerMcpTransportForLaunch(childEnv),
       );
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
@@ -1691,12 +1731,10 @@ export class CodexAppServerHost implements EngineHost {
         text: encodeCodexStructuredUserText(
           normalized.content.text,
           normalized.content.images.length > 0 ? normalized.contentDigest : undefined,
-          /* #844: the selected-card reference becomes durable HERE, on the
-             canonical structured-user record, so it survives a restart and a
-             re-parse and the transcript row renders the composer badge. */
+          /* Persist the selected card before dispatch; the rollout carries
+             its immutable handle for tools and the transcript badge. */
           normalized.selectedContext,
-          /* #1117: authorship lands on the same record, so the feed can tell
-             the operator's bubble from an inter-agent relay without a join. */
+          /* The compact marker retains origin; its record holds the sender. */
           normalized.origin,
           codexDeliveryDedup(normalized.id),
         ),
@@ -2996,9 +3034,16 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private reconcileAfterOpen(status: ThreadStatus | null, resumedTurnId: string | null): void {
-    const resumedStatus = status ?? { type: "idle" as const, activeFlags: [] };
+    let resumedStatus = status ?? { type: "idle" as const, activeFlags: [] };
     if (resumedStatus.type === "active" && !resumedTurnId) {
       throw new Error("thread/resume returned active status without an active turn id");
+    }
+    // Native queue dispatch can start after the resume snapshot was taken,
+    // while its reply and notifications are still buffered by open(). That
+    // live start must survive reconciliation with the older idle snapshot.
+    if (this.bufferedActiveTurnId) {
+      resumedTurnId = this.bufferedActiveTurnId;
+      if (resumedStatus.type !== "active") resumedStatus = { type: "active", activeFlags: this.activeFlags };
     }
     const resumedTurnTerminalized = resumedTurnId !== null && this.bufferedTerminalTurnIds.has(resumedTurnId);
     if (resumedStatus.type === "active" && resumedTurnId && !resumedTurnTerminalized
@@ -3060,6 +3105,7 @@ export class CodexAppServerHost implements EngineHost {
       }
     }
     if (status === "completed" || status === "interrupted" || status === "failed" || status === "error") {
+      if (this.bufferedActiveTurnId === turnId) this.bufferedActiveTurnId = null;
       const authoritativeStatus = terminalStatus(status);
       const recordedTerminal = turnEvents.findLast((event) => event.kind === "turn-ended");
       if (recordedTerminal?.kind !== "turn-ended" || recordedTerminal.status !== authoritativeStatus) {
@@ -3160,7 +3206,9 @@ export class CodexAppServerHost implements EngineHost {
     const clientId = stringField(item, "clientId");
     if (!clientId) return;
     const wireText = userMessageText(item);
-    const decoded = wireText === null ? null : decodeCodexStructuredUserText(wireText);
+    let decoded: ReturnType<typeof decodeCodexStructuredUserText> | null = null;
+    try { decoded = wireText === null ? null : decodeCodexStructuredUserText(wireText); }
+    catch { /* Missing metadata cannot prove a payload, including image-only sends. */ }
     const text = decoded?.text ?? null;
     const contentDigest = decoded?.contentDigest ?? null;
     const previous = this.confirmedDeliveries.get(clientId);
@@ -3191,6 +3239,7 @@ export class CodexAppServerHost implements EngineHost {
 
   private beginBufferedNotificationReconciliation(): void {
     this.bufferedTerminalTurnIds.clear();
+    this.bufferedActiveTurnId = null;
     const durableKeys: string[] = [];
     for (const event of this.events) {
       if (event.kind === "attention" && !this.attentions.has(event.id)) continue;
@@ -3256,6 +3305,7 @@ export class CodexAppServerHost implements EngineHost {
   private endBufferedNotificationReconciliation(): void {
     this.bufferedNotificationOverlap = [];
     this.bufferedTerminalTurnIds.clear();
+    this.bufferedActiveTurnId = null;
   }
 
   private flushPreRestoreMessages(resumeResult: unknown | null): void {
@@ -3684,6 +3734,7 @@ export class CodexAppServerHost implements EngineHost {
         if (historicalStart && (historicalTerminal || this.activeTurnId !== null)) return;
       }
       this.cancelledVoiceTurns.delete(turnId);
+      if (reconcileBufferedLifecycle) this.bufferedActiveTurnId = turnId;
       this.activeTurnId = turnId;
       this.emit({ kind: "turn-started", turnId });
       return;
@@ -3739,6 +3790,7 @@ export class CodexAppServerHost implements EngineHost {
       const turn = record(params.turn);
       const status = terminalStatus(turn?.status);
       if (reconcileBufferedLifecycle) this.bufferedTerminalTurnIds.add(turnId);
+      if (reconcileBufferedLifecycle && this.bufferedActiveTurnId === turnId) this.bufferedActiveTurnId = null;
       if (reconcileBufferedLifecycle
         && this.events.some((event) => event.kind === "turn-ended" && event.turnId === turnId)) return;
       if (this.activeTurnId === turnId) this.activeTurnId = null;

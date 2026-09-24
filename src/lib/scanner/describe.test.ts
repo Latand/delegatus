@@ -1,10 +1,11 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
+import { canonicalProject, persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 
 import { globalCache } from "./caches";
@@ -384,6 +385,37 @@ test("a deleted nested worktree (repo/worktrees/<name>) still groups under its p
   expect(projectInfoFromCwd(nested)?.worktree).toBe("memory-ui-redesign");
 });
 
+test("a Copilot session from a deleted worktree still groups under its parent repo", () => {
+  /* docs/design/copilot-engine.md 3.1: a Copilot transcript's cwd is
+     `session.start.data.context.cwd`, and it goes through the same one
+     algorithm as every other engine. The worktree is gone before the scan. */
+  useStateDirectory("deleted-copilot-state");
+  const repo = path.join(SANDBOX, "deleted-copilot-main");
+  const identity = createRepository(repo);
+  const deadWorktree = path.join(repo, ".worktrees", "copilot-lane");
+  expect(fs.existsSync(deadWorktree)).toBe(false);
+  const root = path.join(SANDBOX, "copilot-home", "session-state");
+  const sessionId = crypto.randomUUID();
+  const transcript = path.join(root, sessionId, "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    { type: "session.start", data: { sessionId, copilotVersion: "1.0.87", context: { cwd: deadWorktree } }, timestamp: "2026-09-22T20:00:00.000Z" },
+    { type: "user.message", data: { content: "Fix the flaky test" }, timestamp: "2026-09-22T20:00:01.000Z" },
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+
+  const described = describe("copilot-sessions", root, transcript, fs.statSync(transcript));
+  expect(described).toMatchObject({
+    engine: "copilot",
+    fmt: "copilot",
+    kind: "session",
+    cwd: deadWorktree,
+    project: identity.project,
+    worktree: "copilot-lane",
+    title: "Fix the flaky test",
+  });
+  expect(projectForCwd(repo)).toBe(described.project);
+});
+
 test("conversation metadata carries the exact cwd and its canonical project root", () => {
   const repo = path.join(SANDBOX, "cwd-project");
   const cwd = path.join(repo, ".worktrees", "issue-173");
@@ -543,6 +575,48 @@ test("a wrong-HOME durable mapping is corrected by repository evidence after wor
   projectForCwd(worktree);
   process.env.LLV_STATE_DIR = state;
   expect(projectForCwd(worktree)).toBe(live);
+});
+
+test("a deleted worktree of a renamed repository still groups under the one project", () => {
+  /* Delegatus rename (rename-delegatus.md §2.3): the repository is renamed on
+     the forge, the checkout's origin follows, and the forge-proven alias joins
+     the old key to the new one. Both worktree layouts that survive deletion
+     resolve to the parent checkout by path or by the remembered map, never by
+     remote, so they land on the parent's current key and then on the one
+     project through the alias. */
+  const base = path.join(SANDBOX, "renamed-repository");
+  const state = path.join(base, "state");
+  process.env.LLV_STATE_DIR = state;
+  fs.mkdirSync(state, { recursive: true });
+  resetProjectAliasesForTests();
+  const repo = path.join(base, "widgets");
+  const old = createRepository(repo, "https://github.com/acme/old-widgets.git");
+  const nested = path.join(repo, "worktrees", "renamed-lane");
+  const sibling = path.join(base, "widgets-pipeline-lane");
+  fs.mkdirSync(path.join(repo, ".git", "worktrees", "widgets-pipeline-lane"), { recursive: true });
+  fs.writeFileSync(path.join(repo, ".git", "worktrees", "widgets-pipeline-lane", "HEAD"), "ref: refs/heads/main\n");
+  fs.mkdirSync(sibling, { recursive: true });
+  fs.writeFileSync(path.join(sibling, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "widgets-pipeline-lane")}\n`);
+  expect(projectForCwd(nested)).toBe(old.project);
+  expect(projectForCwd(sibling)).toBe(old.project);
+  persistWorktreeMap();
+
+  /* Both worktrees are deleted, then the repository is renamed. */
+  fs.rmSync(sibling, { recursive: true, force: true });
+  const renamed = createRepository(repo, "https://github.com/acme/delegated-widgets.git");
+  globalCache("worktree-git").clear();
+  globalCache("project-info-cwd-v2").clear();
+  expect(renamed.project).not.toBe(old.project);
+  expect(persistProjectAliases([
+    { source: old.project, target: renamed.project, displayName: renamed.displayName },
+  ])).toBe(true);
+
+  expect(fs.existsSync(nested)).toBe(false);
+  expect(fs.existsSync(sibling)).toBe(false);
+  for (const cwd of [repo, nested, sibling]) {
+    expect(canonicalProject(projectForCwd(cwd)!)).toBe(renamed.project);
+  }
+  expect(canonicalProject(old.project)).toBe(renamed.project);
 });
 
 test("a pre-change slug follows its repository alias", () => {

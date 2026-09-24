@@ -22,7 +22,7 @@ export type AccountSummary = {
   login: LoginOperationSummary | null;
 };
 
-export type LoginPhase = "idle" | "starting" | "awaiting_browser" | "awaiting_code" | "verifying" | "authenticated" | "canceling" | "canceled" | "timed_out" | "failed" | "interrupted";
+export type LoginPhase = "idle" | "starting" | "awaiting_browser" | "awaiting_storage_choice" | "awaiting_code" | "verifying" | "authenticated" | "canceling" | "canceled" | "timed_out" | "failed" | "interrupted";
 
 export type LoginResult = {
   status: "success" | "failure" | "canceled";
@@ -34,15 +34,28 @@ export type LoginOperationSummary = {
   operationId: string;
   phase: LoginPhase;
   loginUrl: string | null;
+  userCode?: string | null;
   acceptsCode: boolean;
   deadlineAt: string;
   result: LoginResult | null;
 };
 
-export type AccountCatalog = { claude: { active: string; accounts: AccountSummary[] }; codex: { active: string; accounts: AccountSummary[] } };
+export type AccountCatalog = {
+  claude: { active: string; accounts: AccountSummary[] };
+  codex: { active: string; accounts: AccountSummary[] };
+  /** GitHub Copilot accounts (docs/design/copilot-engine.md 3.9). `active` is
+      empty until a managed account exists or one is selected. */
+  copilot?: { active: string; accounts: CopilotAccountSummary[] };
+};
+
+/** A Copilot account adds the copyable login command a managed home needs. */
+export type CopilotAccountSummary = AccountSummary & { loginCommand: string | null };
+
+/** Every engine an account can launch. */
+export type AccountEngineName = Extract<Engine, "claude" | "codex" | "copilot">;
 
 export type AccountContext = {
-  engine: Extract<Engine, "claude" | "codex">;
+  engine: AccountEngineName;
   accountId: string;
   kind: "legacy" | "managed";
   home: string;
@@ -97,12 +110,12 @@ export type ProjectSpawnRequest = {
 
 export interface AccountManager {
   list(): Promise<AccountCatalog>;
-  add(engine: "claude" | "codex", label: string): Promise<AccountSummary>;
-  select(engine: "claude" | "codex", accountId: string): Promise<AccountSummary>;
-  status(engine: "claude" | "codex", accountId: string, fresh: boolean): Promise<AccountSummary>;
+  add(engine: AccountEngineName, label: string): Promise<AccountSummary>;
+  select(engine: AccountEngineName, accountId: string): Promise<AccountSummary>;
+  status(engine: AccountEngineName, accountId: string, fresh: boolean): Promise<AccountSummary>;
   submitLoginInput(operationId: string, code: string): Promise<LoginOperationSummary>;
   cancelLogin(operationId: string): Promise<LoginOperationSummary>;
-  resolveSpawn(engine: "claude" | "codex", requestedId?: string | null): AccountContext;
+  resolveSpawn(engine: AccountEngineName, requestedId?: string | null): AccountContext;
   /**
    * The unattended, capacity-aware pick. Nothing names an account here, so this
    * is an AUTOMATIC selection and `project` is what binds it to that project's
@@ -115,10 +128,10 @@ export interface AccountManager {
    * fence failing open at the one seam whose whole job is to hold it. Required,
    * a new caller has to answer the question.
    */
-  resolveHeadlessSpawn(engine: "claude" | "codex", requestedId: string | null, excludedIds: string[], project: string | null, model?: string | null): HeadlessSpawnAvailability;
+  resolveHeadlessSpawn(engine: AccountEngineName, requestedId: string | null, excludedIds: string[], project: string | null, model?: string | null): HeadlessSpawnAvailability;
   /** The one seam every project-owned launch resolves its account through. */
-  resolveProjectSpawn(engine: "claude" | "codex", request: ProjectSpawnRequest): ProjectSpawnResolution;
-  resolveTranscriptOwner(engine: "claude" | "codex", transcript: string): AccountContext | null;
+  resolveProjectSpawn(engine: AccountEngineName, request: ProjectSpawnRequest): ProjectSpawnResolution;
+  resolveTranscriptOwner(engine: AccountEngineName, transcript: string): AccountContext | null;
 }
 
 export function unavailableLimits(): AccountSummary["limits"] {

@@ -1,4 +1,10 @@
-import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
+import crypto from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
+import { procBackend } from "@/lib/proc";
+import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, withDeliveryMutationAsync } from "./store";
 
 import type { Pipeline } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
@@ -96,6 +102,101 @@ export function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPort): P
     if (probe.code !== 0 || probe.stdout.trim() !== pipeline.branch) return failure("git worktree add", add);
   }
   const base = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+  if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
+  if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
+  return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
+}
+
+/** Provisioning alone uses this asynchronous port; stage Git keeps ExecPort. */
+export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<ExecResult>;
+
+/** Bound every child, including checkout and revision probes. A private process
+ * group lets cancellation end Git's transport children as well as Git itself.
+ * Settlement waits for close, so a replacement cannot overlap a dying child. */
+export const realProvisionExec: ProvisionExecPort = (command, args, cwd, signal) => new Promise((resolve) => {
+  if (signal?.aborted) { resolve({ code: null, stdout: "", stderr: "pipeline provisioning cancelled" }); return; }
+  let stdout = "";
+  let stderr = "";
+  let stopped: string | null = null;
+  const child = spawn(command, args, {
+    cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  const stop = (reason: string) => {
+    if (stopped) return;
+    stopped = reason;
+    if (child.pid) {
+      try { process.kill(-child.pid, "SIGKILL"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") stderr += String(error); }
+    }
+  };
+  const abort = () => stop("pipeline provisioning cancelled");
+  const timer = setTimeout(() => stop("git command timed out after 60s"), 60_000);
+  signal?.addEventListener("abort", abort, { once: true });
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+  child.on("error", (error) => { stderr += error.message; });
+  child.on("close", (code, childSignal) => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+    resolve({ code: stopped ? null : code, stdout, stderr: stopped ?? stderr, signal: childSignal });
+  });
+  if (signal?.aborted) abort();
+});
+
+export async function resolvePipelineBaseAsync(
+  repoDir: string,
+  input: { baseBranch?: string; baseRef?: string },
+  exec: ProvisionExecPort,
+  signal?: AbortSignal,
+): Promise<PipelineBaseResult> {
+  const baseBranch = input.baseBranch?.trim() || DEFAULT_PIPELINE_BASE_BRANCH;
+  if (!validBaseBranch(baseBranch)) return { ok: false, error: INVALID_BASE_BRANCH };
+  const requestedRef = input.baseRef?.trim();
+  if (!requestedRef) {
+    const fetch = await exec("timeout",
+      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], repoDir, signal);
+    if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+    if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
+    if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
+  }
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const ref = requestedRef || `origin/${baseBranch}`;
+  const resolved = await exec("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], repoDir, signal);
+  if (resolved.code !== 0) return failure(`resolving pipeline base ${ref}`, resolved);
+  const baseRef = resolved.stdout.trim();
+  if (!/^[0-9a-f]{40}$/i.test(baseRef)) return { ok: false, error: `resolving pipeline base ${ref}: expected an exact commit SHA` };
+  return { ok: true, baseBranch, baseRef };
+}
+
+export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
+  if (!pipeline.baseBranch || !/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) return { ok: false, error: "the pipeline base is unresolved" };
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const add = await exec("git", ["worktree", "add", "-b", pipeline.branch, pipeline.worktreeDir, pipeline.baseRef], pipeline.repoDir, signal);
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  if (killedAtBound(add)) return { ok: false, error: "git worktree add: checkout interrupted or timed out after 60s" };
+  if (add.signal || add.code === null) return failure("git worktree add interrupted", add);
+  if (add.code !== 0) {
+    const probe = await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], pipeline.worktreeDir, signal);
+    if (probe.code !== 0 || probe.stdout.trim() !== pipeline.branch) return failure("git worktree add", add);
+    // Git writes the branch and HEAD before checkout finishes. A killed
+    // checkout leaves its initialization lock, even when no files were written.
+    const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.worktreeDir, signal);
+    if (listing.code !== 0) return failure("checking pipeline worktree initialization", listing);
+    const entry = listing.stdout.split("\0\0").map((record) => record.split("\0"))
+      .find((fields) => fields.includes(`branch refs/heads/${pipeline.branch}`));
+    if (!entry || entry.includes("locked initializing") || entry.some((field) => field.startsWith("prunable"))) {
+      return { ok: false, error: "the pipeline worktree has not finished initializing" };
+    }
+    // Preserve existing files; a retry may adopt only a complete tracked tree.
+    // Untracked files do not affect completeness and remain untouched.
+    const tracked = await exec("git", ["diff", "--quiet", "HEAD", "--"], pipeline.worktreeDir, signal);
+    if (tracked.code === 1) return { ok: false, error: "the pipeline worktree has incomplete or modified tracked files" };
+    if (tracked.code !== 0) return failure("checking pipeline worktree tracked files", tracked);
+  }
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const base = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
@@ -272,10 +373,29 @@ export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPo
 
 export type PipelinePublishResult =
   | { ok: true; sha: string; remote: "published" | "unavailable" }
-  | { ok: true; sha: string; remote: "unreachable"; detail: string }
+  | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
   | { ok: false; error: string };
 
 const REMOTE_READ_TIMEOUT = "5s";
+
+/** The lock's mtime records publication progress across Viewer restarts. The
+    existing fetch and two remote-read budgets bound a silent operation. */
+export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublishResult {
+  const delivery = pipeline.delivery!;
+  const operation = delivery.operation!;
+  if (operation.epoch !== delivery.epoch) return { ok: false, error: "publication owner or epoch changed" };
+  let progressAt = Date.parse(pipeline.createdAt);
+  try {
+    const stat = fs.statSync(operation.executor!.lock);
+    if (`${stat.dev}:${stat.ino}` === operation.executor?.lockIdentity) progressAt = stat.mtimeMs;
+  } catch { /* A missing lock supplies no progress evidence. */ }
+  const age = Math.max(0, Date.now() - progressAt);
+  const bound = (parseInt(BASE_FETCH_TIMEOUT) + 2 * parseInt(REMOTE_READ_TIMEOUT)) * 1_000;
+  if (!Number.isFinite(age) || age > bound) return { ok: false,
+    error: `publication ${operation.id} has no progress for ${Number.isFinite(age) ? `${Math.floor(age / 1_000)}s` : "an unknown age"}; reconcile through takeover with expectedOwner ${delivery.ownerId} and expectedEpoch ${delivery.epoch} once the publisher exits` };
+  return { ok: true, sha: operation.sha, remote: "unreachable",
+    detail: `publishing the passed stage, in progress since ${new Date(progressAt).toISOString()} (operation ${operation.id})` };
+}
 
 /** A publication tick gets one bounded remote read. The engine tick is already
     the retry loop, so retrying or sleeping inside this synchronous adapter only
@@ -286,9 +406,10 @@ function readRemotePipelineBranch(
   exec: ExecPort,
   step: string,
 ): { ok: true; sha: string } | { ok: false; error: string } {
+  if (pipeline.delivery && !pipeline.delivery.target.remote) return { ok: true, sha: "" };
   const result = exec(
     "timeout",
-    ["--signal=KILL", REMOTE_READ_TIMEOUT, "git", "ls-remote", "--heads", "origin", `refs/heads/${pipeline.branch}`],
+    ["--signal=KILL", REMOTE_READ_TIMEOUT, "git", "ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
     pipeline.worktreeDir,
   );
   if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
@@ -305,6 +426,36 @@ export interface PipelinePublishRequest {
   /** What the caller last recorded as published; a match short-circuits the
       whole probe. */
   publishedSha?: string | null;
+}
+
+/** Acquire a kernel lock on the parent's open file description BEFORE any
+    publisher child exists. Descriptor 3 is inherited explicitly by each Git
+    child, so parent death cannot open a pre-lock launch window. */
+function acquirePublicationFileLock(lock: string): number | null {
+  let descriptor: number;
+  try { descriptor = fs.openSync(lock, "a", 0o600); }
+  catch { return null; }
+  try {
+    const result = spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] });
+    if (result.status === 0) return descriptor;
+  } catch { /* Unsupported locking fails closed. */ }
+  fs.closeSync(descriptor);
+  return null;
+}
+
+function publicationLockIdentity(descriptor: number): string {
+  const stat = fs.fstatSync(descriptor);
+  return `${stat.dev}:${stat.ino}`;
+}
+
+async function withPublicationFileLock<T>(lock: string, operation: () => Promise<T>, expectedIdentity: string): Promise<{ locked: true; value: T } | { locked: false }> {
+  const descriptor = acquirePublicationFileLock(lock);
+  if (descriptor === null) return { locked: false };
+  try {
+    if (publicationLockIdentity(descriptor) !== expectedIdentity) return { locked: false };
+    return { locked: true, value: await operation() };
+  }
+  finally { fs.closeSync(descriptor); }
 }
 
 /**
@@ -328,7 +479,127 @@ export interface PipelinePublishRequest {
  * to, which is a different fact from a failed publication and never a stall on
  * its own.
  */
-export function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): PipelinePublishResult {
+export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
+  const operationId = crypto.randomUUID();
+  const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
+  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+  const descriptor = acquirePublicationFileLock(lock);
+  if (descriptor === null) {
+    const current = findPipelineRecord(pipeline.id);
+    const error = deliveryOwnerError(current ?? pipeline, current);
+    if (error) return { ok: false, error };
+    if (pipeline.delivery?.epoch !== current?.delivery?.epoch) return { ok: false, error: "publication owner or epoch changed" };
+    if (current?.delivery?.operation?.state === "running") return pipelinePublicationInFlight(current);
+    return { ok: false, error: `publisher ${pipeline.delivery?.ownerId ?? pipeline.id} is still in flight or kernel locking is unavailable` };
+  }
+  const lockIdentity = publicationLockIdentity(descriptor);
+  let descriptorOpen = true;
+  let reserved = false;
+  try {
+    const reservation = await withDeliveryMutationAsync((tx) => {
+      const current = tx.get(pipeline.id);
+      const owner = current?.delivery ? tx.pipelineLookup({ ...current.delivery.target, active: true }) : null;
+      const error = deliveryOwnerError(current ?? pipeline, owner);
+      if (error || !current?.delivery) {
+        if (current?.delivery) { deliveryJournal(current, "denied", error!); tx.put(current); }
+        return { error: error ?? "delivery claim is missing" };
+      }
+      if (pipeline.delivery && pipeline.delivery.epoch !== current.delivery.epoch) return { error: "delivery epoch changed; reload the owner before publishing" };
+      const previous = current.delivery.operation;
+      if (pipeline.delivery?.operation?.state === "pending" && previous?.id !== pipeline.delivery.operation.id) {
+        return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
+      }
+      if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
+      current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
+        ...(previous?.state === "pending" ? { requestKey: previous.requestKey } : {}), state: "running",
+      executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
+      fs.futimesSync(descriptor, new Date(), new Date());
+      tx.put(current);
+      return { pipeline: current, operationId: current.delivery.operation.id };
+    });
+    if (reservation.waiting) return reservation.waiting;
+    if (!reservation.pipeline) return { ok: false, error: reservation.error! };
+    reserved = true;
+    // Git and network work deliberately run after boundedPatch released its lease.
+    // Each real Git child inherits this kernel lock. If the Viewer dies, the
+    // lock stays held until that child is gone; takeover must prove it is free.
+    const fencedExec: ExecPort = (command, args, cwd) => {
+      fs.futimesSync(descriptor, new Date(), new Date());
+      if (exec !== realExec) return exec(command, args, cwd);
+      const child = spawnSync(command, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", descriptor] });
+      return { code: child.status, stdout: child.stdout ?? "", stderr: child.stderr ?? String(child.error ?? ""), signal: child.signal };
+    };
+    let result: PipelinePublishResult;
+    try { result = executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
+      publishedSha: request.publishedSha === reservation.pipeline.publishedCommit ? request.publishedSha : null }); }
+    catch (error) { result = { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }; }
+    fs.closeSync(descriptor);
+    descriptorOpen = false;
+    // Reacquisition proves that no orphan child retained the inherited lock.
+    const completed = await withPublicationFileLock(lock, () => withDeliveryMutationAsync<PipelinePublishResult>((tx) => {
+      const current = tx.get(pipeline.id);
+      const delivery = current?.delivery;
+      if (!current || !delivery || delivery.operation?.id !== reservation.operationId
+        || delivery.epoch !== reservation.pipeline.delivery!.epoch) return { ok: false, error: "publication reservation changed; reconcile the remote before retrying" };
+      // A lost reply after push must keep fencing takeover.
+      if (delivery.operation.executor) delivery.operation.executor.finished = true;
+      if (result.ok && result.remote === "unreachable" && result.uncertain) { tx.put(current); return result; }
+      delivery.operation = { ...delivery.operation, state: "settled", result };
+      if (result.ok && result.remote === "published") current.publishedCommit = result.sha;
+      tx.put(current);
+      return result;
+    }), lockIdentity);
+    if (completed.locked) return completed.value;
+    await withDeliveryMutationAsync((tx) => {
+      const current = tx.get(pipeline.id);
+      if (current?.delivery?.operation?.id === reservation.operationId && current.delivery.operation.executor) {
+        current.delivery.operation.executor.finished = true;
+        tx.put(current);
+      }
+    });
+    return { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
+      detail: "publisher child quiescence could not be established; the reservation remains in flight" };
+  } catch (error) {
+    // After reservation, even a store lease refusal cannot prove non-execution.
+    if (!reserved) throw error;
+    return { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
+      detail: `publication settlement is unconfirmed; reconcile the reserved operation: ${String(error)}` };
+  } finally { if (descriptorOpen) fs.closeSync(descriptor); }
+}
+
+/** Explicit recovery reads the remote only after proving the previous executor
+    and all its fenced Git children can no longer write. No age-based election. */
+export async function reconcilePipelinePublication(id: string, expectedEpoch: number, exec: ExecPort, conversationId: string | null): Promise<string | null> {
+  const pipeline = findPipelineRecord(id);
+  const operation = pipeline?.delivery?.operation;
+  if (!pipeline?.delivery || pipeline.delivery.epoch !== expectedEpoch) return "publication owner or epoch changed";
+  if (operation?.state !== "running") return null;
+  const executor = operation.executor;
+  if (!executor?.lockIdentity) return "publisher quiescence is unknown; no executor lock identity was recorded";
+  // The parent takes this lock before recording the operation and holds it
+  // through its final Git command. A free lock therefore proves quiescence
+  // even when a live Viewer could not persist its finished marker.
+  const reconciled = await withPublicationFileLock(executor.lock, async () => {
+    const remote = readRemotePipelineBranch(pipeline, exec, "reconciling the interrupted publisher");
+    if (!remote.ok) return remote.error;
+    return withDeliveryMutationAsync((tx) => {
+      const current = tx.get(id);
+      if (!current?.delivery || current.delivery.epoch !== expectedEpoch || current.delivery.operation?.id !== operation.id
+        || current.delivery.operation.state !== "running") return "publication changed while reconciling";
+      const result: PipelinePublishResult = remote.sha === operation.sha
+        ? { ok: true, sha: operation.sha, remote: "published" }
+        : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
+      current.delivery.operation = { ...current.delivery.operation, state: "settled", result };
+      if (result.ok) current.publishedCommit = operation.sha;
+      deliveryJournal(current, "recovery", "publisher quiescent; remote reconciled", conversationId);
+      tx.put(current);
+      return null;
+    });
+  }, executor.lockIdentity);
+  return reconciled.locked ? reconciled.value : "publisher child is still in flight or its lock could not be checked";
+}
+
+function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): PipelinePublishResult {
   const acceptedSha = request.acceptedSha;
   if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) {
     return { ok: false, error: `the accepted pipeline revision is not an exact commit SHA: ${acceptedSha || "absent"}` };
@@ -342,7 +613,9 @@ export function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, reques
   }
   if (request.publishedSha && request.publishedSha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
 
-  const origin = exec("git", ["remote", "get-url", "origin"], pipeline.worktreeDir);
+  const origin = pipeline.delivery
+    ? { code: 0, stdout: pipeline.delivery.target.remote, stderr: "" }
+    : exec("git", ["remote", "get-url", "origin"], pipeline.worktreeDir);
   if (origin.code !== 0 || !origin.stdout.trim()) return { ok: true, sha: acceptedSha, remote: "unavailable" };
 
   const probe = readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch");
@@ -360,7 +633,7 @@ export function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, reques
     if (known.code !== 0) {
       const fetched = exec(
         "git",
-        ["fetch", "--no-tags", "origin", `+refs/heads/${pipeline.branch}:refs/remotes/origin/${pipeline.branch}`],
+        ["fetch", "--no-tags", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
         pipeline.worktreeDir,
       );
       if (fetched.code !== 0) return failure("fetching the remote pipeline branch", fetched);
@@ -375,10 +648,10 @@ export function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, reques
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
   }
 
-  const push = exec("git", ["push", "origin", `${acceptedSha}:refs/heads/${pipeline.branch}`], pipeline.worktreeDir);
+  const push = exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir);
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch");
-  if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error };
+  if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error, uncertain: true };
   const publishedHead = confirm.sha;
   if (publishedHead !== acceptedSha) {
     return { ok: false, error: `publishing the pipeline branch did not land: origin/${pipeline.branch} is ${publishedHead || "absent"}, expected ${acceptedSha}` };
@@ -395,14 +668,15 @@ export function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, reques
 export function synchronizePipelineRetryHead(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
   const local = currentPipelineBranchHead(pipeline, exec);
   if (!local.ok) return local;
+  if (pipeline.delivery && !pipeline.delivery.target.remote) return local;
 
-  const remoteProbe = exec("git", ["ls-remote", "--heads", "origin", `refs/heads/${pipeline.branch}`], pipeline.worktreeDir);
+  const remoteProbe = exec("git", ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`], pipeline.worktreeDir);
   if (remoteProbe.code !== 0) return failure("checking the remote pipeline branch", remoteProbe);
   if (!remoteProbe.stdout.trim()) return local;
 
   const fetch = exec(
     "git",
-    ["fetch", "--no-tags", "origin", `+refs/heads/${pipeline.branch}:refs/remotes/origin/${pipeline.branch}`],
+    ["fetch", "--no-tags", pipeline.delivery?.target.remote || "origin", `+${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}:refs/remotes/origin/${pipeline.branch}`],
     pipeline.worktreeDir,
   );
   if (fetch.code !== 0) return failure("fetching the remote pipeline branch", fetch);

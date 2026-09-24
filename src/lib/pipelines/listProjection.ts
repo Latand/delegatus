@@ -19,15 +19,17 @@
  * exactly the ones the previous implementation applied, so MCP stays at parity
  * with `GET /api/pipelines` filtered the same way.
  */
-import type { FlowEngine } from "@/lib/flows/types";
+import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 
 import { latestOperationalStageAttempt } from "./attemptSelection";
-import { loadArchivedPipelines, loadPipelinesForList } from "./store";
+import { failEdgeExhaustion, failEdgeMaxRounds, pipelineReviewSummary, type PipelineReviewSummary } from "./failEdgeBudget";
+import { loadArchivedPipelines, loadPipelinesForList, withDeliveryPublicationDetail } from "./store";
 import type {
   Pipeline,
   PipelineAccess,
   PipelineAttemptState,
   PipelineCursorState,
+  PipelineFailEdgeExhaustion,
   PipelineRoleId,
   PipelineStage,
   PipelineStageAttempt,
@@ -50,8 +52,14 @@ const MAX_ROW_TEXT = 400;
     synchronous walk to release the loop. */
 const YIELD_EVERY_ROWS = 25;
 
+/** `state: "open"` selects every state a lane can still move from (#1845). */
+export const PIPELINE_OPEN_STATE = "open";
+
+const TERMINAL_PIPELINE_STATES: ReadonlySet<string> = new Set<PipelineState>(["completed", "closed"]);
+
 export type PipelineListFilter = {
   project?: string | null;
+  /** A pipeline state, or `open` for every non-terminal one. */
   state?: string | null;
   includeClosed?: boolean;
   limit?: number | null;
@@ -79,12 +87,14 @@ export type PipelineListStage = {
   effort: string | null;
   access: PipelineAccess | null;
   next: string | null;
-  onFail: { to: string; maxRounds: number } | null;
+  /** `maxRounds` includes rounds continue-review granted (#1938). */
+  onFail: { to: string; maxRounds: number; onExhausted: PipelineFailEdgeExhaustion } | null;
   attempts: number;
   latestAttempt: PipelineListAttempt | null;
 };
 
 export type PipelineListRow = {
+  delivery?: Pick<NonNullable<Pipeline["delivery"]>, "target" | "disposition" | "publish" | "ownerId" | "epoch" | "active">;
   id: string;
   /** Clamped title. */
   task: string;
@@ -106,6 +116,9 @@ export type PipelineListRow = {
   cursor: { stageId: string; state: PipelineCursorState } | null;
   attemptCount: number;
   unconfirmedHostCount: number;
+  /** Present only in `needs_review` (#1938): the reviewed head, the current
+      unreviewed head and the last verdict. */
+  review?: PipelineReviewSummary;
   stages: PipelineListStage[];
   pos: { x: number; y: number } | null;
 };
@@ -123,6 +136,12 @@ export type PipelineListProjectionOptions = {
   /** Record source; defaults to the bounded, cached store read. */
   source?: () => readonly Pipeline[];
 };
+
+function deliveryProjection(pipeline: Pipeline): NonNullable<PipelineListRow["delivery"]> {
+  const delivery = pipeline.delivery!;
+  return { target: { ...delivery.target }, disposition: delivery.disposition, publish: delivery.publish,
+    ownerId: delivery.ownerId, epoch: delivery.epoch, active: delivery.active };
+}
 
 function clampText(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
@@ -151,7 +170,7 @@ export function selectPipelineListRecords(
   const selected: Pipeline[] = [];
   for (const pipeline of pipelines) {
     if (project && pipeline.project !== project) continue;
-    if (state && pipeline.state !== state) continue;
+    if (state === PIPELINE_OPEN_STATE ? TERMINAL_PIPELINE_STATES.has(pipeline.state) : state && pipeline.state !== state) continue;
     if (!includeClosed && pipeline.state === "closed") continue;
     /* Hidden is settled for listing purposes (#1274): a lane the operator
        discarded is not in flight, and a listing that reported it as active
@@ -193,7 +212,7 @@ function stageRow(
     effort: role?.effort ?? stage.effort ?? null,
     access: role?.access ?? stage.access ?? null,
     next: stage.next,
-    onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds } : null,
+    onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: failEdgeMaxRounds(pipeline, stage), onExhausted: failEdgeExhaustion(stage.onFail) } : null,
     attempts: attempts.length,
     /* The canonical selector, not "the last element": a lineage-adopted
        historical attempt is evidence, never the stage's current work. */
@@ -216,6 +235,7 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     attemptCount += attempts.length;
   }
   return {
+    ...(pipeline.delivery ? { delivery: deliveryProjection(pipeline) } : {}),
     id: pipeline.id,
     task: clampText(pipeline.task) ?? "",
     taskIds: [...(pipeline.taskIds ?? [])],
@@ -226,7 +246,7 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     baseBranch: pipeline.baseBranch,
     state: pipeline.state,
     pausedState: pipeline.pausedState ?? null,
-    stateDetail: clampText(pipeline.stateDetail),
+    stateDetail: clampText(withDeliveryPublicationDetail(pipeline).stateDetail),
     hasSpec: typeof pipeline.spec === "string" && pipeline.spec.length > 0,
     createdAt: pipeline.createdAt,
     closedAt: pipeline.closedAt ?? null,
@@ -234,9 +254,69 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     attemptCount,
     unconfirmedHostCount: pipeline.unconfirmedHosts?.length ?? 0,
+    ...reviewField(pipeline),
     stages: (pipeline.stages ?? []).map((stage) => stageRow(pipeline, stage, attemptsByStage.get(stage.id) ?? [])),
     pos: pipeline.pos ? { x: pipeline.pos.x, y: pipeline.pos.y } : null,
   };
+}
+
+/** The compact row (#1845): what a seat polling its lanes reads — which lane,
+    where it stands, and how each stage's latest attempt ended. Everything else
+    on the card is one `get_pipeline` away. */
+export type PipelineCompactRow = {
+  delivery?: PipelineListRow["delivery"];
+  id: string;
+  /** First line of the title, clamped. */
+  task: string;
+  state: PipelineState;
+  cursor: { stageId: string; state: PipelineCursorState } | null;
+  /** Clamped. */
+  stateDetail: string | null;
+  /** As on the full row (#1938). */
+  review?: PipelineReviewSummary;
+  stages: Array<{
+    id: string;
+    latestAttempt: { n: number; state: PipelineAttemptState; verdict: StageVerdictStatus | null } | null;
+  }>;
+};
+
+const COMPACT_TASK_CHARS = 120;
+const COMPACT_DETAIL_CHARS = 200;
+
+export function clampLine(value: string | null | undefined, limit: number): string | null {
+  if (typeof value !== "string") return null;
+  const line = value.split("\n", 1)[0]!.trim();
+  return line.length <= limit ? line : `${line.slice(0, limit)}…`;
+}
+
+export function clampChars(value: string | null | undefined, limit: number): string | null {
+  if (typeof value !== "string") return null;
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+}
+
+export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
+  const pipeline: Pipeline = record.runs ? record : { ...record, runs: [] };
+  return {
+    ...(pipeline.delivery ? { delivery: deliveryProjection(pipeline) } : {}),
+    id: pipeline.id,
+    task: clampLine(pipeline.task, COMPACT_TASK_CHARS) ?? "",
+    state: pipeline.state,
+    cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
+    stateDetail: clampChars(withDeliveryPublicationDetail(pipeline).stateDetail, COMPACT_DETAIL_CHARS),
+    ...reviewField(pipeline),
+    stages: (pipeline.stages ?? []).map((stage) => {
+      const attempt = latestOperationalStageAttempt(pipeline, stage.id);
+      return {
+        id: stage.id,
+        latestAttempt: attempt ? { n: attempt.n, state: attempt.state, verdict: attempt.verdict?.status ?? null } : null,
+      };
+    }),
+  };
+}
+
+function reviewField(pipeline: Pipeline): { review?: PipelineReviewSummary } {
+  const review = pipelineReviewSummary(pipeline);
+  return review ? { review } : {};
 }
 
 function yieldToEventLoop(): Promise<void> {
@@ -256,6 +336,22 @@ export async function projectPipelineListRows(
   filter: PipelineListFilter,
   options: PipelineListProjectionOptions = {},
 ): Promise<PipelineListRow[]> {
+  return projectPipelineRows(filter, options, pipelineListRow);
+}
+
+/** The same page as {@link projectPipelineListRows}, as compact rows. */
+export async function projectPipelineCompactRows(
+  filter: PipelineListFilter,
+  options: PipelineListProjectionOptions = {},
+): Promise<PipelineCompactRow[]> {
+  return projectPipelineRows(filter, options, pipelineCompactRow);
+}
+
+async function projectPipelineRows<Row>(
+  filter: PipelineListFilter,
+  options: PipelineListProjectionOptions,
+  project: (pipeline: Pipeline) => Row,
+): Promise<Row[]> {
   const checkpoint = options.checkpoint ?? (() => {});
   checkpoint();
   const hot = (options.source ?? loadPipelinesForList)();
@@ -266,13 +362,13 @@ export async function projectPipelineListRows(
     : hot;
   checkpoint();
   const selected = selectPipelineListRecords(records, filter);
-  const rows: PipelineListRow[] = [];
+  const rows: Row[] = [];
   for (const pipeline of selected) {
     if (rows.length > 0 && rows.length % YIELD_EVERY_ROWS === 0) {
       await yieldToEventLoop();
       checkpoint();
     }
-    rows.push(pipelineListRow(pipeline));
+    rows.push(project(pipeline));
   }
   return rows;
 }

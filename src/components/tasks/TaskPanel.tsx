@@ -17,6 +17,7 @@ import { type FavoriteRow } from "@/components/favorites/favoriteRows";
 import { updateTask } from "./taskApi";
 import { pushTaskToast } from "./taskToast";
 import { TaskComposer } from "./TaskComposer";
+import { TaskIcon } from "./TaskIcon";
 import { TASK_TONES, taskTitle } from "./taskModel";
 import { useTaskCreateDraft } from "./useTaskCreateDraft";
 
@@ -165,7 +166,7 @@ export function TaskPanel({
   );
 
   return (
-    <aside className="flex w-[280px] shrink-0 flex-col border-l border-border bg-card" aria-label={t("tasks.panelTitle")}>
+    <aside className="flex w-[280px] shrink-0 flex-col border-l border-border bg-card" aria-label={t("tasks.panelTitle")} data-task-panel="">
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-2.5">
         <span className="text-[12px] font-bold">{t("tasks.panelTitle")}</span>
         <div className="ml-1 flex items-center rounded-full border border-border p-0.5">
@@ -243,6 +244,7 @@ export function TaskPanel({
                     >
                       {t(`tasks.status.${task.status}`)}
                     </span>
+                    <TaskIcon icon={task.icon} title={taskTitle(task.text)} size={14} />
                     <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold">
                       {taskTitle(task.text) || t("tasks.untitled")}
                     </span>

@@ -10,7 +10,7 @@ import { GlyphIcon, Loader2 } from "../../icons";
 import { hhmm } from "../../utils";
 import { ACTION_GUTTER, MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
-import { tr, type ToolEvent, type ToolOutputBlock } from "../parse";
+import { hasImageBlock, tr, type ToolEvent, type ToolOutputBlock } from "../parse";
 import type { ArgChip } from "../tools";
 import { formatDuration, isFollowUpCall, toolDurationMs } from "../toolBlocks";
 import { DiffCard } from "./DiffCard";
@@ -47,9 +47,9 @@ export function ToolChips({ chips }: { chips: ArgChip[] }) {
   return (
     <div className="mb-1 flex flex-wrap gap-1">
       {chips.map((chip, i) => (
-        <span key={i} className="inline-flex max-w-full items-center gap-1 truncate rounded-md bg-sunken px-1.5 py-0.5 font-mono text-[11px] text-primary">
-          {chip.label ? <span className="text-muted">{chip.label}</span> : null}
-          {chip.value}
+        <span key={i} data-tool-chip className="inline-block max-w-full [overflow-wrap:anywhere] rounded-md bg-sunken px-1.5 py-0.5 font-mono text-[11px] text-primary">
+          {chip.label ? <span className="mr-1 text-muted">{chip.label}</span> : null}
+          <span className="whitespace-pre-wrap">{chip.value}</span>
         </span>
       ))}
     </div>
@@ -64,6 +64,23 @@ function exitLabel(event: ToolEvent): string | null {
   if (event.status === "err") return event.statusLabel || tr("render.error");
   if (event.status === "ok" && event.family === "shell") return tr("tools.exitOk");
   return null;
+}
+
+/* The one trailing verdict a collapsed row carries (#1938). A failure names
+   the exit code the result reported, so the danger reads as a small chip beside
+   a quiet label instead of colouring and emboldening the whole line; a clean
+   call shows nothing, because its exit code belongs to the expanded block's
+   meta row and adds nothing to a line that already says the command ran. */
+function RowStatusChip({ event }: { event: ToolEvent }) {
+  if (event.status === "ok") return null;
+  const label = (event.status === "err" ? exitLabel(event) : null) || event.statusLabel;
+  if (!label) return null;
+  return (
+    <span className={`inline-flex shrink-0 items-center gap-1 text-caption font-semibold ${statusClass(event.status)}`}>
+      <StatusIcon status={event.status} className="h-3 w-3" />
+      {label}
+    </span>
+  );
 }
 
 /* One quiet metadata row over the command: exit status, wall-clock span, and
@@ -87,7 +104,7 @@ function ToolMeta({ event }: { event: ToolEvent }) {
       {span ? <span className="tabular-nums">{span}</span> : null}
       {event.cwd ? (
         <span className="inline-flex min-w-0 max-w-full items-center gap-1">
-          <code className="min-w-0 truncate font-mono text-[11px] text-secondary" title={event.cwd}>
+          <code className="min-w-0 break-all font-mono text-[11px] text-secondary" title={event.cwd}>
             {event.cwd}
           </code>
           <CopyButton text={event.cwd} label={tr("tools.copyCwd")} className="shrink-0 p-0.5" />
@@ -100,10 +117,16 @@ function ToolMeta({ event }: { event: ToolEvent }) {
 /* The full redacted command, the hero of the block: bare monospace on the
    shared sunken well (no nested card/border — those only stacked chrome the
    user did not open), wrapped instead of scrolled so a long line stays fully
-   visible and never forces document-level horizontal overflow on 390px. */
+   visible and never forces document-level horizontal overflow on 390px.
+
+   The block is at least as tall as its copy control (#1978). A one-line
+   command is ~20px, and on a coarse pointer the control is 44px pinned 6px
+   down, so it hung 30px into the output below — over the output's own copy
+   control, pinned 6px into that block. 50px is the inset plus the coarse
+   size; the fine pointer's 22px control already fits beside one line. */
 function CommandBlock({ command }: { command: string }) {
   return (
-    <div className="group/cmd relative">
+    <div className="group/cmd relative [@media(pointer:coarse)]:min-h-[50px]">
       <pre className={`max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] py-0.5 font-mono text-ui text-primary ${ACTION_GUTTER}`}>
         <span className="select-none text-muted">$ </span>
         {command}
@@ -115,6 +138,15 @@ function CommandBlock({ command }: { command: string }) {
       />
     </div>
   );
+}
+
+/* The same rule for an output's copy control (#1978): pinned 6px down, or 20px
+   under a stdout/stderr heading, a 44px coarse-pointer control overhung a
+   one-line output by 14px, past its call's box and into the next call's
+   header. The frame holds it; an empty output renders nothing and gets none. */
+function OutputFrame({ output, heading, children }: { output: string; heading?: string; children: ReactNode }) {
+  if (!output.trim()) return null;
+  return <div className={heading ? "[@media(pointer:coarse)]:min-h-[64px]" : "[@media(pointer:coarse)]:min-h-[50px]"}>{children}</div>;
 }
 
 /* The expanded readable body of a tool call (issue #475): chips, the auditable
@@ -145,34 +177,38 @@ export function ToolBody({ event }: { event: ToolEvent }) {
             heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}
           />
         ) : (
-          <OutputPreview
-            output={event.outputPreview}
-            truncated={event.outputTruncated}
-            lang={event.lang}
-            heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}
-          />
+          <OutputFrame output={event.outputPreview} heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}>
+            <OutputPreview
+              output={event.outputPreview}
+              truncated={event.outputTruncated}
+              lang={event.lang}
+              heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}
+            />
+          </OutputFrame>
         )
       ) : null}
       {event.stderr !== undefined ? (
-        <OutputPreview
-          output={event.stderr}
-          truncated={Boolean(event.stderrTruncated)}
-          heading={tr("tools.stderr")}
-          tone="err"
-          copyLabel={tr("tools.copyStderr")}
-          showAllLabel={tr("tools.showStderr")}
-        />
+        <OutputFrame output={event.stderr} heading={tr("tools.stderr")}>
+          <OutputPreview
+            output={event.stderr}
+            truncated={Boolean(event.stderrTruncated)}
+            heading={tr("tools.stderr")}
+            tone="err"
+            copyLabel={tr("tools.copyStderr")}
+            showAllLabel={tr("tools.showStderr")}
+          />
+        </OutputFrame>
       ) : null}
     </div>
   );
 }
 
-/* #1498: a result that carried pictures renders its blocks in transcript
-   order — text through the capped preview, a picture through the feed's own
-   ImageCard, collapsed to its chip so the data URI enters the DOM only when
-   the operator opens it. A picture whose data did not survive falls back to
-   the same text placeholder the flattened preview carries, so a broken frame
-   degrades to a line rather than to a blank card. */
+/* #1498: a result that carried pictures renders its text blocks in
+   transcript order through the capped preview. The pictures themselves are
+   drawn on the line, outside this body ({@link ToolImages}, #2075). A picture
+   whose data did not survive falls back to the same text placeholder the
+   flattened preview carries, so a broken frame degrades to a line rather than
+   to a blank card. */
 function ToolOutputBlocks({
   blocks,
   truncated,
@@ -189,15 +225,35 @@ function ToolOutputBlocks({
   return (
     <>
       {blocks.map((block, index) => {
-        if (block.type === "image" && block.data) {
-          return <ImageCard key={index} media={block.media} data={block.data} w={block.w} h={block.h} bytes={block.bytes} initialView="chip" inset />;
-        }
+        if (block.type === "image" && drawable(block)) return null;
         const text = block.type === "text" ? block.text : `[${tr("render.imageOutput")}]`;
-        const node = <OutputPreview key={index} output={text} truncated={truncated && index === lastText} lang={lang} heading={firstText ? heading : undefined} />;
+        const node = (
+          <OutputFrame key={index} output={text} heading={firstText ? heading : undefined}>
+            <OutputPreview output={text} truncated={truncated && index === lastText} lang={lang} heading={firstText ? heading : undefined} />
+          </OutputFrame>
+        );
         firstText = false;
         return node;
       })}
     </>
+  );
+}
+
+type ImageBlock = Extract<ToolOutputBlock, { type: "image" }>;
+const drawable = (block: ImageBlock) => Boolean(block.data || block.path);
+
+/** The pictures a tool call showed its agent, drawn under its line with the
+    same card that draws an operator's attachment (#2075). They sit outside the
+    line's disclosure, so they show while the line is closed: on the phone, in
+    the dock's collapsed-tools mode, and before the operator opened anything.
+    The inset lines them up with the summary text after the glyph. */
+export function ToolImages({ event }: { event: ToolEvent }) {
+  const images = (event.outputBlocks ?? []).filter((block): block is ImageBlock => block.type === "image" && drawable(block));
+  if (!images.length) return null;
+  return (
+    <div data-tool-images className="flex min-w-0 max-w-full flex-wrap items-start gap-x-2 pl-[22px]">
+      {images.map((image, index) => <ImageCard key={`${image.path ?? "inline"}:${index}`} {...image} inset />)}
+    </div>
   );
 }
 
@@ -210,7 +266,7 @@ export function PollRow({ events, session, elapsedMs }: { events: ToolEvent[]; s
   const elapsed = typeof elapsedMs === "number" && elapsedMs > 0 ? formatDuration(elapsedMs) : "";
   const detail = [tr("tools.pollRun", { count }), session ? `→ ${session}` : "", elapsed].filter(Boolean).join(" · ");
   return (
-    <div className="flex items-center gap-2 rounded-control py-0.5 text-ui text-muted/80">
+    <div data-tool-row="poll" className="flex items-center gap-2 rounded-control py-0.5 text-ui text-muted/80">
       <span className="shrink-0 select-none text-muted" aria-hidden>↳</span>
       <GlyphIcon name="clock" className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate tabular-nums text-caption">{detail}</span>
@@ -233,8 +289,9 @@ export function ToolBlockRow({ event, index, nested = false }: { event: ToolEven
   return (
     <div className="min-w-0">
       <div
+        data-tool-row={isErr ? "failed" : "done"}
         className={`flex items-center gap-2 rounded-control py-0.5 text-ui ${
-          isErr ? "border-l-2 border-danger bg-danger-soft pl-2 pr-1 text-danger" : nested ? "text-muted/90" : "text-muted"
+          isErr ? "border-l-2 border-danger bg-danger-soft pl-2 pr-1" : nested ? "text-muted/90" : "text-muted"
         }`}
       >
         {index !== undefined ? (
@@ -242,17 +299,13 @@ export function ToolBlockRow({ event, index, nested = false }: { event: ToolEven
         ) : null}
         {nested ? <span className="shrink-0 select-none text-muted" aria-hidden>↳</span> : null}
         <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
-        <span className={`min-w-0 flex-1 truncate ${isErr ? "font-semibold" : "text-secondary"}`} title={event.summary}>
+        <span className="min-w-0 flex-1 truncate text-secondary" title={event.summary}>
           {event.summary}
         </span>
-        {event.status !== "ok" ? (
-          <span className={`inline-flex shrink-0 items-center gap-1 text-caption font-semibold ${statusClass(event.status)}`}>
-            <StatusIcon status={event.status} className="h-3 w-3" />
-            {event.statusLabel}
-          </span>
-        ) : null}
+        <RowStatusChip event={event} />
         {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
       </div>
+      <ToolImages event={event} />
       <ToolBody event={event} />
     </div>
   );
@@ -302,9 +355,10 @@ export function ToolLine({
   const duration = durationMs === undefined ? "" : formatDuration(durationMs);
   const isErr = event.status === "err";
   const running = event.status === "run";
-  return (
+  const pictured = hasImageBlock(event);
+  const line = (
     <details
-      className={`group/tool ${className}`}
+      className={`group/tool ${pictured ? "" : className}`}
       open={open}
       onToggle={(e) => {
         const next = e.currentTarget.open;
@@ -317,8 +371,9 @@ export function ToolLine({
           says so in words with its spinner first; the padding is its gap. */}
       <summary
         data-mobile-tool-line={isMobile ? (running ? "running" : isErr ? "failed" : "done") : undefined}
+        data-tool-row={running ? "running" : isErr ? "failed" : "done"}
         className={`flex cursor-pointer list-none items-center gap-2 rounded-control py-0.5 text-ui hover:bg-sunken [@media(pointer:coarse)]:min-h-11 [&::-webkit-details-marker]:hidden ${isMobile ? "min-h-11 gap-1.5 " : ""}${
-          isErr ? "border-l-2 border-danger bg-danger-soft pl-2 pr-1 text-danger" : nested ? "text-muted/90" : "text-muted"
+          isErr ? "border-l-2 border-danger bg-danger-soft pl-2 pr-1" : nested ? "text-muted/90" : "text-muted"
         }`}
       >
         {index !== undefined ? (
@@ -330,23 +385,25 @@ export function ToolLine({
         ) : (
           <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
         )}
-        <span className={`min-w-0 flex-1 truncate ${isErr ? "font-semibold" : "text-secondary"}`} title={event.summary}>
+        <span className="min-w-0 flex-1 truncate text-secondary" title={event.summary}>
           {isMobile && running ? tr("mobile2.feed.running", { summary: event.summary }) : event.summary}
         </span>
         {/* On the phone a running line already said "running …" with its
             spinner, so the status chip (a second spinner, "executing…") stays
             off it; the duration is the trailing word. */}
-        {event.status !== "ok" && !(isMobile && running) ? (
-          <span className={`inline-flex shrink-0 items-center gap-1 text-caption font-semibold ${statusClass(event.status)}`}>
-            <StatusIcon status={event.status} className="h-3 w-3" />
-            {event.statusLabel}
-          </span>
-        ) : null}
+        {isMobile && running ? null : <RowStatusChip event={event} />}
         {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
         {showTime && time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
       </summary>
       {(collapsed ? manualOpen : isMobile ? phoneOpen : mounted) ? <><ToolBody event={event} />{children}</> : null}
     </details>
+  );
+  if (!pictured) return line;
+  return (
+    <div className={`min-w-0 ${className}`}>
+      {line}
+      <ToolImages event={event} />
+    </div>
   );
 }
 
@@ -359,24 +416,14 @@ export function ToolCard({ event }: { event: ToolEvent }) {
   return <ToolLine event={event} className={isMobile ? "" : "ml-9"} />;
 }
 
-/* Mobile v2 (#1439, lane 4): the detail a failed call shows under its 36 px
-   row inside a sunken run block — the exit verdict and the first lines of what
-   the tool said, bounded so the block stays a list and never a log. */
-const FAILURE_DETAIL_LINES = 2;
-const FAILURE_DETAIL_CHARS = 160;
-
-export function mobileFailureDetail(event: ToolEvent): string {
-  const source = event.stderr?.trim() || event.outputPreview.trim();
-  if (!source) return "";
-  const lines = source.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, FAILURE_DETAIL_LINES);
-  const text = lines.join("\n");
-  return text.length > FAILURE_DETAIL_CHARS ? `${text.slice(0, FAILURE_DETAIL_CHARS - 1).trimEnd()}…` : text;
-}
-
 /** One 36 px list item inside the phone's sunken run block (mobile v2, §4.2):
-    glyph or spinner, the summary, then exit · time · duration in tabular
-    caption type. A failed item reads in danger and carries its detail under
-    it. Renders no control of its own: the block around it is the target. */
+    glyph or spinner, the command clipped to one line, then exit · time ·
+    duration in tabular caption type. A failure is the danger glyph and its exit
+    code in the trailing meta, never a coloured wall: the label keeps the same
+    quiet type as every other row, and what the tool said is one tap away in the
+    block's readable body (#1938). Renders no control of its own: the block
+    around it is the target. `min-h-9` rather than a fixed height, so no
+    rendering of a row can paint outside its own box. */
 export function MobileRunRow({ event }: { event: ToolEvent }) {
   const isErr = event.status === "err";
   const running = event.status === "run";
@@ -385,33 +432,23 @@ export function MobileRunRow({ event }: { event: ToolEvent }) {
   const duration = durationMs === undefined ? "" : formatDuration(durationMs);
   const exit = exitLabel(event);
   const meta = [isErr ? exit : "", time, duration].filter(Boolean).join(" · ");
-  const detail = isErr ? mobileFailureDetail(event) : "";
   return (
-    <>
-      <span
-        data-mobile-run-row={running ? "running" : isErr ? "failed" : "done"}
-        className={`flex h-9 items-center gap-1.5 text-ui ${isErr ? "text-danger" : "text-secondary"}`}
-      >
-        {running ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />
-        ) : isErr ? (
-          <StatusIcon status="err" className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <span className="min-w-0 flex-1 truncate" title={event.summary}>
-          {running ? tr("mobile2.feed.running", { summary: event.summary }) : event.summary}
-        </span>
-        {meta ? <span className={`shrink-0 text-caption tabular-nums ${isErr ? "text-danger" : "text-muted"}`}>{meta}</span> : null}
+    <span
+      data-mobile-run-row={running ? "running" : isErr ? "failed" : "done"}
+      data-tool-row={running ? "running" : isErr ? "failed" : "done"}
+      className="flex min-h-9 items-center gap-1.5 text-ui text-secondary"
+    >
+      {running ? (
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />
+      ) : isErr ? (
+        <StatusIcon status="err" className="h-3.5 w-3.5 shrink-0 text-danger" />
+      ) : (
+        <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
+      )}
+      <span className="min-w-0 flex-1 truncate" title={event.summary}>
+        {running ? tr("mobile2.feed.running", { summary: event.summary }) : event.summary}
       </span>
-      {detail ? (
-        <span
-          data-mobile-run-detail
-          className="mb-1.5 ml-5 block whitespace-pre-wrap break-words rounded-control bg-danger-soft px-2.5 py-1.5 font-mono text-label text-danger"
-        >
-          {detail}
-        </span>
-      ) : null}
-    </>
+      {meta ? <span className={`shrink-0 text-caption tabular-nums ${isErr ? "text-danger" : "text-muted"}`}>{meta}</span> : null}
+    </span>
   );
 }

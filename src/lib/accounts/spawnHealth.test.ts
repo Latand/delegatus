@@ -24,6 +24,15 @@ globalThis.fetch = (async () => {
 }) as unknown as typeof globalThis.fetch;
 const { claudeValidityFromLimitRead, NoHealthyClaudeAccountError, selectHealthyClaudeAccount } = await import("./spawnHealth");
 const { withAccountMutationLockAsync } = await import("./accountMutation");
+const { seedAccountRegistry } = await import("./accountsStoreFixture");
+const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+/* The process-wide registry keeps its SQLite store open; close it before the
+   store's directory goes, or macOS answers the next query with
+   SQLITE_IOERR_VNODE. */
+function removeStateDir() {
+  closeAgentRegistryForTests();
+  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+}
 const homes: string[] = [];
 const current = () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null } as const);
 const lastKnown = () => ({ kind: "admissible", basis: "last-known", stale: true, retryAt: null } as const);
@@ -39,6 +48,7 @@ afterAll(() => {
   if (PREVIOUS_HOME === undefined) delete process.env.LLV_CLAUDE_HOME;
   else process.env.LLV_CLAUDE_HOME = PREVIOUS_HOME;
   globalThis.fetch = PREVIOUS_FETCH;
+  closeAgentRegistryForTests();
   fs.rmSync(STATE_SANDBOX, { recursive: true, force: true });
 });
 
@@ -65,7 +75,7 @@ for (const kind of ["legacy", "managed"] as const) {
       }));
       const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
       const { resolveHealthySpawnAccount } = await import("./manager");
-      fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+      removeStateDir();
       fs.mkdirSync(process.env.LLV_CLAUDE_HOME!, { recursive: true, mode: 0o700 });
       const requested = kind === "legacy" ? listClaudeAccounts()[0] : createManagedClaudeAccount("Account A");
       const fallback = createManagedClaudeAccount("Account B");
@@ -105,7 +115,7 @@ for (const kind of ["legacy", "managed"] as const) {
       } finally {
         read.mockRestore();
         providerReply = null;
-        fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+        removeStateDir();
       }
     });
   }
@@ -118,7 +128,7 @@ for (const [healthyKind, kind] of [["legacy", "managed"], ["managed", "legacy"],
       const read = spyOn(store, "readClaudeCredentials").mockReturnValue({ state: "absent" });
       const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
       const { resolveHealthySpawnAccount } = await import("./manager");
-      fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+      removeStateDir();
       fs.mkdirSync(process.env.LLV_CLAUDE_HOME!, { recursive: true, mode: 0o700 });
       const uncertain = kind === "legacy" ? listClaudeAccounts()[0] : createManagedClaudeAccount("Account B");
       const healthy = healthyKind === "legacy" ? listClaudeAccounts()[0] : createManagedClaudeAccount("Account A");
@@ -183,7 +193,7 @@ for (const [healthyKind, kind] of [["legacy", "managed"], ["managed", "legacy"],
       } finally {
         read.mockRestore();
         providerReply = null;
-        fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+        removeStateDir();
       }
     });
   }
@@ -378,7 +388,7 @@ test("Claude provider checks waiting behind deletion re-resolve retired accounts
     retired: [expired, currentAccount].map(({ id, label }) => ({ id, label, retiredAt: 2 })),
   };
   fs.mkdirSync(path.dirname(stateFile), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(stateFile, JSON.stringify(activeRegistry), { mode: 0o600 });
+  seedAccountRegistry("claude", activeRegistry);
   providerReads = 0;
   let release!: () => void;
   let entered!: () => void;
@@ -387,7 +397,7 @@ test("Claude provider checks waiting behind deletion re-resolve retired accounts
   const holder = withAccountMutationLockAsync(async () => {
     entered();
     await held;
-    fs.writeFileSync(stateFile, JSON.stringify(retiredRegistry), { mode: 0o600 });
+    seedAccountRegistry("claude", retiredRegistry);
   });
   await acquired;
 

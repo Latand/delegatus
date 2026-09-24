@@ -12,12 +12,13 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 /*
  * #1671 end to end on the phone: the real Viewer, its file poll, its bar and
- * the board under it. The badge in the bar and the Needs-you rows are one
- * queue (README §4.6), so what a swipe does to a pipeline row has to reach
- * both in the same tap — Hide through the optimistic pipeline record every
- * reader shares, Close lane through the held act the receipt owns — and a hide
- * the server refuses has to put both back. The pipeline PATCH is held open
- * here, so everything asserted before it answers is the optimistic render.
+ * the board under it. The badge in the bar and what the columns pin as
+ * needing the operator are one queue (README §4.6; #2072 slice 4), so what
+ * a long-press does to a lane has to reach both in the same tap — Hide
+ * through the optimistic pipeline record every reader shares, Close lane
+ * through the held act the receipt owns — and a hide the server refuses has
+ * to put both back. The pipeline PATCH is held open here, so everything
+ * asserted before it answers is the optimistic render.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -87,8 +88,13 @@ const finished = {
 
 const lane = (id: string, task: string): Pipeline => ({
   id, task, taskIds: [], project: PROJECT, repoDir: "/repo", worktreeDir: `/repo-${id}`, branch: `lane/${id}`, baseBranch: "main", baseRef: "main",
-  lastPassedCommit: "", stages: [{ id: "implement", kind: "run" }, { id: "review", kind: "review-loop" }],
-  runs: [{ stageId: "review", attempts: [{ n: 2, state: "failed", verdict: { status: "fail", findings: ["one"] }, completedAt: iso(3_600) }] }],
+  /* Every stage and attempt carries the role it runs under, as the engine
+     records it: the task projection the columns read relies on it. */
+  lastPassedCommit: "", stages: [
+    { id: "implement", kind: "run", effectiveRole: { roleId: "builder", access: "read-write", promptScaffold: null } },
+    { id: "review", kind: "review-loop", effectiveRole: { roleId: "reviewer", access: "read-only", promptScaffold: null } },
+  ],
+  runs: [{ stageId: "review", attempts: [{ n: 2, state: "failed", effectiveRole: { roleId: "reviewer", access: "read-only", promptScaffold: null }, verdict: { status: "fail", findings: ["one"] }, completedAt: iso(3_600) }] }],
   cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
   state: "needs_decision", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
   createdAt: iso(7_200), closedAt: null,
@@ -185,22 +191,26 @@ async function until(check: () => boolean, maxMs = 5_000): Promise<void> {
   }
 }
 
-const row = (host: HTMLElement, id: string) => host.querySelector(`[data-mobile2-board] [data-mobile2-swipe-row="pipeline:${id}"]`) as HTMLElement | null;
-const trayButton = (host: HTMLElement, id: string, key: string) =>
-  host.querySelector(`[data-mobile2-swipe-row="pipeline:${id}"] [data-mobile2-swipe-action="${key}"]`) as HTMLElement;
+/** The lane's card where the columns pin what needs the operator. */
+const row = (host: HTMLElement, id: string) => host.querySelector(`[data-phone-kanban] [data-phone-card-pipeline="${id}"][data-needs="1"]`) as HTMLElement | null;
+/** Any card of the lane, pinned or not. */
+const card = (host: HTMLElement, id: string) => host.querySelector(`[data-phone-kanban] [data-phone-card-pipeline="${id}"]`) as HTMLElement | null;
+const sheetAction = (key: string) => dom.document.querySelector(`[data-phone-card-sheet] [data-phone-card-action="${key}"]`) as unknown as HTMLElement;
 const badge = (host: HTMLElement) => host.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? null;
 const receiptText = () => dom.document.querySelector("[data-mobile2-receipt]")?.textContent ?? "";
 
-function swipeLeft(target: HTMLElement): void {
-  const card = target.querySelector("[data-mobile2-swipe-card] [data-mobile2-row]")!;
-  for (const [type, x] of [["pointerdown", 350], ["pointermove", 340], ["pointermove", 150], ["pointerup", 150]] as const) {
-    card.dispatchEvent(new dom.PointerEvent(type, {
-      bubbles: true, cancelable: true, clientX: x, clientY: 30, pointerId: 3, pointerType: "touch", isPrimary: true,
-    }) as unknown as Event);
-  }
+/* A held finger on the card: the column pager owns the sideways swipe, so a
+   board card's actions are on its long-press sheet (phone-kanban §3.8). */
+async function hold(target: HTMLElement): Promise<void> {
+  const press = (type: string) => target.dispatchEvent(new dom.PointerEvent(type, {
+    bubbles: true, cancelable: true, clientX: 200, clientY: 30, pointerId: 3, pointerType: "touch", isPrimary: true,
+  }) as unknown as Event);
+  act(() => { press("pointerdown"); });
+  await act(async () => { await Bun.sleep(520); });
+  act(() => { press("pointerup"); });
 }
 
-test("phone: Hide takes a lane off the board and out of the bar's badge on the tap, and a refused hide puts both back", async () => {
+test("phone: Hide takes a lane out of the pin and out of the bar's badge on the tap, and a refused hide puts both back", async () => {
   const host = await mountViewer();
   await until(() => row(host, "p-a") !== null && row(host, "p-b") !== null);
   expect(badge(host)).toBe("2");
@@ -209,13 +219,16 @@ test("phone: Hide takes a lane off the board and out of the bar's badge on the t
   pipelineReply = () => new Promise<Response>((resolve) => {
     refuse = () => resolve(new Response(JSON.stringify({ error: "the lane moved on" }), { status: 409 }));
   });
-  act(() => swipeLeft(row(host, "p-a")!));
-  act(() => trayButton(host, "p-a", "hide").click());
+  await hold(row(host, "p-a")!);
+  act(() => sheetAction("hide").click());
 
-  /* The server has not answered, and the row and the count moved together. */
+  /* The server has not answered, and the pin and the count moved together:
+     the lane still stands in Inbox, with nothing asked of the operator. */
   expect(pipelinePatches).toEqual([{ action: "dismiss" }]);
   expect(row(host, "p-a")).toBeNull();
+  expect(card(host, "p-a")).not.toBeNull();
   expect(badge(host)).toBe("1");
+  expect(host.querySelector("[data-phone-kanban-tab=inbox] [data-phone-tab-needs]")?.textContent).toBe("1");
   /* The queue sheet the badge opens lists the same one lane. */
   act(() => (host.querySelector('[data-mobile2-open="attention"]') as HTMLElement).click());
   const sheet = dom.document.querySelector('[data-mobile2-sheet="attention"]')!;
@@ -235,9 +248,9 @@ test("phone: Close lane leaves the board and the badge on the tap, sends nothing
   await until(() => row(host, "p-a") !== null && row(host, "p-b") !== null);
   expect(badge(host)).toBe("2");
 
-  act(() => swipeLeft(row(host, "p-b")!));
-  act(() => trayButton(host, "p-b", "closeLane").click());
-  expect(row(host, "p-b")).toBeNull();
+  await hold(row(host, "p-b")!);
+  act(() => sheetAction("closeLane").click());
+  expect(card(host, "p-b")).toBeNull();
   expect(badge(host)).toBe("1");
   await act(async () => { await Bun.sleep(40); });
   expect(pipelinePatches).toEqual([]);
@@ -256,15 +269,15 @@ test("phone: a Close lane that has gone out stays off the board and the badge un
   const answers: Array<(response: Response) => void> = [];
   pipelineReply = () => new Promise<Response>((resolve) => { answers.push(resolve); });
 
-  act(() => swipeLeft(row(host, "p-a")!));
-  act(() => trayButton(host, "p-a", "closeLane").click());
+  await hold(row(host, "p-a")!);
+  act(() => sheetAction("closeLane").click());
   /* A second Close lane inside the first one's window sends the first. */
-  act(() => swipeLeft(row(host, "p-b")!));
-  act(() => trayButton(host, "p-b", "closeLane").click());
+  await hold(row(host, "p-b")!);
+  act(() => sheetAction("closeLane").click());
   await until(() => answers.length === 1);
   expect(pipelinePatches).toEqual([{ action: "close" }]);
-  expect(row(host, "p-a")).toBeNull();
-  expect(row(host, "p-b")).toBeNull();
+  expect(card(host, "p-a")).toBeNull();
+  expect(card(host, "p-b")).toBeNull();
   expect([null, "0"]).toContain(badge(host));
 
   /* The second window runs out: that close goes out too, and neither lane
@@ -272,8 +285,8 @@ test("phone: a Close lane that has gone out stays off the board and the badge un
   act(() => pendingPipelineActs.flush());
   await until(() => answers.length === 2);
   await act(async () => { await Bun.sleep(40); });
-  expect(row(host, "p-a")).toBeNull();
-  expect(row(host, "p-b")).toBeNull();
+  expect(card(host, "p-a")).toBeNull();
+  expect(card(host, "p-b")).toBeNull();
   expect([null, "0"]).toContain(badge(host));
 
   /* The server closes the first: its echo and the next scan both say closed. */
@@ -282,8 +295,8 @@ test("phone: a Close lane that has gone out stays off the board and the badge un
     answers[0]!(Response.json({ ok: true, pipeline: served.find((pipeline) => pipeline.id === "p-a") }));
     await Bun.sleep(40);
   });
-  expect(row(host, "p-a")).toBeNull();
-  expect(row(host, "p-b")).toBeNull();
+  expect(card(host, "p-a")).toBeNull();
+  expect(card(host, "p-b")).toBeNull();
 
   /* It refuses the second: that lane comes back, and the receipt says why. */
   await act(async () => {
@@ -291,12 +304,12 @@ test("phone: a Close lane that has gone out stays off the board and the badge un
     await Bun.sleep(40);
   });
   await until(() => row(host, "p-b") !== null);
-  expect(row(host, "p-a")).toBeNull();
+  expect(card(host, "p-a")).toBeNull();
   expect(badge(host)).toBe("1");
   expect(receiptText()).toContain("the lane is still publishing");
 });
 
-test("phone: a lane hidden before that parked again hides again: its old Hide is cleared first, and the row and the count stay gone once the server answers", async () => {
+test("phone: a lane hidden before that parked again hides again: its old Hide is cleared first, and the pin and the count stay gone once the server answers", async () => {
   /* Hidden an hour before the round that parked it again, so it is back in
      Needs you. The server here keeps a lane's first Hide instant through a
      later dismiss, as the engine does, and undismiss clears it. */
@@ -315,8 +328,8 @@ test("phone: a lane hidden before that parked again hides again: its old Hide is
     });
   });
 
-  act(() => swipeLeft(row(host, "p-a")!));
-  act(() => trayButton(host, "p-a", "hide").click());
+  await hold(row(host, "p-a")!);
+  act(() => sheetAction("hide").click());
   await until(() => answers.length === 1);
   expect(pipelinePatches).toEqual([{ action: "undismiss" }]);
   expect(row(host, "p-a")).toBeNull();

@@ -16,6 +16,7 @@ import {
 
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
+import type { CopilotAcpHost } from "./copilotAcpHost";
 import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost";
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
@@ -62,6 +63,20 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
 export function claudeHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
     kind: "claude-broker",
+    endpoint: state.endpoint,
+    process: state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity),
+    eventCursor: state.eventCursor,
+    protocolVersion: state.protocolVersion,
+    writerClaimEpoch,
+    activeTurnRef: state.activeTurnRef,
+    pendingAttention: state.pendingAttention,
+    activeFlags: state.activeFlags,
+  };
+}
+
+export function copilotHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
+  return {
+    kind: "copilot-acp",
     endpoint: state.endpoint,
     process: state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity),
     eventCursor: state.eventCursor,
@@ -284,6 +299,27 @@ export async function bindClaudeHostPersistence(
   );
 }
 
+export async function bindCopilotHostPersistence(
+  registry: AgentRegistry,
+  key: SessionKey,
+  host: CopilotAcpHost,
+  claimOwner: string,
+  writerClaimEpoch: number,
+  releasedStatus: "unhosted" | "dead" = "unhosted",
+  options: StructuredHostPersistenceOptions = {},
+): Promise<() => void> {
+  return bindStructuredHostPersistence(
+    registry,
+    key,
+    host,
+    claimOwner,
+    writerClaimEpoch,
+    releasedStatus,
+    copilotHostColumns,
+    options,
+  );
+}
+
 export interface AdoptedCodexHost {
   key: SessionKey;
   host: CodexAppServerHost;
@@ -414,10 +450,12 @@ export async function reapSeveredStructuredHost(
 export async function demoteSkippedStructuredRegistryHosts(
   registry: AgentRegistry,
   shouldAdopt: StructuredHostAdoptionFilter,
+  admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => mutation(),
 ): Promise<void> {
   const rows = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
     entry.structuredHost && !shouldAdopt(entry));
-  for (const entry of rows) {
+  for (const [index, entry] of rows.entries()) {
+    if (index > 0 && index % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const host = entry.structuredHost!;
     const alreadyDead = entry.status === "dead"
       && host.process === null
@@ -428,8 +466,10 @@ export async function demoteSkippedStructuredRegistryHosts(
       && host.activeFlags.length === 0;
     if (alreadyDead) continue;
     const conversation = registry.conversationForPath(entry.artifactPath);
-    if (conversation
-      && reconcileDeadStructuredRegistryHost(registry, conversation.id, entry.key)) continue;
+    if (conversation) {
+      const reconciled = await admit(entry, () => reconcileDeadStructuredRegistryHost(registry, conversation.id, entry.key));
+      if (reconciled === undefined || reconciled) continue;
+    }
     const owner = captureProcessIdentity(process.pid);
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
@@ -439,35 +479,46 @@ export async function demoteSkippedStructuredRegistryHosts(
            transcript signals already excluded this row from adoption, so the
            startup demotion may replace that unverifiable owner and settle the
            retained receipt through the ordinary terminal path. */
-        let claimed = registry.claimStructuredHost(entry.key, owner, {
+        let claimed = await admit(entry, () => registry.claimStructuredHost(entry.key, owner, {
           allowUnhosted: true,
           reclaimUnverifiedOwner: true,
-        });
+        }));
+        if (claimed === undefined) return;
         if (!claimed) {
           const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
           const orphan = current?.structuredHost?.kind === "claude-broker"
             ? current.structuredHost.process
             : null;
-          if (orphan && await terminateVerifiedStructuredOrphan(orphan, current?.claimOwner ?? null)) {
-            claimed = registry.claimStructuredHost(entry.key, owner, {
+          if (orphan && current && !shouldAdopt(current)
+            && await terminateVerifiedStructuredOrphan(orphan, current.claimOwner ?? null)) {
+            claimed = await admit(entry, () => registry.claimStructuredHost(entry.key, owner, {
               allowUnhosted: true,
               reclaimUnverifiedOwner: true,
-            });
+            }));
           }
         }
         if (!claimed?.structuredHost || !claimed.claimOwner) return;
-        const demoted = registry.setStructuredHostClaimed(entry.key, {
-          ...claimed.structuredHost,
+        const claim = claimed;
+        const columns = claimed.structuredHost;
+        const demoted = await admit(entry, () => registry.setStructuredHostClaimed(entry.key, {
+          ...columns,
           endpoint: "stdio:released",
           process: null,
           activeTurnRef: null,
           pendingAttention: [],
           activeFlags: [],
-        }, "dead", claimed.claimOwner, claimed.claimEpoch, true);
+        }, "dead", claim.claimOwner!, claim.claimEpoch, true));
+        if (demoted === undefined) {
+          registry.releaseStructuredHostClaim(entry.key, claim.claimOwner!, claim.claimEpoch);
+          return;
+        }
         if (!demoted) throw new Error("structured host writer claim is stale");
       });
     } catch (error) {
-      if (!(error instanceof Error) || error.message !== "agent registry is busy") throw error;
+      if (!(error instanceof Error) || error.message !== "agent registry is busy") {
+        if (error instanceof Error) Object.assign(error, { hostKey: sessionKeyId(entry.key) });
+        throw error;
+      }
     }
   }
 }
@@ -481,6 +532,8 @@ export async function adoptCodexRegistryHosts(
   processed?: StructuredHostAdoptionProgress,
   dependencies: {
     adoptHost?: (sessionId: string, options: CodexAppServerHostOptions) => Promise<CodexAppServerHost>;
+    onAdopted?: (item: AdoptedCodexHost) => void;
+    claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
@@ -489,13 +542,14 @@ export async function adoptCodexRegistryHosts(
     && entry.structuredHost?.kind === "codex-app-server"
     && shouldAdopt(entry));
   const adopted: AdoptedCodexHost[] = [];
-  for (const entry of rows) {
+  for (const [index, entry] of rows.entries()) {
+    if (index > 0 && index % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const owner = captureProcessIdentity(process.pid);
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
         const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || !shouldAdopt(current)) return;
-        let claimed = registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true });
+        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
         if (!claimed) {
           const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
           const orphan = current?.structuredHost?.kind === "codex-app-server"
@@ -507,7 +561,7 @@ export async function adoptCodexRegistryHosts(
             && await terminateVerifiedStructuredOrphan(orphan, current.claimOwner ?? null)) {
             const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !shouldAdopt(retry)) return;
-            claimed = registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true });
+            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
           }
         }
         if (!claimed?.structuredHost) return;
@@ -527,6 +581,7 @@ export async function adoptCodexRegistryHosts(
             : await CodexAppServerHost.adopt(entry.key.sessionId, options);
           await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch);
           adopted.push({ key: entry.key, host });
+          dependencies.onAdopted?.({ key: entry.key, host });
         } catch (error) {
           if (error instanceof StructuredHostAdoptionCleanupError
             && error.host instanceof CodexAppServerHost) {
@@ -554,7 +609,10 @@ export async function adoptCodexRegistryHosts(
         }
       });
     } catch (error) {
-      if (!(error instanceof Error) || error.message !== "agent registry is busy") throw error;
+      if (!(error instanceof Error) || error.message !== "agent registry is busy") {
+        if (error instanceof Error) Object.assign(error, { hostKey: sessionKeyId(entry.key) });
+        throw error;
+      }
     } finally {
       processed?.(entry);
     }
@@ -572,6 +630,8 @@ export async function adoptClaudeRegistryHosts(
   processed?: StructuredHostAdoptionProgress,
   dependencies: {
     adoptHost?: (sessionId: string, options: ClaudeStreamBrokerHostOptions) => Promise<ClaudeStreamBrokerHost>;
+    onAdopted?: (item: AdoptedClaudeHost) => void;
+    claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
@@ -580,13 +640,14 @@ export async function adoptClaudeRegistryHosts(
     && entry.structuredHost?.kind === "claude-broker"
     && shouldAdopt(entry));
   const adopted: AdoptedClaudeHost[] = [];
-  for (const entry of rows) {
+  for (const [index, entry] of rows.entries()) {
+    if (index > 0 && index % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const owner = captureProcessIdentity(process.pid);
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
         const eligible = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
         if (!eligible?.structuredHost || !shouldAdopt(eligible)) return;
-        let claimed = registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true });
+        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
         if (!claimed) {
           const current = registry.readOnlySnapshot().entries[`claude:${entry.key.sessionId}`];
           const orphan = current?.structuredHost?.kind === "claude-broker"
@@ -598,7 +659,7 @@ export async function adoptClaudeRegistryHosts(
             && await terminateVerifiedStructuredOrphan(orphan, current.claimOwner ?? null)) {
             const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !shouldAdopt(retry)) return;
-            claimed = registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true });
+            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
           }
         }
         if (!claimed?.structuredHost) return;
@@ -617,6 +678,7 @@ export async function adoptClaudeRegistryHosts(
             : await ClaudeStreamBrokerHost.adopt(entry.key.sessionId, options);
           await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch);
           adopted.push({ key: entry.key, host });
+          dependencies.onAdopted?.({ key: entry.key, host });
         } catch (error) {
           if (error instanceof StructuredHostAdoptionCleanupError
             && error.host instanceof ClaudeStreamBrokerHost) {
@@ -644,7 +706,10 @@ export async function adoptClaudeRegistryHosts(
         }
       });
     } catch (error) {
-      if (!(error instanceof Error) || error.message !== "agent registry is busy") throw error;
+      if (!(error instanceof Error) || error.message !== "agent registry is busy") {
+        if (error instanceof Error) Object.assign(error, { hostKey: sessionKeyId(entry.key) });
+        throw error;
+      }
     } finally {
       processed?.(entry);
     }

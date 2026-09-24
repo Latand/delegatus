@@ -9,17 +9,18 @@ export type RootKey =
   | "codex-sessions"
   | "claude-projects"
   | "claude-tasks"
-  | "openclaw-sessions";
+  | "openclaw-sessions"
+  | "copilot-sessions";
 
-export type Engine = "codex" | "claude" | "shell" | "openclaw";
+export type Engine = "codex" | "claude" | "shell" | "openclaw" | "copilot";
 export type Activity = "live" | "recent" | "stalled" | "idle";
-export type Fmt = "codex" | "claude" | "plain" | "openclaw";
+export type Fmt = "codex" | "claude" | "plain" | "openclaw" | "copilot";
 
 /** The engines that write a structured transcript the Viewer parses — every
     `Engine` except `"shell"`, whose background tasks are plain output logs.
     Named once so the readers that must switch on the dialect (title and search
     text, turn state, model, effort, the feed) all agree on the same set. */
-export type TranscriptEngine = Extract<Engine, "codex" | "claude" | "openclaw">;
+export type TranscriptEngine = Extract<Engine, "codex" | "claude" | "openclaw" | "copilot">;
 
 declare const epochSecondsBrand: unique symbol;
 /**
@@ -347,6 +348,13 @@ export interface FileEntry {
   /** Live per-session migration annotation while an intent drains. Absent for
       every session not currently migrating. */
   migration?: ConversationMigration;
+  /** The failed account switch holding this conversation's messages (#1846):
+      they wait, unsent, until the operator sends them on the account the
+      conversation runs on or picks another account. */
+  switchHold?: { targetAccountId: string; reason: string; since: string };
+  /** The account switch the registry has claimed for this conversation (#1846): a message engaged it and the
+      move is under way, whatever its receipt reads meanwhile, so no surface offers to take it back. */
+  switchApplying?: { operationId: string };
   /** Oldest durable message this live conversation still owes the operator. */
   stuckDelivery?: StuckDelivery;
   /** Durable launch projection shown before its transcript enters the scan. */
@@ -429,12 +437,16 @@ export interface FilesResponse {
   pipelinesError?: string;
   workflows: Workflow[];
   tasks: BoardTask[];
+  /** Resolved PR and issue links of the carried pipelines and tasks (#2059). */
+  workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
   systemHealth: {
     tmux: TmuxEndpointHealth;
     registry?: Omit<
       import("@/lib/agent/registry").AgentRegistryStorageDiagnostics,
       "mirrorAgeMs" | "writerRatePerSecond"
     >;
+    /** State database fallbacks and refused backups of the last week (#1870). */
+    storage?: { incidents: import("@/lib/state/durability").StorageIncident[] };
   };
   /** Durable conversation-id aliases (old id → canonical id), so a deep link
       copied before provisional-id adoption still resolves its card. */
@@ -616,12 +628,16 @@ export interface LimitWindow {
 }
 
 /** A weekly window the provider meters separately for one model tier (issues
-    #1358, #1796): Anthropic's OAuth usage payload carries a seven-day bucket
-    per metered tier beside the general week. `tier` is the bucket's tier name
-    as the provider spelled it (`opus` for `seven_day_opus`), so the label the
-    row carries is the provider's, never a guess. */
+    #1358, #1796, #1839): Anthropic's OAuth usage payload carries a seven-day
+    bucket per metered tier beside the general week. `tier` is the key the
+    provider filed the bucket under — a tier name (`opus` for `seven_day_opus`)
+    or, for a bucket the provider has not named in the open, a codename
+    (`nimbus_quill`). `label` is the provider's own human label for the window
+    when it supplies one, which is what the operator reads: a codename is never
+    shown raw while a label exists (issue #1839). */
 export interface TierLimitWindow extends LimitWindow {
   tier: string;
+  label?: string | null;
 }
 
 /** The quota window that bound an effective-remaining minimum. A `tier:<name>`
@@ -667,6 +683,9 @@ export interface LimitsProvenance {
   staleSince: string | null;
   /** ISO timestamp for the next provider refresh after a failed read. */
   retryAt?: string | null;
+  /** ISO timestamp of the provider rejection that established `retryAt`.
+      This lets conversation evidence supersede only an older account wait. */
+  throttleAt?: string | null;
 }
 
 export const LIMITS_RATE_LIMITED_REASON = "oauth-rate-limited";
@@ -675,13 +694,17 @@ export const LIMITS_REAUTH_REQUIRED_REASON = "oauth-reauthentication-required";
 export interface LimitsPayload {
   claude: EngineLimits | null;
   codex: EngineLimits | null;
+  /** Optional on legacy browser/test payloads; the server now always sends it. */
+  copilot?: EngineLimits | null;
   /** The Claude account whose values appear in this payload. */
   claudeAccountId: string | null;
   /** The account whose Codex values appear in this payload. The server always
       stamps it; null remains accepted while a legacy cached/browser payload is
       being replaced after an upgrade. */
   codexAccountId: string | null;
-  provenance: { claude: LimitsProvenance; codex: LimitsProvenance };
+  /** The Copilot account whose latest transcript snapshot appears here. */
+  copilotAccountId?: string | null;
+  provenance: { claude: LimitsProvenance; codex: LimitsProvenance; copilot?: LimitsProvenance };
   /** ISO timestamp from the first failed refresh behind this fallback payload. */
   staleSince?: string | null;
 }
@@ -758,7 +781,7 @@ export interface ResourceSession {
       structured hosts were listed, which only ever held tmux panes. */
   kind?: "tmux" | "structured";
   path: string | null;
-  engine: "claude" | "codex" | null;
+  engine: "claude" | "codex" | "copilot" | null;
   /** Several live panes claim the same stable conversation identity. */
   hostConflict?: boolean;
   title: string | null;

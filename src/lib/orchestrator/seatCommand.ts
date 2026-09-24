@@ -10,10 +10,12 @@ import { internalServiceHeaders, rotationActor, type ViewerActor } from "@/lib/a
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
+import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { resolveSpawnRole } from "@/lib/roles/registry";
+import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
 
@@ -31,7 +33,14 @@ import {
   type HandoffDigestRequest,
   type HandoffParts,
 } from "./handoffDigest";
-import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery, orchestratorMandateStale } from "./prompt";
+import {
+  ORCHESTRATOR_PROMPT_VERSION,
+  ORCHESTRATOR_SYSTEM_PROMPT,
+  orchestratorMandateForDelivery,
+  orchestratorMandateStale,
+  orchestratorMandateWithRoleTable,
+  orchestratorRoleTable,
+} from "./prompt";
 import {
   abandonStillbornOrchestratorSeat,
   activeOrchestratorSeats,
@@ -252,6 +261,10 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
     if (!conversation) return null;
     if (conversation.supersededBy) {
       return { kind: "ineligible", code: "conversation_ineligible", error: "conversation is superseded" };
+    }
+    /* Copilot as an orchestrator seat is design slice 4. */
+    if (conversation.engine === "copilot") {
+      return { kind: "ineligible", code: "conversation_ineligible", error: "a Copilot conversation cannot hold the orchestrator seat yet" };
     }
     const generation = conversation.generations.at(-1);
     const transcriptPath = generation?.path?.trim();
@@ -726,6 +739,10 @@ async function runOrchestratorSeatRequest(
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
+  /* #1874: a key the named checkout has since moved on from (the folder gained
+     a repository or an origin) is recorded as succeeded first, so the seat is
+     designated under the key its lanes will be written to. */
+  recordProjectSuccessions([projectSuccessionFor(canonicalOrchestratorProject(namedProject), text(rawBody.cwd))]);
   const project = canonicalOrchestratorProject(namedProject);
   const mandate = typeof rawBody.mandate === "string" ? rawBody.mandate : "";
   if (!mandate.trim()) return { status: 400, body: { error: "mandate is required" } };
@@ -794,6 +811,7 @@ async function runOrchestratorSeatRequest(
     const begun = beginOrchestratorSeatIntent({
       project,
       mandate,
+      roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
       clientRequestId,
       mode: "existing",
       conversationId: target.conversationId,
@@ -828,9 +846,11 @@ async function runOrchestratorSeatRequest(
       /* Derived, never minted: a retry after a lost response reuses the same
          id and the delivery receipts answer it instead of delivering twice. */
       clientMessageId: `orchmandate_${clientRequestId}`,
-      /* On a pending replay the ORIGINAL intent's mandate is what completes:
-         a retry that recomposed its text must not deliver a second variant. */
-      text: orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate),
+      /* The intent's recorded mandate and role table are what completes: a
+         pending replay whose caller recomposed its text, or whose registry
+         changed since the first attempt, must not deliver a second variant
+         under the same clientMessageId. */
+      text: orchestratorMandateWithRoleTable(begun.seat.mandate, begun.seat.roleTable ?? null),
     });
     if (!delivery.ok) {
       const error = delivery.error ?? "mandate delivery failed";
@@ -897,6 +917,7 @@ async function runOrchestratorSeatRequest(
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
+    roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
     clientRequestId,
     mode: "spawn",
     engine: resolvedRuntime.value.config.engine,
@@ -923,10 +944,11 @@ async function runOrchestratorSeatRequest(
       },
     };
   }
-  /* A pending replay spawns the ORIGINAL intent's mandate: the spawn receipt is
-     matched by clientAttemptId AND request digest, so a recomposed retry would
+  /* A pending replay spawns the ORIGINAL intent's mandate and role table: the
+     spawn receipt is matched by clientAttemptId AND request digest, so a
+     recomposed retry, or one rendered from a registry edited since, would
      otherwise conflict with its own first attempt. */
-  const spawnMandate = orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate);
+  const spawnMandate = orchestratorMandateWithRoleTable(begun.seat.mandate, begun.seat.roleTable ?? null);
 
   const spawnFields = ["cwd", "effort", "fast", "accountId", "images", "roleParams", "allowSubagents"] as const;
   const spawnRuntime = begun.kind === "replay"
@@ -1236,9 +1258,18 @@ async function runOrchestratorRotation(
      edit; over a STALE incumbent it records no version, the spawn rule for an
      edited mandate — inheriting v3 would flag a seat running edited v13 rules
      as stale and hand the next rotation's default prefill its edit to drop.
-     A seat on the current version keeps its version on an override. */
-  const base = text(rawBody.mandate) || incumbent.mandate;
-  const promptVersion = base === ORCHESTRATOR_SYSTEM_PROMPT
+     A seat on the current version keeps its version on an override.
+
+     #2030: a rotation that names no mandate over an incumbent whose core is an
+     OLDER default rebuilds the core from the current default, byte for byte,
+     and keeps the incumbent's rotation history and handoffs behind it. Leaving
+     that choice to each caller is how every seat after an unbumped prompt edit
+     kept running the text the edit removed. `keepIncumbentMandate: true` is
+     the explicit way to carry the old text forward. */
+  const requested = text(rawBody.mandate);
+  const rebuildCore = !requested && rawBody.keepIncumbentMandate !== true && orchestratorMandateStale(incumbent.promptVersion);
+  const base = requested || incumbent.mandate;
+  const promptVersion = base === ORCHESTRATOR_SYSTEM_PROMPT || rebuildCore
     ? ORCHESTRATOR_PROMPT_VERSION
     : base !== incumbent.mandate && orchestratorMandateStale(incumbent.promptVersion)
       ? null
@@ -1250,6 +1281,7 @@ async function runOrchestratorRotation(
     project,
     clientRequestId,
     base,
+    ...(rebuildCore ? { core: ORCHESTRATOR_SYSTEM_PROMPT } : {}),
     handoff,
     predecessor: predecessor ? { path: predecessor.path, engine: predecessor.engine } : null,
     roleParams: rawBody.roleParams,
@@ -1369,6 +1401,8 @@ interface RotationComposition {
   project: string;
   clientRequestId: string;
   base: string;
+  /** Replaces the base's core, keeping its history and handoffs (#2030). */
+  core?: string;
   handoff: HandoffParts;
   predecessor: { path: string; engine: "claude" | "codex" } | null;
   roleParams: unknown;
@@ -1385,7 +1419,8 @@ function composeRotationMandate(
   if (pending && pending.intent.clientRequestId === input.clientRequestId && pending.intent.error === null) {
     return { kind: "composed", mandate: pending.mandate, handoff: null };
   }
-  const split = splitMandate(input.base);
+  const parts = splitMandate(input.base);
+  const split = input.core === undefined ? parts : { ...parts, core: input.core };
   /* First rotation: no prior handoffs to compact, so no summarizer run — the
      fresh handoff already names the predecessor and its bounded message read. */
   if (split.history === null && split.handoffs.length === 0) {
@@ -1422,12 +1457,13 @@ function renderRotationMandate(
   reason: string | null,
 ): RotationMandate {
   const overhead = launchOverheadBytes("spawn", input.roleParams);
+  const roles = loadRoleDefinitionsOrDefaults();
   const composed = composeSuccessorMandate({
     core,
     history,
     handoff: input.handoff,
     budgetBytes: MAX_STRUCTURED_TEXT_BYTES - overhead,
-    deliver: orchestratorMandateForDelivery,
+    deliver: (mandate) => orchestratorMandateForDelivery(mandate, roles),
   });
   if (composed.kind === "too_large") {
     return {

@@ -3,6 +3,11 @@
 import { useLayoutEffect, useRef } from "react";
 
 import { useLocale } from "@/lib/i18n";
+import { TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT } from "@/lib/tasks/types";
+
+/** The fields of a task a card edits in place: the first line of its text, the
+    rest of it, and the agent-facing `details` beside it (#1834). */
+export type CardEditField = "title" | "description" | "details";
 
 /** Whether focus is still inside an edit of this card: its field, its Save and
     Cancel, or a notice marked as part of the edit. */
@@ -11,14 +16,15 @@ export function withinEdit(card: HTMLElement, active: Element | null): boolean {
 }
 
 /**
- * A kanban card's title or description, edited in place (#1695 K4b, prototype
- * `renderEditor`). The field takes the place of the text it edits: `Enter`
- * saves a title, ⌘/Ctrl+Enter a description, `Esc` cancels and leaving the
- * field saves. The draft belongs to the board, so it survives the card moving
- * or re-rendering; this component only reports what the operator typed.
+ * A kanban card's title, description or details, edited in place (#1695 K4b,
+ * prototype `renderEditor`; details since #1834). The field takes the place of
+ * the text it edits: `Enter` saves a title, ⌘/Ctrl+Enter a description or the
+ * details, `Esc` cancels and leaving the field saves. The draft belongs to the
+ * board, so it survives the card moving or re-rendering; this component only
+ * reports what the operator typed.
  */
 export function CardInlineText({ field, draft, onDraft, onCommit, onCancel }: {
-  field: "title" | "description";
+  field: CardEditField;
   draft: string;
   onDraft: (draft: string) => void;
   onCommit: () => void;
@@ -33,7 +39,7 @@ export function CardInlineText({ field, draft, onDraft, onCommit, onCancel }: {
     const element = ref.current;
     if (!element || isTitle) return;
     element.style.height = "auto";
-    element.style.height = `${Math.min(220, element.scrollHeight + 2)}px`;
+    element.style.height = `${Math.min(field === "details" ? 320 : 220, element.scrollHeight + 2)}px`;
   };
   /* The field opens focused with the caret at the end of the text. */
   useLayoutEffect(() => {
@@ -83,8 +89,10 @@ export function CardInlineText({ field, draft, onDraft, onCommit, onCancel }: {
     <div ref={wrap} className="editor" data-editor-field={field} data-edit-scope="">
       {isTitle ? (
         <input {...common} type="text" className="edit title-edit" aria-label={t("kanban.editTitleAria")} maxLength={200} placeholder={t("kanban.editTitlePlaceholder")} />
+      ) : field === "details" ? (
+        <textarea {...common} className="edit details-edit" rows={6} aria-label={t("kanban.editDetailsAria")} maxLength={TASK_DETAILS_LIMIT} placeholder={t("kanban.editDetailsPlaceholder")} />
       ) : (
-        <textarea {...common} className="edit desc-edit" rows={2} aria-label={t("kanban.editDescriptionAria")} maxLength={6000} placeholder={t("kanban.editDescriptionPlaceholder")} />
+        <textarea {...common} className="edit desc-edit" rows={2} aria-label={t("kanban.editDescriptionAria")} maxLength={TASK_TEXT_LIMIT} placeholder={t("kanban.editDescriptionPlaceholder")} />
       )}
       <div className="edit-hint">
         <span>{isTitle ? t("kanban.editTitleHint") : t("kanban.editDescriptionHint")}</span>

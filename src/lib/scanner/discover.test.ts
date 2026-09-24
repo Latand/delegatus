@@ -6,6 +6,7 @@ import path from "node:path";
 import { expect, test } from "bun:test";
 
 import { emptyLaunchProfile } from "../accounts/migration/contracts";
+import { persistedBoardProjects } from "../board/storeFixture";
 import { AgentRegistry, setAgentRegistryForTests } from "../agent/registry";
 import type { FileEntry, RootKey } from "../types";
 import { conversationCatalogSnapshot } from "./conversationCatalog";
@@ -68,6 +69,7 @@ test("pure project-catalog discovery leaves the state directory unchanged", asyn
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     await discoverFilesWithProjectCatalog(roots, undefined, { persist: false });
@@ -89,6 +91,7 @@ test("request refreshes persist the per-file scanner index", async () => {
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "indexed.jsonl");
@@ -120,6 +123,7 @@ test("a poisoned durable alias source defers only itself in the persist scan", a
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     await mkdir(process.env.LLV_STATE_DIR, { recursive: true });
@@ -166,6 +170,7 @@ test("project catalog persistence repairs private modes and atomically replaces 
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "private.jsonl");
@@ -214,6 +219,7 @@ test("a non-ENOENT directory failure leaves the completed catalog index authorit
     "claude-projects": path.join(base, "claude-projects"),
     "claude-tasks": path.join(base, "claude-tasks"),
     "openclaw-sessions": path.join(base, "openclaw"),
+    "copilot-sessions": path.join(base, "copilot-sessions"),
   };
   try {
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
@@ -257,6 +263,7 @@ test("project index publication failures preserve the canonical file, clean temp
     "claude-projects": path.join(base, "claude-projects"),
     "claude-tasks": path.join(base, "claude-tasks"),
     "openclaw-sessions": path.join(base, "openclaw"),
+    "copilot-sessions": path.join(base, "copilot-sessions"),
   };
   try {
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
@@ -339,6 +346,7 @@ test("an append reparses its file and reuses unchanged persisted summaries", asy
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const unchanged = path.join(roots["claude-projects"], "incremental", "session", "subagents", "agent-unchanged.jsonl");
@@ -388,6 +396,7 @@ test("a same-size transcript rewrite with a newer mtime reparses cwd and project
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "rewritten.jsonl");
@@ -426,6 +435,7 @@ test("larger Codex and Claude rewrites replace cached head metadata", async () =
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const codex = path.join(roots["codex-sessions"], "rewritten.jsonl");
@@ -484,6 +494,7 @@ test("Codex and Claude true appends retain head metadata through repeated EIO an
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const codex = path.join(roots["codex-sessions"], "append-recovery.jsonl");
@@ -568,6 +579,7 @@ test("a one-shot transcript read failure stays incomplete and recovers in memory
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "rewritten.jsonl");
@@ -634,6 +646,7 @@ test("first-ever repeated transcript read failures publish and persist only afte
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "first.jsonl");
@@ -691,6 +704,7 @@ test("a same-size subagent sidecar rewrite with a newer mtime reparses its title
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["claude-projects"], "sidecar", "session", "subagents", "agent-rewritten.jsonl");
@@ -725,6 +739,7 @@ test("a one-shot sidecar read failure stays incomplete and recovers in memory an
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["claude-projects"], "sidecar", "session", "subagents", "agent-x.jsonl");
@@ -782,6 +797,7 @@ test("a corrupt per-file scanner index falls back to a full parse and repairs it
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["claude-projects"], "recovered", "session", "subagents", "agent-child.jsonl");
@@ -810,6 +826,7 @@ test("a pinned discovery identifies only rows outside the global scheme window",
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcripts: string[] = [];
@@ -970,6 +987,7 @@ test("project catalog carries the canonical root for projects outside the capped
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const repo = path.join(base, "catalog-project");
@@ -1014,6 +1032,7 @@ test("archived migration predecessors cannot outvote the current project root", 
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const archivedPaths = [
@@ -1080,6 +1099,7 @@ test("persisted scheme metadata excludes unbounded first-prompt text", async () 
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const marker = "PROMPT_TAIL_MUST_STAY_OUT_OF_SCHEME_STATE";
@@ -1126,6 +1146,7 @@ test("a legacy cached Claude subagent is migrated into the conversation catalog"
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const subagent = path.join(roots["claude-projects"], "legacy-project", "session", "subagents", "agent-child.jsonl");
@@ -1177,6 +1198,7 @@ test("project catalog omits task-only residue from a clean state", async () => {
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const taskPath = path.join(roots["claude-tasks"], "orphan-project", "missing-session", "tasks", "task.output");
@@ -1206,6 +1228,7 @@ test("a Claude transcript appearing in a previously sessionless project director
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const repository = path.join(base, "late-session-repository");
@@ -1250,6 +1273,7 @@ test("first-ever EIO and EACCES task twin lookups publish only after recovery", 
         "claude-projects": path.join(base, "claude-projects"),
         "claude-tasks": path.join(base, "claude-tasks"),
         "openclaw-sessions": path.join(base, "openclaw"),
+        "copilot-sessions": path.join(base, "copilot-sessions"),
       };
       await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
       const taskPath = path.join(roots["claude-tasks"], "project-a", "session-a", "tasks", "task-a.output");
@@ -1294,6 +1318,7 @@ test("a first-ever ENOTDIR task twin lookup stays incomplete and publishes no du
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const taskPath = path.join(roots["claude-tasks"], "project-a", "session-a", "tasks", "task-a.output");
@@ -1325,6 +1350,7 @@ test("project and conversation catalogs retain a project whose only transcript i
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const subagent = path.join(roots["claude-projects"], "project-only-child", "session", "subagents", "agent-child.jsonl");
@@ -1352,6 +1378,7 @@ test("discoverFiles preserves scanner filters, mtime ordering, and the per-proje
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const repository = path.join(base, "recent-project");
@@ -1425,6 +1452,7 @@ test("discoverFiles applies the card cap independently to each visible project",
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const projectA = path.join(base, "project-a");
@@ -1547,6 +1575,7 @@ test("discoverFiles keeps native Codex spawn parents outside the recent cap", as
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -1586,6 +1615,7 @@ test("discoverFilesWithProjectCatalog keeps quiet projects in the recent cap", a
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -1635,6 +1665,7 @@ test("registry launch cwd governs scheme caps and the uncapped project catalog",
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const paths: string[] = [];
@@ -1682,6 +1713,7 @@ test("discoverFilesWithProjectCatalog keeps a selected project inside the scheme
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -1738,6 +1770,7 @@ test("discoverFilesWithProjectCatalog refreshes cached projects when flow state 
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -1803,6 +1836,7 @@ test("current-production catalog records converge two legacy buckets for one rep
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all([...Object.values(roots), stateDir].map((root) => mkdir(root, { recursive: true })));
 
@@ -1877,7 +1911,10 @@ test("current-production catalog records converge two legacy buckets for one rep
         [staleProject]: boardState(["/stale"]),
         [staleAlternateProject]: boardState(["/alternate"]),
     } };
-    await writeFile(boardFile, "{ corrupt");
+    /* A board the store refuses: valid JSON whose project state it cannot mean.
+       Bytes that are not JSON at all are imported as a recorded gap now (#1870)
+       and no longer hold a migration back. */
+    await writeFile(boardFile, JSON.stringify({ projects: { [staleProject]: { schemaVersion: 2 } } }));
 
     const preview = await discoverFilesWithProjectCatalog(roots);
 
@@ -1901,10 +1938,10 @@ test("current-production catalog records converge two legacy buckets for one rep
     expect(persistedCatalog.files[sessionPath].project).toBe(canonicalProject);
     expect(persistedCatalog.files[taskPath].project).toBe(canonicalProject);
     expect(persistedCatalog.files[codexPath].project).toBe(canonicalProject);
-    const persistedBoard = JSON.parse(await readFile(path.join(stateDir, "board.json"), "utf8"));
-    expect(persistedBoard.projects[staleProject]).toBeUndefined();
-    expect(persistedBoard.projects[staleAlternateProject]).toBeUndefined();
-    expect(persistedBoard.projects[canonicalProject].prefs.manual).toEqual(["/canonical", "/alternate", "/stale"]);
+    const persistedBoard = persistedBoardProjects(boardFile);
+    expect(persistedBoard[staleProject]).toBeUndefined();
+    expect(persistedBoard[staleAlternateProject]).toBeUndefined();
+    expect(persistedBoard[canonicalProject]!.prefs.manual).toEqual(["/canonical", "/alternate", "/stale"]);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
@@ -1923,6 +1960,7 @@ test("an ambiguous legacy project key defers catalog and board migration", async
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all([...Object.values(roots), stateDir].map((root) => mkdir(root, { recursive: true })));
 
@@ -2009,6 +2047,7 @@ test("demoted archived predecessors rank below live transcripts for the recency 
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -2063,6 +2102,7 @@ test("a live conversation keeps its card past the per-project card cap", async (
       "claude-projects": path.join(base, "claude-projects"),
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
+      "copilot-sessions": path.join(base, "copilot-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const slug = path.join(roots["claude-projects"], "-repo");

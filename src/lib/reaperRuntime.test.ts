@@ -1520,7 +1520,7 @@ test("persisted GitHub merge evidence survives a deleted checkout and allows flo
     rounds: [],
     closedAt: new Date(now - 31 * 60_000).toISOString(),
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "agent/issue-31-reaper",
       headSha: "a".repeat(40),
       prNumber: 125,
@@ -1552,7 +1552,7 @@ test("a squash-merged GitHub PR becomes durable evidence before checkout deletio
     id: "flow-squash",
     rounds: [{ ...headlessFlow(now).rounds[0]!, reviewHeadSha: "b".repeat(40) }],
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "feature/squashed",
       headSha: "b".repeat(40),
       prNumber: null,
@@ -1596,7 +1596,7 @@ test("a changed checkout SHA clears prior positive merge evidence", async () => 
     id: "flow-new-head",
     rounds: [{ ...headlessFlow(now).rounds[0]!, reviewHeadSha: oldSha }],
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "feature/reused",
       headSha: oldSha,
       prNumber: 100,
@@ -1608,7 +1608,7 @@ test("a changed checkout SHA clears prior positive merge evidence", async () => 
 
   expect(await refreshMergedFlowIds([flow], {
     now: () => now,
-    resolveMergeIdentity: () => ({ repository: "Latand/live-log-viewer-next", headRef: "feature/reused", headSha: newSha }),
+    resolveMergeIdentity: () => ({ repository: "Latand/delegatus", headRef: "feature/reused", headSha: newSha }),
     probePullRequest: () => null,
     localBranchMerged: () => false,
     saveFlows: () => {},
@@ -1627,7 +1627,7 @@ test("a numbered PR merge with a different head SHA cannot authorize cleanup", a
     id: "flow-pr-head-mismatch",
     rounds: [{ ...headlessFlow(now).rounds[0]!, reviewHeadSha: "c".repeat(40) }],
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "feature/mismatch",
       headSha: "c".repeat(40),
       prNumber: 400,
@@ -1709,7 +1709,7 @@ test("a clean detached checkout cannot retain stale merge authorization", async 
       cwd: directory,
       rounds: [{ ...headlessFlow(now).rounds[0]!, reviewHeadSha: reviewedSha }],
       mergeEvidence: {
-        repository: "Latand/live-log-viewer-next",
+        repository: "Latand/delegatus",
         headRef: "feature/reviewed",
         headSha: reviewedSha,
         prNumber: 605,
@@ -1736,7 +1736,7 @@ test("merge probes are concurrent and a stalled probe times out fail closed", as
     id: "flow-stalled-probe",
     rounds: [{ ...headlessFlow(now).rounds[0]!, reviewHeadSha: "e".repeat(40) }],
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "feature/stalled",
       headSha: "e".repeat(40),
       prNumber: null,
@@ -1750,7 +1750,7 @@ test("merge probes are concurrent and a stalled probe times out fail closed", as
     id: "flow-responsive-probe",
     rounds: [{ ...headlessFlow(now).rounds[0]!, reviewHeadSha: "f".repeat(40) }],
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "feature/responsive",
       headSha: "f".repeat(40),
       prNumber: null,
@@ -1794,7 +1794,7 @@ test("merge evidence persistence cannot roll back a concurrent flow transition",
     id: "flow-store-race",
     rounds: [{ ...headlessFlow(now).rounds[0]!, reviewHeadSha: reviewedSha }],
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "feature/store-race",
       headSha: reviewedSha,
       prNumber: null,
@@ -1869,7 +1869,7 @@ test("an existing checkout with unverified cleanliness loses merge authorization
     cwd: directory,
     rounds: [{ ...headlessFlow(now).rounds[0]!, reviewHeadSha: reviewedSha }],
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "feature/unverified",
       headSha: reviewedSha,
       prNumber: 602,
@@ -1882,7 +1882,7 @@ test("an existing checkout with unverified cleanliness loses merge authorization
     expect(await refreshMergedFlowIds([flow], {
       now: () => now,
       checkoutClean: () => null,
-      resolveMergeIdentity: () => ({ repository: "Latand/live-log-viewer-next", headRef: "feature/unverified", headSha: reviewedSha }),
+      resolveMergeIdentity: () => ({ repository: "Latand/delegatus", headRef: "feature/unverified", headSha: reviewedSha }),
       saveFlows: () => {},
     })).toEqual(new Set());
     expect(flow.mergeEvidence?.mergedAt).toBeNull();
@@ -1960,7 +1960,7 @@ test("Viewer flow deliveries are discounted from transcript authorship", async (
       relayDelivery: { path: pathname, deliveredAt: new Date(now - 31 * 60_000).toISOString() },
     }],
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "feature/authorship",
       headSha: reviewedSha,
       prNumber: 603,
@@ -2231,7 +2231,7 @@ test("a delivery created during merge revalidation fences the final reap decisio
     closedAt: new Date(now - 31 * 60_000).toISOString(),
     rounds: [{ ...headlessFlow(now).rounds[0]!, reviewHeadSha: reviewedSha }],
     mergeEvidence: {
-      repository: "Latand/live-log-viewer-next",
+      repository: "Latand/delegatus",
       headRef: "feature/delivery-race",
       headSha: reviewedSha,
       prNumber: null,

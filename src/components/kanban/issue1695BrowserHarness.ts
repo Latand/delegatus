@@ -4,22 +4,26 @@ import tailwind from "@tailwindcss/postcss";
 import type { Browser } from "playwright-core";
 import postcss from "postcss";
 
+import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
+
 /* The rendered-evidence harness shared by the browser drivers: a fixture
    module bundled for the browser and served with the production stylesheet on
    an ephemeral loopback port. `entry` defaults to the kanban board's fixture,
-   so every #1695 caller is unchanged; another surface's driver passes its own. */
+   so every #1695 caller is unchanged; another surface's driver passes its own.
+   It also answers `/api/task-icons` the way the Viewer does (#2102), so a
+   fixture draws lucide's real icons. */
 
 export async function serveEvidenceFixture(
   outDir: string,
   entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
 ): Promise<{ base: string; stop: () => void }> {
-  /* Bundled by a separate `bun build`: inside the `bun test` process,
+  /* Bundled in a separate process: inside the `bun test` process,
      `Bun.build` resolves the `@/` alias for some module graphs and not for
-     others, and the fixture's graph is one of the others. */
+     others, and the fixture's graph is one of the others. The builder stubs
+     server actions the way Next does for the client bundle (#2009). */
   const bundle = path.join(outDir, "bundle");
   const build = Bun.spawnSync([
-    process.execPath, "build", path.resolve(entryFixture),
-    "--target=browser", `--outdir=${bundle}`, "--define", 'process.env.NODE_ENV="production"', "--define", "process.env={}",
+    process.execPath, path.resolve("src/components/kanban/buildEvidenceFixture.ts"), path.resolve(entryFixture), bundle,
   ], { stdout: "pipe", stderr: "pipe" });
   if (build.exitCode !== 0) throw new Error(`fixture bundle failed: ${build.stderr.toString()}${build.stdout.toString()}`);
   const entry = path.join(bundle, `${path.basename(entryFixture).replace(/\.tsx?$/, "")}.js`);
@@ -27,8 +31,9 @@ export async function serveEvidenceFixture(
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch(request) {
-      const pathname = new URL(request.url).pathname;
+    async fetch(request) {
+      const { pathname, searchParams } = new URL(request.url);
+      if (pathname === "/api/task-icons") return Response.json({ icons: await taskIconNodes((searchParams.get("names") ?? "").split(",")) });
       if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
       if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
       return new Response(
@@ -53,8 +58,16 @@ export async function openFixture(
      rendering under `prefers-reduced-motion`, and a case that gates the one
      the motion leaves behind has to ask for it (#1798). */
   motion: "no-preference" | "reduce" = "no-preference",
+  /* A phone has a coarse pointer, and several controls in this product are
+     sized off `(pointer: coarse)` rather than off width (#1439). A 390px
+     context with a mouse is therefore NOT a phone, and a case that measures
+     phone geometry has to say so (send-latency slice 3). */
+  touch = false,
 ) {
-  const context = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: motion });
+  const context = await browser.newContext({
+    viewport, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: motion,
+    ...(touch ? { hasTouch: true, isMobile: true } : {}),
+  });
   if (lang) await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
   const page = await context.newPage();
   const pageErrors: string[] = [];

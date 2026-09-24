@@ -683,6 +683,56 @@ test("an unconfirmed optimistic pipeline outlives every scan until reverted", as
   expect(cache.read().pipelines[0]!.task).toBe("server");
 });
 
+function taskRow(id: string, text: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    project: "project-a",
+    text,
+    status: "inbox",
+    placement: "unplaced",
+    assignments: [],
+    createdAt: "2026-09-19T08:27:35.616Z",
+    updatedAt: "2026-09-19T08:27:35.616Z",
+    ...over,
+  };
+}
+
+test("a task row pushed with an attention request draws before any scan carries it, and the scan takes it back (#1836)", async () => {
+  let rows: unknown[] = [];
+  let call = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const cache = createFilesClientCache(async () => {
+    const index = call++;
+    /* Scan 2 was requested BEFORE the push: it still carries the stale
+       corpus, which is exactly the fourteen-second scan the lane lost to. */
+    if (index === 1) await gate;
+    return new Response(JSON.stringify({ files: [], pipelines: [], tasks: rows }), { headers: { ETag: `"${index}"` } });
+  });
+
+  await cache.revalidate();
+  expect(cache.read().tasks).toEqual([]);
+
+  const stale = cache.revalidate();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  /* The lane the scan has not reached yet: its card exists at once. */
+  cache.applyTask(taskRow("task-fresh", "A lane just created") as never);
+  expect(cache.read().tasks.map((task) => task.id)).toEqual(["task-fresh"]);
+
+  release();
+  await stale;
+  /* The stale scan must not take the card back off the board… */
+  expect(cache.read().tasks.map((task) => task.id)).toEqual(["task-fresh"]);
+
+  /* …and the server's own row replaces the pushed one in place: one card,
+     the server's values, no duplicate. */
+  rows = [taskRow("task-fresh", "A lane just created", { status: "assigned" })];
+  await cache.revalidate();
+  expect(cache.read().tasks.map((task) => [task.id, task.status])).toEqual([["task-fresh", "assigned"]]);
+});
+
 test("a created-draft echo appears before any scan lists it; a hidden (deleted) echo disappears", async () => {
   const cache = createFilesClientCache(async () =>
     new Response(JSON.stringify({ files: [], pipelines: [] })));

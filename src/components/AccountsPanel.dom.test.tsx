@@ -3,11 +3,14 @@ import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
-import type { ClaudeLoginView, EngineAccountsState } from "@/hooks/useEngineAccounts";
+import type { AccountRemovalRefusal, AccountRemovalSummary, ClaudeLoginView, EngineAccountsState } from "@/hooks/useEngineAccounts";
 
 import { AccountsPanel } from "./AccountsPanel";
 import { formatQuotaAsOf, formatResetEta } from "./rateLimit";
 
+/** An archive under an invented home, composed so the `~` fold is exercised
+    without a home path written out in a published source. */
+const archiveUnderHome = (id: string) => ["", "home", "someone", ".config", "agent-log-viewer", "shared", "claude", "retired", id].join("/");
 const dom = new Window();
 Object.assign(globalThis, {
   window: dom,
@@ -52,6 +55,9 @@ function state(currentLogin: ClaudeLoginView, over: Partial<EngineAccountsState>
     useResetCredit: async () => true,
     limitsBusy: null,
     limitsVersion: 0,
+    removing: null,
+    removal: null,
+    dismissRemoval: () => {},
     ...over,
   };
 }
@@ -114,42 +120,248 @@ test("keyboard Submit code restores focus to the Claude sign-in row after it ent
   expect(document.activeElement).toBe(view.host.querySelector('[role="group"]'));
 });
 
+const managedAcc = { id: "acc", label: "Acc", kind: "managed" as const, authPresent: true, loginPending: false, loginState: "authenticated" as const, deviceAuth: null, login: null };
+const buttonNamed = (host: HTMLElement, text: string) => [...host.querySelectorAll("button")].find((button) => button.textContent === text);
+
 test("removing a managed account arms on the first click and only removes on an explicit confirm", async () => {
   let removed: string | null = null;
   const initial = state(login({ phase: "authenticated" }), {
-    accounts: [{ id: "acc", label: "Acc", kind: "managed", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null, login: null }],
+    accounts: [managedAcc],
     remove: async (id) => { removed = id; return true; },
   });
   const view = await mount(initial);
   mounted.push(view);
-  const remove = [...view.host.querySelectorAll("button")].find((button) => button.textContent === "Remove")!;
-
-  flushSync(() => { remove.click(); });
+  flushSync(() => { buttonNamed(view.host, "Remove")!.click(); });
   expect(removed).toBeNull();
-  expect(view.host.textContent).toContain("Remove this account?");
+  const armed = view.host.querySelector('[data-account-remove-armed="acc"]')!;
+  expect(armed.textContent).toContain("Remove Acc? Its files move to the shared archive and past conversations stay readable.");
+  // The armed line replaces the action line: the confirm is focused.
+  expect(document.activeElement).toBe(buttonNamed(armed as HTMLElement, "Remove")!);
 
-  const confirm = [...view.host.querySelectorAll("button")].find((button) => button.textContent === "Confirm")!;
-  flushSync(() => { confirm.click(); });
+  flushSync(() => { buttonNamed(armed as HTMLElement, "Remove")!.click(); });
   expect(removed as unknown as string).toBe("acc");
 });
 
 test("canceling an armed removal backs out without removing the account", async () => {
   let removed: string | null = null;
   const initial = state(login({ phase: "authenticated" }), {
-    accounts: [{ id: "acc", label: "Acc", kind: "managed", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null, login: null }],
+    accounts: [managedAcc],
     remove: async (id) => { removed = id; return true; },
   });
   const view = await mount(initial);
   mounted.push(view);
-  const remove = [...view.host.querySelectorAll("button")].find((button) => button.textContent === "Remove")!;
-  flushSync(() => { remove.click(); });
-
-  const cancel = [...view.host.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!;
-  flushSync(() => { cancel.click(); });
+  flushSync(() => { buttonNamed(view.host, "Remove")!.click(); });
+  flushSync(() => { buttonNamed(view.host, "Cancel")!.click(); });
 
   expect(removed).toBeNull();
-  expect(view.host.textContent).not.toContain("Remove this account?");
-  expect([...view.host.querySelectorAll("button")].some((button) => button.textContent === "Remove")).toBe(true);
+  expect(view.host.querySelector("[data-account-remove-armed]")).toBeNull();
+  expect(buttonNamed(view.host, "Remove")).toBeDefined();
+});
+
+test("Escape disarms an armed removal without closing the panel, and the arm times out after ten seconds", async () => {
+  let closed = 0;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const initial = state(login({ phase: "authenticated" }), { accounts: [managedAcc] });
+  flushSync(() => { root.render(<AccountsPanel state={initial} onClose={() => { closed += 1; }} />); });
+  mounted.push({ unmount: async () => { flushSync(() => { root.unmount(); }); host.remove(); } });
+
+  flushSync(() => { buttonNamed(host, "Remove")!.click(); });
+  const confirm = buttonNamed(host.querySelector("[data-account-remove-armed]") as HTMLElement, "Remove")!;
+  flushSync(() => { dispatch(confirm, new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  expect(host.querySelector("[data-account-remove-armed]")).toBeNull();
+  expect(closed).toBe(0);
+
+  const timers: Array<() => void> = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((callback: () => void, ms?: number) => {
+    if (ms === 10_000) { timers.push(callback); return 0 as unknown as ReturnType<typeof setTimeout>; }
+    return realSetTimeout(callback, ms);
+  }) as typeof setTimeout;
+  try {
+    flushSync(() => { buttonNamed(host, "Remove")!.click(); });
+    expect(host.querySelector("[data-account-remove-armed]")).not.toBeNull();
+    expect(timers).toHaveLength(1);
+    flushSync(() => { timers[0]!(); });
+    expect(host.querySelector("[data-account-remove-armed]")).toBeNull();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+});
+
+test("a removal in flight dims its row and says Removing…", async () => {
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc], mutation: "remove", removing: "acc" }));
+  mounted.push(view);
+  const row = view.host.querySelector('[data-account-row="acc"]')!;
+  expect(row.getAttribute("aria-busy")).toBe("true");
+  expect(row.className).toContain("opacity-60");
+  expect(row.textContent).toContain("Removing…");
+  expect(buttonNamed(view.host, "Remove")).toBeUndefined();
+});
+
+const REFUSALS: Array<[AccountRemovalRefusal, string]> = [
+  [{ accountId: "acc", label: "Acc", reasons: ["live_sessions"] }, "An agent is still running on Acc."],
+  [{ accountId: "acc", label: "Acc", reasons: ["login_pending"] }, "A sign-in for Acc is still open."],
+  [{ accountId: "acc", label: "Acc", reasons: ["queued_pin"] }, "A queued launch is pinned to Acc"],
+  [{ accountId: "acc", label: "Acc", reasons: ["current_conversations"] }, "A conversation on Acc is still in flight"],
+  [{ accountId: "acc", label: "Acc", reasons: ["unsafe_home"] }, "The folder of Acc failed a safety check"],
+  [{ accountId: "acc", label: "Acc", reasons: ["archive_unavailable"], archive: archiveUnderHome("acc") }, "Move it away, then remove the account."],
+  [{ accountId: "acc", label: "Acc", reasons: ["accounts_locked"] }, "The accounts registry needs repair"],
+  [{ accountId: "acc", label: "Acc", reasons: ["unknown_account"] }, "Acc is no longer in the list."],
+  [{ accountId: "acc", label: "Acc", reasons: ["removal_failed"], errno: "EACCES" }, "Removing Acc failed at a file step (EACCES)."],
+  [{ accountId: "acc", label: "Acc", reasons: ["no_answer"] }, "Delegatus did not answer."],
+];
+
+test("each refusal renders its own message inside the refused row, unclamped", async () => {
+  for (const [refusal, text] of REFUSALS) {
+    const other = { ...managedAcc, id: "other", label: "Other" };
+    const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc, other], removal: { kind: "refused", refusal } }));
+    const block = view.host.querySelector('[data-account-row="acc"] [data-account-refusal="acc"]');
+    expect(block?.textContent, refusal.reasons[0]).toContain(text);
+    expect(view.host.querySelector('[data-account-row="other"] [data-account-refusal]')).toBeNull();
+    expect(block!.innerHTML).not.toContain("line-clamp");
+    await view.unmount();
+  }
+});
+
+test("a refusal names the archive path with its account id kept, and its actions reach the store", async () => {
+  let dismissed = 0;
+  let retried: string | null = null;
+  let refreshed = 0;
+  const archive = archiveUnderHome("acc");
+  const view = await mount(state(login({ phase: "authenticated" }), {
+    accounts: [managedAcc],
+    removal: { kind: "refused", refusal: { accountId: "acc", label: "Acc", reasons: ["archive_unavailable"], archive } },
+    dismissRemoval: () => { dismissed += 1; },
+  }));
+  mounted.push(view);
+  expect(view.host.querySelector("[data-archive-path-id]")?.textContent).toBe("acc");
+  expect(view.host.querySelector(`[data-archive-path="${archive}"]`)?.textContent).toContain("~/.config/");
+  flushSync(() => { (view.host.querySelector('button[aria-label="Close this message"]') as HTMLButtonElement).click(); });
+  expect(dismissed).toBeGreaterThanOrEqual(1);
+
+  await view.rerender(state(login({ phase: "authenticated" }), {
+    accounts: [managedAcc],
+    removal: { kind: "refused", refusal: { accountId: "acc", label: "Acc", reasons: ["removal_failed"] } },
+    remove: async (id) => { retried = id; return true; },
+  }));
+  expect(view.host.textContent).toContain("Removing Acc failed. The account was put back as it was.");
+  flushSync(() => { buttonNamed(view.host.querySelector("[data-account-refusal]") as HTMLElement, "Try again")!.click(); });
+  expect(retried as unknown as string).toBe("acc");
+
+  await view.rerender(state(login({ phase: "authenticated" }), {
+    accounts: [managedAcc],
+    removal: { kind: "refused", refusal: { accountId: "acc", label: "Acc", reasons: ["no_answer"] } },
+    refresh: async () => { refreshed += 1; return true; },
+  }));
+  flushSync(() => { buttonNamed(view.host.querySelector("[data-account-refusal]") as HTMLElement, "Refresh")!.click(); });
+  expect(refreshed).toBe(1);
+});
+
+test("each new refusal scrolls its whole block into view inside the list", async () => {
+  const proto = dom.HTMLElement.prototype as unknown as { scrollIntoView?: (options?: ScrollIntoViewOptions) => void };
+  const original = proto.scrollIntoView;
+  const calls: Array<{ refusal: string | null; options?: ScrollIntoViewOptions }> = [];
+  proto.scrollIntoView = function (this: HTMLElement, options?: ScrollIntoViewOptions) {
+    calls.push({ refusal: this.getAttribute("data-account-refusal"), options });
+  };
+  try {
+    const other = { ...managedAcc, id: "other", label: "Other" };
+    const refused = (reasons: AccountRemovalRefusal["reasons"]) => state(login({ phase: "authenticated" }), {
+      accounts: [managedAcc, other],
+      removal: { kind: "refused", refusal: { accountId: "other", label: "Other", reasons } },
+    });
+    const view = await mount(refused(["live_sessions"]));
+    mounted.push(view);
+    expect(calls).toEqual([{ refusal: "other", options: { block: "nearest", inline: "nearest" } }]);
+    await view.rerender(refused(["removal_failed"]));
+    expect(calls.map((call) => call.refusal)).toEqual(["other", "other"]);
+  } finally {
+    proto.scrollIntoView = original;
+  }
+});
+
+test("a refusal whose row left the list shows in the footer slot", async () => {
+  const view = await mount(state(login({ phase: "authenticated" }), {
+    accounts: [],
+    removal: { kind: "refused", refusal: { accountId: "gone", label: "Gone", reasons: ["unknown_account"] } },
+  }));
+  mounted.push(view);
+  expect(view.host.querySelector('[data-account-refusal="gone"]')?.textContent).toContain("Gone is no longer in the list.");
+});
+
+const SUMMARY: AccountRemovalSummary = {
+  accountId: "acc", label: "Account B",
+  archive: archiveUnderHome("claude-b"),
+  files: 1284, bytes: 2_100_000_000, conversations: 37, pins: 2, deliveries: 1, migrations: 1,
+  credential: "clean",
+};
+
+test("the summary renders after the row is gone, with every counted line, and no Force remove anywhere", async () => {
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [], removal: { kind: "removed", summary: SUMMARY } }));
+  mounted.push(view);
+  const card = view.host.querySelector('[data-account-removal-card="removed"]')!;
+  const text = card.textContent!;
+  expect(text).toContain("Account B removed");
+  expect(text).toContain("Past conversations stay readable.");
+  expect(text).toContain("1,284 files · 2.1 GB");
+  expect(card.querySelector("[data-archive-path-id]")?.textContent).toBe("claude-b");
+  expect(text).toContain("37 now read from the archive");
+  expect(text).toContain("Pins cleared2");
+  expect(text).toContain("1 undelivered message dropped");
+  expect(text).toContain("1 settled");
+  expect(view.host.textContent).not.toContain("Force remove");
+  expect(view.host.textContent).toContain("Clean up leftovers");
+});
+
+test("a clean removal is three quiet lines; a sign-in file left behind adds the clean-up line", async () => {
+  let cleaned = 0;
+  const clean = { ...SUMMARY, conversations: 0, pins: 0, deliveries: 0, migrations: 0, files: 3, bytes: 812_000 };
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [], removal: { kind: "removed", summary: clean } }));
+  mounted.push(view);
+  const card = () => view.host.querySelector('[data-account-removal-card="removed"]')!;
+  expect(card().querySelectorAll("dt")).toHaveLength(2);
+  expect(card().textContent).toContain("3 files · 812 KB");
+  expect(card().querySelector("[data-account-removal-credential]")).toBeNull();
+
+  await view.rerender(state(login({ phase: "authenticated" }), {
+    accounts: [],
+    removal: { kind: "removed", summary: { ...clean, credential: "pending" } },
+    cleanupOrphans: async () => { cleaned += 1; return true; },
+  }));
+  expect(card().querySelector('[data-account-removal-credential="pending"]')?.textContent).toContain("The sign-in file could not be deleted from the archive.");
+  flushSync(() => { buttonNamed(view.host, "Finish clean-up")!.click(); });
+  expect(cleaned).toBe(1);
+
+  await view.rerender(state(login({ phase: "authenticated" }), { accounts: [], removal: { kind: "removed", summary: { ...clean, credential: "deleted" } } }));
+  expect(card().querySelector('[data-account-removal-credential="deleted"]')?.textContent).toBe("Sign-in file deleted.");
+});
+
+test("the clean-up result lists what it deleted, archived and left, at most five names", async () => {
+  const unresolved = ["a.lock", "b", "c", "d", "e", "f", "g"];
+  const view = await mount(state(login({ phase: "authenticated" }), {
+    removal: { kind: "cleanup", report: { removed: ["x", "y", "z"], archived: [{ id: "old", files: 412, bytes: 96_000_000 }, { id: "older", files: 0, bytes: 0 }], unresolved } },
+  }));
+  mounted.push(view);
+  const text = view.host.querySelector('[data-account-removal-card="cleanup"]')!.textContent!;
+  expect(text).toContain("Some leftovers need a look");
+  expect(text).toContain("3 empty folders");
+  expect(text).toContain("2 retired accounts · 412 files · 96.0 MB");
+  expect(text).toContain("a.lock");
+  expect(text).toContain("e");
+  expect(text).not.toContain("f+");
+  expect(text).toContain("+2 more");
+
+  await view.rerender(state(login({ phase: "authenticated" }), { removal: { kind: "cleanup", report: { removed: [], archived: [], unresolved: [] } } }));
+  expect(view.host.textContent).toContain("Nothing to clean up");
+});
+
+test("closing the panel closes the removal answer", async () => {
+  let dismissed = 0;
+  const view = await mount(state(login({ phase: "authenticated" }), { removal: { kind: "removed", summary: SUMMARY }, dismissRemoval: () => { dismissed += 1; } }));
+  await view.unmount();
+  expect(dismissed).toBe(1);
 });
 
 test("clicking Retry on an erroring legacy Main starts an in-place login recovery (issue #470)", async () => {

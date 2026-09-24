@@ -44,10 +44,10 @@ import {
  * Vocabulary (frozen)                                                 *
  * ------------------------------------------------------------------ */
 
-export type RuntimeEngine = "codex" | "claude";
+export type RuntimeEngine = "codex" | "claude" | "copilot";
 
 /** Where a session's structured plane lives. Legacy tmux is always degraded. */
-export type HostKind = "codex-app-server" | "claude-broker" | "tmux-legacy" | "unhosted";
+export type HostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "tmux-legacy" | "unhosted";
 
 /** Orthogonal host axis (Sol). Never collapsed into the linear state. */
 export type HostAxis = "registering" | "hosted" | "recovering" | "unhosted" | "conflict" | "dead";
@@ -265,6 +265,9 @@ export interface RuntimeSession {
   artifactPath: string | null;
   capabilities: {
     steer: boolean;
+    /** `interrupt`: no steer; a message for the running turn interrupts it
+        and starts the next one (Copilot). */
+    steerMode?: "interrupt";
     structuredAttention: boolean;
     /** #1629: the host advertised a working native Codex queue. Observed from
         the running executable, never inferred from the engine name. */

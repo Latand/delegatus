@@ -1,5 +1,7 @@
 import { agentRegistry, type ConversationLookup } from "@/lib/agent/registry";
+import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { rootIdentity } from "@/lib/root/store";
+import { loadTasks } from "@/lib/tasks/store";
 import { freshness, listPresence } from "@/lib/view/presenceStore";
 import type { StoredViewSession } from "@/lib/view/types";
 
@@ -13,6 +15,7 @@ import {
   type AttentionEvent,
   type DeviceOfferStatus,
 } from "./machine";
+import { attentionTargetRecords, type AttentionRecordSources, type AttentionTargetRecords } from "./targetRecords";
 import {
   createAttentionRequest,
   liveAttentionRequests,
@@ -52,6 +55,18 @@ export interface DeviceAttentionView {
       conversation and one journal event, so an unseen request is a fact both
       sides can see. */
   expired: string[];
+  /**
+   * The board rows this device is owed, as the server holds them right now
+   * (#1836): every lane admitted in the last few minutes, plus the rows a live
+   * target names, plus the ids this device holds that the registry does not.
+   * Null when there are none.
+   *
+   * This is the answer to a lane the server has admitted and the browser has
+   * not drawn: the client layers these into the board's data layer, so the
+   * lane is there from the moment it was created rather than minutes later
+   * when the corpus scan catches up. See {@link attentionTargetRecords}.
+   */
+  records: AttentionTargetRecords | null;
 }
 
 /** Requests are answered oldest-first, so a queued one surfaces in the order it
@@ -60,9 +75,23 @@ function byAge(left: AttentionRequestV1, right: AttentionRequestV1): number {
   return Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id);
 }
 
+/** The stores the pushed rows are read from. Production reads the registry and
+    the task file; a test passes its own rows. */
+const productionRecordSources: AttentionRecordSources = {
+  pipelines: () => loadPipelinesForList(),
+  tasks: () => loadTasks(),
+};
+
 export function attentionForDevice(
   deviceId: string,
-  options: { filePath?: string; now?: Date } = {},
+  options: {
+    filePath?: string;
+    now?: Date;
+    records?: AttentionRecordSources;
+    /** Pipeline ids this device is holding from an earlier push, so the read
+        can tell it which of them the registry does not hold (#1836). */
+    echoedPipelineIds?: readonly string[];
+  } = {},
 ): DeviceAttentionView {
   const now = options.now ?? new Date();
   /* Sweeping on read is what makes expiry hold without a daemon: the clock is
@@ -95,6 +124,37 @@ export function attentionForDevice(
     offer,
     live,
     expired,
+    /* Every freshly admitted lane, unasked (that is item 1), and on top of it
+       the rows a request still looking for somewhere to land names. A follow
+       is left out of the second half: it stays live for ten minutes after it
+       arrived, and the board has been drawing that lane since the move. */
+    records: attentionTargetRecords(
+      live.filter((entry) => entry.request.state !== "following").map((entry) => entry.request.target),
+      options.records ?? productionRecordSources,
+      { now, ...(options.echoedPipelineIds ? { echoedPipelineIds: options.echoedPipelineIds } : {}) },
+    ),
+  };
+}
+
+/**
+ * The board rows alone, for a surface that draws the board and answers no
+ * request: the phone (#1836). It withholds its device id so it is never
+ * offered a handoff, and that same withholding kept it from the read that
+ * carries a freshly admitted lane — so a phone board waited for the corpus
+ * scan, which is the failure item 1 is about.
+ *
+ * Nothing here reads, sweeps or answers the attention record: no offer, no
+ * presence, no expiry. Only the lanes admitted inside the window, and which of
+ * the echoed ids the registry does not hold.
+ */
+export function attentionRecordsForSurface(
+  options: { now?: Date; records?: AttentionRecordSources; echoedPipelineIds?: readonly string[] } = {},
+): { records: AttentionTargetRecords | null } {
+  return {
+    records: attentionTargetRecords([], options.records ?? productionRecordSources, {
+      now: options.now ?? new Date(),
+      ...(options.echoedPipelineIds ? { echoedPipelineIds: options.echoedPipelineIds } : {}),
+    }),
   };
 }
 

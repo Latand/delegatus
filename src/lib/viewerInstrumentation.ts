@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 
 import { statePath } from "@/lib/configDir";
+import { redactBounded } from "@/lib/monitor/redact";
 import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import {
@@ -17,6 +19,7 @@ import {
   type HotStateCheckpoint,
 } from "@/lib/state/hotStateAuthority";
 import { initializeStateCollections, markStateSqliteCutoverReady } from "@/lib/state/sqliteStateStore";
+import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { markStructuredHostStartupFailed, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import {
@@ -64,6 +67,8 @@ interface ViewerReleaseActivationOptions {
   log?: (...args: unknown[]) => void;
   fenceRequest?: () => HotStateAuthority | null;
   onFenceRequested?: (request: HotStateAuthority) => void | Promise<void>;
+  /** A fence this release acknowledged was withdrawn while it stayed current. */
+  onFenceWithdrawn?: () => void | Promise<void>;
   onDemoted?: (context: { fenced: boolean }) => void | Promise<void>;
 }
 
@@ -126,6 +131,22 @@ export function viewerReleaseOwnsTraffic(
   } catch {
     return false;
   }
+}
+
+/** Names the release that demoted this Viewer: the durable target that now
+ * appoints its successor. A turn cut by this release records it as the
+ * boundary of the continuation it is owed (#1835). */
+export function viewerReleaseBoundary(
+  readTarget: () => string = () => fs.readFileSync(statePath("viewer-release.json"), "utf8"),
+): string {
+  let target: string;
+  try {
+    target = readTarget();
+  } catch {
+    return `viewer-release:pid-${process.pid}`;
+  }
+  const digest = crypto.createHash("sha256").update(target).digest("hex").slice(0, 16);
+  return `viewer-release:${digest}`;
 }
 
 function legacyHotStateSignature(): string {
@@ -220,7 +241,12 @@ export async function activateViewerRuntimeWhenCurrent(
     }
     const fence = started ? options.fenceRequest?.() ?? null : null;
     if (!fence || fence.mode !== "fencing") {
-      if (!fenceInProgress) fencedEpoch = null;
+      if (!fenceInProgress && fencedEpoch !== null) {
+        fencedEpoch = null;
+        void Promise.resolve(options.onFenceWithdrawn?.()).catch((error) => {
+          log("[viewer release] withdrawn fence recovery failed", error);
+        });
+      }
     } else if (fencedEpoch !== fence.epoch && !fenceInProgress) {
       fenceInProgress = true;
       void Promise.resolve(options.onFenceRequested?.(fence)).then(() => {
@@ -308,6 +334,10 @@ export async function checkpointHotStateRollbackMirrorsForDemotion(): Promise<Ho
   const flowRevision = await flows.checkpointFlowRollbackMirrorForDemotionAsync();
   const pipelineRevisions = await pipelines.checkpointPipelineRollbackMirrorsForDemotionAsync();
   const workflowRevision = await workflows.checkpointWorkflowRollbackMirrorForDemotionAsync();
+  /* Stores moved by #1870 record their mirror in `state_imports`, not in the
+     checkpoint record older adapters parse. */
+  const { checkpointLegacyCollectionMirrorsForDemotion } = await import("@/lib/state/legacyCollections");
+  await checkpointLegacyCollectionMirrorsForDemotion();
   return {
     flows: flowRevision,
     pipelines: pipelineRevisions.pipelines,
@@ -556,7 +586,7 @@ const TRANSIENT_IO_CODES = new Set([
 ]);
 const DATA_CORRUPTION_CODES = new Set(["SQLITE_CORRUPT", "SQLITE_NOTADB"]);
 
-function startupErrorField(error: unknown, field: "code" | "name" | "message"): string {
+function startupErrorField(error: unknown, field: "code" | "name" | "message" | "hostKey"): string {
   if (typeof error !== "object" || error === null || !(field in error)) return "";
   const value = error[field as keyof typeof error];
   return typeof value === "string" ? value : "";
@@ -637,11 +667,13 @@ export async function runStructuredHostStartup(
   options: StructuredHostStartupOptions = {},
 ): Promise<void> {
   const schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
-  const maxRetryMs = options.maxRetryMs ?? 1_000;
+  const maxRetryMs = options.maxRetryMs ?? 300_000;
   const jitterRatio = Math.min(Math.max(options.jitterRatio ?? 0.2, 0), 1);
   const random = options.random ?? Math.random;
-  let retryMs = options.initialRetryMs ?? 100;
+  let retryMs = options.initialRetryMs ?? 5_000;
   let retryPending = false;
+  let running = false;
+  let finished = false;
   let attempts = 0;
   let resolveReady: (() => void) | null = null;
   let rejectReady: ((error: unknown) => void) | null = null;
@@ -650,24 +682,38 @@ export async function runStructuredHostStartup(
     : null;
 
   const attempt = async (): Promise<void> => {
+    if (running || finished) return;
+    running = true;
     attempts += 1;
     try {
       options.signal?.throwIfAborted();
       await adopt();
       options.signal?.throwIfAborted();
       markStructuredHostStartupReady();
+      finished = true;
+      options.signal?.removeEventListener("abort", aborted);
       resolveReady?.();
       if (attempts > 1) log("[structured hosts] startup adoption recovered", { attempts });
     } catch (error) {
-      markStructuredHostStartupFailed();
       if (options.signal?.aborted) {
+        markStructuredHostStartupFailed();
+        finished = true;
         rejectReady?.(error);
         throw error;
       }
       const classification = classifyStructuredHostStartupError(error);
+      markStructuredHostStartupFailed(classification.category);
+      const diagnostic = {
+        message: redactBounded(startupErrorField(error, "message") || String(error), 1_000),
+        hostKey: startupErrorField(error, "hostKey") || null,
+      };
       if (classification.disposition === "terminal") {
-        log("[structured hosts] startup adoption failed", error, {
+        finished = true;
+        options.signal?.removeEventListener("abort", aborted);
+        log("[structured hosts] startup adoption failed", {
+          ...diagnostic,
           category: classification.category,
+          attempt: attempts,
           action: classification.action,
         });
         rejectReady?.(error);
@@ -678,17 +724,24 @@ export async function runStructuredHostStartup(
       const delayMs = Math.min(maxRetryMs, Math.max(0, Math.round(retryMs * jitter)));
       retryMs = Math.min(retryMs * 2, maxRetryMs);
       retryPending = true;
-      if (attempts === 1) log("[structured hosts] startup adoption failed; retry scheduled", error);
+      log("[structured hosts] startup adoption failed; retry scheduled", {
+        ...diagnostic,
+        category: classification.category, attempt: attempts, retryInMs: delayMs,
+      });
       schedule(() => {
+        if (!retryPending || running || finished) return;
         retryPending = false;
-        void attempt().catch((retryError) => {
-          log("[structured hosts] startup adoption retry aborted", retryError);
-        });
+        // The attempt logs its classified failure; avoid duplicating it or
+        // exposing an exception payload in a second log line.
+        void attempt().catch(() => {});
       }, delayMs).unref?.();
+    } finally {
+      running = false;
     }
   };
 
   const aborted = () => {
+    if (finished) return;
     markStructuredHostStartupFailed();
     // An executing attempt must settle before retirement can checkpoint.
     if (retryPending) rejectReady?.(options.signal?.reason);
@@ -715,9 +768,48 @@ export async function completeViewerRuntimeActivation(
   steps.publishViewerReleaseReady();
 }
 
+/** Check every state database before a store opens one (#1870 slice 10):
+    a damaged one is replaced by its newest good backup, or starts empty. The
+    returned `start` raises the board cards and arms the backup timer once the
+    release is ready. A failure here never blocks activation. */
+export async function checkStateDatabasesBeforeStores(
+  stateDirectory: string,
+): Promise<{ start(ownsTraffic: () => boolean): void }> {
+  try {
+    const { checkStateDatabasesAtActivation, startStateDurability } = await import("@/lib/state/durability");
+    const incidents = checkStateDatabasesAtActivation(stateDirectory);
+    return { start: (ownsTraffic) => { startStateDurability({ stateDirectory, incidents, ownsTraffic }); } };
+  } catch (error) {
+    console.error("[state durability] activation check failed", error instanceof Error ? error.message : String(error));
+    return { start: () => {} };
+  }
+}
+
 /** The full node-runtime startup sequence `src/instrumentation.ts` defers to. */
+/**
+ * The remembered phone-access choice gates this process before it serves a
+ * single request (#2024): a Docker release container is started by
+ * `next start` with no launcher in front of it, while the tailnet mapping
+ * stays live in tailscaled across every deploy and restart. A gate that
+ * cannot be put in place stops the process instead of serving ungated.
+ */
+export async function gatePhoneAccessBeforeServing(
+  exit: (code: number) => never = process.exit,
+  log: (line: string) => void = console.error,
+): Promise<void> {
+  const { PhoneGateRefusal, restorePhoneAccessGate } = await import("@/lib/access/phoneAccess");
+  try {
+    await restorePhoneAccessGate();
+  } catch (error) {
+    if (!(error instanceof PhoneGateRefusal)) throw error;
+    log(`[phone access] phone access is on and the access key cannot be put in place (${error.message}); refusing to serve the tailnet ungated. Fix the key file, or remove the phone-access file beside it to turn phone access off.`);
+    exit(78);
+  }
+}
+
 export async function registerViewerRuntime(): Promise<void> {
   discardWakatimeEnvironmentCredential();
+  await gatePhoneAccessBeforeServing();
   const isCurrent = () => viewerReleaseOwnsTraffic();
   const hotStateDirectory = path.dirname(statePath("state.sqlite"));
   const releaseRevision = () => hotStateWriterRevision(hotStateDirectory);
@@ -737,15 +829,22 @@ export async function registerViewerRuntime(): Promise<void> {
     startupAbort.signal.throwIfAborted();
   };
   const releaseHosts = async () => {
-    const { releaseUnpublishedStartupHostsForDemotion } = await import("@/lib/runtime/startup");
-    await releaseUnpublishedStartupHostsForDemotion();
-    const { releaseStructuredDeliveryHostsForDemotion } = await import("@/lib/runtime/structuredDeliveryController");
-    await releaseStructuredDeliveryHostsForDemotion();
+    const { releaseStructuredHostsForViewerDemotion } = await import("@/lib/runtime/startup");
+    await releaseStructuredHostsForViewerDemotion({ boundary: viewerReleaseBoundary() });
   };
   await activateViewerRuntimeWhenCurrent(async () => {
+    /* This callback runs only in the process that owns the release and is
+       about to serve traffic. It is the one place a state-mutating startup
+       step — the #1870 imports, their rollback mirrors, the durability
+       checks — is allowed to run at all; everywhere else the barrier refuses
+       (#1905, a lane's `next build` importing the live account files). */
+    openStateMutationActivation();
     const boundary = await establishHotStateCutoverBoundary(isCurrent);
     activatedReleaseRevision = boundary.authority?.releaseRevision ?? null;
+    const durability = await checkStateDatabasesBeforeStores(hotStateDirectory);
     const authority = await initializeHotStateStoresAtStartup(boundary);
+    const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
+    await ensureLegacyCollectionsImported();
     let activatedAuthority: HotStateAuthority | null = null;
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
@@ -774,6 +873,7 @@ export async function registerViewerRuntime(): Promise<void> {
         if (activatedAuthority) markViewerReleaseReady(hotStateDirectory, activatedAuthority);
       },
     });
+    durability.start(isCurrent);
   }, isCurrent, {
     fenceRequest: () => {
       const revision = releaseRevision();
@@ -788,9 +888,18 @@ export async function registerViewerRuntime(): Promise<void> {
       await quiesceStartup();
       await releaseHosts();
       const revisions = await checkpointHotStateRollbackMirrorsForDemotion();
-      const { agentRegistry } = await import("@/lib/agent/registry");
-      agentRegistry().checkpointRollbackMirrorForDemotion();
       acknowledgeHotStateFence(hotStateDirectory, request, revisions);
+    },
+    /* A cancelled deployment restores this release's authority but leaves the
+       rollback mirrors writable, so an older release's MCP process could write
+       one nothing reads. Re-running the import folds such writes in and puts
+       the tombstones back. */
+    onFenceWithdrawn: async () => {
+      const revision = releaseRevision();
+      const authority = readHotStateAuthority(hotStateDirectory);
+      if (!isCurrent() || revision === null || authority?.mode !== "sqlite" || authority.releaseRevision !== revision) return;
+      const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
+      await ensureLegacyCollectionsImported();
     },
     onDemoted: async ({ fenced }) => {
       await quiesceStartup();
@@ -800,9 +909,7 @@ export async function registerViewerRuntime(): Promise<void> {
         if (!activatedReleaseRevision
           || authority?.releaseRevision !== activatedReleaseRevision
           || (authority.mode !== "sqlite" && authority.mode !== "fencing")) return;
-        const { agentRegistry } = await import("@/lib/agent/registry");
         await checkpointHotStateRollbackMirrorsForDemotion();
-        agentRegistry().checkpointRollbackMirrorForDemotion();
       }, undefined, undefined, releaseHosts);
     },
   });

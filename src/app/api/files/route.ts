@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { bridgeReportLogSignature } from "@/lib/bridge/store";
 import { statePath } from "@/lib/configDir";
+import { FILES_BUILT_HEADER, formatFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
+import { diffFilesBodies, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER } from "@/lib/filesDelta";
+import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 import { ensureEmptyTaskBoardVisibilityMigration } from "@/lib/tasks/boardVisibilityMigration";
 import { buildFilesResponse } from "./response";
@@ -25,6 +29,10 @@ type ProjectionRepresentation = {
   contentType: string;
   etag: string;
   timing: string;
+  delta?: { base: string; body: string };
+  /** The state this body was built from, sent with it whenever it is served,
+      a stale answer included (#2072). */
+  built?: FilesBuilt;
 };
 type ProjectionResult = {
   representation: ProjectionRepresentation;
@@ -48,28 +56,99 @@ const PERSISTED_PROJECTION_META_FILE = "files-response-cache.json";
 const PERSISTED_PROJECTION_BODY_PREFIX = "files-response-cache-";
 const PERSISTED_PROJECTION_KEY_PREFIX = "persisted:";
 const PROJECTION_STATE_FILES = [
-  "tasks.json",
   "project-aliases.json",
   "project-curation.json",
   "worktree-map.json",
   "reaper-state.json",
-  /* The orchestrator's open ask is derived from this log (issue #1168), so a
-     report filed — or answered — between two identical scans has to invalidate
-     the projection. Without it the ask would appear, and clear, only when some
-     unrelated store happened to move. */
-  "bridge-reports.json",
+  /* A state database fallback or a refused backup (#1870 slice 10) shows in
+     `systemHealth.storage` on the next poll, not after some other store moves. */
+  "storage-incidents.json",
 ] as const;
+/* A client more links behind than this, or whose deltas add up to more than a
+   quarter of the full body, is sent the full body. */
+const DELTA_LINKS_PER_SCOPE = 32;
+const DELTA_PATH_MAX_LINKS = 16;
+const DELTA_MAX_BODY_FRACTION = 0.25;
+type DeltaLink = { etag: string; delta: string };
 const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;
+  __llvFilesDeltaLinks?: Map<string, Map<string, DeltaLink>>;
+  __llvFilesGzipBodies?: WeakMap<ProjectionRepresentation, Promise<Uint8Array>>;
   __llvFilesProjectionInflight?: Map<string, Promise<ProjectionRepresentation>>;
   __llvFilesProjectionWorkerTail?: Promise<void>;
   __llvFilesProjectionPersistenceTail?: Promise<void>;
   __llvFilesPersistedProjectionChecked?: boolean;
+  __llvFilesProjectionSequence?: number;
 };
+
+/** The next build in this process's order, taken when a build reads the
+    stores: a later build read later stores. */
+function nextProjectionSequence(): number {
+  projectionCacheStore.__llvFilesProjectionSequence = (projectionCacheStore.__llvFilesProjectionSequence ?? 0) + 1;
+  return projectionCacheStore.__llvFilesProjectionSequence;
+}
 
 function projectionCache(): Map<string, CachedProjection> {
   projectionCacheStore.__llvFilesProjectionCache ??= new Map();
   return projectionCacheStore.__llvFilesProjectionCache;
+}
+
+/* Every representation a scope moved through, as base ETag → the next one and
+   the delta that gets there (#1994). A phone that certified any recent
+   representation catches up with the rows that changed, never the board. */
+function deltaLinks(scopeKey: string): Map<string, DeltaLink> {
+  projectionCacheStore.__llvFilesDeltaLinks ??= new Map();
+  let links = projectionCacheStore.__llvFilesDeltaLinks.get(scopeKey);
+  if (!links) {
+    links = new Map();
+    projectionCacheStore.__llvFilesDeltaLinks.set(scopeKey, links);
+  }
+  return links;
+}
+
+function recordDeltaLink(scopeKey: string, base: string, etag: string, delta: string): void {
+  if (!base || !etag || base === etag) return;
+  const links = deltaLinks(scopeKey);
+  links.delete(base);
+  links.set(base, { etag, delta });
+  while (links.size > DELTA_LINKS_PER_SCOPE) {
+    const oldest = links.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    links.delete(oldest);
+  }
+}
+
+/** The deltas from `from` to `to`, or null when the chain does not reach or a
+    full body is cheaper. */
+function deltaPath(scopeKey: string, from: string, to: string, fullBytes: number): string[] | null {
+  const links = projectionCacheStore.__llvFilesDeltaLinks?.get(scopeKey);
+  if (!links) return null;
+  const deltas: string[] = [];
+  const seen = new Set<string>();
+  let bytes = 0;
+  let at = from;
+  while (at !== to) {
+    const link = links.get(at);
+    if (!link || seen.has(at) || deltas.length >= DELTA_PATH_MAX_LINKS) return null;
+    seen.add(at);
+    bytes += link.delta.length;
+    if (bytes > fullBytes * DELTA_MAX_BODY_FRACTION) return null;
+    deltas.push(link.delta);
+    at = link.etag;
+  }
+  return deltas.length ? deltas : null;
+}
+
+/** One compression per representation, however many clients fetch it. */
+function gzippedRepresentation(representation: ProjectionRepresentation): Promise<Uint8Array> {
+  projectionCacheStore.__llvFilesGzipBodies ??= new WeakMap();
+  let compressed = projectionCacheStore.__llvFilesGzipBodies.get(representation);
+  if (!compressed) {
+    compressed = gzipBody(representation.body);
+    projectionCacheStore.__llvFilesGzipBodies.set(representation, compressed);
+    void compressed.catch(() => projectionCacheStore.__llvFilesGzipBodies?.delete(representation));
+  }
+  return compressed;
 }
 
 function projectionInflight(): Map<string, Promise<ProjectionRepresentation>> {
@@ -105,9 +184,15 @@ function projectionBaseKey(
     pinOverlayPaths: scan.pinOverlayPaths ?? [],
     stores: [
       ...PROJECTION_STATE_FILES.map(stateFileSignature),
+      hotStateSignature("tasks", "tasks.json"),
       hotStateSignature("flows", "flows.json"),
       hotStateSignature("pipelines", "pipelines.json"),
       hotStateSignature("workflows", "workflows.json"),
+      /* The orchestrator's open ask is derived from the bridge report log (issue
+         #1168), so a report filed — or answered — between two identical scans
+         has to invalidate the projection. Without it the ask would appear, and
+         clear, only when some unrelated store happened to move. */
+      bridgeReportLogSignature(),
     ],
   })).digest("hex");
 }
@@ -173,7 +258,7 @@ function validPersistedProjection(value: unknown): value is PersistedProjection 
     && typeof candidate.timing === "string";
 }
 
-function warmPersistedProjection(scopeKey: string, pinnedPath: string | undefined): void {
+function warmPersistedProjection(scopeKey: string, pinnedPath: string | undefined, epoch: string): void {
   if (pinnedPath || projectionCacheStore.__llvFilesPersistedProjectionChecked) return;
   projectionCacheStore.__llvFilesPersistedProjectionChecked = true;
   try {
@@ -187,6 +272,8 @@ function warmPersistedProjection(scopeKey: string, pinnedPath: string | undefine
       contentType: metadata.contentType,
       etag,
       timing: metadata.timing,
+      /* Built by an earlier process, so before anything this one builds. */
+      built: { epoch, generation: 0, sequence: 0 },
     });
   } catch {
     // A first run or interrupted cache write performs one live projection.
@@ -242,6 +329,7 @@ async function projectionFor(
   key: string,
   request: Request,
   scan: CachedScan,
+  summary: boolean,
 ): Promise<ProjectionResult> {
   const cached = projectionCache().get(scopeKey);
   if (cached?.key === key) return { representation: cached.representation, cacheStatus: "hit" };
@@ -257,20 +345,35 @@ async function projectionFor(
   const promise = (async () => {
     const headers = new Headers(request.headers);
     headers.delete("if-none-match");
+    const previous = cached?.representation;
     const snapshot = { ...scan.snapshot, pinOverlayPaths: scan.pinOverlayPaths };
     const persistedSnapshot = statePath("files-scan-snapshot.json");
+    const epoch = scan.epoch ?? "0";
     let representation: ProjectionRepresentation;
     if (filesResponseWorkerEnabled()) {
-      representation = await queueProjectionWorker(() =>
-        buildFilesResponseInWorker({
+      representation = await queueProjectionWorker(async () => {
+        /* The build order is taken as the build starts, where it reads the
+           stores. The persisted snapshot is read by the worker when its turn
+           comes, and a later scan may have replaced it by then: the file
+           names its own generation and the worker reports it back, so the
+           rows are dated by the scan they came from. A file this process
+           never wrote holds the snapshot it warm-started from, which it
+           counts as generation 0. */
+        const sequence = nextProjectionSequence();
+        const fromFile = !scan.pinOverlayPaths?.length && fs.existsSync(persistedSnapshot);
+        const { snapshotRead, ...projected } = await buildFilesResponseInWorker({
           type: "project",
           url: request.url,
           headers: [...headers.entries()],
-          ...(scan.pinOverlayPaths?.length || !fs.existsSync(persistedSnapshot)
-            ? { snapshot }
-            : { snapshotFile: persistedSnapshot }),
-        }));
+          ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
+          ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
+        });
+        const generation = !fromFile ? scan.generation : snapshotRead?.epoch === epoch ? snapshotRead.generation : 0;
+        return { ...projected, built: { epoch, generation, sequence } };
+      });
     } else {
+      /* Stamped as the build starts, where it reads the stores. */
+      const built: FilesBuilt = { epoch, generation: scan.generation, sequence: nextProjectionSequence() };
       const response = await buildFilesResponse(new Request(request.url, { headers }), {
         listFilesWithProjectCatalog: async () => snapshot,
       });
@@ -279,7 +382,19 @@ async function projectionFor(
         contentType: response.headers.get("content-type") ?? "application/json",
         etag: response.headers.get("etag") ?? "",
         timing: response.headers.get("server-timing") ?? "",
+        built,
       };
+      if (summary && previous && previous.etag !== representation.etag) {
+        representation.delta = {
+          base: previous.etag,
+          body: diffFilesBodies(previous.body, representation.body, previous.etag, representation.etag),
+        };
+      }
+    }
+    if (representation.delta) {
+      recordDeltaLink(scopeKey, representation.delta.base, representation.etag, representation.delta.body);
+      /* The link holds the delta; the cached representation need not. */
+      representation = { ...representation, delta: undefined };
     }
     rememberProjection(scopeKey, key, representation);
     if (scopeKey === projectionScopeKey(undefined)) {
@@ -368,20 +483,45 @@ export async function GET(request: Request): Promise<Response> {
   const key = projectionKey(baseKey);
   const summary = url.searchParams.get("view") === "summary";
   const scopeKey = projectionScopeKey(pinnedPath, summary);
-  if (!summary) warmPersistedProjection(scopeKey, pinnedPath);
-  const projected = await projectionFor(scopeKey, key, request, scan);
+  if (!summary) warmPersistedProjection(scopeKey, pinnedPath, scan.epoch ?? "0");
+  const projected = await projectionFor(scopeKey, key, request, scan, summary);
   const notModified = request.headers.get("if-none-match") === projected.representation.etag;
   const projectionTiming = [
     projected.representation.timing,
     `files-projection-cache;dur=0.0;desc="${projected.cacheStatus}"`,
   ].filter(Boolean).join(", ");
-  const response = new Response(notModified ? null : projected.representation.body, {
+  const headers: Record<string, string> = {
+    ETag: projected.representation.etag,
+    ...(notModified ? {} : { "content-type": projected.representation.contentType }),
+    "x-llv-files-projection-cache": projected.cacheStatus,
+    vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}`,
+    /* The live scan's generation goes out as `x-llv-files-generation`; this
+       is the one the body was built from, older when the answer is stale. */
+    ...(projected.representation.built ? { [FILES_BUILT_HEADER]: formatFilesBuilt(projected.representation.built) } : {}),
+  };
+  let body: string | Uint8Array | null = null;
+  if (!notModified) {
+    /* A client that certified an earlier representation of this scope, and
+       says it can apply a delta, gets the rows that changed since (#1994). */
+    const base = request.headers.get("if-none-match");
+    const deltas = base && summary && request.headers.get(FILES_DELTA_ACCEPT_HEADER) === "1"
+      ? deltaPath(scopeKey, base, projected.representation.etag, projected.representation.body.length)
+      : null;
+    if (deltas && base) {
+      headers[FILES_DELTA_BASE_HEADER] = base;
+      headers["cache-control"] = "no-store";
+      body = `{"deltas":[${deltas.join(",")}]}`;
+    } else {
+      body = projected.representation.body;
+    }
+    if (acceptsGzip(request) && body.length >= 1024) {
+      body = deltas ? await gzipBody(body) : await gzippedRepresentation(projected.representation);
+      headers["content-encoding"] = "gzip";
+    }
+  }
+  const response = new Response(body as BodyInit | null, {
     status: notModified ? 304 : 200,
-    headers: {
-      ETag: projected.representation.etag,
-      ...(notModified ? {} : { "content-type": projected.representation.contentType }),
-      "x-llv-files-projection-cache": projected.cacheStatus,
-    },
+    headers,
   });
   applyScanHeaders(response, scan, projectionTiming);
   return response;

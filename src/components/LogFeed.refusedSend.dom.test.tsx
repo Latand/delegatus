@@ -84,6 +84,12 @@ import { setLogFeedDependenciesForTests } from "./logFeedDependencies";
 import { TmuxComposer } from "./TmuxComposer";
 import { enqueueOutbox, readOutbox, resetOutboxForTests, updateOutbox } from "./conversation/outbox";
 
+/** The bytes the payload store still holds for one submission. */
+async function retainedImages(conversationId: string, key: string): Promise<string[] | undefined> {
+  const { composerSubmissionPayloads } = await import("@/lib/composerSubmissionPayloads");
+  return (await composerSubmissionPayloads.restore({ conversationId, key }))?.submission.images.map((image) => image.base64);
+}
+
 const realFetch = globalThis.fetch;
 const composerStorage = installComposerStorageForTests();
 afterAll(() => composerStorage.uninstall());
@@ -276,8 +282,13 @@ test("a refusal answered after newer words keeps the bubble AND the saved copy, 
     const entry = readOutbox(cardId)[0];
     expect(entry?.state).toBe("failed");
     expect(entry?.error).toBe(REASON);
-    expect(mounted.host.querySelector(`[data-payload-key="${sends[0]!.idempotencyKey}"]`)).not.toBeNull();
-    expect(mounted.host.querySelector("[data-payload-retry]")).not.toBeNull();
+    /* The copy is RETAINED — its bytes are the only remaining record of the
+       image. It is no longer painted as a panel of its own beside the
+       composer: since slice 3 the message is explained in one place, and that
+       place is its row, which is right there carrying the same failure. */
+    expect(await retainedImages(cardId, sends[0]!.idempotencyKey)).toHaveLength(1);
+    expect(mounted.host.querySelector(`[data-payload-key="${sends[0]!.idempotencyKey}"]`)).toBeNull();
+    expect(mounted.host.querySelector(`[data-outbox-entry="${sends[0]!.idempotencyKey}"]`)).not.toBeNull();
     expect(mounted.host.querySelector("textarea")?.value).toBe("words typed while it was in flight");
   } finally { await act(async () => mounted.root.unmount()); }
 });
@@ -294,9 +305,12 @@ test("an uncertain send keeps its saved copy, and that copy offers no retry", as
     /* Untouched: the command may be on the wire, so the copy stays and
        nothing here offers to send it a second time. */
     expect(readOutbox(cardId)[0]?.deliveryUncertain).toBe(true);
-    expect(mounted.host.querySelector(`[data-payload-key="${sends[0]!.idempotencyKey}"]`)).not.toBeNull();
-    expect(mounted.host.querySelector("[data-payload-retry]")).toBeNull();
-    expect(mounted.host.querySelector("[data-payload-discard]")).toBeNull();
+    expect(await retainedImages(cardId, sends[0]!.idempotencyKey)).toHaveLength(1);
+    /* The message's own row says this, and nothing anywhere offers to send it
+       a second time or to end it: an unconfirmed delivery is asked about. */
+    expect(mounted.host.querySelector(`[data-payload-key="${sends[0]!.idempotencyKey}"]`)).toBeNull();
+    expect(mounted.host.querySelector("[data-payload-retry], [data-payload-discard]")).toBeNull();
+    expect(mounted.host.querySelector(`[data-outbox-entry="${sends[0]!.idempotencyKey}"]`)).not.toBeNull();
   } finally { await act(async () => mounted.root.unmount()); }
 });
 
@@ -314,13 +328,21 @@ test("a refusal answered after the operator started the next message keeps the b
     expect(entry?.text).toBe("first message");
     expect(entry?.state).toBe("failed");
     expect(entry?.error).toBe(REASON);
-    /* Never parked, so the bubble carries the ordinary retry and cancel. */
+    /* Never parked, so the row is a proven failure with its one action. */
     expect(entry?.deliveryUncertain).toBeUndefined();
     const bubble = mounted.host.querySelector("[data-outbox-entry]")!;
-    expect(bubble.textContent).toContain(REASON);
+    /* The reason reads in the interface language; the refusal's own sentence
+       is one tap behind it, never printed at the operator in English. */
+    expect(bubble.querySelector("[data-outbox-status]")?.textContent)
+      .toBe(translate("en", "outbox.failure.generic"));
+    const reason = bubble.querySelector<HTMLButtonElement>("[data-outbox-reason]")!;
+    expect(reason.getAttribute("title")).toBe(REASON);
     expect(bubble.querySelector("[data-outbox-retry]")).not.toBeNull();
-    expect(bubble.querySelector("[data-outbox-cancel]")).not.toBeNull();
     expect(bubble.querySelector("[data-outbox-clear]")).toBeNull();
+    /* Dropping it is still possible, one tap in, beside the raw reason. */
+    await settle(() => reason.click());
+    expect(bubble.querySelector("[data-outbox-raw]")?.textContent).toBe(REASON);
+    expect(bubble.querySelector("[data-outbox-cancel]")).not.toBeNull();
     /* The newer words are untouched. */
     expect(mounted.host.querySelector("textarea")?.value).toBe("words typed while it was in flight");
   } finally { await act(async () => mounted.root.unmount()); }
@@ -348,21 +370,37 @@ test.each([
   } finally { await act(async () => mounted.root.unmount()); }
 });
 
-test("an already parked bubble that holds no operation id can be taken back to the composer", async () => {
+test("a parked bubble with no operation id is still never taken back — it is asked about", async () => {
+  /* This used to be the one way out of an unconfirmed delivery (#1593): no
+     operation id, so "nothing can ever settle this", so the words went back to
+     the composer and the row disappeared. Round 3 proved what that costs. The
+     row is the only record of idempotency key K; once it is gone the composer
+     mints K2 for the same words and the server can hold BOTH — reproduced as
+     two admitted operations for one message, with the original key never once
+     looked up. The key exists from the moment Send was pressed, so there is
+     always something to ask about, and asking is all the row offers. */
   const sends: SendBody[] = [];
   gatedWire(sends, {});
   enqueueOutbox(cardId, { id: "key-parked", text: "the message nobody can settle", images: 0, at: Date.now() });
   updateOutbox(cardId, "key-parked", { state: "delivering", deliveryUncertain: true });
   const mounted = await renderInto(surface());
   try {
-    const clear = mounted.host.querySelector<HTMLButtonElement>("[data-outbox-clear]")!;
-    expect(clear).not.toBeNull();
-    expect(clear.getAttribute("aria-label")).toBe(translate("en", "outbox.clearParked"));
-    await settle(() => clear.click());
-    expect(readOutbox(cardId)).toEqual([]);
-    expect(mounted.host.querySelector("[data-outbox-entry]")).toBeNull();
-    expect(mounted.host.querySelector("textarea")?.value).toBe("the message nobody can settle");
-    /* Taking it back sends nothing. */
+    /* The evidence is one tap behind the message's own progress affordance:
+       the resting row is the message, not a control panel. */
+    const progress = mounted.host.querySelector<HTMLButtonElement>("[data-outbox-progress]")!;
+    expect(progress).not.toBeNull();
+    await settle(() => progress.click());
+    /* No exit of any kind: not a take-back, not a cancel, not a local replay. */
+    expect(mounted.host.querySelector("[data-outbox-clear], [data-outbox-cancel], [data-outbox-retry]")).toBeNull();
+    const check = mounted.host.querySelector<HTMLButtonElement>("[data-outbox-check]")!;
+    expect(check).not.toBeNull();
+    expect(check.textContent).toBe(translate("en", "outbox.action.checkStatus"));
+    await settle(() => check.click());
+    /* The row and its whole payload are still filed under the original key,
+       and asking sent nothing. */
+    expect(readOutbox(cardId).map((entry) => entry.id)).toEqual(["key-parked"]);
+    expect(readOutbox(cardId)[0]).toMatchObject({ text: "the message nobody can settle", deliveryUncertain: true });
+    expect(mounted.host.querySelectorAll("[data-outbox-entry]")).toHaveLength(1);
     expect(sends).toEqual([]);
   } finally { await act(async () => mounted.root.unmount()); }
 });
@@ -376,6 +414,12 @@ test("a parked bubble an operation CAN address keeps its recovery controls and o
   try {
     const bubble = mounted.host.querySelector("[data-outbox-entry]")!;
     expect(bubble.querySelector("[data-outbox-clear], [data-outbox-retry], [data-outbox-cancel]")).toBeNull();
+    /* Opening the evidence offers the one thing that is honest here: asking
+       the server again under the SAME operation, never a take-back that would
+       claim a journaled message is gone. */
+    await settle(() => bubble.querySelector<HTMLButtonElement>("[data-outbox-progress]")!.click());
+    expect(bubble.querySelector("[data-outbox-clear]")).toBeNull();
+    expect(bubble.querySelector("[data-outbox-check]")).not.toBeNull();
     expect(readOutbox(cardId)[0]?.operationId).toBe("operation-admitted");
   } finally { await act(async () => mounted.root.unmount()); }
 });

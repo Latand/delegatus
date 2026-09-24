@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt, NATIVE_MULTI_AGENT_HOOK_MATCHER, NATIVE_MULTI_AGENT_TOOLS, NATIVE_SUBAGENT_DENY_MESSAGE, prepareManagedClaudeSpawnHome, viewerMcpServerEntry, VIEWER_SPAWN_PROMPT_FENCE } from "./spawnPolicy";
+import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt, viewerMcpHttpUrl, viewerMcpServerEnv, viewerMcpTransport, viewerMcpTransportForLaunch, NATIVE_MULTI_AGENT_HOOK_MATCHER, NATIVE_MULTI_AGENT_TOOLS, NATIVE_SUBAGENT_DENY_MESSAGE, prepareManagedClaudeSpawnHome, viewerMcpServerEntry, VIEWER_SPAWN_PROMPT_FENCE } from "./spawnPolicy";
 
 const homes: string[] = [];
 const TELEGRAM_HEADERS = {
@@ -145,7 +145,7 @@ test("Claude native MCP config keeps only granted servers out of the operator's 
   /* Viewer is forced in; every other registered server stays out, including the
      one the allowlist named, because the grant bound excludes it (#739). */
   expect(mcpConfig.mcpServers).toEqual({
-    viewer: { type: "stdio", command: "viewer-mcp", args: ["--viewer"] },
+    viewer: { type: "stdio", command: "viewer-mcp", args: ["--viewer"], env: viewerMcpServerEnv() },
   });
 });
 
@@ -163,7 +163,9 @@ test("Claude native MCP config defaults to the registered Viewer server only", (
     mcpServers: Record<string, unknown>;
   };
 
-  expect(mcpConfig.mcpServers).toEqual({ viewer: { type: "stdio", command: "viewer-mcp" } });
+  expect(mcpConfig.mcpServers).toEqual({
+    viewer: { type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() },
+  });
   expect(JSON.parse(fs.readFileSync(installed.settingsPath, "utf8"))).not.toHaveProperty("mcpServers");
 });
 
@@ -176,19 +178,31 @@ test("Claude native MCP config supplies the packaged Viewer server on a fresh in
     mcpServers: Record<string, unknown>;
   };
 
+  /* The spawned agent runs under its own config and state root (#1905), so
+     the Viewer server carries the real one itself. */
   expect(mcpConfig.mcpServers).toEqual({
-    viewer: { type: "stdio", command: "bun", args: [launcher] },
+    viewer: { type: "stdio", command: "bun", args: [launcher], env: viewerMcpServerEnv() },
   });
-  expect(viewerMcpServerEntry()).toEqual({ command: "bun", args: [launcher] });
+  expect(viewerMcpServerEntry()).toEqual({ command: "bun", args: [launcher], env: viewerMcpServerEnv() });
   expect(fs.existsSync(launcher)).toBe(true);
   expect(fs.existsSync(path.join(accountHome, ".claude.json"))).toBe(false);
+});
+
+test("the Viewer entry names the stable host runtime before the package's own launcher", () => {
+  const hostHome = home();
+  const stable = path.join(hostHome, ".agents", "tools", "llv-mcp-runtime", "bin", "mcp-server.mjs");
+  fs.mkdirSync(path.dirname(stable), { recursive: true });
+  fs.writeFileSync(stable, "");
+  /* process.cwd() carries a launcher of its own, as the image's /app does. */
+  expect(viewerMcpServerEntry(process.cwd(), { HOME: hostHome }).args).toEqual([stable]);
+  expect(viewerMcpServerEntry(process.cwd(), { HOME: home() }).args).toEqual([path.resolve(process.cwd(), "bin", "mcp-server.mjs")]);
 });
 
 test("the packaged Viewer entry fails before writing an unusable launcher path", () => {
   expect(() => viewerMcpServerEntry(home())).toThrow("Viewer MCP launcher could not be resolved");
 });
 
-test("Claude native MCP config preserves an operator Viewer definition byte-for-byte", () => {
+test("Claude native MCP config preserves an operator Viewer definition, pinning only the Viewer's own root", () => {
   const accountHome = home();
   const statePath = path.join(accountHome, ".claude.json");
   const operatorState = JSON.stringify({
@@ -204,7 +218,12 @@ test("Claude native MCP config preserves an operator Viewer definition byte-for-
     mcpServers: Record<string, unknown>;
   };
 
-  expect(mcpConfig.mcpServers.viewer).toEqual({ type: "stdio", command: "operator-viewer", args: ["--custom"] });
+  expect(mcpConfig.mcpServers.viewer).toEqual({
+    type: "stdio",
+    command: "operator-viewer",
+    args: ["--custom"],
+    env: viewerMcpServerEnv(),
+  });
   expect(fs.readFileSync(statePath, "utf8")).toBe(operatorState);
 });
 
@@ -258,7 +277,9 @@ test("Claude native MCP config merges project scope between user and local scope
     type: "stdio",
     command: "project-version",
     args: ["--project"],
-    env: { PROJECT_AUTH: "kept" },
+    /* The scope's own environment is kept and wins; the Viewer's roots are
+       added under it so the sandboxed agent still reaches this machine. */
+    env: { ...viewerMcpServerEnv(), PROJECT_AUTH: "kept" },
     timeout: 12_345,
     alwaysLoad: true,
   });
@@ -277,7 +298,11 @@ test("Claude native MCP config merges project scope between user and local scope
 
   /* The launch directory's local definition wins over both. */
   expect(mcpConfig.mcpServers).toEqual({
-    viewer: { type: "stdio", command: "local-version", env: { LOCAL_AUTH: "kept" } },
+    viewer: {
+      type: "stdio",
+      command: "local-version",
+      env: { ...viewerMcpServerEnv(), LOCAL_AUTH: "kept" },
+    },
   });
   expect(mcpConfig.mcpServers).not.toHaveProperty("project-unrelated");
   expect(settings.enabledMcpjsonServers).toEqual(["viewer"]);
@@ -369,4 +394,106 @@ test("managed Claude launch state accepts bypass mode and trusts the exact spawn
 test("Codex spawn prompts carry the Viewer lineage fence", () => {
   expect(fenceViewerSpawnPrompt("codex", "Implement the change")).toBe(`Implement the change\n\n${VIEWER_SPAWN_PROMPT_FENCE}`);
   expect(fenceViewerSpawnPrompt("claude", "Implement the change")).toBe("Implement the change");
+});
+
+test("over HTTP, the Claude spawn config points the Viewer server at the shared endpoint and stores no capability", () => {
+  const accountHome = home();
+  fs.writeFileSync(path.join(accountHome, ".claude.json"), JSON.stringify({
+    mcpServers: { viewer: { type: "stdio", command: "viewer-mcp", args: ["--viewer"] } },
+  }));
+  const previous = { transport: process.env.LLV_MCP_TRANSPORT, capability: process.env.LLV_SPAWN_CAPABILITY };
+  process.env.LLV_MCP_TRANSPORT = "http";
+  process.env.LLV_SPAWN_CAPABILITY = "c".repeat(43);
+  try {
+    const installed = applyClaudeSpawnPolicy(accountHome, { profileId: "http-mcp", cwd: "/repo", viewerTransport: "http" });
+    const written = fs.readFileSync(installed.mcpConfigPath, "utf8");
+    /* The registered stdio launcher is replaced whole, never merged into: a
+       `command` beside a `url` is not a server Claude can start. */
+    expect(JSON.parse(written).mcpServers).toEqual({
+      viewer: {
+        type: "http",
+        url: "http://127.0.0.1:8898/api/mcp",
+        headers: { "x-llv-spawn-capability": "${LLV_SPAWN_CAPABILITY}" },
+      },
+    });
+    /* Claude expands the reference from the agent's own environment, so a
+       relaunch that rotates the capability needs no rewrite and the file holds
+       no secret. It is still written owner-only like every spawn config. */
+    expect(written).not.toContain("c".repeat(43));
+    expect(fs.statSync(installed.mcpConfigPath).mode & 0o777).toBe(0o600);
+  } finally {
+    for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_SPAWN_CAPABILITY", previous.capability]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test("the Viewer MCP transport flag defaults to stdio and the endpoint URL to the stable loopback listener", () => {
+  expect(viewerMcpTransport({})).toBe("stdio");
+  expect(viewerMcpTransport({ LLV_MCP_TRANSPORT: "HTTP" })).toBe("http");
+  expect(viewerMcpTransport({ LLV_MCP_TRANSPORT: "sse" })).toBe("stdio");
+  expect(viewerMcpHttpUrl({})).toBe("http://127.0.0.1:8898/api/mcp");
+  expect(viewerMcpHttpUrl({ LLV_VIEWER_PORT: "9100" })).toBe("http://127.0.0.1:9100/api/mcp");
+  expect(viewerMcpHttpUrl({ LLV_MCP_HTTP_URL: "http://127.0.0.1:41234/api/mcp" })).toBe("http://127.0.0.1:41234/api/mcp");
+  /* Only a loopback http URL is taken; anything else falls back rather than
+     sending an agent's capability off the machine. */
+  expect(viewerMcpHttpUrl({ LLV_MCP_HTTP_URL: "http://example.com:80/api/mcp" })).toBe("http://127.0.0.1:8898/api/mcp");
+  expect(viewerMcpHttpUrl({ LLV_MCP_HTTP_URL: "https://127.0.0.1:443/api/mcp" })).toBe("http://127.0.0.1:8898/api/mcp");
+});
+
+test("a launch goes over HTTP only with the flag, a capability of its own, and a way through the access gate", () => {
+  const capability = { LLV_SPAWN_CAPABILITY: "c".repeat(43) };
+  const flag = { LLV_MCP_TRANSPORT: "http" };
+  expect(viewerMcpTransportForLaunch(capability, flag)).toBe("http");
+  /* No capability: the endpoint could name nobody, so the stdio launcher stays. */
+  expect(viewerMcpTransportForLaunch({}, flag)).toBe("stdio");
+  expect(viewerMcpTransportForLaunch({ LLV_SPAWN_CAPABILITY: "short" }, flag)).toBe("stdio");
+  expect(viewerMcpTransportForLaunch(capability, {})).toBe("stdio");
+  /* Omitted, applyClaudeSpawnPolicy writes stdio: a caller must assert HTTP. */
+  const accountHome = home();
+  const written = applyClaudeSpawnPolicy(accountHome, { profileId: "default-transport", cwd: "/repo" });
+  expect((JSON.parse(fs.readFileSync(written.mcpConfigPath, "utf8")) as { mcpServers: { viewer: { type: string } } }).mcpServers.viewer.type).toBe("stdio");
+
+  /* With LLV_TOKEN configured an agent can pass the Viewer's gate only through
+     the stable local entry, and only while the gateway trusts that entry. */
+  const previousState = process.env.LLV_STATE_DIR;
+  const state = home();
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const gated = { ...flag, LLV_TOKEN: "operator-key" };
+    expect(viewerMcpTransportForLaunch(capability, gated)).toBe("stdio");
+    fs.writeFileSync(path.join(state, "viewer-gateway.json"), JSON.stringify({ localEntry: "authenticated" }));
+    expect(viewerMcpTransportForLaunch(capability, gated)).toBe("stdio");
+    fs.writeFileSync(path.join(state, "viewer-gateway.json"), JSON.stringify({ remoteEntryPort: 8897, localEntry: "trusted" }));
+    expect(viewerMcpTransportForLaunch(capability, gated)).toBe("http");
+    /* A URL that bypasses the stable entry gets no key supplied on its way in. */
+    expect(viewerMcpTransportForLaunch(capability, { ...gated, LLV_MCP_HTTP_URL: "http://127.0.0.1:41234/api/mcp" })).toBe("stdio");
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
+test("a key the Viewer puts in place at runtime (phone access) moves the next launch back to stdio unless the local entry is trusted", () => {
+  const capability = { LLV_SPAWN_CAPABILITY: "c".repeat(43) };
+  const previous = { transport: process.env.LLV_MCP_TRANSPORT, token: process.env.LLV_TOKEN, state: process.env.LLV_STATE_DIR };
+  const state = home();
+  process.env.LLV_STATE_DIR = state;
+  process.env.LLV_MCP_TRANSPORT = "http";
+  delete process.env.LLV_TOKEN;
+  try {
+    expect(viewerMcpTransportForLaunch(capability)).toBe("http");
+    /* Phone access sets LLV_TOKEN on the running Viewer's own environment,
+       which is what each launch reads. */
+    process.env.LLV_TOKEN = "key-file-key";
+    expect(viewerMcpTransportForLaunch(capability)).toBe("stdio");
+    fs.writeFileSync(path.join(state, "viewer-gateway.json"), JSON.stringify({ localEntry: "trusted" }));
+    expect(viewerMcpTransportForLaunch(capability)).toBe("http");
+  } finally {
+    for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_TOKEN", previous.token], ["LLV_STATE_DIR", previous.state]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });

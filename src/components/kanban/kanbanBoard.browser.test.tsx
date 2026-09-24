@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type LaunchOptions, type Page } from "playwright-core";
 
+import { translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
+import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
@@ -47,7 +50,8 @@ describe("#1695 K1+K2 kanban board", () => {
    *
    * What only a browser settles, and is gated here:
    *   - the layout mode follows the board's width, and its column widths are the
-   *     prototype's (264 px shelves wide, 220 px narrow, a 280/480 px scroller,
+   *     prototype's (equal shelves of at least 264 px wide, balanced on large
+   *     screens, 220 px narrow, a 280/480 px scroller,
    *     one tabbed column below 768 px); 640–767 px is the desktop board;
    *   - every task is on the board or counted off it, per column;
    *   - a status move lands in the new column on the click, a refused one comes
@@ -137,7 +141,7 @@ describe("#1695 K1+K2 kanban board", () => {
       } : null,
       hiddenCount: board.querySelector("[data-hidden-pill] .count")?.textContent ?? null,
       cards: board.querySelectorAll(".card[data-id]").length,
-      pipelineSections: board.querySelectorAll(".stage-section").length,
+      pipelineSections: board.querySelectorAll(".pblock").length,
     };
   }, root);
 
@@ -146,7 +150,9 @@ describe("#1695 K1+K2 kanban board", () => {
     if (geometry.mode !== expectedMode) failures.push(`${label}: mode ${geometry.mode} at board width ${geometry.boardWidth}, expected ${expectedMode}`);
     const shelves = geometry.columns.filter((column) => column.status !== "assigned" && column.visible);
     const assigned = geometry.columns.find((column) => column.status === "assigned")!;
-    if (expectedMode === "wide" && shelves.some((column) => Math.abs(column.width - 264) > 1)) failures.push(`${label}: wide shelves ${shelves.map((c) => c.width)} != 264`);
+    /* Wide shelves are balanced on large screens: equal, never under the
+       prototype's 264 px, with Assigned kept at its 520 px floor or more. */
+    if (expectedMode === "wide" && (shelves.some((column) => column.width < 263.5) || Math.max(...shelves.map((c) => c.width)) - Math.min(...shelves.map((c) => c.width)) > 1 || assigned.width < 519.5)) failures.push(`${label}: wide shelves ${shelves.map((c) => c.width)}, Assigned ${assigned.width}`);
     if (expectedMode === "narrow" && shelves.some((column) => Math.abs(column.width - 220) > 1)) failures.push(`${label}: narrow shelves ${shelves.map((c) => c.width)} != 220`);
     if (expectedMode === "scroll") {
       if (shelves.some((column) => Math.abs(column.width - 280) > 1)) failures.push(`${label}: scroller shelves ${shelves.map((c) => c.width)} != 280`);
@@ -205,7 +211,8 @@ describe("#1695 K1+K2 kanban board", () => {
               const other = prototype!.columns.find((entry) => entry.status === column.status);
               return { status: column.status, production: column.width, prototype: other?.width ?? null, delta: other ? column.width - other.width : null };
             }) : null;
-            if (prototype && production.mode === prototype.mode && (production.mode === "wide" || production.mode === "narrow")) {
+            /* The wide grid no longer caps its shelves at the prototype's 264 px, so only narrow compares. */
+            if (prototype && production.mode === prototype.mode && production.mode === "narrow") {
               for (const delta of deltas!) if (delta.delta !== null && Math.abs(delta.delta) > 2) failures.push(`${label}: ${delta.status} is ${delta.production}px, prototype ${delta.prototype}px`);
             }
             frames.push({ key: label, viewport, production, prototype, deltas, pageErrors });
@@ -502,8 +509,8 @@ describe("#1695 K3 conversations inside cards", () => {
    * the production ones.
    *
    * Gated here, because only a laid-out page settles it:
-   *   - the seat is centred, at most 1040 px wide, at the agreed default height
-   *     clamp(160px, 30vh, 360px) with at least two transcript rows and a
+   *   - the seat is centred, at most 1040 px wide, at the default height
+   *     75dvh with at least two transcript rows and a
    *     composer of at least 60 px, collapsed in a window under 800 px tall, the
    *     side dock stays closed, and every conversation on the page, the
    *     orchestrator included, has at most one composer;
@@ -677,7 +684,7 @@ describe("#1695 K3 conversations inside cards", () => {
             await boardReady(page);
             const seat = await seatGeometry(page);
             const shortWindow = viewport.height < 800;
-            const expected = Math.min(360, Math.max(160, Math.round(viewport.height * 0.3)));
+            const expected = Math.round(viewport.height * 0.75);
             if (!seat.present) failures.push(`${label}: no seat`);
             if (seat.collapsed !== shortWindow) failures.push(`${label}: seat collapsed=${seat.collapsed} in a ${viewport.height} px window`);
             if (!seat.collapsed && Math.abs(seat.height - expected) > 2) failures.push(`${label}: seat ${seat.height}px tall, default ${expected}px`);
@@ -709,7 +716,9 @@ describe("#1695 K3 conversations inside cards", () => {
               if (readers.readers.filter((reader) => reader.folded).length !== 1) failures.push(`${label}: expected one folded reader`);
               const mode = kanbanLayoutMode(seat.boardWidth);
               const blocked = readers.columns.blocked ?? 0;
-              if ((mode === "wide" || mode === "narrow") && (blocked < 420 || blocked > 460 || !readers.reading)) failures.push(`${label}: Blocked holding a reader is ${blocked}px (reading=${readers.reading})`);
+              /* Reading width: 420–460 px, or a balanced shelf's width where that is wider. */
+              const ceiling = Math.max(460, readers.columns.done ?? 0);
+              if ((mode === "wide" || mode === "narrow") && (blocked < 420 || blocked > ceiling + 1 || !readers.reading)) failures.push(`${label}: Blocked holding a reader is ${blocked}px (reading=${readers.reading})`);
               if (mode === "scroll" && Math.abs(blocked - 460) > 1) failures.push(`${label}: scroller Blocked holding a reader is ${blocked}px`);
               await page.screenshot({ path: path.join(OUT, `readers-${label}.png`) });
               await prototypeShot("readers=c-export-1,c-links-1:c,c-auth-1&scrollto=t-export", { width: seat.boardWidth, height: viewport.height }, scheme, `prototype-readers-${label}.png`);
@@ -1864,7 +1873,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
     const shot = (page: Page, side: string, id: string, scheme: Scheme) => page.screenshot({ path: path.join(OUT, `${side}-k5a-${id}-${scheme}.png`) });
 
     const openGraph = async (page: Page, id: string) => {
-      const section = `${card(id)} .stage-section`;
+      const section = `${card(id)} .pblock`;
       await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "start" }));
       if (await page.evaluate((selector) => document.querySelector(`${selector} [data-graph-toggle]`)?.getAttribute("aria-pressed") !== "true", section)) {
         await page.click(`${section} [data-graph-toggle]`);
@@ -1876,19 +1885,25 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
     try {
       for (const scheme of ["light", "dark"] as const) {
         await production(scheme, `retry graph ${scheme}`, async (page) => {
-          /* Binding correction 4: every card starts on the compact summary. */
-          await page.locator(`${card("t-search")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          /* Binding correction 4: every card starts on the summary. The lane
+             row (#2072) draws the summary as its chain of pills with no graph
+             slot, and its toggle puts the graph in the chain's place. */
+          await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.waitForTimeout(300);
-          const fresh = await page.evaluate((selector) => ({
-            compact: document.querySelector(`${selector} .stage-section`)?.classList.contains("compact") ?? null,
-            nodes: document.querySelectorAll(`${selector} .pnode`).length,
-            pressed: document.querySelector(`${selector} [data-graph-toggle]`)?.getAttribute("aria-pressed") ?? null,
-            chips: document.querySelectorAll(`${selector} .psummary .pchip`).length,
-          }), card("t-search"));
+          const view = (selector: string) => page.evaluate((scope) => ({
+            chain: document.querySelectorAll(`${scope} .pblock .pb-chain`).length,
+            graphs: document.querySelectorAll(`${scope} .pblock .pb-graph`).length,
+            nodes: document.querySelectorAll(`${scope} .pnode`).length,
+            pressed: document.querySelector(`${scope} [data-graph-toggle]`)?.getAttribute("aria-pressed") ?? null,
+            chips: document.querySelectorAll(`${scope} .pb-chain .pb-pills .pb-pill`).length,
+          }), selector);
+          const fresh = await view(card("t-search"));
           await shot(page, "production", "summary-default", scheme);
-          if (!fresh.compact || fresh.nodes !== 0 || fresh.pressed !== "false" || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
+          if (fresh.chain !== 1 || fresh.graphs !== 0 || fresh.nodes !== 0 || fresh.pressed !== "false" || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
           frames[`summary-default-${scheme}`] = { production: fresh };
           await openGraph(page, "t-search");
+          const opened = await view(card("t-search"));
+          if (opened.chain !== 0 || opened.graphs !== 1 || opened.pressed !== "true") failures.push(`retry card graph ${scheme}: the graph did not take the summary's place ${JSON.stringify(opened)}`);
           const graph = await measureGraph(page, card("t-search"));
           await shot(page, "production", "graph-branch-retry", scheme);
           frames[`graph-branch-retry-${scheme}`] = { production: graph };
@@ -1907,9 +1922,14 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           if (!fail?.dashed || !/\bback\b/.test(fail.classes) || !/\btaken\b/.test(fail.classes)) failures.push(`retry graph ${scheme}: fail edge ${JSON.stringify(fail)}`);
           if (graph.edges.filter((edge) => !edge.dashed).length !== 3) failures.push(`retry graph ${scheme}: pass edges ${JSON.stringify(graph.edges)}`);
           if (!graph.labels.includes("fail · retry 1 of 2")) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
+          /* The same toggle brings the summary back, all four stages with it. */
+          await page.click(`${card("t-search")} .pblock [data-graph-toggle]`);
+          await page.waitForSelector(`${card("t-search")} .pblock .pb-chain`, { timeout: 5_000 });
+          const back = await view(card("t-search"));
+          if (back.chain !== 1 || back.graphs !== 0 || back.nodes !== 0 || back.pressed !== "false" || back.chips !== 4) failures.push(`retry card summary again ${scheme}: ${JSON.stringify(back)}`);
         });
         await prototype("scrollto=t-search", scheme, `prototype retry graph ${scheme}`, async (page) => {
-          await page.locator(`${protoCard("t-search")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.locator(`${protoCard("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.waitForTimeout(300);
           const graph = await measureGraph(page, protoCard("t-search"));
           await shot(page, "prototype", "graph-branch-retry", scheme);
@@ -1919,7 +1939,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "two-stage graph", async (page) => {
         await openGraph(page, "t-links");
-        await page.locator(`${card("t-links")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.locator(`${card("t-links")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.waitForTimeout(250);
         const graph = await measureGraph(page, card("t-links"));
         await shot(page, "production", "graph-two-stage", "light");
@@ -1927,7 +1947,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         if (graph?.dir !== "LR" || graph.nodes.some((node) => node.width !== 176 || node.height !== 76)) failures.push(`two-stage graph: ${JSON.stringify(graph)}`);
       }, WIDE);
       await prototype("scrollto=t-links", "light", "prototype two-stage graph", async (page) => {
-        await page.locator(`${protoCard("t-links")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.locator(`${protoCard("t-links")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.waitForTimeout(300);
         Object.assign(frames["graph-two-stage"] as object, { prototype: await measureGraph(page, protoCard("t-links")) });
         await shot(page, "prototype", "graph-two-stage", "light");
@@ -1935,7 +1955,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "five review rounds", async (page) => {
         await openGraph(page, "t-rounds");
-        await page.locator(`${card("t-rounds")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.locator(`${card("t-rounds")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.waitForTimeout(250);
         const review = await page.evaluate((selector) => {
           const node = document.querySelector<HTMLElement>(`${selector} .pnode[data-stage="review"]`);
@@ -1985,18 +2005,18 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
       });
 
       await production("light", "toggle and node", async (page) => {
-        const section = `${card("t-search")} .stage-section`;
+        const section = `${card("t-search")} .pblock`;
         await openGraph(page, "t-search");
         await page.click(`${section} .pnode[data-stage="implement"]`);
         await page.waitForSelector(`${card("t-search")} [data-kanban-reader]`, { timeout: 10_000 });
         await page.waitForTimeout(300);
         const node = await page.evaluate((selector) => ({
           pressed: document.querySelector(`${selector} .pnode[data-stage="implement"]`)?.getAttribute("aria-pressed"),
-          reader: document.querySelector<HTMLElement>(`${selector.replace(" .stage-section", "")} [data-kanban-reader]`)?.dataset.kanbanReader ?? null,
+          reader: document.querySelector<HTMLElement>(`${selector.replace(" .pblock", "")} [data-kanban-reader]`)?.dataset.kanbanReader ?? null,
         }), section);
         await shot(page, "production", "node-reader", "light");
         await page.click(`${section} [data-graph-toggle]`);
-        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pchip`).length }), section);
+        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pb-pill`).length }), section);
         /* The historical helper was adopted last; the node opens and marks Implement's own latest attempt. */
         if (node.pressed !== "true" || node.reader !== "conversation_search-impl-2") failures.push(`node: ${JSON.stringify(node)}`);
         if (summary.nodes !== 0 || summary.chips !== 4) failures.push(`toggle back: ${JSON.stringify(summary)}`);
@@ -2005,7 +2025,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "live edge", async (page) => {
         type Hook = { evidence: { addStageAttempt: (pipelineId: string, stageId: string, over: Record<string, unknown>) => void } };
-        const section = `${card("t-search")} .stage-section`;
+        const section = `${card("t-search")} .pblock`;
         await openGraph(page, "t-search");
         const before = await page.evaluate((selector) => document.querySelectorAll(`${selector} .pedge.live`).length, section);
         /* A helper adopted with the fail edge's provenance copied: nothing travelled that edge. */
@@ -2221,7 +2241,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     };
     const shot = (page: Page, side: string, id: string, scheme: Scheme) => page.screenshot({ path: path.join(OUT, `${side}-k5b-${id}-${scheme}.png`) });
     const openStages = async (page: Page, taskId: string) => {
-      await page.locator(`${card(taskId)} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await page.locator(`${card(taskId)} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
       await page.click(`${card(taskId)} [data-open-stages]`);
       await page.waitForSelector(".gsheet .pane[data-stage]", { timeout: 10_000 });
       await page.waitForTimeout(500);
@@ -2278,9 +2298,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "stage details and save", async (page) => {
-        const section = `${card("t-links")} .stage-section`;
+        const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${section} .psummary [data-stage="review"]`);
+        await page.click(`${section} .pb-pills [data-stage="review"]`);
         const panel = `${card("t-links")} [data-stage-detail]`;
         await page.waitForSelector(panel, { timeout: 5_000 });
         await page.locator(panel).evaluate((element) => element.scrollIntoView({ block: "center" }));
@@ -2330,9 +2350,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       }, "board");
 
       await production("light", "stage started during save", async (page) => {
-        const section = `${card("t-links")} .stage-section`;
+        const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${section} .psummary [data-stage="review"]`);
+        await page.click(`${section} .pb-pills [data-stage="review"]`);
         const panel = `${card("t-links")} [data-stage-detail]`;
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
@@ -2362,9 +2382,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "changed between read and write", async (page) => {
-        const section = `${card("t-links")} .stage-section`;
+        const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${section} .psummary [data-stage="review"]`);
+        await page.click(`${section} .pb-pills [data-stage="review"]`);
         const panel = `${card("t-links")} [data-stage-detail]`;
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
@@ -2414,7 +2434,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "pipeline actions", async (page) => {
-        const section = `${card("t-upload")} .stage-section`;
+        const section = `${card("t-upload")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} [data-pipeline-menu]`);
         await page.waitForTimeout(350);
@@ -2458,7 +2478,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "moved cursor", async (page) => {
-        const section = `${card("t-links")} .stage-section`;
+        const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the stage worktree has uncommitted changes" }; });
         await page.click(`${section} [data-pipeline-menu]`);
@@ -2481,9 +2501,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "persistent reader and keys", async (page) => {
-        const section = `${card("t-upload")} .stage-section`;
+        const section = `${card("t-upload")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${section} .psummary [data-stage="build-ui"]`);
+        await page.click(`${section} .pb-pills [data-stage="build-ui"]`);
         const reader = '[data-kanban-reader="conversation_upload-ui"]';
         await page.waitForSelector(`${card("t-upload")} ${reader} textarea`, { timeout: 10_000 });
         await page.fill(`${card("t-upload")} ${reader} textarea`, "Keep this draft while the stages open.");
@@ -2589,7 +2609,7 @@ describe("#1695 K6a account chips and pickers", () => {
    *   - a running stage conversation's chip and picker: its current account and
    *     stage setting, an account outside the project's accounts offered and
    *     recorded, the switch sent as the conversation header's `reconfigure`,
-   *     then "after this turn" with the target known to this page only (the
+   *     then "with the next message" with the target known to this page only (the
    *     fixture runs without a runtime plane, so no session reports it), every
    *     nothing resent while it waits, and "now runs on" only once the
    *     conversation runs on the target;
@@ -2700,8 +2720,8 @@ describe("#1695 K6a account chips and pickers", () => {
     const shot = (page: Page, side: string, id: string, scheme: Scheme) => page.screenshot({ path: path.join(OUT, `${side}-k6a-${id}-${scheme}.png`) });
     const hook = <T,>(page: Page, run: (evidence: Hook["evidence"]) => T) => page.evaluate(`(${run.toString()})(window.evidence)`) as Promise<T>;
     const openVerify = async (page: Page) => {
-      await page.locator(`${card("t-search")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-      await page.click(`${card("t-search")} .psummary [data-stage="verify"]`);
+      await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await page.click(`${card("t-search")} .pb-pills [data-stage="verify"]`);
       await page.waitForSelector(VERIFY_CHIP, { timeout: 10_000 });
       await page.waitForTimeout(300);
     };
@@ -2743,8 +2763,8 @@ describe("#1695 K6a account chips and pickers", () => {
       }
 
       await production("light", "stage picker", async (page) => {
-        await page.locator(`${card("t-links")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${card("t-links")} .psummary [data-stage="review"]`);
+        await page.locator(`${card("t-links")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.click(`${card("t-links")} .pb-pills [data-stage="review"]`);
         await page.waitForSelector(LINKS_REVIEW_CHIP, { timeout: 10_000 });
         await openPicker(page, LINKS_REVIEW_CHIP);
         const before = await measurePicker(page, LINKS_REVIEW_CHIP);
@@ -2806,8 +2826,8 @@ describe("#1695 K6a account chips and pickers", () => {
           await page.waitForTimeout(1_500);
           const committed = await page.evaluate((selector) => document.querySelector(selector)?.textContent?.trim() ?? "", VERIFY_CHIP);
           flows.conversationSwitch = { pending, requests, waiting, migrationRequests, changedRequests, changedChip, committed, receipts: await receipts(page) };
-          if (!pending || !pending.chip.pending || pending.chip.when !== "after this turn") failures.push(`pending switch: chip ${JSON.stringify(pending?.chip)}`);
-          if (JSON.stringify(pending?.now.at(-1)) !== JSON.stringify(["Pending", "Account G · waits for the current turn to end"])) failures.push(`pending switch: summary ${JSON.stringify(pending?.now)}`);
+          if (!pending || !pending.chip.pending || pending.chip.when !== "with the next message") failures.push(`pending switch: chip ${JSON.stringify(pending?.chip)}`);
+          if (JSON.stringify(pending?.now.at(-1)) !== JSON.stringify(["Pending", "Account G · moves with the next message"])) failures.push(`pending switch: summary ${JSON.stringify(pending?.now)}`);
           if (!pending?.cancel || pending.label !== "Change the pending account" || pending.rows.filter((row) => !row.disabled).length < 3) failures.push(`pending switch: Cancel and Change ${JSON.stringify({ cancel: pending?.cancel, label: pending?.label, rows: pending?.rows })}`);
           if (!pending?.notes.some((note) => note.startsWith("Known to this page only."))) failures.push(`pending switch: notes ${JSON.stringify(pending?.notes)}`);
           if (requests.length !== 1 || requests[0]?.action !== "reconfigure" || requests[0]?.accountId !== "account-g" || requests[0]?.conversationId !== "conversation_search-ver-2") failures.push(`pending switch: requests ${JSON.stringify(requests)}`);
@@ -2897,6 +2917,182 @@ describe("#1695 K6a account chips and pickers", () => {
     fs.writeFileSync(path.join(EVIDENCE, "k6.json"), `${JSON.stringify({ prototypeCompared: Boolean(PROTOTYPE), frames, comparison, flows, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
+});
+
+describe("#1846 one account pick, every surface in the same frame", () => {
+  /*
+   * Rendered evidence for the account pick's shared store (#1846, critique P1): the running verify
+   * conversation on a structured host (`&runtime=structured` answers one runtime session), so the reader's
+   * composer draws its runtime pill beside the board's account chip. A pick made in either one must show in
+   * the other in the frame of the click, before any answer or projection: the fixture's runtime snapshot
+   * never projects the pick, so whatever shows came from the page's own store.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#1846"
+   *
+   * Measurements go to `evidence/issue-1846/shared-pick.json`; frames to `.artifacts/issue-1846/`.
+   */
+  const OUT = path.resolve(".artifacts/issue-1846");
+  const EVIDENCE = path.resolve("evidence/issue-1846");
+  const READER = '[data-reader-path="/repo/search-ver-2.jsonl"]';
+  const CHIP = '[data-kanban-board] [data-account-trigger="conversation_search-ver-2"]';
+
+  /** Clicks inside the page and reads every surface one animation frame later. */
+  const clickAndRead = (page: Page, selector: string) => page.evaluate(async ([target, chip]) => {
+    const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    const element = document.querySelector<HTMLElement>(target);
+    if (!element) return { error: `no ${target}` };
+    const started = performance.now();
+    element.click();
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    return {
+      ms: Math.round((performance.now() - started) * 10) / 10,
+      chip: [...(document.querySelector(chip)?.querySelectorAll(".cur, .arrow, .to, .when") ?? [])].map(text).join(" "),
+      pillHead: text(document.querySelector("[data-runtime-popover-account]")),
+      pickerPending: text(document.querySelector(".popover.acct-pop [data-account-pending] .v")),
+    };
+  }, [selector, CHIP] as const);
+
+  /* The desktop board in English at the board's own width, and at 1280 px in Ukrainian, whose «з наступним
+     повідомленням» is the longer tail the chip has to hold (#1846 critique P3). */
+  const PASSES = [
+    { lang: "en", viewport: VIEWPORT },
+    { lang: "uk", viewport: VIEWPORT },
+    { lang: "en", viewport: { width: 1_280, height: 900 } },
+    { lang: "uk", viewport: { width: 1_280, height: 900 } },
+  ] as const;
+
+  /** A chip-sized cell: its text, its width, and whether it draws less than its text. */
+  const cellReading = (page: Page, selector: string) => page.evaluate((sel) => {
+    const element = document.querySelector<HTMLElement>(sel);
+    if (!element) return null;
+    const box = element.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const cut = [element, ...element.querySelectorAll<HTMLElement>("*")].some((node) => node.scrollWidth > node.clientWidth + 1);
+    return {
+      text: element.textContent?.replace(/\s+/g, " ").trim() ?? "",
+      width: Math.round(box.width * 10) / 10,
+      inView: box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth,
+      cut,
+    };
+  }, selector);
+
+  browserTest("#1846: a pick in the runtime pill shows on the board chip, and a pick on the board shows in the pill, in one frame", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const passes: Record<string, unknown>[] = [];
+    try {
+      for (const { lang, viewport } of PASSES) {
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string>) => translate(lang, key, vars);
+        /* Every surface names an account by the label its rows carry (#1846 critique P2). */
+        const runsOn = tr("mobile2.composer.accountRunsOn", { account: "Account A" });
+        const runsOnNext = tr("mobile2.composer.accountRunsOnNext", { account: "Account A", next: "Account C" });
+        const chipMoving = `Account A → Account C ${tr("kanban.account.whenNextMessage")}`;
+        const key = `${lang}-${viewport.width}`;
+        const fail = (label: string) => failures.push(`${key}: ${label}`);
+        const record: Record<string, unknown> = { lang, viewport };
+        passes.push(record);
+        const opened = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured`, viewport, "light", lang);
+        const { page } = opened;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.waitForTimeout(700);
+          await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.click(`${card("t-search")} .pb-pills [data-stage="verify"]`);
+          await page.waitForSelector(CHIP, { timeout: 10_000 });
+          await page.waitForSelector(`${READER} [data-runtime-pill]`, { state: "attached", timeout: 10_000 });
+          await page.waitForTimeout(500);
+          record.before = await page.evaluate((chip) => document.querySelector(chip)?.textContent?.replace(/\s+/g, " ").trim() ?? "", CHIP);
+
+          /* 1. The pill's Account panel picks Account C. */
+          await page.locator(`${READER} [data-runtime-pill]`).evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
+          await page.waitForSelector('[data-runtime-row="submenu"][data-runtime-value="account"]', { timeout: 5_000 });
+          await page.click('[data-runtime-row="submenu"][data-runtime-value="account"]');
+          await page.waitForSelector('[data-runtime-row="account"][data-runtime-value="account-account-c"]', { timeout: 5_000 });
+          const pillPick = await clickAndRead(page, '[data-runtime-row="account"][data-runtime-value="account-account-c"]');
+          record.pillPick = pillPick;
+          await page.waitForTimeout(200);
+          /* The popover closed with the pick: the pill it was made on carries it (critique P3), and the board chip
+             and the reader's account chip hold the longer tail whole. */
+          record.pillMark = await cellReading(page, `${READER} [data-runtime-pill-next-account]`);
+          record.boardChip = await cellReading(page, CHIP);
+          /* The reader's own header chip, in the board column that holds the reader: the narrow pane. The
+             conversation pane's «@ A → B» badge is not mounted here — a kanban reader replaces the pane's
+             header with this one — so the reading below also records that it is absent. */
+          record.readerChip = await cellReading(page, `${READER} [data-account-trigger]`);
+          record.readerWidth = await page.evaluate((reader) => Math.round((document.querySelector(reader)?.getBoundingClientRect().width ?? 0) * 10) / 10, READER);
+          record.paneBadges = await page.evaluate(() => document.querySelectorAll("[data-conversation-account-chip]").length);
+          await page.screenshot({ path: path.join(OUT, `${key}-pill-pick-chip.png`) });
+          if (!("chip" in pillPick) || pillPick.chip !== chipMoving) fail(`pill pick: chip ${JSON.stringify(pillPick)}`);
+          const pillMark = record.pillMark as Awaited<ReturnType<typeof cellReading>>;
+          if (pillMark?.text !== "→ Account C" || pillMark.cut) fail(`the pill's face carries the pick: ${JSON.stringify(pillMark)}`);
+          const boardChip = record.boardChip as Awaited<ReturnType<typeof cellReading>>;
+          if (boardChip?.cut !== false) fail(`the board chip holds its tail whole: ${JSON.stringify(boardChip)}`);
+          const readerChip = record.readerChip as Awaited<ReturnType<typeof cellReading>>;
+          if (!readerChip || readerChip.cut || !readerChip.text.includes("Account C")) fail(`the reader's header chip names the pick whole: ${JSON.stringify(readerChip)}`);
+
+          /* 2. The board picker, opened now, says the same thing. */
+          await page.click(CHIP);
+          await page.waitForSelector(".popover.acct-pop .acct-row", { timeout: 5_000 });
+          const picker = await page.evaluate(() => ({
+            pending: document.querySelector(".popover.acct-pop [data-account-pending] .v")?.textContent?.trim() ?? null,
+            source: document.querySelector(".popover.acct-pop [data-account-pending]")?.getAttribute("data-account-source") ?? null,
+            checked: [...document.querySelectorAll('.popover.acct-pop .acct-row[aria-checked="true"]')].map((row) => (row as HTMLElement).dataset.account),
+          }));
+          record.pickerAfterPillPick = picker;
+          await page.screenshot({ path: path.join(OUT, `${key}-pill-pick-picker.png`) });
+          if (picker.pending !== tr("kanban.account.pendingNextMessage", { target: "Account C" }) || picker.source !== "pick" || JSON.stringify(picker.checked) !== JSON.stringify(["account-c"])) fail(`board picker after the pill's pick: ${JSON.stringify(picker)}`);
+
+          /* 3. The board picker takes it back: the pill's line and its face follow in the same frame. */
+          const boardBack = await clickAndRead(page, '.popover.acct-pop [data-account-cancel]');
+          record.boardTakeBack = boardBack;
+          record.pillMarkAfterTakeBack = await cellReading(page, `${READER} [data-runtime-pill-next-account]`);
+          await page.locator(`${READER} [data-runtime-pill]`).evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-runtime-popover-account]", { timeout: 5_000 });
+          const pillAfterBack = await page.evaluate(() => document.querySelector("[data-runtime-popover-account]")?.textContent?.trim() ?? "");
+          record.pillAfterBoardTakeBack = pillAfterBack;
+          if (!("chip" in boardBack) || boardBack.chip !== "Account A" || pillAfterBack !== runsOn || record.pillMarkAfterTakeBack !== null) fail(`board take-back: ${JSON.stringify({ boardBack, pillAfterBack, mark: record.pillMarkAfterTakeBack })}`);
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(200);
+
+          /* 4. A pick in the board picker, then the pill's popover. */
+          await page.locator(`${READER} [data-runtime-pill]`).evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-runtime-popover-account]", { timeout: 5_000 });
+          const pillHeadBefore = await page.evaluate(() => document.querySelector("[data-runtime-popover-account]")?.textContent?.trim() ?? "");
+          await page.keyboard.press("Escape");
+          await page.click(CHIP);
+          await page.waitForSelector(".popover.acct-pop .acct-row", { timeout: 5_000 });
+          const boardPick = await clickAndRead(page, '.popover.acct-pop .acct-row[data-account="account-c"]');
+          record.boardPick = boardPick;
+          await page.locator(`${READER} [data-runtime-pill]`).evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-runtime-popover-account]", { timeout: 5_000 });
+          const pillHeadAfter = await page.evaluate(() => document.querySelector("[data-runtime-popover-account]")?.textContent?.trim() ?? "");
+          record.pillHead = { before: pillHeadBefore, after: pillHeadAfter };
+          await page.screenshot({ path: path.join(OUT, `${key}-board-pick-pill.png`) });
+          if (pillHeadBefore !== runsOn || pillHeadAfter !== runsOnNext) fail(`pill after the board's pick: ${JSON.stringify(record.pillHead)}`);
+          if (!("chip" in boardPick) || boardPick.chip !== chipMoving) fail(`board pick: chip ${JSON.stringify(boardPick)}`);
+
+          record.requests = await page.evaluate(() => {
+            const evidence = (window as unknown as { evidence: { pillRequests: Array<Record<string, unknown>>; accountRequests: Array<Record<string, unknown>>; migrationRequests: unknown[] } }).evidence;
+            return { pill: evidence.pillRequests.map((body) => body.accountId), board: evidence.accountRequests.map((body) => body.accountId), migrations: evidence.migrationRequests.length };
+          });
+          const requests = record.requests as { pill: unknown[]; board: unknown[]; migrations: number };
+          if (JSON.stringify(requests.pill) !== JSON.stringify(["account-c"]) || JSON.stringify(requests.board) !== JSON.stringify(["default", "account-c"]) || requests.migrations !== 0) fail(`requests: ${JSON.stringify(requests)}`);
+          if (opened.pageErrors.length) fail(`page errors ${opened.pageErrors.join(" | ")}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "shared-pick.json"), `${JSON.stringify({ passes, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 300_000);
 });
 
 describe("#1712 the window of a conversation no card holds", () => {
@@ -3339,12 +3535,12 @@ describe("#1765 pipelines named on the card", () => {
     const card = document.querySelector(selector);
     if (!card) return null;
     const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
-    const rows = [...card.querySelectorAll<HTMLElement>(".stage-section")].map((row) => ({
+    const rows = [...card.querySelectorAll<HTMLElement>(".pblock")].map((row) => ({
       pipeline: row.dataset.pipeline ?? "",
-      title: text(row.querySelector(".ptitle")),
-      hover: row.querySelector(".ptitle")?.getAttribute("title") ?? "",
+      title: text(row.querySelector(".pb-title")),
+      hover: row.querySelector(".pb-title")?.getAttribute("title") ?? "",
       state: text(row.querySelector(".pstate-chip")),
-      pills: [...row.querySelectorAll(".psummary .pname, .pnode .pname")].map((pill) => text(pill)),
+      pills: [...row.querySelectorAll(".pb-pills .pname, .pnode .pname")].map((pill) => text(pill)),
     }));
     const toggle = card.querySelector<HTMLElement>("[data-completed-toggle]");
     const folded = card.querySelector<HTMLElement>("[data-completed-pipelines]");
@@ -3482,6 +3678,299 @@ describe("#1765 pipelines named on the card", () => {
   }, 600_000);
 });
 
+describe("#1938 a spent review budget ends visibly on the card and the phone", () => {
+  /*
+   * Rendered evidence for #1938: the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=issue1938`, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 1938
+   *
+   * One task holds one lane whose critique failed on its only round, whose
+   * findings went to one more build, and whose build wrote a new head. At
+   * 1280 px the lane row's state word says needs review and its answer names
+   * the last verdict, the reviewed head and the unreviewed current head; the
+   * card never reads completed. At 390 px the phone queues the lane under
+   * Needs you as a pipeline card with a «needs review» badge and the heads line
+   * shortened to the unreviewed head (#2072 §3.4).
+   *
+   * Measurements go to `evidence/issue-1938/board.json`; frames to
+   * `.artifacts/issue-1938/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/issue-1938");
+  const EVIDENCE = path.resolve("evidence/issue-1938");
+  const CARD = '[data-kanban-board] .card[data-id="task:t-review-spent"]';
+  const HEADS = translate("en", "pipelineReview.heads", { verdict: "fail", reviewed: "4f1c2a9d", current: "9b2e7d4c" });
+  const STATE = en["pipelineState.needs_review"];
+
+  browserTest("#1938: the card and the phone name needs_review with the last verdict and both heads, never completed", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const base = `${server.base}?scenario=issue1938`;
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const opened = await openFixture(browser, base, { width: 1280, height: 900 }, scheme);
+        try {
+          await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
+          await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await opened.page.waitForTimeout(500);
+          const measured = await opened.page.evaluate((selector) => {
+            const card = document.querySelector(selector);
+            const row = card?.querySelector<HTMLElement>('.pblock[data-pipeline="p-review-spent"]');
+            const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
+            const chip = row?.querySelector<HTMLElement>(".pb-head .pstate-word");
+            const note = row?.querySelector<HTMLElement>("[data-review-heads]");
+            const title = row?.querySelector<HTMLElement>(".pb-title");
+            const box = (node: HTMLElement | null | undefined) => node ? (({ x, y, width, height }) => ({ x, y, width, height }))(node.getBoundingClientRect()) : null;
+            return {
+              drawn: Boolean(row),
+              state: chip?.dataset.pstate ?? null,
+              chip: text(chip),
+              note: text(note),
+              label: row?.getAttribute("aria-label") ?? "",
+              cardText: text(card),
+              chipBox: box(chip),
+              noteBox: box(note),
+              noteClipped: note ? note.scrollWidth > note.clientWidth : null,
+              titleClipped: title ? title.scrollWidth > title.clientWidth : null,
+            };
+          }, CARD);
+          await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `issue-1938-1280-${scheme}.png`) });
+          frames[`1280-${scheme}`] = measured;
+          if (!measured.drawn) failures.push(`1280 ${scheme}: the lane was not drawn on its card`);
+          if (measured.state !== "needs_review") failures.push(`1280 ${scheme}: the chip's state is ${measured.state}`);
+          if (measured.chip !== STATE) failures.push(`1280 ${scheme}: the chip reads ${JSON.stringify(measured.chip)}`);
+          if (measured.note !== HEADS) failures.push(`1280 ${scheme}: the note reads ${JSON.stringify(measured.note)}`);
+          if (!measured.label.includes(HEADS)) failures.push(`1280 ${scheme}: the row's label omits the heads: ${JSON.stringify(measured.label)}`);
+          if (!measured.noteBox?.width || measured.noteClipped) failures.push(`1280 ${scheme}: the heads line is not fully drawn: ${JSON.stringify(measured.noteBox)}`);
+          if (/completed/i.test(measured.cardText)) failures.push(`1280 ${scheme}: the card says completed`);
+          if (opened.pageErrors.length) failures.push(`1280 ${scheme}: page errors ${opened.pageErrors.join(" | ")}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+
+      const phone = await openFixture(browser, base, { width: 390, height: 844 }, "light");
+      try {
+        const ROW = '[data-mobile2-pipeline-row="p-review-spent"]';
+        await phone.page.waitForSelector(ROW, { state: "attached", timeout: 20_000 });
+        await phone.page.locator(ROW).first().evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await phone.page.waitForTimeout(500);
+        const measured = await phone.page.evaluate((selector) => {
+          const row = document.querySelector<HTMLElement>(selector);
+          const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
+          const meta = row?.querySelector<HTMLElement>("[data-pipeline-reason]");
+          return {
+            state: row?.dataset.mobile2State ?? null,
+            text: text(row),
+            meta: text(meta),
+            width: row?.getBoundingClientRect().width ?? null,
+            overflows: row ? row.scrollWidth > row.clientWidth : null,
+          };
+        }, ROW);
+        await phone.page.locator(ROW).first().screenshot({ path: path.join(OUT, "issue-1938-390.png") });
+        await phone.page.screenshot({ path: path.join(OUT, "issue-1938-390-board.png"), fullPage: true });
+        frames["390"] = measured;
+        if (measured.state !== "needs_review") failures.push(`390: the row's state is ${measured.state}`);
+        const SHORT = translate("en", "pipelineBlock.reason.review", { current: "9b2e7d4c" });
+        if (!measured.meta.startsWith(SHORT)) failures.push(`390: the card's reason omits the unreviewed head: ${JSON.stringify(measured.meta)}`);
+        if (!measured.text.includes(en["mobile2.pipelines.badgeReview"])) failures.push(`390: the row has no needs review badge: ${JSON.stringify(measured.text)}`);
+        if (measured.overflows) failures.push("390: the row overflows its width");
+        if (phone.pageErrors.length) failures.push(`390: page errors ${phone.pageErrors.join(" | ")}`);
+      } finally {
+        await phone.context.close();
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "board.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
+describe("#1865 stage conversations lead with the stage and its attempt", () => {
+  /*
+   * Rendered evidence for #1865: the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=issue1865`, with the production
+   * stylesheet, in Chromium, at 1440 and 1280, in English and Ukrainian, light
+   * and dark:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#1865"
+   *
+   * The seeded task carries the header lane the operator read: design → build
+   * → critique, where design and critique share the architect preset and
+   * critique ran twice. Three of its stage conversations are opened on the
+   * card — design, critique's latest attempt from the lane's row, and
+   * critique's first from Past attempts — and each reader header is gated: it
+   * leads with the stage's name, with the attempt once the stage ran twice
+   * (`Design`, `Critique · 1`, `Critique · 2`), the three are distinct, none
+   * names the preset, the preset is in the header's tooltip, and the label
+   * itself is drawn whole. The Stages sheet is then opened and its panes must
+   * name the same stages letter for letter.
+   *
+   * Measurements go to `evidence/issue-1865/board.json`; frames to
+   * `.artifacts/issue-1865/`, which is not committed.
+   */
+
+  const OUT = path.resolve(".artifacts/issue-1865");
+  const EVIDENCE = path.resolve("evidence/issue-1865");
+  const CARD = card("t-labels");
+  const TASK = "Build the board header lane";
+  const LABELS = ["Design", "Critique · 1", "Critique · 2"];
+
+  interface Header { text: string; hint: string; label: string; labelWhole: boolean; width: number; attempt: { text: string; muted: boolean; tabular: boolean } | null }
+  interface Tile { name: string; attempt: string; hint: string; nameWhole: boolean; attemptMuted: boolean }
+
+  /** Each reader header on the card, whether its leading stage label is painted
+      whole, and how its attempt suffix is set apart from the bold name. */
+  const measureHeaders = (page: Page) => page.evaluate(({ selector, labels }): Header[] => {
+    const cardEl = document.querySelector(selector);
+    return [...(cardEl?.querySelectorAll<HTMLElement>(".conv-head .ch-title") ?? [])].map((title) => {
+      const text = title.textContent ?? "";
+      const label = labels.filter((candidate) => text.startsWith(`${candidate} · `)).sort((a, b) => b.length - a.length)[0] ?? "";
+      const box = title.getBoundingClientRect();
+      const suffix = title.querySelector<HTMLElement>(".attempt");
+      /* The label ends where the attempt suffix ends, or with the name. */
+      let end: DOMRect | null = null;
+      if (suffix) end = suffix.getBoundingClientRect();
+      else if (label && title.firstChild?.nodeType === Node.TEXT_NODE) {
+        const range = document.createRange();
+        range.setStart(title.firstChild, 0);
+        range.setEnd(title.firstChild, label.length);
+        end = range.getBoundingClientRect();
+      }
+      const labelWhole = !!label && !!end && box.width > 0 && end.right <= box.right + 0.5;
+      const attempt = suffix ? (() => {
+        const style = getComputedStyle(suffix);
+        return { text: suffix.textContent ?? "", muted: style.color !== getComputedStyle(title).color, tabular: style.fontVariantNumeric.includes("tabular-nums") };
+      })() : null;
+      return { text, hint: title.getAttribute("title") ?? "", label, labelWhole, width: Math.round(box.width * 10) / 10, attempt };
+    });
+  }, { selector: CARD, labels: LABELS });
+
+  /** Each stage tile on the card: its name, its attempt suffix, and whether the
+      name is drawn whole. */
+  const measureTiles = (page: Page) => page.evaluate((selector): Tile[] => {
+    const cardEl = document.querySelector(selector);
+    return [...(cardEl?.querySelectorAll<HTMLElement>(".tile") ?? [])].map((tile) => {
+      const role = tile.querySelector<HTMLElement>(".role");
+      const suffix = tile.querySelector<HTMLElement>(".attempt");
+      return {
+        name: role?.textContent ?? "",
+        attempt: suffix?.textContent ?? "",
+        hint: role?.getAttribute("title") ?? "",
+        nameWhole: !!role && role.scrollWidth <= role.clientWidth + 0.5,
+        attemptMuted: !!suffix && !!role && getComputedStyle(suffix).color !== getComputedStyle(role).color,
+      };
+    });
+  }, CARD);
+
+  /** A pointer click at the centre of the first match: the board's chips and
+      Past attempts' buttons are real targets under the mouse. */
+  const clickAt = async (page: Page, selector: string) => {
+    const target = page.locator(selector).first();
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    if (!box) throw new Error(`nothing drawn at ${selector}`);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(350);
+  };
+
+  browserTest("#1865: each stage conversation on the card names its stage and attempt, as the stage list does", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const base = `${server.base}?scenario=issue1865`;
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          for (const width of [1440, 1280]) {
+            const label = `${width}-${lang}-${scheme}`;
+            const viewport = { width, height: 900 };
+            const opened = await openFixture(browser, base, viewport, scheme, lang);
+            const fail = (text: string) => failures.push(`${label}: ${text}`);
+            try {
+              await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
+              await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
+              await opened.page.waitForTimeout(500);
+              await clickAt(opened.page, `${CARD} .pb-pill[data-stage="design"]`);
+              await clickAt(opened.page, `${CARD} .pb-pill[data-stage="critique"]`);
+              /* Critique's first attempt opens from the card's Past attempts,
+                 which the card keeps folded. */
+              if (!(await opened.page.locator(`${CARD} details.history`).first().evaluate((element) => (element as HTMLDetailsElement).open))) {
+                await clickAt(opened.page, `${CARD} details.history > summary`);
+              }
+              const pastKey = await opened.page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(`${selector} details.history [data-past]`)]
+                .find((row) => /^Critique/.test(row.querySelector(".lbl")?.textContent ?? ""))?.dataset.past ?? null, CARD);
+              if (!pastKey) fail("Past attempts lists no earlier critique");
+              else await clickAt(opened.page, `${CARD} details.history [data-past=${JSON.stringify(pastKey)}] .hopen`);
+              const headers = await measureHeaders(opened.page);
+              await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
+              await opened.page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
+
+              const texts = headers.map((header) => header.text).sort();
+              const expected = LABELS.map((stage) => `${stage} · ${TASK}`).sort();
+              if (JSON.stringify(texts) !== JSON.stringify(expected)) fail(`reader headers ${JSON.stringify(texts)}, expected ${JSON.stringify(expected)}`);
+              const preset = translate(lang, "roleCopy.architect.name" as never);
+              for (const header of headers) {
+                if (header.text.includes(preset)) fail(`a header names the preset: ${JSON.stringify(header.text)}`);
+                if (!header.hint.includes(` · ${preset} · `)) fail(`the preset is missing from the tooltip: ${JSON.stringify(header.hint)}`);
+                if (!header.labelWhole) fail(`the stage label is cut: ${JSON.stringify(header)}`);
+              }
+              for (const header of headers.filter((entry) => entry.label.includes(" · "))) {
+                if (!header.attempt?.muted || !header.attempt.tabular) fail(`the attempt in ${JSON.stringify(header.label)} is not a muted tabular suffix: ${JSON.stringify(header.attempt)}`);
+              }
+              const critique2 = headers.find((header) => header.label === "Critique · 2");
+              const attemptOf = translate(lang, "kanban.stageAttemptOf" as never, { stage: "Critique", n: 2, total: 2 } as never);
+              if (!critique2?.hint.startsWith(attemptOf)) fail(`the latest critique's tooltip reads ${JSON.stringify(critique2?.hint)}`);
+
+              await clickAt(opened.page, `${CARD} [data-open-stages]`);
+              await opened.page.waitForSelector("[data-stages-sheet] .pane .pname", { timeout: 10_000 });
+              await opened.page.waitForTimeout(400);
+              const stageList = await opened.page.evaluate(() => [...document.querySelectorAll("[data-stages-sheet] .pane .pname")].map((name) => name.textContent ?? ""));
+              await opened.page.screenshot({ path: path.join(OUT, `sheet-${label}.png`) });
+              if (JSON.stringify(stageList) !== JSON.stringify(["1. Design", "2. Build", "3. Critique"])) fail(`the stage list reads ${JSON.stringify(stageList)}`);
+              for (const header of headers) {
+                const name = header.label.split(" · ")[0];
+                if (!stageList.some((entry) => entry.endsWith(`. ${name}`))) fail(`${JSON.stringify(header.label)} names no stage of the list`);
+              }
+              /* The member tiles the card draws for stage conversations, where
+                 it draws them: the same label, the suffix muted, the name whole. */
+              const tiles = await measureTiles(opened.page);
+              for (const tile of tiles.filter((entry) => entry.hint)) {
+                if (tile.hint.startsWith(tile.name) === false) fail(`a tile's tooltip does not lead with its stage: ${JSON.stringify(tile)}`);
+                if (!tile.nameWhole) fail(`a tile's stage name is cut: ${JSON.stringify(tile)}`);
+                if (tile.attempt && !tile.attemptMuted) fail(`a tile's attempt is not muted: ${JSON.stringify(tile)}`);
+              }
+              frames.push({ label, viewport, lang, scheme, headers, tiles, stageList });
+              if (opened.pageErrors.length) fail(`page errors ${opened.pageErrors.join(" | ")}`);
+            } catch (error) {
+              fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+            } finally {
+              await opened.context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "board.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
 describe("#1743 engine marks, effort scale and how often an edge fired", () => {
   /*
    * Rendered evidence for #1743, on the harness the #1695 cases already use: the
@@ -3525,8 +4014,8 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
   const OUT = path.resolve(".artifacts/issue-1743");
   const EVIDENCE = path.resolve("evidence/issue-1743");
   const CARD = card("t-marks");
-  const LOOPED = '.stage-section[data-pipeline="p-marks"]';
-  const SPENT = '.stage-section[data-pipeline="p-marks-spent"]';
+  const LOOPED = '.pblock[data-pipeline="p-marks"]';
+  const SPENT = '.pblock[data-pipeline="p-marks-spent"]';
 
   interface NodeMeasure {
     stage: string;
@@ -3683,7 +4172,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
     const scope = document.querySelector(selector);
     if (!scope) return null;
     return {
-      chips: [...scope.querySelectorAll<HTMLElement>(".psummary .pchip")].map((chip) => ({
+      chips: [...scope.querySelectorAll<HTMLElement>(".pb-pills .pb-pill")].map((chip) => ({
         stage: chip.dataset.stage ?? "",
         engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
         effortStep: chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
@@ -4504,6 +4993,63 @@ describe("#1796 per-model limits", () => {
   }, 90_000);
 });
 
+describe("#1839 a tier the provider files under a codename", () => {
+  browserTest("the provider's label names the row, on desktop and phone, and the codename never reaches the operator", async () => {
+    const out = path.resolve(".artifacts/issue-1839/browser");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=tier-codename",
+      values: "invented",
+    };
+    const readRows = (page: Page, selector: string) => page.locator(selector).evaluate((root) => ({
+      rows: [...root.querySelectorAll<HTMLElement>("[data-limit-row]")].map((row) => ({
+        key: row.dataset.limitRow, text: row.textContent?.replace(/\s+/g, " ").trim(),
+        width: Math.round(row.getBoundingClientRect().width),
+      })),
+      overflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+    }));
+    try {
+      for (const [name, viewport] of [["desktop", { width: 1440, height: 1000 }], ["phone", { width: 390, height: 844 }]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base + "?scenario=tier-codename", viewport, "light", "en");
+        try {
+          let selector: string;
+          if (name === "desktop") {
+            await page.waitForFunction(() => document.querySelector("[data-rail-footer]")?.textContent?.includes("Fable · Week"));
+            const footerText = await page.locator("[data-rail-footer]").innerText();
+            expect(footerText).toContain("Cedar Ember · Week");
+            expect(footerText).not.toContain("Nimbus");
+            evidence.footer = { text: footerText };
+            await page.screenshot({ path: path.join(out, "desktop-footer.png") });
+            await page.click('button[aria-label="Claude accounts — switch or add"]');
+            selector = '[role="dialog"][aria-label="Claude accounts"]';
+          } else {
+            await page.waitForSelector('[data-mobile2-screen="board"]');
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-go="accounts"]');
+            selector = '[data-mobile2-screen="accounts"]';
+          }
+          await page.waitForSelector(selector + ' [data-limit-row="tier:nimbus_quill"]');
+          const facts = await readRows(page, selector);
+          /* The row is still keyed by the bucket the window arrived in — that is
+             what the gate matches on — while what it reads is the label. */
+          expect(facts.rows.some((row) => row.key === "tier:nimbus_quill" && row.text?.includes("Fable · Week") && row.text.includes("12%"))).toBe(true);
+          expect(facts.rows.some((row) => row.key === "tier:cedar_ember" && row.text?.includes("Cedar Ember · Week") && row.text.includes("37%"))).toBe(true);
+          expect(facts.rows.every((row) => !row.text?.includes("nimbus"))).toBe(true);
+          expect(facts.overflow).toBe(0);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${name}-accounts.png`), fullPage: true });
+          evidence[name] = { viewport, ...facts, pageErrors };
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/issue-1839", { recursive: true });
+      fs.writeFileSync("evidence/issue-1839/limits.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
+
 describe("#1819 putting the whole project sidebar away, and the header that stays", () => {
   /*
    * Rendered evidence for the operator's correction before a stream (#1819),
@@ -4654,694 +5200,2350 @@ describe("#1819 putting the whole project sidebar away, and the header that stay
   }, 300_000);
 });
 
-describe("#1798 a fail edge is a return arc under the collapsed row", () => {
+/* #1798's return arc under the collapsed row is gone from the card: variant B
+   (#2072) puts a fired fail edge on the failing pill as "↺1/2", and the arc is
+   drawn only by the graph. The rendered record of the arc stays in
+   `evidence/issue-1798/`; the suffix is gated by `PipelineBlock.dom.test.tsx`
+   and the "#2072 one pipeline block" case below. */
+
+describe("#1836 where the view was just taken", () => {
   /*
-   * Rendered evidence for #1798, on the harness every kanban case uses: the real
-   * Viewer over `issue1695Evidence.fixture.tsx?scenario=issue1798`, with the
-   * production stylesheet, in Chromium.
+   * Rendered evidence for the arrival (#1836), in the real Viewer over
+   * `issue1695Evidence.fixture.tsx`, against the production stylesheet, in
+   * Chromium — desktop and 390x844, light and dark, both motion preferences.
    *
-   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
-   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx
-   *
-   * One task carries the lanes the arc has to tell apart: a fail edge at rest,
-   * one that fired once and is carrying the work back right now, one whose
-   * budget is spent with the last return still in flight, one the spent budget
-   * already stopped, and a lane with two fail edges into the same stage. A
-   * sixth lane has four stages, the length a real lane usually has, and wraps
-   * in every column this board has — which is what puts the pill suffix, not
-   * the arc, on most of the rows an operator sees.
+   * The arrival is DRIVEN, not imitated: the page runs the real focus
+   * transaction, asks the board's own index what it drew the anchor as, and
+   * hands that to the real `startArrivalPulse` — the same three calls
+   * `AttentionHost` makes. A driver that set the attribute itself would
+   * photograph the stylesheet and prove nothing about what gets marked.
    *
    * What only a browser settles, and is gated here:
-   *   - the collapsed row holds stage pills and nothing else — the fail-edge
-   *     chip is gone from it, at every width;
-   *   - an arc is drawn entirely BELOW the line the pills sit on, so it crosses
-   *     no pill, and stays inside the card, so it touches no card edge;
-   *   - the row reserves the arcs' depth, so nothing the arc paints lands on the
-   *     line under the row — and a lane with no fail edge reserves nothing;
-   *   - at rest the arc prints no count and keeps the sentence in its title;
-   *     once fired it prints `n/max` and takes the warning colour; a spent
-   *     budget takes the danger colour, which is a different colour, not a
-   *     lighter one;
-   *   - two edges into one target hang at two different depths, their curves
-   *     never cross, and their two tips keep clear air between them;
-   *   - the sentence is reachable: every point sampled along a drawn arc, and
-   *     every point 4 px beside it, opens that arc's own explanation — at rest
-   *     the sentence is the only place the budget lives;
-   *   - a lane that parked on a spent edge does not say what a lane still
-   *     running says;
-   *   - the counter's halo is cut out of the ground the section paints, and is
-   *     wide enough to be air: 2 px of ground on both sides of the digits
-   *     against the thickest stroke any state draws, and no gap between two
-   *     digits that the halo cannot close from both sides;
-   *   - the dashes of a live arc travel towards its own arrowhead, and a solid
-   *     piece under them keeps the head met by ink at every phase;
-   *   - a lane whose edges all rest reserves no room for a counter it has not;
-   *   - a row that wrapped drops the arcs altogether and puts the same count on
-   *     the failing stage's own pill, only once the edge has fired, and marks a
-   *     return still in flight apart from one that is over.
+   *   - the mark paints a ring the card does not otherwise carry, so the
+   *     landed card is findable at a glance beside its neighbours;
+   *   - it is a blink (a running animation) by default and a STEADY highlight
+   *     of the same strength under reduced motion, never nothing;
+   *   - it moves NOTHING: the landed element and its neighbour occupy exactly
+   *     the same boxes while it plays;
+   *   - it takes itself off, leaving the card exactly as it was;
+   *   - a conversation no card holds is landed in its own reader pane, and
+   *     that pane is what lights up.
    *
-   * The phone (390 px) is recorded rather than gated: under 640 px the Viewer
-   * hands the whole board to the mobile shell, so the collapsed kanban row has
-   * no phone surface at all. The wrapped row is therefore a desktop rendering
-   * — and not only a narrow one: a four-stage lane wraps in a 1680 px board's
-   * columns too, so the suffix is gated at every width here and the arcs are
-   * what the short lanes draw.
+   * 390x844 is the phone, and the phone is recorded rather than gated for the
+   * handoff itself: mobile is chat-only by design — it withholds its device id
+   * and never follows a handoff (`src/lib/attention/service.ts`) — so what is
+   * measured there is the decoration the operator would see, on the surface
+   * that width actually draws.
    *
-   * Measurements go to `evidence/issue-1798/arcs.json`; frames to
-   * `.artifacts/issue-1798/`, which is not committed.
+   * The scheme's own surfaces (an absolutely positioned node and task band)
+   * are not drawn by this fixture; their geometry is settled in the board
+   * geometry driver, `scripts/capture-board-geometry.ts`, and their positioning
+   * contract in `arrivalPulse.dom.test.tsx`.
+   *
+   * Geometry goes to `evidence/issue-1836/arrival-pulse.json`; frames to
+   * `.artifacts/issue-1836/`, which is not committed.
+   */
+  type PulseEvidence = {
+    focus: {
+      bus: { board(): { index: { pulseSelectorFor?(key: string): string | null } } | null };
+      runFocusTransaction(request: unknown, bus: unknown, options: unknown): Promise<{ resolution: string; moved: boolean }>;
+      startArrivalPulse(selectors: Array<string | null>, options?: { durationMs?: number }): { cancel(): void };
+      cancelArrivalPulse(): void;
+    };
+  };
+
+  /** One arrival, exactly as the host performs it: the transaction, the board's
+      own answer for what it drew, and the mark. Returns what the page can only
+      say from inside itself — the boxes and the paint, before, during, after. */
+  const arrive = (page: Page, path: string, intent: "show" | "open", neighbour: string | null) => page.evaluate(async ([target, wanted, near]) => {
+    const { bus, runFocusTransaction, startArrivalPulse } = (window as unknown as { evidence: PulseEvidence }).evidence.focus;
+    const box = (element: Element | null) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    const paint = (element: Element | null) => {
+      if (!element) return null;
+      const style = getComputedStyle(element);
+      return { animation: style.animationName, duration: style.animationDuration, shadow: style.boxShadow, position: style.position };
+    };
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const result = await runFocusTransaction({
+      id: `attention_pulse_${wanted}`,
+      target: { kind: "conversation", path: target },
+      frameAtCreation: { project: "atlas", rect: { x: 0, y: 0, w: 0, h: 0 }, boardRevision: null },
+      intent: wanted,
+      zoom: "inspect",
+    }, bus, { timeoutMs: 8_000 });
+    await wait(400);
+
+    const selector = bus.board()?.index.pulseSelectorFor?.(target) ?? null;
+    const landed = selector ? document.querySelector(selector) : null;
+    const other = near ? document.querySelector(near) : null;
+    const before = { landed: box(landed), neighbour: box(other), paint: paint(landed) };
+    startArrivalPulse([selector]);
+    /* Past the card's own box-shadow transition, so what is measured and
+       photographed is the pulse rather than the way into it. */
+    await wait(300);
+    const during = { landed: box(landed), neighbour: box(other), paint: paint(landed), mark: landed?.getAttribute("data-attention-pulse") ?? null };
+    return { resolution: result.resolution, selector, before, during };
+  }, [path, intent, neighbour] as const);
+
+  /** The mark comes off, and the page says what it left behind. */
+  const settlePulse = (page: Page, selector: string | null, neighbour: string | null) => page.evaluate(async ([sel, near]) => {
+    const { cancelArrivalPulse } = (window as unknown as { evidence: PulseEvidence }).evidence.focus;
+    cancelArrivalPulse();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const landed = sel ? document.querySelector(sel) : null;
+    const other = near ? document.querySelector(near) : null;
+    const box = (element: Element | null) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    const style = landed ? getComputedStyle(landed) : null;
+    return {
+      landed: box(landed),
+      neighbour: box(other),
+      paint: style ? { animation: style.animationName, duration: style.animationDuration, shadow: style.boxShadow, position: style.position } : null,
+      mark: landed?.getAttribute("data-attention-pulse") ?? null,
+    };
+  }, [selector, neighbour] as const);
+
+  browserTest("the landed card blinks, holds steady under reduced motion, moves nothing, and leaves nothing behind", async () => {
+    const out = path.resolve(".artifacts/issue-1836");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const IMPLEMENTER = "/repo/export-impl.jsonl";
+    const REVIEWER = "/repo/export-review.jsonl";
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx",
+      values: "invented",
+    };
+    const failures: string[] = [];
+    try {
+      for (const [surface, viewport] of [["desktop", VIEWPORT], ["phone", { width: 390, height: 844 }]] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          for (const motion of ["no-preference", "reduce"] as const) {
+            const label = `${surface}-${scheme}-${motion}`;
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=loose`, viewport, scheme, "en", motion);
+            try {
+              const kanban = await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 }).then(() => true).catch(() => false);
+              const board = await page.evaluate(() => (document.querySelector("[data-mobile2-board]") ? "mobile2" : document.querySelector("[data-kanban-board]") ? "kanban" : "none"));
+              if (!kanban) {
+                /* The phone. Mobile is chat-only for a handoff, so there is no
+                   arrival to gate — what is recorded is the surface that width
+                   draws, and the decoration on it, which is what the operator
+                   would have to see at a glance. */
+                const rows = await page.$$eval("[data-mobile2-row], .card[data-id]", (nodes) => nodes.length);
+                const mark = await page.evaluate(async () => {
+                  const { startArrivalPulse, cancelArrivalPulse } = (window as unknown as { evidence: PulseEvidence }).evidence.focus;
+                  const row = document.querySelector("[data-mobile2-row], .card[data-id]");
+                  if (!row) return null;
+                  const rect = () => { const box = row.getBoundingClientRect(); return { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) }; };
+                  const shadow = () => getComputedStyle(row).boxShadow;
+                  const before = { box: rect(), shadow: shadow() };
+                  startArrivalPulse(["[data-mobile2-row], .card[data-id]"]);
+                  await new Promise((resolve) => setTimeout(resolve, 300));
+                  const during = { box: rect(), shadow: shadow(), animation: getComputedStyle(row).animationName, mark: row.getAttribute("data-attention-pulse") };
+                  cancelArrivalPulse();
+                  await new Promise((resolve) => setTimeout(resolve, 200));
+                  return { before, during, after: { box: rect(), shadow: shadow() } };
+                });
+                await page.screenshot({ path: path.join(out, `${label}.png`), fullPage: true });
+                if (mark) {
+                  if (mark.during.shadow === mark.before.shadow) failures.push(`${label}: the mark painted no ring at 390x844`);
+                  if (JSON.stringify(mark.during.box) !== JSON.stringify(mark.before.box)) failures.push(`${label}: the mark moved the row it lit`);
+                  if (motion === "no-preference" && mark.during.animation !== "attention-arrival-pulse") failures.push(`${label}: no blink (${mark.during.animation})`);
+                  if (motion === "reduce" && mark.during.animation !== "none") failures.push(`${label}: reduced motion still animates (${mark.during.animation})`);
+                  if (mark.after.shadow !== mark.before.shadow) failures.push(`${label}: the mark left something behind`);
+                }
+                evidence[label] = { viewport, board, rows, handoff: "the phone withholds its device id and never follows a handoff", mark };
+                if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+                continue;
+              }
+
+              /* A conversation a card holds: the card is what lights up, and
+                 its neighbour must not stir. */
+              const neighbour = "[data-kanban-board] .card[data-id] ~ .card[data-id]";
+              const card = await arrive(page, IMPLEMENTER, "show", neighbour);
+              await page.screenshot({ path: path.join(out, `${label}-card.png`) });
+              const cleared = await settlePulse(page, card.selector, neighbour);
+              if (card.resolution === "lost") failures.push(`${label}: the handoff found nowhere to land`);
+              if (!card.selector) failures.push(`${label}: the board answered no selector for the landed card`);
+              if (!card.during.paint || card.during.paint.shadow === card.before.paint?.shadow) failures.push(`${label}: the mark painted no ring`);
+              if (JSON.stringify(card.during.landed) !== JSON.stringify(card.before.landed)) failures.push(`${label}: the mark moved the card it lit`);
+              if (JSON.stringify(card.during.neighbour) !== JSON.stringify(card.before.neighbour)) failures.push(`${label}: the mark moved the neighbouring card`);
+              if (motion === "no-preference" && card.during.paint?.animation !== "attention-arrival-pulse") failures.push(`${label}: no blink (${card.during.paint?.animation})`);
+              if (motion === "reduce" && card.during.paint?.animation !== "none") failures.push(`${label}: reduced motion still animates (${card.during.paint?.animation})`);
+              if (motion === "reduce" && !/0px 0px 0px [\d.]+px/.test(card.during.paint?.shadow ?? "")) failures.push(`${label}: reduced motion left no ring`);
+              if (cleared.mark !== null) failures.push(`${label}: the mark outlived the pulse`);
+              if (cleared.paint?.shadow !== card.before.paint?.shadow) failures.push(`${label}: the card did not go back to what it was`);
+              if (JSON.stringify(cleared.landed) !== JSON.stringify(card.before.landed)) failures.push(`${label}: the card ended somewhere else`);
+
+              /* A conversation NO card holds: it is opened in its own reader,
+                 and that pane is the thing the operator is being pointed at. */
+              const pane = await arrive(page, REVIEWER, "open", null);
+              await page.screenshot({ path: path.join(out, `${label}-reader.png`) });
+              const paneCleared = await settlePulse(page, pane.selector, null);
+              if (!pane.selector?.includes("data-reader-path")) failures.push(`${label}: the board answered ${pane.selector} for a conversation no card holds`);
+              if (pane.during.paint?.shadow === pane.before.paint?.shadow) failures.push(`${label}: the reader pane was not lit`);
+              if (JSON.stringify(pane.during.landed) !== JSON.stringify(pane.before.landed)) failures.push(`${label}: the mark moved the reader pane`);
+              if (paneCleared.mark !== null) failures.push(`${label}: the reader pane stayed lit`);
+
+              evidence[label] = { viewport, board, card, cleared, pane, paneCleared };
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+            } finally { await context.close(); }
+          }
+        }
+      }
+      fs.mkdirSync("evidence/issue-1836", { recursive: true });
+      fs.writeFileSync("evidence/issue-1836/arrival-pulse.json", JSON.stringify({ ...evidence, failures }, null, 2) + "\n");
+      if (failures.length) throw new Error(failures.join("\n"));
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
+
+describe("#1836 the phone draws a lane the moment the server admits it", () => {
+  /*
+   * The phone board at 390x844, in the real Viewer over
+   * `issue1695Evidence.fixture.tsx`. The fixture's `/api/files` scan never
+   * carries the admitted lane; only `/api/attention` hands it out, as the rows
+   * the server holds. So a lane on this board came from the push.
+   *
+   * Gated: the pipelines row counts the lane, the pipelines list names it,
+   * the phone never names a device or posts anything (it stays chat-only for
+   * a handoff), and a lane the server then drops leaves the list again.
+   *
+   * Geometry and counts go to `evidence/issue-1836/phone-admitted-lane.json`;
+   * frames to `.artifacts/issue-1836/`, which is not committed.
+   */
+  type LaneEvidence = {
+    admitLane(title: string): void;
+    admitted: unknown;
+    attentionCalls: Array<{ url: string; method: string }>;
+  };
+  const TITLE = "A lane just created";
+
+  browserTest("the admitted lane is on the phone board before any scan carries it, and leaves when dropped", async () => {
+    const out = path.resolve(".artifacts/issue-1836");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx",
+      values: "invented",
+    };
+    const failures: string[] = [];
+    const viewport = { width: 390, height: 844 };
+    const pipelinesRow = "[data-mobile2-row='pipelines']";
+    const poll = (page: Page) => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const label = `phone-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, scheme, "en");
+        try {
+          await page.waitForSelector("[data-mobile2-board]", { timeout: 20_000 });
+          const rowText = () => page.$eval(pipelinesRow, (node) => node.textContent ?? "").catch(() => null);
+          const before = await rowText();
+          await page.screenshot({ path: path.join(out, `${label}-before.png`) });
+
+          await page.evaluate((title) => (window as unknown as { evidence: LaneEvidence }).evidence.admitLane(title), TITLE);
+          const admittedAt = Date.now();
+          await poll(page);
+          let during = before;
+          while (Date.now() - admittedAt < 5_000 && during === before) {
+            await page.waitForTimeout(100);
+            during = await rowText();
+          }
+          const drawnAfterMs = Date.now() - admittedAt;
+          await page.screenshot({ path: path.join(out, `${label}-admitted.png`) });
+          if (during === before) failures.push(`${label}: the pipelines row did not count the admitted lane (${before})`);
+
+          await page.click(pipelinesRow);
+          const listed = await page.waitForFunction((title) => document.body.textContent?.includes(title), TITLE, { timeout: 5_000 }).then(() => true).catch(() => false);
+          await page.screenshot({ path: path.join(out, `${label}-list.png`) });
+          if (!listed) failures.push(`${label}: the pipelines list does not name the admitted lane`);
+
+          /* The server drops it: refused, or never materialized. */
+          await page.evaluate(() => { (window as unknown as { evidence: LaneEvidence }).evidence.admitted = null; });
+          await poll(page);
+          const gone = await page.waitForFunction((title) => !document.body.textContent?.includes(title), TITLE, { timeout: 5_000 }).then(() => true).catch(() => false);
+          await page.screenshot({ path: path.join(out, `${label}-withdrawn.png`) });
+          if (!gone) failures.push(`${label}: the dropped lane stayed on the list`);
+
+          const calls = await page.evaluate(() => (window as unknown as { evidence: LaneEvidence }).evidence.attentionCalls);
+          if (calls.length === 0) failures.push(`${label}: the phone never read the admitted rows`);
+          if (calls.some((call) => call.method !== "GET")) failures.push(`${label}: the phone posted to the attention record`);
+          if (calls.some((call) => call.url.includes("deviceId="))) failures.push(`${label}: the phone named a device`);
+
+          evidence[label] = { viewport, pipelinesRow: { before, during }, drawnAfterMs, listed, withdrawn: gone, attentionCalls: calls };
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/issue-1836", { recursive: true });
+      fs.writeFileSync("evidence/issue-1836/phone-admitted-lane.json", JSON.stringify({ ...evidence, failures }, null, 2) + "\n");
+      if (failures.length) throw new Error(failures.join("\n"));
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
+
+describe("#1834 the card's collapsed Details row", () => {
+  /*
+   * Rendered evidence for the agent-context split (#1834), in the real Viewer
+   * over `issue1695Evidence.fixture.tsx`, in Chromium at a desktop viewport
+   * (light and dark) and on the phone at 390×844:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx
+   *
+   * Gated here, because only a laid-out page settles it:
+   *   - closed, the card carries ONE row saying «Details» and nothing of the
+   *     agent's text is readable anywhere on it, while the title and the
+   *     description are exactly what they were;
+   *   - opened, the whole text is in place inside the card and scrolls INSIDE
+   *     itself — the element overflows and the card's own height barely moves,
+   *     which is the claim a DOM test cannot make;
+   *   - a task without details carries no row at all;
+   *   - clicking the opened text opens the editor in its place;
+   *   - the phone's opened task shows the same one closed row and opens the
+   *     same text.
+   *
+   * Measurements go to `evidence/issue-1834/details.json`; no frame is
+   * committed — the PNGs stay in the run's own temp directory.
    */
 
-  const OUT = path.resolve(".artifacts/issue-1798");
-  const EVIDENCE = path.resolve("evidence/issue-1798");
-  const CARD = card("t-arcs");
-  /* The lanes with no fail edge at all: they must reserve no band. */
-  const PLAIN = "[data-kanban-board]";
+  const EVIDENCE = path.resolve("evidence/issue-1834");
+  const DETAILED = "t-search";
+  const PLAIN = "t-upload";
 
-  interface ArcMeasure {
-    edge: string;
-    state: string | null;
-    live: string | null;
-    fired: string | null;
-    max: string | null;
-    /** The count drawn on the arc itself, when one is. */
-    count: string | null;
-    /** The sentence the arc kept, which is where the budget lives at rest. */
-    title: string;
-    stroke: string;
-    strokeWidth: string;
-    dash: string;
-    countFill: string;
-    /** The colour the counter's halo is cut out of: it has to be the ground the
-        section actually paints, or the count carries a blot of another colour. */
-    countHalo: string;
-    /** How wide that halo is cut. Half of it is the air on each side of the
-        digits, and the arc runs at the digits' own vertical middle, so a halo
-        no wider than the stroke leaves the count read as a line struck into
-        dirty digits. */
-    countHaloWidth: number;
-    /** The widest gap between two digits' INK, measured in the font the counter
-        actually draws with. The halo closes over a gap from both sides, so a
-        gap wider than the whole halo keeps a speck of the arc inside the
-        count. Null when the browser cannot report glyph ink. */
-    countInkGap: number | null;
-    /** The live arc's dashes move; these are its `stroke-dashoffset` sampled
-        with the animation paused at three points of one cycle. The curve is
-        drawn from the head backwards, so an offset that GROWS is a dash
-        travelling towards the arrowhead — which is where the work goes. */
-    flow: number[] | null;
-    /** The solid piece drawn over the head end of a live arc, so no phase of
-        the motion leaves the arrowhead standing off its own line. */
-    lead: { length: number; dash: string } | null;
-    /** The arrowhead's own box, so two heads on one pill can be told apart. */
-    head: { x: number; right: number } | null;
-    /** What a pointer aimed at the arc actually meets, over `samples` points
-        taken along the drawn curve. `answered` of them open SOME arc's
-        sentence, which is the whole point — a tooltip that opens only on 1.5 px
-        of dashes opens nowhere. `onPath` open this arc's own, and where two
-        nested arcs converge into their shared pill the shallower one answers
-        for both, so that number is a share rather than all of them. `offPath`
-        and `offAnswered` are the same two readings 4 px off the curve, and
-        `ownsHead` is whether the arc answers at its own arrowhead, and
-        `clearsPills` whether the stroke stays out of the pill the arc leaves —
-        a hit target that reaches back up into a pill takes the last pixels of
-        a control the operator is aiming at. */
-    hit: { strokeWidth: string; samples: number; answered: number; onPath: number; offAnswered: number; offPath: number; ownsHead: boolean; clearsPills: boolean };
-    /** The arc's painted box, relative to the row's own box. */
-    box: { x: number; y: number; right: number; bottom: number } | null;
-    /** Pixels by which the arc reaches ABOVE the pills' bottom edge: anything
-        over zero is an arc drawn into the row of pills. */
-    intoPills: number;
-    /** Pixels by which the arc paints outside the card's content box. */
-    pastCard: number;
-    /** Pixels by which the arc paints below the row's own box — onto whatever
-        the card draws under it. */
-    pastRow: number;
+  interface Row {
+    present: boolean;
+    label: string;
+    expanded: boolean;
+    /** The opened text, its box and whether it scrolls inside itself. */
+    text: { chars: number; firstLine: string; clientHeight: number; scrollHeight: number; overflowY: string; fontFamily: string } | null;
+    editorField: string | null;
+  }
+  interface Measured {
+    board: string;
+    detailed: { cardHeight: number; title: string; description: string; row: Row; textOnCard: boolean };
+    plain: { row: Row; description: string };
   }
 
-  interface RowMeasure {
-    pipeline: string;
-    /** `arcs` on a one-line row, `suffix` on a wrapped one, absent with no edge. */
-    mode: string | null;
-    chips: string[];
-    /** Fail-edge chips still in the row of steps. There must be none. */
-    loopChips: number;
-    columnWidth: number;
-    rowWidth: number;
-    rowHeight: number;
-    /** The bottom of the line the pills sit on, relative to the row. */
-    pillsBottom: number;
-    /** The height the row reserved under the pills for the arcs. */
-    band: number;
-    /** Reserved room under the deepest arc's ink: a lane whose edges all rest
-        has no counter to put there, so it should be near zero. */
-    deadBelowArcs: number;
-    /** The ground the section paints, which the counter's halo has to match. */
-    sectionSurface: string;
-    /** Every pair of arcs in this row: do the curves cross, how close do they
-        come, and how much clear air is between their two arrowheads. */
-    pairs: Array<{ a: string; b: string; crosses: boolean; minGap: number; headGap: number }>;
-    arcs: ArcMeasure[];
-    /** The wrapped row's stand-in for the arcs, on the failing stage's own
-        pill. `live` and `ground` are how a return still in flight is told
-        apart from one that is over on the surface that has no arc to make
-        live — and a four-stage lane wraps in every column the board has, so
-        this is the rendering most lanes get. */
-    suffixes: Array<{ edge: string; state: string | null; live: string | null; text: string; title: string; colour: string; ground: string }>;
-    /** The gap between the row's bottom and the next thing the card draws. */
-    gapBelow: number;
-  }
-
-  const readRows = (page: Page, scopeSelector: string) => page.evaluate((selector): RowMeasure[] => {
-    const scope = document.querySelector(selector);
-    if (!scope) return [];
-    return [...scope.querySelectorAll<HTMLElement>(".stage-section")].map((section) => {
-      const row = section.querySelector<HTMLElement>(".psummary");
-      const cardBox = section.closest<HTMLElement>(".card")!.getBoundingClientRect();
-      const column = section.closest<HTMLElement>(".column") ?? section.closest<HTMLElement>(".card")!;
-      if (!row) {
-        return {
-          pipeline: section.dataset.pipeline ?? "", mode: null, chips: [], loopChips: 0,
-          columnWidth: Math.round(column.getBoundingClientRect().width), rowWidth: 0, rowHeight: 0,
-          pillsBottom: 0, band: 0, deadBelowArcs: 0, sectionSurface: getComputedStyle(section).backgroundColor,
-          pairs: [], arcs: [], suffixes: [], gapBelow: 0,
-        };
-      }
-      const rowBox = row.getBoundingClientRect();
-      const pills = [...row.querySelectorAll<HTMLElement>(".pchip")].map((pill) => pill.getBoundingClientRect());
-      const pillsBottom = pills.length ? Math.max(...pills.map((pill) => pill.bottom)) - rowBox.top : 0;
-      /* The `.psummary` is alone inside its slot, so what follows the row is
-         what follows the slot — and failing that, the section's own bottom. */
-      const slot = row.closest<HTMLElement>(".graph-slot") ?? row;
-      const next = (slot.nextElementSibling ?? section.nextElementSibling)?.getBoundingClientRect()
-        ?? { top: section.getBoundingClientRect().bottom };
-      const round = (value: number) => Math.round(value * 100) / 100;
-      /* A curve in client pixels, sampled along its own length: the one way to
-         ask whether two arcs meet, and where a pointer aimed at one lands. */
-      const trace = (path: SVGPathElement) => {
-        const matrix = path.getScreenCTM();
-        const total = path.getTotalLength();
-        const points: Array<{ x: number; y: number }> = [];
-        for (let step = 0; step <= 32; step += 1) {
-          const at = path.getPointAtLength((total * step) / 32);
-          const screen = matrix ? new DOMPoint(at.x, at.y).matrixTransform(matrix) : at;
-          points.push({ x: screen.x, y: screen.y });
+  const readRow = (page: Page, id: string) => page.evaluate((selector: string): Row => {
+    const card = document.querySelector<HTMLElement>(selector);
+    const block = card?.querySelector<HTMLElement>("[data-details]") ?? null;
+    const toggle = block?.querySelector<HTMLElement>("[data-details-toggle]") ?? null;
+    const text = block?.querySelector<HTMLElement>("[data-details-text]") ?? null;
+    const style = text ? getComputedStyle(text) : null;
+    return {
+      present: Boolean(block),
+      label: (toggle?.textContent ?? "").replace(/\s+/g, " ").trim(),
+      expanded: toggle?.getAttribute("aria-expanded") === "true",
+      text: text
+        ? {
+          chars: (text.textContent ?? "").length,
+          firstLine: (text.textContent ?? "").split("\n")[0]!.slice(0, 60),
+          clientHeight: Math.round(text.clientHeight),
+          scrollHeight: Math.round(text.scrollHeight),
+          overflowY: style!.overflowY,
+          fontFamily: style!.fontFamily,
         }
-        return points;
-      };
-      const traces = new Map<string, Array<{ x: number; y: number }>>();
-      const arcs = [...row.querySelectorAll<SVGGElement>("[data-loop-arc]")].map((group): ArcMeasure => {
-        const path = group.querySelector<SVGPathElement>(".parc");
-        const head = group.querySelector<SVGPolygonElement>(".parc-head");
-        const count = group.querySelector<SVGTextElement>(".parc-count");
-        /* The painted ink of the whole arc: the curve, its arrowhead and, when
-           it has one, its counter. */
-        const parts = [path, head, count].filter(Boolean).map((part) => part!.getBoundingClientRect());
-        const box = parts.length
-          ? {
-            x: round(Math.min(...parts.map((part) => part.left)) - rowBox.left),
-            y: round(Math.min(...parts.map((part) => part.top)) - rowBox.top),
-            right: round(Math.max(...parts.map((part) => part.right)) - rowBox.left),
-            bottom: round(Math.max(...parts.map((part) => part.bottom)) - rowBox.top),
-          }
-          : null;
-        /* Where a pointer aimed at the drawing actually lands. The sentence is
-           the only home of the budget at rest, so an arc nothing can be aimed
-           at explains nothing. */
-        const owner = (x: number, y: number) =>
-          (document.elementFromPoint(x, y) as Element | null)?.closest<SVGElement>("[data-arc-hit]")?.dataset.arcHit ?? null;
-        const mine = (x: number, y: number) => owner(x, y) === group.dataset.loopArc;
-        const samples = path ? trace(path) : [];
-        if (path) traces.set(group.dataset.loopArc ?? "", samples);
-        const inside = samples.filter((point) => point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight);
-        const hitPath = group.querySelector<SVGPathElement>(".parc-hit");
-        const style = path ? getComputedStyle(path) : null;
-        const countStyle = count ? getComputedStyle(count) : null;
-        /* The digits' own ink, in the font the counter draws with: the halo
-           dilates each glyph outline by half its width, so a gap between two
-           digits wider than the halo reaches from both sides keeps a speck of
-           the arc in it. Canvas is the one place a glyph's ink box can be
-           asked for; a browser that does not answer reports nothing rather
-           than a number nobody measured. */
-        const inkGap = (() => {
-          const text = count?.textContent ?? "";
-          const context = text.length > 1 ? document.createElement("canvas").getContext("2d") : null;
-          if (!context || !countStyle) return null;
-          context.font = `${countStyle.fontWeight} ${countStyle.fontSize} ${countStyle.fontFamily}`;
-          if (!Number.isFinite(context.measureText("1").actualBoundingBoxRight)) return null;
-          let widest = 0;
-          for (let index = 1; index < text.length; index += 1) {
-            const run = context.measureText(text.slice(0, index));
-            const next = context.measureText(text[index]!);
-            widest = Math.max(widest, (run.width - next.actualBoundingBoxLeft) - run.actualBoundingBoxRight);
-          }
-          return round(widest);
-        })();
-        /* Where the dashes of a live arc are going. The animation is paused at
-           three points of one cycle and its offset read off the same element
-           the eye watches; the curve starts at the arrowhead, so an offset
-           that grows is ink travelling towards the head. The motion is put
-           back as it was, so nothing after this reads a stopped board. */
-        const flow = (() => {
-          if (!path || group.dataset.arcLive !== "1") return null;
-          const animations = path.getAnimations();
-          if (!animations.length) return null;
-          const samples = [0, 175, 350].map((at) => {
-            for (const animation of animations) { animation.pause(); animation.currentTime = at; }
-            return round(Number.parseFloat(getComputedStyle(path).strokeDashoffset) || 0);
-          });
-          for (const animation of animations) animation.play();
-          return samples;
-        })();
-        const leadPath = group.querySelector<SVGPathElement>(".parc-lead");
-        /* A stroke is painted half outside the geometry the box reports, so the
-           half-width is added on every side before anything is called a clash. */
-        const half = style ? Number.parseFloat(style.strokeWidth) / 2 || 0 : 0;
-        const absolute = parts.length
-          ? { top: Math.min(...parts.map((part) => part.top)) - half, left: Math.min(...parts.map((part) => part.left)) - half, right: Math.max(...parts.map((part) => part.right)) + half, bottom: Math.max(...parts.map((part) => part.bottom)) + half }
-          : null;
-        return {
-          edge: group.dataset.loopArc ?? "",
-          state: group.dataset.arcState ?? null,
-          live: group.dataset.arcLive ?? null,
-          fired: group.dataset.arcFired ?? null,
-          max: group.dataset.arcMax ?? null,
-          count: count?.textContent?.trim() ?? null,
-          title: group.querySelector("title")?.textContent ?? "",
-          stroke: style?.stroke ?? "",
-          strokeWidth: style?.strokeWidth ?? "",
-          dash: style?.strokeDasharray ?? "",
-          countFill: countStyle?.fill ?? "",
-          countHalo: countStyle?.stroke ?? "",
-          countHaloWidth: countStyle ? round(Number.parseFloat(countStyle.strokeWidth) || 0) : 0,
-          countInkGap: inkGap,
-          flow,
-          lead: leadPath ? { length: round(leadPath.getTotalLength()), dash: getComputedStyle(leadPath).strokeDasharray } : null,
-          head: head ? { x: round(head.getBoundingClientRect().left - rowBox.left), right: round(head.getBoundingClientRect().right - rowBox.left) } : null,
-          hit: {
-            strokeWidth: hitPath ? getComputedStyle(hitPath).strokeWidth : "",
-            samples: inside.length,
-            answered: inside.filter((point) => owner(point.x, point.y) !== null).length,
-            onPath: inside.filter((point) => mine(point.x, point.y)).length,
-            offAnswered: inside.filter((point) => owner(point.x, point.y + 4) !== null).length,
-            offPath: inside.filter((point) => mine(point.x, point.y + 4)).length,
-            /* The curve is drawn from its arrowhead back to the failing pill. */
-            ownsHead: samples.length ? mine(samples[0]!.x, samples[0]!.y) : false,
-            /* One pixel inside the bottom of the pill the arc leaves. */
-            clearsPills: samples.length
-              ? owner(samples[samples.length - 1]!.x, rowBox.top + pillsBottom - 1) === null
-              : true,
-          },
-          box,
-          intoPills: absolute ? round(Math.max(0, (rowBox.top + pillsBottom) - absolute.top)) : 0,
-          pastCard: absolute ? round(Math.max(0, cardBox.left - absolute.left, absolute.right - cardBox.right)) : 0,
-          pastRow: absolute ? round(Math.max(0, absolute.bottom - rowBox.bottom)) : 0,
-        };
-      });
-      /* Two arcs into one pill have to nest. They cross when the sign of the
-         vertical distance between them flips anywhere over the stretch of x
-         they share — which is exactly what the reader sees as a tangle. */
-      const pairs: RowMeasure["pairs"] = [];
-      const traced = [...traces.entries()];
-      for (let i = 0; i < traced.length; i += 1) {
-        for (let j = i + 1; j < traced.length; j += 1) {
-          const [aId, a] = traced[i]!;
-          const [bId, b] = traced[j]!;
-          const yAt = (points: Array<{ x: number; y: number }>, x: number) => {
-            const sorted = [...points].sort((one, two) => one.x - two.x);
-            if (x < sorted[0]!.x || x > sorted[sorted.length - 1]!.x) return null;
-            for (let k = 1; k < sorted.length; k += 1) {
-              if (sorted[k]!.x >= x) {
-                const span = sorted[k]!.x - sorted[k - 1]!.x;
-                const ratio = span ? (x - sorted[k - 1]!.x) / span : 0;
-                return sorted[k - 1]!.y + ratio * (sorted[k]!.y - sorted[k - 1]!.y);
-              }
-            }
-            return sorted[sorted.length - 1]!.y;
-          };
-          const shared = a.map((point) => point.x).concat(b.map((point) => point.x))
-            .filter((x) => yAt(a, x) !== null && yAt(b, x) !== null);
-          const gaps = shared.map((x) => yAt(a, x)! - yAt(b, x)!);
-          const headA = arcs.find((arc) => arc.edge === aId)?.head ?? null;
-          const headB = arcs.find((arc) => arc.edge === bId)?.head ?? null;
-          pairs.push({
-            a: aId,
-            b: bId,
-            crosses: gaps.some((gap) => gap > 0.5) && gaps.some((gap) => gap < -0.5),
-            minGap: gaps.length ? round(Math.min(...gaps.map((gap) => Math.abs(gap)))) : 0,
-            headGap: headA && headB ? round(Math.max(headA.x, headB.x) - Math.min(headA.right, headB.right)) : 0,
-          });
-        }
-      }
-      const inkBottom = arcs.reduce((deepest, arc) => Math.max(deepest, arc.box?.bottom ?? 0), 0);
-      return {
-        pipeline: section.dataset.pipeline ?? "",
-        mode: row.dataset.arcs ?? null,
-        chips: [...row.querySelectorAll<HTMLElement>(".pchip")].map((pill) => pill.dataset.stage ?? ""),
-        loopChips: row.querySelectorAll(".ploop").length,
-        columnWidth: Math.round(column.getBoundingClientRect().width),
-        rowWidth: round(rowBox.width),
-        rowHeight: round(rowBox.height),
-        pillsBottom: round(pillsBottom),
-        band: round(rowBox.height - pillsBottom),
-        deadBelowArcs: inkBottom ? round(rowBox.height - inkBottom) : 0,
-        sectionSurface: getComputedStyle(section).backgroundColor,
-        pairs,
-        arcs,
-        suffixes: [...row.querySelectorAll<HTMLElement>(".pret")].map((mark) => ({
-          edge: mark.dataset.stageReturn ?? "",
-          state: mark.dataset.arcState ?? null,
-          live: mark.dataset.arcLive ?? null,
-          text: mark.textContent?.trim() ?? "",
-          title: mark.getAttribute("title") ?? "",
-          colour: getComputedStyle(mark).color,
-          ground: getComputedStyle(mark).backgroundColor,
-        })),
-        gapBelow: round(next.top - rowBox.bottom),
-      };
-    });
-  }, scopeSelector);
-
-  browserTest("#1798: the fail-edge chip is gone, the arc hangs under the pills, and a wrapped row carries the count on the pill", async () => {
-    fs.mkdirSync(OUT, { recursive: true });
-    fs.mkdirSync(EVIDENCE, { recursive: true });
-    const server = await serveEvidenceFixture(OUT);
-    const base = `${server.base}?scenario=issue1798`;
-    const browser: Browser = await chromium.launch(LAUNCH);
-    const failures: string[] = [];
-    const frames: Record<string, unknown> = {};
-
-    /* The thickest stroke any state of an arc draws: the live one with motion
-       switched off, which is the rendering the halo has the least room against. */
-    const ARC_INK = 3;
-
-    const check = (label: string, rows: RowMeasure[], plain: RowMeasure[]) => {
-      const by = (id: string) => rows.find((row) => row.pipeline === id);
-      if (rows.length !== 6) {
-        failures.push(`${label}: the card drew ${rows.length} pipeline rows`);
-        return;
-      }
-      for (const row of rows) {
-        /* The point of the issue: the row of steps holds steps only. */
-        if (row.loopChips) failures.push(`${label}: ${row.pipeline} still draws ${row.loopChips} fail-edge chip(s) in the row`);
-        if (!row.chips.length) failures.push(`${label}: ${row.pipeline} drew no stage pill`);
-        for (const arc of row.arcs) {
-          if (arc.intoPills > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.intoPills} px into the row of pills`);
-          if (arc.pastCard > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastCard} px outside the card`);
-          if (arc.pastRow > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastRow} px below the row, onto the line under it`);
-          if (!arc.title || arc.title.length < 12) failures.push(`${label}: ${row.pipeline} ${arc.edge} carries no sentence (${JSON.stringify(arc.title)})`);
-          /* The sentence is the only home of the budget at rest, so the arc has
-             to be something a pointer can be aimed at: every point ON the drawn
-             curve opens it, and so does a point beside it. */
-          if (arc.hit.samples < 8) {
-            failures.push(`${label}: ${row.pipeline} ${arc.edge} put only ${arc.hit.samples} sample(s) on screen`);
-          } else {
-            /* Nothing drawn is dead: every point of the curve, and every point
-               beside it, opens an explanation. */
-            if (arc.hit.answered < arc.hit.samples) failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves ${arc.hit.samples - arc.hit.answered} of ${arc.hit.samples} points on the drawn arc explaining nothing`);
-            if (arc.hit.offAnswered < arc.hit.samples - 1) failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves ${arc.hit.samples - arc.hit.offAnswered} of ${arc.hit.samples} points beside the arc explaining nothing`);
-            /* And an arrow you can see is an arrow you can ask about: it owns
-               its own head and the clear majority of its own length. Where two
-               nested arcs converge into one pill the shallower one answers for
-               both, which is the only reading a reader could have given them. */
-            if (!arc.hit.ownsHead) failures.push(`${label}: ${row.pipeline} ${arc.edge} does not answer at its own arrowhead`);
-            if (!arc.hit.clearsPills) failures.push(`${label}: ${row.pipeline} ${arc.edge} reaches back up into the pill it leaves`);
-            if (arc.hit.onPath * 3 < arc.hit.samples * 2) failures.push(`${label}: ${row.pipeline} ${arc.edge} answers for only ${arc.hit.onPath} of its own ${arc.hit.samples} points`);
-          }
-          /* The halo is cut out of the ground the section paints, or every
-             count carries a blot of the card's colour on a tinted row. */
-          if (arc.count && arc.countHalo !== row.sectionSurface) {
-            failures.push(`${label}: ${row.pipeline} ${arc.edge} halos its count with ${arc.countHalo} over a ${row.sectionSurface} ground`);
-          }
-          /* And it is wide enough to BE air. The counter sits on the arc, at
-             the digits' own vertical middle, so a halo that only reaches the
-             edge of the first and last digit leaves the arc drawn through the
-             count: 2 px of ground on both sides of the digits is the target,
-             against the thickest stroke any state of the arc draws. */
-          if (arc.count && (arc.countHaloWidth - ARC_INK) / 2 < 2) {
-            failures.push(`${label}: ${row.pipeline} ${arc.edge} halos its count ${arc.countHaloWidth} px wide, which leaves ${(arc.countHaloWidth - ARC_INK) / 2} px of air beside the digits`);
-          }
-          /* The halo closes over a gap between two digits from both sides. A
-             gap wider than the whole halo keeps a speck of arc inside the
-             count, which is what blinks as the dashes pass. */
-          if (arc.count && arc.countInkGap !== null && arc.countInkGap > arc.countHaloWidth) {
-            failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves a ${arc.countInkGap} px gap between digits that a ${arc.countHaloWidth} px halo cannot close`);
-          }
-          /* A live arc says where the work goes twice: with its arrowhead, and
-             with the way its dashes move. They have to say the same thing. The
-             curve runs from the head backwards, so the offset has to GROW. */
-          if (arc.live === "1" && arc.flow) {
-            const [start, middle, end] = arc.flow;
-            if (!(start! < middle! && middle! < end!)) {
-              failures.push(`${label}: ${row.pipeline} ${arc.edge} runs its dashes ${JSON.stringify(arc.flow)}, away from its own arrowhead`);
-            }
-          }
-          /* And the head is met by ink at every phase of that motion: the first
-             px of the curve are drawn solid under the dashes. */
-          if (arc.live === "1" && arc.dash !== "none") {
-            if (!arc.lead) failures.push(`${label}: ${row.pipeline} ${arc.edge} moves dashes over its arrowhead with nothing solid under it`);
-            else if (arc.lead.dash !== "none" || arc.lead.length < 5) {
-              failures.push(`${label}: ${row.pipeline} ${arc.edge} draws a ${arc.lead.length} px lead dashed ${arc.lead.dash}, which cannot hold the head`);
-            }
-          }
-        }
-        /* Two arcs into one pill nest; they never tangle and their tips never
-           touch — that is the point at which a reader stops being able to say
-           which count belongs to which arrow. */
-        for (const pair of row.pairs) {
-          if (pair.crosses) failures.push(`${label}: ${row.pipeline} ${pair.a} and ${pair.b} cross each other`);
-          if (pair.headGap < 1) failures.push(`${label}: ${row.pipeline} the tips of ${pair.a} and ${pair.b} are ${pair.headGap} px apart`);
-        }
-        /* Room for a counter is reserved only where a counter goes. */
-        if (row.arcs.length && row.arcs.every((arc) => !arc.count) && row.deadBelowArcs > 4) {
-          failures.push(`${label}: ${row.pipeline} rests and still reserves ${row.deadBelowArcs} px of empty band under its arc`);
-        }
-        if (row.mode === "arcs" && !row.arcs.length) failures.push(`${label}: ${row.pipeline} says it draws arcs and drew none`);
-        /* The band exists only for the arcs: a wrapped row reserves nothing. */
-        if (row.mode === "suffix" && row.band > 1) failures.push(`${label}: ${row.pipeline} wrapped to suffixes and still reserves ${row.band} px`);
-        if (row.mode === "suffix" && row.arcs.length) failures.push(`${label}: ${row.pipeline} wrapped and still drew ${row.arcs.length} arc(s)`);
-        /* Whatever the mode, a fired edge says its count somewhere in the row. */
-        const marks = [...row.arcs.map((arc) => [arc.state, arc.count] as const), ...row.suffixes.map((mark) => [mark.state, mark.text] as const)];
-        for (const [state, text] of marks) {
-          if (state === "rest" && text) failures.push(`${label}: ${row.pipeline} prints ${JSON.stringify(text)} for an edge that never fired`);
-          if (state !== "rest" && !text) failures.push(`${label}: ${row.pipeline} prints nothing for an edge in state ${state}`);
-        }
-      }
-      /* A lane with no fail edge reserves no band and draws no layer. */
-      const edgeless = plain.filter((row) => row.mode === null && row.chips.length);
-      if (!edgeless.length) failures.push(`${label}: the board drew no lane without a fail edge to compare against`);
-      for (const row of edgeless) {
-        if (row.band > 1) failures.push(`${label}: ${row.pipeline} has no fail edge and still reserves ${row.band} px under its row`);
-      }
-
-      const rest = by("p-arc-rest")!;
-      const fired = by("p-arc-fired")!;
-      const spent = by("p-arc-spent")!;
-      const parked = by("p-arc-parked")!;
-      const two = by("p-arc-two")!;
-      const edgeOf = (row: RowMeasure, edge: string) => row.arcs.find((arc) => arc.edge === edge) ?? null;
-      const markOf = (row: RowMeasure, edge: string) => row.suffixes.find((mark) => mark.edge === edge) ?? null;
-
-      /* At rest: no number anywhere in the row, and the budget in the title. */
-      const restEdge = edgeOf(rest, "review:fail:fix");
-      if (rest.mode === "arcs") {
-        if (restEdge?.state !== "rest") failures.push(`${label}: the untouched edge reads ${JSON.stringify(restEdge?.state)}`);
-        if (restEdge?.count) failures.push(`${label}: the untouched edge prints ${JSON.stringify(restEdge.count)}`);
-        if (!/3/.test(restEdge?.title ?? "")) failures.push(`${label}: the untouched edge's title does not carry its budget (${JSON.stringify(restEdge?.title)})`);
-      } else if (rest.suffixes.length) {
-        failures.push(`${label}: the wrapped lane at rest still marks a pill ${JSON.stringify(rest.suffixes)}`);
-      }
-
-      /* Fired once of three, with the returned stage running because of it. */
-      const firedEdge = edgeOf(fired, "review:fail:fix");
-      const firedMark = markOf(fired, "review:fail:fix");
-      if (fired.mode === "arcs") {
-        if (firedEdge?.state !== "fired") failures.push(`${label}: the edge that fired once reads ${JSON.stringify(firedEdge?.state)}`);
-        if (firedEdge?.count !== "1/3") failures.push(`${label}: the edge that fired once counts ${JSON.stringify(firedEdge?.count)}`);
-        if (firedEdge?.live !== "1") failures.push(`${label}: the edge carrying the running work is not the live one`);
-      } else if (!/1.*3/.test(firedMark?.text ?? "")) {
-        failures.push(`${label}: the wrapped fired lane marks its pill ${JSON.stringify(firedMark?.text)}`);
-      }
-
-      /* A spent budget: a different colour, never a lighter version of the same. */
-      const spentEdge = edgeOf(spent, "review:fail:fix");
-      const spentMark = markOf(spent, "review:fail:fix");
-      if (spent.mode === "arcs") {
-        if (spentEdge?.state !== "exhausted") failures.push(`${label}: the spent edge reads ${JSON.stringify(spentEdge?.state)}`);
-        if (spentEdge?.count !== "2/2") failures.push(`${label}: the spent edge counts ${JSON.stringify(spentEdge?.count)}`);
-        if (firedEdge && spentEdge && firedEdge.stroke === spentEdge.stroke) {
-          failures.push(`${label}: the spent arc is painted the same colour as the live one (${spentEdge.stroke})`);
-        }
-        /* Exhaustion is never the lighter drawing: the spent arc carries at
-           least the ink of the untouched one. The live arc is not the subject
-           — liveness has its own width wherever it appears. */
-        if (restEdge && spentEdge && Number.parseFloat(spentEdge.strokeWidth) < Number.parseFloat(restEdge.strokeWidth) - 0.01) {
-          failures.push(`${label}: the spent arc is thinner than the untouched one`);
-        }
-        if (restEdge && spentEdge && restEdge.stroke === spentEdge.stroke) {
-          failures.push(`${label}: the spent arc is painted the colour of an untouched one (${spentEdge.stroke})`);
-        }
-      } else if (spentMark?.state !== "exhausted") {
-        failures.push(`${label}: the wrapped spent lane marks its pill ${JSON.stringify(spentMark)}`);
-      }
-
-      /* A lane the spent budget already stopped: the same red arc, and a
-         sentence about what happened rather than about a failure that can no
-         longer happen. */
-      const parkedEdge = edgeOf(parked, "review:fail:fix");
-      const parkedMark = markOf(parked, "review:fail:fix");
-      if (parked.mode === "arcs") {
-        if (parkedEdge?.state !== "exhausted") failures.push(`${label}: the parked lane's edge reads ${JSON.stringify(parkedEdge?.state)}`);
-        if (parkedEdge && spentEdge && parkedEdge.title === spentEdge.title) {
-          failures.push(`${label}: a lane that parked on the edge says what a lane still running says (${JSON.stringify(parkedEdge.title)})`);
-        }
-      } else if (parkedMark?.state !== "exhausted") {
-        failures.push(`${label}: the wrapped parked lane marks its pill ${JSON.stringify(parkedMark)}`);
-      }
-
-      /* Two edges into one target: two arcs, two depths, no meeting. */
-      if (two.mode === "arcs") {
-        if (two.arcs.length !== 2) failures.push(`${label}: the two-edge lane drew ${two.arcs.length} arc(s)`);
-        const [first, second] = [...two.arcs].sort((a, b) => (a.box?.bottom ?? 0) - (b.box?.bottom ?? 0));
-        if (first?.box && second?.box) {
-          /* Both arcs end on the same pill — that IS the shape. What has to
-             differ is how deep each hangs and where each head lands, or the
-             two read as one arrow. */
-          if (second.box.bottom - first.box.bottom < 4) {
-            failures.push(`${label}: the two arcs hang at the same depth (${first.box.bottom} and ${second.box.bottom})`);
-          }
-          if (Math.abs(first.box.x - second.box.x) < 3) {
-            failures.push(`${label}: the two arrowheads land on the same point (${first.box.x} and ${second.box.x})`);
-          }
-        }
-        if (two.arcs.some((arc) => arc.count === null)) {
-          failures.push(`${label}: an edge of the two-edge lane prints no count ${JSON.stringify(two.arcs.map((arc) => [arc.edge, arc.count]))}`);
-        }
-      } else if (two.suffixes.length !== 2) {
-        failures.push(`${label}: the wrapped two-edge lane marks ${two.suffixes.length} pill(s)`);
-      }
-
-      /* The four-stage lane: the length a real lane usually has. It wraps in
-         every column this board has, which makes the suffix the ORDINARY
-         rendering rather than a narrow-column fallback, so the wide frames
-         have to show it and it has to carry every reading the arc carries. */
-      const long = by("p-arc-long")!;
-      const longMark = markOf(long, "verify:fail:implement");
-      if (long.mode !== "suffix") {
-        failures.push(`${label}: the four-stage lane reads ${JSON.stringify(long.mode)}; the suffix is what a row of that length draws`);
-      } else {
-        if (long.arcs.length) failures.push(`${label}: the four-stage lane wrapped and still drew ${long.arcs.length} arc(s)`);
-        if (longMark?.state !== "fired") failures.push(`${label}: the four-stage lane's mark reads ${JSON.stringify(longMark?.state)}`);
-        if (!/1.*3/.test(longMark?.text ?? "")) failures.push(`${label}: the four-stage lane marks its pill ${JSON.stringify(longMark?.text)}`);
-        /* A return in flight is not a return that is over. With no arc to make
-           live, the mark itself has to carry it. */
-        if (longMark?.live !== "1") failures.push(`${label}: the four-stage lane's return is in flight and its mark says ${JSON.stringify(longMark?.live)}`);
-        const settled = [parked, spent, fired, rest].flatMap((row) => row.suffixes).find((mark) => mark.live === "0");
-        if (settled && longMark && settled.ground === longMark.ground && settled.colour === longMark.colour) {
-          failures.push(`${label}: a return in flight is drawn exactly like one that is over (${longMark.colour} on ${longMark.ground})`);
-        }
-      }
+        : null,
+      editorField: block?.querySelector<HTMLElement>("[data-card-editor]")?.getAttribute("data-card-editor") ?? null,
     };
+  }, `${card(id)}`);
 
-    const desktop = async (width: number, height: number, scheme: Scheme, lang: "en" | "uk", motion: "no-preference" | "reduce" = "no-preference") => {
-      const label = `${width}-${lang}-${scheme}${motion === "reduce" ? "-still" : ""}`;
-      const opened = await openFixture(browser, base, { width, height }, scheme, lang, motion);
+  /** One reading of both cards: the shared shape above plus each card's row. */
+  const measure = async (page: Page): Promise<Measured> => {
+    const shell = await page.evaluate((selectors: { detailed: string; plain: string }) => {
+      const words = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
+      const detailed = document.querySelector<HTMLElement>(selectors.detailed);
+      const plain = document.querySelector<HTMLElement>(selectors.plain);
+      return {
+        board: document.querySelector("[data-kanban-board]") ? "kanban" : document.querySelector("[data-mobile2-board]") ? "mobile2" : "none",
+        cardHeight: Math.round(detailed?.getBoundingClientRect().height ?? 0),
+        title: words(detailed?.querySelector(".title")),
+        description: words(detailed?.querySelector(".desc")),
+        textOnCard: words(detailed).includes("Files another lane holds"),
+        plainDescription: words(plain?.querySelector(".desc")),
+      };
+    }, { detailed: card(DETAILED), plain: card(PLAIN) });
+    return {
+      board: shell.board,
+      detailed: { cardHeight: shell.cardHeight, title: shell.title, description: shell.description, row: await readRow(page, DETAILED), textOnCard: shell.textOnCard },
+      plain: { row: await readRow(page, PLAIN), description: shell.plainDescription },
+    };
+  };
+
+  browserTest("the agent's context is one closed row on the card, and opens in place scrolling inside itself", async () => {
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const OUT = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "llv-1834-"));
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+
+    const desktop = async (scheme: Scheme, lang: "en" | "uk") => {
+      const label = `${scheme}-${lang}`;
+      const { context, page, pageErrors } = await openFixture(browser, server.base, VIEWPORT, scheme, lang);
       try {
-        await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
-        await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
-        await opened.page.waitForTimeout(500);
-        const rows = await readRows(opened.page, CARD);
-        const plain = await readRows(opened.page, PLAIN);
-        await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `card-${label}.png`) });
-        await opened.page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
-        /* One label also keeps the live arc still at three points of a cycle.
-           Which way the dashes go, and whether the arrowhead is left standing
-           off its own line while they go there, are questions about a moving
-           drawing: a single frame of it answers neither. */
-        if (label === "1680-en-light") {
-          for (const at of [0, 175, 350]) {
-            await opened.page.evaluate((ms) => {
-              for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = ms; }
-            }, at);
-            await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `phase-${at}.png`) });
-          }
-          await opened.page.evaluate(() => { for (const animation of document.getAnimations()) animation.play(); });
+        await page.waitForSelector(card(DETAILED), { timeout: 20_000 });
+        await page.waitForTimeout(500);
+
+        /* ---- Closed: one row, and none of the agent's text on the card. */
+        const closed = await measure(page);
+        await page.screenshot({ path: path.join(OUT, `${label}-details-closed.png`) });
+        if (!closed.detailed.row.present) failures.push(`${label}: the card carries no Details row`);
+        if (closed.detailed.row.expanded) failures.push(`${label}: the row is open before anything was clicked`);
+        if (closed.detailed.row.text) failures.push(`${label}: the agent's text is on the card while the row is shut`);
+        if (closed.detailed.textOnCard) failures.push(`${label}: the agent's own words are readable on the closed card`);
+        if (closed.detailed.row.label !== (lang === "uk" ? "Деталі" : "Details")) failures.push(`${label}: the row says ${JSON.stringify(closed.detailed.row.label)}`);
+        if (!closed.detailed.description.startsWith("Results vanish")) failures.push(`${label}: the human description moved: ${JSON.stringify(closed.detailed.description)}`);
+        /* A task nobody wrote details for carries no row at all. */
+        if (closed.plain.row.present) failures.push(`${label}: a task without details drew a Details row`);
+        if (!closed.plain.description.startsWith("Resumable uploads")) failures.push(`${label}: the plain card's description moved`);
+
+        /* ---- Opened: the whole text, in place, scrolling inside itself. */
+        await page.click(`${card(DETAILED)} [data-details-toggle]`);
+        await page.waitForTimeout(300);
+        const open = await measure(page);
+        await page.screenshot({ path: path.join(OUT, `${label}-details-open.png`) });
+        if (!open.detailed.row.expanded) failures.push(`${label}: the row did not open`);
+        if (!open.detailed.row.text) failures.push(`${label}: opening the row showed no text`);
+        if ((open.detailed.row.text?.chars ?? 0) < 200) failures.push(`${label}: the opened text is only ${open.detailed.row.text?.chars} characters`);
+        if (open.detailed.row.text && open.detailed.row.text.scrollHeight <= open.detailed.row.text.clientHeight) {
+          failures.push(`${label}: the opened text does not overflow its own box (${open.detailed.row.text.clientHeight} ≥ ${open.detailed.row.text.scrollHeight}), so nothing proves it scrolls inside itself`);
         }
-        check(label, rows, plain);
-        frames[label] = { viewport: { width, height }, lang, scheme, motion, documentLang: await opened.page.evaluate(() => document.documentElement.lang), rows, plain };
-        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+        if (open.detailed.row.text && !/auto|scroll/.test(open.detailed.row.text.overflowY)) {
+          failures.push(`${label}: the opened text has overflow-y ${open.detailed.row.text.overflowY}, so it cannot scroll inside itself`);
+        }
+        if (open.detailed.cardHeight - closed.detailed.cardHeight > 320) {
+          failures.push(`${label}: opening the row grew the card by ${open.detailed.cardHeight - closed.detailed.cardHeight}px, so the text is not bounded`);
+        }
+        if (open.detailed.title !== closed.detailed.title || open.detailed.description !== closed.detailed.description) {
+          failures.push(`${label}: opening the row changed the human title or description`);
+        }
+
+        /* ---- The opened text is edited in its place. */
+        await page.click(`${card(DETAILED)} [data-details-text]`);
+        await page.waitForTimeout(300);
+        const editing = await readRow(page, DETAILED);
+        await page.screenshot({ path: path.join(OUT, `${label}-details-editing.png`) });
+        if (editing.editorField !== "details") failures.push(`${label}: clicking the opened text opened ${JSON.stringify(editing.editorField)} instead of the details editor`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(200);
+
+        /* ---- Shut again: one row, and the text gone from the card. */
+        await page.click(`${card(DETAILED)} [data-details-toggle]`);
+        await page.waitForTimeout(300);
+        const shut = await readRow(page, DETAILED);
+        if (shut.expanded || shut.text) failures.push(`${label}: the row did not shut again`);
+
+        frames[label] = { viewport: VIEWPORT, closed, open, editing, shut };
+        if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
       } catch (error) {
         failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
       } finally {
-        await opened.context.close();
+        await context.close();
       }
     };
 
-    /* The phone is recorded, not gated: the kanban board does not mount there. */
-    const phone = async (scheme: Scheme) => {
-      const label = `390-en-${scheme}`;
-      const opened = await openFixture(browser, base, { width: 390, height: 844 }, scheme, "en");
+    /* The phone draws its own board, and a task is opened from its menu. */
+    const phone = async () => {
+      const label = "390";
+      const viewport = { width: 390, height: 844 };
+      const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, "light", "en");
       try {
-        await opened.page.waitForTimeout(800);
-        await opened.page.screenshot({ path: path.join(OUT, `phone-${label}.png`), fullPage: true });
-        frames[label] = {
-          viewport: { width: 390, height: 844 },
-          board: await opened.page.evaluate(() => (document.querySelector("[data-mobile2-board]") ? "mobile2" : document.querySelector("[data-kanban-board]") ? "kanban" : "none")),
-          collapsedRows: await opened.page.evaluate(() => document.querySelectorAll(".psummary").length),
-          arcLayers: await opened.page.evaluate(() => document.querySelectorAll("[data-arc-layer]").length),
-        };
-        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+        await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 20_000 });
+        await page.waitForTimeout(500);
+        await page.click('[data-mobile2-open="menu"]');
+        await page.click('[data-mobile2-menu-row="tasks"]');
+        await page.waitForTimeout(400);
+        await page.getByText("Restore search results after the index rebuild").first().click();
+        await page.waitForSelector("[data-task-details-toggle]", { timeout: 10_000 });
+        await page.waitForTimeout(300);
+
+        const read = () => page.evaluate(() => {
+          const block = document.querySelector<HTMLElement>("[data-task-details]");
+          const toggle = document.querySelector<HTMLElement>("[data-task-details-toggle]");
+          const field = block?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
+          const text = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task text"]');
+          const style = field ? getComputedStyle(field) : null;
+          return {
+            rows: document.querySelectorAll("[data-task-details-toggle]").length,
+            label: (toggle?.textContent ?? "").replace(/\s+/g, " ").trim(),
+            expanded: toggle?.getAttribute("aria-expanded") === "true",
+            details: field
+              ? { chars: field.value.length, clientHeight: Math.round(field.clientHeight), scrollHeight: Math.round(field.scrollHeight), overflowY: style!.overflowY }
+              : null,
+            taskText: (text?.value ?? "").split("\n")[0] ?? "",
+            contextReadable: (document.getElementById("root")?.textContent ?? "").includes("Files another lane holds"),
+          };
+        });
+
+        const closed = await read();
+        await page.screenshot({ path: path.join(OUT, "phone-390x844-details-closed.png") });
+        if (closed.rows !== 1) failures.push(`${label}: the opened task carries ${closed.rows} details rows, not one`);
+        if (closed.expanded) failures.push(`${label}: the row is open before anything was tapped`);
+        if (closed.details) failures.push(`${label}: the agent's text is on screen while the row is shut`);
+        if (closed.contextReadable) failures.push(`${label}: the agent's own words are readable with the row shut`);
+        if (closed.label !== "Details") failures.push(`${label}: the row says ${JSON.stringify(closed.label)}`);
+        if (!closed.taskText.startsWith("Restore search results")) failures.push(`${label}: the task's own text is not the text field's first line`);
+
+        await page.click("[data-task-details-toggle]");
+        await page.waitForTimeout(300);
+        const open = await read();
+        await page.screenshot({ path: path.join(OUT, "phone-390x844-details-open.png") });
+        if (!open.expanded || !open.details) failures.push(`${label}: tapping the row showed no text`);
+        if ((open.details?.chars ?? 0) < 200) failures.push(`${label}: the opened text is only ${open.details?.chars} characters`);
+        if (open.details && open.details.scrollHeight <= open.details.clientHeight) {
+          failures.push(`${label}: the opened text does not overflow its own box, so nothing proves it scrolls inside itself`);
+        }
+        if (open.taskText !== closed.taskText) failures.push(`${label}: opening the row changed the task's text`);
+
+        frames[label] = { viewport, closed, open };
+        if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
       } finally {
-        await opened.context.close();
+        await context.close();
       }
     };
 
     try {
-      for (const scheme of ["light", "dark"] as const) {
-        for (const lang of ["en", "uk"] as const) {
-          /* A wide board and the scroller, where the short rows are one line
-             and their arcs are drawn while the four-stage lane already wraps;
-             then 640 px, the narrowest desktop the board supports, where the
-             three-stage rows wrap too and hand their count to the failing pill
-             while the two-stage ones keep their arcs. */
-          /* Tall enough that the whole card is inside the frame at every
-             width: the arcs are read off the drawing, and a curve scrolled
-             past the bottom of the window is a curve nothing can be asked
-             about. */
-          await desktop(1680, 1150, scheme, lang);
-          await desktop(1280, 1250, scheme, lang);
-          /* Motion off is the arc's second rendering, and the one the counter's
-             halo has the least room against: the live arc is a solid 3 px line
-             there rather than dashes with gaps in it. */
-          if (lang === "en") await desktop(1440, 1250, scheme, lang, "reduce");
-          /* Tall enough that the whole card fits one frame: the wrapped row's
-             pill suffix is the only drawing of the edge there, and a frame
-             that clips it away shows nothing of what it replaced. */
-          await desktop(640, 1240, scheme, lang);
-        }
-        await phone(scheme);
-      }
+      await desktop("light", "en");
+      await desktop("dark", "uk");
+      await phone();
     } finally {
       await browser.close();
       server.stop();
     }
 
-    /* Both modes have to appear across the widths, or the evidence only shows
-       half the design — and the suffix has to appear at a WIDE one, because
-       that is where it is the ordinary rendering rather than the fallback. */
-    const modesOf = (frame: unknown) => ((frame as { rows?: RowMeasure[] }).rows ?? []).map((row) => row.mode);
-    const modes = new Set(Object.values(frames).flatMap(modesOf));
-    for (const wanted of ["arcs", "suffix"]) {
-      if (!modes.has(wanted)) failures.push(`no width produced a row in ${wanted} mode; modes seen: ${[...modes].join(", ")}`);
-    }
-    const wide = Object.entries(frames).filter(([, frame]) => ((frame as { viewport?: { width: number } }).viewport?.width ?? 0) >= 1280);
-    if (!wide.some(([, frame]) => modesOf(frame).includes("suffix"))) {
-      failures.push("no wide frame drew a row in suffix mode, so the common case is not on record");
-    }
-    if (!wide.some(([, frame]) => modesOf(frame).includes("arcs"))) {
-      failures.push("no wide frame drew a row in arcs mode");
-    }
-
-    fs.writeFileSync(path.join(EVIDENCE, "arcs.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    fs.writeFileSync(path.join(EVIDENCE, "details.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+
+describe("role evaluation mounted candidate", () => {
+  const candidateTest = process.env.LLV_KANBAN_BROWSER_TEST === "1" && process.env.ROLE_EVAL_CANDIDATE ? test : test.skip;
+  candidateTest("executes final-row rejection, reorder, touch and keyboard retry", async () => {
+    const { gradeRendered } = await import("../../../evals/roles/graders/rendered");
+    await gradeRendered(path.resolve(process.env.ROLE_EVAL_CANDIDATE!), path.resolve(process.env.ROLE_EVAL_OUTPUT!));
+  }, 180_000);
+});
+
+
+describe("readable tool rows", () => {
+  browserTest("Codex feed at phone and desktop widths", async () => {
+    const phase = process.env.TOOL_CAPTURE_PHASE === "before" ? "before" : "after";
+    const out = path.resolve(`.artifacts/readable-tools/${phase}`);
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/feed/__fixtures__/readableTools.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: object[] = [];
+    try {
+      for (const width of [390, 1280]) for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 1000 }, "dark", lang);
+        await page.locator("[data-readable-tools]").waitFor();
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-closed.png`), fullPage: true });
+        // Open the existing tool/group disclosures with real pointer input.
+        for (let round = 0; round < 8; round++) {
+          // Pin each node while clicking: a live :not([open]) locator can
+          // retarget between Playwright's checks and the native toggle event.
+          const details = await page.locator("details:not([open]) > summary").elementHandles();
+          for (const summary of details) {
+            if (await summary.evaluate(el => !el.parentElement?.hasAttribute("open"))) await summary.click();
+            await page.waitForTimeout(100);
+          }
+          const folds = page.locator("[data-mobile-run-fold][aria-expanded=false]");
+          if (await folds.count()) {
+            await folds.first().click();
+            await page.waitForTimeout(100);
+          }
+          await page.waitForTimeout(100);
+          if (!await page.locator("details:not([open]), [data-mobile-run-fold][aria-expanded=false]").count()) break;
+        }
+        expect(await page.locator("details:not([open]), [data-mobile-run-fold][aria-expanded=false]").count()).toBe(0);
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-open.png`), fullPage: true });
+        const reading = await page.locator("[data-readable-tools]").evaluate(el => ({
+          text: el.textContent, scrollWidth: document.documentElement.scrollWidth,
+          viewport: innerWidth, rows: el.querySelectorAll("details").length,
+        }));
+        expect(pageErrors).toEqual([]);
+        expect(reading.scrollWidth).toBeLessThanOrEqual(width);
+        if (phase === "after") {
+          expect(reading.text).toContain("git status --short");
+          expect(reading.text).toContain("Check retry behaviour");
+          expect(reading.text).toContain("+1");
+          expect(reading.text).not.toContain("Text absent");
+          expect(reading.text).not.toContain("Extension");
+          expect(await page.locator("[data-readable-tools]").innerHTML()).not.toContain("invented-review-value");
+          expect(reading.text).toContain("application/json");
+          const clippedChips = await page.locator("[data-tool-chip]").evaluateAll(chips =>
+            chips.filter(el => el.scrollWidth > el.clientWidth + 1).length);
+          expect(clippedChips).toBe(0);
+          // Short labels stay on one line even next to a one-character value.
+          const wrappedLabels = await page.locator("[data-tool-chip] > span:first-child").evaluateAll(labels =>
+            labels.filter(el => el.getClientRects().length > 1).length);
+          expect(wrappedLabels).toBe(0);
+        }
+        readings.push({ width, lang, ...reading });
+        await context.close();
+      }
+      fs.mkdirSync("evidence/readable-tools", { recursive: true });
+      fs.writeFileSync(`evidence/readable-tools/${phase}.json`, JSON.stringify({ phase, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+
+/* #1938: Codex tool rows at phone width, beside Claude rows, in a real browser.
+   happy-dom lays nothing out, so the defect this case exists for — a row whose
+   label wrapped out of its own fixed-height box and painted over the row under
+   it — is only visible where boxes have geometry. The fixture
+   (`codexPhoneRows.fixture.tsx`) carries the same eight tool cases under both
+   engines: clean, failed, heredoc, wrapper-prefixed, env-prefixed, very long,
+   MCP and still running.
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "codex tool rows"
+
+   `TOOL_ROW_CAPTURE_PHASE=before` records the defect without asserting it;
+   the default `after` phase holds the verdicts. PNGs go to the directory named
+   by `TOOL_ROW_PNG_DIR` so the pixels can be looked at before merging. */
+describe("codex tool rows on a phone", () => {
+  /* One row must contain its own text and never touch another row. Returned as
+     data (not thrown) so every frame is measured and the evidence file records
+     the whole matrix rather than the first failure. */
+  const measureRows = `(() => {
+    const rows = [...document.querySelectorAll("[data-tool-row]")];
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({
+      top: Math.max(a.top, b.top), left: Math.max(a.left, b.left),
+      right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom),
+    });
+    const empty = r => r.right - r.left < 0.5 || r.bottom - r.top < 0.5;
+    /* A clipped label is not an escape: \`truncate\` hides the overflow, but a
+       Range's rect ignores that, so each text rect is first cut down by every
+       ancestor that clips it. What survives is what the operator can see. */
+    const visible = (node, row) => {
+      let clip = null;
+      for (let el = node.parentElement; el; el = el.parentElement) {
+        const style = getComputedStyle(el);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = clip ? intersect(clip, box(el)) : box(el);
+        if (el === row) break;
+      }
+      return clip;
+    };
+    const textRects = row => {
+      const out = [];
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const clip = visible(node, row);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          if (raw.width === 0 || raw.height === 0) continue;
+          const rect = clip ? intersect(clip, raw) : { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom };
+          if (empty(rect)) continue;
+          out.push({ text: node.nodeValue.trim().slice(0, 60), rect });
+        }
+      }
+      return out;
+    };
+    /* What the operator sees is ink, not the layout box: a label that wraps out
+       of a fixed-height row keeps its row's box small and paints over the row
+       below it. So each row is measured by the union of its box and every
+       visible text rect inside it. */
+    const inked = rows.map(row => {
+      const base = box(row);
+      const ink = { ...base };
+      for (const { rect } of textRects(row)) {
+        ink.top = Math.min(ink.top, rect.top); ink.left = Math.min(ink.left, rect.left);
+        ink.right = Math.max(ink.right, rect.right); ink.bottom = Math.max(ink.bottom, rect.bottom);
+      }
+      return { base, ink, text: (row.textContent || "").trim().slice(0, 60) };
+    });
+    const disjoint = (a, b) => a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5;
+    const overlaps = [];
+    for (let i = 0; i < inked.length; i++) for (let j = i + 1; j < inked.length; j++) {
+      if (disjoint(inked[i].ink, inked[j].ink)) continue;
+      overlaps.push({ a: i, b: j, aText: inked[i].text, bText: inked[j].text });
+    }
+    const escapes = [];
+    for (const [index, row] of rows.entries()) {
+      const r = box(row);
+      for (const { text, rect } of textRects(row)) {
+        if (rect.top >= r.top - 1 && rect.bottom <= r.bottom + 1 && rect.left >= r.left - 1 && rect.right <= r.right + 1) continue;
+        escapes.push({
+          row: index, text,
+          overflowY: Math.round(Math.max(0, rect.bottom - r.bottom, r.top - rect.top)),
+          overflowX: Math.round(Math.max(0, rect.right - r.right, r.left - rect.left)),
+        });
+        break;
+      }
+    }
+    const lineHeight = parseFloat(getComputedStyle(document.body).lineHeight) || 16;
+    const tall = inked.filter(row => row.ink.bottom - row.ink.top > lineHeight * 2.6)
+      .map(row => ({ text: row.text, height: Math.round(row.ink.bottom - row.ink.top) }));
+    return { rows: rows.length, overlaps, escapes, tall, scrollWidth: document.documentElement.scrollWidth };
+  })()`;
+
+  browserTest("rows stay one compact line and never overlap", async () => {
+    const phase = process.env.TOOL_ROW_CAPTURE_PHASE === "before" ? "before" : "after";
+    const out = path.resolve(`.artifacts/codex-phone-rows/${phase}`);
+    const pngDir = process.env.TOOL_ROW_PNG_DIR ?? "/var/tmp/llv-codex-rows-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/feed/__fixtures__/codexPhoneRows.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const shots: string[] = [];
+    try {
+      for (const width of [390, 1280]) {
+        for (const scheme of ["dark", "light"] as const) {
+          for (const lang of ["en", "uk"] as const) {
+            const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 1400 }, scheme, lang);
+            try {
+              await page.locator("[data-codex-phone-rows]").waitFor();
+              for (const state of ["collapsed", "expanded"] as const) {
+                if (state === "expanded") {
+                  /* Open every disclosure with real pointer input. Each node is
+                     pinned before the click: a live `:not([open])` locator can
+                     retarget between Playwright's check and the native toggle. */
+                  for (let round = 0; round < 10; round++) {
+                    for (const summary of await page.locator("details:not([open]) > summary").elementHandles()) {
+                      if (await summary.evaluate(el => !el.parentElement?.hasAttribute("open"))) await summary.click();
+                    }
+                    const folds = page.locator("[data-mobile-run-fold][aria-expanded=false], [data-mobile-run] > button[aria-expanded=false]");
+                    for (const fold of await folds.elementHandles()) await fold.click();
+                    await page.waitForTimeout(80);
+                    if (!(await page.locator("details:not([open]), [aria-expanded=false]").count())) break;
+                  }
+                }
+                await page.waitForTimeout(80);
+                const reading = await page.evaluate(measureRows) as {
+                  rows: number; overlaps: unknown[]; escapes: unknown[]; tall: unknown[]; scrollWidth: number;
+                };
+                const label = `${width}-${scheme}-${lang}-${state}`;
+                frames[label] = reading;
+                for (const engine of ["codex", "claude"] as const) {
+                  const name = `${engine}-${label}.png`;
+                  await page.locator(`[data-rows-engine=${engine}]`).screenshot({ path: path.join(pngDir, name) });
+                  shots.push(name);
+                }
+                if (phase !== "after") continue;
+                if (!reading.rows) failures.push(`${label}: the fixture rendered no tool rows`);
+                if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} row pairs overlap — ${JSON.stringify(reading.overlaps[0])}`);
+                if (reading.escapes.length) failures.push(`${label}: ${reading.escapes.length} text runs escape their row — ${JSON.stringify(reading.escapes[0])}`);
+                if (reading.tall.length) failures.push(`${label}: ${reading.tall.length} rows are taller than one line — ${JSON.stringify(reading.tall[0])}`);
+                if (reading.scrollWidth > width) failures.push(`${label}: the document scrolls sideways (${reading.scrollWidth} > ${width})`);
+              }
+              if (pageErrors.length) failures.push(`${width}-${scheme}-${lang}: page errors ${pageErrors.join(" | ")}`);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/codex-phone-rows", { recursive: true });
+    fs.writeFileSync(`evidence/codex-phone-rows/${phase}.json`, `${JSON.stringify({ phase, shots, frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+
+/* #1959: the live-turn overlay at phone width, against the two transcript
+   states that decide what it paints. The defect the operator photographed is a
+   rendering one — dozens of "Bash · arguments omitted" and "viewer ·
+   create_pipeline · arguments omitted" rows under the canonical cards — so it
+   is measured where rows have geometry, over the same long turn the DOM tests
+   use (`liveTurnLongTurn.fixture.ts`): sixty calls, long Viewer MCP names,
+   failures, shed arguments, one still running.
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "live turn rows"
+
+   `LIVE_ROWS_CAPTURE_PHASE=before` records the wall without asserting it (run
+   it against the overlay as it was); the default `after` phase holds the
+   verdicts. PNGs go to the directory named by `LIVE_ROWS_PNG_DIR` — they are
+   never committed — and the readings to `evidence/live-turn-rows/<phase>.json`. */
+describe("live turn rows on a phone", () => {
+  /* What a title has to hold to be worth reading. At 390 px an overlay row is
+     about 330 px wide, and the badge, the outcome mark and the row's own
+     indent take a fixed bite out of it; what is left is the title's, and a
+     title holding less than these is one the operator cannot use. The round-1
+     row gave it 1.27 px — 0 % — because the chips took the line and the title
+     was the only item left able to shrink. A chip smaller than `MIN_CHIP_PX`
+     in either direction has been squeezed rather than wrapped. */
+  const MIN_MCP_TITLE_PX = 140;
+  const MIN_MCP_TITLE_SHARE = 40;
+  const MIN_CHIP_PX = 24;
+
+  /* What the operator can see of the overlay: how many rows it paints, what
+     the collapsed line says, whether any row is a bare "arguments omitted",
+     and whether a live row repeats a call the transcript below already shows. */
+  const measureOverlay = `(() => {
+    const phrases = ${JSON.stringify([en["feed.liveToolArgsOmitted"], translate("uk", "feed.liveToolArgsOmitted")])};
+    const read = (section) => {
+      const overlay = section.querySelector("[data-live-rows-overlay]");
+      const transcript = section.querySelector("[data-live-rows-transcript]");
+      const rows = [...overlay.querySelectorAll("[data-live-turn]")];
+      const collapsed = overlay.querySelector("[data-live-turn-earlier]");
+      const text = overlay.textContent || "";
+      const ids = rows.map(row => row.getAttribute("data-live-turn-item-id")).filter(Boolean);
+      const canonical = new Set(transcript
+        ? [...transcript.querySelectorAll("[data-tool-row], [data-testid=mcp-call-card]")]
+          .flatMap(node => (node.textContent || "").trim() ? [(node.textContent || "").trim()] : [])
+        : []);
+      const box = overlay.getBoundingClientRect();
+      /* Round-2 P2: the action title is what the operator reads, so it is
+         measured. On one flex line it was the only item able to shrink and
+         two entity chips squeezed it to about a pixel; the readings below say
+         how much of the row it holds now, and how tall the row grew to keep
+         its chips whole. */
+      const mcp = [...overlay.querySelectorAll("[data-live-mcp]")].map(row => {
+        /* A bare flex-1 span is where the title lived before it was given a
+           basis of its own, so the before phase measures the same thing. */
+        const title = row.querySelector("[data-live-mcp-title]") || row.querySelector("span.flex-1");
+        const rowBox = row.getBoundingClientRect();
+        const titleBox = title.getBoundingClientRect();
+        const chips = [...row.querySelectorAll("[data-live-mcp-link]")];
+        const mark = row.querySelector("[data-live-mcp-outcome=omitted]") ? "omitted"
+          : row.querySelector("[aria-label=success]") ? "success"
+            : row.querySelector("[aria-label=error]") ? "error"
+              : row.querySelector("[role=status]") ? "pending" : "none";
+        return {
+          tool: row.getAttribute("data-live-mcp"),
+          status: row.getAttribute("data-live-tool-status"),
+          state: row.getAttribute("data-live-mcp-state"),
+          mark,
+          chips: chips.length,
+          /* A chip that had to shrink to fit is not a tappable chip. */
+          minChipWidth: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().width))) : 0,
+          minChipHeight: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().height))) : 0,
+          rowWidth: Math.round(rowBox.width),
+          rowHeight: Math.round(rowBox.height),
+          titleWidth: Math.round(titleBox.width * 100) / 100,
+          titleShare: rowBox.width ? Math.round((titleBox.width / rowBox.width) * 100) : 0,
+          /* How much of the action title survives before the ellipsis. */
+          titleFullWidth: title.scrollWidth,
+          titleText: (title.textContent || "").trim(),
+        };
+      });
+      /* The canonical McpCallCard the live row hands over to, measured in the
+         same units and held to the same bounds (#1955). A handoff is only
+         invisible if the card the transcript writes reads at least as well as
+         the live row it replaces, so both sides of it are asserted here. */
+      const canonicalMcp = transcript
+        ? [...transcript.querySelectorAll("[data-testid=mcp-call-card]")].map(card => {
+          /* A bare flex-1 span is where this title lived before it was given a
+             basis of its own, so an earlier phase measures the same thing. */
+          const title = card.querySelector("[data-mcp-title]") || card.querySelector("summary > span.flex-1");
+          const summary = card.querySelector("summary");
+          if (!title || !summary) return null;
+          const rowBox = summary.getBoundingClientRect();
+          const chips = [...card.querySelectorAll("[data-testid^=mcp-link-]")];
+          return {
+            tool: (title.textContent || "").trim().slice(0, 40),
+            rowWidth: Math.round(rowBox.width),
+            titleWidth: Math.round(title.getBoundingClientRect().width * 100) / 100,
+            titleShare: rowBox.width ? Math.round((title.getBoundingClientRect().width / rowBox.width) * 100) : 0,
+            chips: chips.length,
+            minChipWidth: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().width))) : 0,
+            minChipHeight: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().height))) : 0,
+          };
+        }).filter(Boolean)
+        : [];
+      return {
+        mcp,
+        canonicalMcp,
+        rows: rows.length,
+        height: Math.round(box.height),
+        toolRows: rows.filter(row => row.hasAttribute("data-live-tool")).length,
+        mcpRows: overlay.querySelectorAll("[data-live-mcp]").length,
+        mcpChips: overlay.querySelectorAll("[data-live-mcp-link]").length,
+        argsOmittedRows: rows.filter(row => phrases.some(phrase => (row.textContent || "").includes(phrase))).length,
+        argsOmittedMentions: phrases.reduce((total, phrase) => total + text.split(phrase).length - 1, 0),
+        collapsed: collapsed ? { count: Number(collapsed.getAttribute("data-live-turn-earlier")), text: (collapsed.textContent || "").trim() } : null,
+        collapsedLines: overlay.querySelectorAll("[data-live-turn-earlier]").length,
+        /* A live row that repeats a canonical row is the duplicate the
+           operator reads as junk: both name the same call. */
+        duplicates: rows.filter(row => canonical.has((row.textContent || "").trim())).length,
+        ids,
+      };
+    };
+    const out = {};
+    for (const section of document.querySelectorAll("[data-live-rows-case]")) {
+      out[section.getAttribute("data-live-rows-case")] = read(section);
+    }
+    return { cases: out, scrollWidth: document.documentElement.scrollWidth };
+  })()`;
+
+  browserTest("the overlay is a bounded tail, and nothing at all once the transcript carries the calls", async () => {
+    /* Any phase name but "after" records without asserting, so the overlay as
+       it was at an earlier commit can be measured in these same units: "before"
+       is the unbounded wall this issue started from, "round1" the bounded
+       overlay whose MCP row still squeezed its title and called an unknown
+       outcome a success. */
+    const phase = (process.env.LIVE_ROWS_CAPTURE_PHASE ?? "after").replace(/[^a-z0-9-]/gi, "") || "after";
+    /* Which tree rendered these readings. An earlier phase is captured from an
+       exported checkout of the revision being measured, which carries no git
+       metadata of its own, so the runner names it — and a phase whose PNGs and
+       JSON disagree about their source cannot go unnoticed again. */
+    const source = process.env.LIVE_ROWS_SOURCE_REV
+      ?? (() => {
+        try { return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(); }
+        catch { return "unrecorded"; }
+      })();
+    const out = path.resolve(`.artifacts/live-turn-rows/${phase}`);
+    const pngDir = process.env.LIVE_ROWS_PNG_DIR ?? "/var/tmp/llv-live-rows-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/liveTurnRowsEvidence.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const shots: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 390, height: 1400 }, "dark", lang);
+        try {
+          await page.locator("[data-live-turn-evidence]").waitFor();
+          await page.waitForTimeout(150);
+          type McpReading = {
+            tool: string; status: string; state: string; mark: string; chips: number;
+            minChipWidth: number; minChipHeight: number; rowWidth: number; rowHeight: number;
+            titleWidth: number; titleShare: number; titleFullWidth: number; titleText: string;
+          };
+          type CanonicalReading = {
+            tool: string; rowWidth: number; titleWidth: number; titleShare: number;
+            chips: number; minChipWidth: number; minChipHeight: number;
+          };
+          const reading = await page.evaluate(measureOverlay) as {
+            cases: Record<string, { rows: number; argsOmittedRows: number; argsOmittedMentions: number; mcpRows: number; mcpChips: number; collapsed: { count: number; text: string } | null; collapsedLines: number; duplicates: number; mcp: McpReading[]; canonicalMcp: CanonicalReading[] }>;
+            scrollWidth: number;
+          };
+          const label = `390-dark-${lang}`;
+          frames[label] = reading;
+          for (const section of ["stale", "current", "states"] as const) {
+            /* The before phase is rendered by the overlay as it was, which
+               has no section the fix added. */
+            if (!reading.cases[section]) continue;
+            const name = `${section}-${label}-${phase}.png`;
+            await page.locator(`[data-live-rows-case=${section}]`).screenshot({ path: path.join(pngDir, name) });
+            shots.push(name);
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          if (phase !== "after") continue;
+          const stale = reading.cases.stale!;
+          const current = reading.cases.current!;
+          /* The tail is bounded, and what it drops it counts — once. */
+          if (stale.rows > 8) failures.push(`${label}: the overlay painted ${stale.rows} rows`);
+          if (!stale.rows) failures.push(`${label}: the overlay painted no tail at all`);
+          if (stale.collapsedLines !== 1) failures.push(`${label}: ${stale.collapsedLines} collapsed lines`);
+          if (!stale.collapsed?.count) failures.push(`${label}: the collapsed line counts nothing`);
+          /* No wall of "arguments omitted", in either language. */
+          if (stale.argsOmittedRows || stale.argsOmittedMentions) {
+            failures.push(`${label}: ${stale.argsOmittedRows} rows / ${stale.argsOmittedMentions} mentions of shed arguments`);
+          }
+          /* A Viewer MCP row reads like its canonical card, chips and all. */
+          if (!stale.mcpRows) failures.push(`${label}: no MCP row survived into the tail`);
+          if (!stale.mcpChips) failures.push(`${label}: the MCP rows carry no entity chips`);
+
+          /* Round-2 P2, the readable title. The tail carries the two-chip
+             call (`link_task_to_pipeline`), which is where the title used to
+             lose its line entirely: 1.27 px of a 330 px row. A title has to
+             hold a readable share of its row, and the chips beside it have to
+             stay whole rather than shrink to fit. */
+          const chipped = stale.mcp.filter((row) => row.chips >= 2);
+          if (!chipped.length) failures.push(`${label}: the tail carries no MCP row with two entity chips`);
+          for (const row of [...stale.mcp, ...reading.cases.states!.mcp]) {
+            if (row.titleWidth < MIN_MCP_TITLE_PX) {
+              failures.push(`${label}: ${row.tool} title is ${row.titleWidth}px of a ${row.rowWidth}px row`);
+            }
+            if (row.titleShare < MIN_MCP_TITLE_SHARE) {
+              failures.push(`${label}: ${row.tool} title holds only ${row.titleShare}% of its row`);
+            }
+            if (row.chips && (row.minChipWidth < MIN_CHIP_PX || row.minChipHeight < MIN_CHIP_PX)) {
+              failures.push(`${label}: ${row.tool} chips squeezed to ${row.minChipWidth}x${row.minChipHeight}px`);
+            }
+          }
+
+          /* Round-3 P2, the other half of the handoff: the canonical card the
+             live row becomes. A row that reads well only until the transcript
+             claims it is not a handoff, and this card squeezed its own title
+             to 1.27 px with two chips (#1955) — the same construction the live
+             row was fixed for. Both are held to one bound now, in the same
+             units, over the same calls. */
+          const canonical = current.canonicalMcp;
+          if (!canonical.length) failures.push(`${label}: the current transcript carries no canonical MCP card`);
+          if (!canonical.some((card) => card.chips >= 2)) {
+            failures.push(`${label}: no canonical MCP card carries two entity chips`);
+          }
+          for (const card of canonical) {
+            if (card.titleWidth < MIN_MCP_TITLE_PX) {
+              failures.push(`${label}: canonical "${card.tool}" title is ${card.titleWidth}px of a ${card.rowWidth}px row`);
+            }
+            if (card.titleShare < MIN_MCP_TITLE_SHARE) {
+              failures.push(`${label}: canonical "${card.tool}" title holds only ${card.titleShare}% of its row`);
+            }
+            if (card.chips && (card.minChipWidth < MIN_CHIP_PX || card.minChipHeight < MIN_CHIP_PX)) {
+              failures.push(`${label}: canonical "${card.tool}" chips squeezed to ${card.minChipWidth}x${card.minChipHeight}px`);
+            }
+          }
+
+          /* Round-2 P1, the outcome vocabulary: a call whose result the
+             journal dropped is never painted as a success. */
+          const marks = Object.fromEntries(reading.cases.states!.mcp.map((row) => [row.status, row.mark]));
+          for (const [status, expected] of [["run", "pending"], ["ok", "success"], ["err", "error"], ["unknown", "omitted"]] as const) {
+            if (marks[status] !== expected) {
+              failures.push(`${label}: an MCP call with status ${status} is marked "${marks[status] ?? "nothing"}", not "${expected}"`);
+            }
+          }
+          /* And once the transcript carries the calls, the overlay is silent. */
+          if (current.rows || current.collapsedLines) {
+            failures.push(`${label}: the overlay painted ${current.rows} rows beside a current transcript`);
+          }
+          if (stale.duplicates || current.duplicates) {
+            failures.push(`${label}: ${stale.duplicates + current.duplicates} live rows repeat a canonical row`);
+          }
+          if (reading.scrollWidth > 390) failures.push(`${label}: the document scrolls sideways (${reading.scrollWidth} > 390)`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/live-turn-rows", { recursive: true });
+    fs.writeFileSync(`evidence/live-turn-rows/${phase}.json`, `${JSON.stringify({ phase, source, shots, frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
+
+describe("#1972 stopped launches in the production task reader", () => {
+  browserTest("closed launch dismisses from the board while the parked launch stays retryable", async () => {
+    const out = path.resolve(".artifacts/stopped-launches");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=stopped-launches`, { width: 1280, height: 900 }, "light", "en");
+      await page.waitForSelector(card("t-stopped"));
+      await page.locator(card("t-stopped")).scrollIntoViewIfNeeded();
+
+      await page.locator(`${card("t-stopped")} [data-pipeline="p-closed"] .pb-pill[data-stage="build"]`).click();
+      const closed = page.locator('[data-reader-path="spawn:launch-closed"]');
+      await closed.locator("[data-launch-dismiss]").waitFor({ state: "visible" });
+      expect(await closed.locator("[data-launch-retry]").count()).toBe(0);
+      expect(await closed.locator("textarea, [data-agent-control-strip]").count()).toBe(0);
+      const bounds = await closed.locator("[data-launch-dismiss]").boundingBox();
+      expect(bounds?.width).toBeGreaterThan(0);
+      await page.screenshot({ path: path.join(out, "closed-launch.png") });
+      await closed.locator("[data-launch-dismiss]").click();
+      await closed.waitFor({ state: "detached" });
+      await page.waitForFunction(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string; path?: string }> } }).evidence.boardMutations
+        .some((mutation) => mutation.kind === "close" && mutation.path === "spawn:launch-closed"));
+      expect(await page.locator(`${card("t-stopped")} .tile[data-member="spawn:launch-closed"]`).count()).toBe(0);
+      await page.locator(`${card("t-stopped")} [data-pipeline="p-needs_decision"] .pb-pill[data-stage="build"]`).click();
+      const parked = page.locator('[data-reader-path="spawn:launch-needs_decision"]');
+      await parked.locator("[data-launch-retry]").waitFor({ state: "visible" });
+      await page.screenshot({ path: path.join(out, "parked-launch.png") });
+      expect(pageErrors).toEqual([]);
+      await context.close();
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 60_000);
+});
+
+describe("columns balanced on large screens, stage pills and heads on one line", () => {
+  /*
+   * The board's four columns on a large screen, and the one-line rows inside
+   * them, over `?scenario=balance`: every column holds a card whose pipelines
+   * name their stages in 5, 20 and 40 characters, on a one-stage chain and on
+   * Build → Review with a fail loop that fired; one task carries five
+   * pipelines; Inbox holds a stack of long-titled cards.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "columns balanced"
+   *
+   * What it gates, per viewport, in en and uk:
+   *   - wide mode at 1920 and 2560: Assigned is 60–70 % of the width it had
+   *     with shelves capped at 264 px (content − 3·264 − 3·16), the three
+   *     shelves are equal and wider than 264 px;
+   *   - every wide or narrow frame: Assigned ≥ 520 (wide) / 440 (narrow),
+   *     shelves ≥ 232 (wide) / 220 (narrow), nothing overflows sideways;
+   *   - a card fills its column;
+   *   - a stage pill's ink stays inside the pill, its name is one line and
+   *     ends in an ellipsis with the full name in the pill's title, and the
+   *     dot, the engine mark, the model and the effort bars keep their size;
+   *   - a column head is one line: its title, count and counters inside the
+   *     head, the counters truncating before anything wraps.
+   * BALANCE_CAPTURE_LABEL names the record, written to
+   * src/components/kanban/evidence/column-balance/<label>.json. With `main` (the stylesheet and
+   * components of the base, this fixture and driver on top) the same checks
+   * are recorded and must fail: the negative control.
+   */
+  const label = process.env.BALANCE_CAPTURE_LABEL?.trim() || "branch";
+  const EVIDENCE = path.resolve("src/components/kanban/evidence/column-balance");
+  const measure = `(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+    const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const empty = r => r.right - r.left < 0.5 || r.bottom - r.top < 0.5;
+    /* Ink, clipped: a Range's rects ignore overflow, so each text rect is cut
+       by every clipping ancestor up to the measured element. */
+    const clipOf = (node, top) => {
+      let clip = null;
+      for (let el = node.parentElement; el; el = el.parentElement) {
+        const style = getComputedStyle(el);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = clip ? intersect(clip, box(el)) : box(el);
+        if (el === top) break;
+      }
+      return clip;
+    };
+    const textRects = top => {
+      const out = [];
+      const walker = document.createTreeWalker(top, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        /* A closed <details> paints only its summary, yet its rows still report rects. */
+        const shut = node.parentElement.closest("details:not([open])");
+        if (shut && !node.parentElement.closest("summary")) continue;
+        const clip = clipOf(node, top);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          if (raw.width === 0 || raw.height === 0) continue;
+          const rect = clip ? intersect(clip, raw) : { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom };
+          if (!empty(rect)) out.push({ text: node.nodeValue.trim().slice(0, 50), rect, parent: node.parentElement });
+        }
+      }
+      return out;
+    };
+    const escapes = (el, slack) => {
+      const r = box(el);
+      return textRects(el).filter(({ rect }) => rect.top < r.top - slack || rect.bottom > r.bottom + slack || rect.left < r.left - slack || rect.right > r.right + slack).map(({ text }) => text);
+    };
+    /* The number of visual lines a text node spans. */
+    const lines = el => {
+      const tops = new Set();
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) if (raw.width > 0) tops.add(Math.round(raw.top));
+      }
+      return tops.size;
+    };
+    const board = document.querySelector("[data-board]");
+    const style = getComputedStyle(board);
+    const content = board.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const columns = [...board.querySelectorAll(".column")].map(column => {
+      const head = column.querySelector(".col-head");
+      const body = column.querySelector(".col-body");
+      const bodyStyle = getComputedStyle(body);
+      const inner = body.clientWidth - parseFloat(bodyStyle.paddingLeft) - parseFloat(bodyStyle.paddingRight);
+      const cards = [...column.querySelectorAll(".card")].filter(card => card.getBoundingClientRect().width > 0);
+      const counters = [...head.querySelectorAll(".live, .needs")].map(counter => ({
+        text: counter.textContent, title: counter.getAttribute("title"), lines: lines(counter),
+        /* What the counter shows: its text, or under 300 px its number alone. */
+        shown: counter.querySelector(".ct") && getComputedStyle(counter.querySelector(".ct")).display === "none" ? getComputedStyle(counter, "::after").content.replace(/"/g, "") : counter.textContent,
+        width: Math.round(counter.getBoundingClientRect().width),
+        truncated: counter.querySelector(".ct") ? counter.querySelector(".ct").scrollWidth > counter.querySelector(".ct").clientWidth + 1 : false,
+      }));
+      return {
+        status: column.dataset.status, width: Math.round(column.getBoundingClientRect().width * 10) / 10,
+        head: { lines: [...head.children].filter(child => (child.textContent || "").trim()).map(child => lines(child)), escapes: escapes(head, 1), counters, height: Math.round(head.getBoundingClientRect().height) },
+        narrowCards: cards.filter(card => card.getBoundingClientRect().width < inner - 1).map(card => ({ id: card.dataset.id, width: Math.round(card.getBoundingClientRect().width), inner: Math.round(inner) })),
+      };
+    });
+    const pills = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .pb-pills .pb-pill')].filter(pill => pill.getBoundingClientRect().width > 0).map(pill => {
+      const name = pill.querySelector(".pname");
+      const model = pill.querySelector(".imodel");
+      const parts = [pill.querySelector(".pdot"), pill.querySelector(".pident > span:first-child"), model, pill.querySelector(".reasoning-slot")].filter(Boolean);
+      const r = box(pill);
+      return {
+        column: pill.closest(".column").dataset.status,
+        stage: pill.dataset.stage,
+        name: name ? name.textContent : null,
+        nameLines: name ? lines(name) : 0,
+        nameClipped: name ? name.scrollWidth > name.clientWidth + 1 : false,
+        ellipsis: name ? getComputedStyle(name).textOverflow : null,
+        titleHasName: (pill.getAttribute("title") || "").includes(name ? name.textContent : ""),
+        escapes: escapes(pill, 0.5),
+        partsInside: parts.every(part => { const p = box(part); return p.left >= r.left - 0.5 && p.right <= r.right + 0.5 && p.top >= r.top - 0.5 && p.bottom <= r.bottom + 0.5; }),
+        partWidths: parts.map(part => Math.round(part.getBoundingClientRect().width * 10) / 10),
+        model: model ? { text: model.textContent, clipped: model.scrollWidth > model.clientWidth + 1 } : null,
+        height: Math.round(r.height),
+      };
+    });
+    const heads = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .pblock .pb-head')].filter(row => row.getBoundingClientRect().width > 0).map(row => {
+      const title = row.querySelector(".pb-title");
+      return { column: row.closest(".column").dataset.status, ellipsis: getComputedStyle(title).textOverflow, clipped: title.scrollWidth > title.clientWidth + 1, escapes: escapes(row.closest(".card"), 1) };
+    });
+    return {
+      viewport: window.innerWidth, boardWidth: Math.round(board.getBoundingClientRect().width), content: Math.round(content * 10) / 10,
+      mode: board.dataset.mode, overflow: Math.max(0, board.scrollWidth - board.clientWidth), pageOverflow: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+      columns, pills, heads,
+    };
+  })()`;
+
+  browserTest("Assigned gives a third of its width to the shelves; pills and heads hold one line", async () => {
+    const out = path.resolve(".artifacts/kanban-column-balance", label);
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const width of [1440, 1500, 1648, 1680, 1920, 2560]) {
+        for (const lang of ["en", "uk"] as const) {
+          const tag = `${width}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=balance`, { width, height: 1000 }, "light", lang);
+          try {
+            await page.waitForSelector(card("t-bal-done"));
+            await page.waitForTimeout(600);
+            const frame = await page.evaluate(measure) as {
+              boardWidth: number; content: number; mode: string; overflow: number; pageOverflow: number;
+              columns: Array<{ status: string; width: number; head: { lines: number[]; escapes: string[]; counters: Array<{ text: string; title: string | null; lines: number; truncated: boolean; shown: string; width: number }>; height: number }; narrowCards: unknown[] }>;
+              pills: Array<{ column: string; stage: string; name: string | null; nameLines: number; nameClipped: boolean; ellipsis: string | null; titleHasName: boolean; escapes: string[]; partsInside: boolean; partWidths: number[]; model: { text: string; clipped: boolean } | null; height: number }>;
+              heads: Array<{ column: string; ellipsis: string; clipped: boolean; escapes: string[] }>;
+            };
+            frames[tag] = frame;
+            await page.screenshot({ path: path.join(out, `${tag}.png`) });
+            const col = (status: string) => frame.columns.find((entry) => entry.status === status)!.width;
+            const shelves = ["inbox", "blocked", "done"].map(col);
+            if (frame.pageOverflow > 0) failures.push(`${tag}: the page scrolls sideways by ${frame.pageOverflow}px`);
+            {
+              if (frame.mode === "wide" || frame.mode === "narrow") {
+                if (frame.overflow > 0) failures.push(`${tag}: the ${frame.mode} board overflows by ${frame.overflow}px`);
+                const floor = frame.mode === "wide" ? { work: 520, shelf: 232 } : { work: 440, shelf: 220 };
+                if (col("assigned") < floor.work - 0.5) failures.push(`${tag}: Assigned ${col("assigned")} under ${floor.work}`);
+                if (shelves.some((w) => w < floor.shelf - 0.5)) failures.push(`${tag}: a shelf under ${floor.shelf}: ${shelves.join(", ")}`);
+                if (Math.max(...shelves) - Math.min(...shelves) > 1) failures.push(`${tag}: shelves differ: ${shelves.join(", ")}`);
+                if (frame.mode === "narrow" && shelves.some((w) => Math.abs(w - 220) > 1)) failures.push(`${tag}: narrow shelves ${shelves.join(", ")} != 220`);
+              }
+              if (width === 1920 || width === 2560) {
+                if (frame.mode !== "wide") failures.push(`${tag}: mode ${frame.mode}, expected wide`);
+                /* On main the shelves were capped at 264: Assigned held the content less three shelves and three gaps. */
+                const before = frame.content - 3 * 264 - 3 * 16;
+                const ratio = col("assigned") / before;
+                if (ratio < 0.6 || ratio > 0.7) failures.push(`${tag}: Assigned ${col("assigned")} is ${(ratio * 100).toFixed(1)}% of main's ${before}`);
+                if (shelves.some((w) => w <= 264.5)) failures.push(`${tag}: a shelf is not wider than 264: ${shelves.join(", ")}`);
+              }
+              for (const column of frame.columns) {
+                if (column.width < 1) continue;
+                if (column.head.lines.some((n) => n > 1)) failures.push(`${tag} ${column.status}: the head wraps (${column.head.lines.join(",")})`);
+                if (column.head.escapes.length) failures.push(`${tag} ${column.status}: head text outside the head: ${column.head.escapes.join(" | ")}`);
+                if (column.head.counters.some((counter) => counter.title !== counter.text)) failures.push(`${tag} ${column.status}: a counter without its full text as title`);
+                /* A counter never loses its number, whatever it gives up. */
+                if (column.head.counters.some((counter) => !/\d/.test(counter.shown) || counter.width < 8)) failures.push(`${tag} ${column.status}: a counter shows «${column.head.counters.map((counter) => counter.shown).join(" | ")}»`);
+                if (column.narrowCards.length) failures.push(`${tag} ${column.status}: cards narrower than the column: ${JSON.stringify(column.narrowCards)}`);
+              }
+              for (const pill of frame.pills) {
+                const where = `${tag} ${pill.column} ${pill.stage}`;
+                if (pill.escapes.length) failures.push(`${where}: text outside the pill: ${pill.escapes.join(" | ")}`);
+                if (pill.nameLines > 1) failures.push(`${where}: the name wraps onto ${pill.nameLines} lines`);
+                if (pill.ellipsis !== "ellipsis") failures.push(`${where}: the name ends in ${pill.ellipsis}`);
+                if (!pill.titleHasName) failures.push(`${where}: the title does not carry the name`);
+                if (!pill.partsInside) failures.push(`${where}: the dot, mark, model or bars leave the pill`);
+                if (pill.model?.clipped) failures.push(`${where}: the model «${pill.model.text}» is cut`);
+              }
+              /* The mark, the model and the bars keep one size in every column. */
+              const sizes = new Set(frame.pills.map((pill) => pill.partWidths.join("/")));
+              if (sizes.size > 2) failures.push(`${tag}: pill parts change size across columns: ${[...sizes].join(" ; ")}`);
+              for (const head of frame.heads) {
+                if (head.ellipsis !== "ellipsis") failures.push(`${tag} ${head.column}: a pipeline title ends in ${head.ellipsis}`);
+                if (head.escapes.length) failures.push(`${tag} ${head.column}: text leaves a pipeline card: ${head.escapes.slice(0, 4).join(" | ")}`);
+              }
+            }
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const summary = Object.fromEntries(Object.entries(frames).map(([tag, frame]) => {
+      const f = frame as { boardWidth: number; content: number; mode: string; columns: Array<{ status: string; width: number }> };
+      return [tag, { boardWidth: f.boardWidth, content: f.content, mode: f.mode, columns: Object.fromEntries(f.columns.map((column) => [column.status, column.width])) }];
+    }));
+    fs.writeFileSync(path.join(EVIDENCE, `${label}.json`), JSON.stringify({ label, summary, frames, failures }, null, 2) + "\n");
+    /* The base run is the negative control: it records what fails there and does not gate. */
+    if (label !== "main") expect(failures).toEqual([]);
+    else expect(failures.length).toBeGreaterThan(0);
+  }, 240_000);
+});
+
+describe("the orchestrator seat's header keeps every element readable and clickable", () => {
+  /*
+   * The seat's header at its fullest (`?scenario=seat-head`): a mandate one
+   * version behind the default, so the stale chip draws; a designated
+   * incumbent with its effort, account and a context past the rotation line;
+   * twenty previous seats; the tick chip, Rotate, Stop host, the placement
+   * switch and Fold. The operator saw the context meter and the stale chip
+   * drawn over Stop host and Rotate in a seat about 1080 px wide.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "orchestrator seat.s header"
+   *
+   * Every button, link and piece of text in the header is measured by its INK
+   * — its box united with every visible text rect inside it, each rect first
+   * cut by the ancestors that clip it — and no two may touch. On top of that:
+   * nothing may be drawn outside the header, no button's label may be clipped,
+   * no text may be crushed below what can be read, and a truncated label must
+   * carry a title saying the rest. Below 640 px the phone shell replaces the
+   * board, so there the seat's card and its sheet's identity are what is
+   * measured. At the widest desktop the seat is also docked at the side.
+   * Every frame draws the role frame the product ships by default (#2043),
+   * and the 1080 px Ukrainian head is measured under each other variant too.
+   * `SEAT_HEAD_PNG_DIR` collects frames (never committed); the readings go to
+   * `evidence/seat-head/geometry.json`.
+   */
+  const OUT = path.resolve(".artifacts/seat-head");
+  const EVIDENCE = path.resolve("evidence/seat-head");
+  const WIDTHS = [390, 768, 1080, 1440] as const;
+  /** Anything narrower cannot be read: a model name cut to «cla…». */
+  const READABLE_PX = 40;
+
+  const MEASURE = `(rootSelector) => {
+    const root = document.querySelector(rootSelector);
+    if (!root) return null;
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({
+      top: Math.max(a.top, b.top), left: Math.max(a.left, b.left),
+      right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom),
+    });
+    const empty = r => r.right - r.left < 0.5 || r.bottom - r.top < 0.5;
+    /* Rendered at all — display: none has no rects. A box crushed to zero
+       width still has one, and is measured as crushed rather than skipped. */
+    const rendered = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
+    /* The clip every ancestor up to the document imposes: the seat's panel
+       clips with overflow hidden, so a control pushed past its edge is gone. */
+    const clipOf = node => {
+      let clip = null;
+      for (let el = node.parentElement; el; el = el.parentElement) {
+        const style = getComputedStyle(el);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = clip ? intersect(clip, box(el)) : box(el);
+      }
+      return clip;
+    };
+    const ownText = el => [...el.childNodes].some(node => node.nodeType === 3 && node.nodeValue.trim());
+    const interactive = el => el.matches("button, a[href]");
+    const all = [...root.querySelectorAll("*")].filter(rendered);
+    const atoms = all.filter(el =>
+      interactive(el)
+      || el.matches(".role-mark, .av")
+      || (ownText(el) && !el.parentElement.closest("button, a[href]")));
+    const runsOf = el => {
+      const out = [];
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue.trim() || !rendered(node.parentElement)) continue;
+        const clip = clipOf(node);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          if (raw.height === 0) continue;
+          const full = { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom };
+          const seen = clip ? intersect(clip, full) : full;
+          out.push({ full, seen: empty(seen) ? null : seen });
+        }
+      }
+      return out;
+    };
+    /* What a text node would take if nothing squeezed it. */
+    const natural = el => {
+      let width = 0;
+      for (const node of el.childNodes) {
+        if (node.nodeType !== 3 || !node.nodeValue.trim()) continue;
+        const probe = document.createElement("span");
+        probe.textContent = node.nodeValue;
+        const style = getComputedStyle(el);
+        /* Longhands: Chrome serializes the font shorthand as empty whenever
+           a longhand it cannot express is set, tabular-nums among them. */
+        probe.style.cssText = "position:fixed;left:0;top:0;visibility:hidden;white-space:pre";
+        for (const key of ["fontFamily", "fontSize", "fontWeight", "fontStyle", "fontStretch", "fontVariantNumeric", "fontFeatureSettings", "letterSpacing", "textTransform"]) probe.style[key] = style[key];
+        document.body.appendChild(probe);
+        width += probe.getBoundingClientRect().width;
+        probe.remove();
+      }
+      return width;
+    };
+    const read = atoms.map(el => {
+      const clip = clipOf(el);
+      const own = box(el);
+      const seenBox = clip ? intersect(clip, own) : own;
+      const ink = empty(seenBox) ? null : { ...seenBox };
+      let visibleText = 0;
+      let clipped = false;
+      for (const run of runsOf(el)) {
+        if (!run.seen) { clipped = true; continue; }
+        visibleText += run.seen.right - run.seen.left;
+        if (run.seen.right - run.seen.left < run.full.right - run.full.left - 0.5) clipped = true;
+        if (ink) {
+          ink.top = Math.min(ink.top, run.seen.top); ink.left = Math.min(ink.left, run.seen.left);
+          ink.right = Math.max(ink.right, run.seen.right); ink.bottom = Math.max(ink.bottom, run.seen.bottom);
+        }
+      }
+      /* A truncated label draws the same text into less room than it needs. */
+      const naturalText = interactive(el) ? visibleText : natural(el);
+      const truncated = [el, ...el.querySelectorAll("*")].some(node => node.scrollWidth > node.clientWidth + 0.5 && getComputedStyle(node).textOverflow === "ellipsis")
+        || (!interactive(el) && naturalText - (own.right - own.left) > 1);
+      let titled = false;
+      for (let node = el; node && node !== root.parentElement; node = node.parentElement) if (node.getAttribute("title") || node.getAttribute("aria-label")) { titled = true; break; }
+      const name = (el.getAttribute("aria-label") || el.textContent || el.getAttribute("title") || el.className || el.tagName).toString().trim().slice(0, 40);
+      return {
+        name, button: interactive(el), el,
+        box: own, ink, visibleText: Math.round(visibleText), naturalText: Math.round(naturalText),
+        clipped, truncated, titled,
+      };
+    });
+    const disjoint = (a, b) => a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5;
+    const overlaps = [];
+    for (let i = 0; i < read.length; i++) for (let j = i + 1; j < read.length; j++) {
+      if (read[i].el.contains(read[j].el) || read[j].el.contains(read[i].el)) continue;
+      const a = read[i].ink, b = read[j].ink;
+      if (!a || !b || disjoint(a, b)) continue;
+      overlaps.push({ a: read[i].name, b: read[j].name, x: Math.round(Math.min(a.right, b.right) - Math.max(a.left, b.left)) });
+    }
+    const rootBox = box(root);
+    const rootClip = clipOf(root);
+    const bounds = rootClip ? intersect(rootClip, rootBox) : rootBox;
+    const outside = read.filter(atom => {
+      const b = atom.box;
+      return b.left < bounds.left - 0.5 || b.right > bounds.right + 0.5 || b.top < bounds.top - 0.5 || b.bottom > bounds.bottom + 0.5;
+    }).map(atom => ({ name: atom.name, left: Math.round(atom.box.left), right: Math.round(atom.box.right), bounds: [Math.round(bounds.left), Math.round(bounds.right)] }));
+    return {
+      root: { width: Math.round(rootBox.right - rootBox.left), height: Math.round(rootBox.bottom - rootBox.top) },
+      atoms: read.map(({ el: _el, box: _box, ink: _ink, ...rest }) => rest),
+      overlaps, outside,
+      pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  }`;
+
+  type HeadAtom = { name: string; button: boolean; visibleText: number; naturalText: number; clipped: boolean; truncated: boolean; titled: boolean };
+  type HeadReading = {
+    root: { width: number; height: number };
+    atoms: HeadAtom[];
+    overlaps: Array<{ a: string; b: string; x: number }>;
+    outside: Array<Record<string, unknown>>;
+    pageOverflow: boolean;
+  };
+
+  const measure = (page: Page, root: string) => page.evaluate(`(${MEASURE})(${JSON.stringify(root)})`) as Promise<HeadReading | null>;
+
+  /** What a reading owes the operator, as failure lines. */
+  function verdicts(label: string, reading: HeadReading | null, mandate: boolean): string[] {
+    if (!reading) return [`${label}: nothing was drawn to measure`];
+    const out: string[] = [];
+    if (mandate && !reading.atoms.some((atom) => /mandate v|мандат v/i.test(atom.name))) out.push(`${label}: the stale-mandate chip is not drawn — nothing was measured`);
+    for (const overlap of reading.overlaps) out.push(`${label}: «${overlap.a}» and «${overlap.b}» overlap by ${overlap.x} px`);
+    for (const escape of reading.outside) out.push(`${label}: ${JSON.stringify(escape)} is drawn outside its row`);
+    for (const atom of reading.atoms) {
+      if (atom.button && atom.clipped) out.push(`${label}: the button «${atom.name}» has its label clipped`);
+      if (!atom.button && atom.naturalText > 0 && atom.visibleText < Math.min(atom.naturalText, READABLE_PX) - 0.5) out.push(`${label}: «${atom.name}» is crushed to ${atom.visibleText} of ${atom.naturalText} px`);
+      if (!atom.button && (atom.truncated || atom.clipped) && !atom.titled) out.push(`${label}: «${atom.name}» is truncated with no title saying the rest`);
+    }
+    if (reading.pageOverflow) out.push(`${label}: the page scrolls sideways`);
+    return out;
+  }
+
+  browserTest("at 390, 768, 1080 and 1440 px in en and uk, with a stale mandate and every control present", async () => {
+    const pngDir = process.env.SEAT_HEAD_PNG_DIR ?? null;
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    if (pngDir) fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    /* The attention toast floats over the board's top-right corner, which is
+       where the seat's controls are; it is not part of the header and would
+       only hide it in the frames. */
+    const hideToast = (page: Page) => page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+    /* The fixture has no document head, so the frame the layout's boot script
+       would set is set here. */
+    const setFrame = async (page: Page, frame: string) => {
+      await page.evaluate((value) => document.documentElement.setAttribute("data-role-frame", value), frame);
+      await page.waitForTimeout(150);
+    };
+    const shoot = async (page: Page, selector: string, name: string) => {
+      if (pngDir) await page.locator(selector).first().screenshot({ path: path.join(pngDir, `${name}.png`) });
+    };
+    try {
+      for (const width of WIDTHS) {
+        for (const lang of ["en", "uk"] as const) {
+          const phone = width < 640;
+          const label = `${width}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head`, phone ? { width, height: 844 } : { width, height: 900 }, "light", lang, "no-preference", phone);
+          try {
+            await setFrame(page, DEFAULT_ROLE_FRAME);
+            if (phone) {
+              /* The phone shell replaces the board: the seat is a card, and
+                 its identity and controls are in the sheet the card opens. */
+              await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 20_000 });
+              await page.waitForTimeout(600);
+              frames[`${label}-card`] = await measure(page, "[data-mobile2-seat-card]");
+              failures.push(...verdicts(`${label} seat card`, frames[`${label}-card`] as HeadReading | null, false));
+              await shoot(page, "[data-mobile2-seat-card]", `seat-card-${label}`);
+              await page.locator("[data-mobile2-open=seat]").first().click();
+              await page.waitForSelector("[data-mobile2-sheet='seat'] [data-orchestrator-incumbent]", { timeout: 20_000 });
+              await page.waitForTimeout(600);
+              frames[`${label}-sheet`] = await measure(page, "[data-mobile2-sheet='seat'] [data-orchestrator-incumbent]");
+              failures.push(...verdicts(`${label} seat sheet`, frames[`${label}-sheet`] as HeadReading | null, false));
+              await shoot(page, "[data-mobile2-sheet='seat']", `seat-sheet-${label}`);
+            } else {
+              await page.waitForSelector("[data-kanban-seat] [data-orchestrator-mandate-version]", { timeout: 20_000 });
+              await page.waitForSelector("[data-kanban-seat] [data-orchestrator-account]", { timeout: 20_000 });
+              await hideToast(page);
+              await page.waitForTimeout(600);
+              const placements = width >= 1440 ? ["top", "side"] as const : ["top"] as const;
+              for (const placement of placements) {
+                if (placement === "side") {
+                  await page.locator("[data-kanban-seat] [data-seat-placement]").click();
+                  await page.waitForSelector("[data-kanban-seat].side [data-orchestrator-mandate-version]", { timeout: 20_000 });
+                  await page.waitForTimeout(600);
+                }
+                const key = `${label}-${placement}`;
+                frames[key] = await measure(page, "[data-kanban-seat] .seat-head");
+                failures.push(...verdicts(key, frames[key] as HeadReading | null, true));
+                await shoot(page, "[data-kanban-seat] .seat-head", `seat-head-${key}`);
+                if (width !== 1080 || lang !== "uk" || placement !== "top") continue;
+                for (const frame of ROLE_FRAME_VARIANTS.filter((variant) => variant !== DEFAULT_ROLE_FRAME)) {
+                  await setFrame(page, frame);
+                  frames[`${key}-${frame}`] = await measure(page, "[data-kanban-seat] .seat-head");
+                  failures.push(...verdicts(`${key} ${frame}`, frames[`${key}-${frame}`] as HeadReading | null, true));
+                  await shoot(page, "[data-kanban-seat] .seat-head", `seat-head-${key}-${frame}`);
+                }
+                await setFrame(page, DEFAULT_ROLE_FRAME);
+              }
+            }
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify({ widths: WIDTHS, readablePx: READABLE_PX, frames, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+/* PR and issue chips (#2059) over `issue1695Evidence.fixture.tsx?scenario=work-links`:
+   the card whose five pipelines carry an open PR with two issues, a lane with
+   no PR, a PR two lanes share, a closed attempt and a merged fix, and the
+   longest Inbox title with an attached draft. At 768, 1080 and 1440 px the
+   kanban cards are measured, at 390 px the phone's pipeline screen, in en
+   and uk:
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "PR and issue chips"
+
+   Measured as ink (see "codex tool rows on a phone"): no chip's box meets a
+   visible text run outside its own row — the title above all — no chip is cut
+   by an overflow ancestor, a title that has more to say keeps at least 10rem,
+   and the page never scrolls sideways. PNGs go to WORK_LINKS_PNG_DIR (never
+   committed), the readings to `evidence/work-links/geometry.json`. */
+describe("PR and issue chips on pipelines and task cards", () => {
+  const measureChips = `(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = r => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const meets = (a, b) => area(intersect(a, b)) > 0.5;
+    /* What survives every clipping box from el up: a text run is cut by
+       its own line-clamped span too, a mark only by what holds it. */
+    const clipFrom = el => {
+      let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+      for (let up = el; up; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+      }
+      return clip;
+    };
+    const ink = root => {
+      const out = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const clip = clipFrom(node.parentElement);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          const rect = intersect(clip, { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom });
+          if (area(rect) > 0.5) out.push({ text: node.nodeValue.trim().slice(0, 40), el: node.parentElement, rect });
+        }
+      }
+      return out;
+    };
+    const rows = [...document.querySelectorAll("[data-work-links]")].filter(row => row.getClientRects().length);
+    const overlaps = [], clipped = [], squeezed = [];
+    let chips = 0;
+    for (const row of rows) {
+      row.scrollIntoView({ block: "center" });
+      const scope = row.closest(".pblock") || row.closest(".card") || row.closest("[data-mobile2-pipeline-body]")?.parentElement || document.body;
+      const title = row.closest(".pblock")?.querySelector(".pb-title")
+        || row.closest(".card")?.querySelector(".head .title")
+        || document.querySelector("[data-mobile2-title-text]");
+      const marks = [...row.querySelectorAll(".wl-chip, .wl-more, .wl-nopr")];
+      chips += marks.length;
+      const others = ink(scope).filter(entry => !row.contains(entry.el));
+      for (const mark of marks) {
+        const rect = box(mark);
+        const shown = intersect(rect, clipFrom(mark.parentElement));
+        if (area(shown) < area(rect) - 1) clipped.push({ row: row.dataset.workLinks, mark: mark.textContent, shown: Math.round(area(shown)), full: Math.round(area(rect)) });
+        for (const entry of others) {
+          if (meets(rect, entry.rect)) overlaps.push({ row: row.dataset.workLinks, mark: mark.textContent, text: entry.text });
+        }
+      }
+      /* A title that shares a line with chips keeps 10rem, so the chips wrap
+         rather than take its meaning; one on a line of its own is not theirs. */
+      const band = title ? box(title) : null;
+      if (band && marks.some(mark => { const r = box(mark); return r.bottom > band.top + 1 && r.top < band.bottom - 1; })) {
+        const width = band.right - band.left;
+        const needs = Math.min(title.scrollWidth, 160);
+        if (width + 1 < needs) squeezed.push({ row: row.dataset.workLinks, title: (title.textContent || "").slice(0, 40), width: Math.round(width), needs });
+      }
+    }
+    return { rows: rows.length, chips, overlaps, clipped, squeezed, scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth };
+  })()`;
+
+  browserTest("PR and issue chips never cover or clip a title, at 390, 768, 1080 and 1440 px, in en and uk", async () => {
+    const out = path.resolve(".artifacts/work-links");
+    const pngDir = process.env.WORK_LINKS_PNG_DIR ?? "/var/tmp/llv-work-links-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=work-links`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    type Reading = { rows: number; chips: number; overlaps: unknown[]; clipped: unknown[]; squeezed: unknown[]; scrollWidth: number; innerWidth: number };
+    const gate = (label: string, reading: Reading, minRows: number) => {
+      frames[label] = reading;
+      if (reading.rows < minRows) failures.push(`${label}: ${reading.rows} chip rows drawn, expected at least ${minRows}`);
+      if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} chips meet other text — ${JSON.stringify(reading.overlaps[0])}`);
+      if (reading.clipped.length) failures.push(`${label}: ${reading.clipped.length} chips are cut — ${JSON.stringify(reading.clipped[0])}`);
+      if (reading.squeezed.length) failures.push(`${label}: ${reading.squeezed.length} titles squeezed under 10rem — ${JSON.stringify(reading.squeezed[0])}`);
+      if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const width of [768, 1080, 1440]) {
+          const label = `${width}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, base, { width, height: 900 }, "light", lang);
+          try {
+            await page.waitForSelector('[data-kanban-board] [data-work-links="t-many"]', { state: "attached", timeout: 20_000 });
+            await page.waitForTimeout(400);
+            /* The finished lanes fold behind their count; open them, so every
+               lane's own row is measured. */
+            const toggle = page.locator('.card[data-id="task:t-many"] [data-completed-toggle]');
+            if (await toggle.count()) await toggle.evaluate((element) => (element as HTMLElement).click());
+            await page.waitForTimeout(200);
+            gate(label, await page.evaluate(measureChips) as Reading, 6);
+            await page.locator('.card[data-id="task:t-many"]').screenshot({ path: path.join(pngDir, `card-${label}.png`) });
+            const long = page.locator('.card[data-id="task:t-longtitle"]');
+            if (await long.count() && await long.isVisible()) await long.screenshot({ path: path.join(pngDir, `longtitle-${label}.png`) });
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        const label = `390-${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, base, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+        try {
+          await page.waitForSelector('[data-mobile2-go="pipeline"]', { state: "attached", timeout: 20_000 });
+          await page.waitForTimeout(300);
+          await page.screenshot({ path: path.join(pngDir, `phone-board-${label}.png`) });
+          /* The queue row is the pipeline card (#2072): its PR is passive text at the end of the chain line. */
+          const clause = await page.locator('[data-mobile2-go="pipeline"] [data-work-links-text]').first().textContent();
+          if (!/#2195/.test(clause ?? "")) failures.push(`${label}: the queue row does not name its PR: ${JSON.stringify(clause)}`);
+          await page.locator('[data-mobile2-go="pipeline"]').first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-mobile2-links]", { state: "attached", timeout: 10_000 });
+          await page.waitForTimeout(300);
+          gate(label, await page.evaluate(measureChips) as Reading, 1);
+          if ((frames[label] as Reading).chips < 3) failures.push(`${label}: the pipeline screen drew ${(frames[label] as Reading).chips} chips, expected the PR and its two issues`);
+          await page.screenshot({ path: path.join(pngDir, `phone-${label}.png`) });
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/work-links", { recursive: true });
+    fs.writeFileSync("evidence/work-links/geometry.json", `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+/* #2072 slice 3: one pipeline block for the desktop card and the phone,
+   variant B (docs/design/desktop-flat-cards.md §4, docs/design/phone-kanban.md
+   §3.13). Over the variant renders' own cards (`?scenario=pipeline-block`):
+   the lane rows on the desktop card at 1440 and 1080 px, and the pipeline
+   cards on the phone's Needs you rows and pipelines list at 390 px, in en and
+   uk. The gate is ink, not boxes (§5): the union of each text element's
+   client rects, cut by every ancestor that clips it, meets no other text's ink
+   and no control, no two controls meet, and no text of a block paints outside
+   its card.
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "one pipeline block"
+
+   PNGs go to the directory named by `PIPELINE_BLOCK_PNG_DIR` (never
+   committed), with the variant renders' file names; the readings go to
+   `evidence/pipeline-block/geometry.json`. */
+describe("#2072 one pipeline block, desktop and phone", () => {
+  /* Two lanes of the pipeline-block scenario stand on a long-named stage. The
+     eight-stage one's 44 characters leave no room for "✓3" and "+4" beside it
+     in a 390 px card, so the card settles on the stage alone; the two-stage
+     one's 86 characters do not fit even alone, so the name wraps in its pill. */
+  const LONG_STAGES = {
+    "verify-backward-compatibility-and-migrations": { name: "Verify backward compatibility and migrations", wrap: false },
+    "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": { name: "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge", wrap: true },
+  } as const;
+  const measureBlocks = `(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = r => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const meets = (a, b) => area(intersect(a, b)) > 0.5;
+    const union = (a, b) => ({ top: Math.min(a.top, b.top), left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) });
+    /* A clipped label is not an escape: a Range's rects ignore overflow, so
+       each one is cut down by every ancestor that clips it first. */
+    const clipFrom = el => {
+      let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+      for (let up = el; up; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+      }
+      return clip;
+    };
+    /* Each text element's ink: the union of its visible text rects. */
+    const inkOf = scope => {
+      const byElement = new Map();
+      const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const el = node.parentElement;
+        if (!el || getComputedStyle(el).visibility === "hidden") continue;
+        const clip = clipFrom(el);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          const rect = intersect(clip, { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom });
+          if (area(rect) <= 0.5) continue;
+          const entry = byElement.get(el);
+          byElement.set(el, entry ? { ...entry, rect: union(entry.rect, rect) } : { el, rect, text: (el.textContent || "").trim().slice(0, 48) });
+        }
+      }
+      return [...byElement.values()];
+    };
+    const controlsOf = scope => [...scope.querySelectorAll("button, a, [role=button]")]
+      .filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== "hidden")
+      .map(el => ({ el, rect: intersect(box(el), clipFrom(el.parentElement)), text: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 48) }))
+      .filter(entry => area(entry.rect) > 0.5);
+    const nested = (a, b) => a.contains(b) || b.contains(a);
+    /* The ink above is what paints, so it cannot see a text that does not
+       paint at all. A card's chain (phone-kanban §3.13) cuts no name or count:
+       each text in a card-density block is seen where it is laid out — its
+       natural rects, clipped by nothing up to its card — and its own box does
+       not hide a sideways overflow behind an ellipsis. */
+    const clippedOf = (block, card) => {
+      const out = [];
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const el = node.parentElement;
+        if (!el || getComputedStyle(el).visibility === "hidden") continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rects = [...range.getClientRects()].filter(r => r.width * r.height > 0.5).map(r => ({ top: r.top, left: r.left, right: r.right, bottom: r.bottom }));
+        if (!rects.length) continue;
+        const natural = rects.reduce(union);
+        let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+        for (let up = el; up; up = up.parentElement) {
+          const style = getComputedStyle(up);
+          if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+          if (up === card) break;
+        }
+        const visible = intersect(natural, clip);
+        const lost = Math.max(visible.left - natural.left, natural.right - visible.right, visible.top - natural.top, natural.bottom - visible.bottom);
+        const own = getComputedStyle(el);
+        const ellipsis = own.overflowX !== "visible" && el.scrollWidth > el.clientWidth + 1;
+        if (lost > 1 || ellipsis) out.push({ text: node.nodeValue.trim().slice(0, 48), natural: Math.round(natural.right - natural.left), visible: Math.round(Math.max(0, visible.right - visible.left)), lost: Math.round(lost), ellipsis });
+      }
+      return out;
+    };
+    /* A desktop lane row is its own scope; a phone card is the scope of the
+       block inside it, with its title and badge. */
+    const scopes = [...new Set([...document.querySelectorAll("[data-kanban-board] .card [data-pipeline], [data-mobile2-pipeline-row]")]
+      .filter(el => el.getClientRects().length)
+      .map(el => el.closest("[data-mobile2-pipeline-row]") || el))];
+    const overlaps = [], escapes = [], clipped = [], unsettled = [];
+    let texts = 0, controls = 0;
+    for (const scope of scopes) {
+      scope.scrollIntoView({ block: "center" });
+      const card = scope.closest(".card, [data-mobile2-pipeline-row]") || scope;
+      const frame = box(card);
+      const ink = inkOf(scope);
+      const hits = controlsOf(scope);
+      texts += ink.length; controls += hits.length;
+      const where = scope.getAttribute("data-pipeline") || scope.getAttribute("data-mobile2-pipeline-row");
+      for (const block of scope.querySelectorAll('.pblock[data-density="card"]')) {
+        for (const entry of clippedOf(block, card)) clipped.push({ where, ...entry });
+        /* Every fold the card settled on fits its box. */
+        for (const fold of block.querySelectorAll(".pb-pills.fold")) {
+          if (fold.scrollWidth > fold.clientWidth + 1) {
+            const line = fold.closest(".pb-line");
+            unsettled.push({ where, scrollWidth: fold.scrollWidth, clientWidth: fold.clientWidth, level: line?.getAttribute("data-fold-level"), alone: line?.getAttribute("data-alone"), wrap: line?.getAttribute("data-wrap") });
+          }
+        }
+      }
+      for (let i = 0; i < ink.length; i++) {
+        const a = ink[i];
+        if (a.rect.left < frame.left - 1 || a.rect.right > frame.right + 1 || a.rect.top < frame.top - 1 || a.rect.bottom > frame.bottom + 1) escapes.push({ where, text: a.text });
+        for (let j = i + 1; j < ink.length; j++) {
+          const b = ink[j];
+          if (!nested(a.el, b.el) && meets(a.rect, b.rect)) overlaps.push({ where, kind: "text/text", a: a.text, b: b.text });
+        }
+        for (const control of hits) {
+          if (!control.el.contains(a.el) && meets(a.rect, control.rect)) overlaps.push({ where, kind: "text/control", a: a.text, b: control.text });
+        }
+      }
+      for (let i = 0; i < hits.length; i++) for (let j = i + 1; j < hits.length; j++) {
+        if (!nested(hits[i].el, hits[j].el) && meets(hits[i].rect, hits[j].rect)) overlaps.push({ where, kind: "control/control", a: hits[i].text, b: hits[j].text });
+      }
+    }
+    const lanes = document.querySelectorAll('.pblock[data-density="task"]').length;
+    const cards = document.querySelectorAll('[data-mobile2-pipeline-row] .pblock[data-density="card"]').length;
+    /* Each long-named current stage, as its card drew it. */
+    const longStages = {};
+    for (const id of ${JSON.stringify(Object.keys(LONG_STAGES))}) {
+      const pill = document.querySelector('[data-mobile2-pipeline-row] .pblock[data-density="card"] .pb-pill[data-stage="' + id + '"]');
+      const line = pill && pill.closest(".pb-line");
+      longStages[id] = pill && line ? {
+        text: pill.querySelector(".pb-name")?.textContent ?? null,
+        level: line.getAttribute("data-fold-level"),
+        alone: line.getAttribute("data-alone") === "1",
+        wrap: line.getAttribute("data-wrap") === "1",
+        items: [...line.querySelectorAll(".pb-pills.fold .pb-pill")].map(item => item.textContent.trim()),
+        height: Math.round(pill.getBoundingClientRect().height),
+      } : null;
+    }
+    return { scopes: scopes.length, lanes, cards, texts, controls, overlaps, escapes, clipped, unsettled, longStages, scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth };
+  })()`;
+  type LongStage = { text: string | null; level: string | null; alone: boolean; wrap: boolean; items: string[]; height: number };
+  type Reading = {
+    scopes: number; lanes: number; cards: number; texts: number; controls: number; overlaps: unknown[]; escapes: unknown[];
+    clipped: unknown[]; unsettled: unknown[]; longStages: Record<string, LongStage | null>;
+    scrollWidth: number; innerWidth: number;
+  };
+  const CARDS = ["t-mobile", "t-review-spent", "t-many", "t-upload", "t-search", "t-export", "t-links", "t-limits", "t-attach"];
+
+  browserTest("no text of a pipeline block meets another's ink or a control, and no card cuts a name or count, at 390, 1080 and 1440 px, in en and uk", async () => {
+    const out = path.resolve(".artifacts/pipeline-block");
+    const pngDir = process.env.PIPELINE_BLOCK_PNG_DIR ?? "/var/tmp/llv-pipeline-block-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=pipeline-block`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, Reading> = {};
+    const failures: string[] = [];
+    const gate = (label: string, reading: Reading, need: { lanes?: number; cards?: number; longStages?: boolean }) => {
+      frames[label] = reading;
+      /* Nothing measured is no verdict: the block has to be on the page. */
+      if (need.lanes !== undefined && reading.lanes < need.lanes) failures.push(`${label}: ${reading.lanes} lane rows drawn, expected at least ${need.lanes}`);
+      if (need.cards !== undefined && reading.cards < need.cards) failures.push(`${label}: ${reading.cards} pipeline cards drawn, expected at least ${need.cards}`);
+      if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} overlaps — ${JSON.stringify(reading.overlaps.slice(0, 3))}`);
+      if (reading.escapes.length) failures.push(`${label}: ${reading.escapes.length} texts paint outside their card — ${JSON.stringify(reading.escapes.slice(0, 3))}`);
+      if (reading.clipped.length) failures.push(`${label}: ${reading.clipped.length} card texts are cut — ${JSON.stringify(reading.clipped.slice(0, 3))}`);
+      if (reading.unsettled.length) failures.push(`${label}: ${reading.unsettled.length} card chains settled wider than their box — ${JSON.stringify(reading.unsettled.slice(0, 3))}`);
+      /* Each long current stage is drawn whole, on the line of its own that
+         the fold reached: alone for the one that fits, wrapped for the one
+         that does not. */
+      if (need.longStages) {
+        for (const [id, want] of Object.entries(LONG_STAGES)) {
+          const got = reading.longStages[id];
+          if (got?.text !== want.name || !got.alone || got.wrap !== want.wrap || got.items.length !== 1) failures.push(`${label}: ${id} settled as ${JSON.stringify(got)}, expected its whole name alone on its line${want.wrap ? ", wrapped" : ""}`);
+        }
+      }
+      if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
+    };
+    const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const [width, scheme] of [[1440, "light"], [1440, "dark"], [1080, "light"]] as const) {
+          const label = `${width}-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, base, { width, height: 3400 }, scheme, lang);
+          try {
+            await context.addInitScript(seatFolded);
+            await page.reload();
+            /* Waits for the card, not the block, so a build without the block
+               is measured too and its missing lane rows are the verdict. */
+            await page.waitForSelector('[data-kanban-board] .card[data-id="task:t-many"] [data-pipeline]', { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            if (scheme === "light") {
+              gate(label, await page.evaluate(measureBlocks) as Reading, { lanes: 12 });
+              /* One tone map (#2080): a spent review budget's state word takes
+                 the same warning ink as a decision's. */
+              const inks = await page.evaluate(() => ["needs_decision", "needs_review"].map((state) => {
+                const word = document.querySelector(`.pb-head .pstate-word[data-pstate="${state}"]`);
+                return word ? getComputedStyle(word).color : null;
+              }));
+              if (!inks[0] || inks[0] !== inks[1]) failures.push(`${label}: needs review is drawn ${inks[1]}, needs a decision ${inks[0]}`);
+            }
+            for (const id of CARDS) {
+              const element = page.locator(card(id));
+              if (await element.count()) await element.screenshot({ path: path.join(pngDir, `card-${id}-${label}.png`) });
+            }
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        for (const scheme of ["dark", "light"] as const) {
+          const label = `390-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, base, { width: 390, height: 844 }, scheme, lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-mobile2-pipeline-row]", { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            const suffix = scheme === "dark" ? lang : `light-${lang}`;
+            await page.screenshot({ path: path.join(pngDir, `phone-board-390-${suffix}.png`) });
+            gate(`${label}-board`, await page.evaluate(measureBlocks) as Reading, { cards: 3 });
+            await page.locator('[data-mobile2-row="pipelines"]').first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForSelector("[data-mobile2-pipelines] [data-mobile2-pipeline-row]", { timeout: 10_000 });
+            await page.waitForTimeout(400);
+            await page.evaluate(() => document.querySelector("[data-mobile2-pipelines]")?.scrollTo(0, 0));
+            await page.screenshot({ path: path.join(pngDir, `phone-pipelines-390-${suffix}.png`) });
+            gate(`${label}-pipelines`, await page.evaluate(measureBlocks) as Reading, { cards: 8, longStages: true });
+            for (const id of Object.keys(LONG_STAGES)) {
+              const row = page.locator(`[data-mobile2-pipelines] [data-mobile2-pipeline-row]:has(.pb-pill[data-stage="${id}"])`);
+              if (await row.count()) await row.first().screenshot({ path: path.join(pngDir, `phone-card-390-${await row.first().getAttribute("data-mobile2-pipeline-row")}-${suffix}.png`) });
+            }
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/pipeline-block", { recursive: true });
+    fs.writeFileSync("evidence/pipeline-block/geometry.json", `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  /* The phone's pipeline screen, the Stages view (slice 6, §3.13), over the
+     same scenario's lanes: the eight-stage one running its long-named fourth
+     stage, a lane paused while a stage ran, the parked decision, the spent
+     review budget and a completed lane.
+     Each is opened from the phone's pipelines list the way the operator opens
+     it, and the whole screen, bar and body, is measured as ink: no text meets
+     another text or a control, no control meets another, every control is a
+     44 px target, no stage name is cut, and nothing scrolls sideways. The body
+     scrolls, so it is measured at its top and at its end, and the running lane
+     once more with its passed stages unfolded. */
+  const measureScreen = `(() => {
+    const screen = document.querySelector('[data-mobile2-screen="pipeline"]');
+    if (!screen) return null;
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = r => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const meets = (a, b) => area(intersect(a, b)) > 0.5;
+    const union = (a, b) => ({ top: Math.min(a.top, b.top), left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) });
+    const clipFrom = el => {
+      let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+      for (let up = el; up; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+      }
+      return clip;
+    };
+    /* The banner slot is the shell's, on every screen, and gated with it. */
+    const banner = el => Boolean(el.closest("[data-mobile2-banner]"));
+    /* A chip's target is its box plus the reach its ::after gives it on a coarse pointer. */
+    const reach = el => {
+      const r = box(el);
+      const after = getComputedStyle(el, "::after");
+      if (after.content === "none" || after.position !== "absolute") return r;
+      const px = v => parseFloat(v) || 0;
+      return { top: r.top + px(after.top), left: r.left + px(after.left), right: r.right - px(after.right), bottom: r.bottom - px(after.bottom) };
+    };
+    const byElement = new Map();
+    const walker = document.createTreeWalker(screen, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.nodeValue || !node.nodeValue.trim()) continue;
+      const el = node.parentElement;
+      if (!el || banner(el) || getComputedStyle(el).visibility === "hidden") continue;
+      const clip = clipFrom(el);
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const raw of range.getClientRects()) {
+        const rect = intersect(clip, { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom });
+        if (area(rect) <= 0.5) continue;
+        const entry = byElement.get(el);
+        byElement.set(el, entry ? { ...entry, rect: union(entry.rect, rect) } : { el, rect, text: (el.textContent || "").trim().slice(0, 48) });
+      }
+    }
+    const ink = [...byElement.values()];
+    const controls = [...screen.querySelectorAll("button, a, [role=button]")]
+      .filter(el => !banner(el) && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden")
+      .map(el => ({ el, full: reach(el), rect: intersect(reach(el), clipFrom(el.parentElement)), text: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 48) }))
+      .filter(entry => area(entry.rect) > 0.5);
+    const nested = (a, b) => a.contains(b) || b.contains(a);
+    const overlaps = [], escapes = [], small = [], cut = [];
+    const frame = box(screen);
+    for (let i = 0; i < ink.length; i++) {
+      const a = ink[i];
+      if (a.rect.left < frame.left - 1 || a.rect.right > frame.right + 1) escapes.push(a.text);
+      for (let j = i + 1; j < ink.length; j++) {
+        const b = ink[j];
+        if (!nested(a.el, b.el) && meets(a.rect, b.rect)) overlaps.push({ kind: "text/text", a: a.text, b: b.text });
+      }
+      for (const control of controls) {
+        if (!control.el.contains(a.el) && meets(a.rect, control.rect)) overlaps.push({ kind: "text/control", a: a.text, b: control.text });
+      }
+    }
+    for (let i = 0; i < controls.length; i++) for (let j = i + 1; j < controls.length; j++) {
+      if (!nested(controls[i].el, controls[j].el) && meets(controls[i].rect, controls[j].rect)) overlaps.push({ kind: "control/control", a: controls[i].text, b: controls[j].text });
+    }
+    /* A target is measured whole, before the scroller clips it. */
+    for (const control of controls) {
+      const height = control.full.bottom - control.full.top, width = control.full.right - control.full.left;
+      if (height < 43.5 || width < 43.5) small.push({ text: control.text, width: Math.round(width), height: Math.round(height) });
+    }
+    for (const name of screen.querySelectorAll(".pb-stage .pb-name, .pb-heading")) {
+      if (name.scrollWidth > name.clientWidth + 1) cut.push((name.textContent || "").slice(0, 48));
+    }
+    const stages = [...screen.querySelectorAll(".pb-stage[data-stage]")].map(el => el.getAttribute("data-stage"));
+    /* How the current stage is drawn, read as computed colour and motion, and
+       the tokens it is compared with, read the same way. */
+    const probe = token => {
+      const el = document.createElement("span");
+      el.style.color = "var(" + token + ")";
+      screen.appendChild(el);
+      const color = getComputedStyle(el).color;
+      el.remove();
+      return color;
+    };
+    const cur = screen.querySelector(".pb-stage[data-stage-current]");
+    const mark = cur && cur.querySelector(".pb-stage-title .pmark");
+    const tone = cur && mark ? {
+      held: cur.getAttribute("data-stage-held") === "1",
+      mark: mark.getAttribute("data-mark"),
+      live: mark.getAttribute("data-live") === "1",
+      pulse: getComputedStyle(mark, "::before").animationName,
+      markInk: getComputedStyle(mark).color,
+      word: getComputedStyle(cur.querySelector(".pb-stage-state")).color,
+      stripe: getComputedStyle(cur).boxShadow,
+    } : null;
+    const inks = { muted: probe("--color-muted"), success: probe("--color-success") };
+    return {
+      texts: ink.length, controls: controls.length, overlaps, escapes, small, cut, stages, tone, inks,
+      current: screen.querySelector(".pb-stage[data-stage-current]")?.getAttribute("data-stage") ?? null,
+      answers: [...screen.querySelectorAll("[data-answer-action]")].map(el => el.getAttribute("data-answer-action")),
+      fold: screen.querySelector("[data-passed-fold]")?.getAttribute("data-passed-fold") ?? null,
+      scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
+    };
+  })()`;
+  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string; word: string; stripe: string };
+  type ScreenReading = {
+    texts: number; controls: number; overlaps: unknown[]; escapes: unknown[]; small: unknown[]; cut: unknown[];
+    stages: string[]; current: string | null; answers: string[]; fold: string | null; scrollWidth: number; innerWidth: number;
+    tone: ScreenTone | null; inks: { muted: string; success: string };
+  } | null;
+  /* `motion`: the running lane's current stage pulses in its live tone; the
+     paused lane's held stage is hollow, still and muted (§3.13). */
+  const SCREENS = [
+    { id: "p-upload", name: "running", current: "verify-backward-compatibility-and-migrations", answers: [], fold: "3", completed: false, motion: "live" },
+    { id: "p-md-accept", name: "paused", current: "accept", answers: [], fold: null, completed: false, motion: "held" },
+    { id: "p-md-decision", name: "decision", current: "implement", answers: ["skip-stage", "retry-stage"], fold: null, completed: false, motion: null },
+    { id: "p-review-spent", name: "review", current: "critique", answers: ["close", "continue-review"], fold: null, completed: false, motion: null },
+    { id: "p-compact", name: "done", current: null, answers: [], fold: null, completed: true, motion: null },
+  ] as const;
+
+  browserTest("the phone's pipeline screen: no text meets another's ink or a control, every control is 44 px, no stage name is cut, and a paused lane's stage is still, at 390 and 430 px, in en and uk", async () => {
+    const out = path.resolve(".artifacts/pipeline-screen");
+    const pngDir = process.env.PIPELINE_SCREEN_PNG_DIR ?? "/var/tmp/llv-pipeline-screen-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=pipeline-block`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, ScreenReading> = {};
+    const failures: string[] = [];
+    const gate = (label: string, reading: ScreenReading, want: (typeof SCREENS)[number]) => {
+      frames[label] = reading;
+      if (!reading) {
+        failures.push(`${label}: no pipeline screen drawn`);
+        return;
+      }
+      if (reading.current !== want.current) failures.push(`${label}: the current stage is ${reading.current}, expected ${want.current}`);
+      if (JSON.stringify(reading.answers) !== JSON.stringify(want.answers)) failures.push(`${label}: answers ${JSON.stringify(reading.answers)}, expected ${JSON.stringify(want.answers)}`);
+      if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} overlaps — ${JSON.stringify(reading.overlaps.slice(0, 3))}`);
+      if (reading.escapes.length) failures.push(`${label}: ${reading.escapes.length} texts paint outside the screen — ${JSON.stringify(reading.escapes.slice(0, 3))}`);
+      if (reading.small.length) failures.push(`${label}: ${reading.small.length} controls under 44 px — ${JSON.stringify(reading.small.slice(0, 4))}`);
+      if (reading.cut.length) failures.push(`${label}: ${reading.cut.length} names are cut — ${JSON.stringify(reading.cut.slice(0, 3))}`);
+      if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
+      const { tone, inks } = reading;
+      if (want.motion === "held" && (!tone || !tone.held || tone.mark !== "ring" || tone.live || tone.pulse !== "none"
+        || tone.markInk !== inks.muted || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
+        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring with the mark, the word and the stripe in ${inks.muted}`);
+      }
+      if (want.motion === "live" && (!tone || tone.held || tone.mark !== "dot" || !tone.live || tone.pulse === "none"
+        || tone.markInk !== inks.success || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
+        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot with the mark, the word and the stripe in ${inks.success}`);
+      }
+    };
+    const bodyTo = (page: Page, where: "top" | "end") => page.evaluate((to) => {
+      const body = document.querySelector("[data-mobile2-pipeline-body]");
+      if (body) body.scrollTop = to === "top" ? 0 : body.scrollHeight;
+    }, where);
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const [width, height, scheme] of [[390, 844, "dark"], [390, 844, "light"], [430, 932, "dark"]] as const) {
+          const { context, page, pageErrors } = await openFixture(browser, base, { width, height }, scheme, lang, "no-preference", true);
+          try {
+            await page.waitForSelector('[data-mobile2-row="pipelines"]', { timeout: 30_000 });
+            await page.waitForTimeout(500);
+            await page.locator('[data-mobile2-row="pipelines"]').first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForSelector("[data-mobile2-pipelines] [data-mobile2-pipeline-row]", { timeout: 10_000 });
+            for (const screen of SCREENS) {
+              const label = `${screen.name}-${width}-${lang}-${scheme}`;
+              if (screen.completed && !(await page.locator(`[data-mobile2-pipeline-row="${screen.id}"]`).count())) {
+                await page.locator("[data-mobile2-completed-toggle]").evaluate((element) => (element as HTMLElement).click());
+              }
+              await page.locator(`[data-mobile2-pipeline-row="${screen.id}"]`).first().evaluate((element) => (element as HTMLElement).click());
+              await page.waitForSelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${screen.id}"] .pblock`, { timeout: 10_000 });
+              await page.waitForTimeout(400);
+              const name = `pipeline-${screen.name}-${width}-${lang}${scheme === "light" ? "-light" : ""}`;
+              if (width === 390) await page.screenshot({ path: path.join(pngDir, `${name}.png`) });
+              gate(`${label}-top`, await page.evaluate(measureScreen) as ScreenReading, screen);
+              await bodyTo(page, "end");
+              await page.waitForTimeout(150);
+              gate(`${label}-end`, await page.evaluate(measureScreen) as ScreenReading, screen);
+              const folded = frames[`${label}-top`]?.fold ?? null;
+              if (folded !== screen.fold) failures.push(`${label}: the passed fold is ${folded}, expected ${screen.fold}`);
+              /* The whole scroll at 390 px, folded, the way the round-2 "-full" frames draw it. */
+              if (width === 390 && screen.name === "running") {
+                const tall = await page.evaluate(() => {
+                  const body = document.querySelector("[data-mobile2-pipeline-body]");
+                  return body ? body.scrollHeight - body.clientHeight : 0;
+                });
+                await page.setViewportSize({ width, height: height + tall });
+                await page.waitForTimeout(300);
+                await page.screenshot({ path: path.join(pngDir, `${name.replace(`-${width}-`, `-${width}-full-`)}.png`) });
+                await page.setViewportSize({ width, height });
+              }
+              if (screen.fold) {
+                await bodyTo(page, "top");
+                await page.locator("[data-passed-fold]").evaluate((element) => (element as HTMLElement).click());
+                await page.waitForTimeout(200);
+                const open = await page.evaluate(measureScreen) as ScreenReading;
+                gate(`${label}-unfolded`, open, screen);
+                if ((open?.stages.length ?? 0) !== 8) failures.push(`${label}: unfolded, ${open?.stages.length} stages are listed, expected 8`);
+              }
+              await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+              await page.waitForSelector("[data-mobile2-pipelines]", { timeout: 10_000 });
+              await page.waitForTimeout(250);
+            }
+            if (pageErrors.length) failures.push(`${width}-${lang}-${scheme}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/pipeline-block", { recursive: true });
+    fs.writeFileSync("evidence/pipeline-block/pipeline-screen.json", `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+describe("#2102 task icons on the desktop board and the Overview", () => {
+  /* Every card of the pipeline-block scenario and of the Overview, with some
+     tasks carrying a stored icon (`&icons=1`), at 1440 and 1080 px, in en and
+     uk, light and dark. Each icon is lucide's own drawing, served the way the
+     Viewer serves it. Gated per card: the icon is the head's first box and has
+     loaded; its glyph keeps a gap from the title's ink; the title still runs
+     from the icon to the tools (the flex-1 rule), so the icon takes no room
+     from it; and the glyph sits level with the title's first line. The picker
+     is opened from a card's icon, searched and used, and the write is read
+     back from the fixture. Frames go to TASK_ICONS_PNG_DIR. A card is
+     `content-visibility: auto`: off screen its SVG is not laid out at all, so
+     each card is brought into view and given two frames before it is read. */
+  const measureIcons = `(async () => {
+    const out = { cards: 0, loaded: 0, sources: { stored: 0, suggested: 0, default: 0 }, problems: [], offsets: [] };
+    for (const card of document.querySelectorAll("[data-kanban-board] .card")) {
+      if (!card.getClientRects().length) continue;
+      card.scrollIntoView({ block: "center" });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const id = card.getAttribute("data-id");
+      const head = card.querySelector(":scope > .head");
+      const icon = head && head.firstElementChild && head.firstElementChild.classList.contains("task-icon") ? head.firstElementChild : null;
+      if (!icon) { out.problems.push({ id, problem: "no icon before the title" }); continue; }
+      out.cards += 1;
+      const shown = icon.querySelector("[data-task-icon]");
+      const svg = shown && shown.querySelector("svg");
+      if (svg) out.loaded += 1;
+      else { out.problems.push({ id, problem: "icon not drawn", icon: shown && shown.getAttribute("data-task-icon") }); continue; }
+      out.sources[shown.getAttribute("data-icon-source")] += 1;
+      const title = head.querySelector(":scope > .title");
+      const text = title && title.querySelector(".clamp");
+      if (!title || !text) { out.problems.push({ id, problem: "no title" }); continue; }
+      const tools = head.querySelector(":scope > .tools");
+      const glyph = svg.getBoundingClientRect(), box = title.getBoundingClientRect(), row = head.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const lines = [...range.getClientRects()].filter((rect) => rect.width * rect.height > 0.5).sort((a, b) => a.top - b.top);
+      if (!lines.length) { out.problems.push({ id, problem: "title paints nothing" }); continue; }
+      const inkLeft = Math.min(...lines.map((rect) => rect.left));
+      if (inkLeft - glyph.right < 4) out.problems.push({ id, problem: "icon meets the title", gap: Math.round(inkLeft - glyph.right) });
+      const end = tools ? tools.getBoundingClientRect().left - (parseFloat(getComputedStyle(head).columnGap) || 0) : row.right;
+      if (end - box.right > 2) out.problems.push({ id, problem: "the title stops short of the tools", short: Math.round(end - box.right) });
+      if (box.left - glyph.right > 12) out.problems.push({ id, problem: "space between the icon and the title", gap: Math.round(box.left - glyph.right) });
+      const offset = (glyph.top + glyph.bottom) / 2 - (lines[0].top + lines[0].bottom) / 2;
+      out.offsets.push(Math.round(offset * 10) / 10);
+      if (Math.abs(offset) > 1.5) out.problems.push({ id, problem: "icon is not level with the first line", offset: Math.round(offset * 10) / 10 });
+    }
+    return out;
+  })()`;
+  type IconReading = { cards: number; loaded: number; sources: Record<"stored" | "suggested" | "default", number>; problems: unknown[]; offsets: number[] };
+  const iconsDrawn = () => [...document.querySelectorAll("[data-kanban-board] .card .task-icon [data-task-icon]")].every((element) => element.querySelector("svg"));
+
+  browserTest("icons lead every card's title without taking its room, on the board and the Overview, at 1440 and 1080 px, en and uk, light and dark; the picker searches and writes", async () => {
+    const out = path.resolve(".artifacts/task-icons");
+    const pngDir = process.env.TASK_ICONS_PNG_DIR ?? "/var/tmp/llv-task-icons-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, IconReading> = {};
+    const failures: string[] = [];
+    const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
+    const surfaces = [
+      { name: "board", query: "?scenario=pipeline-block&icons=1", ready: '[data-kanban-board] .card[data-id="task:t-upload"]' },
+      { name: "overview", query: "?scenario=issue1820&icons=1", ready: '[data-kanban-board] .card[data-id="task:t-ledger"]' },
+    ] as const;
+    try {
+      for (const surface of surfaces) {
+        for (const lang of ["en", "uk"] as const) {
+          for (const width of [1440, 1080] as const) {
+            for (const scheme of ["light", "dark"] as const) {
+              const label = `${surface.name}-${width}-${lang}-${scheme}`;
+              const { context, page, pageErrors } = await openFixture(browser, `${server.base}${surface.query}`, { width, height: 1000 }, scheme, lang);
+              try {
+                await context.addInitScript(seatFolded);
+                await page.reload();
+                await page.waitForSelector(surface.ready, { timeout: 30_000 });
+                await page.waitForFunction(iconsDrawn, undefined, { timeout: 15_000 }).catch(() => {});
+                /* A folded card is the board's other density: its head, icon included, is all it keeps. */
+                if (surface.name === "board") await page.locator(`${card("t-disk")} .icon-btn.fold`).click();
+                await page.waitForTimeout(300);
+                const reading = await page.evaluate(measureIcons) as IconReading;
+                if (surface.name === "board" && await page.locator(`${card("t-disk")}[data-collapsed="1"] .head > .task-icon [data-task-icon] svg`).count() !== 1) failures.push(`${label}: the folded card lost its icon`);
+                /* Reading brought every card into view; the frame is taken from the top-left again. */
+                await page.evaluate(() => {
+                  for (const element of document.querySelectorAll<HTMLElement>("[data-kanban-board], [data-kanban-board] *")) {
+                    if (element.scrollTop) element.scrollTop = 0;
+                    if (element.scrollLeft) element.scrollLeft = 0;
+                  }
+                  window.scrollTo(0, 0);
+                });
+                await page.waitForTimeout(200);
+                frames[label] = reading;
+                if (reading.cards < 5) failures.push(`${label}: ${reading.cards} cards with an icon, expected at least 5`);
+                if (!reading.sources.stored || !reading.sources.suggested || !reading.sources.default) failures.push(`${label}: stored, suggested and default icons should all show, got ${JSON.stringify(reading.sources)}`);
+                if (reading.problems.length) failures.push(`${label}: ${reading.problems.length} problems — ${JSON.stringify(reading.problems.slice(0, 4))}`);
+                await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+                if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+
+                /* The picker, from a card whose icon is only suggested. */
+                if (surface.name === "board" && (width === 1440 || scheme === "light")) {
+                  const target = page.locator(`${card("t-links")} [data-icon-menu]`);
+                  await target.click();
+                  await page.waitForSelector(".icon-popover [data-task-icon-picker] [data-icon-choice] svg", { timeout: 10_000 });
+                  await page.waitForTimeout(200);
+                  const frame = async (name: string) => {
+                    const box = await page.locator(".icon-popover").boundingBox();
+                    const anchor = await target.boundingBox();
+                    if (!box || !anchor) { failures.push(`${label}: no picker to draw for ${name}`); return; }
+                    if (box.x < 0 || box.y < 0 || box.x + box.width > width || box.y + box.height > 1000) failures.push(`${label}: the picker leaves the window ${JSON.stringify(box)}`);
+                    const left = Math.max(0, Math.min(box.x, anchor.x) - 24), top = Math.max(0, Math.min(box.y, anchor.y) - 24);
+                    const right = Math.min(width, Math.max(box.x + box.width, anchor.x + anchor.width + 360) + 24), bottom = Math.min(1000, Math.max(box.y + box.height, anchor.y + anchor.height) + 24);
+                    await page.screenshot({ path: path.join(pngDir, `${label}-picker-${name}.png`), clip: { x: left, y: top, width: right - left, height: bottom - top } });
+                  };
+                  await frame("common");
+                  await page.locator(".icon-popover [data-task-icon-search]").fill("rock");
+                  await page.waitForFunction(() => document.querySelector(".icon-popover [data-icon-choice]")?.getAttribute("data-icon-choice") === "rocket", undefined, { timeout: 10_000 }).catch(() => {});
+                  await page.waitForTimeout(250);
+                  const first = await page.locator(".icon-popover [data-icon-choice]").first().getAttribute("data-icon-choice");
+                  if (first !== "rocket") failures.push(`${label}: "rock" finds ${first} first, expected rocket`);
+                  await frame("search");
+                  await page.locator('.icon-popover [data-icon-choice="rocket"]').click();
+                  await page.waitForTimeout(400);
+                  const after = await page.locator(`${card("t-links")} .task-icon [data-task-icon]`).evaluate((element) => [element.getAttribute("data-task-icon"), element.getAttribute("data-icon-source")]);
+                  if (after[0] !== "rocket" || after[1] !== "stored") failures.push(`${label}: after picking, the card shows ${JSON.stringify(after)}`);
+                  const written = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence.taskPatches.filter((patch) => patch.id === "t-links").map((patch) => patch.body.icon));
+                  if (written.at(-1) !== "rocket") failures.push(`${label}: the fixture received ${JSON.stringify(written)}, expected an icon write of rocket`);
+                  await page.locator(card("t-links")).screenshot({ path: path.join(pngDir, `${label}-card-picked.png`) });
+                }
+              } finally {
+                await context.close();
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/task-icons", { recursive: true });
+    fs.writeFileSync("evidence/task-icons/geometry.json", `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
   }, 900_000);
 });

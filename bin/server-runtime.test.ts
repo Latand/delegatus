@@ -13,6 +13,7 @@ import { structuredHostsEnabled as structuredHostsEnabledInApp } from "@/lib/run
 import { loadWorkflows } from "@/lib/workflows/store";
 import { runtimeHostEndpoint } from "@/lib/runtime/localEndpoint";
 import { RuntimeHostFence } from "@/runtime-host/runtimeHostFence";
+import { hermeticTailscaleEnvironment } from "@/test-helpers/tailscaleStub";
 
 import {
   browserOpenCommand,
@@ -184,7 +185,7 @@ test("the CLI rejects a ready runtime socket owned by another process", async ()
   const packageRoot = path.resolve(import.meta.dir, "..");
   const stateDirectory = path.join(sandbox, "state");
   const environment: Record<string, string | undefined> = {
-    ...process.env,
+    ...hermeticTailscaleEnvironment(process.env),
     HOME: path.join(sandbox, "home"),
     XDG_CONFIG_HOME: path.join(sandbox, "config"),
     LLV_STATE_DIR: stateDirectory,
@@ -227,7 +228,7 @@ test("the CLI rejects a ready runtime socket owned by another process", async ()
     const [, stderr] = await Promise.all([exitedWith(child, 1), new Response(child.stderr).text()]);
     expect(stderr).toContain("Couldn't start the structured runtime host");
     expect(stderr).toContain(`runtime host socket is owned by pid ${process.pid}`);
-    expect(stderr).toContain("stop the other agent-log-viewer instance");
+    expect(stderr).toContain("stop the other delegatus instance");
   } finally {
     if (!child.killed) child.kill();
     await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
@@ -245,7 +246,7 @@ for (const missingExitEvent of [false, true]) test(`the CLI names a missing Bun 
   const nodeExecutable = Bun.which("node", { PATH: nodeSearchPath });
   if (!nodeExecutable) throw new Error("the launcher prerequisite test requires Node");
   const environment: Record<string, string | undefined> = {
-    ...process.env,
+    ...hermeticTailscaleEnvironment(process.env),
     PATH: nodeSearchPath,
     HOME: path.join(sandbox, "home"),
     XDG_CONFIG_HOME: path.join(sandbox, "config"),

@@ -1,5 +1,5 @@
 import { isNonblockingCodexQuestion } from "./codexAttention";
-import type { RuntimeAttentionKind, RuntimeAttentionRequest, RuntimeEventInput } from "./contracts";
+import { runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
 import type { RuntimeEvent } from "./engineHost";
 import { boundedToolArgs } from "./liveTurn";
 import { terminalVoiceResponse } from "./voiceDelivery";
@@ -206,7 +206,12 @@ function questionFrom(value: unknown): RuntimeAttentionRequest["question"] | nul
   };
 }
 
-function attentionProjection(engine: "codex" | "claude", event: Extract<RuntimeEvent, { kind: "attention" }>): {
+/** Host keys are `sessionKeyId`s: `<engine>:<session id>`. */
+function engineForHostKey(hostKey: string): RuntimeEngine {
+  return hostKey.startsWith("codex:") ? "codex" : hostKey.startsWith("copilot:") ? "copilot" : "claude";
+}
+
+function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent, { kind: "attention" }>): {
   kind: RuntimeAttentionKind;
   request: RuntimeAttentionRequest;
   turnId: string | null;
@@ -269,9 +274,9 @@ export function projectEngineHostEvent(
 ): RuntimeEventInput | null {
   const base = {
     scope: { type: "session" as const, id: conversationId },
-    producer: { kind: hostKey.startsWith("codex:") ? "codex-app-server" : "claude-broker", eventKey: `engine-host:${hostKey}:${event.seq}` },
+    producer: { kind: runtimeHostKindForEngine(engineForHostKey(hostKey)), eventKey: `engine-host:${hostKey}:${event.seq}` },
   };
-  const engine = hostKey.startsWith("codex:") ? "codex" : "claude";
+  const engine = engineForHostKey(hostKey);
   if (event.kind === "turn-started") {
     return { ...base, kind: "turn-started", payload: { conversationId, turnId: event.turnId } };
   }

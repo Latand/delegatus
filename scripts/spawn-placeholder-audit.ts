@@ -8,6 +8,11 @@
  *
  *   bun scripts/spawn-placeholder-audit.ts
  */
+/* This operator audit deliberately reads the live registry, tasks and scan
+   roots. The claim must precede their module graph; startup mutations remain
+   fenced to the serving Viewer and runtime host. */
+import "@/lib/state/owner/tool";
+
 import fs from "node:fs";
 
 import { agentRegistry } from "@/lib/agent/registry";

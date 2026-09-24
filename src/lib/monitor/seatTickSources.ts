@@ -16,15 +16,20 @@ import {
 } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
+import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
-import { canonicalOrchestratorProject, activeOrchestratorSeats, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
+import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
+import { pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
-import { latestLedgerDeployment } from "@/lib/runtime/deploymentLedger";
+import { latestLedgerDeployment, ledgerDeployment } from "@/lib/runtime/deploymentLedger";
+import { seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import {
   journalVerdict,
   resolveOriginalSend,
@@ -63,6 +68,7 @@ import {
   type SeatTickCheckInput,
   type SeatTickChildInput,
   type SeatTickChildrenGap,
+  type SeatTickDeployInput,
   type SeatTickEventInput,
   type SeatTickOutstandingWake,
   type SeatTickOwnLaneInput,
@@ -75,6 +81,7 @@ import {
   type SeatTickSignalInput,
   type SeatTickSourceGap,
   type SeatTickTaskInput,
+  type SeatTickTranscriptGap,
 } from "./types";
 
 /**
@@ -419,6 +426,12 @@ export interface SeatTickSources {
   /** The most recently started deployment, read in recency order rather than
       sliced off an ordering that has nothing to do with time. */
   latestDeployment: typeof latestLedgerDeployment;
+  /** The deployments one seat conversation started (#2063), as
+      `deploy_exact_sha` recorded them. Absent reads as none, which is how a
+      harness that does not model deploys stays exactly as it was. */
+  seatDeployments?: (conversationId: string) => readonly SeatDeploymentRecord[];
+  /** One deployment off the ledger by id (#2063). Absent reads as none. */
+  deployment?: typeof ledgerDeployment;
   retirementReport: () => StructuredHostRetirementReport | null;
   /** The project's own tick settings (#1275), read fresh per check so a change
       an agent just recorded takes effect at the very next check rather than at
@@ -500,8 +513,10 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
-    seatFor: orchestratorSeatFor,
-    activeSeats: () => activeOrchestratorSeats().map((seat) => seat.project),
+    /* Seats under the project they serve now (#1874): a seat keyed by its
+       folder's old identity is the seat of the key its lanes are written to. */
+    seatFor: (project) => orchestratorSeatForCurrentProject(project),
+    activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
     pipelines: () => loadPipelinesForList(),
     archivedPipelines: () => loadArchivedPipelines(),
     tasks: () => loadTasks(),
@@ -517,12 +532,11 @@ export function defaultSeatTickSources(): SeatTickSources {
     },
     lifecycleJournal: readLifecycleJournal,
     latestDeployment: latestLedgerDeployment,
+    seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
+    deployment: (deploymentId) => ledgerDeployment(deploymentId),
     retirementReport: () => {
-      try {
-        return JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8")) as StructuredHostRetirementReport;
-      } catch {
-        return null;
-      }
+      const report = readJsonCache(statePath("host-retirement-report.json"));
+      return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
     settings: (project) => readSeatTickSettings(project),
     openPullRequests: (options) => openPullRequestsForRepo(options),
@@ -560,9 +574,17 @@ export function defaultSeatTickSources(): SeatTickSources {
  * the one the operator had just refused to press. Records written from now on
  * settle properly (`discardDraft`); this clause is what retires the ones
  * already on disk.
+ *
+ * `dismissedAt` is there for the same reason, reversibly. A lane the operator
+ * dismissed off the board is still running or parked, but it is not work the
+ * seat is asked to act on, so it raises no stalled, interval or pull-request
+ * wake. {@link laneSettlement} already honoured it; the open set did not, and a
+ * dismissed parked lane woke the seat at every interval. `undismiss` clears the
+ * field and the lane is open evidence again.
  */
 function isOpen(pipeline: Pipeline): boolean {
-  return !pipeline.closedAt && !pipeline.hiddenAt && pipeline.state !== "completed" && pipeline.state !== "closed";
+  return !pipeline.closedAt && !pipeline.hiddenAt && !pipeline.dismissedAt
+    && pipeline.state !== "completed" && pipeline.state !== "closed";
 }
 
 /**
@@ -605,13 +627,16 @@ function pipelineSummary(pipeline: Pipeline): PipelineSummary {
  * away without a wake — which is exactly how a pipeline that completed inside
  * the minute before a tick reached the seat as no item at all.
  *
- * A lane the seat CLOSED is not here: closing it is the seat saying it has
- * taken the outcome, and it is the discharge the reason needs. Nor is a hidden
- * one, nor one the operator dismissed off the board.
+ * A lane explicitly closed, hidden or dismissed is no longer on the seat's
+ * board. Completion writes closedAt automatically, so that timestamp cannot
+ * stand for the seat hearing that the lane completed (#2081).
  */
 function laneSettlement(pipeline: Pipeline): SeatTickOwnLaneInput["settled"] | null {
-  if (pipeline.hiddenAt || pipeline.dismissedAt || pipeline.closedAt || pipeline.state === "closed") return null;
+  if (pipeline.hiddenAt || pipeline.dismissedAt || pipeline.state === "closed") return null;
   const attempts = pipeline.runs.flatMap((run) => run.attempts);
+  /* #1938: a spent review budget left an unreviewed head. It is never
+     "completed", and it outranks the passed fix attempt it ended on. */
+  if (pipeline.state === "needs_review" || pipeline.pausedState === "needs_review") return "needs_review";
   if (pipeline.state === "completed") return "completed";
   if (pipeline.state === "needs_decision" || pipeline.pausedState === "needs_decision") {
     /* A lane that parked with no attempt behind it never ran a stage, so what
@@ -664,7 +689,7 @@ function ownSettledLanes(
   project: string,
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
-  sources: SeatTickSources,
+  pipelines: readonly Pipeline[],
 ): SeatTickOwnLaneInput[] {
   if (!seat) return [];
   /* The HOT store only, and deliberately: a settled lane lives there for three
@@ -674,15 +699,15 @@ function ownSettledLanes(
      buy nothing — and the archive read is the one #1289 kept behind a check
      that had already decided to pay for a subprocess. */
   const lanes: SeatTickOwnLaneInput[] = [];
-  for (const pipeline of sources.pipelines()) {
+  for (const pipeline of pipelines) {
     if (canonicalOrchestratorProject(pipeline.project) !== project) continue;
     if (pipeline.srcConversationId !== seat.conversationId) continue;
     const settled = laneSettlement(pipeline);
     if (!settled) continue;
-    /* The one settlement with no obligation behind it is announced once and
-       then gone (#1799); every other settlement stands until the seat closes
-       the lane out, which is what discharges it. */
-    if (settled === "provisioned" && announced.includes(pipeline.id)) continue;
+    /* The legacy bare id announced only provisioning. A later state is new
+       news, and a landed wake records that state separately (#2081). */
+    if (announced.includes(`${pipeline.id}:${settled}`)
+      || (settled === "provisioned" && announced.includes(pipeline.id))) continue;
     lanes.push({
       id: pipeline.id,
       title: redactBounded(pipeline.task.split("\n")[0] ?? "", OWN_LANE_TITLE_LIMIT),
@@ -691,12 +716,100 @@ function ownSettledLanes(
       ...(settled === "provisioning-failed"
         ? { detail: redactBounded(pipeline.stateDetail ?? "", OWN_LANE_DETAIL_LIMIT) || null }
         : {}),
+      ...(settled === "needs_review" && pipelineReviewSummary(pipeline) ? { review: pipelineReviewSummary(pipeline)! } : {}),
     });
   }
   const at = (lane: SeatTickOwnLaneInput) => (lane.updatedAt ? Date.parse(lane.updatedAt) : Number.NaN);
   return lanes
     .sort((left, right) => (at(right) || 0) - (at(left) || 0) || left.id.localeCompare(right.id))
     .slice(0, OWN_LANE_LIMIT);
+}
+
+/** A delivered lane announcement survives every check that could still offer
+ * that lane. Prune only after the hot lane is gone or outside the same backlog
+ * bound the decision uses; a fixed token count loses live deduplication. */
+function retainedLaneAnnouncements(
+  announced: readonly string[],
+  pipelines: readonly Pipeline[],
+  project: string,
+  seat: SeatTickSeatInput | null,
+  now: number,
+  backlogAfterMs: number,
+): string[] {
+  if (!seat) return [...announced];
+  const eligible = new Set(pipelines.filter((pipeline) => {
+    if (canonicalOrchestratorProject(pipeline.project) !== project || pipeline.srcConversationId !== seat.conversationId
+      || pipeline.hiddenAt || pipeline.dismissedAt || pipeline.state === "closed") return false;
+    const movedAt = laneMovedAt(pipeline);
+    return movedAt !== null && Number.isFinite(Date.parse(movedAt)) && now - Date.parse(movedAt) < backlogAfterMs;
+  }).map((pipeline) => pipeline.id));
+  return announced.filter((token) => eligible.has(token.split(":", 1)[0]!));
+}
+
+/** Settled deployments of the seat's own one check carries (#2063). */
+const SEAT_DEPLOY_LIMIT = 5;
+
+/**
+ * The deployments the seat started that have settled and that no landed wake
+ * has announced (#2063).
+ *
+ * The seat ends its turn after `deploy_exact_sha`, because the promotion
+ * replaces the host that turn runs on, so the deploy settling is what it is
+ * waiting for. Only a deployment recorded against THIS seat's conversation is
+ * here: the operator's deploys and another seat's wake nobody. A ledger that
+ * cannot be read for one deployment leaves it out of this check only; the
+ * next check asks again, and nothing is announced that was not seen.
+ */
+function settledSeatDeploys(
+  seat: SeatTickSeatInput | null,
+  announced: readonly string[],
+  context: { now: number; backlogAfterMs: number },
+  sources: SeatTickSources,
+): SeatTickDeployInput[] {
+  if (!seat || !sources.seatDeployments || !sources.deployment) return [];
+  const settled: SeatTickDeployInput[] = [];
+  let records: readonly SeatDeploymentRecord[];
+  try {
+    records = sources.seatDeployments(seat.conversationId);
+  } catch {
+    return [];
+  }
+  for (const record of records) {
+    if (announced.includes(record.deploymentId)) continue;
+    /* A deployment settles after it is requested, so one requested past the
+       backlog bound has settled past it too, and the decision would drop it.
+       Skipping it before the ledger read keeps a deploy that settled while
+       ticking was off from costing a read on every check until the record
+       ages out. */
+    const requestedAt = Date.parse(record.requestedAt);
+    if (!Number.isFinite(requestedAt) || context.now - requestedAt >= context.backlogAfterMs) continue;
+    const read = sources.deployment(record.deploymentId);
+    const status = read.state === "ok" ? read.value : undefined;
+    if (!status || !status.terminal) continue;
+    settled.push({
+      deploymentId: record.deploymentId,
+      phase: status.phase,
+      sha: status.revision,
+      error: status.error ? redactBounded(status.error, OWN_LANE_DETAIL_LIMIT) : null,
+      settledAt: status.updatedAt ?? null,
+    });
+  }
+  return settled.slice(-SEAT_DEPLOY_LIMIT);
+}
+
+/**
+ * Who paused a lane, read off the detail the pause wrote (#2063).
+ *
+ * The pause records its actor as `paused by operator` or `paused by <role>
+ * <conversation>`; see `pauseResumeDetail`. The role an MCP caller is given
+ * varies, so the conversation is what makes it this seat's.
+ */
+function pausedBy(pipeline: Pipeline, seat: SeatTickSeatInput | null): SeatTickPipelineInput["pausedBy"] {
+  if (pipeline.state !== "paused") return undefined;
+  const detail = pipeline.stateDetail?.trim() ?? "";
+  if (detail === "paused by operator") return "operator";
+  const actor = /^paused by \S+ (\S+)$/.exec(detail)?.[1];
+  return seat && actor === seat.conversationId ? "seat" : "other";
 }
 
 function taskSummary(task: BoardTask & { pipelineIds: string[] }): TaskSummary {
@@ -779,6 +892,7 @@ async function seatInput(project: string, policy: SeatTickPolicy, sources: SeatT
     designatedAt: typeof seat.designatedAt === "string" ? seat.designatedAt : null,
     turn,
     activity,
+    mandateCarriesTickContract: orchestratorMandateCarriesTickContract(seat),
   };
 }
 
@@ -866,6 +980,7 @@ function changeFingerprint(
   pullRequests: readonly SeatTickPullRequestInput[],
   pullRequestsUnavailable: SeatTickPullRequestGap | null,
   ownLanes: readonly SeatTickOwnLaneInput[],
+  settledDeploys: readonly SeatTickDeployInput[] = [],
 ): string {
   /* A child's status and outcome instant decide two wake reasons (#1465), so
      they are in the half the guard reads: a child finishing, or a harvested one
@@ -881,6 +996,9 @@ function changeFingerprint(
        and a guard blind to it would suppress the reason while a second lane
        settled behind the first. */
     ...ownLanes.map((lane) => `o:${lane.id}:${lane.settled}:${lane.updatedAt ?? ""}`),
+    /* A settled deploy decides a wake reason of its own (#2063), and a second
+       deploy settling behind the first is movement the guard has to see. */
+    ...settledDeploys.map((deploy) => `d:${deploy.deploymentId}:${deploy.phase}`),
   ].sort();
   /* The set of unmerged pull requests, for the same reason the card's movement
      instant is in the half above: it decides a wake reason, so a guard keyed on
@@ -1074,8 +1192,9 @@ async function unmergedPullRequests(context: {
        be seen is exactly what gets reported as quiet. */
     return failed("lanes-unreadable");
   }
-  const finished = [...context.sources.pipelines(), ...archived]
-    .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === context.project && isFinished(pipeline));
+  const projectLanes = [...context.sources.pipelines(), ...archived]
+    .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === context.project && !pipeline.hiddenAt);
+  const finished = projectLanes.filter(isFinished);
   if (finished.length === 0) return unasked;
   const cwd = repoDirForProject(context.project, context.sources, archived);
   if (!cwd) return unasked;
@@ -1108,18 +1227,36 @@ async function unmergedPullRequests(context: {
   }
   if (!result.ok) return failed(result.unavailable);
   const open = result.pullRequests;
-  const byBranch = new Map<string, Pipeline>();
-  for (const pipeline of finished) {
-    if (!pipeline.branch) continue;
-    /* Two lanes on one branch is a relaunch: the newest is the one whose
-       finishing left the pull request open. */
-    const held = byBranch.get(pipeline.branch);
-    if (!held || Date.parse(pipeline.createdAt) > Date.parse(held.createdAt)) byBranch.set(pipeline.branch, pipeline);
+  const byBranch = new Map<string, Pipeline[]>();
+  for (const pipeline of projectLanes) {
+    const delivery = pipeline.delivery?.target;
+    const heads = [pipeline.branch];
+    if (delivery?.branch && canonicalOrchestratorProject(delivery.repository) === context.project) {
+      heads.push(delivery.branch.replace(/^refs\/heads\//, ""));
+    }
+    for (const head of heads.filter(Boolean)) {
+      const lanes = byBranch.get(head) ?? [];
+      if (!lanes.some((lane) => lane.id === pipeline.id)) lanes.push(pipeline);
+      byBranch.set(head, lanes);
+    }
   }
+  for (const lanes of byBranch.values()) lanes.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   const found: SeatTickPullRequestInput[] = [];
   for (const pullRequest of open) {
-    const lane = byBranch.get(pullRequest.headRefName);
-    if (!lane) continue;
+    const lanes = byBranch.get(pullRequest.headRefName) ?? [];
+    const named = (lane: Pipeline) => (lane.delivery?.target.pr === pullRequest.number
+      && canonicalOrchestratorProject(lane.delivery.target.repository) === context.project)
+      || lane.runs.some((run) => run.attempts.some((attempt) => attempt.report?.provenance?.pullRequest?.number === pullRequest.number));
+    const openedAt = Date.parse(pullRequest.createdAt);
+    /* A later lane reusing this head owns PRs opened after it started, even if
+       it is still running. Completion alone does not end ownership: a PR can
+       be opened on the unchanged head after the lane automatically closes. */
+    const owner = lanes.find((candidate) => {
+      const bornAt = Date.parse(candidate.createdAt);
+      return Number.isFinite(bornAt) && openedAt >= bornAt;
+    });
+    const lane = lanes.find(named) ?? owner;
+    if (!lane || !isFinished(lane)) continue;
     found.push({
       number: pullRequest.number,
       title: redactBounded(pullRequest.title, PULL_REQUEST_TITLE_LIMIT),
@@ -1173,13 +1310,37 @@ const DISCOVERY_PAGE = 20;
  *
  * The roots are passed in, read once per check: enumerating them walks the
  * account homes, and this runs once per projected child.
+ *
+ * Containment is asked of the path as recorded AND of the file it resolves to
+ * (#1881). A transcript recorded through a link into a root — the shared
+ * Claude store behind an account's `projects`, a dotfile manager's
+ * `~/.claude` — is the same file, and a prefix test on the text alone called
+ * it outside every root, so a child that had just finished was never offered.
+ * When it cannot be read, the reason travels with it: a count of unreadable
+ * children with no reason attached is what left #1881 undiagnosable.
  */
-function transcriptRecordAt(transcriptPath: string, roots: readonly string[]): string | null {
-  if (!roots.some((root) => transcriptPath === root || transcriptPath.startsWith(root.endsWith(path.sep) ? root : root + path.sep))) return null;
-  try {
-    const stat = fs.statSync(transcriptPath);
-    return stat.isFile() ? new Date(stat.mtimeMs).toISOString() : null;
-  } catch { return null; }
+function transcriptRecordAt(transcriptPath: string, roots: SeatTickTranscriptRoots): { record: string; reason: null } | { record: null; reason: SeatTickTranscriptGap } {
+  const inside = (candidate: string, list: readonly string[]) => list.some((root) => candidate === root || candidate.startsWith(root.endsWith(path.sep) ? root : root + path.sep));
+  let stat: fs.Stats;
+  try { stat = fs.statSync(transcriptPath); } catch {
+    return { record: null, reason: inside(transcriptPath, roots.recorded) ? "missing" : "outside-roots" };
+  }
+  if (!stat.isFile()) return { record: null, reason: "missing" };
+  if (!inside(transcriptPath, roots.recorded)) {
+    let real: string;
+    try { real = fs.realpathSync(transcriptPath); } catch { return { record: null, reason: "missing" }; }
+    if (!inside(real, roots.resolved)) return { record: null, reason: "outside-roots" };
+  }
+  return { record: new Date(stat.mtimeMs).toISOString(), reason: null };
+}
+
+/** The scanner roots once per check, as listed and as they resolve on disk. */
+interface SeatTickTranscriptRoots { recorded: readonly string[]; resolved: readonly string[] }
+
+function transcriptRoots(): SeatTickTranscriptRoots {
+  const recorded = scanRootEntries().map(([, root]) => root);
+  const resolved = recorded.flatMap((root) => { try { return [fs.realpathSync(root)]; } catch { return []; } });
+  return { recorded, resolved };
 }
 
 /** The registry entries that could be hosting this child, by every session key
@@ -1217,7 +1378,7 @@ function projectChild(
   edge: SpawnLineageEdge,
   project: string,
   now: number,
-  roots: readonly string[],
+  roots: SeatTickTranscriptRoots,
 ): ProjectedChild | null {
   if (edge.source !== "viewer-spawn") return null;
   const childId = lookup.canonicalConversationId(edge.childConversationId);
@@ -1244,7 +1405,8 @@ function projectChild(
      (#1783): its recorded terminal instant, else the last record of its
      transcript. A transcript the Viewer cannot resolve says so here and is
      never offered as harvestable work. */
-  const record = generation ? transcriptRecordAt(generation.path, roots) : null;
+  const read = generation ? transcriptRecordAt(generation.path, roots) : { record: null, reason: "no-transcript" as const };
+  const record = read.record;
   const settledAt = conversation?.turn.terminalAt ?? record;
   /* `lastRecordAt` rides on EVERY branch below, terminal or not (#1783 round
      two). A child whose host died over an open turn never gets a terminal
@@ -1254,11 +1416,17 @@ function projectChild(
      that child has. */
   /* One line for the pair the same read produced, and the publication gate is
      why: a line that begins `transcript:` reads as a quoted transcript key. */
-  const base = {
+  /* The reason rides beside an unreadable transcript and the path beside a
+     readable one (#1881): the first is what the wake names, the second is
+     where the controller reads the child's final message from once a wake is
+     going out. Neither is read here. */
+  const base: Omit<SeatTickChildInput, "status" | "outcome" | "terminalAt"> = {
     conversationId: childId,
     title,
     activity: null,
     lastRecordAt: record, transcript: record === null ? "unresolvable" as const : "readable" as const,
+    ...(read.reason ? { transcriptReason: read.reason } : generation && conversation ? { transcriptPath: generation.path, engine: conversation.engine } : {}),
+    spawnedAt: edge.createdAt,
   };
   const createdAt = edge.createdAt;
   /* A launch that failed or conflicted before it ran: terminal, outcome
@@ -1267,7 +1435,8 @@ function projectChild(
     /* A launch that failed before it ran has no transcript and needs none: the
        receipt is the whole record, and its instant is the receipt's own, so
        the transcript test does not apply to it (#1783). */
-    return { input: { ...base, transcript: "readable", status: "terminal", outcome: "failed", terminalAt: receipt.rejection?.rejectedAt ?? receipt.createdAt }, turn, hosted, createdAt };
+    const { transcriptReason: _none, ...launched } = base;
+    return { input: { ...launched, transcript: "readable", status: "terminal", outcome: "failed", terminalAt: receipt.rejection?.rejectedAt ?? receipt.createdAt }, turn, hosted, createdAt };
   }
   if (!conversation) return { input: { ...base, status: "unknown", outcome: null, terminalAt: null }, turn, hosted, createdAt };
   if (turn === "terminal") {
@@ -1361,7 +1530,7 @@ async function childWork(
   const children: SeatTickChildInput[] = [];
   /* Enumerated once per check and handed to every projection (#1783): the
      roots decide whether a child's transcript is one this Viewer can read. */
-  const roots = scanRootEntries().map(([, root]) => root);
+  const roots = transcriptRoots();
   const classify = (page: SeatChildrenPage, id: string) => {
     const edge = page.file.lineageEdges[id];
     if (!edge) return null;
@@ -1546,12 +1715,16 @@ async function childWork(
          `terminalAt: null` then, and 130 of the 209 owed rows on the board
          this was filed from carry exactly that — a null the age test cannot
          test. The child as it stands now is what the test must read. */
-      const { terminalAt, lastRecordAt, transcript } = projected.input;
+      const { terminalAt, lastRecordAt, transcript, transcriptReason, transcriptPath, engine, spawnedAt } = projected.input;
+      const { transcriptReason: _frozen, transcriptPath: _frozenPath, ...frozen } = outcome.input;
       children.push({
-        ...outcome.input,
+        ...frozen,
         terminalAt,
         lastRecordAt,
         transcript,
+        ...(transcriptReason ? { transcriptReason } : {}),
+        ...(transcriptPath ? { transcriptPath, engine } : {}),
+        ...(spawnedAt ? { spawnedAt } : {}),
         ...(child.harvestedEpoch === undefined ? {} : { harvestedEpoch: child.harvestedEpoch }),
       });
     }
@@ -1570,7 +1743,8 @@ export async function gatherSeatTickInput(
   const settings = effectiveSeatTickSettings(sources.settings(canonical), now, SEAT_TICK_WAKE_INTERVAL_MS);
   const seat = await seatInput(canonical, policy, sources);
 
-  const openLanes = sources.pipelines().filter((pipeline) => isOpen(pipeline) && canonicalOrchestratorProject(pipeline.project) === canonical);
+  const hotLanes = sources.pipelines();
+  const openLanes = hotLanes.filter((pipeline) => isOpen(pipeline) && canonicalOrchestratorProject(pipeline.project) === canonical);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
   const activity = openLanes.length > 0 ? await laneActivity(canonical, policy, sources) : new Map<string, SeatTickActivity>();
   const pipelines: SeatTickPipelineInput[] = openLanes.map((pipeline, index) => ({
@@ -1580,11 +1754,12 @@ export async function gatherSeatTickInput(
     updatedAt: evidence[index]!.updatedAt,
     stageActivity: activity.get(pipeline.id) ?? null,
     stageId: pipeline.cursor?.stageId ?? null,
+    ...(pipeline.state === "paused" ? { pausedBy: pausedBy(pipeline, seat) } : {}),
   }));
 
   /* Pipeline membership is the read model the board itself uses, so "owned"
      means the same thing here as it does on the card. */
-  const board = projectTaskPipelineIds(sources.tasks(), [...sources.pipelines()])
+  const board = projectTaskPipelineIds(sources.tasks(), [...hotLanes])
     .filter((task) => canonicalOrchestratorProject(task.project) === canonical);
   const taskEvidence = evidenceFromTasks(board.map(taskSummary));
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
@@ -1595,13 +1770,15 @@ export async function gatherSeatTickInput(
     updatedAt: task.updatedAt ?? null,
   }));
 
-  const ownLanes = ownSettledLanes(canonical, seat, state.announcedLanes ?? [], sources);
+  const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);
+  const ownLanes = ownSettledLanes(canonical, seat, announcedLanes, hotLanes);
+  const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
 
   /* The open set spans EVERY project, not this one's lanes: an event is history
      because its own lane finished, and reading a lane from another project as
      terminal because it is not in this project's slice would be the same claim
      made about the wrong pipeline. */
-  const openPipelineIds = new Set(sources.pipelines().filter(isOpen).map((pipeline) => pipeline.id));
+  const openPipelineIds = new Set(hotLanes.filter(isOpen).map((pipeline) => pipeline.id));
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, sources);
   const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
   /* The children source's run of failures (#1465), kept exactly as the
@@ -1638,9 +1815,10 @@ export async function gatherSeatTickInput(
     pullRequestsUnavailable,
     signals: signals(canonical, seat, sources),
     ownLanes,
+    settledDeploys,
     children,
     childrenUnavailable,
-    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes),
+    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys),
     /* The sealed cursor travels on the state the decision carries forward, so a
        check of any verdict — a skip included, which remembers nothing else —
        persists where the journal stood when the tick first saw this project.
@@ -1648,7 +1826,7 @@ export async function gatherSeatTickInput(
        is what attempted the read, so the gather is what records what became of
        it, and the decision reads that row to know whether this is the outage
        worth putting on the board. */
-    state: { ...state, eventsThrough: cursor, pullRequestGap, childrenGap, harvestedChildren, accounting: state.accounting ? new SeatTickAccounting(state.accounting.filename, canonical).readState().accounting : undefined },
+    state: { ...state, announcedLanes, eventsThrough: cursor, pullRequestGap, childrenGap, harvestedChildren, accounting: state.accounting ? new SeatTickAccounting(state.accounting.filename, canonical).readState().accounting : undefined },
     policy,
     settings,
   };

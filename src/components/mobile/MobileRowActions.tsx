@@ -7,7 +7,7 @@ import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 import { patchPipeline } from "../pipelines/pipelineModel";
-import { dismissStamp, pipelineHiddenFromBoard, type MobileBoardRowRef } from "./mobileBoardModel";
+import { dismissStamp, pipelineHiddenFromBoard, type MobileBoardConversation, type MobileBoardPipelineRow } from "./mobileBoardModel";
 import { pendingPipelineActs, type PendingPipelineActs } from "./MobilePipelineScreen";
 import { showReceipt } from "./MobileReceipt";
 import { MobileSheet } from "./MobileSheet";
@@ -52,6 +52,13 @@ async function hidePipeline(pipeline: Pipeline): Promise<string | null> {
   return patchPipeline(pipeline.id, "dismiss", undefined, hidden);
 }
 
+/** What an action needs of its row: a conversation's path and title, or a
+    lane and its task. A board row carries both, and so does a row of the
+    phone's columns (#2072 slice 4) that no task owns. */
+export type MobileRowActionTarget =
+  | { kind: "conversation"; row: Pick<MobileBoardConversation, "path" | "title"> }
+  | { kind: "pipeline"; row: Pick<MobileBoardPipelineRow, "pipeline" | "task"> };
+
 export interface MobileBoardRowActionPorts {
   /** Hides the card through the board's close. */
   closeCard: (path: string, title: string) => void;
@@ -63,7 +70,7 @@ export interface MobileBoardRowActionPorts {
 
 export function useMobileBoardRowActions({ closeCard, reopenCard, acts = pendingPipelineActs }: MobileBoardRowActionPorts) {
   const { t } = useLocale();
-  return (ref: MobileBoardRowRef): MobileRowAction[] => {
+  return (ref: MobileRowActionTarget): MobileRowAction[] => {
     if (ref.kind === "conversation") {
       const { path, title } = ref.row;
       return [{

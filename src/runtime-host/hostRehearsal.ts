@@ -24,6 +24,7 @@ import type {
   ViewerRuntimeHostHealthEvidence,
   ViewerRuntimeHostListenerEvidence,
   ViewerRuntimeHostProbeEvidence,
+  ViewerRuntimeHostRecoveryEvidence,
 } from "@/lib/runtime/contracts";
 
 /** The predecessor's listener must answer within this after it is started. */
@@ -69,6 +70,11 @@ export interface RuntimeHostRehearsalPorts {
   probeSocket(options: { abandon: boolean }): Promise<boolean>;
   now(): number;
   sleep(milliseconds: number): Promise<void>;
+  /**
+   * What the successor did at boot with the rollback it was started for, read
+   * back once the hold is over. A `failure` names what it did not do.
+   */
+  recovery?(): Promise<{ evidence: ViewerRuntimeHostRecoveryEvidence; failure: string | null }>;
 }
 
 export interface RuntimeHostRehearsalOptions {
@@ -87,6 +93,7 @@ function evidence(
   listener: ViewerRuntimeHostListenerEvidence,
   socket: ViewerRuntimeHostProbeEvidence,
   failure: { detail: string; log: string[] } | null,
+  recovery?: ViewerRuntimeHostRecoveryEvidence,
 ): ViewerRuntimeHostHealthEvidence {
   return {
     checkedAt,
@@ -94,6 +101,7 @@ function evidence(
     succession,
     listener,
     socket,
+    ...(recovery ? { recovery } : {}),
     ok: failure === null,
     ...(failure ? { detail: failure.detail } : {}),
     ...(failure && failure.log.length > 0 ? { log: failure.log } : {}),
@@ -220,7 +228,16 @@ export async function rehearseRuntimeHost(
     }
     const afterWindow = await observe(false, () => `at the end of a ${window}s hold`);
     if (afterWindow) return afterWindow;
-    return evidence(options, checkedAt, succession, listener, socket, null);
+    /* A host that held its endpoints can still have skipped the rollback it
+       was started for, and that is the recovery path a failed release needs. */
+    const recovery = await ports.recovery?.();
+    if (recovery?.failure) {
+      return evidence(options, checkedAt, succession, listener, socket, {
+        detail: `${recovery.failure} under ${options.runtime}`,
+        log: successor.log(),
+      }, recovery.evidence);
+    }
+    return evidence(options, checkedAt, succession, listener, socket, null, recovery?.evidence);
   } finally {
     await successor?.stop().catch(() => undefined);
     await predecessor?.stop().catch(() => undefined);

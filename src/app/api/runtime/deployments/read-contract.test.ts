@@ -75,7 +75,7 @@ async function serveRuntime(
 }
 
 test("GET /api/runtime/deployments returns an empty live ledger with runtime-host latency health", async () => {
-  const methods = await serveRuntime({ deployments: [] });
+  const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
 
   const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
 
@@ -83,43 +83,63 @@ test("GET /api/runtime/deployments returns an empty live ledger with runtime-hos
   expect(await response.json()).toEqual({
     count: 0,
     deployments: [],
+    nextCursor: null,
+    hasMore: false,
     runtimeHostRequests: runtimeHostRequestHealth(),
   });
-  expect(methods).toEqual(["snapshot"]);
+  expect(methods).toEqual(["viewer-deployment-list"]);
 });
 
-test("GET /api/runtime/deployments preserves limit ordering for a working host", async () => {
-  const deployments = ["one", "two", "three"].map((suffix) => ({
+/* #1845 defect C: the snapshot orders deployments by id, a random UUID, so the
+   last `limit` of it was an arbitrary window. The newest starts come first. */
+test("GET /api/runtime/deployments answers the newest deployments first, whatever their ids sort as (#1845)", async () => {
+  const deployments = [["0a11", 19], ["ffdf", 9], ["ff40", 1]].map(([suffix, day]) => ({
     deploymentId: `deployment_${suffix}`,
     phase: "succeeded",
     revision: "a".repeat(40),
+    createdAt: `2026-09-${String(day).padStart(2, "0")}T09:00:00.000Z`,
+    updatedAt: `2026-09-${String(day).padStart(2, "0")}T09:04:00.000Z`,
   }));
-  await serveRuntime({ deployments });
+  await serveRuntime((request: { method: string; params?: Record<string, unknown> }) => {
+    expect(request.method).toBe("viewer-deployment-list");
+    expect(request.params).toEqual({ limit: 2, compact: false });
+    return { deployments: deployments.slice(0, 2), nextCursor: "next-page", hasMore: true };
+  });
 
   const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments?limit=2"));
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
     count: 2,
-    deployments: deployments.slice(-2),
+    deployments: [deployments[0], deployments[1]],
+    nextCursor: "next-page",
+    hasMore: true,
     runtimeHostRequests: runtimeHostRequestHealth(),
   });
 });
 
-test("GET /api/runtime/deployments leaves an omitted limit unbounded for the journal projection", async () => {
-  const deployments = Array.from({ length: 30 }, (_, index) => ({
+test("GET /api/runtime/deployments defaults to a bounded page with explicit continuation", async () => {
+  const deployments = Array.from({ length: 130 }, (_, index) => ({
     deploymentId: `deployment_${index + 1}`,
     phase: "succeeded",
     revision: "f".repeat(40),
+    createdAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(),
+    updatedAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(),
   }));
-  await serveRuntime({ deployments });
+  await serveRuntime((request: { method: string; params?: Record<string, unknown> }) => {
+    expect(request.method).toBe("viewer-deployment-list");
+    expect(request.params).toEqual({ limit: 100, compact: false });
+    return { deployments: [...deployments].reverse().slice(0, 100), nextCursor: "next-page", hasMore: true };
+  });
 
   const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
-    count: deployments.length,
-    deployments,
+    count: 100,
+    deployments: [...deployments].reverse().slice(0, 100),
+    nextCursor: "next-page",
+    hasMore: true,
     runtimeHostRequests: runtimeHostRequestHealth(),
   });
 });

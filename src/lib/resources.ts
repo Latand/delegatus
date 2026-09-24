@@ -30,6 +30,7 @@ import { overlayResourceSessionTitles } from "@/lib/session/titleProjection";
 import { readTranscriptHosts, type TranscriptHost, type TranscriptHostSnapshot } from "@/lib/agent/transcriptHost";
 import { captureTmuxAttachReferences, type TmuxAttachReference } from "@/lib/tmux";
 import { statePath } from "@/lib/configDir";
+import { fsyncPath } from "@/lib/state/durableJson";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, type ResourcesPayload } from "./types";
@@ -164,7 +165,7 @@ export type KillTargetRef = TmuxAttachReference | StructuredHostKillRef;
 export interface StructuredHostRecord {
   /** Session key id (`<engine>:<sessionId>`), the row's stable target suffix. */
   id: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   sessionId: string | null;
   pid: number;
   /** Kernel start-time token captured with the pid; a recycled pid fails it. */
@@ -202,7 +203,7 @@ export interface StructuredHostKillRef {
   pid: number;
   startIdentity: string;
   bootEpoch: string | null;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   sessionId: string | null;
   conversationId: string | null;
   seat: boolean | null;
@@ -359,11 +360,7 @@ async function readStructuredHostRecordsForCollection(): Promise<StructuredHostR
 }
 
 const resourceSnapshotDependencies: ResourceSnapshotDependencies = {
-  readFiles: async (fresh) => {
-    const files = await readResourceFileSnapshot(fresh);
-    overlayResourceSessionTitles(files as FileEntry[]);
-    return files;
-  },
+  readFiles: readResourceFileSnapshot,
   readHosts: (fresh, entries, ppids) => readTranscriptHosts(fresh, entries as FileEntry[], ppids),
   proc: procBackend,
   captureAttachReferences: captureTmuxAttachReferences,
@@ -397,9 +394,14 @@ export function resourceWorkerFileSnapshot(
   }));
 }
 
+/** The Viewer's file observation, titles and conversation identity already
+    projected from the registry. The collector worker takes it as handed over:
+    the registry is the Viewer's to read, never the worker's (#1870). */
 export async function readResourceFileSnapshot(fresh: boolean): Promise<ResourceWorkerFileObservation[]> {
   const scan = fresh ? await currentResourceFileScan() : await completedFileScan({ revalidate: false });
-  return resourceWorkerFileSnapshot(scan.snapshot.files, () => null);
+  const files = resourceWorkerFileSnapshot(scan.snapshot.files, () => null);
+  overlayResourceSessionTitles(files as FileEntry[]);
+  return files;
 }
 
 /** The outermost consecutive ancestor carrying this viewer's host stamp.
@@ -1252,8 +1254,10 @@ function persistObservation(observation: ResourceObservation<CollectedResources>
     const serialized = JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation }) + "\n";
     if (Buffer.byteLength(serialized) > RESOURCE_OBSERVATION_MAX_BYTES) throw new Error("resource observation exceeded durable size limit");
     writeFileSync(temporary, serialized, { mode: 0o600 });
+    fsyncPath(temporary);
     renameSync(temporary, filename);
     chmodSync(filename, 0o600);
+    fsyncPath(path.dirname(filename));
     return true;
   } catch (error) {
     if (temporary) {

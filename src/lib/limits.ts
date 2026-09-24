@@ -1,13 +1,17 @@
 import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
+import { claudeTierDisplayName, normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import fs from "node:fs";
 import path from "node:path";
 
 import { accountForSpawn, type CodexAccount } from "@/lib/accounts/codex";
-import { claudeAccountForSpawn } from "@/lib/accounts/claude";
+import { claudeAccountForSpawn, type ClaudeAccount } from "@/lib/accounts/claude";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
+import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
 import { statePath } from "@/lib/configDir";
+import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { WINDOW_SECONDS, clampPercent, mergeSamples, type WindowKey } from "@/lib/burndown";
 import { relabelCachedWindows, routeWindowsByHorizon, SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES } from "@/lib/limitWindows";
 import { historySamples, historySince, recordLimitSample, RETENTION_S } from "@/lib/limitsHistoryStore";
@@ -30,6 +34,11 @@ const MAX_FILES = 12;
     active long-running sessions whose start bucket has aged past this bound. */
 const MAX_RECENT_SESSION_DAYS = 8;
 const CACHE_MS = 30_000;
+/** One Claude usage read per account per window, whichever path asks first —
+    the footer's poll or the quota controller's minute tick (issue #1849). It is
+    shorter than the controller's 60-second cadence, so each tick still reads
+    unless a footer poll already did inside the window. */
+const CLAUDE_REFRESH_WINDOW_MS = 50_000;
 const FAILURE_COOLDOWN_MS = 60_000;
 const MAX_RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
 const CODEX_INITIALIZE_TIMEOUT_REASON = "app-server-initialize-timeout";
@@ -48,8 +57,23 @@ type EngineCacheEntry = {
   retryAt?: number | null;
   consecutive429s?: number;
   consecutiveInitializeTimeouts?: number;
+  /** The parser generation that produced `data`; absent on older entries. */
+  parser?: number;
+  /** When the provider answered with `data` (ms). `at` moves at every failed
+      retry, so it cannot order two snapshots of one account; this can. Absent
+      on entries written before issue #1849. */
+  observedAt?: number;
 };
 type LimitsCache = { version: 2; engines: Record<EngineName, Record<string, EngineCacheEntry>> };
+
+/** Bumped whenever the Claude usage parser can read a window out of a payload
+    that an earlier parser read nothing out of (issue #1839). A cached entry
+    carries the version that produced it; an entry from an older parser keeps
+    its numbers — they are still true — but loses the provider backoff that
+    would otherwise let it rest, so the very next read goes to the provider
+    instead of resting on a snapshot whose tier list an old parser emptied.
+    The cache must never be the thing that hides a tier. */
+const CLAUDE_PARSER_VERSION = 2;
 export type LimitRead = {
   data: EngineLimits | null;
   /** The reading `data` would have been without a rejection projected onto it,
@@ -66,6 +90,8 @@ export type CodexLiveLimitsReader = (account: Pick<CodexAccount, "id" | "kind" |
 
 const globalStore = globalThis as unknown as {
   __llvLimitsCache?: LimitsCache | null;
+  /** The disk file's mtime when `of` was loaded from it or written to it. */
+  __llvLimitsCacheDisk?: { of: LimitsCache; mtimeMs: number };
   __llvLimitsInflight?: Map<string, Promise<ResolvedRead>>;
 };
 
@@ -77,7 +103,8 @@ function isProvenance(value: unknown): value is { claude: LimitsProvenance; code
     return (meta.source === "live" || meta.source === "transcript" || meta.source === "cache" || meta.source === "unavailable") &&
       (typeof meta.reason === "string" || meta.reason === null) &&
       (typeof meta.staleSince === "string" || meta.staleSince === null) &&
-      (meta.retryAt === undefined || typeof meta.retryAt === "string" || meta.retryAt === null);
+      (meta.retryAt === undefined || typeof meta.retryAt === "string" || meta.retryAt === null) &&
+      (meta.throttleAt === undefined || typeof meta.throttleAt === "string" || meta.throttleAt === null);
   };
   return valid(record.claude) && valid(record.codex);
 }
@@ -95,17 +122,30 @@ function safeCacheEntry(value: unknown): EngineCacheEntry | null {
       (typeof provenance.reason !== "string" && provenance.reason !== null) ||
       (typeof provenance.staleSince !== "string" && provenance.staleSince !== null) ||
       (provenance.retryAt !== undefined && typeof provenance.retryAt !== "string" && provenance.retryAt !== null) ||
+      (provenance.throttleAt !== undefined && typeof provenance.throttleAt !== "string" && provenance.throttleAt !== null) ||
       (entry.baseData !== undefined && entry.baseData !== null && typeof entry.baseData !== "object") ||
       (entry.retryAt !== undefined && entry.retryAt !== null && typeof entry.retryAt !== "number") ||
       (entry.consecutive429s !== undefined && (!Number.isInteger(entry.consecutive429s) || entry.consecutive429s < 0)) ||
-      (entry.consecutiveInitializeTimeouts !== undefined && (!Number.isInteger(entry.consecutiveInitializeTimeouts) || entry.consecutiveInitializeTimeouts < 0))) return null;
+      (entry.consecutiveInitializeTimeouts !== undefined && (!Number.isInteger(entry.consecutiveInitializeTimeouts) || entry.consecutiveInitializeTimeouts < 0)) ||
+      (entry.parser !== undefined && !Number.isInteger(entry.parser))) return null;
   const normalize = (data: EngineLimits | null | undefined) => data ? { ...data, tiers: modelTierWindows(data) } : data;
   return { ...entry, data: normalize(entry.data), ...(entry.baseData === undefined ? {} : { baseData: normalize(entry.baseData) }) } as EngineCacheEntry;
 }
 
+/** A Claude entry an earlier parser generation wrote keeps its numbers — a
+    session and a weekly percentage are true whoever parsed them — but loses the
+    provider backoff and the cache age that would let it rest (issue #1839).
+    That entry's tier list was produced by a parser that could not see the
+    account's codenamed bucket, so resting on it is how a tier stays hidden for
+    as long as the provider keeps answering 429. The next read goes live. */
+function withCurrentParser(entry: EngineCacheEntry): EngineCacheEntry {
+  if (entry.parser === CLAUDE_PARSER_VERSION) return entry;
+  return { ...entry, at: 0, retryAt: null, consecutive429s: 0, parser: CLAUDE_PARSER_VERSION };
+}
+
 function readDiskCache(): LimitsCache {
   try {
-    const raw = JSON.parse(fs.readFileSync(limitsCacheFile(), "utf8")) as Partial<LimitsCache> & { at?: unknown; accountId?: unknown; data?: LimitsPayload };
+    const raw = (readJsonCache(limitsCacheFile()) ?? {}) as Partial<LimitsCache> & { at?: unknown; accountId?: unknown; data?: LimitsPayload };
     if (raw.version === 2 && raw.engines && typeof raw.engines === "object") {
       const cache = emptyCache();
       for (const engine of ["claude", "codex"] as const) {
@@ -118,7 +158,7 @@ function readDiskCache(): LimitsCache {
           // its number under the horizon that number actually has.
           if (valid) cache.engines[engine][id] = engine === "codex"
             ? { ...valid, data: relabelCachedWindows(valid.data), ...(valid.baseData === undefined ? {} : { baseData: relabelCachedWindows(valid.baseData) }) }
-            : valid;
+            : withCurrentParser(valid);
         }
       }
       return cache;
@@ -134,9 +174,23 @@ function readDiskCache(): LimitsCache {
   return emptyCache();
 }
 
+function diskMtime(): number {
+  try { return fs.statSync(limitsCacheFile()).mtimeMs; } catch { return -1; }
+}
+
+/** The quota controller's periodic tick runs in the inventory sidecar, a
+    separate OS process from the Viewer that serves `/api/limits`. Both read and
+    write this one file, so a copy loaded from disk is reloaded once the other
+    process has written it (issue #1849). A cache seeded in memory, never loaded
+    from disk, stays as it is. */
 function cache(): LimitsCache {
-  if (!globalStore.__llvLimitsCache) globalStore.__llvLimitsCache = readDiskCache();
-  return globalStore.__llvLimitsCache;
+  const current = globalStore.__llvLimitsCache;
+  const disk = globalStore.__llvLimitsCacheDisk;
+  if (current && (disk?.of !== current || disk.mtimeMs === diskMtime())) return current;
+  const loaded = readDiskCache();
+  globalStore.__llvLimitsCache = loaded;
+  globalStore.__llvLimitsCacheDisk = { of: loaded, mtimeMs: diskMtime() };
+  return loaded;
 }
 
 function writeDiskCache(value: LimitsCache): void {
@@ -161,7 +215,12 @@ function writeDiskCache(value: LimitsCache): void {
         staleSince: claude?.[1].provenance.staleSince ?? codex[1].provenance.staleSince,
       },
     } : {};
-    fs.writeFileSync(limitsCacheFile(), JSON.stringify({ ...value, ...projection }, null, 2) + "\n", "utf8");
+    // Written whole and renamed into place: the other process may read it at
+    // any moment, and a torn read would be a cache miss for every account.
+    writeJsonDurably(limitsCacheFile(), { ...value, ...projection });
+    if (globalStore.__llvLimitsCacheDisk?.of === value || globalStore.__llvLimitsCache === value) {
+      globalStore.__llvLimitsCacheDisk = { of: value, mtimeMs: diskMtime() };
+    }
   } catch (err) {
     console.warn("[limits] failed to persist cache", err);
   }
@@ -172,9 +231,10 @@ function lastCache(engine: EngineName, accountId: string): EngineCacheEntry | nu
 }
 
 /** Drop one account's short-lived cache entry so the next `/api/limits` read
-    goes to the provider. An operator-triggered re-read or a redeemed reset
-    credit (issues #1418, #1373) has just produced a newer truth than the
-    30-second cache holds; serving the cache would show the old window. */
+    goes to the provider. A redeemed Codex reset credit (issue #1373) has just
+    produced a newer truth than the 30-second cache holds; serving the cache
+    would show the old window. A Claude re-read needs none of this: it goes
+    through the same snapshot the footer answers from (issue #1849). */
 export function forgetCachedLimits(engine: EngineName, accountId: string): void {
   const entries = cache().engines[engine];
   if (!(accountId in entries)) return;
@@ -194,6 +254,8 @@ export function cachedLimitsProvenance(
 
 type ResolvedRead = {
   data: EngineLimits | null;
+  /** When the provider answered with `data` (ms), or null when unknown. */
+  observedAt: number | null;
   /** What the cache should keep when it differs from what this read serves. */
   baseData?: EngineLimits | null;
   meta: LimitsProvenance;
@@ -211,6 +273,8 @@ function remember(engine: EngineName, accountId: string, resolved: ResolvedRead,
     retryAt: resolved.retryAt,
     consecutive429s: resolved.consecutive429s,
     consecutiveInitializeTimeouts: resolved.consecutiveInitializeTimeouts,
+    ...(engine === "claude" ? { parser: CLAUDE_PARSER_VERSION } : {}),
+    ...(resolved.observedAt !== null ? { observedAt: resolved.observedAt } : {}),
   };
   writeDiskCache(cache());
   if (!resolved.data || (resolved.meta.source !== "live" && resolved.meta.source !== "transcript")) return;
@@ -238,6 +302,7 @@ function resolveRead(read: LimitRead, cached: EngineCacheEntry | null, staleSinc
     const retryAt = initializeTimedOut ? now + initializeBackoffMs : null;
     return {
       data: read.data,
+      observedAt: now,
       ...(read.baseData ? { baseData: read.baseData } : {}),
       meta: { source: read.source, reason: read.reason, staleSince: read.reason ? staleSince : null, retryAt: retryAt ? new Date(retryAt).toISOString() : null },
       retryAt,
@@ -263,7 +328,8 @@ function resolveRead(read: LimitRead, cached: EngineCacheEntry | null, staleSinc
   if (cachedRejection && exhaustionRunning(cachedRejection, now / 1000)) {
     return {
       data: cachedRejection,
-      meta: { source: "transcript", reason: read.reason, staleSince: null, retryAt: new Date(retryAt).toISOString() },
+      observedAt: cached ? snapshotObservedAt(cached) : null,
+      meta: { source: "transcript", reason: read.reason, staleSince: null, retryAt: new Date(retryAt).toISOString(), throttleAt: new Date(now).toISOString() },
       retryAt,
       consecutive429s,
       consecutiveInitializeTimeouts,
@@ -275,13 +341,25 @@ function resolveRead(read: LimitRead, cached: EngineCacheEntry | null, staleSinc
     reason: read.reason,
     staleSince: cached?.provenance.staleSince ?? staleSince,
     retryAt: new Date(retryAt).toISOString(),
+    throttleAt: new Date(now).toISOString(),
   };
-  return { data: base, meta, retryAt, consecutive429s, consecutiveInitializeTimeouts };
+  return { data: base, observedAt: base && cached ? snapshotObservedAt(cached) : null, meta, retryAt, consecutive429s, consecutiveInitializeTimeouts };
+}
+
+/** When the provider answered with the entry's numbers. An entry written
+    before issue #1849 has no such field: a live one was written when it was
+    read, and a carried one went stale no earlier than it was read. */
+function snapshotObservedAt(entry: EngineCacheEntry): number | null {
+  if (!entry.data) return null;
+  if (entry.observedAt !== undefined) return entry.observedAt;
+  const staleSince = entry.provenance.staleSince ? Date.parse(entry.provenance.staleSince) : NaN;
+  return entry.provenance.source === "cache" && Number.isFinite(staleSince) ? staleSince : entry.at;
 }
 
 function cachedRead(entry: EngineCacheEntry): ResolvedRead {
   return {
     data: entry.data,
+    observedAt: snapshotObservedAt(entry),
     meta: entry.provenance,
     retryAt: entry.retryAt ?? null,
     consecutive429s: entry.consecutive429s ?? 0,
@@ -289,10 +367,10 @@ function cachedRead(entry: EngineCacheEntry): ResolvedRead {
   };
 }
 
-function cacheIsFresh(entry: EngineCacheEntry | null, now: number): boolean {
+function cacheIsFresh(entry: EngineCacheEntry | null, now: number, windowMs: number): boolean {
   if (!entry) return false;
   if (entry.retryAt) return now < entry.retryAt;
-  return now - entry.at < CACHE_MS;
+  return now - entry.at < windowMs;
 }
 
 function inflightReads(): Map<string, Promise<ResolvedRead>> {
@@ -306,9 +384,16 @@ function logFallbackReasons(entries: ReadonlyArray<readonly [EngineName, LimitsP
   }
 }
 
-function resolveEngineRead(engine: EngineName, accountId: string, now: number, clock: () => number, reader: () => Promise<LimitRead>): Promise<ResolvedRead> {
+type EngineReadOptions = {
+  windowMs?: number;
+  /** Skip the fresh-cache and backoff rests: an operator asked for a read now. */
+  force?: boolean;
+};
+
+function resolveEngineRead(engine: EngineName, accountId: string, now: number, clock: () => number, reader: () => Promise<LimitRead>, options: EngineReadOptions = {}): Promise<ResolvedRead> {
+  const windowMs = options.windowMs ?? CACHE_MS;
   const cached = lastCache(engine, accountId);
-  if (cacheIsFresh(cached, now)) return Promise.resolve(cachedRead(cached!));
+  if (!options.force && cacheIsFresh(cached, now, windowMs)) return Promise.resolve(cachedRead(cached!));
 
   const key = `${engine}:${accountId}`;
   const reads = inflightReads();
@@ -317,7 +402,7 @@ function resolveEngineRead(engine: EngineName, accountId: string, now: number, c
 
   const pending = (async () => {
     const latest = lastCache(engine, accountId);
-    if (cacheIsFresh(latest, now)) return cachedRead(latest!);
+    if (!options.force && cacheIsFresh(latest, now, windowMs)) return cachedRead(latest!);
     const read = await reader();
     const resolvedAt = clock();
     const resolved = resolveRead(read, latest, new Date(resolvedAt).toISOString(), resolvedAt);
@@ -339,8 +424,11 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
   const now = clock();
   const claudeAccount = claudeAccountForSpawn();
   const codexAccount = accountForSpawn();
+  const copilotAccountId = activeCopilotAccountId();
+  const copilotAccount = listCopilotAccounts().find((account) => account.id === copilotAccountId) ?? null;
+  const copilotRead = copilotAccount ? readCopilotTranscriptLimits(copilotAccount.sessionStateDir) : null;
   const [resolvedClaude, resolvedCodex] = await Promise.all([
-    resolveEngineRead("claude", claudeAccount.id, now, clock, () => fetchClaudeLimits(path.join(claudeAccount.home, ".credentials.json"), clock)),
+    resolveClaudeRead(claudeAccount, now, clock),
     resolveEngineRead("codex", codexAccount.id, now, clock, () => readCodexLimits({ account: codexAccount, liveReader: options.codexLiveReader, now: clock })),
   ]);
   return {
@@ -348,12 +436,78 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
     codex: resolvedCodex.data,
     claudeAccountId: claudeAccount.id,
     codexAccountId: codexAccount.id,
-    provenance: { claude: resolvedClaude.meta, codex: resolvedCodex.meta },
+    copilot: copilotRead?.data ?? null,
+    copilotAccountId: copilotAccount?.id ?? null,
+    provenance: {
+      claude: resolvedClaude.meta,
+      codex: resolvedCodex.meta,
+      copilot: copilotRead
+        ? { source: copilotRead.source, reason: copilotRead.reason, staleSince: null }
+        : { source: "unavailable", reason: "no active Copilot account", staleSince: null },
+    },
     staleSince: resolvedClaude.meta.staleSince ?? resolvedCodex.meta.staleSince,
   };
 }
 
 /* ------------------------------- Claude ------------------------------- */
+
+function resolveClaudeRead(account: Pick<ClaudeAccount, "id" | "home">, now: number, clock: () => number, force = false): Promise<ResolvedRead> {
+  return resolveEngineRead("claude", account.id, now, clock,
+    () => fetchClaudeLimits(path.join(account.home, ".credentials.json"), clock),
+    { windowMs: CLAUDE_REFRESH_WINDOW_MS, force });
+}
+
+export type ClaudeAccountLimits = {
+  data: EngineLimits | null;
+  provenance: LimitsProvenance;
+  /** When the provider answered with `data` (ms), or null when unknown. */
+  observedAt: number | null;
+};
+
+/**
+ * One account's Claude usage through the snapshot `/api/limits` answers from
+ * (issue #1849). The quota controller and the operator's re-read call this
+ * rather than the provider, so every path shares one read per account per
+ * window, one in-flight request, and one backoff after a 429 — and whichever
+ * path reads, the footer shows the result.
+ */
+export async function readClaudeAccountLimits(
+  account: Pick<ClaudeAccount, "id" | "home">,
+  options: { now?: () => number; force?: boolean } = {},
+): Promise<ClaudeAccountLimits> {
+  const clock = options.now ?? Date.now;
+  const resolved = await resolveClaudeRead(account, clock(), clock, options.force);
+  return { data: resolved.data, provenance: resolved.meta, observedAt: resolved.observedAt };
+}
+
+/**
+ * Offers a snapshot another path holds — the registry's durable observation —
+ * to the shared one. It lands only when the provider answered it later than
+ * the shared snapshot's own numbers, so an older snapshot, and in particular
+ * an older one with no tiers, never replaces a newer one (issue #1849). The
+ * shared backoff is kept: adopting numbers is not a provider read.
+ */
+export function adoptClaudeLimitsSnapshot(accountId: string, data: EngineLimits, observedAt: number, now: number = Date.now()): boolean {
+  const entry = lastCache("claude", accountId);
+  const held = entry ? snapshotObservedAt(entry) : null;
+  if (!Number.isFinite(observedAt) || (held !== null && held >= observedAt)) return false;
+  const throttled = Boolean(entry?.retryAt && now < entry.retryAt);
+  cache().engines.claude[accountId] = {
+    at: observedAt,
+    data,
+    baseData: data,
+    provenance: throttled
+      ? { source: "cache", reason: entry!.provenance.reason, staleSince: new Date(observedAt).toISOString(), retryAt: entry!.provenance.retryAt ?? null }
+      : { source: "live", reason: null, staleSince: null, retryAt: null },
+    retryAt: throttled ? entry!.retryAt : null,
+    consecutive429s: throttled ? entry!.consecutive429s ?? 0 : 0,
+    consecutiveInitializeTimeouts: 0,
+    parser: CLAUDE_PARSER_VERSION,
+    observedAt,
+  };
+  writeDiskCache(cache());
+  return true;
+}
 
 interface OauthWindow {
   utilization?: unknown;
@@ -427,35 +581,177 @@ function oauthWindow(w: OauthWindow | undefined, windowMinutes: number): LimitWi
 }
 
 const OAUTH_TIER_PREFIX = "seven_day_";
+const OAUTH_GENERAL_WINDOWS: ReadonlySet<string> = new Set(["five_hour", "seven_day"]);
 
-/** `seven_day_*` buckets the provider meters that are NOT model tiers, as the
-    Claude CLI itself enumerates them: overage accounting, the OAuth-app pool,
-    and the product pools that ride the same key shape. Everything else under
-    the prefix is a model tier and earns its own window (issue #1796) — a tier
-    the provider adds tomorrow renders the day it is reported, which is the
-    whole point of reading the payload instead of one hard-coded key. */
-const OAUTH_NON_TIER_BUCKETS: ReadonlySet<string> = new Set([
-  "overage_included",
-  "oauth_apps",
-  "cowork",
-  "omelette",
-]);
+/** Metered buckets that are NOT model tiers: overage and spend accounting, the
+    OAuth-app pool, the product pools that ride the same window shape, and the
+    per-model breakdown inside the week. Matched on the bucket key's words, so
+    `seven_day_omelette` and `omelette_promotional` are both the omelette pool
+    however the provider spells the key. */
+const OAUTH_NON_TIER_POOLS: readonly string[] = ["overage", "oauth_apps", "cowork", "omelette", "extra_usage", "spend", "breakdown"];
 
-/** Every model-tier weekly bucket beside `seven_day` (issues #1358, #1796),
-    ordered by tier name so the rows never reshuffle between reads. A bucket
-    whose suffix carries an underscore is an accounting key rather than a tier
-    name, so it is excluded by shape as well as by the list above. */
+function isAccountingPool(key: string): boolean {
+  return OAUTH_NON_TIER_POOLS.some((pool) => key.includes(pool));
+}
+
+/** The tier name a top-level bucket key spells: `seven_day_opus` meters the
+    `opus` tier, and a bucket the provider files under a codename (`nimbus_quill`)
+    is its own tier key until something names it. */
+function tierOfBucketKey(key: string): string {
+  return key.startsWith(OAUTH_TIER_PREFIX) ? key.slice(OAUTH_TIER_PREFIX.length) : key;
+}
+
+/** One model-scoped entry of the payload's `limits` array (issue #1839).
+ *
+ * Captured live on two accounts (key names and label strings only), every
+ * entry has the shape
+ * `{ kind, group, percent, severity, resets_at, scope, is_active }`: `kind` is
+ * `session`, `weekly_all` or `weekly_scoped`, and only a scoped entry carries
+ * `scope: { model: { id, display_name }, surface }`. The Fable window is the
+ * `weekly_scoped` entry whose `scope.model.display_name` is "Fable" and whose
+ * `id` is null. The codenamed `nimbus_quill` bucket matched neither that
+ * entry's percent nor its reset on either account, so it is a separate pool
+ * and never the source of Fable's line while this list names one.
+ *
+ * The reader stays tolerant of other spellings the provider may send
+ * (`utilization` for `percent`, a top-level `model`, a `name` label, an entry
+ * naming the bucket its window lives in), because nothing pins this shape.
+ */
+interface OauthScopedLimit {
+  /** Bucket keys this entry names, matched against the payload's own keys. */
+  buckets: string[];
+  /** The model family this entry attributes the window to, when it names one. */
+  family: string | null;
+  /** The provider's human label for the window, when the entry carries one. */
+  label: string | null;
+  /** The entry's own window, when it carries one inline. */
+  window: LimitWindow | null;
+}
+
+/** Fields a human label arrives under, most explicit first: `display_name` is
+    what the provider fills for the operator, while `name` can carry a machine
+    identifier (issue #1839 review). */
+const OAUTH_LABEL_FIELDS: readonly string[] = ["display_name", "displayName", "label", "title", "name"];
+
+/** A string spelled as a machine identifier (`weekly_scoped`, `nimbus_quill`,
+    `claude-fable-5-1`, `fable`) rather than as words for a person to read. */
+const MACHINE_IDENTIFIER = /^[a-z0-9_.:-]+$/;
+
+function stringValues(value: unknown, depth = 0): string[] {
+  if (typeof value === "string") return [value];
+  if (depth >= 3 || !value || typeof value !== "object") return [];
+  const entries = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
+  return entries.flatMap((item) => stringValues(item, depth + 1));
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+/** The first human label among `records`' label fields; codenames and bucket
+    keys are skipped so a machine `name` never outranks a `display_name`. */
+function humanLabel(records: readonly (Record<string, unknown> | null)[], bucketKeys: ReadonlySet<string>): string | null {
+  for (const record of records) {
+    if (!record) continue;
+    for (const field of OAUTH_LABEL_FIELDS) {
+      const value = record[field];
+      if (typeof value !== "string") continue;
+      const text = value.trim();
+      if (text && !bucketKeys.has(text) && !MACHINE_IDENTIFIER.test(text)) return text;
+    }
+  }
+  return null;
+}
+
+function scopedWindow(record: Record<string, unknown>): LimitWindow | null {
+  const used = typeof record.percent === "number" ? record.percent : typeof record.utilization === "number" ? record.utilization : null;
+  if (used === null || !Number.isFinite(used)) return null;
+  const resets = typeof record.resets_at === "string" ? Date.parse(record.resets_at) : NaN;
+  const session = [record.group, record.kind].some((value) => typeof value === "string" && value.startsWith("session"));
+  return {
+    usedPercent: used,
+    resetsAt: Number.isFinite(resets) ? Math.round(resets / 1000) : null,
+    windowMinutes: session ? SESSION_WINDOW_MINUTES : WEEKLY_WINDOW_MINUTES,
+  };
+}
+
+function readScopedLimit(entry: unknown, bucketKeys: ReadonlySet<string>): OauthScopedLimit | null {
+  const record = asRecord(entry);
+  if (!record) return null;
+  const identifiers = stringValues(record).map((value) => value.trim()).filter((value) => MACHINE_IDENTIFIER.test(value));
+  /* An entry that spells a general window or an accounting pool anywhere in
+     its identifiers is neither a model tier nor a pointer to one: adopting it
+     would file the 5-hour window, or the OAuth-app pool, under whatever model
+     it names and gate that model's spawns on it. Checked before the entry can
+     contribute an inline window or a bucket attribution. */
+  if (identifiers.some((value) => OAUTH_GENERAL_WINDOWS.has(value) || isAccountingPool(value))) return null;
+  const buckets = [...new Set(identifiers.filter((value) => bucketKeys.has(value)))];
+  const scope = asRecord(record.scope);
+  const scopeModel = asRecord(scope?.model);
+  const label = humanLabel([scopeModel, record], bucketKeys);
+  /* The family comes from the model the entry is scoped to, and only then
+     from the words of its human label ("Fable", "Fable weekly limit"). */
+  const modelNames = [scopeModel?.id, scopeModel?.display_name, scope?.model, record.model, record.model_id]
+    .filter((value): value is string => typeof value === "string");
+  const family = [...modelNames, ...(label ? label.split(/[\s,/|()\[\]]+/) : [])]
+    .map((value) => normalizeClaudeLaunchModel(value))
+    .find((value) => value !== null) ?? null;
+  if (!buckets.length && !family) return null;
+  return { buckets, family, label, window: scopedWindow(record) };
+}
+
+/** Every model-tier window the provider meters beside `five_hour`/`seven_day`
+ * (issues #1358, #1796, #1839).
+ *
+ * The provider sends no `seven_day_<tier>` key for the tier it meters:
+ * `seven_day_opus` and `seven_day_sonnet` arrive null and there is no
+ * `seven_day_fable` at all. It names the window in `limits[]` instead, as a
+ * `weekly_scoped` entry scoped to a model. So `limits[]` is the source whenever
+ * one of its entries names a model window: its label is the name the operator
+ * reads, and the model it names is the tier key a spawn of that model is gated
+ * on. Only when it names none does the bucket scan stand in: every non-null
+ * top-level bucket carrying a window that is not one of the two general windows
+ * and not an accounting pool.
+ *
+ * Rows are ordered by the name they display, so they never reshuffle between
+ * reads.
+ */
 function oauthTierWindows(json: Record<string, unknown>): TierLimitWindow[] {
-  return Object.keys(json)
-    .flatMap((key) => {
-      if (!key.startsWith(OAUTH_TIER_PREFIX)) return [];
-      const tier = key.slice(OAUTH_TIER_PREFIX.length);
-      if (!tier || tier.includes("_") || OAUTH_NON_TIER_BUCKETS.has(tier)) return [];
-      const value = json[key];
-      const window = oauthWindow(value && typeof value === "object" ? value as OauthWindow : undefined, WEEKLY_WINDOW_MINUTES);
-      return window ? [{ ...window, tier }] : [];
-    })
-    .sort((left, right) => left.tier.localeCompare(right.tier));
+  const byBucket = new Map<string, TierLimitWindow>();
+  const tierOfBucket = new Map<string, string>();
+  for (const key of Object.keys(json)) {
+    if (OAUTH_GENERAL_WINDOWS.has(key) || isAccountingPool(key)) continue;
+    const value = json[key];
+    const window = oauthWindow(value && typeof value === "object" ? value as OauthWindow : undefined, WEEKLY_WINDOW_MINUTES);
+    if (!window) continue;
+    const tier = tierOfBucketKey(key);
+    if (!tier) continue;
+    byBucket.set(tier, { ...window, tier });
+    tierOfBucket.set(key, tier);
+  }
+  const bucketKeys = new Set([...tierOfBucket.keys(), ...tierOfBucket.values()]);
+  const listed = new Map<string, TierLimitWindow>();
+  const entries = Array.isArray(json.limits) ? json.limits : [];
+  for (const raw of entries) {
+    const entry = readScopedLimit(raw, bucketKeys);
+    if (!entry) continue;
+    const bucketTier = entry.buckets.map((key) => tierOfBucket.get(key) ?? key).find((tier) => byBucket.has(tier)) ?? null;
+    const source = entry.window ?? (bucketTier ? byBucket.get(bucketTier)! : null);
+    const tier = entry.family ?? bucketTier;
+    if (!source || !tier) continue;
+    const window: TierLimitWindow = {
+      usedPercent: source.usedPercent,
+      resetsAt: source.resetsAt,
+      windowMinutes: source.windowMinutes,
+      tier,
+      ...(entry.label ? { label: entry.label } : {}),
+    };
+    // Two entries for one model: the more exhausted one is what binds a spawn.
+    const prior = listed.get(tier);
+    if (!prior || window.usedPercent > prior.usedPercent) listed.set(tier, window);
+  }
+  const tiers = listed.size ? [...listed.values()] : [...byBucket.values()];
+  return tiers.sort((left, right) => claudeTierDisplayName(left.tier, left.label).localeCompare(claudeTierDisplayName(right.tier, right.label)));
 }
 
 /* -------------------------------- Codex -------------------------------- */

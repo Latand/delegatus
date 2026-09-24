@@ -3,11 +3,13 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { KanbanBoard } from "./kanban/KanbanBoard";
+import { resetOrchestratorSeatCacheForTests } from "./orchestrator/useOrchestratorSeat";
 import { OverviewBoard } from "./OverviewBoard";
 
 /*
@@ -18,6 +20,11 @@ import { OverviewBoard } from "./OverviewBoard";
  * `KanbanBoard`, with no board, model or card of this file's own. Nothing on
  * disk is read and no route is called: the fixtures below are three invented
  * projects and their invented conversations.
+ *
+ * The one route it answers is the cross-project seat read (#1841): the
+ * Overview spans every project, so it reads every project's seat conversations
+ * and keeps them — and the tasks that exist only for them — off its columns and
+ * out of its hidden count.
  *
  * It also carries #699's structural lesson onto the surface that replaced the
  * project-summary grid: nothing that navigates is nested inside anything else
@@ -40,6 +47,14 @@ const OVERRIDES: Record<string, unknown> = {
   PointerEvent: dom.PointerEvent ?? dom.MouseEvent,
   requestAnimationFrame: (callback: (t: number) => void) => setTimeout(() => callback(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
+  fetch: (async (input: string | URL) => {
+    const url = String(input);
+    if (url.startsWith("/api/orchestrator/seat?")) {
+      seatReads += 1;
+      return { ok: true, status: 200, json: async () => ({ all: SEAT_ANSWER }), text: async () => "" };
+    }
+    return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+  }) as unknown as typeof fetch,
   matchMedia: (query: string) => ({
     matches: false,
     media: String(query),
@@ -64,7 +79,8 @@ afterAll(async () => {
 });
 
 let roots: Root[] = [];
-beforeEach(() => { dom.document.body.replaceChildren(); roots = []; });
+let seatReads = 0;
+beforeEach(() => { dom.document.body.replaceChildren(); roots = []; seatReads = 0; resetOrchestratorSeatCacheForTests(); });
 afterEach(async () => { for (const root of roots) flushSync(() => root.unmount()); roots = []; await settle(); });
 
 /* Three invented projects. Canonical keys on the left, what the operator
@@ -137,6 +153,33 @@ const TASKS: BoardTask[] = [
   task("t-atlas", ATLAS, "inbox", "Redraw the atlas legend", "/sessions/atlas-live.jsonl"),
   task("t-mesh", MESH, "blocked", "Unblock the mesh migration", "/sessions/mesh-live.jsonl"),
   task("t-empty", MESH, "done", "Nothing runs on this one", null),
+];
+
+/* The live seat of one project and the retired seat of another, as the seat
+   records name them. */
+const LEDGER_SEAT = "/sessions/ledger-seat.jsonl";
+const MESH_RETIRED_SEAT = "/sessions/mesh-seat-old.jsonl";
+const SEAT_ANSWER = {
+  conversationIds: [],
+  paths: [LEDGER_SEAT],
+  previous: { conversationIds: [], paths: [MESH_RETIRED_SEAT] },
+};
+/* The live seat has a transcript and is working, so without the seat read it
+   draws a card in Assigned. The retired seat's transcript is long gone and its
+   task carries the empty-band preference every legacy row was given, so the
+   board resolves no band for it and it lands in the hidden tray — which is
+   exactly where the Overview used to name every seat it had ever had. One
+   ordinary task sits there for the same reason, and stays. */
+const SEAT_FILES: FileEntry[] = [
+  ...FILES,
+  fileEntry({ path: LEDGER_SEAT, project: LEDGER, title: "Orchestrator seat", activity: "live", lastTurn: workingTurn }),
+];
+const offBoard = (row: BoardTask): BoardTask => ({ ...row, board: "hidden" });
+const SEAT_TASKS: BoardTask[] = [
+  ...TASKS,
+  task("t-seat-ledger", LEDGER, "assigned", "Orchestrator seat, launch week", LEDGER_SEAT),
+  offBoard(task("t-seat-mesh", MESH, "assigned", "Manager seat, release week", MESH_RETIRED_SEAT)),
+  offBoard(task("t-gone", MESH, "assigned", "Nothing runs on this one either", null)),
 ];
 
 interface Taps { projects: string[] }
@@ -270,6 +313,20 @@ test("what needs one project to write into is absent, never faked", () => {
   expect(cardOf(host, "t-ledger")?.querySelector(".foot .pill")).toBeTruthy();
 });
 
+test("the Overview's bar keeps its three facts; the project board's bar, put in order (#1801), says each once", () => {
+  const { host } = mount(FILES, TASKS);
+  const summary = (root: HTMLElement) => root.querySelector<HTMLElement>(".bar .summary")?.textContent ?? "";
+
+  /* Three live turns across three projects; the task count is the board's, before the narrowing. */
+  expect(summary(host)).toContain(translate("en", "kanban.overviewWorking", { count: 3 }));
+  expect(summary(host)).toContain(translate("en", "kanban.overviewTasks", { count: 5 }));
+
+  /* The project's own board keeps only who is working: the waiting signal and the
+     task count live elsewhere on its bar and its columns. */
+  const project = mountProjectBoard();
+  expect(summary(project)).toBe(translate("en", "kanban.summaryWorking", { count: 0 }));
+});
+
 test("nothing that navigates is nested inside anything else that navigates (#699)", () => {
   const { host } = mount(FILES, TASKS);
 
@@ -332,4 +389,34 @@ test("a first run has no projects, so it keeps its own panel and mounts no board
   expect(host.querySelector("[data-testid='overview-first-run']")).toBeTruthy();
   expect(host.querySelector("[data-kanban-board]")).toBeNull();
   expect(host.textContent).toContain(en["overview.firstRunTitle"]);
+});
+
+/* #1841 — a seat belongs to the seat panel of its own project's board, and to
+   no task list. The Overview spans every project, so it needs every project's
+   seats; the count it draws first is its hidden one. */
+test("the Overview draws no seat card and counts no seat task as hidden (#1841)", async () => {
+  const { host } = mount(SEAT_FILES, SEAT_TASKS);
+
+  /* Before the read answers, nothing is hidden on a guess: the live seat has
+     its card and the retired seat's task sits in the hidden count beside the
+     genuinely empty task. */
+  expect(cardIds(host)).toContain("task:t-seat-ledger");
+  expect(host.querySelector("[data-hidden-pill]")?.getAttribute("data-count")).toBe("2");
+  expect(host.querySelector("[data-hidden-pill]")?.textContent).toContain("2");
+
+  await settle();
+  await settle();
+  flushSync(() => undefined);
+
+  expect(seatReads).toBeGreaterThan(0);
+  expect(cardIds(host)).not.toContain("task:t-seat-ledger");
+  /* One left: the task with nothing on it, which is what the tray is for. */
+  expect(host.querySelector("[data-hidden-pill]")?.getAttribute("data-count")).toBe("1");
+  flushSync(() => (host.querySelector("[data-hidden-pill]") as HTMLElement).dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event));
+  const tray = dom.document.body.textContent ?? "";
+  expect(tray).toContain("Nothing runs on this one either");
+  expect(tray).not.toContain("Manager seat, release week");
+  expect(tray).not.toContain("Orchestrator seat, launch week");
+  /* The project's own work is untouched by the same answer. */
+  expect(cardIds(host)).toContain("task:t-ledger");
 });

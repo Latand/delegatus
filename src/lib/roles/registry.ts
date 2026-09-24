@@ -76,7 +76,7 @@ function renderScaffold(template: string, params: RoleParamValues): string {
  */
 export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues): string {
   const frontendGuidance = definition.id === "builder" && params.domain === "frontend"
-    ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics, responsive behavior, and English/Ukrainian parity."
+    ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics, responsive behavior, and English/Ukrainian parity. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the issue does not ask for."
     : "";
   return renderScaffold(definition.promptScaffold, params) + frontendGuidance;
 }
@@ -91,10 +91,12 @@ function promptWithFences(definition: RoleDefinition, params: RoleParamValues): 
   return roleScaffoldBody(definition, params) + roleFenceBlock(definition);
 }
 
+/** The runtime a role runs on for these parameters. The builder's two variants
+    read the install's mapping (#1876) over their shipped values. */
 export function configForParams(definition: RoleDefinition, params: RoleParamValues): RoleConfig {
   if (definition.id !== "builder") return definition.config;
-  if (params.domain === "frontend") return BUILDER_FRONTEND_CONFIG;
-  if (params.mode === "apply-fixes") return BUILDER_APPLY_FIXES_CONFIG;
+  if (params.domain === "frontend") return definition.variants?.frontend ?? BUILDER_FRONTEND_CONFIG;
+  if (params.mode === "apply-fixes") return definition.variants?.["apply-fixes"] ?? BUILDER_APPLY_FIXES_CONFIG;
   return definition.config;
 }
 

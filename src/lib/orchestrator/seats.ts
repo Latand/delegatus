@@ -6,6 +6,7 @@ import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { IdentityWavePathRekey } from "@/lib/agent/identityWaveMigration";
+import type { BoardTask } from "@/lib/tasks/types";
 
 /* Operator-selected PER-PROJECT orchestrator seats.
  *
@@ -84,6 +85,11 @@ export interface OrchestratorSeat {
   runtimeIdentityFrozen?: boolean;
   /** The mandate text delivered (active) or to be delivered (pending). */
   mandate: string;
+  /** The role table (#1880) rendered from the live registry when this intent
+      began. A pending replay delivers it instead of rendering again, so a role
+      edited in between cannot change the text its first attempt sent. Absent
+      on intents recorded before tables existed. */
+  roleTable?: string | null;
   /** Version of the approved default prompt the mandate was based on; null
       when the designation predates versioning or the mandate is bespoke. */
   promptVersion: number | null;
@@ -138,6 +144,24 @@ export interface OrchestratorRevocation {
   /** Who triggered the rotation that ended this seat (#1402), copied from the
       successor's intent so the lineage entry answers "who did this" on its own. */
   triggeredBy?: OrchestratorSeatTrigger | null;
+  /** When the ended seat took the project (#1841), copied from the seat as the
+      revocation is written, so the board can say how long it held it. Absent
+      on revocations written before this existed. */
+  activatedAt?: string | null;
+  /** The ended seat's transcript path and engine, copied the same way. */
+  path?: string | null;
+  engine?: string | null;
+}
+
+/** The span fields of a stored revocation (#1841), carried only when it has
+    them, so a revocation written before they existed reads back unchanged. */
+function seatSpanOf(revocation: Partial<OrchestratorRevocation>): Pick<OrchestratorRevocation, "activatedAt" | "path" | "engine"> {
+  const span: Pick<OrchestratorRevocation, "activatedAt" | "path" | "engine"> = {};
+  for (const key of ["activatedAt", "path", "engine"] as const) {
+    const value = revocation[key];
+    if (typeof value === "string" && value) span[key] = value;
+  }
+  return span;
 }
 
 interface OrchestratorSeatFile {
@@ -228,6 +252,7 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
     model,
     runtimeIdentityFrozen,
     mandate: seat.mandate,
+    ...(typeof seat.roleTable === "string" ? { roleTable: seat.roleTable } : {}),
     promptVersion: typeof seat.promptVersion === "number" && Number.isInteger(seat.promptVersion) ? seat.promptVersion : null,
     predecessorConversationId: typeof seat.predecessorConversationId === "string" ? seat.predecessorConversationId : null,
     triggeredBy: normalizeSeatTrigger(seat.triggeredBy),
@@ -272,7 +297,7 @@ function retainNewestSeat(collection: Record<string, OrchestratorSeat>, seat: Or
  * does not normalize is not evidence of a seat, and the next designation
  * overwrites it.
  */
-function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
+export function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
   let raw: string;
   try {
     raw = fs.readFileSync(seatsFile(), "utf8");
@@ -314,6 +339,7 @@ function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
           revokedAt: revocation.revokedAt,
           successorConversationId: typeof revocation.successorConversationId === "string" ? revocation.successorConversationId : null,
           triggeredBy: normalizeSeatTrigger(revocation.triggeredBy),
+          ...seatSpanOf(revocation),
         });
       }
     }
@@ -443,6 +469,7 @@ function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvide
       /* Carried through the migration: this reader's whole point is that a
          rewrite publishes everything it read. */
       triggeredBy: normalizeSeatTrigger(revocation.triggeredBy),
+      ...seatSpanOf(revocation),
     });
   }
   for (const candidate of arrayEvidence(raw.history, "history")) {
@@ -473,13 +500,173 @@ export function orchestratorSeatFor(project: string): {
   pending: OrchestratorSeat | null;
   history: OrchestratorSeatTerminalization[];
 } {
-  const file = readOrchestratorSeatFile();
+  return orchestratorSeatIn(readOrchestratorSeatFileOrNull(), project);
+}
+
+/**
+ * The same answer, from a record the caller has ALREADY read.
+ *
+ * The record is one document, so a caller that needs more than one thing out of
+ * it — the status read needs the active seat, the retired ones and the
+ * cross-project set — reads and parses it once and derives all three, rather
+ * than once per question. An unreadable record (`null`) answers as an empty
+ * one, exactly as {@link readOrchestratorSeatFile} does.
+ */
+export function orchestratorSeatIn(file: OrchestratorSeatFile | null, project: string): {
+  active: OrchestratorSeat | null;
+  pending: OrchestratorSeat | null;
+  history: OrchestratorSeatTerminalization[];
+} {
+  const record = file ?? emptyFile();
   const canonical = canonicalOrchestratorProject(project);
   return {
-    active: file.seats[canonical] ?? null,
-    pending: file.pending[canonical] ?? null,
-    history: file.history.filter((entry) => entry.seat.project === canonical),
+    active: record.seats[canonical] ?? null,
+    pending: record.pending[canonical] ?? null,
+    history: record.history.filter((entry) => entry.seat.project === canonical),
   };
+}
+
+/** How many previous seats a project's status read carries. */
+export const PREVIOUS_SEATS_LIMIT = 20;
+
+/** A seat that held the project and was revoked, as the board lists it (#1841). */
+export interface PreviousOrchestratorSeat {
+  conversationId: string;
+  path: string | null;
+  engine: string | null;
+  /** When it took the project; null on a revocation written before that was
+      recorded. */
+  heldFrom: string | null;
+  /** When it was revoked. */
+  heldTo: string;
+}
+
+/**
+ * The seats that held a project before its current one, newest revocation
+ * first, at most `limit`. A conversation revoked more than once (a stillborn
+ * successor's rollback restores it, a later rotation ends it again) is listed
+ * once, at its newest revocation, and the conversation holding the seat now is
+ * never listed.
+ */
+export function previousOrchestratorSeats(project: string, limit = PREVIOUS_SEATS_LIMIT): PreviousOrchestratorSeat[] {
+  return previousOrchestratorSeatsIn(readOrchestratorSeatFileOrNull(), project, limit);
+}
+
+/** The same list, from a record the caller has already read: see
+    {@link orchestratorSeatIn}. */
+export function previousOrchestratorSeatsIn(
+  file: OrchestratorSeatFile | null,
+  project: string,
+  limit = PREVIOUS_SEATS_LIMIT,
+): PreviousOrchestratorSeat[] {
+  const record = file ?? emptyFile();
+  const canonical = canonicalOrchestratorProject(project);
+  const current = record.seats[canonical]?.conversationId ?? null;
+  const seen = new Set<string>();
+  const out: PreviousOrchestratorSeat[] = [];
+  const ordered = record.revocations
+    .map((revocation, index) => ({ revocation, index }))
+    .filter(({ revocation }) => revocation.project === canonical)
+    .sort((a, b) => b.revocation.revokedAt.localeCompare(a.revocation.revokedAt) || b.index - a.index);
+  for (const { revocation } of ordered) {
+    if (out.length >= limit) break;
+    if (revocation.conversationId === current || seen.has(revocation.conversationId)) continue;
+    seen.add(revocation.conversationId);
+    out.push({
+      conversationId: revocation.conversationId,
+      path: revocation.path ?? null,
+      engine: revocation.engine ?? null,
+      heldFrom: revocation.activatedAt ?? null,
+      heldTo: revocation.revokedAt,
+    });
+  }
+  return out;
+}
+
+/** Every conversation a seat record names, across EVERY project (#1841), split
+    into the seats held now (active or pending) and the seats retired. */
+export interface SeatConversations {
+  conversationIds: string[];
+  paths: string[];
+  previous: { conversationIds: string[]; paths: string[] };
+}
+
+/**
+ * Every conversation any project's seat record names (#1841), from one read of
+ * the record.
+ *
+ * The per-project answer above is what a board needs; a surface that spans
+ * projects — the Overview's board, the Tasks panel in its «all» scope — needs
+ * this one, because a seat of ANOTHER project is just as much a seat and has
+ * just as little to do with a task list. Read whole rather than per project:
+ * the file is one document, so asking it once per project would re-read and
+ * re-parse it once per project for the same answer.
+ *
+ * Null when the record cannot be read. A surface that hides rows on this
+ * answer hides nothing without it, which is why «unreadable» has to be
+ * distinguishable from «no seats anywhere».
+ */
+export function allSeatConversations(): SeatConversations | null {
+  return allSeatConversationsIn(readOrchestratorSeatFileOrNull());
+}
+
+/** The same set, from a record the caller has already read: see
+    {@link orchestratorSeatIn}. Null in, null out — a record that could not be
+    read names no conversations and hides no rows. */
+export function allSeatConversationsIn(file: OrchestratorSeatFile | null): SeatConversations | null {
+  if (file === null) return null;
+  const held = { conversationIds: new Set<string>(), paths: new Set<string>() };
+  for (const seat of [...Object.values(file.seats), ...Object.values(file.pending)]) {
+    if (seat.conversationId) held.conversationIds.add(seat.conversationId);
+    if (seat.path) held.paths.add(seat.path);
+  }
+  const previous = { conversationIds: new Set<string>(), paths: new Set<string>() };
+  for (const revocation of file.revocations) {
+    previous.conversationIds.add(revocation.conversationId);
+    if (revocation.path) previous.paths.add(revocation.path);
+  }
+  return {
+    conversationIds: [...held.conversationIds],
+    paths: [...held.paths],
+    previous: { conversationIds: [...previous.conversationIds], paths: [...previous.paths] },
+  };
+}
+
+/** A seat's notes task as the status read reports it (#1841): every surface,
+    including the ones that carry no task list, can name the seat and decide
+    whether to offer its notes without reading the store itself. */
+export interface SeatNotesTask {
+  taskId: string;
+  title: string | null;
+  /** Whether the task carries notes at all. A seat with none draws no Notes
+      control, so this has to be answered here rather than guessed by a surface
+      that cannot see the task. */
+  hasNotes: boolean;
+}
+
+/**
+ * The task a seat conversation is assigned to, by conversation id or path: the
+ * one seat launch minted, where the seat keeps its notes (`details`). The
+ * newest such task wins when more than one names it. Pure: the caller hands in
+ * the project's tasks.
+ */
+export function seatTaskOf(
+  tasks: readonly Pick<BoardTask, "id" | "project" | "text" | "details" | "updatedAt" | "assignments" | "origin">[],
+  project: string,
+  seat: { conversationId: string | null; path: string | null },
+): SeatNotesTask | null {
+  const canonical = canonicalOrchestratorProject(project);
+  let best: (typeof tasks)[number] | null = null;
+  for (const task of tasks) {
+    if (task.project !== project && task.project !== canonical && canonicalOrchestratorProject(task.project) !== canonical) continue;
+    const names = task.assignments.some((assignment) =>
+      (seat.conversationId !== null && assignment.conversationId === seat.conversationId)
+      || (seat.path !== null && assignment.path === seat.path));
+    if (names && (!best || task.updatedAt > best.updatedAt)) best = task;
+  }
+  if (!best) return null;
+  const title = best.origin?.refinement === "pending" ? "" : best.text.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  return { taskId: best.id, title: title || null, hasNotes: Boolean(best.details?.trim()) };
 }
 
 export type BeginSeatIntentResult =
@@ -509,6 +696,8 @@ export type BeginSeatIntentResult =
 export function beginOrchestratorSeatIntent(input: {
   project: string;
   mandate: string;
+  /** The role table this intent's delivery carries; see `OrchestratorSeat.roleTable`. */
+  roleTable?: string | null;
   clientRequestId: string;
   mode: "spawn" | "existing";
   conversationId?: string | null;
@@ -561,6 +750,7 @@ export function beginOrchestratorSeatIntent(input: {
       model: input.model?.trim() || null,
       runtimeIdentityFrozen: Boolean(input.engine?.trim() && input.model?.trim()),
       mandate: input.mandate,
+      ...(typeof input.roleTable === "string" ? { roleTable: input.roleTable } : {}),
       promptVersion: input.promptVersion ?? null,
       predecessorConversationId: null,
       triggeredBy: input.triggeredBy ?? null,
@@ -624,6 +814,9 @@ export function completeOrchestratorSeatIntent(input: {
            its request returned — an accepted spawn activates from the
            reconciler, which has no request to ask. */
         triggeredBy: pending.triggeredBy ?? null,
+        activatedAt: active.activatedAt,
+        path: active.path,
+        engine: active.engine ?? null,
       };
       file.revocations.push(revoked);
     }
@@ -816,6 +1009,9 @@ export function abandonStillbornOrchestratorSeat(input: {
       revokedAt: now,
       successorConversationId: restored?.conversationId ?? null,
       triggeredBy: active.triggeredBy ?? null,
+      activatedAt: active.activatedAt,
+      path: active.path,
+      engine: active.engine ?? null,
     });
     delete file.rollbacks[project];
     /* WHY the project ends undesignated, on the row the operator reads. A bare

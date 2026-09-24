@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { attentionForDevice, raiseAttentionRequest } from "@/lib/attention/service";
+import { attentionForDevice, attentionRecordsForSurface, raiseAttentionRequest } from "@/lib/attention/service";
+import { MAX_ECHOED_IDS } from "@/lib/attention/targetRecords";
 import { readBoundedJson, validateAttentionCreate } from "@/lib/attention/validation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
@@ -15,11 +16,24 @@ const headers = { "Cache-Control": "no-store" };
     expired so the caller can say so once. */
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const deviceId = request.nextUrl.searchParams.get("deviceId");
-  if (!deviceId) {
+  /* A surface that draws the board and answers no request — the phone — asks
+     for the rows alone (#1836). It names no device, so it can be offered
+     nothing. */
+  const recordsOnly = request.nextUrl.searchParams.get("records") === "only";
+  if (!deviceId && !recordsOnly) {
     return NextResponse.json({ error: "INVALID_REQUEST", message: "deviceId is required" }, { status: 400, headers });
   }
+  /* The lanes this device is holding out of an earlier push (#1836), so the
+     read can answer which of them the registry does not hold at all. Bounded
+     and length-checked here rather than trusted: this is a query string. */
+  const echoedPipelineIds = (request.nextUrl.searchParams.get("echoes") ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0 && id.length <= 128)
+    .slice(0, MAX_ECHOED_IDS);
   try {
-    return NextResponse.json({ ok: true, ...attentionForDevice(deviceId) }, { headers });
+    if (!deviceId) return NextResponse.json({ ok: true, ...attentionRecordsForSurface({ echoedPipelineIds }) }, { headers });
+    return NextResponse.json({ ok: true, ...attentionForDevice(deviceId, { echoedPipelineIds }) }, { headers });
   } catch (error) {
     return attentionFailure(error);
   }

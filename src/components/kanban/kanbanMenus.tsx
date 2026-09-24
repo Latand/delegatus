@@ -25,15 +25,25 @@ export type KanbanMenuItem =
     /** The item moves focus itself (an editor opens, the card leaves): the
         menu closes without handing focus back to its anchor. */
     keepFocus?: boolean;
+    /** A leading icon, the way the header's ⋯ rows carry one. */
+    icon?: ReactNode;
     onSelect: () => void;
   };
 
-function place(element: HTMLElement, anchor: HTMLElement): void {
+/** A popover's left edge: right-aligned to its control unless that would hang
+    past the left edge of the surface the control sits in, then starting under
+    the control; always 8 px inside the viewport. */
+export function popoverLeft(anchor: { left: number; right: number }, width: number, viewportWidth: number, withinLeft: number | null = null): number {
+  let left = anchor.right - width;
+  if (withinLeft !== null && left < withinLeft) left = anchor.left;
+  return Math.max(8, Math.min(left, viewportWidth - width - 8));
+}
+
+function place(element: HTMLElement, anchor: HTMLElement, within?: HTMLElement | null): void {
   const rect = anchor.getBoundingClientRect();
   const width = element.offsetWidth;
   const height = element.offsetHeight;
-  let left = rect.right - width;
-  left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+  const left = popoverLeft(rect, width, window.innerWidth, within ? within.getBoundingClientRect().left : null);
   let top = rect.bottom + 6;
   if (top + height > window.innerHeight - 8) top = rect.top - height - 6;
   top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
@@ -132,6 +142,7 @@ export function KanbanMenu({ anchor, label, items, onClose }: {
               item.onSelect();
             }}
           >
+            {item.icon ?? null}
             {item.status ? <span className="st" data-status={item.status} /> : null}
             {item.type === "radio" ? <CheckGlyph /> : null}
             <span className="lbl">
@@ -146,8 +157,10 @@ export function KanbanMenu({ anchor, label, items, onClose }: {
   );
 }
 
-export function KanbanPopover({ anchor, label, onClose, children, initialFocus = "button", className }: {
+export function KanbanPopover({ anchor, label, onClose, children, initialFocus = "button", className, within }: {
   anchor: HTMLElement;
+  /** The surface the anchor sits in; the popover does not hang past its left edge. */
+  within?: HTMLElement | null;
   label: string;
   onClose: (refocus: boolean) => void;
   children: ReactNode;
@@ -159,9 +172,9 @@ export function KanbanPopover({ anchor, label, onClose, children, initialFocus =
   useDismiss(ref, anchor, onClose);
   useLayoutEffect(() => {
     if (!ref.current) return;
-    place(ref.current, anchor);
+    place(ref.current, anchor, within);
     ref.current.querySelector<HTMLElement>(initialFocus)?.focus();
-  }, [anchor, initialFocus]);
+  }, [anchor, initialFocus, within]);
   return (
     <div ref={ref} className={`popover${className ? ` ${className}` : ""}`} role="dialog" aria-label={label}>
       {children}

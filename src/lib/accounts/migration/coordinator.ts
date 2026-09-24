@@ -1,3 +1,4 @@
+import type { AgentEngine } from "@/lib/agent/cli";
 import crypto from "node:crypto";
 import fs from "node:fs";
 
@@ -11,6 +12,7 @@ import {
   type MigrationScope,
   type RegistryConversation,
   type RegistryFile,
+  resolveConversationAlias,
 } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { headCwd, headSessionStartedAt } from "@/lib/agent/transcript";
@@ -177,7 +179,7 @@ function hostFencedTurn(observed: TranscriptTurnResult, hasActiveHost: boolean):
     host is exactly the case the transcript projection already governs. */
 function structuredHostTurnReleased(
   registry: AgentRegistry,
-  engine: MigrationEngine,
+  engine: AgentEngine,
   generation: { id: string; path: string },
 ): boolean {
   const entry = registry.readOnlySnapshot().entries[sessionKeyId({ engine, sessionId: generation.id })];
@@ -230,12 +232,53 @@ function projectedInventoryTurn(
   return parsed;
 }
 
+/** Latest `deliveredAt` per canonical conversation. The reaper reads a
+    delivery settled at or after `turn.observedAt` as a turn nobody has looked
+    at since (see `deliveryFencesTurn`), so a re-read after that delivery is
+    new evidence even when the transcript did not move. */
+function latestDeliveredAt(snapshot: RegistryFile): Map<ViewerConversationId, number> {
+  const latest = new Map<ViewerConversationId, number>();
+  for (const delivery of Object.values(snapshot.heldDeliveries)) {
+    if (delivery.state !== "delivered" || !delivery.deliveredAt) continue;
+    const deliveredAt = Date.parse(delivery.deliveredAt);
+    if (!Number.isFinite(deliveredAt)) continue;
+    const conversationId = resolveConversationAlias(snapshot, delivery.conversationId);
+    latest.set(conversationId, Math.max(latest.get(conversationId) ?? deliveredAt, deliveredAt));
+  }
+  return latest;
+}
+
+/**
+ * Whether a complete re-read says nothing the row does not already hold
+ * (#1990). The stored observation must already cover the transcript's current
+ * content (taken at or after its mtime), project the same turn, and postdate
+ * every delivery to the conversation. Restamping such a row every cycle
+ * rewrote every scanned conversation and advanced the registry revision, which
+ * made every reader reload the full snapshot.
+ */
+function observationUnchanged(
+  existing: RegistryConversation | null,
+  turn: ConversationObservation["turn"],
+  mtimeMs: number,
+  deliveredAt: Map<ViewerConversationId, number>,
+): existing is RegistryConversation & { turn: { observedAt: string } } {
+  if (!existing?.turn.observedAt) return false;
+  const observedAt = Date.parse(existing.turn.observedAt);
+  if (!Number.isFinite(observedAt) || observedAt < mtimeMs) return false;
+  if (existing.turn.state !== turn.state
+    || existing.turn.source !== turn.source
+    || existing.turn.terminalAt !== turn.terminalAt) return false;
+  const delivered = deliveredAt.get(existing.id);
+  return delivered === undefined || delivered < observedAt;
+}
+
 async function inventory(files: FileEntry[], registry: AgentRegistry): Promise<ConversationObservation[]> {
   const inventoryStartedAt = Date.now();
   const snapshot = registry.readOnlySnapshot();
   const conversationByPath = new Map<string, RegistryConversation>();
   const launchProfileByPath = new Map<string, RegistryConversation["generations"][number]["launchProfile"]>();
   const hostedPaths = activeRegisteredHostPaths(snapshot);
+  const deliveredAt = latestDeliveredAt(snapshot);
   await forEachCooperatively(Object.values(snapshot.conversations), (conversation) => {
     for (const generation of conversation.generations) {
       if (!conversationByPath.has(generation.path)) conversationByPath.set(generation.path, conversation);
@@ -329,7 +372,9 @@ async function inventory(files: FileEntry[], registry: AgentRegistry): Promise<C
       startedAt: entry.sessionStartedAt ?? headSessionStartedAt(entry.path, transcriptIdentity),
       observedAt: !observedTurn.complete && existing?.turn.observedAt
         ? existing.turn.observedAt
-        : new Date(Math.max(entry.mtime * 1000, inventoryStartedAt)).toISOString(),
+        : observationUnchanged(existing, turn, mtimeMs, deliveredAt)
+          ? existing.turn.observedAt
+          : new Date(Math.max(mtimeMs, inventoryStartedAt)).toISOString(),
     });
   });
   return observations;
@@ -750,6 +795,10 @@ export async function advanceConversationMigration(
 ): Promise<RegistryConversation> {
   let conversation = registry.conversation(conversationId);
   if (!conversation?.migration) throw new Error("conversation has no migration");
+  /* The registry never opens a migration for a Copilot conversation; the
+     engine is narrowed here so every step below keeps the migration types. */
+  const engine = conversation.engine;
+  if (engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
   if (reconfigureOwnsMigration(conversation, options.reconfigureOperationId)) return conversation;
   let migration = conversation.migration;
   if (migration.phase === "waiting-turn") {
@@ -823,7 +872,7 @@ export async function advanceConversationMigration(
         launchProfile: migration.successorLaunchProfile!,
       };
       receipt = await successorProvider.create({
-        engine: conversation.engine,
+        engine,
         operationId: creationOwner.operationId,
         conversationId,
         source: successorSource,
@@ -843,7 +892,7 @@ export async function advanceConversationMigration(
     const successorProfile = migration.successorLaunchProfile
       ?? migrationSuccessorLaunchProfile(source.launchProfile);
     if (!receipt || receipt.operationId !== migration.operationId) throw new Error("persisted successor receipt operation does not match");
-    await successorProvider.verify(receipt, { engine: conversation.engine, targetAccountId: migration.targetId, launchProfile: successorProfile });
+    await successorProvider.verify(receipt, { engine, targetAccountId: migration.targetId, launchProfile: successorProfile });
     const publicationConversationId = conversation.id;
     const publicationReceipt = receipt;
     const publicationRevision = migration.revision;
@@ -875,7 +924,7 @@ export async function advanceConversationMigration(
       return registry.conversation(publicationConversationId) ?? publishOwner ?? conversation;
     }
     await successorProvider.publishHost?.(publicationReceipt, {
-      engine: conversation.engine,
+      engine,
       conversationId: publicationConversationId,
       targetAccountId: migration.targetId,
       launchProfile: successorProfile,
@@ -936,7 +985,7 @@ export async function advanceConversationMigration(
     }
     console.warn("[account-migration] recoverable successor provider failure", {
       conversationId: conversation.id,
-      engine: conversation.engine,
+      engine,
       phase: migration.phase,
       targetAccountId: migration.targetId,
       error: safeProviderDiagnostic(error),
@@ -1002,14 +1051,27 @@ export async function reconcileMigrations(
     if (owner) await cleanupDiscardedSuccessor(provider, pending.receipt, owner, registry);
   });
   const pendingDeliveries = new Set<ViewerConversationId>();
+  const uncertainDeliveries = new Set<ViewerConversationId>();
   await forEachCooperatively(Object.values(before.heldDeliveries), (item) => {
-    if (item.state !== "delivered" && (item.state !== "delivery-uncertain" || delivery.reconcileUncertain)) {
-      pendingDeliveries.add(item.conversationId);
+    if (item.state !== "delivered" && item.state !== "failed"
+      && (item.state !== "delivery-uncertain" || delivery.reconcileUncertain)) {
+      const id = registry.canonicalConversationId(item.conversationId);
+      pendingDeliveries.add(id);
+      if (item.state === "delivery-uncertain") uncertainDeliveries.add(id);
     }
   });
   await forEachCooperatively(Object.values(before.conversations), async (snapshotConversation) => {
-    const needsFreshSnapshot = snapshotConversation.migration !== null || pendingDeliveries.has(snapshotConversation.id);
-    let conversation = needsFreshSnapshot ? registry.conversation(snapshotConversation.id) ?? snapshotConversation : snapshotConversation;
+    // A keyed delivery read may assemble grant provenance across the registry.
+    // Inventory already tells us which conversations need that read (#1983).
+    const hasDelivery = pendingDeliveries.has(snapshotConversation.id);
+    // A failed migration needs an explicit retry. Only reconciliation of an
+    // uncertain prior actuation can make progress while it remains parked.
+    if (snapshotConversation.migration?.phase === "failed-recoverable"
+      && !uncertainDeliveries.has(snapshotConversation.id)) return;
+    const activeMigration = snapshotConversation.migration !== null
+      && !terminalMigrationPhase(snapshotConversation.migration.phase);
+    if (!hasDelivery && !activeMigration) return;
+    let conversation = registry.conversation(snapshotConversation.id) ?? snapshotConversation;
     if (conversation.migration
       && conversation.migration.phase !== "committed"
       && conversation.migration.phase !== "rolled-back"
@@ -1061,6 +1123,7 @@ export async function reconcileMigrations(
       }
       return;
     }
+    if (conversation.migration.phase === "failed-recoverable") return;
     const migration = conversation.migration;
     const source = conversation.generations.find((generation) => generation.id === migration.sourceGenerationId)
       ?? conversation.generations.at(-1);

@@ -1,5 +1,6 @@
-import type { FlowEngine, RoleConfig } from "@/lib/flows/types";
+import type { RuntimeEngine as FlowEngine, RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
+import type { BackgroundWait } from "./backgroundTasks";
 
 export type PipelineAccess = "read-only" | "read-write";
 export type PipelineSandbox = "full" | "restricted";
@@ -7,7 +8,7 @@ export type PipelineSandbox = "full" | "restricted";
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
 export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedRevision" | "addRounds";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
@@ -64,11 +65,21 @@ export type PipelineStageKind = "run" | "review-loop";
 
 export type PipelineEdgeKind = "pass" | "fail";
 
-/** Verdict-keyed fail successor (#353): where a `fail` verdict routes next, and
-    how many times this edge may fire before the pipeline parks for the
-    operator. Cycles live exclusively on fail edges; the pass graph stays
-    acyclic so every pass path terminates. */
-export type PipelineFailEdge = { to: string; maxRounds: number };
+/** What a fail edge does once its `maxRounds` reviewed rounds are spent
+    (#1868). `advance` (the default, and every edge without the field) reads
+    `maxRounds` as the number of reviews: the last review's findings go to the
+    target once more and, when that fix passes, the lane follows the source's
+    own pass edge without re-running the source. `park` keeps the older count,
+    one more review after `maxRounds` traversals, then stops for the operator. */
+export type PipelineFailEdgeExhaustion = "advance" | "park";
+
+export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion[] = ["advance", "park"];
+
+/** Verdict-keyed fail successor (#353): where a `fail` verdict routes next, how
+    many rounds of it the source reviews, and what happens once those are spent.
+    Cycles live exclusively on fail edges; the pass graph stays acyclic so
+    every pass path terminates. */
+export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: PipelineFailEdgeExhaustion };
 
 export type PipelineStageInput = {
   id: string;
@@ -140,7 +151,15 @@ export type PipelineAttemptState =
 /** Durable provenance for a cursor activation / attempt: which stage's attempt
     advanced here, along which verdict edge. Loop budgets are derived from these
     records (never a separate counter), so counts cannot drift from evidence. */
-export type PipelineEdgeActivation = { stageId: string; attempt: number; edge: PipelineEdgeKind };
+export type PipelineEdgeActivation = {
+  stageId: string;
+  attempt: number;
+  edge: PipelineEdgeKind;
+  /** On a fail activation: the source's budget was spent, so this is the
+      one handoff past it (#1868). It spends no reviewed round, and the
+      target's pass follows the source's pass edge instead of re-running it. */
+  budgetSpent?: true;
+};
 
 export type PipelineVerdictRecovery = {
   state: "pending" | "recovered" | "exhausted";
@@ -279,11 +298,45 @@ export type PipelineStageReportEntry = {
   summary: string | null;
 };
 
+export const MAX_DECISION_ANSWER_CHARS = 12_000;
+
+/** Accepted answers are append-only, including their original request fence. */
+export type PipelineDecisionAnswer = {
+  clientRequestId: string;
+  expectedRevision: string;
+  stageId: string;
+  attempt: number;
+  nextAttempt: number;
+  question: string;
+  answer: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor;
+  at: string;
+};
+
 export type PipelineStageAttempt = {
   n: number;
+  /** Answer that created this continuation; forces lease-free activation. */
+  decisionAnswerId?: string;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
   historical?: boolean;
+  /** A review-loop attempt kept, with `historical`, when its stage was
+      converted to a run stage: history of the legacy flow, never this stage's
+      own attempt, so its verdict passes nothing. */
+  legacyReview?: true;
   state: PipelineAttemptState;
+  /** Durable custody across the pipeline/registry boundary. Rollback keeps draining these. */
+  activation?: {
+    id: string;
+    phase: "reserved" | "reserving" | "dispatching" | "settled";
+    input: Parameters<import("./engine").PipelinePorts["spawnAgent"]>[0];
+    clientAttemptId: string;
+    startedAt: string;
+    fence: string;
+    owner?: import("@/lib/processIdentity").ProcessIdentity;
+    replay?: boolean;
+    closeRequested?: boolean;
+    cancelRequested?: boolean;
+  };
   effectiveRole: EffectivePipelineRole;
   /** Absent until the attempt leaves `pending`, and on attempts recorded
       before definitions were bound, which read the live stage. */
@@ -313,10 +366,10 @@ export type PipelineStageAttempt = {
     roundCount: number;
     implementerHeadSha: string | null;
     reviewerHeadSha: string | null;
-    verdict: import("@/lib/flows/types").ReviewVerdict | null;
-    relayState: import("@/lib/flows/types").FlowState;
-    terminalState: import("@/lib/flows/types").FlowState | null;
-    hostClaim?: import("@/lib/flows/types").FlowHostClaim | null;
+    verdict: import("@/lib/review/types").ReviewVerdict | null;
+    relayState: import("@/lib/reviewHistory/types").FlowState;
+    terminalState: import("@/lib/reviewHistory/types").FlowState | null;
+    hostClaim?: import("@/lib/reviewHistory/types").FlowHostClaim | null;
     synchronizedAt: string;
     sourceUpdatedAt: string | null;
     lagMs: number | null;
@@ -358,6 +411,10 @@ export type PipelineStageAttempt = {
     resumedAt?: string;
     clientMessageId?: string;
   };
+  /** Why a turn that ended did not settle this attempt (#1441): its agent
+      still held harness-tracked background work, named in `tasks`. Cleared
+      once the work has reported. */
+  backgroundWait?: BackgroundWait;
   /** The one verdict the controller asked this attempt for (#1756). Written
       when a completed turn carried no verdict the reader could accept:
       `messageTs` is the turn it was asked about, and a later completed turn
@@ -407,6 +464,13 @@ export type PipelineStageAttempt = {
       reviewer reported; this is what says the reviewer asked for a decision and
       the lane kept going instead of parking on it. */
   decisionRequested?: boolean;
+  /** Set on the failed attempt whose findings were handed along a spent fail
+      edge (#1868): they went to the fix stage and the source was not asked
+      again. The verdict and its findings stay on this attempt. */
+  budgetSpent?: boolean;
+  /** On a `budgetSpent` attempt: the head that review judged (#1938), compared
+      with the head the fix writes to decide whether the lane may move on. */
+  reviewedHead?: string | null;
   /** Bounded, append-only reconciliation receipt for terminal parser misses. */
   verdictRecovery?: PipelineVerdictRecovery;
   /** What a close could prove it did not finish (#1501): the authorized host
@@ -430,7 +494,73 @@ export type PipelineStageRun = {
 
 export type PipelineCursorState = "pending" | "spawning" | "running" | "reviewing" | "committing";
 
-export type PipelineState = "draft" | "provisioning" | "running" | "needs_decision" | "paused" | "completed" | "closed";
+/** `needs_review` (#1938): a review stage's fail-edge budget was spent and the
+    fix that received its last findings wrote a new head, so the current head
+    was never reviewed. Not terminal: `continue-review` grants more rounds. */
+export type PipelineState = "draft" | "provisioning" | "running" | "needs_decision" | "needs_review" | "paused" | "completed" | "closed";
+
+/** Why a pipeline stopped in `needs_review` (#1938): the review whose budget
+    ran out, the fix that followed it, and the two heads they left behind. */
+export type PipelineReviewPending = {
+  /** The review stage whose fail-edge budget is spent, and its last attempt. */
+  stageId: string;
+  attempt: number;
+  /** The fix stage that received the last findings, and its passed attempt. */
+  fixStageId: string;
+  fixAttempt: number;
+  /** The head the last review judged; null on a handoff recorded before
+      reviewed heads were captured. */
+  reviewedHead: string | null;
+  /** The head the fix wrote, which nobody has reviewed. */
+  currentHead: string;
+  /** The last review's verdict and how many findings it carried. */
+  verdict: StageVerdictStatus;
+  findings: number;
+  at: string;
+};
+
+/** One accepted `continue-review` (#1938), append-only. `rounds` adds to the
+    review stage's fail-edge `maxRounds`, which itself stays frozen evidence. */
+export type PipelineReviewGrant = {
+  clientRequestId: string;
+  expectedRevision: string;
+  stageId: string;
+  rounds: number;
+  reviewedHead: string | null;
+  currentHead: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor;
+  at: string;
+};
+
+/** Where a converted review's round limit came from: the caller's edit, the
+    limit recorded on the stage's review flow, or the limit every review flow
+    the pipeline engine created carried. */
+export type PipelineLegacyReviewLimitSource = "request" | "flow" | "default";
+
+/** One explicit conversion of a legacy review-loop stage into run stages,
+    append-only. `original` is the definition as it was, kept immutable so the
+    conversion can be reverted while nothing has run under it. */
+export type PipelineLegacyReviewConversion = {
+  clientRequestId: string;
+  expectedRevision: string;
+  stageId: string;
+  fixerStageId: string;
+  implementerStageId: string;
+  reviewLimit: number;
+  reviewLimitSource: PipelineLegacyReviewLimitSource;
+  original: {
+    stages: PipelineStage[];
+    run: PipelineStageRun;
+    cursor: Pipeline["cursor"];
+    /** Absent on conversions that did not rewrite it. */
+    stateDetail?: string | null;
+  };
+  /** `graphDigest` of the stages the conversion wrote; a revert requires it. */
+  convertedGraphDigest: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor;
+  at: string;
+  reverted?: { clientRequestId: string; actor: import("@/lib/pauseResumeActor").PauseResumeActor; at: string };
+};
 
 /** A stage host a close asked the runtime to kill without confirming that it
     died (#670). Durable, so the possible survivor stays addressable: the board
@@ -470,7 +600,105 @@ export type PipelineTerminalReap = {
   settledAt: string | null;
 };
 
+export type PipelineDeliveryTarget = {
+  repository: string;
+  remote: string;
+  branch: string;
+  pr?: number;
+  rejectedHead?: string;
+};
+
+export type PipelineDelivery = {
+  target: PipelineDeliveryTarget;
+  disposition: "owner" | "comparison";
+  publish: "enabled" | "disabled";
+  ownerId: string;
+  epoch: number;
+  active: boolean;
+  releasedAt?: string;
+  /** Failure already released or explicitly acknowledged by takeover. */
+  settledFailure?: string;
+  operation?: {
+    id: string;
+    epoch: number;
+    sha: string;
+    requestKey?: string;
+    state: "pending" | "running" | "settled";
+    executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean };
+    result?: { ok: true; sha: string; remote: "published" | "unavailable" | "unreachable"; detail?: string; uncertain?: boolean } | { ok: false; error: string };
+  };
+  journal: Array<{ at: string; kind: "claim" | "comparison" | "release" | "takeover" | "denied" | "recovery"; ownerId: string; epoch: number; conversationId: string | null; reason: string }>;
+};
+
+export type PipelineStageHostRef = {
+  stageId: string;
+  attempt: number;
+  conversationId: string | null;
+  agentPath: string | null;
+  paneId: string | null;
+  /** Set for a conversation a stage agent spawned and the pipeline adopted, so
+      the report distinguishes it from the stage's own launch. */
+  adopted?: true;
+  /** The attempt's immutable launch identity. A stop that has to act on the
+      registry row alone (#1501) binds the row to this launch's receipt. */
+  launchId?: string | null;
+};
+
+/**
+ * What closing a pipeline did to its stage hosts, and what it left on disk
+ * (#670). `stopped` is empty and `alreadyStopped` may be populated when nothing
+ * was burning quota; a non-empty `stillRunning` keeps the closed lane visible.
+ */
+export type PipelineCloseReport = {
+  /** Recorded hosts still awaiting teardown. */
+  pending: PipelineStageHostRef[];
+  /** Pending while launch reconciliation, host, flow or worktree work is owed. */
+  status: "pending" | "settled";
+  /** Hosts this close terminated, with termination evidenced. */
+  stopped: PipelineStageHostRef[];
+  /** Launched stages — settled or parked included — whose host was already gone. */
+  alreadyStopped: PipelineStageHostRef[];
+  /** Kills the runtime accepted without confirming termination in time. The
+      operation id keeps the possible survivor addressable. */
+  unconfirmed: Array<PipelineStageHostRef & { operationId: string | null; detail: string }>;
+  /** Review rounds whose live reviewer this close terminated through the flow.
+      Headless reviewers are child processes with no registry entry, so they are
+      counted here rather than in `stopped`. */
+  reviewers: Array<{ stageId: string; attempt: number; flowId: string; round: number }>;
+  /** Unconfirmed hosts the operator explicitly dismissed on this close. */
+  acknowledged: Array<PipelineStageHostRef & { detail: string }>;
+  /** Hosts that survived teardown, so the close cannot claim to be clean. */
+  stillRunning: Array<PipelineStageHostRef & { error: string }>;
+  /** Stop failures demoted by durable terminal evidence. */
+  notes: Array<PipelineStageHostRef & { detail: string }>;
+  /** Uncommitted stage work preserved in the worktree; null when unprovisioned. */
+  worktree: { dir: string; uncommitted: string[]; truncated: boolean; error?: string } | null;
+};
+
+/** Evidence belongs to the recorded host even when a review round replaces it. */
+export type PipelineCloseHostEvidence = Pick<PipelineStageAttempt,
+  "effectiveRole" | "startedAt" | "state" | "error" | "completedAt" | "verdict" | "unresolvedTermination">;
+
+/** Durable close custody, understood regardless of the activation feature flag. */
+export type PipelineCloseTeardown = {
+  /** Optional for obligations written before host evidence was frozen. */
+  hosts?: Array<{ target: PipelineStageHostRef; evidence: PipelineCloseHostEvidence }>;
+  id: string;
+  phase: "pending" | "running" | "settled";
+  owner?: import("@/lib/processIdentity").ProcessIdentity;
+  waitingForActivation: boolean;
+  acknowledgeHosts: boolean;
+  flow: { id: string; stageId: string; attempt: number } | null;
+};
+
 export type Pipeline = {
+  closeTeardown?: PipelineCloseTeardown;
+  closeReport?: PipelineCloseReport;
+  /** Retained until a close requested during spawn has completed teardown. */
+  activationCloseRequested?: boolean;
+  /** Viewer publication ownership. Agent tools remain unrestricted. */
+  delivery?: PipelineDelivery;
+  creationRequest?: { key: string; digest: string };
   id: string;
   task: string;
   /** Durable board-task membership. The legacy `task` field remains the title. */
@@ -521,6 +749,10 @@ export type Pipeline = {
       transcripts are untouched, and `undismiss` clears it. `hiddenAt` cannot
       carry this, because every reader takes it to mean closed or discarded. */
   dismissedAt?: string | null;
+  /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
+      pipeline's own branches, `delivery.pr` and stage provenance say is joined
+      at read time and never stored here. */
+  workLinks?: import("@/lib/forge/workLinks").StoredWorkLink[];
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
@@ -534,12 +766,20 @@ export type Pipeline = {
   pos?: { x: number; y: number };
   /** Accepted graph edits, oldest first, at most MAX_PIPELINE_GRAPH_EDITS. */
   graphEdits?: PipelineGraphEdit[];
+  decisionAnswers?: PipelineDecisionAnswer[];
+  /** Present exactly while `state` (or `pausedState`) is `needs_review` (#1938). */
+  reviewPending?: PipelineReviewPending;
+  /** Accepted continue-review grants, oldest first (#1938). */
+  reviewGrants?: PipelineReviewGrant[];
+  /** Explicit legacy review-loop conversions, oldest first. */
+  legacyReviewConversions?: PipelineLegacyReviewConversion[];
   /** Accepted stage completion calls, oldest first, at most
       MAX_PIPELINE_STAGE_REPORTS (graph slice 2). */
   stageReports?: PipelineStageReportEntry[];
 };
 
 export type CreatePipelineRequest = {
+  delivery?: { branch: string; remote?: string; pr?: number; rejectedHead?: string; comparison?: boolean };
   task: string;
   taskIds?: string[];
   spec?: string;
@@ -560,6 +800,8 @@ export type CreatePipelineRequest = {
    these to callers and the PATCH route admits exactly this set; an action added
    to one and forgotten in the other is the defect this constant prevents. */
 export const PIPELINE_ACTIONS = [
+  "publish",
+  "takeover",
   "start",
   "update-draft",
   "set-position",
@@ -570,6 +812,11 @@ export const PIPELINE_ACTIONS = [
   "pause",
   "resume",
   "retry-stage",
+  "resolve-decision",
+  "continue-review",
+  "preview-legacy-review",
+  "convert-legacy-review",
+  "revert-legacy-review",
   "skip-stage",
   "override-stage",
   "link-task",
@@ -579,14 +826,39 @@ export const PIPELINE_ACTIONS = [
   "close",
   "dismiss",
   "undismiss",
+  "attach-link",
+  "detach-link",
 ] as const;
 
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 
 export type PatchPipelineRequest = {
+  /** Required for resolve-decision and continue-review, preserved as its durable receipt key. */
+  clientRequestId?: string;
+  /** Opaque revision returned by get_pipeline or the pipeline detail route. */
+  expectedRevision?: string;
+  /** Answer to the settled question, up to MAX_DECISION_ANSWER_CHARS. */
+  answer?: string;
+  /** for continue-review (#1938): review rounds to add, 1..MAX_FAIL_EDGE_ROUNDS. */
+  addRounds?: number;
+  /** for preview/convert-legacy-review: the finite review limit to convert to,
+      1..MAX_FAIL_EDGE_ROUNDS; absent, the stage's recorded limit is used. */
+  reviewLimit?: number;
+  /** for preview/convert-legacy-review: the run stage whose role the fixer
+      copies, when more than one run passes into the review. */
+  implementerStageId?: string;
+  expectedOwner?: string;
+  expectedEpoch?: number;
+  acceptedSha?: string;
+  reason?: string;
   action: PipelineAction;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
+  /** for attach-link and detach-link (#2059): a PR or issue as `#123`, `123`,
+      `PR 123`, `owner/repo#123` or a github.com URL, or a list of them. */
+  link?: string | number | Array<string | number>;
+  /** for attach-link: overrides whether the number is a PR or an issue. */
+  kind?: import("@/lib/forge/workLinks").WorkLinkKind;
   /** Creator transcript used by set-src. */
   srcPath?: string;
   /** Explicit authorization to replace existing creator lineage. */
@@ -608,7 +880,7 @@ export type PatchPipelineRequest = {
       and `get_pipeline` answer both. A plan that no longer has it answers 409
       `STAGE_CHANGED` and is left unchanged. */
   expectedStageDigest?: string;
-  /** for retry-stage and skip-stage: the stage the caller saw the pipeline
+  /** for retry-stage, skip-stage and resolve-decision: the stage the caller saw the pipeline
       waiting on. A pipeline no longer waiting on it answers 409 `STAGE_CHANGED`
       before anything is closed, reset or started. Deliberately not `stageId`,
       which on retry-stage names a launch-receipt retry. */
@@ -652,6 +924,8 @@ export type PatchPipelineRequest = {
   edge?: PipelineEdgeKind;
   to?: string | null;
   maxRounds?: number;
+  /** Fail edges only: what happens once `maxRounds` is spent (#1868). */
+  onExhausted?: PipelineFailEdgeExhaustion;
 };
 
 export type PipelinesResponse = {
