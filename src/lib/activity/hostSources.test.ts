@@ -59,7 +59,7 @@ describe("human input from every expected host", () => {
     localExport();
     const read = readHumanInputs({ start: DAY.start - 600_000, end: NOW }, NOW, { dir: () => dir, readLedger: quietLedger });
     expect(read.hosts.map((host) => [host.host, host.configured, host.sources.map((source) => `${source.source}:${source.state}`)])).toEqual([
-      ["workstation", true, ["ledger:read", "transcripts:read"]],
+      ["workstation", true, ["ledger:read", "ingest:absent", "transcripts:read"]],
       ["stage", true, ["transcripts:read"]],
     ]);
     expect(read.hosts[1]!.sources[0]!.excluded).toEqual({ "agent-message": 3, unmarked: 1 });
@@ -88,7 +88,7 @@ describe("human input from every expected host", () => {
     stageExport([]);
     const ledger = (): LedgerRead => ({ rows: [{ v: 1, key: "e".repeat(64), at: Date.parse("2026-09-23T09:00:00Z"), kind: "message", surface: "desktop", project: "client-a" }], ledgerStartMs: NOW - 7 * 24 * 3_600_000 });
     const read = readHumanInputs({ start: DAY.start, end: NOW }, NOW, { dir: () => dir, readLedger: ledger });
-    expect(read.hosts[0]!.sources.map((source) => `${source.source}:${source.state}:${source.scope}`)).toEqual(["ledger:read:delegatus", "transcripts:absent:all"]);
+    expect(read.hosts[0]!.sources.map((source) => `${source.source}:${source.state}:${source.scope}`)).toEqual(["ledger:read:delegatus", "ingest:absent:all"]);
     expect(read.coverage.find((host) => host.host === "workstation")!.covered).toEqual([]);
     const report = reportFor(read);
     /* The ledger's request still counts, and the figure says it is a lower bound. */
@@ -140,6 +140,6 @@ describe("human input from every expected host", () => {
     fs.writeFileSync(path.join(dir, "hosts.json"), "{not json");
     expect(readHostsConfig(dir).state).toBe("unreadable");
     hostsFile([{ id: "Bad Id" }, { id: "stage", projects: ["client-a"], since: "2026-09-20" }, { id: "stage" }]);
-    expect(readHostsConfig(dir).hosts).toEqual([{ id: "stage", label: null, projects: "all", since: null }]);
+    expect(readHostsConfig(dir).hosts).toEqual([{ id: "stage", label: null, projects: "all", since: null, pull: null }]);
   });
 });

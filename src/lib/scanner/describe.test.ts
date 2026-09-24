@@ -880,3 +880,23 @@ test("a workspace directory outside any OpenClaw state directory is not recogniz
     projectInfoFromCwd(foreign, "openclaw-foreign"));
   expect(info).toMatchObject({ displayName: "workspace" });
 });
+
+test("every handoff digest groups under one project, live or deleted, never a lookalike named cwd", () => {
+  /* Each seat rotation's digest runs in `<state>/orchestrator/handoff-digests/<request>/cwd`,
+     removed when it finishes. By the directory rule each was a project of its
+     own, and the activity page listed dozens of rows all named `cwd`. */
+  useStateDirectory("handoff-digest-state");
+  const container = path.join(SANDBOX, "digest-home", "state", "orchestrator", "handoff-digests");
+  const live = path.join(container, crypto.randomUUID(), "cwd");
+  fs.mkdirSync(live, { recursive: true });
+  const deleted = path.join(container, "rotate-seat-to-next", "cwd");
+  const another = path.join(container, crypto.randomUUID(), "cwd");
+  const infos = [live, deleted, another].map((cwd) => projectInfoFromCwd(cwd, "handoff-digest"));
+  expect(new Set(infos.map((info) => info?.project)).size).toBe(1);
+  expect(infos[0]).toMatchObject({ displayName: "Handoff digests" });
+  expect(infos[0]!.project.startsWith("dir-")).toBeTrue();
+  /* A directory that merely has the same leaf stays its own project. */
+  const plain = path.join(SANDBOX, "digest-home", "elsewhere", "cwd");
+  fs.mkdirSync(plain, { recursive: true });
+  expect(projectInfoFromCwd(plain, "handoff-digest")?.project).not.toBe(infos[0]!.project);
+});

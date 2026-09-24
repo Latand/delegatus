@@ -109,6 +109,8 @@ export function collectFileScanInWorker(
      here without one would spawn a path this process does not have. */
   if (!launch) return Promise.reject(new Error("this process has no file scanner worker artifact"));
   const catalogScanToken = beginProjectCatalogScan(false);
+  /* Nothing created after the worker starts listing is in its inventory. */
+  const listedAt = Date.now();
   /* Full-corpus scans are background freshness work. Keep the interactive
      Next process ahead of their CPU demand on a busy operator host. Explicit
      test/runtime launch seams retain their exact command. */
@@ -230,7 +232,7 @@ export function collectFileScanInWorker(
         publishConversationCatalogForScan(completedConversationCatalog, catalogScanToken, completed.complete);
         if (currentScan) {
           (runtime.transcriptIndexScheduler ?? scheduleTranscriptIndex)(
-            transcriptIndexFeed(completedConversationCatalog, completed.complete),
+            transcriptIndexFeed(completedConversationCatalog, completed.complete, undefined, listedAt),
           );
         }
       }
