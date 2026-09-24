@@ -31,7 +31,7 @@ mock.module("@/hooks/useRuntime", () => ({
 }));
 
 const { MobileFocusView } = await import("@/components/mobile/MobileFocusView");
-const { getMobileNav, topScreen } = await import("@/components/mobile/mobileNav");
+const { getMobileNav, resetMobileNavForTests, topScreen } = await import("@/components/mobile/mobileNav");
 
 const dom = new Window({ url: "http://localhost/" });
 const G = globalThis as Record<string, unknown>;
@@ -68,7 +68,7 @@ afterAll(async () => {
 });
 
 let roots: Root[] = [];
-beforeEach(() => { dom.document.body.replaceChildren(); roots = []; getMobileNav().home(); });
+beforeEach(() => { dom.document.body.replaceChildren(); roots = []; resetMobileNavForTests(); });
 afterEach(async () => { for (const r of roots) flushSync(() => r.unmount()); roots = []; await settle(); dom.sessionStorage.clear(); });
 
 function mount(node: React.ReactElement): Root {

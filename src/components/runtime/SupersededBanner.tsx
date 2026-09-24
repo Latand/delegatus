@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { ArrowRight, History } from "lucide-react";
 import { Loader2, Play } from "@/components/icons";
+import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { fmtAge } from "@/components/utils";
 import type { FileEntry } from "@/lib/types";
@@ -94,7 +95,7 @@ export function SupersededBanner({ file }: { file: FileEntry }) {
   const openSuccessor = () => {
     // The chain tail's stable id is the durable target; #c= survives path
     // rotation and resolves through conversation aliases.
-    window.location.hash = "#c=" + encodeURIComponent(supersededNavigationTarget(superseded));
+    navigateToFragment("#c=" + encodeURIComponent(supersededNavigationTarget(superseded)));
   };
 
   const resumeHere = async () => {

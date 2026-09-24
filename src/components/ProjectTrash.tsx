@@ -8,6 +8,7 @@ import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 import { cleanTitle } from "@/lib/title";
+import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 
 import { DeleteFileButton } from "./DeleteFileButton";
 import { OVERVIEW } from "./projectModel";
@@ -16,7 +17,7 @@ import { activityDot, engineBadge, fmtAge } from "./utils";
 /* Module-level: the React Compiler flags direct global mutation inside a
    component body (same reason as gotoProject in ProjectDashboard). */
 function gotoOverview() {
-  location.hash = "#p=" + encodeURIComponent(OVERVIEW);
+  navigateToFragment("#p=" + encodeURIComponent(OVERVIEW));
 }
 
 type ProjectDeleteFetcher = (input: string, init?: RequestInit) => Promise<Response>;

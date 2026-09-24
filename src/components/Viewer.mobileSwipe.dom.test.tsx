@@ -76,7 +76,7 @@ const { Viewer } = await import("./Viewer");
 const { resetFilesClientCacheForTests } = await import("@/hooks/useFiles");
 const { pendingPipelineActs } = await import("./mobile/MobilePipelineScreen");
 const { receipts } = await import("./mobile/MobileReceipt");
-const { getMobileNav } = await import("./mobile/mobileNav");
+const { getMobileNav, resetMobileNavForTests } = await import("./mobile/mobileNav");
 const { resetDismissalOverlayForTests } = await import("./attention/dismissalOverlay");
 
 const NOW = Math.floor(Date.now() / 1000);
@@ -173,7 +173,7 @@ beforeEach(() => {
   resetDismissalOverlayForTests();
   pendingPipelineActs.cancel();
   receipts.dismiss();
-  getMobileNav().home();
+  resetMobileNavForTests();
   stubFetch();
 });
 

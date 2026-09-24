@@ -79,7 +79,7 @@ mock.module("@/hooks/runtimeBus", () => ({
 const { Viewer } = await import("./Viewer");
 const { resetFilesClientCacheForTests } = await import("@/hooks/useFiles");
 const { receipts } = await import("./mobile/MobileReceipt");
-const { getMobileNav } = await import("./mobile/mobileNav");
+const { getMobileNav, resetMobileNavForTests } = await import("./mobile/mobileNav");
 const { resetPhoneKanbanPlaces } = await import("./mobile/phoneKanbanPlace");
 const { resetOrchestratorSeatCacheForTests } = await import("./orchestrator/useOrchestratorSeat");
 const { transcriptFocusHash } = await import("./search/GlobalSearch");
@@ -215,7 +215,7 @@ beforeEach(() => {
   taskPatches.length = 0;
   boards.clear();
   receipts.dismiss();
-  getMobileNav().home();
+  resetMobileNavForTests();
   stubFetch();
 });
 
@@ -549,7 +549,7 @@ test("Forward and a reload bring a conversation back over the Overview", async (
   expect(dom.location.hash).toContain("#c=");
   await act(async () => { mounted!.unmount(); });
   mounted = null;
-  getMobileNav().home();
+  resetMobileNavForTests();
   dom.history.replaceState(entry, "", dom.location.href);
   dom.document.body.replaceChildren();
   const again = dom.document.createElement("div");

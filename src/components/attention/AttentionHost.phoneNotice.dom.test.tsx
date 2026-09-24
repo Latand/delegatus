@@ -42,6 +42,7 @@ mock.module("@/hooks/useRuntime", () => ({
 
 const { MobileBarTitle, MobileShell } = await import("@/components/mobile/MobileShell");
 const { createMobileNav, MobileNavContext, topScreen, useMobileNav } = await import("@/components/mobile/mobileNav");
+const { fakeHistory } = await import("@/components/mobile/mobileNavTestHistory");
 const { MobileAttentionSheet } = await import("./MobileAttentionSheet");
 const { AttentionHost } = await import("./AttentionHost");
 const { clearNotice, markNoticesSeen, resetPhoneNoticesForTests, usePhoneNotices } = await import("./phoneNotices");
@@ -97,21 +98,9 @@ afterEach(async () => {
 const READING = "/tmp/what-i-am-reading.jsonl";
 const TARGET = "/tmp/reviewer.jsonl";
 
-/** A model of the browser's same-document history, as the shell's own test has it. */
+/** The browser's same-document history, as the shell's own tests model it. */
 function browser(): MobileNavHost {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=atlas" }];
-  let index = 0;
-  let listener: ((state: unknown) => void) | null = null;
-  return {
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index === 0) return; index -= 1; listener?.(entries[index]!.state); },
-    },
-    href: () => entries[index]!.url,
-    onPopstate(next) { listener = next; return () => { listener = null; }; },
-  };
+  return fakeHistory("http://localhost/#p=atlas").host;
 }
 
 /** The rows-only read, answered as `/api/attention?records=only` answers it. */
