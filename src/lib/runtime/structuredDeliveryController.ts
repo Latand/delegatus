@@ -31,7 +31,7 @@ import { deliveryRouteOf, journalVerdict, sendIsSettled } from "./sendSettlement
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
-import { NATIVE_INJECT_CAPABILITY } from "./codexAppServerHost";
+import { NATIVE_INJECT_CAPABILITY, NATIVE_QUEUE_CAPABILITY, NATIVE_TURN_PROFILE_CAPABILITY } from "./codexCapabilityFlags";
 import {
   markStructuredDeliveryControllerReady,
   markStructuredDeliveryControllerUnavailable,
@@ -588,7 +588,7 @@ async function publishHostState(
       artifactPath: entry.artifactPath,
       capabilities: {
         ...runtimeSteerCapability(adopted.key.engine),
-        nativeQueue: adopted.key.engine === "codex" && state.activeFlags.includes("native-queue"),
+        nativeQueue: adopted.key.engine === "codex" && state.activeFlags.includes(NATIVE_QUEUE_CAPABILITY),
         /* #1560: OBSERVED, never inferred. The flag comes from the running
            executable's negotiated protocol, and a host that has not resolved it
            advertises nothing — so the composer offers no injection action and
@@ -600,7 +600,7 @@ async function publishHostState(
           adopted.key.engine,
           state.activeFlags.includes(STRUCTURED_IMAGE_CAPABILITY),
         ),
-        runtimeSettings: runtimeSettingsCapability(adopted.key.engine, state.activeFlags.includes("native-turn-profile")),
+        runtimeSettings: runtimeSettingsCapability(adopted.key.engine, state.activeFlags.includes(NATIVE_TURN_PROFILE_CAPABILITY)),
       },
       activeTurnId: state.activeTurnRef,
       diagnostics: state.diagnostics,

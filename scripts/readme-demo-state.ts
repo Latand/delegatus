@@ -1,7 +1,8 @@
 /**
  * The seeded home the README screenshots render: four invented projects, the
- * agent conversations working in them, the tasks on their board, two
- * pipelines and two accounts per engine.
+ * agent conversations working in them, the tasks on their board (with their
+ * icons), three pipelines (one running, one parked on a decision, one landed)
+ * and two accounts per engine.
  *
  * Everything is written fresh under a capture root, with timestamps relative
  * to the moment of capture, so the board reads "working" and "3 min ago" the
@@ -133,6 +134,23 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
         },
       ],
       midTurn: { tool: "Edit", input: { file_path: `src/webhooks/verify.ts`, old_string: "  const expected = hmac(currentKey(), payload);", new_string: "  const accepted = keyRing.verifying(now).map((key) => hmac(key, payload));" } },
+    },
+    {
+      key: "webhook-retries",
+      title: "Webhook retry backoff",
+      project: "harbor-api",
+      model: "claude-opus-5",
+      startedMinutesAgo: 20,
+      pace: 24,
+      steps: [
+        { user: "Back off webhook retries: exponential with jitter, and stop at some point instead of retrying forever." },
+        {
+          tool: "Grep",
+          input: { pattern: "scheduleRetry", path: "src/webhooks" },
+          result: "src/webhooks/deliver.ts:31:  await scheduleRetry(delivery, 60);\nsrc/webhooks/deliver.ts:48:export async function scheduleRetry(delivery: Delivery, seconds: number) {",
+        },
+        { say: "Every failed delivery retries after a flat 60 s today, with no limit. The backoff itself is straightforward, but where to stop is a product choice, so I'm reporting this stage as a decision: stop after 24 hours (about 12 attempts) or after 72 hours (about 18, which covers an endpoint that is down over a weekend)?" },
+      ],
     },
     {
       key: "charges-pagination",
@@ -306,22 +324,22 @@ function assignment(file: Written, engine: "claude" | "codex") {
 function buildTasks(layout: DemoLayout, files: Record<string, Written>) {
   const { ids, now } = layout;
   const ago = (minutes: number) => iso(now - minutes * 60_000);
-  const task = (id: string, project: DemoProject, status: string, text: string, assignments: unknown[], createdMinutesAgo: number, color?: string) => ({
-    id, project: ids[project], status, text, placement: "unplaced", board: "shown", ...(color ? { color } : {}), assignments, createdAt: ago(createdMinutesAgo), updatedAt: ago(Math.max(1, createdMinutesAgo - 5)),
+  const task = (id: string, project: DemoProject, status: string, text: string, assignments: unknown[], createdMinutesAgo: number, color?: string, icon?: string) => ({
+    id, project: ids[project], status, text, placement: "unplaced", board: "shown", ...(color ? { color } : {}), ...(icon ? { icon } : {}), assignments, createdAt: ago(createdMinutesAgo), updatedAt: ago(Math.max(1, createdMinutesAgo - 5)),
   });
   return {
     tasks: [
-      task("task-refunds", "harbor-api", "assigned", "Idempotent refunds\nA retried POST /refunds must never refund twice.", [assignment(files["refunds-builder"]!, "claude")], 36, "sky"),
-      task("task-key-rotation", "harbor-api", "assigned", "Rotate webhook signing keys\nSign with the new key, accept both for a day, then drop the old one.", [assignment(files["key-rotation"]!, "claude")], 10),
-      task("task-webhook-retries", "harbor-api", "inbox", "Back off webhook retries\nExponential backoff with jitter; stop after 24 hours and surface the failure.", [], 50),
-      task("task-refund-errors", "harbor-api", "inbox", "Document refund error codes\nOne table in the API reference: code, meaning, whether a retry is safe.", [], 55),
-      task("task-ledger", "harbor-api", "blocked", "Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", [], 300, "amber"),
-      task("task-charges-pagination", "harbor-api", "done", "Paginate GET /charges\nCursor pagination, 50 per page, capped at 200.", [assignment(files["charges-pagination"]!, "claude")], 215),
+      task("task-refunds", "harbor-api", "assigned", "Idempotent refunds\nA retried POST /refunds must never refund twice.", [assignment(files["refunds-builder"]!, "claude")], 36, "sky", "receipt-text"),
+      task("task-key-rotation", "harbor-api", "assigned", "Rotate webhook signing keys\nSign with the new key, accept both for a day, then drop the old one.", [assignment(files["key-rotation"]!, "claude")], 10, undefined, "key-round"),
+      task("task-webhook-retries", "harbor-api", "assigned", "Back off webhook retries\nExponential backoff with jitter, and a limit on how long a delivery retries.", [assignment(files["webhook-retries"]!, "claude")], 22, undefined, "repeat"),
+      task("task-refund-errors", "harbor-api", "inbox", "Document refund error codes\nOne table in the API reference: code, meaning, whether a retry is safe.", [], 55, undefined, "file-text"),
+      task("task-ledger", "harbor-api", "blocked", "Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", [], 300, "amber", "book-open"),
+      task("task-charges-pagination", "harbor-api", "done", "Paginate GET /charges\nCursor pagination, 50 per page, capped at 200.", [assignment(files["charges-pagination"]!, "claude")], 215, undefined, "list-ordered"),
       task("task-cart-rounding", "lumen-web", "done", "Fix cart rounding\nKeep money in integer cents and format once.", [assignment(files["cart-rounding"]!, "claude")], 100),
-      task("task-product-grid", "lumen-web", "assigned", "Lazy-load the product grid\nImages below the fold load on scroll; measure LCP before and after.", [assignment(files["product-grid"]!, "claude")], 8),
-      task("task-offline-drafts", "fieldnotes", "assigned", "Offline drafts\nQueue edits without signal and sync them in order.", [assignment(files["offline-drafts"]!, "claude")], 14),
-      task("task-editor-dark", "fieldnotes", "inbox", "Dark mode for the note editor\nFollow the system setting; keep the highlight colours readable.", [], 70),
-      task("task-import-speed", "quarry", "blocked", "Speed up the nightly import\nGeocoding is 34 of 38 minutes. Waiting on a choice: cache by address or geocode changed rows only.", [assignment(files["import-profile"]!, "claude")], 145),
+      task("task-product-grid", "lumen-web", "assigned", "Lazy-load the product grid\nImages below the fold load on scroll; measure LCP before and after.", [assignment(files["product-grid"]!, "claude")], 8, undefined, "layout-grid"),
+      task("task-offline-drafts", "fieldnotes", "assigned", "Offline drafts\nQueue edits without signal and sync them in order.", [assignment(files["offline-drafts"]!, "claude")], 14, undefined, "wifi-off"),
+      task("task-editor-dark", "fieldnotes", "inbox", "Dark mode for the note editor\nFollow the system setting; keep the highlight colours readable.", [], 70, undefined, "moon"),
+      task("task-import-speed", "quarry", "blocked", "Speed up the nightly import\nGeocoding is 34 of 38 minutes. Waiting on a choice: cache by address or geocode changed rows only.", [assignment(files["import-profile"]!, "claude")], 145, undefined, "gauge"),
     ],
   };
 }
@@ -353,8 +371,18 @@ function stage(id: string, roleId: RoleId, prompt: string, next: string | null, 
 }
 
 type Activation = { stageId: string; attempt: number; edge: "pass" | "fail" } | null;
+type Verdict = { status: "pass" | "fail" | "needs_decision"; findings: string[] } | null;
 
-function attempt(roleId: RoleId, state: string, startedAt: string, completedAt: string | null, output: string | null, agentPath: string | null, activatedBy: Activation) {
+function attempt(
+  roleId: RoleId,
+  state: string,
+  startedAt: string,
+  completedAt: string | null,
+  output: string | null,
+  agentPath: string | null,
+  activatedBy: Activation,
+  verdict: Verdict = state === "passed" ? { status: "pass", findings: [] } : null,
+) {
   return {
     n: 1,
     state,
@@ -371,7 +399,7 @@ function attempt(roleId: RoleId, state: string, startedAt: string, completedAt: 
     input: null,
     activatedBy,
     output,
-    verdict: state === "passed" ? { status: "pass", findings: [] } : null,
+    verdict,
     error: null,
   };
 }
@@ -434,7 +462,34 @@ function buildPipelines(layout: DemoLayout, files: Record<string, Written>) {
     closedAt: ago(74),
   };
 
-  return { schemaVersion: 5, pipelines: [running, landed] };
+  /* Parked on the operator: the builder reported needs_decision with no fail
+     edge to route it along, so the lane stops on its build stage, the way
+     park() in the engine leaves it. */
+  const retriesTask = "Back off webhook retries";
+  const decision = "Retry window: stop retrying a failed delivery after 24 hours or after 72 hours? The spec leaves it open, and it sets how many attempts a delivery gets.";
+  const parkedBuild = attempt("builder", "needs_decision", ago(19), ago(3), "Backoff with jitter is ready; the retry window is a product choice.", files["webhook-retries"]!.path, null, { status: "needs_decision", findings: [decision] });
+  const parked = {
+    ...common,
+    id: "b17e5a90",
+    task: retriesTask,
+    taskIds: ["task-webhook-retries"],
+    project: ids["harbor-api"],
+    repoDir: dirs["harbor-api"],
+    ...identity("b17e5a90", retriesTask, dirs["harbor-api"]),
+    spec: "Failed webhook deliveries retry with exponential backoff and jitter, and stop after a fixed window with the failure surfaced.",
+    runs: [
+      { stageId: "build", attempts: [parkedBuild] },
+      { stageId: "review", attempts: [] },
+      { stageId: "verify", attempts: [] },
+    ],
+    cursor: { stageId: "build", state: "running", input: null, activatedBy: null },
+    state: "needs_decision",
+    stateDetail: decision,
+    createdAt: ago(21),
+    closedAt: null,
+  };
+
+  return { schemaVersion: 5, pipelines: [running, parked, landed] };
 }
 
 /* ── the home ───────────────────────────────────────────────────────────── */

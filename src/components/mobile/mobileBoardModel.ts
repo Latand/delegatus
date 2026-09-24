@@ -323,11 +323,11 @@ export function needsDecisionPipelineRows(
   closing: readonly string[] = NO_IDS,
 ): MobileBoardPipelineRow[] {
   return boardPipelines(pipelines)
-    .filter((pipeline) => pipeline.project === project && (pipeline.state === "needs_decision" || pipeline.state === "needs_review"))
-    /* A lane the operator hid while it waits on this decision, or is closing,
-       no longer waits on them here (#1671); the pipelines list still carries a
+    /* The lanes the cards name (`pipelineAsks`, what `laneNeed` flags): a lane
+       the operator hid while it waits on this decision, or is closing, no
+       longer waits on them here (#1671); the pipelines list still carries a
        hidden one. */
-    .filter((pipeline) => !pipelineHiddenFromBoard(pipeline) && !closing.includes(pipeline.id))
+    .filter((pipeline) => pipeline.project === project && pipelineAsks(pipeline) && !closing.includes(pipeline.id))
     .map((pipeline) => pipelineRow(pipeline, now));
 }
 

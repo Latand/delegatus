@@ -289,7 +289,8 @@ test("the phone lists only what opens: a transcript the board did not load opens
     text: "Exercise legacy spawn fixture",
     origin: { kind: "launch", key: "launch-ghost", refinement: "pending" },
     assignments: [
-      { launchId: "launch-ghost", conversationId: "conversation_ghost", path: null, panePid: null, state: "linked", error: null, at: iso(3_600), engine: "codex" },
+      /* A row from before launches reserved a conversation: it never minted one. */
+      { launchId: "launch-ghost", path: null, panePid: null, state: "linked", error: null, at: iso(3_600), engine: "codex" },
       { conversationId: "conversation_elsewhere", path: "/elsewhere/conversation-9.jsonl", panePid: null, state: "linked", error: null, at: iso(3_600) },
     ],
   } as unknown as BoardTask;
@@ -309,9 +310,78 @@ test("the phone lists only what opens: a transcript the board did not load opens
     expect(qa(host, "[data-phone-task-unstarted]").map((row) => row.getAttribute("data-phone-task-unstarted"))).toEqual(["launch-ghost"]);
     click(q(host, '[data-phone-launch-dismiss="launch-ghost"]'));
     await sleep(5);
-    expect(requests.filter((request) => request.method !== "GET")).toEqual([{ url: "/api/tasks/t-ghost/assignment", method: "PATCH", body: { launchId: "launch-ghost", conversationId: "conversation_ghost", dismiss: "launch-did-not-start" } }]);
+    expect(requests.filter((request) => request.method !== "GET")).toEqual([{ url: "/api/tasks/t-ghost/assignment", method: "PATCH", body: { launchId: "launch-ghost", conversationId: null, dismiss: "launch-did-not-start" } }]);
   } finally {
     globalThis.fetch = realFetch;
     dom.location.hash = "";
+  }
+});
+
+test("the phone folds several launches that did not start behind one summary row, opens it on tap, and offers Dismiss all", async () => {
+  /* Days of stage attempts that started, each with its minted conversation
+     and no path, beside five launches that did not: four that never minted a
+     conversation and one whose receipt failed. */
+  const stages = Array.from({ length: 27 }, (_, index) => ({
+    launchId: `launch-stage-${index}`, clientAttemptId: index % 4 === 3 ? `handshake_retry_1_pipeline_old${index}_review_1` : `pipeline_old${index % 5}_build_${index + 1}`,
+    conversationId: `conversation_stage_${index}`, path: null, panePid: null, state: "linked", error: null, at: iso(4 * 86_400 - index * 600), engine: "codex",
+  }));
+  const legacy = ["a", "b", "c", "d"].map((id) => ({ launchId: `launch-${id}`, path: null, panePid: null, state: "linked", error: null, at: iso(2 * 86_400), engine: "codex" }));
+  const subject = {
+    ...theTask,
+    id: "t-lanes",
+    assignments: [
+      ...stages,
+      ...legacy,
+      { launchId: "launch-failed", conversationId: "conversation_failed", path: "spawn:launch-failed", panePid: null, state: "spawning", error: null, at: iso(120), engine: "claude" },
+    ],
+  } as unknown as BoardTask;
+  const placeholder = file(7, {
+    path: "spawn:launch-failed", conversationId: "conversation_failed", mtime: NOW - 120,
+    spawn: { launchId: "launch-failed", clientAttemptId: null, accountId: null, conversationId: "conversation_failed", state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached" },
+  });
+  const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    requests.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
+    await sleep(1);
+    return new Response(JSON.stringify({ ok: true, task: subject }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const { host } = mount(taskPorts([]), noPipelinePorts, subject, { files: [placeholder] });
+    /* The stage attempts: no launch row and no row each. */
+    expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
+    /* One summary row, folded. */
+    expect(qa(host, "[data-phone-task-unstarted-summary]").map((row) => row.getAttribute("data-phone-task-unstarted-summary"))).toEqual(["5"]);
+    expect(qa(host, "[data-phone-task-unstarted]").length).toBe(0);
+    const toggle = q(host, "[data-phone-launches-toggle]")!;
+    expect(toggle.textContent).toBe("5 launches did not start");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(qa(host, "[data-phone-task-unstarted]").map((row) => row.getAttribute("data-phone-task-unstarted"))).toEqual(["launch-failed", "launch-a", "launch-b", "launch-c", "launch-d"]);
+    /* The failed one inside still carries its error and opens its launch view. */
+    expect(q(host, '[data-phone-launch-error="launch-failed"]')?.textContent).toBe("account limit reached");
+    expect(q(host, '[data-phone-launch-open="launch-failed"]')).not.toBeNull();
+    click(toggle);
+    expect(qa(host, "[data-phone-task-unstarted]").length).toBe(0);
+    const all = q(host, "[data-phone-launches-dismiss-all]")!;
+    expect(all.textContent).toBe("Dismiss all");
+    click(all);
+    for (let wait = 0; wait < 50 && requests.length < 5; wait += 1) await sleep(5);
+    expect(requests).toEqual([
+      { launchId: "launch-failed", conversationId: "conversation_failed" },
+      ...["a", "b", "c", "d"].map((id) => ({ launchId: `launch-${id}`, conversationId: null })),
+    ].map((body) => ({ url: "/api/tasks/t-lanes/assignment", method: "PATCH", body: { ...body, dismiss: "launch-did-not-start" } })));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  /* The same row in Ukrainian. */
+  setLocale("uk");
+  try {
+    const { host } = mount(taskPorts([]), noPipelinePorts, subject, { files: [placeholder] });
+    expect(q(host, "[data-phone-launches-toggle]")?.textContent).toBe("5 запусків не стартували");
+    expect(q(host, "[data-phone-launches-dismiss-all]")?.textContent).toBe("Прибрати всі");
+  } finally {
+    setLocale("en");
   }
 });

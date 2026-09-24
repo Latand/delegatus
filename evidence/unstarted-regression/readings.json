@@ -1,0 +1,197 @@
+{
+  "readings": {
+    "desktop-1440-en": {
+      "t-lanes-sqlite": {
+        "height": 338,
+        "conversations": "43",
+        "rows": 0,
+        "summary": null,
+        "summaryText": null,
+        "dismissAll": null,
+        "notLoaded": 0,
+        "error": null
+      },
+      "t-lanes-flows": {
+        "height": 338,
+        "conversations": "27",
+        "rows": 0,
+        "summary": null,
+        "summaryText": null,
+        "dismissAll": null,
+        "notLoaded": 0,
+        "error": null
+      },
+      "t-lanes-mixed": {
+        "height": 158,
+        "conversations": "4",
+        "rows": 0,
+        "summary": "4",
+        "summaryText": "4 launches did not start",
+        "dismissAll": "Dismiss all",
+        "notLoaded": 0,
+        "error": null
+      }
+    },
+    "desktop-1440-en-mixed-open": {
+      "expanded": "true",
+      "rows": [
+        "launch-mixed-failed",
+        "launch-mixed-legacy-a",
+        "launch-mixed-legacy-b",
+        "launch-mixed-legacy-c"
+      ],
+      "error": "account limit reached: the weekly window resets in 3 days",
+      "open": 1
+    },
+    "desktop-1440-en-dismiss-all": [
+      {
+        "id": "t-lanes-mixed",
+        "launchId": "launch-mixed-failed",
+        "dismiss": "launch-did-not-start"
+      },
+      {
+        "id": "t-lanes-mixed",
+        "launchId": "launch-mixed-legacy-a",
+        "dismiss": "launch-did-not-start"
+      },
+      {
+        "id": "t-lanes-mixed",
+        "launchId": "launch-mixed-legacy-b",
+        "dismiss": "launch-did-not-start"
+      },
+      {
+        "id": "t-lanes-mixed",
+        "launchId": "launch-mixed-legacy-c",
+        "dismiss": "launch-did-not-start"
+      }
+    ],
+    "phone-390-en": {
+      "t-lanes-sqlite": {
+        "rows": 0,
+        "summary": null,
+        "summaryText": null,
+        "dismissAll": null,
+        "notLoaded": 0,
+        "agentsHeight": 54
+      },
+      "t-lanes-flows": {
+        "rows": 0,
+        "summary": null,
+        "summaryText": null,
+        "dismissAll": null,
+        "notLoaded": 0,
+        "agentsHeight": 54
+      },
+      "t-lanes-mixed": {
+        "rows": 0,
+        "summary": "4",
+        "summaryText": "4 launches did not start",
+        "dismissAll": "Dismiss all",
+        "notLoaded": 0,
+        "agentsHeight": 98,
+        "opened": {
+          "expanded": "true",
+          "rows": 4,
+          "error": "account limit reached: the weekly window resets in 3 days"
+        }
+      }
+    },
+    "desktop-1440-uk": {
+      "t-lanes-sqlite": {
+        "height": 338,
+        "conversations": "43",
+        "rows": 0,
+        "summary": null,
+        "summaryText": null,
+        "dismissAll": null,
+        "notLoaded": 0,
+        "error": null
+      },
+      "t-lanes-flows": {
+        "height": 338,
+        "conversations": "27",
+        "rows": 0,
+        "summary": null,
+        "summaryText": null,
+        "dismissAll": null,
+        "notLoaded": 0,
+        "error": null
+      },
+      "t-lanes-mixed": {
+        "height": 170,
+        "conversations": "4",
+        "rows": 0,
+        "summary": "4",
+        "summaryText": "4 запуски не стартували",
+        "dismissAll": "Прибрати всі",
+        "notLoaded": 0,
+        "error": null
+      }
+    },
+    "desktop-1440-uk-mixed-open": {
+      "expanded": "true",
+      "rows": [
+        "launch-mixed-failed",
+        "launch-mixed-legacy-a",
+        "launch-mixed-legacy-b",
+        "launch-mixed-legacy-c"
+      ],
+      "error": "account limit reached: the weekly window resets in 3 days",
+      "open": 1
+    },
+    "desktop-1440-uk-dismiss-all": [
+      {
+        "id": "t-lanes-mixed",
+        "launchId": "launch-mixed-failed",
+        "dismiss": "launch-did-not-start"
+      },
+      {
+        "id": "t-lanes-mixed",
+        "launchId": "launch-mixed-legacy-a",
+        "dismiss": "launch-did-not-start"
+      },
+      {
+        "id": "t-lanes-mixed",
+        "launchId": "launch-mixed-legacy-b",
+        "dismiss": "launch-did-not-start"
+      },
+      {
+        "id": "t-lanes-mixed",
+        "launchId": "launch-mixed-legacy-c",
+        "dismiss": "launch-did-not-start"
+      }
+    ],
+    "phone-390-uk": {
+      "t-lanes-sqlite": {
+        "rows": 0,
+        "summary": null,
+        "summaryText": null,
+        "dismissAll": null,
+        "notLoaded": 0,
+        "agentsHeight": 54
+      },
+      "t-lanes-flows": {
+        "rows": 0,
+        "summary": null,
+        "summaryText": null,
+        "dismissAll": null,
+        "notLoaded": 0,
+        "agentsHeight": 54
+      },
+      "t-lanes-mixed": {
+        "rows": 0,
+        "summary": "4",
+        "summaryText": "4 запуски не стартували",
+        "dismissAll": "Прибрати всі",
+        "notLoaded": 0,
+        "agentsHeight": 98,
+        "opened": {
+          "expanded": "true",
+          "rows": 4,
+          "error": "account limit reached: the weekly window resets in 3 days"
+        }
+      }
+    }
+  },
+  "failures": []
+}

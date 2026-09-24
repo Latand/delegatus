@@ -97,6 +97,13 @@ test("the filter toggle keeps its pressed state and accessible labels", async ()
   expect(host.querySelector("[data-attention-filter]")!.getAttribute("aria-pressed")).toBe("true");
 });
 
+test("with no toggle handed in, the island offers no filter and keeps its count and Next", async () => {
+  const host = await render(island({ count: 1, onToggleFilter: undefined }));
+  expect(host.querySelector("[data-attention-filter]")).toBeNull();
+  expect(host.querySelector("[data-attention-count]")!.textContent).toContain("1");
+  expect(host.querySelector("[data-attention-next]")).not.toBeNull();
+});
+
 test("the zero state is present, muted, inert and pulse-free", async () => {
   const host = await render(island({ count: 0 }));
   const zero = host.querySelector("[data-attention-island]")!;
