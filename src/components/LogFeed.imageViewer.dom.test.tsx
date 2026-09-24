@@ -415,7 +415,7 @@ test("arrows typed in a text field stay in the field, and step once focus leaves
   expect([position(), shown().getAttribute("src")]).toEqual(["3 / 6", AFTER]);
 });
 
-test("only the shown picture and its two neighbours load, and a move shows the neighbour already loaded", async () => {
+test("a picture loads when it comes within one step, a move shows the neighbour already loaded, and every loaded picture stays held", async () => {
   const [host] = await mount([{ path: "/fixture/gallery", lines: GALLERY }]);
   /* The viewer asks for the very URL the thumbnail loaded, so the browser
      hands back the picture it already has. */
@@ -438,10 +438,10 @@ test("only the shown picture and its two neighbours load, and a move shows the n
   const next = viewer()!.querySelector(`img[src="${INBOX}"]`)!;
   press(document.body, "ArrowRight");
   expect(shown()).toBe(next as HTMLImageElement);
-  expect(mounted()).toEqual([[AFTER, true], [INBOX, false], [FRAME, true]]);
+  expect(mounted()).toEqual([[BEFORE, true], [AFTER, true], [INBOX, false], [FRAME, true]]);
   record();
   for (let i = 0; i < 2; i += 1) { press(document.body, "ArrowRight"); record(); }
-  expect(mounted()).toEqual([[FRAME, true], [FINAL, false]]);
+  expect(mounted()).toEqual([[BEFORE, true], [AFTER, true], [INBOX, true], [FRAME, true], [FINAL, false]]);
   for (const [src, elements] of created) expect([src, elements.size]).toEqual([src, 1]);
   expect([...created.keys()].sort()).toEqual([BEFORE, AFTER, INBOX, FRAME, FINAL].sort());
   expect(created.has(PASTED)).toBe(false);
@@ -459,6 +459,43 @@ test("a picture whose row the feed has not mounted is still reached", async () =
   expect(position()).toBe("2 / 6");
   press(document.body, "ArrowLeft");
   expect([position(), shown().getAttribute("src")]).toEqual(["1 / 6", PASTED]);
+});
+
+test("a picture no mounted row draws is held by the viewer until it closes, so the walk back reuses it", async () => {
+  /* A compact pane mounts its last 300 rows. The inbox attachment and the
+     answer's two pictures sit above them, so once the viewer has loaded one,
+     its own element is the only thing on the page holding it. Let go of that
+     element and the browser may drop the picture and download it again. */
+  const filler = Array.from({ length: 320 }, (_, i) => answer(`a-fill-${i}`, 10 + i, `step ${i}`));
+  const lines = [...GALLERY.slice(0, 3), ...filler, ...GALLERY.slice(3)];
+  const [host] = await mount([{ path: "/fixture/held", lines, compact: true }]);
+  expect([PASTED, BEFORE, AFTER, INBOX].filter((src) => thumb(host!, src))).toEqual([]);
+  await open(host!, FINAL);
+  expect(position()).toBe("6 / 6");
+
+  const created = new Map<string, Set<Element>>();
+  const record = () => {
+    for (const img of viewer()!.querySelectorAll("img")) {
+      const src = img.getAttribute("src")!;
+      created.set(src, (created.get(src) ?? new Set()).add(img));
+    }
+  };
+  const walk = (key: string, steps: number) => { for (let i = 0; i < steps; i += 1) { press(document.body, key); record(); } };
+  record();
+  walk("ArrowLeft", 1);
+  /* One step from the attachment: it loads now, and never again. */
+  const inbox = viewer()!.querySelector(`img[src="${INBOX}"][hidden]`);
+  expect(inbox).not.toBeNull();
+  walk("ArrowLeft", 4);
+  expect([position(), shown().getAttribute("src")]).toEqual(["1 / 6", PASTED]);
+
+  walk("ArrowRight", 5);
+  expect(position()).toBe("6 / 6");
+  press(document.body, "ArrowLeft");
+  press(document.body, "ArrowLeft");
+  expect([position(), shown() === inbox]).toEqual(["4 / 6", true]);
+  for (const [src, elements] of created) expect([src, elements.size]).toEqual([src, 1]);
+  expect(created.size).toBe(6);
 });
 
 test("two conversations side by side keep separate lists", async () => {

@@ -85,7 +85,11 @@
  * markdown images and pictures a tool showed its agent, interleaved. It opens
  * the newest picture, steps ← to the first and → back to the last, and counts
  * every image request the page makes, per step: nothing beyond the shown
- * picture and its neighbours, and nothing fetched twice. Real clicks, a real
+ * picture and its neighbours, and nothing fetched twice. On the desktop it
+ * also puts the other 25 pictures above rows the feed never mounts, collects
+ * garbage and waits out the pictures' 60 s freshness before walking back, so
+ * a picture the viewer stopped holding would have to be downloaded again.
+ * Real clicks, a real
  * drag and real taps check that the dimmed backdrop closes the viewer while a
  * click on the picture or a pan that ends off it does not; it renders the
  * viewer mid-gallery at 1440 × 900 and 390 × 844.
@@ -4209,6 +4213,12 @@ const LIGHTBOX_SHOTS = path.join(REPO_DIR, "shots");
 const LIGHTBOX_INBOX_DIR = path.join(HOME, ".config", "agent-log-viewer", "inbox");
 /** The picture the renders show: a markdown image in the middle of the walk. */
 const LIGHTBOX_MID = 12;
+type LightboxLayout = "dense" | "spread" | "unmounted";
+/** Short answers between the last picture and the rest in the `unmounted` layout: more rows
+    than the 1,500 a reader mounts, few enough bytes that every picture stays in the 768 KB
+    tail the feed reads. */
+const LIGHTBOX_FILLER = 1_600;
+const LIGHTBOX_TAIL_BYTES = 768 * 1024;
 
 /** Invented screens, painted by the browser: a coloured frame with its number large enough to read in a render. */
 async function paintLightboxPictures(browser: Browser): Promise<string[]> {
@@ -4240,9 +4250,11 @@ async function paintLightboxPictures(browser: Browser): Promise<string[]> {
 
 /** One conversation drawing the 26 pictures in order. `spread` puts a long note before each
     picture, so a picture sits screens away from the next and the feed's own lazy thumbnails
-    reach only the last few; without it they follow one another. `urls` collects the URL each
+    reach only the last few; `dense` has them follow one another. `unmounted` puts 1,600 short
+    answers before the last picture, so the feed mounts none of the other rows and the viewer's
+    own elements are the only thing on the page that loads them. `urls` collects the URL each
     picture that loads over the network is asked for by. */
-function writeLightboxConversation(id: string, spread: boolean, pictures: string[], urls: Map<string, number>): string {
+function writeLightboxConversation(id: string, layout: LightboxLayout, pictures: string[], urls: Map<string, number>): string {
   const base = { cwd: REPO_DIR, sessionId: id };
   const at = (n: number, s = 0) => `2100-01-03T10:${String(n).padStart(2, "0")}:${String(s).padStart(2, "0")}.000Z`;
   const say = (uuid: string, n: number, text: string) => ({ type: "assistant", uuid, timestamp: at(n), ...base, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text }] } });
@@ -4250,7 +4262,9 @@ function writeLightboxConversation(id: string, spread: boolean, pictures: string
   for (let n = 1; n <= LIGHTBOX_COUNT; n += 1) {
     const topic = LIGHTBOX_TOPICS[n % LIGHTBOX_TOPICS.length]!;
     const bytes = Buffer.from(pictures[n - 1]!, "base64");
-    if (spread) lines.push(say(`${id}-n${n}`, n, `Notes before screen ${n}:\n${Array.from({ length: 120 }, (_, line) => `- Note ${line + 1} on the ${topic}: spacing, contrast and copy checked.`).join("\n")}`));
+    if (layout === "spread") lines.push(say(`${id}-n${n}`, n, `Notes before screen ${n}:\n${Array.from({ length: 120 }, (_, line) => `- Note ${line + 1} on the ${topic}: spacing, contrast and copy checked.`).join("\n")}`));
+    /* Bare answers: the session's own fields ride on the other rows, and the bytes they save keep every picture in the tail. */
+    if (layout === "unmounted" && n === LIGHTBOX_COUNT) for (let i = 1; i <= LIGHTBOX_FILLER; i += 1) lines.push({ type: "assistant", uuid: `${id}-f${i}`, timestamp: at(n - 1, 30), message: { role: "assistant", content: [{ type: "text", text: `Checked item ${i}.` }] } });
     if (LIGHTBOX_INBOX.has(n)) {
       const name = `img-${String(n).padStart(2, "0")}-redesign.png`;
       fs.writeFileSync(path.join(LIGHTBOX_INBOX_DIR, name), bytes);
@@ -4272,17 +4286,20 @@ function writeLightboxConversation(id: string, spread: boolean, pictures: string
   fs.mkdirSync(folder, { recursive: true });
   const transcript = path.join(folder, `${id}.jsonl`);
   fs.writeFileSync(transcript, lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+  const size = fs.statSync(transcript).size;
+  if (size > LIGHTBOX_TAIL_BYTES) throw new Error(`the ${layout} conversation is ${size} bytes; the feed would not read its first pictures`);
   return transcript;
 }
 
-function seedLightbox(pictures: string[]): { transcripts: Record<"dense" | "spread", string>; urls: Map<string, number> } {
+function seedLightbox(pictures: string[]): { transcripts: Record<LightboxLayout, string>; urls: Map<string, number> } {
   for (const dir of [LIGHTBOX_SHOTS, LIGHTBOX_INBOX_DIR]) fs.mkdirSync(dir, { recursive: true });
   const urls = new Map<string, number>();
   /* Session ids assembled from parts, like the other seeded ones. */
   const id = (tail: string) => ["00000026", "0000", "4000", "8000", tail.padStart(12, "0")].join("-");
-  const dense = writeLightboxConversation(id("cafe"), false, pictures, urls);
-  const spread = writeLightboxConversation(id("beef"), true, pictures, urls);
-  return { transcripts: { dense, spread }, urls };
+  const dense = writeLightboxConversation(id("cafe"), "dense", pictures, urls);
+  const spread = writeLightboxConversation(id("beef"), "spread", pictures, urls);
+  const unmounted = writeLightboxConversation(id("f00d"), "unmounted", pictures, urls);
+  return { transcripts: { dense, spread, unmounted }, urls };
 }
 
 /** The open viewer, read in the page. */
@@ -4319,7 +4336,8 @@ async function lightboxMain(): Promise<void> {
   const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(encodeURIComponent(HOME)).join(encodeURIComponent("$HOME")).split(HOME).join("$HOME"));
   const report: Record<string, unknown> = { commit: captureCommit(), pictures: LIGHTBOX_COUNT };
   try {
-    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    /* `gc()` lets the walk drop every picture nothing holds any more. */
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage", "--js-flags=--expose-gc"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
     const { transcripts, urls } = seedLightbox(await paintLightboxPictures(browser));
     report.networkPictures = urls.size;
     server = startServer(port);
@@ -4335,7 +4353,9 @@ async function lightboxMain(): Promise<void> {
       { device: "desktop", phone: false, options: { viewport: { width: 1440, height: 900 } } },
       { device: "phone", phone: true, options: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true } },
     ] as const;
-    for (const { device, phone, options } of viewports) for (const layout of ["dense", "spread"] as const) {
+    /* A phone's reader keeps only its last 1,000 lines while it follows the tail, fewer than
+       the 1,500 rows it mounts, so there every picture the feed holds has a mounted row. */
+    for (const { device, phone, options } of viewports) for (const layout of (phone ? ["dense", "spread"] : ["dense", "spread", "unmounted"]) as LightboxLayout[]) {
       const tag = `${device}-${layout}`;
       const context = await browser.newContext({ ...options, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
@@ -4355,6 +4375,11 @@ async function lightboxMain(): Promise<void> {
       await page.waitForSelector(thumbnail, { timeout: 60_000 }).catch(() => {});
       await page.waitForTimeout(1_500);
       const feedPictures = requests.map((request) => request.picture);
+      /* The pictures a mounted feed row draws. */
+      const heldByFeed = (await page.evaluate(() => [...document.querySelectorAll("[data-log-feed-scroller] img")].map((img) => img.getAttribute("src") ?? "")))
+        .filter((src) => /^(\/api\/(image|inbox|artifact)\?|data:image\/)/.test(src))
+        .map((src) => (src.startsWith("data:") ? "inline" : urls.get(src) ?? src));
+      if (layout === "unmounted") must(JSON.stringify(heldByFeed) === JSON.stringify([LIGHTBOX_COUNT]), `${tag}: the feed's mounted rows draw pictures ${JSON.stringify(heldByFeed)}`);
       const read = () => page.evaluate(readLightbox);
       const settle = async () => {
         await page.waitForFunction(() => {
@@ -4388,7 +4413,7 @@ async function lightboxMain(): Promise<void> {
         const reading = await stepOnce("ArrowLeft", `left-to-${n}`);
         must(reading.position === `${n} / ${LIGHTBOX_COUNT}`, `${tag}: ← to ${n} shows «${reading.position}»`);
         must(reading.loaded, `${tag}: picture ${n} did not load`);
-        must(reading.mounted.length === (n === 1 ? 2 : 3), `${tag}: at ${n} the viewer holds ${reading.mounted.length} pictures`);
+        must(reading.mounted.length >= (n === 1 ? 2 : 3), `${tag}: at ${n} the viewer holds ${reading.mounted.length} pictures`);
         /* Only the neighbour the move brought into reach may load. */
         for (const picture of walk.at(-1)!.requested) must(picture === n - 1, `${tag}: at ${n} the page asked for picture ${picture}`);
         if (n === LIGHTBOX_MID) {
@@ -4398,6 +4423,21 @@ async function lightboxMain(): Promise<void> {
       }
       const pastFirst = await stepOnce("ArrowLeft", "left-past-first");
       must(pastFirst.position === `1 / ${LIGHTBOX_COUNT}` && pastFirst.previous === null, `${tag}: ← at the first picture shows «${pastFirst.position}»`);
+      /* Nothing but the viewer holds pictures 1 to 25 here. Collect garbage and outlast
+         /api/image's 60 s freshness, so a picture the viewer let go of can only come back over
+         the network (/api/inbox answers no-store). */
+      let collected: boolean | null = null;
+      if (layout === "unmounted") {
+        const collect = () => page.evaluate(() => {
+          const gc = (globalThis as { gc?: () => void }).gc;
+          if (gc) { gc(); gc(); }
+          return Boolean(gc);
+        });
+        collected = await collect();
+        await page.waitForTimeout(61_000);
+        collected = (await collect()) && collected;
+        must(collected, `${tag}: the page could not collect garbage`);
+      }
       const backFrom = requests.length;
       for (let n = 2; n <= LIGHTBOX_COUNT; n += 1) await stepOnce("ArrowRight", `right-to-${n}`);
       const pastLast = await stepOnce("ArrowRight", "right-past-last");
@@ -4470,6 +4510,8 @@ async function lightboxMain(): Promise<void> {
           fetchedTwice: refetched.length,
         },
         feedPictures: [...feedPictures].sort((a, b) => (a ?? 0) - (b ?? 0)),
+        heldByFeed,
+        collectedGarbageBeforeWalkingBack: collected,
         openPictures,
         walk,
         opened,

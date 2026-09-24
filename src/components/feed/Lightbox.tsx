@@ -62,9 +62,10 @@ function openAt(images: readonly GalleryImage[], opened: GalleryImage, owner: un
  * Fullscreen image viewer: wheel zooms around the cursor, drag pans, double
  * click toggles fit/200%, Esc or a click on the dimmed backdrop closes. ←/→
  * and the edge buttons step through the conversation's pictures and stop at
- * either end. Only the shown picture and its two neighbours are mounted, the
- * neighbours hidden, so each loads once and is on screen the moment it is
- * reached.
+ * either end. A picture loads when it comes within one step of the shown one,
+ * hidden, so it is on screen the moment it is reached. Every picture loaded
+ * stays mounted until the viewer closes: a picture no mounted feed row draws
+ * has no other holder, and once let go the browser may download it again.
  */
 export function Lightbox({ src, alt, caption, at, onClose }: Props) {
   const { t } = useLocale();
@@ -74,6 +75,9 @@ export function Lightbox({ src, alt, caption, at, onClose }: Props) {
      while a live feed keeps growing. */
   const [{ images, start }] = useState(() => openAt(gallery?.() ?? [], { src, alt, caption, at }, owner));
   const [index, setIndex] = useState(start);
+  /* The first and the last picture shown so far. A move is one step, so every
+     picture between them has been shown too. */
+  const [reach, setReach] = useState({ from: start, to: start });
   const [scale, setScale] = useState(1);
   const [tx, setTx] = useState(0);
   const [ty, setTy] = useState(0);
@@ -92,6 +96,7 @@ export function Lightbox({ src, alt, caption, at, onClose }: Props) {
   /* Every move, by key or by button, starts the next picture unzoomed. */
   const show = useCallback((next: number) => {
     setIndex(next);
+    setReach((reach) => ({ from: Math.min(reach.from, next), to: Math.max(reach.to, next) }));
     reset();
   }, [reset]);
 
@@ -131,7 +136,8 @@ export function Lightbox({ src, alt, caption, at, onClose }: Props) {
   };
 
   const image = images[index]!;
-  const mounted = [index - 1, index, index + 1].filter((at) => at >= 0 && at < images.length);
+  const first = Math.max(0, reach.from - 1);
+  const mounted = Array.from({ length: Math.min(images.length - 1, reach.to + 1) - first + 1 }, (_, at) => first + at);
   const edge = "absolute top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-lg border border-white/25 bg-black/40 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60";
 
   /* Panes on the scheme canvas sit under a CSS transform, which turns the
