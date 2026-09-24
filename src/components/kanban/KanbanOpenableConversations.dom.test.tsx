@@ -67,7 +67,8 @@ function task(id: string, extra: Partial<BoardTask>): BoardTask {
 const ghost = task("ghost", {
   text: "Exercise legacy spawn fixture",
   origin: { kind: "launch", key: "launch-ghost", refinement: "pending" },
-  assignments: [{ launchId: "launch-ghost", conversationId: "conversation_ghost", path: null, panePid: null, state: "linked", error: null, at: iso(NOW - 3600), engine: "codex" }],
+  /* A row from before launches reserved a conversation: it never minted one. */
+  assignments: [{ launchId: "launch-ghost", path: null, panePid: null, state: "linked", error: null, at: iso(NOW - 3600), engine: "codex" }],
 });
 const elsewhere = task("elsewhere", {
   text: "Tune the upload retries",
@@ -121,7 +122,62 @@ test("a launch that never started is no conversation: the card lists it apart an
   expect(row?.textContent).toContain("Launch did not start");
   flushSync(() => (ghostCard.querySelector('[data-launch-dismiss="launch-ghost"]') as HTMLElement).click());
   await new Promise((resolve) => setTimeout(resolve, 5));
-  expect(requests.filter((request) => request.method !== "GET")).toEqual([{ url: "/api/tasks/ghost/assignment", method: "PATCH", body: { launchId: "launch-ghost", conversationId: "conversation_ghost", dismiss: "launch-did-not-start" } }]);
+  expect(requests.filter((request) => request.method !== "GET")).toEqual([{ url: "/api/tasks/ghost/assignment", method: "PATCH", body: { launchId: "launch-ghost", conversationId: null, dismiss: "launch-did-not-start" } }]);
+});
+
+/* A task that ran lanes for days: an assignment per stage attempt and review
+   round, each with the conversation it minted and no path, none loaded here. */
+function laneAssignments(prefix: string, count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    launchId: `launch-${prefix}-${index}`,
+    clientAttemptId: index % 5 === 4 ? `flow_${prefix}_round${index}` : `pipeline_${prefix}${index % 3}_build_${index + 1}`,
+    conversationId: `conversation_${prefix}_${index}`,
+    path: null, panePid: null, state: "linked", error: null, at: iso(NOW - 4 * 86_400 + index * 600), engine: "claude",
+  }));
+}
+const legacyLaunch = (id: string) => ({ launchId: `launch-${id}`, path: null, panePid: null, state: "linked", error: null, at: iso(NOW - 2 * 86_400), engine: "codex" });
+
+test("stage attempts that started are no launch rows: the card counts them and lists none", () => {
+  const lanes = task("lanes", { text: "Move the state into SQLite", assignments: laneAssignments("lanes", 43) as BoardTask["assignments"] });
+  const host = mount([lanes]);
+  const lanesCard = card(host, "lanes")!;
+  expect(lanesCard.querySelectorAll("[data-launch-not-started]").length).toBe(0);
+  expect(lanesCard.querySelector("[data-launches-not-started]")).toBeNull();
+  expect(lanesCard.querySelectorAll("[data-not-loaded]").length).toBe(0);
+  expect(lanesCard.querySelector("[data-foot-conversations]")?.getAttribute("data-foot-conversations")).toBe("43");
+});
+
+test("several launches that did not start fold behind one summary row that opens on click, with Dismiss all beside it", async () => {
+  const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  const mixed = task("mixed", {
+    text: "Tune the upload retries",
+    assignments: [...laneAssignments("mixed", 12), legacyLaunch("a"), legacyLaunch("b"), legacyLaunch("c")] as BoardTask["assignments"],
+  });
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    requests.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    return new Response(JSON.stringify({ ok: true, task: mixed }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const host = mount([mixed]);
+  const mixedCard = card(host, "mixed")!;
+  /* One summary row, folded: no launch row until it opens. */
+  const summary = mixedCard.querySelector("[data-launches-not-started]") as HTMLElement | null;
+  expect(summary?.getAttribute("data-launches-not-started")).toBe("3");
+  expect(mixedCard.querySelectorAll("[data-launch-not-started]").length).toBe(0);
+  const toggle = mixedCard.querySelector('[data-launches-toggle="task:mixed"]') as HTMLElement;
+  expect(toggle.textContent).toBe("3 launches did not start");
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  flushSync(() => toggle.click());
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect([...mixedCard.querySelectorAll("[data-launch-not-started]")].map((row) => row.getAttribute("data-launch-not-started"))).toEqual(["launch-a", "launch-b", "launch-c"]);
+  flushSync(() => toggle.click());
+  expect(mixedCard.querySelectorAll("[data-launch-not-started]").length).toBe(0);
+  /* Dismiss all dismisses each in turn. */
+  const all = mixedCard.querySelector('[data-launches-dismiss-all="task:mixed"]') as HTMLElement;
+  expect(all.textContent).toBe("Dismiss all");
+  flushSync(() => all.click());
+  for (let wait = 0; wait < 50 && requests.length < 3; wait += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(requests).toEqual(["a", "b", "c"].map((id) => ({ url: "/api/tasks/mixed/assignment", method: "PATCH", body: { launchId: `launch-${id}`, conversationId: null, dismiss: "launch-did-not-start" } })));
 });
 
 test("every conversation a card counts opens on click, loaded on this board or not", () => {

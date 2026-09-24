@@ -101,18 +101,24 @@ export interface KanbanCard {
   details: string;
   members: KanbanMember[];
   mirrors: KanbanMirror[];
-  /** Distinct conversations the operator can open, counted from members,
-      mirrors and durable rows. A launch that never produced a transcript is
-      not one of them: it is listed in `unstarted`. */
+  /** Distinct conversations the card holds, counted from members, mirrors
+      and durable rows that name a transcript or a minted conversation id. A
+      launch that did not start is not one of them: it is listed in
+      `unstarted`. */
   conversations: number;
-  /** Conversations counted from durable rows whose transcripts this board does not carry. */
+  /** Conversations counted from durable rows whose transcripts this board
+      does not carry: every row that names a transcript or a minted
+      conversation id. */
   notLoaded: number;
-  /** Those conversations, each with the transcript it opens. */
+  /** Those the card lists, each with the transcript or conversation id it
+      opens. A pipeline stage's or a review round's is left out: it opens from
+      its pipeline's chips and Past attempts. */
   notLoadedRefs: KanbanRecordedConversation[];
-  /** The task's launches that never produced a transcript: a failed one at
-      once, any other past the grace a starting launch gets. None is a
-      conversation; the card offers to dismiss each, and a failed one opens
-      its launch view. */
+  /** The task's own launches that did not start, on evidence only: a failed
+      receipt at once, and a launch that never minted a conversation past the
+      grace a starting launch gets. None is a conversation; the card offers to
+      dismiss each, and a failed one opens its launch view. A stage attempt or
+      a review round is never one: its pipeline shows it. */
   unstarted: KanbanUnstartedLaunch[];
   /** Review decks and worker stacks the band carries besides conversations. */
   otherSurfaces: number;
@@ -148,14 +154,15 @@ export interface KanbanCard {
   holdsSeat: boolean;
 }
 
-/** A conversation the card holds that this board did not load. */
+/** A conversation the card holds that this board did not load. It opens by
+    its conversation id, or by its transcript path when it has no id. */
 export interface KanbanRecordedConversation {
   key: string;
-  path: string;
+  path: string | null;
   conversationId: string | null;
 }
 
-/** A launch recorded on the task that never produced a transcript. */
+/** A launch recorded on the task that did not start. */
 export interface KanbanUnstartedLaunch {
   key: string;
   launchId: string | null;
@@ -163,17 +170,21 @@ export interface KanbanUnstartedLaunch {
   /** When the launch was recorded, epoch ms. */
   atMs: number;
   /** The launch failed: its receipt's error, and the placeholder that opens
-      the launch view, where Retry lives. Null for a launch that simply never
-      produced a transcript. */
+      the launch view, where Retry lives. Null for a launch that never minted
+      a conversation. */
   failed: { error: string | null; file: FileEntry } | null;
   /** The task still holds a live assignment for it, which Dismiss settles. */
   dismissable: boolean;
 }
 
-/** How long a launch may run before its transcript appears and still count as
-    starting: a Codex rollout is attributed a moment after its process starts,
-    and until then the task row carries no path. */
+/** How long a launch that has minted no conversation may still count as
+    starting. */
 export const LAUNCH_START_GRACE_MS = 10 * 60_000;
+
+/** The client attempt ids the pipeline engine (`pipeline_<id>_<stage>_<n>`,
+    and `handshake_retry_<k>_…` when it retries a handshake) and the review-flow
+    engine (`flow_<id>_…`) give their own launches. */
+const ENGINE_ATTEMPT_ID = /^(?:pipeline|flow|handshake_retry)_/;
 
 /** A projected launch placeholder whose launch failed: nothing ever ran. */
 function failedLaunchPlaceholder(file: FileEntry): boolean {
@@ -465,11 +476,36 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       if (execution.basis === "explicit") cardPipelines.set(execution.pipeline.id, pipelineById.get(execution.pipeline.id) ?? execution.pipeline);
     }
 
+    /* What a pipeline of this card ran, open or closed: its stage attempts,
+       the helpers its agents brought in and its review rounds, and the rounds
+       of the task's review flows. Each lives in its pipeline's chips and Past
+       attempts, never in the card's own lists. */
+    const attemptKeys = new Set<string>();
+    const addAttemptKeys = (...keys: Array<string | null | undefined>) => {
+      for (const key of keys) if (key) attemptKeys.add(key);
+    };
+    for (const pipeline of [...cardPipelines.values(), ...(workflow?.executions ?? []).map((execution) => execution.pipeline)]) {
+      for (const run of pipeline.runs) for (const attempt of run.attempts) {
+        addAttemptKeys(attempt.conversationId, attempt.launchId, attempt.agentPath);
+        for (const round of (attempt.flowId ? flowsById.get(attempt.flowId)?.rounds : undefined) ?? []) addAttemptKeys(round.reviewerConversationId, round.reviewerPath);
+      }
+    }
+    for (const flow of workflow?.flows ?? []) for (const round of flow.rounds) addAttemptKeys(round.reviewerConversationId, round.reviewerPath);
+    const assignmentOf = (reference: { launchId: string | null; conversationId: string | null; path: string | null }, live = false) => task?.assignments.find((candidate) => (!live || candidate.state !== "failed")
+      && ((reference.launchId && candidate.launchId === reference.launchId)
+        || (reference.conversationId && candidate.conversationId === reference.conversationId)
+        || (!reference.launchId && !reference.conversationId && reference.path !== null && candidate.path === reference.path)));
+    const stageWork = (reference: { kind: string; launchId: string | null; conversationId: string | null; path: string | null }, clientAttemptId?: string | null) =>
+      reference.kind === "attempt" || reference.kind === "review"
+      || [reference.conversationId, reference.launchId, reference.path].some((key) => key && attemptKeys.has(key))
+      || ENGINE_ATTEMPT_ID.test(clientAttemptId ?? (reference.kind === "assignment" ? assignmentOf(reference)?.clientAttemptId ?? "" : ""));
+
     /* Conversations: what the band carries, plus durable rows it could not
        resolve to a transcript on this board. */
     const identities = new Set<string>();
+    let notLoaded = 0;
     const notLoadedRefs: KanbanRecordedConversation[] = [];
-    const unopenable: { kind: string; state: string; conversationId: string | null; launchId: string | null }[] = [];
+    const neverMinted: { kind: string; state: string; conversationId: string | null; launchId: string | null; path: string | null }[] = [];
     for (const member of members) identities.add(conversationIdentity(member.file));
     for (const mirror of mirrors) identities.add(conversationIdentity(mirror.file));
     const failedIdentities = new Set(failedLaunches.flatMap((file) => [file.conversationId, file.path].filter((key): key is string => Boolean(key))));
@@ -477,35 +513,44 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       if (reference.kind === "planned") return;
       if (isSeatConversation(input.seat, reference.file ?? reference)) return;
       const identity = referenceIdentity(reference);
-      if (!identity || identities.has(identity)) return;
+      /* A row with neither a conversation id nor a path: a launch that never
+         minted a conversation, when it has a launch id to name it by. */
+      if (!identity) {
+        if (reference.launchId) neverMinted.push(reference);
+        return;
+      }
+      if (identities.has(identity)) return;
       if (reference.file && failedLaunchPlaceholder(reference.file)) {
         failedLaunches.push(reference.file);
         return;
       }
+      /* The row of a failed launch: its failed row stands for it. */
+      if (reference.conversationId !== null && failedIdentities.has(reference.conversationId)) return;
       const known = Boolean(reference.file)
         || (reference.path !== null && knownConversations.has(reference.path))
-        || (reference.conversationId !== null && knownConversations.has(reference.conversationId) && !failedIdentities.has(reference.conversationId));
+        || (reference.conversationId !== null && knownConversations.has(reference.conversationId));
       if (known) {
         identities.add(identity);
         return;
       }
-      /* Not on this board: it counts, and opens, only through a transcript. */
+      /* Not on this board. A row that names a transcript, or a conversation
+         id the launch minted, started: it counts, and opens through either.
+         A failed row with neither (a dismissed launch, a dead spawn) is
+         nothing to open. */
       const transcript = reference.path && !reference.path.startsWith("spawn:") ? reference.path : null;
-      if (transcript) {
+      if (transcript || (reference.conversationId && reference.state !== "failed")) {
         identities.add(identity);
-        notLoadedRefs.push({ key: identity, path: transcript, conversationId: reference.conversationId });
+        notLoaded += 1;
+        if (!stageWork(reference)) notLoadedRefs.push({ key: identity, path: transcript, conversationId: reference.conversationId });
         return;
       }
-      unopenable.push(reference);
+      if (!reference.conversationId) neverMinted.push(reference);
     };
     for (const reference of workflow?.references ?? []) countReference(reference);
     for (const execution of workflow?.executions ?? []) {
       if (execution.basis !== "explicit") continue;
       for (const reference of execution.references) countReference(reference);
     }
-    /* The task's own launches that nothing can open: past the grace a starting
-       launch gets, each is a launch that did not start. A dismissed one is a
-       failed row and is gone. Stage attempts have their chips instead. */
     const unstarted: KanbanUnstartedLaunch[] = [];
     const unstartedKeys = new Set<string>();
     const nowMs = now * 1000;
@@ -518,6 +563,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       const conversationId = failed.spawn?.conversationId ?? failed.conversationId ?? null;
       const assignment = task?.assignments.find((candidate) => (launchId && candidate.launchId === launchId) || (conversationId && candidate.conversationId === conversationId));
       if (assignment?.state === "failed" && assignment.error === LAUNCH_NOT_STARTED_ERROR) continue;
+      if (stageWork({ kind: "assignment", launchId, conversationId, path: failed.path }, failed.spawn?.clientAttemptId ?? assignment?.clientAttemptId)) continue;
       const key = launchId ?? conversationId ?? failed.path;
       if (unstartedKeys.has(key)) continue;
       unstartedKeys.add(key);
@@ -533,19 +579,20 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
         dismissable: Boolean(assignment && assignment.state !== "failed"),
       });
     }
-    for (const reference of unopenable) {
+    /* A launch of the task's own that never minted a conversation (a row
+       from before launches reserved one) did not start once it is past the
+       grace a starting launch gets. */
+    for (const reference of neverMinted) {
       if (reference.kind !== "assignment" || reference.state === "failed" || !task) continue;
-      const assignment = task.assignments.find((candidate) => candidate.state !== "failed"
-        && ((reference.launchId && candidate.launchId === reference.launchId) || (reference.conversationId && candidate.conversationId === reference.conversationId)));
-      if (!assignment) continue;
+      const assignment = assignmentOf(reference, true);
+      if (!assignment || stageWork(reference, assignment.clientAttemptId)) continue;
       const atMs = Date.parse(assignment.at);
       if (Number.isFinite(atMs) && nowMs - atMs < LAUNCH_START_GRACE_MS) continue;
-      const key = assignment.launchId ?? assignment.conversationId ?? "";
+      const key = assignment.launchId ?? "";
       if (!key || unstartedKeys.has(key)) continue;
       unstartedKeys.add(key);
-      unstarted.push({ key, launchId: assignment.launchId ?? null, conversationId: assignment.conversationId ?? null, atMs: Number.isFinite(atMs) ? atMs : 0, failed: null, dismissable: true });
+      unstarted.push({ key, launchId: key, conversationId: null, atMs: Number.isFinite(atMs) ? atMs : 0, failed: null, dismissable: true });
     }
-    const notLoaded = notLoadedRefs.length;
 
     /* Newest agent work first; a pipeline with no recorded work sorts last. */
     const summaries = [...cardPipelines.values()]

@@ -7760,3 +7760,181 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+describe("old cards list only the launches that did not start, folded behind one row", () => {
+  /* The `unstarted-regression` scenario: two Inbox cards whose lanes ran for
+     days (43 and 27 assignments, one per stage attempt, review round and
+     handshake retry, each with the conversation it minted and no path, none
+     loaded on this board), and a card with four launches of its own that did
+     not start: three rows that never minted a conversation and one whose
+     receipt failed an hour ago. On the desktop at 1440 px and on the phone at
+     390 px, in en and uk: the lane cards list no launch row and no row per
+     conversation, and the mixed card shows one summary row that opens on
+     click, with Dismiss all beside it. Frames go to
+     UNSTARTED_REGRESSION_PNG_DIR; every frame is taken before any gate is
+     read, so the same case renders the "before" frames on a tree without the
+     change. */
+  const CARDS = ["t-lanes-sqlite", "t-lanes-flows", "t-lanes-mixed"] as const;
+  const FAILED_ERROR = "account limit reached: the weekly window resets in 3 days";
+  const read = `(() => {
+    const out = {};
+    for (const id of ${JSON.stringify(CARDS)}) {
+      const card = document.querySelector('[data-kanban-board] .card[data-id="task:' + id + '"]');
+      if (!card) { out[id] = null; continue; }
+      const rect = card.getBoundingClientRect();
+      out[id] = {
+        height: Math.round(rect.height),
+        conversations: card.querySelector("[data-foot-conversations]")?.getAttribute("data-foot-conversations") ?? null,
+        rows: card.querySelectorAll("[data-launch-not-started]").length,
+        summary: card.querySelector("[data-launches-not-started]")?.getAttribute("data-launches-not-started") ?? null,
+        summaryText: (card.querySelector("[data-launches-toggle]")?.textContent ?? "").trim() || null,
+        dismissAll: (card.querySelector("[data-launches-dismiss-all]")?.textContent ?? "").trim() || null,
+        notLoaded: card.querySelectorAll("[data-not-loaded]").length,
+        error: (card.querySelector("[data-launch-error]")?.textContent ?? "").trim() || null,
+      };
+    }
+    return out;
+  })()`;
+  type Reading = Record<string, { height: number; conversations: string | null; rows: number; summary: string | null; summaryText: string | null; dismissAll: string | null; notLoaded: number; error: string | null } | null>;
+
+  browserTest("the lane cards list no launch, and the launches that did not start fold behind one row with Dismiss all — desktop and phone, en and uk", async () => {
+    const out = path.resolve(".artifacts/unstarted-regression");
+    const pngDir = process.env.UNSTARTED_REGRESSION_PNG_DIR ?? "/var/tmp/llv-unstarted-regression-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=unstarted-regression`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const summaryText = translate(lang, "kanban.launchesNotStarted", { count: 4 });
+        /* Desktop. */
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 1440, height: 1000 }, "light", lang);
+          try {
+            await page.waitForSelector(card("t-lanes-sqlite"), { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            for (const id of CARDS) {
+              const element = page.locator(card(id));
+              if (await element.count()) {
+                await element.scrollIntoViewIfNeeded();
+                await element.screenshot({ path: path.join(pngDir, `${label}-${id}.png`) });
+              }
+            }
+            await page.locator(card("t-lanes-sqlite")).scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(pngDir, `${label}-board.png`) });
+            const reading = await page.evaluate(read) as Reading;
+            readings[label] = reading;
+            /* The fold opens on click and lists each launch. */
+            const toggle = page.locator(`${card("t-lanes-mixed")} [data-launches-toggle]`);
+            let opened: Record<string, unknown> | null = null;
+            if (await toggle.count()) {
+              await toggle.click();
+              await page.waitForTimeout(300);
+              await page.locator(card("t-lanes-mixed")).screenshot({ path: path.join(pngDir, `${label}-t-lanes-mixed-open.png`) });
+              opened = await page.locator(card("t-lanes-mixed")).evaluate((element) => ({
+                expanded: element.querySelector("[data-launches-toggle]")?.getAttribute("aria-expanded") ?? null,
+                rows: [...element.querySelectorAll("[data-launch-not-started]")].map((row) => row.getAttribute("data-launch-not-started")),
+                error: (element.querySelector("[data-launch-error]")?.textContent ?? "").trim() || null,
+                open: element.querySelectorAll("[data-launch-open]").length,
+              }));
+              readings[`${label}-mixed-open`] = opened;
+            }
+            const at = (id: string) => reading[id];
+            for (const [id, count] of [["t-lanes-sqlite", "43"], ["t-lanes-flows", "27"]] as const) {
+              const found = at(id);
+              if (!found) { failures.push(`${label}: no card ${id}`); continue; }
+              if (found.rows !== 0 || found.summary !== null) failures.push(`${label}: ${id} lists launches that started ${JSON.stringify(found)}`);
+              if (found.notLoaded !== 0) failures.push(`${label}: ${id} lists ${found.notLoaded} stage conversation(s) one row each`);
+              if (found.conversations !== count) failures.push(`${label}: ${id} counts ${found.conversations} conversations, not ${count}`);
+            }
+            const mixed = at("t-lanes-mixed");
+            if (mixed?.summary !== "4" || mixed.rows !== 0 || mixed.summaryText !== summaryText || mixed.dismissAll !== translate(lang, "kanban.dismissAllLaunches")) failures.push(`${label}: the mixed card's summary row ${JSON.stringify(mixed)}`);
+            if (opened?.expanded !== "true" || (opened.rows as string[]).length !== 4 || opened.error !== FAILED_ERROR || opened.open !== 1) failures.push(`${label}: the opened fold ${JSON.stringify(opened)}`);
+            /* Dismiss all sends one dismissal per launch. */
+            const all = page.locator(`${card("t-lanes-mixed")} [data-launches-dismiss-all]`);
+            if (await all.count()) {
+              await all.click();
+              await page.waitForTimeout(1200);
+              const sent = await page.evaluate(() => (window as unknown as { evidence: { assignments: Array<{ method: string; id: string; body: Record<string, unknown> }> } }).evidence.assignments.filter((entry) => entry.method === "PATCH"));
+              readings[`${label}-dismiss-all`] = sent.map((entry) => ({ id: entry.id, launchId: entry.body.launchId ?? null, dismiss: entry.body.dismiss ?? null }));
+              if (sent.length !== 4 || sent.some((entry) => entry.id !== "t-lanes-mixed" || entry.body.dismiss !== "launch-did-not-start")) failures.push(`${label}: Dismiss all sent ${JSON.stringify(sent)}`);
+            } else failures.push(`${label}: the mixed card offers no Dismiss all`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        /* Phone. */
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const tab = page.locator('[data-phone-kanban-tab="inbox"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(600);
+            const screens: Record<string, unknown> = {};
+            for (const id of CARDS) {
+              const element = page.locator(`[data-phone-card="task:${id}"]`);
+              if (!await element.count()) { screens[id] = null; failures.push(`${label}: no phone card ${id}`); continue; }
+              await element.first().scrollIntoViewIfNeeded();
+              await element.first().click();
+              await page.waitForTimeout(800);
+              /* The agents section, where launches are listed. */
+              await page.locator("[data-phone-task-agents]").first().scrollIntoViewIfNeeded().catch(() => {});
+              await page.screenshot({ path: path.join(pngDir, `${label}-task-${id}.png`) });
+              const screen: Record<string, unknown> = await page.evaluate(() => ({
+                rows: document.querySelectorAll("[data-phone-task-unstarted]").length,
+                summary: document.querySelector("[data-phone-task-unstarted-summary]")?.getAttribute("data-phone-task-unstarted-summary") ?? null,
+                summaryText: (document.querySelector("[data-phone-launches-toggle]")?.textContent ?? "").trim() || null,
+                dismissAll: (document.querySelector("[data-phone-launches-dismiss-all]")?.textContent ?? "").trim() || null,
+                notLoaded: document.querySelectorAll("[data-phone-task-not-loaded]").length,
+                agentsHeight: Math.round(document.querySelector("[data-phone-task-agents]")?.getBoundingClientRect().height ?? 0),
+              }));
+              if (id === "t-lanes-mixed") {
+                const toggle = page.locator("[data-phone-launches-toggle]");
+                if (await toggle.count()) {
+                  await toggle.first().click();
+                  await page.waitForTimeout(300);
+                  await page.locator("[data-phone-task-agents]").first().scrollIntoViewIfNeeded().catch(() => {});
+                  await page.screenshot({ path: path.join(pngDir, `${label}-task-${id}-open.png`) });
+                  screen.opened = await page.evaluate(() => ({
+                    expanded: document.querySelector("[data-phone-launches-toggle]")?.getAttribute("aria-expanded") ?? null,
+                    rows: document.querySelectorAll("[data-phone-task-unstarted]").length,
+                    error: (document.querySelector("[data-phone-launch-error]")?.textContent ?? "").trim() || null,
+                  }));
+                }
+              }
+              screens[id] = screen;
+              await page.goBack().catch(() => {});
+              await page.waitForTimeout(500);
+            }
+            readings[label] = screens;
+            for (const id of ["t-lanes-sqlite", "t-lanes-flows"]) {
+              const screen = screens[id] as Record<string, unknown> | null;
+              if (screen && (screen.rows !== 0 || screen.summary !== null || screen.notLoaded !== 0)) failures.push(`${label}: ${id}'s task screen ${JSON.stringify(screen)}`);
+            }
+            const mixed = screens["t-lanes-mixed"] as Record<string, unknown> | null;
+            const opened = mixed?.opened as Record<string, unknown> | undefined;
+            if (mixed && (mixed.summary !== "4" || mixed.rows !== 0 || mixed.summaryText !== summaryText || mixed.dismissAll !== translate(lang, "kanban.dismissAllLaunches"))) failures.push(`${label}: the mixed task screen ${JSON.stringify(mixed)}`);
+            if (opened?.expanded !== "true" || opened.rows !== 4 || opened.error !== FAILED_ERROR) failures.push(`${label}: the opened fold ${JSON.stringify(opened ?? null)}`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/unstarted-regression", { recursive: true });
+    fs.writeFileSync("evidence/unstarted-regression/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});

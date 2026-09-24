@@ -6,8 +6,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
 import { TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
-import { dismissUnstartedLaunch } from "@/components/kanban/kanbanAssignments";
-import { KANBAN_STATUSES, summarizePipeline, type KanbanPipeline } from "@/components/kanban/kanbanModel";
+import { dismissUnstartedLaunch, dismissUnstartedLaunches } from "@/components/kanban/kanbanAssignments";
+import { KANBAN_STATUSES, summarizePipeline, type KanbanPipeline, type KanbanUnstartedLaunch } from "@/components/kanban/kanbanModel";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pipelinePorts";
 import { textField, withField } from "@/components/kanban/taskText";
@@ -341,6 +341,91 @@ function EarlierAttempts({ taskId, lanes, past, files, nowMs, onOpen }: {
 }
 
 /* ── The screen ─────────────────────────────────────────────────────────── */
+
+/** The task's launches that did not start. One is its own row; more fold
+    behind one summary row that opens on tap, with Dismiss all beside it. */
+function UnstartedLaunches({ taskId, title, launches, onOpen }: {
+  taskId: string;
+  title: string;
+  launches: readonly KanbanUnstartedLaunch[];
+  onOpen: (file: FileEntry) => void;
+}) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  const action = "min-h-11 shrink-0 rounded-[8px] px-3 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  const frame = (failed: boolean) => `flex min-h-14 w-full flex-wrap items-center gap-x-2 rounded-[12px] border px-3 py-2 ${failed ? "border-danger/40" : "border-dashed border-border"}`;
+  const words = (failed: boolean) => `min-w-0 flex-1 truncate text-body ${failed ? "font-semibold text-danger" : "text-muted"}`;
+  const row = (launch: KanbanUnstartedLaunch) => (
+    <div
+      key={launch.key}
+      data-phone-task-unstarted={launch.key}
+      data-phone-task-launch-failed={launch.failed ? launch.key : undefined}
+      title={t(launch.failed ? "kanban.launchFailedHint" : "kanban.launchNotStartedHint")}
+      className={frame(Boolean(launch.failed))}
+    >
+      <span className={words(Boolean(launch.failed))}>
+        {t(launch.failed ? "kanban.launchFailed" : "kanban.launchNotStarted")}
+      </span>
+      {launch.failed ? (
+        <button
+          type="button"
+          data-phone-launch-open={launch.key}
+          aria-label={t("kanban.openFailedLaunchAria", { title })}
+          className={action}
+          onClick={() => onOpen(launch.failed!.file)}
+        >
+          {t("kanban.openFailedLaunch")}
+        </button>
+      ) : null}
+      {launch.dismissable ? (
+        <button
+          type="button"
+          data-phone-launch-dismiss={launch.key}
+          aria-label={t("kanban.dismissLaunchAria", { title })}
+          className={action}
+          onClick={() => { void dismissUnstartedLaunch(taskId, launch); }}
+        >
+          {t("kanban.dismissLaunch")}
+        </button>
+      ) : null}
+      {launch.failed?.error ? (
+        <p data-phone-launch-error={launch.key} className="m-0 line-clamp-2 basis-full break-words pb-1 text-ui text-secondary">{launch.failed.error}</p>
+      ) : null}
+    </div>
+  );
+  if (launches.length === 1) return row(launches[0]!);
+  const dismissable = launches.filter((launch) => launch.dismissable);
+  const failed = launches.some((launch) => launch.failed);
+  return (
+    <>
+      <div data-phone-task-unstarted-summary={launches.length} className={frame(failed)}>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={t(open ? "kanban.launchesNotStartedHide" : "kanban.launchesNotStartedShow", { count: launches.length })}
+          data-phone-launches-toggle=""
+          className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          onClick={() => setOpen((value) => !value)}
+        >
+          <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} aria-hidden />
+          <span className={words(failed)}>{t("kanban.launchesNotStarted", { count: launches.length })}</span>
+        </button>
+        {dismissable.length ? (
+          <button
+            type="button"
+            data-phone-launches-dismiss-all=""
+            aria-label={t("kanban.dismissAllLaunchesAria", { count: dismissable.length, title })}
+            className={action}
+            onClick={() => { void dismissUnstartedLaunches(taskId, dismissable); }}
+          >
+            {t("kanban.dismissAllLaunches")}
+          </button>
+        ) : null}
+      </div>
+      {open ? launches.map(row) : null}
+    </>
+  );
+}
 
 export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const { t } = useLocale();
@@ -900,60 +985,25 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 </button>
               ))}
               {/* A conversation the board did not load still opens, through its
-                  own transcript; the count on the card holds only these. */}
+                  conversation id or its transcript. A stage's is left to its
+                  pipeline's Earlier attempts. */}
               {notLoadedRefs.map((ref) => (
                 <button
                   key={ref.key}
                   type="button"
                   data-phone-task-not-loaded={ref.key}
                   className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
-                  onClick={() => { window.location.hash = formatConversationHash({ conversationId: ref.conversationId ?? undefined, path: ref.path }); }}
+                  onClick={() => { window.location.hash = formatConversationHash({ conversationId: ref.conversationId ?? undefined, path: ref.path ?? "" }); }}
                 >
                   <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("kanban.notLoadedOpen")}</span>
                   <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                 </button>
               ))}
-              {/* A launch that never produced a transcript opens nothing: it
-                  says so, and can be dismissed. A failed one says so at once,
-                  with its error, and opens its launch view, where Retry lives. */}
-              {unstarted.map((launch) => (
-                <div
-                  key={launch.key}
-                  data-phone-task-unstarted={launch.key}
-                  data-phone-task-launch-failed={launch.failed ? launch.key : undefined}
-                  title={t(launch.failed ? "kanban.launchFailedHint" : "kanban.launchNotStartedHint")}
-                  className={`flex min-h-14 w-full flex-wrap items-center gap-x-2 rounded-[12px] border px-3 py-2 ${launch.failed ? "border-danger/40" : "border-dashed border-border"}`}
-                >
-                  <span className={`min-w-0 flex-1 truncate text-body ${launch.failed ? "font-semibold text-danger" : "text-muted"}`}>
-                    {t(launch.failed ? "kanban.launchFailed" : "kanban.launchNotStarted")}
-                  </span>
-                  {launch.failed ? (
-                    <button
-                      type="button"
-                      data-phone-launch-open={launch.key}
-                      aria-label={t("kanban.openFailedLaunchAria", { title })}
-                      className="min-h-11 shrink-0 rounded-[8px] px-3 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                      onClick={() => props.onOpenConversation(launch.failed!.file)}
-                    >
-                      {t("kanban.openFailedLaunch")}
-                    </button>
-                  ) : null}
-                  {launch.dismissable ? (
-                    <button
-                      type="button"
-                      data-phone-launch-dismiss={launch.key}
-                      aria-label={t("kanban.dismissLaunchAria", { title })}
-                      className="min-h-11 shrink-0 rounded-[8px] px-3 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                      onClick={() => { void dismissUnstartedLaunch(taskId, launch); }}
-                    >
-                      {t("kanban.dismissLaunch")}
-                    </button>
-                  ) : null}
-                  {launch.failed?.error ? (
-                    <p data-phone-launch-error={launch.key} className="m-0 line-clamp-2 basis-full break-words pb-1 text-ui text-secondary">{launch.failed.error}</p>
-                  ) : null}
-                </div>
-              ))}
+              {/* A launch that did not start opens nothing: it says so, and
+                  can be dismissed. A failed one says so at once, with its
+                  error, and opens its launch view, where Retry lives. Two or
+                  more fold behind one summary row. */}
+              {unstarted.length ? <UnstartedLaunches taskId={taskId} title={title} launches={unstarted} onOpen={props.onOpenConversation} /> : null}
               {!agents.length && !notLoadedRefs.length && !unstarted.length && !card?.drafts.length ? (
                 <p className="m-0 px-1 text-ui text-muted">{t("mobile2.kanban.noAgents")}</p>
               ) : null}
