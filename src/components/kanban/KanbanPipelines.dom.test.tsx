@@ -620,7 +620,9 @@ test("the card draws no activity line: the footer counts the conversations, and 
   const parked = mount([{ ...searchPipeline(), state: "needs_decision" } as Pipeline]);
   await tick();
   expect(card(parked.host).dataset.attention).toBe("needs");
-  /* The lane says it in its own amber word, so the footer does not say it again. */
   expect(card(parked.host).querySelector(".pb-head .pstate-word")?.textContent).toBe("needs a decision");
-  expect(card(parked.host).querySelector("[data-foot-needs]")).toBeNull();
+  /* The footer names why and on which stage, beside its Dismiss
+     (docs/design/needs-attention.md §4). */
+  expect(card(parked.host).querySelector("[data-foot-needs]")?.textContent).toMatch(/^needs a decision · /);
+  expect(card(parked.host).querySelector("[data-dismiss]")).not.toBeNull();
 });

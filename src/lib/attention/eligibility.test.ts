@@ -6,6 +6,7 @@ import {
   attentionCapablePresence,
   MOBILE_LAYOUT_QUERY,
   mobileLayoutViewport,
+  noticeCapablePresence,
   type AttentionPresenceFacts,
 } from "./eligibility";
 
@@ -80,3 +81,13 @@ test("the host's media query and the selection viewport are one pair of numbers"
   expect(ATTENTION_MIN_BOARD_HEIGHT).toBe(600);
   expect(MOBILE_LAYOUT_QUERY).toBe(`(max-width: ${ATTENTION_MIN_BOARD_WIDTH - 1}px), (max-height: ${ATTENTION_MIN_BOARD_HEIGHT - 1}px)`);
 });
+
+/* docs/design/needs-attention.md §6: the phone gets a notice, never a move. */
+test("a visible, active phone, or a window drawing the phone layout, can take a notice", () => {
+  expect(noticeCapablePresence(facts({ device: { kind: "mobile" }, mode: "mobile-focus", viewport: { width: 390, height: 844 } }))).toBe(true);
+  expect(noticeCapablePresence(facts({ viewport: { width: ATTENTION_MIN_BOARD_WIDTH - 1, height: 900 } }))).toBe(true);
+  expect(noticeCapablePresence(facts())).toBe(false);
+  expect(noticeCapablePresence(facts({ device: { kind: "mobile" }, visibility: "hidden", freshness: "background" }))).toBe(false);
+  expect(noticeCapablePresence(facts({ device: { kind: "mobile" }, freshness: "stale" }))).toBe(false);
+});
+

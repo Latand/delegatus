@@ -1,21 +1,23 @@
 "use client";
 
-import { ArrowRight, Ban, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
+import { ArrowRight, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
   useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type TouchEvent as ReactTouchEvent,
 } from "react";
 
+import { clearedLine, needLabel } from "@/components/attention/decision";
+import { sendDismissal } from "@/components/attention/dismissalOverlay";
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
 import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/components/kanban/kanbanModel";
+import { subjectOf } from "@/components/kanban/cardDismissal";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { updateTask } from "@/components/tasks/taskApi";
 import { blockAgeSeconds } from "@/components/pipelines/pipelineBlockModel";
-import { pipelineStateLabel } from "@/components/pipelines/pipelineModel";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -29,6 +31,7 @@ import type { MobileRowActionTarget } from "./MobileRowActions";
 import { MobileSheet } from "./MobileSheet";
 import { ROW_ACTION_TONE, type MobileRowAction } from "./MobileSwipeRow";
 import { useMobileNav, useMobileNavStore } from "./mobileNav";
+import { mobileRowState } from "./mobileBoardModel";
 import { buildPhoneKanban, columnEmpty, nearestWithWork, type PhoneCard, type PhoneColumn } from "./phoneKanbanModel";
 import { readPlace, usePhoneKanbanColumn, usePhoneKanbanDoneShown, writePlace } from "./phoneKanbanPlace";
 import { LONG_PRESS_MS, SWIPE_LOCK_PX } from "./swipeIntent";
@@ -55,6 +58,10 @@ import { usePhoneBoardModel, type PhoneBoardInput, type TaskMutations } from "./
  */
 
 const CARD = "flex w-full min-h-14 flex-col gap-1.5 rounded-[12px] bg-card px-3 py-2.5 text-left shadow-1 active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40";
+/* A card with a Dismiss or an Undo beside its body: the frame holds both, so
+   the card's own button and the control never overlap (#699). */
+const FRAME = "flex w-full min-w-0 items-stretch rounded-[12px] bg-card shadow-1";
+const BODY = "flex min-h-14 min-w-0 flex-1 flex-col gap-1.5 rounded-[12px] py-2.5 pl-3 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40";
 const QUIET = "bg-quiet shadow-none ring-1 ring-inset ring-border";
 const EDGE: Record<"warning" | "danger", string> = {
   warning: "shadow-[inset_3px_0_0_var(--color-warning),var(--shadow-1)]",
@@ -216,8 +223,10 @@ function NeedBadge({ item }: { item: PhoneCard }) {
   const { t } = useLocale();
   const need = item.need;
   if (!need) return null;
+  /* A lane's chip names its reason and the stage it stopped on
+     (docs/design/needs-attention.md §4); a conversation's badge names its own. */
   if (need.kind === "pipeline") {
-    return <span className="pstate-chip mt-px" data-phone-card-badge="" data-pstate={need.pipeline.state}>{pipelineStateLabel(t, need.pipeline.state)}</span>;
+    return <span className="pstate-chip mt-px min-w-0 truncate" data-phone-card-badge="" data-pstate={need.pipeline.state}>{needLabel(t, need.reason)}</span>;
   }
   const badge = need.state.badge;
   if (!badge) return null;
@@ -242,14 +251,22 @@ function Agent({ file }: { file: FileEntry }) {
 const Sep = () => <span aria-hidden className="shrink-0 opacity-60">·</span>;
 
 /** What a conversation that asks says besides its badge: its question when
-    it wrote one, when a wall lifts and on which account, else nothing — the
-    badge already says the state, once (P2-8). */
-function askDetail(t: TFunction, item: PhoneCard, now: number): string | null {
+    it wrote one, else nothing — the badge already says the reason, once
+    (P2-8). */
+function askDetail(item: PhoneCard): string | null {
   if (item.need?.kind !== "conversation") return null;
-  const { member, state } = item.need;
-  const question = member.file.pendingQuestion?.questions?.[0]?.question?.trim();
-  if (question) return question;
-  return state.key === "limit" ? statePhrase(t, state, now) : null;
+  return item.need.member.file.pendingQuestion?.questions?.[0]?.question?.trim() || null;
+}
+
+/** What a conversation that asks nothing still has to say about itself: a
+    stalled turn and a wall keep their words, in their tone, without the edge or
+    the badge a reason gets (docs/design/needs-attention.md §3, reasons 4, 7). */
+function quietState(t: TFunction, file: FileEntry | null, now: number): { text: string; tone: string; stalled: boolean } | null {
+  if (!file) return null;
+  const state = mobileRowState(file, now);
+  if (state.key === "stalled") return { text: statePhrase(t, state, now), tone: "font-semibold text-danger", stalled: true };
+  if (state.key === "limit") return { text: statePhrase(t, state, now), tone: "font-semibold text-warning", stalled: false };
+  return null;
 }
 
 /** How long the conversation has asked, with a unit. */
@@ -259,10 +276,10 @@ function askAge(t: TFunction, item: PhoneCard): string | null {
 }
 
 /** A conversation that asks, on a task's card: who, what, and how long. */
-function AskLine({ item, now }: { item: PhoneCard; now: number }) {
+function AskLine({ item }: { item: PhoneCard }) {
   const { t } = useLocale();
   if (item.need?.kind !== "conversation") return null;
-  const detail = askDetail(t, item, now);
+  const detail = askDetail(item);
   const age = askAge(t, item);
   return (
     <span data-phone-card-ask="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
@@ -278,13 +295,16 @@ function AskLine({ item, now }: { item: PhoneCard; now: number }) {
 function LooseLine({ item, now }: { item: PhoneCard; now: number }) {
   const { t } = useLocale();
   const file = item.need?.kind === "conversation" ? item.need.member.file : item.firstAgent;
-  const detail = askDetail(t, item, now);
+  const detail = askDetail(item);
+  const quiet = item.need ? null : quietState(t, file, now);
   const at = item.card.lastAgentWorkAtMs > 0 ? item.card.lastAgentWorkAtMs : file ? file.mtime * 1000 : 0;
-  const age = askAge(t, item) ?? (at > 0 ? ageText(t, at, now * 1000) : null);
+  /* A stalled phrase already says how long it has been quiet. */
+  const age = askAge(t, item) ?? (at > 0 && !quiet?.stalled ? ageText(t, at, now * 1000) : null);
   return (
     <span data-phone-card-meta="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
       {file ? <><Agent file={file} /><Sep /></> : null}
       {detail ? <><span className="min-w-0 truncate">{detail}</span><Sep /></> : null}
+      {quiet ? <><span data-phone-card-state="" className={`min-w-0 truncate ${quiet.tone}`}>{quiet.text}</span><Sep /></> : null}
       <span className="shrink-0">{t("mobile2.kanban.notOnTask")}</span>
       {age ? <><Sep /><span className="shrink-0">{age}</span></> : null}
     </span>
@@ -322,7 +342,20 @@ function othersText(t: TFunction, item: PhoneCard): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
-function CardView({ item, now, project, onOpen, onLongPress }: {
+/** Who cleared a card and how long ago: the muted line a cleared card keeps
+    while what it cleared is still live. */
+function ClearedLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
+  const { t } = useLocale();
+  const cleared = item.cleared;
+  if (!cleared) return null;
+  return (
+    <span data-phone-card-cleared={cleared.by.kind} className="min-w-0 truncate text-label text-muted">
+      {clearedLine(t, cleared, nowMs / 1000)}
+    </span>
+  );
+}
+
+function CardView({ item, now, project, onOpen, onLongPress, onDismiss, onUndo }: {
   item: PhoneCard;
   /** Epoch seconds. */
   now: number;
@@ -330,6 +363,10 @@ function CardView({ item, now, project, onOpen, onLongPress }: {
   project: string | null;
   onOpen: (() => void) | null;
   onLongPress: (() => void) | null;
+  /** Dismiss what the card asks (docs/design/needs-attention.md §5). */
+  onDismiss: (() => void) | null;
+  /** Bring back what the card shows as cleared. */
+  onUndo: (() => void) | null;
 }) {
   const { t } = useLocale();
   const { card } = item;
@@ -361,11 +398,14 @@ function CardView({ item, now, project, onOpen, onLongPress }: {
       {item.shown && !loose ? (
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
       ) : null}
-      {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} now={now} />}
+      {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} />}
       <AgentsLine item={item} nowMs={nowMs} />
+      <ClearedLine item={item} nowMs={nowMs} />
     </>
   );
-  const className = `${CARD} ${item.kind === "task" && item.finished && !item.need ? QUIET : ""} ${item.edge ? EDGE[item.edge] : ""}`;
+  const tone = `${item.kind === "task" && item.finished && !item.need ? QUIET : ""} ${item.edge ? EDGE[item.edge] : ""}`;
+  const aside = onDismiss || onUndo;
+  const className = aside ? BODY : `${CARD} ${tone}`;
   const data = {
     "data-phone-card": item.key,
     "data-phone-card-kind": item.kind,
@@ -374,13 +414,40 @@ function CardView({ item, now, project, onOpen, onLongPress }: {
     "data-phone-card-agent": item.kind === "task" ? undefined : item.firstAgent?.path,
     "data-phone-card-pipeline": item.shown?.pipeline.id,
   };
+  const face = onOpen ? (
+    <button type="button" {...data} aria-label={label} className={className} style={aside ? undefined : colour} onClick={onOpen}>{body}</button>
+  ) : (
+    <div {...data} className={className} style={aside ? undefined : colour}>{body}</div>
+  );
   return (
     <Pressable onLongPress={onLongPress}>
-      {onOpen ? (
-        <button type="button" {...data} aria-label={label} className={className} style={colour} onClick={onOpen}>{body}</button>
-      ) : (
-        <div {...data} className={className} style={colour}>{body}</div>
-      )}
+      {aside ? (
+        <div data-phone-card-frame={item.key} className={`${FRAME} ${tone}`} style={colour}>
+          {face}
+          {onDismiss ? (
+            <button
+              type="button"
+              data-phone-card-dismiss={item.key}
+              aria-label={t("needs.dismissAria", { title })}
+              title={t("needs.dismissHint")}
+              className="grid h-11 w-11 shrink-0 place-items-center self-start rounded-[12px] text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+              onClick={onDismiss}
+            >
+              <Check className="h-[18px] w-[18px]" aria-hidden />
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-phone-card-undo={item.key}
+              aria-label={t("needs.undoAria", { title })}
+              className="inline-flex h-11 shrink-0 items-center self-end rounded-[12px] px-3 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+              onClick={onUndo ?? undefined}
+            >
+              {t("needs.undo")}
+            </button>
+          )}
+        </div>
+      ) : face}
     </Pressable>
   );
 }
@@ -730,6 +797,26 @@ export function MobileKanban(props: MobileKanbanProps) {
     });
   }, [controller, t]);
 
+  /* Dismiss (docs/design/needs-attention.md §5): the reasons the card counts
+     stop raising needs-you on the tap, and come back only when something
+     newer asks. The receipt's Undo is the same request with `undo`. */
+  const sendCardDismissal = useCallback((item: PhoneCard, undo: boolean) => {
+    const needs = undo ? item.card.cleared.map((entry) => entry.need) : item.reasons;
+    const subjects = needs.map(subjectOf);
+    if (!subjects.length) return;
+    const title = shortTitle(t, item);
+    const target = item.card.task ? { kind: "task" as const, taskId: item.card.task.id, subjects } : { kind: "subjects" as const, subjects };
+    if (!undo) {
+      showReceipt(t("needs.dismissedReceipt", { title }), {
+        kind: "undo",
+        run: () => void sendDismissal(target, subjects, { undo: true, surface: "phone" }),
+      });
+    }
+    void sendDismissal(target, subjects, { undo, surface: "phone" }).then((result) => {
+      if (!result.ok) showReceipt(t(undo ? "needs.undoFailed" : "needs.dismissFailed", { title, error: result.error }), null, { error: true });
+    });
+  }, [t]);
+
   /* ⋯ › Hidden tasks: the hidden groups, newest hide first, then the empty
      tasks taken off the board. Show is the desktop tray's own write. */
   const hiddenRows = useMemo<HiddenRow[]>(() => [
@@ -766,6 +853,15 @@ export function MobileKanban(props: MobileKanbanProps) {
     }
     return map;
   }, [phone]);
+  /* The card's own Dismiss: everything it counts, whatever kind of card it is. */
+  const dismissRow = (item: PhoneCard): SheetRow[] => item.reasons.length ? [{
+    key: "dismiss",
+    name: t("needs.dismiss"),
+    hint: t("needs.dismissRowHint"),
+    icon: <Check className="h-4 w-4" aria-hidden />,
+    tone: "accent",
+    run: () => sendCardDismissal(item, false),
+  }] : [];
   const sheetRows = (item: PhoneCard): SheetRow[] => {
     if (item.kind !== "task") {
       const target: MobileRowActionTarget | null = item.kind === "conversation" && item.firstAgent
@@ -773,9 +869,11 @@ export function MobileKanban(props: MobileKanbanProps) {
         : item.kind === "pipeline" && item.shown && item.need?.kind === "pipeline"
           ? { kind: "pipeline", row: { pipeline: item.shown.pipeline, task: item.card.title } }
           : null;
-      return (target && props.rowActions ? props.rowActions(target) : []).map((action) => ({
-        key: action.key, name: action.name, hint: action.hint, icon: action.icon, tone: action.tone, run: action.run,
-      }));
+      /* A row's own Dismiss would clear one subject; the card's clears what
+         the card counts, so it stands in for it. */
+      return [...dismissRow(item), ...(target && props.rowActions ? props.rowActions(target) : [])
+        .filter((action) => action.key !== "dismiss")
+        .map((action) => ({ key: action.key, name: action.name, hint: action.hint, icon: action.icon, tone: action.tone, run: action.run }))];
     }
     /* Every pipeline finished: the move it is waiting for is Done (§3.4). */
     const order = item.finished ? (["done", ...KANBAN_STATUSES.filter((status) => status !== "done")] as TaskStatus[]) : [...KANBAN_STATUSES];
@@ -800,6 +898,7 @@ export function MobileKanban(props: MobileKanbanProps) {
         run: () => hide(item),
       });
     }
+    rows.push(...dismissRow(item));
     const first = item.firstAgent;
     if (first) {
       rows.push({
@@ -839,7 +938,16 @@ export function MobileKanban(props: MobileKanbanProps) {
   };
   const projectLabel = props.projectLabel;
   const cardOf = (item: PhoneCard) => (
-    <CardView key={item.key} item={item} now={now} project={projectLabel?.(item.card.project) ?? null} onOpen={open(item)} onLongPress={() => openSheet(item)} />
+    <CardView
+      key={item.key}
+      item={item}
+      now={now}
+      project={projectLabel?.(item.card.project) ?? null}
+      onOpen={open(item)}
+      onLongPress={() => openSheet(item)}
+      onDismiss={item.reasons.length ? () => sendCardDismissal(item, false) : null}
+      onUndo={item.cleared ? () => sendCardDismissal(item, true) : null}
+    />
   );
 
   return (

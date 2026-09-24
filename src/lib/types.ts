@@ -357,6 +357,10 @@ export interface FileEntry {
   switchApplying?: { operationId: string };
   /** Oldest durable message this live conversation still owes the operator. */
   stuckDelivery?: StuckDelivery;
+  /** The needs-you dismissal recorded for this conversation, when there is one
+      (docs/design/needs-attention.md §5). A reason that started at or before
+      it is not flagged; a newer one is. */
+  attentionDismissal?: import("@/lib/attention/dismissalTypes").AttentionDismissalMark;
   /** Durable launch projection shown before its transcript enters the scan. */
   spawn?: StructuredSpawnCardState;
   /** Transient launch/delivery facts of the launch that CREATED this live

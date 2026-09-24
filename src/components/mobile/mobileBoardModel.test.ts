@@ -7,7 +7,6 @@ import type { FileEntry } from "@/lib/types";
 import {
   buildMobileBoard,
   catalogContinuation,
-  dismissStamp,
   launchedAt,
   mobileRowState,
   needsDecisionPipelineRows,
@@ -21,7 +20,7 @@ import {
  * The list is the operator's triage surface, so the things asserted here are
  * the decisions the design makes and nothing about how they look: which
  * section a conversation lands in, the ONE precedence every surface reads
- * (killed > stalled > limit > held > waiting > working > returned > done), the
+ * (killed > waiting > stalled > limit > held > working > returned > done), the
  * seat kept out of the sections it sits above, pipelines waiting on a decision
  * standing in the queue beside conversations, the pipelines summary rising
  * above Working while any pipeline runs, Recent capped at three, and the
@@ -111,25 +110,34 @@ function pipeline(over: Partial<Pipeline> & { id: string }): Pipeline {
 test("the precedence is one order, and a lower signal never outranks a higher one", () => {
   const base = { path: "/p/a.jsonl" };
   /* Every case below also carries the signals of the ones under it, so each
-     assertion is the precedence itself, not merely the mapping. */
+     assertion is the precedence itself, not merely the mapping. A question
+     outranks a quiet turn: the turn went quiet because it asked
+     (docs/design/needs-attention.md §2). */
   const stalledAndWaiting = question({ ...base, activity: "stalled", mtime: NOW - 840 });
   expect(mobileRowState(question(base), NOW).key).toBe("waiting");
-  expect(mobileRowState(stalledAndWaiting, NOW).key).toBe("stalled");
+  expect(mobileRowState(stalledAndWaiting, NOW).key).toBe("waiting");
   expect(mobileRowState({ ...stalledAndWaiting, proc: "killed" } as FileEntry, NOW).key).toBe("killed");
-  expect(mobileRowState(question({ ...base, rateLimit: { source: "account", accountId: null, window: "session", resetAt: NOW + 600 } }), NOW).key).toBe("limit");
+  const quiet = working({ ...base, activity: "stalled", mtime: NOW - 840 });
+  expect(mobileRowState(quiet, NOW).key).toBe("stalled");
+  const limit = { rateLimit: { source: "account" as const, accountId: null, window: "session" as const, resetAt: NOW + 600 } };
+  expect(mobileRowState(question({ ...base, ...limit }), NOW).key).toBe("waiting");
+  expect(mobileRowState(working({ ...base, ...limit }), NOW).key).toBe("limit");
+  expect(mobileRowState(working({ ...base, ...limit, activity: "stalled", mtime: NOW - 840 }), NOW).key).toBe("stalled");
   /* The wall carries BOTH halves of what the row must say — which account, and
      when it reopens — so «Main resets 16:40» is rendered from the read, never
-     re-derived from somewhere else (README §4.2). */
-  const walled = mobileRowState(question({ ...base, rateLimit: { source: "account", accountId: "main", window: "session", resetAt: NOW + 600 } }), NOW);
-  expect(walled).toMatchObject({ key: "limit", account: "main", resetAt: NOW + 600, badge: "limit", edge: "warning" });
+     re-derived from somewhere else (README §4.2). It asks nothing of the
+     operator, so it carries no edge and no badge. */
+  const walled = mobileRowState(working({ ...base, rateLimit: { source: "account", accountId: "main", window: "session", resetAt: NOW + 600 } }), NOW);
+  expect(walled).toMatchObject({ key: "limit", account: "main", resetAt: NOW + 600, badge: null, edge: null, section: "working", dot: "warning" });
   /* A read that names no account and no reset still says «limit» and nothing
      it does not know. */
-  expect(mobileRowState(question({ ...base, rateLimit: { source: "pane", accountId: null, window: null, resetAt: null } }), NOW))
+  expect(mobileRowState(working({ ...base, rateLimit: { source: "pane", accountId: null, window: null, resetAt: null } }), NOW))
     .toMatchObject({ key: "limit", account: null, resetAt: null });
-  const held = question({
+  const held = working({
     ...base,
     migration: { intentId: "i1", trigger: "manual", phase: "switching", targetAccountId: "other", heldDeliveries: 2, failure: null },
   });
+  expect(mobileRowState(question({ ...base, migration: held.migration }), NOW).key).toBe("waiting");
   expect(mobileRowState(held, NOW).key).toBe("held");
   expect(mobileRowState(held, NOW).held).toBe(2);
   expect(mobileRowState(working(base), NOW).key).toBe("working");
@@ -201,8 +209,13 @@ test("a row that needs the operator carries the edge and the badge; the rest car
   expect(asked).toMatchObject({ section: "needs", edge: "warning", badge: "question" });
   expect(Math.round(asked.seconds ?? 0)).toBe(540);
   expect(mobileRowState(question({ path: "/p/plan.jsonl" }, "plan"), NOW).badge).toBe("plan");
-  const stalled = mobileRowState(question({ path: "/p/s.jsonl", activity: "stalled", mtime: NOW - 900 }), NOW);
-  expect(stalled).toMatchObject({ section: "needs", edge: "danger", badge: "stalled" });
+  /* A stalled turn keeps its danger dot and its word, in Working, and asks
+     nothing (docs/design/needs-attention.md §3, reason 7). */
+  const stalled = mobileRowState(working({ path: "/p/s.jsonl", activity: "stalled", mtime: NOW - 900 }), NOW);
+  expect(stalled).toMatchObject({ key: "stalled", section: "working", edge: null, badge: null, dot: "danger" });
+  /* A dismissed question falls through to what the conversation is doing. */
+  const cleared = mobileRowState(question({ path: "/p/c.jsonl", attentionDismissal: { at: new Date(NOW * 1000).toISOString(), by: { kind: "operator" } } }), NOW);
+  expect(cleared).toMatchObject({ key: "working", section: "working", edge: null, badge: null });
   const run = mobileRowState(working({ path: "/p/w.jsonl" }), NOW);
   expect(run).toMatchObject({ section: "working", edge: null, badge: null, dot: "success" });
   expect(Math.round(run.seconds ?? 0)).toBe(760);
@@ -237,12 +250,11 @@ test("the sections group by state, the seat is never a row, and Recent is capped
   expect(model.recentTotal).toBe(4);
 });
 
-test("the queue reads in the attention queue's own order, not merely oldest first", () => {
+test("the queue reads in the attention queue's own order, and a stalled turn is not in it", () => {
   /* README §4.6: the rows, the bar's badge and the sheet's «Next ›» are one
-     queue, so the board cannot invent a second order. `buildAttentionQueue`
-     ranks the hard-blocked segment ahead of the stalled tail and sorts by age
-     only inside each — here the stalled row is by far the oldest signal and
-     still reads second. */
+     queue, so the board cannot invent a second order. A stalled turn asks
+     nothing (docs/design/needs-attention.md §3, reason 7): it is in Working,
+     however old its silence. */
   const asked = question({ path: "/p/ask.jsonl", title: "Implement the export endpoint" });
   const stalled = working({ path: "/p/stalled.jsonl", title: "Fix the flaky reseat test", activity: "stalled", mtime: NOW - 5_400 });
   const older = question({ path: "/p/plan.jsonl", title: "Migrate accounts to the new binding" }, "plan");
@@ -250,10 +262,9 @@ test("the queue reads in the attention queue's own order, not merely oldest firs
 
   const model = buildMobileBoard({ files: [asked, stalled, older], pipelines: [], project: PROJECT, now: NOW });
   expect(model.needsYou.map((item) => (item.kind === "conversation" ? item.path : item.id)))
-    .toEqual(["/p/plan.jsonl", "/p/ask.jsonl", "/p/stalled.jsonl"]);
-  /* The stalled row is the oldest of the three, so an age-only order would
-     have led with it. */
-  expect(mobileRowState(stalled, NOW).seconds).toBeGreaterThan(mobileRowState(older, NOW).seconds ?? 0);
+    .toEqual(["/p/plan.jsonl", "/p/ask.jsonl"]);
+  expect(model.working.map((row) => row.path)).toContain("/p/stalled.jsonl");
+  expect(model.attentionCount).toBe(2);
 });
 
 test("a closed card and an archived conversation leave the board; a crowned one wears its mark", () => {
@@ -370,20 +381,6 @@ test("a Hide covers the decision the operator saw: a lane that parks again after
   const model = buildMobileBoard({ files: [], pipelines, project: PROJECT, now: NOW });
   expect(model.needsYou.map((item) => (item.kind === "pipeline" ? item.id : item.path))).toEqual(["p-retried", "p-failover"]);
   expect(model.attentionCount).toBe(2);
-});
-
-test("an optimistic Hide covers the decision on the tap even when this device's clock runs behind the server's (#1671)", () => {
-  const serverAhead = new Date((NOW + 90) * 1_000).toISOString();
-  const lane = pipeline({
-    id: "p-skewed", state: "needs_decision",
-    runs: [{ stageId: "review", attempts: [{ n: 1, state: "failed", startedAt: new Date((NOW - 30) * 1_000).toISOString(), completedAt: serverAhead }] }] as unknown as Pipeline["runs"],
-  });
-  const optimistic = { ...lane, dismissedAt: dismissStamp(lane, NOW * 1_000) };
-
-  expect(optimistic.dismissedAt).toBe(serverAhead);
-  expect(needsDecisionPipelineRows([optimistic], PROJECT, NOW)).toEqual([]);
-  /* A device in step with the server stamps plain now. */
-  expect(dismissStamp({ ...lane, runs: [] }, NOW * 1_000)).toBe(new Date(NOW * 1_000).toISOString());
 });
 
 test("the catalog continues the list without repeating it: listed rows, the seat, closed cards, predecessors and repeats drop (#1671)", () => {

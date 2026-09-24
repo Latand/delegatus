@@ -85,10 +85,11 @@ test("a retried message that parks again keeps its attention entry and clock (#1
       state: "delivery-uncertain",
     });
     expect(attentionId(file, admittedSeconds + 10 * 60)).toBe(`${transcriptPath}:delivery:${Math.floor(admittedSeconds)}`);
-    expect(attentionExpiries([file])).toContain(admittedSeconds + 5 * 60);
+    /* Uncertain already, so it asks from admission; a held one would ask at
+       the half hour, which is the tick the queue schedules either way. */
+    expect(attentionExpiries([file])).toContain(admittedSeconds + 30 * 60);
     expect(decisionLine(
       (key, params) => translate("en", key, params),
-      "en",
       file,
       admittedSeconds + 10 * 60,
     )).toBe("message delivery");
@@ -101,7 +102,6 @@ test("a retried message that parks again keeps its attention entry and clock (#1
       .toBe(`${transcriptPath}:delivery:${Math.floor(admittedSeconds)}`);
     expect(decisionLine(
       (key, params) => translate("en", key, params),
-      "en",
       file,
       admittedSeconds + 10 * 60,
     )).toBe("message delivery");

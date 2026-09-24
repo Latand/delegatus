@@ -265,18 +265,21 @@
 .kb .card .pending-line { margin: -2px 0 0; font-size: var(--text-label); color: var(--color-muted); }
 
 /* The card's one status hue is its edge (#2072 §3.4): amber while it owes the
-   operator an answer, red while a member stalled. It takes the colour label's
-   place for as long as that lasts, and runs the card's full height. */
+   operator an answer. It takes the colour label's place for as long as that
+   lasts, and runs the card's full height. */
 .kb .card[data-attention] .label { top: 0; bottom: 0; border-radius: var(--radius-surface) 0 0 var(--radius-surface); }
 .kb .card[data-attention="needs"] .label { background: var(--color-warning); }
-.kb .card[data-attention="stalled"] .label { background: var(--color-danger); }
-/* What is happening now, at the card's foot: who is working, how many
-   conversations, and "needs you" when no lane row says it. */
+/* What is happening now, at the card's foot: why it needs the operator (or
+   who cleared it), who is working, and how many conversations. */
 .kb .card .foot-meta { font-size: var(--text-label); color: var(--color-muted); white-space: nowrap; }
 .kb .card .foot-meta.working { display: inline-flex; align-items: center; gap: 5px; color: var(--color-success); font-weight: 600; }
 .kb .card .foot-meta.working::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .kb .card .foot-meta.needs { display: inline-flex; align-items: center; gap: 5px; color: var(--color-warning); font-weight: 600; }
-.kb .card .foot-meta.needs::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 22%, transparent); }
+.kb .card .foot-meta.needs::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 22%, transparent); }
+.kb .card .foot-meta.needs { min-width: 0; max-width: 100%; }
+.kb .card .foot-meta.needs .clamp { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.kb .card .icon-btn.dismiss { margin-left: -4px; }
+.kb .card .icon-btn.dismiss:hover { color: var(--color-success); }
 
 .kb .card .foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; flex-wrap: wrap; row-gap: 4px; }
 .kb .pill {
@@ -295,6 +298,8 @@
 .kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 .kb .card .add .plus { color: var(--color-accent); font-size: 14px; line-height: 1; }
 .kb .card .add:hover { background: var(--surface-well); color: var(--color-primary); }
+.kb .card .undo { display: inline-flex; align-items: center; height: var(--target, 32px); padding: 0 6px; margin-left: -6px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-accent); }
+.kb .card .undo:hover { background: var(--surface-well); }
 .kb .card .origin-chip { height: 20px; padding: 0 8px; display: inline-flex; align-items: center; border-radius: 999px; border: 1px dashed var(--border-strong); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
 
 /* The project a card belongs to (#1820). Only the cross-project Overview
@@ -835,6 +840,7 @@
   .kb .card .desc, .kb .divider button, .kb .card .edit-hint button, .kb .card .notice button, .kb .card .title-trigger { min-height: 44px; }
   .kb .card .edit { min-height: 44px; }
   .kb .card .edit-hint button, .kb .card .notice button { min-width: 44px; padding: 0 12px; }
+  .kb .card .icon-btn.dismiss, .kb .card .undo { min-width: 44px; min-height: 44px; }
   .kb .card .tools .icon-btn.hide { opacity: 1; }
   .kb .swatches { grid-template-columns: repeat(5, 44px); gap: 4px; }
   .kb .swatch { width: 44px; height: 44px; border-width: 10px; border-color: transparent; background-clip: padding-box; }

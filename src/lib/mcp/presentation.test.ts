@@ -59,6 +59,8 @@ describe("describeMcpCall", () => {
       ["request_attention", { target: { kind: "conversation", path: "/tmp/a.jsonl" }, reason: "The reviewer finished." }, "conversation", "Asking to show a conversation"],
       ["request_attention", { target: { kind: "task", taskId: "task-a" }, intent: "open", reason: "This is blocked." }, "conversation", "Asking to open a task"],
       ["suggest_replies", { replies: [{ label: "yes, do it", text: "Yes." }, { label: "hold", text: "Hold." }] }, "message", "Offering 2 reply drafts"],
+      ["dismiss_attention", { target: { kind: "task", taskId: "task-a" } }, "task", "Clearing needs-you on a task"],
+      ["dismiss_attention", { target: { kind: "pipeline", pipelineId: "pipe-a" }, undo: true }, "pipeline", "Flagging a pipeline again"],
     ] as const;
 
     for (const [tool, args, icon, prefix] of cases) {

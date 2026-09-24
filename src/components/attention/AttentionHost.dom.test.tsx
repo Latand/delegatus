@@ -7,6 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
 import { viewBus, type ViewSlice } from "@/hooks/viewPresenceBus";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { answerAttentionRequest, attentionForDevice, attentionRecordsForSurface, raiseAttentionRequest } from "@/lib/attention/service";
 import { readAttentionFile } from "@/lib/attention/store";
 import { OFFER_TTL_MS, type FocusRect } from "@/lib/attention/types";
@@ -100,6 +101,9 @@ afterEach(async () => {
   arrivalClockCleanup?.();
   arrivalClockCleanup = undefined;
   await settle();
+  /* The process-wide registry is opened on the first test's state directory;
+     each test deletes its own, so the next one must reopen it. */
+  closeAgentRegistryForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });

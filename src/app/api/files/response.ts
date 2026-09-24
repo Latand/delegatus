@@ -6,6 +6,7 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 
 import { listFilesWithProjectCatalog, pinnedPathsFor } from "@/lib/scanner";
+import { overlayAttentionDismissals } from "@/lib/attention/dismissals";
 import { overlayBridgeAsks } from "@/lib/bridge/asks";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { bridgeAsksForSeats } from "@/lib/bridge/service";
@@ -818,6 +819,11 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     }),
   );
   markTiming("files-bridge-asks");
+  /* Needs-you dismissals (docs/design/needs-attention.md §5): each
+     conversation's record on its own entries, which the reason model compares
+     with the reason it would otherwise flag. */
+  overlayAttentionDismissals(projected.files);
+  markTiming("files-attention-dismissals");
   const visibleProjects = [
     ...projected.files.map((file) => file.project),
     ...effectiveProjectCatalog.map((entry) => entry.project),

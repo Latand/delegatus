@@ -16,7 +16,7 @@ import { accountManager } from "@/lib/accounts/manager";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
-const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, terminalFlowStageVerdict, tickPipelines } = engineModule;
+const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
@@ -2176,11 +2176,22 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   expect(stored.runs).toEqual(before.runs);
   expect(h.calls.length).toBe(callsBefore);
 
-  /* A second hide keeps the first instant. */
-  expect((await patchPipeline(created.id, { action: "dismiss" }, h.ports)).pipeline!.dismissedAt).toBe(hiddenAt);
+  expect(stored.dismissedBy).toEqual({ kind: "operator" });
+
+  /* A second dismissal stamps its own instant (docs/design/needs-attention.md
+     §5): a lane that parked again after an earlier one is cleared for the
+     decision it waits on now, so the phone no longer clears it first. */
+  const again = (await patchPipeline(created.id, { action: "dismiss" }, h.ports, { kind: "agent", role: "orchestrator", conversationId: "conversation_seat" })).pipeline!;
+  expect(Date.parse(again.dismissedAt!)).toBeGreaterThan(Date.parse(hiddenAt!));
+  expect(again.dismissedBy).toEqual({ kind: "agent", conversationId: "conversation_seat", role: "orchestrator" });
+
+  /* The dismissal service's own write carries the attribution it derived. */
+  const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports);
+  expect(serviced.pipeline!.dismissedBy).toEqual({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" });
 
   const shown = await patchPipeline(created.id, { action: "undismiss" }, h.ports);
   expect(shown.pipeline!.dismissedAt).toBeNull();
+  expect(shown.pipeline!.dismissedBy).toBeUndefined();
   expect(loadPipelines()[0]!).toMatchObject({ state: before.state, dismissedAt: null });
 
   const closed = await closeAndDrain(created.id, { action: "close" }, h.ports);
@@ -2188,6 +2199,7 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   for (const action of ["dismiss", "undismiss"] as const) {
     expect((await patchPipeline(created.id, { action }, h.ports)).status).toBe(409);
   }
+  expect((await setPipelineDismissal(created.id, true, { kind: "operator" }, h.ports)).status).toBe(409);
 
   savePipelines([]);
   const draft = await createPipelineFromRequest({ task: "A draft", repoDir: "/repo", stages: RUN_STAGES as never, autoStart: false }, h.ports);

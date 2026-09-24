@@ -113,7 +113,7 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
  * learn what it wants, which is the work the queue exists to remove.
  */
 export function AttentionQueueRow({ item, onOpen }: { item: AttentionItem; onOpen: () => void }) {
-  const { t, locale } = useLocale();
+  const { t } = useLocale();
   return (
     <button
       type="button"
@@ -132,9 +132,9 @@ export function AttentionQueueRow({ item, onOpen }: { item: AttentionItem; onOpe
       </span>
       <span
         data-attention-decision
-        className={`w-full truncate text-[11px] ${item.tier === "stalled" ? "text-warning" : "text-muted"}`}
+        className="w-full truncate text-[11px] text-muted"
       >
-        {decisionLine(t, locale, item.file) ?? t("status.stalled")}
+        {decisionLine(t, item.file) ?? t("attention.decisionQuestion")}
       </span>
     </button>
   );

@@ -1,0 +1,650 @@
+{
+  "phase": "after",
+  "assigned": {
+    "tabNeeds": "5",
+    "cards": [
+      {
+        "key": "task:t-owed",
+        "title": "Tell the reviewer the flake is fixed",
+        "needs": true,
+        "edge": true,
+        "badge": "message not delivered",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 175,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-prompt",
+        "title": "Rotate the deploy key on the stage box",
+        "needs": true,
+        "edge": true,
+        "badge": "permission prompt",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 258,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-data",
+        "title": "Mobile data: stop repeated full-board downloads and hidden-tab traffic",
+        "needs": true,
+        "edge": true,
+        "badge": "needs a decision · implement",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 341,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-copilot",
+        "title": "GitHub Copilot as a third engine the Viewer can launch",
+        "needs": true,
+        "edge": true,
+        "badge": "review budget spent · critique",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 448,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-many",
+        "title": "Kanban: say what each pipeline of a task does",
+        "needs": true,
+        "edge": true,
+        "badge": "review budget spent · critique",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 555,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-cleared",
+        "title": "Pick the log retention for the stage box",
+        "needs": false,
+        "edge": false,
+        "badge": null,
+        "state": null,
+        "cleared": "Cleared · orchestrator · 10m",
+        "dismiss": null,
+        "undo": {
+          "x": 324,
+          "y": 738,
+          "width": 54,
+          "height": 44
+        },
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-favicon",
+        "title": "Restore /favicon.ico with the Delegatus emblem",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-kanban",
+        "title": "Phone kanban: a convenient board on mobile, merged with today's phone view",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-long",
+        "title": "Board and phone: one definition of «working» everywhere a count is shown, so the bar, the tabs, the cards, the seat and the switcher never disagree about how many agents are running; today the bar counts open turns, the switcher counts live transcripts, the seat counts its own children and the cards count members whose row state is working or held, and on a busy afternoon the phone showed three different numbers for the same five agents within one screen, which made the operator open each conversation to find out which number was true; pick the row state as the one authority and have every surface read it",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-skeletons",
+        "title": "Skeletons and state transitions on phone and desktop",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-uk",
+        "title": "Перевірити, що мобільна дошка не завантажує весь проєкт при кожному опитуванні",
+        "needs": false,
+        "edge": "colour",
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-upload",
+        "title": "Redesign attachment upload for large files",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-chips",
+        "title": "PR and issue chips on pipelines and task cards",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-seat",
+        "title": "Seat wakes after its own deploy and keeps its mandate",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      }
+    ]
+  },
+  "assignedGeometry": {
+    "smallControls": [],
+    "crossingControls": [],
+    "inkOverlaps": [],
+    "inkOnControls": [],
+    "pinnedFirst": true
+  },
+  "inbox": {
+    "tabNeeds": "1",
+    "cards": [
+      {
+        "key": "task:t-systemd",
+        "title": "Retire the systemd install path",
+        "needs": true,
+        "edge": true,
+        "badge": "a question",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 175,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-attention",
+        "title": "request_attention: the target blinks, intent open opens the conversation (#1696)",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-quota",
+        "title": "Spend quota before its window resets",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-tray",
+        "title": "Hide the Hidden tray when it holds nothing",
+        "needs": false,
+        "edge": "colour",
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "lineage:conversation_kanban-43",
+        "title": "Summarize the week's review findings",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": "main resets 10:42",
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "pipeline:lane-flake",
+        "title": "Nightly: rerun the flake campaign on a quiet machine",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "lineage:conversation_kanban-36",
+        "title": "Audit the release notes for dead anchors",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": "stalled · 37m",
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "lineage:conversation_kanban-37",
+        "title": "Measure the board's memory on a 390 px phone",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": "stalled · 37m 10s",
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "lineage:conversation_kanban-38",
+        "title": "Draft the Copilot engine login flow",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": "stalled · 38m",
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "lineage:conversation_kanban-39",
+        "title": "Rename the MCP key in the setup docs",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": "stalled · 38m 10s",
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "lineage:conversation_running",
+        "title": "Rebuild the board status projection",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      }
+    ]
+  },
+  "dismissed": {
+    "tabNeeds": "4",
+    "cards": [
+      {
+        "key": "task:t-owed",
+        "title": "Tell the reviewer the flake is fixed",
+        "needs": true,
+        "edge": true,
+        "badge": "message not delivered",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 175,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-data",
+        "title": "Mobile data: stop repeated full-board downloads and hidden-tab traffic",
+        "needs": true,
+        "edge": true,
+        "badge": "needs a decision · implement",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 258,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-copilot",
+        "title": "GitHub Copilot as a third engine the Viewer can launch",
+        "needs": true,
+        "edge": true,
+        "badge": "review budget spent · critique",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 365,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-many",
+        "title": "Kanban: say what each pipeline of a task does",
+        "needs": true,
+        "edge": true,
+        "badge": "review budget spent · critique",
+        "state": null,
+        "cleared": null,
+        "dismiss": {
+          "x": 334,
+          "y": 472,
+          "width": 44,
+          "height": 44
+        },
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-cleared",
+        "title": "Pick the log retention for the stage box",
+        "needs": false,
+        "edge": false,
+        "badge": null,
+        "state": null,
+        "cleared": "Cleared · orchestrator · 10m",
+        "dismiss": null,
+        "undo": {
+          "x": 324,
+          "y": 655,
+          "width": 54,
+          "height": 44
+        },
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-favicon",
+        "title": "Restore /favicon.ico with the Delegatus emblem",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-kanban",
+        "title": "Phone kanban: a convenient board on mobile, merged with today's phone view",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-long",
+        "title": "Board and phone: one definition of «working» everywhere a count is shown, so the bar, the tabs, the cards, the seat and the switcher never disagree about how many agents are running; today the bar counts open turns, the switcher counts live transcripts, the seat counts its own children and the cards count members whose row state is working or held, and on a busy afternoon the phone showed three different numbers for the same five agents within one screen, which made the operator open each conversation to find out which number was true; pick the row state as the one authority and have every surface read it",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-prompt",
+        "title": "Rotate the deploy key on the stage box",
+        "needs": false,
+        "edge": false,
+        "badge": null,
+        "state": null,
+        "cleared": "Cleared · you · just now",
+        "dismiss": null,
+        "undo": {
+          "x": 324,
+          "y": 988,
+          "width": 54,
+          "height": 44
+        },
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-skeletons",
+        "title": "Skeletons and state transitions on phone and desktop",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-uk",
+        "title": "Перевірити, що мобільна дошка не завантажує весь проєкт при кожному опитуванні",
+        "needs": false,
+        "edge": "colour",
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-upload",
+        "title": "Redesign attachment upload for large files",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-chips",
+        "title": "PR and issue chips on pipelines and task cards",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      },
+      {
+        "key": "task:t-seat",
+        "title": "Seat wakes after its own deploy and keeps its mandate",
+        "needs": false,
+        "edge": null,
+        "badge": null,
+        "state": null,
+        "cleared": null,
+        "dismiss": null,
+        "undo": null,
+        "controlCrossesCard": false,
+        "controlOnText": false
+      }
+    ]
+  },
+  "dismissals": [
+    {
+      "target": {
+        "kind": "task",
+        "taskId": "t-prompt",
+        "subjects": [
+          {
+            "kind": "conversation",
+            "conversationId": "conversation_kanban-40",
+            "path": "/repo/kanban-40.jsonl",
+            "reasonId": "/repo/kanban-40.jsonl:waiting:1790232946",
+            "reason": "permission"
+          }
+        ]
+      },
+      "undo": false,
+      "surface": "phone"
+    }
+  ],
+  "chat": {
+    "before": {
+      "screen": "chat",
+      "conversation": "conversation_running",
+      "feedScrollTop": 1156,
+      "banner": 1,
+      "badge": "5 need you",
+      "dot": 0,
+      "hash": "#c=conversation_running"
+    },
+    "arrived": {
+      "screen": "chat",
+      "conversation": "conversation_running",
+      "feedScrollTop": 1156,
+      "banner": 1,
+      "badge": "5 need you, a notice from your agents",
+      "dot": 1,
+      "hash": "#c=conversation_running"
+    }
+  },
+  "sheet": {
+    "notices": [
+      "The review of the upload redesign finished with two findings.Redesign attachment upload for large files·orchestrator·40s"
+    ],
+    "queue": [
+      "Tell the reviewer the flake is fixedmessage delivery·41m·opus",
+      "Retire the systemd install pathUnit·9m·Opus 5.5",
+      "Mobile data: stop repeated full-board downloadspipeline · stage 1/2 · implement · failed · 1 finding·41m",
+      "GitHub Copilot as a third engine the Viewer can launchpipeline · stage 2/2 · critique · failed · 2 findings · last review fail on 4be1c07a · current head 9b2e7d4c unreviewed·33m 20s",
+      "Name every pipeline row by its first prompt linepipeline · stage 2/2 · critique · failed · 2 findings · last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed·33m 20s"
+    ],
+    "dotAfterOpen": 0
+  },
+  "failures": []
+}

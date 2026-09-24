@@ -596,3 +596,59 @@ test("a needs_review lane's card needs the operator and says the last review fai
   expect(pipelineProgress(en, summary, (stage) => stage.id))
     .toBe("needs review · last review fail on aaaaaaaa · current head bbbbbbbb unreviewed");
 });
+
+/* docs/design/needs-attention.md §4: a card names why it needs the operator,
+   and what someone cleared, from the same reason model the phone reads. */
+test("a card lists its reasons oldest first and keeps what was cleared, with who cleared it", () => {
+  const asked = (path: string, askedAt: string) => ({ kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 1, paneTarget: null, askedAt }) as never;
+  const questioner = file(301, { pendingQuestion: asked("/fixture/conversation-301.jsonl", "2026-09-14T12:30:00.000Z") });
+  const cleared = file(302, {
+    pendingQuestion: asked("/fixture/conversation-302.jsonl", "2026-09-14T12:00:00.000Z"),
+    attentionDismissal: { at: "2026-09-14T12:10:00.000Z", by: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" } },
+  });
+  const stalled = file(303, { activity: "stalled", proc: "running", mtime: NOW - 400 });
+  const walled = file(304, { activity: "live", proc: "running", rateLimit: { source: "pane", accountId: null, window: null, resetAt: NOW + 900 } });
+  const parked = linkedPipeline("p-parked", [{ state: "failed", startedAt: "2026-09-14T11:00:00.000Z", completedAt: "2026-09-14T11:30:00.000Z" }], {
+    state: "needs_decision",
+    taskIds: ["t-reasons"],
+    cursor: { stageId: "build", state: "needs_decision", input: null, activatedBy: null },
+  } as unknown as Partial<Pipeline>);
+  const files = [questioner, cleared, stalled, walled];
+  const result = model([task("t-reasons", "assigned", files.map((entry) => entry.path))], files, { pipelines: [parked] });
+  const card = result.columns.assigned.cards.find((entry) => entry.task?.id === "t-reasons")!;
+
+  expect(card.needsYou).toBe(true);
+  expect(card.reasons.map((need) => [need.subject, need.kind, need.key])).toEqual([
+    ["pipeline", "lane-decision", "pipeline:p-parked"],
+    ["conversation", "question", "tool-/fixture/conversation-301.jsonl"],
+  ]);
+  expect(card.cleared.map((entry) => [entry.need.key, entry.by.kind])).toEqual([["tool-/fixture/conversation-302.jsonl", "manager"]]);
+  /* A stalled member and a member at a wall keep their words and ask nothing. */
+  const byPath = new Map(card.members.map((member) => [member.file.path, member] as const));
+  expect(byPath.get(stalled.path)).toMatchObject({ state: "stalled", needsYou: false, need: null });
+  expect(byPath.get(walled.path)).toMatchObject({ state: "limit", needsYou: false, need: null });
+  expect(byPath.get(questioner.path)).toMatchObject({ state: "waiting", needsYou: true, need: { kind: "question" } });
+  expect(result.columns.assigned.needsYou).toBe(1);
+});
+
+test("a lane cleared on the phone no longer marks the desktop card, and comes back once it moves", () => {
+  const parkedAt = "2026-09-14T11:30:00.000Z";
+  const lane = (dismissedAt: string | null, completedAt = parkedAt) => linkedPipeline("p-hidden", [{ state: "failed", startedAt: "2026-09-14T11:00:00.000Z", completedAt }], {
+    state: "needs_decision",
+    taskIds: ["t-hidden"],
+    cursor: { stageId: "build", state: "needs_decision", input: null, activatedBy: null },
+    dismissedAt,
+    dismissedBy: dismissedAt ? { kind: "operator", surface: "phone" } : undefined,
+  } as unknown as Partial<Pipeline>);
+  const cardOf = (pipeline: Pipeline) => model([task("t-hidden", "assigned")], [], { pipelines: [pipeline] }).columns.assigned.cards.find((entry) => entry.task?.id === "t-hidden")!;
+
+  expect(cardOf(lane(null)).needsYou).toBe(true);
+  const hidden = cardOf(lane("2026-09-14T11:45:00.000Z"));
+  expect(hidden.needsYou).toBe(false);
+  expect(hidden.reasons).toEqual([]);
+  expect(hidden.cleared.map((entry) => [entry.need.kind, entry.by])).toEqual([["lane-decision", { kind: "operator", surface: "phone" }]]);
+  /* A round ended after the dismissal: a decision nobody cleared. */
+  const moved = cardOf(lane("2026-09-14T11:45:00.000Z", "2026-09-14T12:15:00.000Z"));
+  expect(moved.needsYou).toBe(true);
+  expect(moved.cleared).toEqual([]);
+});

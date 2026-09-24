@@ -265,6 +265,11 @@ export interface AttentionRequestV1 {
    */
   operationKey?: string;
   acceptedVia?: "operator" | "auto-follow";
+  /** `notice`: no desktop could be moved and a phone was open, so the request
+      reaches the phone as a quiet notice and never moves anything there
+      (docs/design/needs-attention.md §6). A desktop that opens before the
+      record ends can still follow it. Absent on every directed handoff. */
+  delivery?: "notice";
   /** One entry per device that has been moved. Viewports are never mirrored;
       what is shared is the target and the acknowledgement. */
   returnPoints: ReturnPoint[];
@@ -279,6 +284,17 @@ export interface AttentionRequestV1 {
   desktopTarget?: DesktopWindowRef;
   /** Bumped on every accepted transition; a stale writer is refused. */
   revision: number;
+}
+
+/** A request as the phone shows it: a row in the ⚠ sheet's «From your
+    agents», never a move (docs/design/needs-attention.md §6). */
+export interface AttentionNotice {
+  id: string;
+  reason: string;
+  target: FocusTarget;
+  contextLabel: string | null;
+  raisedBy: { kind: AttentionRaisedBy["kind"]; role: string | null } | null;
+  createdAt: string;
 }
 
 export interface AttentionFileV1 {

@@ -61,6 +61,11 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     checkpointMirrorForDemotion: async () => (await import("@/lib/suggestions/store")).checkpointReplySuggestionsRollbackMirrorForDemotion(),
   },
   {
+    collection: "attention_dismissals",
+    importAtActivation: async () => (await import("@/lib/attention/dismissals")).importLegacyAttentionDismissals(undefined, { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/attention/dismissals")).checkpointAttentionDismissalsRollbackMirrorForDemotion(),
+  },
+  {
     collection: "seat_tick_settings",
     importAtActivation: async () => (await import("@/lib/monitor/seatTickSettings")).importLegacySeatTickSettings(undefined, { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/monitor/seatTickSettings")).checkpointSeatTickSettingsRollbackMirrorForDemotion(),

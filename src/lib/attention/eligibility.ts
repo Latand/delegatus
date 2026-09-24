@@ -80,3 +80,15 @@ export function attentionCapablePresence(facts: AttentionPresenceFacts): boolean
   if (facts.visibility !== "visible" || facts.freshness !== "active") return false;
   return !mobileLayoutViewport(facts.viewport);
 }
+
+/**
+ * Whether this presence session is a phone the operator is looking at: visible,
+ * active, and drawing the phone layout (a phone, or any window under the
+ * breakpoint). Such a view is never moved; a request that has no desktop to
+ * move reaches it as a quiet notice instead (docs/design/needs-attention.md §6).
+ * The mode does not matter: the notice lives in the bar, on every screen.
+ */
+export function noticeCapablePresence(facts: Omit<AttentionPresenceFacts, "mode">): boolean {
+  if (facts.visibility !== "visible" || facts.freshness !== "active") return false;
+  return facts.device.kind === "mobile" || mobileLayoutViewport(facts.viewport);
+}

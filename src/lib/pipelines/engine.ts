@@ -25,6 +25,7 @@ import { MAX_FLOW_NOTE_LENGTH, closeFlow, createFlowFromRequest, isRecoverableLe
 import { lastAssistantMessage, readFindingsFile } from "@/lib/flows/findings";
 import { loadFlows } from "@/lib/flows/store";
 import type { CreateFlowRequest, Flow, FlowEngine, RoleConfig } from "@/lib/flows/types";
+import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
@@ -7558,15 +7559,8 @@ export async function patchPipeline(
         summary: `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}`,
       });
     } else if (req.action === "dismiss" || req.action === "undismiss") {
-      /* #1671: the phone board's Hide. It only says whether the lane stands in
-         the board's queue; nothing about the lane itself moves, so no host is
-         touched and the controller is not woken. A draft is never on the board
-         and a closed lane is gone from it already, so neither has a row to
-         hide or bring back. */
-      if (pipeline.state === "draft" || pipeline.state === "closed") {
-        return { error: `a ${pipeline.state} pipeline has no board row to ${req.action === "dismiss" ? "hide" : "show"}`, status: 409 };
-      }
-      pipeline.dismissedAt = req.action === "dismiss" ? pipeline.dismissedAt ?? ports.now() : null;
+      const refused = applyPipelineDismissal(pipeline, req.action === "dismiss", dismissedByActor(actor), ports.now());
+      if (refused) return refused;
     } else if (req.action === "delete") {
       if (pipeline.closeTeardown) {
         if (pipeline.closeReport?.status !== "settled" || pipeline.closeReport.stillRunning.length || pipeline.closeReport.unconfirmed.length) {
@@ -7656,6 +7650,51 @@ export async function patchPipeline(
   /* The lock is gone: ask the sweep to read what the new links name. */
   for (const repository of linkRepositories) nudgeForgeSweep(repository);
   return patched;
+}
+
+/**
+ * Stamp or clear a lane's dismissal (#1671, docs/design/needs-attention.md §5).
+ *
+ * It only says whether the lane stands in the board's queue; nothing about the
+ * lane itself moves, so no host is touched and the controller is not woken. A
+ * dismissal stamps NOW every time, so a lane that parked again after an
+ * earlier one is cleared for the decision it waits on today, and it records
+ * who cleared it. A draft is never on the board and a closed lane is gone from
+ * it already, so neither has a row to clear or bring back.
+ */
+function applyPipelineDismissal(pipeline: Pipeline, dismiss: boolean, by: DismissedBy, now: string): PipelinePatchResult | null {
+  if (pipeline.state === "draft" || pipeline.state === "closed") {
+    return { error: `a ${pipeline.state} pipeline has no board row to ${dismiss ? "hide" : "show"}`, status: 409 };
+  }
+  if (dismiss) {
+    pipeline.dismissedAt = now;
+    pipeline.dismissedBy = by;
+  } else {
+    pipeline.dismissedAt = null;
+    delete pipeline.dismissedBy;
+  }
+  return null;
+}
+
+/** The attribution a `dismiss` sent through `pipeline_action` or the pipeline
+    route carries: the operator, or the server-attributed agent. */
+function dismissedByActor(actor: PauseResumeActor | null): DismissedBy {
+  if (!actor || actor.kind === "operator") return { kind: "operator" };
+  return { kind: "agent", conversationId: actor.conversationId, role: actor.role };
+}
+
+/** The dismissal service's write (`@/lib/attention/dismissals`): the same
+    stamp as the `dismiss`/`undismiss` actions, with the attribution the
+    service derived. */
+export async function setPipelineDismissal(id: string, dismiss: boolean, by: DismissedBy, ports: PipelinePorts = defaultPipelinePorts()): Promise<PipelinePatchResult> {
+  return withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
+    const pipeline = pipelines.find((item) => item.id === id);
+    if (!pipeline) return { error: "pipeline not found", status: 404 };
+    const refused = applyPipelineDismissal(pipeline, dismiss, by, ports.now());
+    if (refused) return refused;
+    persist();
+    return { pipeline };
+  });
 }
 
 /** A run attempt whose own turn is under way, so its conversation can still

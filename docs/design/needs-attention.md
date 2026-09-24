@@ -157,21 +157,30 @@ There is still one authority per subject, and it now says why.
   dismissed them and when. The phone's `PhoneNeed` (`phoneKanbanModel.ts:43`)
   becomes `card.reasons[0]` read through the attention rank. It no longer
   re-derives anything.
-- One label function, `needLabel(t, reason, role)`, is shared by the desktop
-  foot, the phone badge and the island rows. It uses the existing i18n keys
-  where they exist (`attention.decisionPlan`, `attention.decisionPermission`,
-  `attention.decisionDelivery`, `status.awaitingDecision`) and adds en and uk
-  keys for the two lane reasons and "Cleared by ‹who›".
+- One label function, `needLabel(t, need)` (`src/components/attention/decision.ts`),
+  is shared by the desktop foot, a member tile's title and the phone's lane
+  chip. A conversation's reason carries its role when the evidence names one,
+  and a lane's carries the stage it stopped on. It reuses the badge words
+  where they exist (`mobile2.board.badgeDecision`, `badgePlan`, `badgeQuestion`,
+  `attention.decisionPermission`) and adds en and uk keys under `needs.*` for
+  the owed message, the two lane reasons and "Cleared · ‹who› · ‹age›". The
+  island rows and the toast keep `decisionLine`, which now reads the reason's
+  kind.
 
 **On the card.** Desktop: the foot's bare "needs you" becomes the first
 reason's label, with "+N" when there are more, and a Dismiss control (✓, 28 px,
 labelled "Dismiss: stop flagging this card until something new"). A member
 tile's `needs` class stays, and the tile's title attribute names its reason.
-Phone: the badge already names conversation reasons, so a lane's chip becomes
-"Decision · ‹stage›", and the badge line gets a 44 × 44 Dismiss button at its
-end. Both surfaces show a cleared card with a muted "Cleared · ‹who› · 2m"
-line, which is also the Undo. It stays for as long as the dismissed reason is
-live. That line is how the operator sees that an agent cleared something.
+Phone: the badge already names conversation reasons (a permission prompt now
+reads "permission prompt" rather than "a question"), so a lane's chip becomes
+"needs a decision · ‹stage›", and the card gets a 44 × 44 Dismiss at the end
+of its badge line. The card's own button and the Dismiss sit side by side in
+one frame, so neither covers the other (#699). Both surfaces show a cleared
+card with a muted "Cleared · ‹who› · 2m" line and an Undo beside it. It stays
+for as long as the dismissed reason is live. That line is how the operator
+sees that an agent cleared something. A loose phone row that is stalled or at
+its limit keeps its phrase ("stalled · 37m", "main resets 16:40") in its tone,
+without the edge or the badge.
 
 ## 5. Dismissal
 
@@ -191,8 +200,9 @@ Each subject kind keeps the record it already has, and one module owns both,
   (`src/lib/suggestions/store.ts`, a `LegacyDocumentStore`). Its legacy file is
   `attention-dismissals.json`, used only as the rollback mirror. It is
   registered in `src/lib/state/legacyCollections.ts` beside the suggestions
-  entry. It holds **one record per durable conversation id**, and a new
-  dismissal replaces the old one:
+  entry. It holds **one record per durable conversation id** (or per
+  transcript path, for a terminal session the registry never adopted), and a
+  new dismissal replaces the old one:
 
   ```ts
   interface AttentionDismissalV1 {
@@ -204,15 +214,16 @@ Each subject kind keeps the record it already has, and one module owns both,
     operationKey?: string;   // MCP idempotency
   }
   type DismissedBy =
-    | { kind: "operator"; surface: "desktop" | "phone" }
+    | { kind: "operator"; surface?: "desktop" | "phone" }
     | { kind: "manager" | "agent" | "gateway"; conversationId: string | null; role: string | null };
   ```
 
   `DismissedBy` for an agent is the server-derived `AttentionRaisedBy`
   (`src/lib/attention/types.ts`, "AttentionRaisedBy"), so the caller cannot
-  assert it. Records older than 30 days, or whose conversation the registry no
-  longer knows, are pruned on write, and the collection is capped at the
-  suggestions store's conversation capacity.
+  assert it. Records older than 30 days are pruned on write, and the collection
+  is capped at 2 000 conversations, oldest dismissal first. A record whose
+  conversation the registry forgot is left to those two bounds: it can only
+  cover reasons that started before it, so it costs nothing while it waits.
 - **Pipeline.** The existing `pipeline.dismissedAt` (#1671,
   `src/lib/pipelines/types.ts:751`) stays the storage, because the phone queue,
   the group hide and the seat monitor (`src/lib/monitor/seatTickSources.ts:586,635,742`)
@@ -232,6 +243,14 @@ Each subject kind keeps the record it already has, and one module owns both,
 projection key at `src/app/api/files/route.ts:183-192`, so a dismissal
 invalidates the cached payload the way a task or pipeline write does. The
 pipeline payload already carries `dismissedAt`.
+
+On the click's side, `src/components/attention/dismissalOverlay.ts` layers a
+dismissal over the polled rows at the one place the Viewer reads them, so the
+card, the phone's ⚠ count and the queue stop flagging it in the same frame. A
+mark stamped on the device covers what the card drew even when the device's
+clock runs behind the one that dated the reason. The server's own instant
+replaces it when the request answers, and the layer retires once the poll
+carries it, or after 30 seconds. A refusal takes the layer off and says why.
 
 ### What brings an item back
 
@@ -260,9 +279,14 @@ something newer", and it is kept in one place:
   A task expands to `subjects` when the caller names them. The card sends
   exactly the members and lanes it drew as needing the operator, which is "what
   the operator saw", the rule the group hide uses. Otherwise it expands to the
-  task's live assignments plus the pipelines whose `taskIds` include it. The
-  answer is `{ dismissed: Subject[], alreadyClear: Subject[], at, by }`. A
-  subject with nothing to dismiss goes in `alreadyClear` and is not an error.
+  task's live assignments plus the pipelines whose `taskIds` include it. A card
+  no task owns sends `{ kind: "subjects", subjects }`, which only the
+  operator's route accepts. The answer is `{ dismissed: Subject[],
+  alreadyClear: Subject[], at, by }`. A subject with nothing to dismiss (a lane
+  that asks nothing or is already cleared, an undo of nothing) goes in
+  `alreadyClear` and is not an error. A conversation is always recorded: the
+  record says what was seen up to now and cannot hide anything that starts
+  later.
 - **Route.** `POST /api/attention/dismissals`, with body
   `{ target, undo? }`, is the operator's (`by: { kind: "operator", surface }`).
   Both cards call it, and so does the phone's swipe action (now "Dismiss" on
@@ -289,8 +313,11 @@ something newer", and it is kept in one place:
   clear its own question off the operator's board. The call is idempotent by
   `clientRequestId`: the record carries the operation key, and a replay answers
   the first result. `pipeline_action`'s existing `dismiss`/`undismiss` calls the
-  same service, so its write is attributed too. It stays as an alias because
-  callers already use it.
+  same service behind the same gate, so its write is attributed too and a
+  worker can no longer clear a lane off the board through it. It stays as an
+  alias because callers already use it. The pipeline route's `dismiss` and
+  `undismiss` (the phone's pipeline screen) go through the same engine stamp
+  and are attributed to the operator.
 
   I chose a new tool over a field on an existing one because each existing
   tool is scoped to one subject kind (`conversation_action`, `pipeline_action`,
@@ -373,27 +400,41 @@ The phone never posts to the request, so a desktop can still follow it.
   no longer marks the desktop card. `reasons` and `cleared` are populated.
   Stalled and limit rows are in `working`.
 - `src/lib/attention/dismissals.test.ts`: replace, prune, undo, attribution,
-  the pipeline stamp, and the task expansion with and without `subjects`.
-- The MCP binding test beside the `request_attention` cases: a worker is
-  refused with nothing written, the seat and root are admitted, a replay by
-  `clientRequestId` gives one record, and `alreadyClear` is returned rather
-  than an error.
-- `src/components/kanban/KanbanCard` DOM test: one click on Dismiss posts the
-  card's drawn subjects, and the card shows "Cleared · …" with Undo.
-- `src/components/attention/AttentionHost.dom.test.tsx` and the
-  `MobileAttentionSheet` DOM test: a notice on the phone layout, delivered while
-  a conversation screen is open, leaves the nav stack's top screen and the
-  scroll position unchanged, adds no `[data-mobile2-banner]`, lights the badge
-  dot, and a tap in the sheet opens the target.
-- `src/lib/attention/service.test.ts`: only a phone gives a notice record and
-  no wait. No view at all is still `NO_ACTIVE_VIEW`.
+  the pipeline stamp, the task expansion with and without `subjects`, target
+  validation, and the `/api/files` projection of the record.
+- `src/lib/pipelines/engine.test.ts`: a second `dismiss` stamps its own
+  instant and records who made it.
+- `src/lib/mcp/dismissAttention.test.ts`, beside the `request_attention`
+  cases: a worker is refused with nothing written, the seat and root are
+  admitted, a seat of another project is refused, a replay by
+  `clientRequestId` gives one record, `alreadyClear` is returned rather than
+  an error, and `pipeline_action` dismiss is the same write behind the same
+  gate.
+- `src/components/kanban/KanbanDismiss.dom.test.tsx`: the foot names the
+  reasons, one click on Dismiss posts the card's drawn subjects, the card
+  shows "Cleared · …" with Undo at once, Undo flags it again, a newer question
+  comes back, and a refused dismissal puts the flag back.
+- `src/components/attention/dismissalOverlay.test.ts`: the click's layer, its
+  clock-skew guard, the server's instant, undo and its bound.
+- `src/components/attention/AttentionHost.phoneNotice.dom.test.tsx`: a notice
+  on the phone layout, delivered while a conversation screen is open, leaves
+  the nav stack's top screen and the scroll position unchanged, adds no
+  `[data-mobile2-banner]`, lights the badge dot, the sheet lists it and puts
+  the dot out, a tap opens the target, and × clears it on this phone.
+- `src/lib/attention/service.test.ts`, `eligibility.test.ts` and
+  `src/lib/mcp/requestAttention*.test.ts`: only a phone gives a notice record
+  and no wait. No view at all, or a hidden phone, is still `NO_ACTIVE_VIEW`.
 
-**Renders.** A new `describe` block in the existing phone driver,
+**Renders.** A new case in the existing phone driver,
 `src/components/mobile/issue1671Evidence.browser.test.tsx` (gated by
-`LLV_SWIPE_BROWSER_TEST=1`), at 390 px from a seeded home. It renders a card for
-each reason, a cleared card, the ⚠ sheet with a notice, and a chat screen with
-a notice arriving. Before and after PNGs go to
-`~/Pictures/delegatus-review/needs-attention/`. No new driver is written.
+`LLV_SWIPE_BROWSER_TEST=1`), over the fixture's `?needs=1` scene at 390 × 844
+from a seeded home. It renders a card for each reason, a cleared card, the
+loose stalled and walled rows, a Dismiss, the ⚠ sheet with a notice, and a
+chat screen with a notice arriving. `LLV_NEEDS_PHASE=before` renders the same
+scene on a checkout without the change and gates nothing, so the two phases
+are one scene's before and after. PNGs go to
+`~/Pictures/delegatus-review/needs-attention/`, and the after readings to
+`evidence/needs-attention/phone.json`. No new driver is written.
 
 **Gates.** `tsc`, the files above one path at a time under an isolated
 `LLV_STATE_DIR`/`XDG_CONFIG_HOME`, `bun run build` with an isolated config root,
