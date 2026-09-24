@@ -90,6 +90,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
   if (directOperatorActivityAuthority(req).ok) {
     recordOperatorRequest(req, { kind: "task", idempotencyKey: `task-create:${result.task.id}`, project: result.task.project });
   }
-  /* An icon that names no lucide icon was clamped to none, and says so (#2102). */
+  /* An icon that names no lucide icon, or a colour that is no task colour, was
+     clamped to none, and says so (#2102). */
   return NextResponse.json({ ok: true, task: result.task, ...(result.notes ? { notes: result.notes } : {}) });
 }

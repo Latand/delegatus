@@ -5,6 +5,7 @@ import { taskRevision } from "./revision";
 import { isoNow } from "./helpers";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { admissionSnapshot } from "./groupHide";
+import { readTaskColorInput } from "./colorRule";
 import { readTaskIconInput } from "./taskIcon";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { applyLineEdits, LINE_EDIT_KEYS, type LineEdits } from "@/lib/lineEdits";
@@ -36,7 +37,7 @@ export const RECENT_CREATES_CAP = 100;
 export type TaskRefusal = { ok: false; error: string; status: number; code?: string; field?: string };
 
 export type TaskCommandResult =
-  /* `notes` says what a write clamped instead of refusing (an unknown icon). */
+  /* `notes` says what a write clamped instead of refusing (an unknown icon or colour). */
   | { ok: true; tasks: BoardTask[]; task: BoardTask; notes?: string[] }
   | TaskRefusal;
 
@@ -71,6 +72,9 @@ export interface CreateTaskInput {
   /** A lucide icon name (#2102), read by `readTaskIconInput`: one that names
       no icon creates the task without one and adds a note to the answer. */
   icon?: unknown;
+  /** A colour label, read by `readTaskColorInput`: one that is no task colour
+      creates the task without one and adds a note to the answer. */
+  color?: unknown;
 }
 
 export interface PatchTaskInput {
@@ -341,6 +345,7 @@ export function createTask(
   const source = normalizeSource(input.source);
   if (source === null) return { ok: false, error: "invalid task source", status: 400 };
   const icon = Object.hasOwn(input, "icon") ? readTaskIconInput(input.icon) : { kind: "clear" as const };
+  const color = readTaskColorInput(input.color);
 
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
@@ -366,6 +371,7 @@ export function createTask(
     ...(source ? { source } : {}),
     ...(board ? { board } : {}),
     ...(icon.kind === "set" ? { icon: icon.icon } : {}),
+    ...(color.kind === "set" ? { color: color.color } : {}),
     assignments: [],
     createdAt: now,
     updatedAt: now,
@@ -373,7 +379,8 @@ export function createTask(
   const nextRecent = clientRequestId
     ? [...recentCreates.filter((entry) => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId: id }].slice(-RECENT_CREATES_CAP)
     : recentCreates;
-  return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(icon.kind === "clamped" ? { notes: [icon.note] } : {}) };
+  const notes = [icon, color].flatMap((field) => field.kind === "clamped" ? [field.note] : []);
+  return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(notes.length ? { notes } : {}) };
 }
 
 /** Presentation of a task, never work on it: `updatedAt` stays (see below). */

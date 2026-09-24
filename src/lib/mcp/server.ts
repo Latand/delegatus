@@ -30,6 +30,7 @@ import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, STAGE_FINDING_SEVERITIE
 import { procBackend } from "@/lib/proc";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
+import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { TASK_COLORS } from "@/lib/tasks/types";
 import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
 import {
@@ -2942,7 +2943,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Create a durable board task.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
-    "Set `icon` to the lucide icon name that says what the task is about (bug, smartphone, rocket, search-check), so the card reads at a glance.",
+    "Pass `icon` (a lucide icon name) and `color` on every task you create, both picked by the rule below, so the card reads at a glance.",
+    renderTaskColorRule(),
   ].join(" "),
   update_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
@@ -2950,7 +2952,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
     "`refine` writes only the human part, as it always has.",
     "To change one line of `details`, send `replaceLine`, `removeLine` or `appendLine` instead of the whole field; the answer carries detailsLength and the revision, never the field.",
-    "`icon` sets the card's lucide icon; give one to a task that has none.",
+    "`icon` and `color` set the card's lucide icon and colour; give both to a task you touch that lacks them, picked by the colour and icon rule in create_task's description.",
   ].join(" "),
   create_pipeline: [
     "Create a Delegatus pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
@@ -3288,6 +3290,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     /* Unknown, so the command clamps what the schema would refuse (#2102). */
     icon: z.unknown().optional()
       .describe("A lucide icon name for the card (#2102), kebab-case: bug, smartphone, rocket, search-check, shield. Bug and lucide:bug mean the same. A name lucide does not have, or a value that is no name, is stored as no icon and the answer carries a note."),
+    /* Unknown too, so an unknown colour is clamped with a note like an icon. */
+    color: z.unknown().optional()
+      .describe(`Colour label for the card: none, ${TASK_COLORS.join(", ")}, picked by the rule in this tool's description. A value that is no colour is stored as no colour and the answer carries a note.`),
   }).passthrough(),
   update_task: z.object({
     clientRequestId: clientRequestIdSchema,

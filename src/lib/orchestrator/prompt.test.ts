@@ -9,6 +9,7 @@ import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import type { RegistryRoleDefinitions, RoleDefinition } from "@/lib/roles/types";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
 
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
@@ -71,8 +72,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 23, and a v22 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(23);
+test("the default mandate is at version 24, and a v23 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(24);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -81,9 +82,10 @@ test("the default mandate is at version 23, and a v22 seat reads as stale", () =
      section. v20 (#1880) points "role per the role table" at the table
      delivery renders. v21 (#2030) carries the seat tick contract. v22 names the
      product Delegatus and says its MCP key stays `viewer`. v23 keeps work
-     moving and removes tool-schema duplication from the delivered text. */
-  expect(orchestratorMandateStale(22)).toBe(true);
-  expect(orchestratorMandateStale(23)).toBe(false);
+     moving and removes tool-schema duplication from the delivered text. v24
+     gives every new task an icon and a colour by one rule. */
+  expect(orchestratorMandateStale(23)).toBe(true);
+  expect(orchestratorMandateStale(24)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("You are Delegatus's built-in Manager");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("registered under the key `viewer`");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("the viewer's built-in Manager");
@@ -105,6 +107,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   21: "99305652476c390cccbe283e49771f6abe408cb6ff8bdd14ed6fb4394dd7704c",
   22: "6e5ca84fd3997ce92d85d2ae1602d909b1786fa3340312539021e31d91dec74a",
   23: "4853170b7f7a47ad6e219e25276b2d2bc3a9baad55964b7b078f20735ea02cae",
+  24: "3053cebbd39a69790a168102612399f4bb971b95893b1c001cf41197c9452109",
 };
 
 test("any edit to the default mandate text moves its version (#2030)", () => {
@@ -368,6 +371,19 @@ test("no retired task-binding claim survives in the ownership directive", () => 
   /* The task-side proof is `pipelineIds`; a manager told to look for an
      assignment reads a successful repair as a failed one. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("get_task and confirm the launch is recorded on it");
+});
+
+/* The task-creation section carries the colour and icon rule as the rule
+   module renders it, so the mandate cannot teach a rule create_task does not. */
+test("the task-creation section tells the manager to pass icon and color by the one rule", () => {
+  const section = ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.slice(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.indexOf("NAME AND DESCRIBE IT AT CREATION."));
+  expect(section).toContain("Pass icon and color on every create_task");
+  expect(section).toContain("when a task you touch has no colour, give it one with update_task");
+  expect(section).toContain(renderTaskColorRule());
+  for (const { color, icons } of TASK_COLOR_RULE) {
+    expect(section).toContain(`${color} = `);
+    for (const icon of icons) expect(section).toContain(icon);
+  }
 });
 
 /* Delivery, on exactly the terms the clock handover established: the seats that
