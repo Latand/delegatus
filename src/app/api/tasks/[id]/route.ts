@@ -20,8 +20,9 @@ type TaskRouteContext = {
 };
 
 /** What a line edit to `details` answers (#1845): the task's new revision and
-    the length of the field, never the field, which the caller did not send. */
-type LineEditAnswer = { ok: true; taskId: string; revision: string; detailsLength: number; updatedAt: string };
+    the length of the field, never the field, which the caller did not send.
+    Clamp notes and resolved links still travel, as they do on any other edit. */
+type LineEditAnswer = { ok: true; taskId: string; revision: string; detailsLength: number; updatedAt: string; workLinks?: ResolvedWorkLinks; notes?: string[] };
 
 export async function PATCH(
   req: NextRequest,
@@ -52,12 +53,13 @@ export async function PATCH(
       { status: result.status },
     );
   }
-  if (LINE_EDIT_KEYS.some((key) => Object.hasOwn(body, key))) {
-    return NextResponse.json({ ok: true, taskId: result.task.id, revision: taskRevision(result.task), detailsLength: result.task.details?.length ?? 0, updatedAt: result.task.updatedAt });
-  }
   /* #2059: the card redraws its links from this answer, not the next poll. */
   const links = Object.hasOwn(body, "attachLinks") || Object.hasOwn(body, "detachLinks") ? taskWorkLinks(result.task, loadPipelines()) : null;
-  return NextResponse.json({ ok: true, task: result.task, ...(links ? { workLinks: links } : {}), ...(result.notes ? { notes: result.notes } : {}) });
+  const extras = { ...(links ? { workLinks: links } : {}), ...(result.notes ? { notes: result.notes } : {}) };
+  if (LINE_EDIT_KEYS.some((key) => Object.hasOwn(body, key))) {
+    return NextResponse.json({ ok: true, taskId: result.task.id, revision: taskRevision(result.task), detailsLength: result.task.details?.length ?? 0, updatedAt: result.task.updatedAt, ...extras });
+  }
+  return NextResponse.json({ ok: true, task: result.task, ...extras });
 }
 
 export async function DELETE(_req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true } | ApiError>> {

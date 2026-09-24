@@ -217,6 +217,20 @@ test("the HTTP PATCH takes the same line edits and answers the revision and deta
   expect(stored(id).details).toBe(expected);
 });
 
+test("the HTTP line edit still reports what it clamped beside it, and still never echoes the field", async () => {
+  const created = await POST(request("http://localhost/api/tasks", "POST", { project: "line-edits-http", text: HUMAN, details: "a\nb", placement: "unplaced" }));
+  const id = ((await created.json()) as { task: { id: string } }).task.id;
+
+  const edited = await PATCH(request(`http://localhost/api/tasks/${id}`, "PATCH", { appendLine: "c", icon: "no-such-icon-abc" }), { params: Promise.resolve({ id }) });
+  expect(edited.status).toBe(200);
+  const body = await edited.json() as Record<string, unknown>;
+  expect(stored(id).details).toBe("a\nb\nc");
+  expect(body).toMatchObject({ ok: true, taskId: id, revision: taskRevision(stored(id)), detailsLength: 5 });
+  expect(body.notes).toEqual([expect.stringContaining("no-such-icon-abc")]);
+  expect(body).not.toHaveProperty("task");
+  expect(body).not.toHaveProperty("details");
+});
+
 test("GET /api/tasks honours project and status and refuses a parameter it does not read", async () => {
   const make = async (project: string, text: string) => {
     const created = await POST(request("http://localhost/api/tasks", "POST", { project, text, placement: "unplaced" }));
