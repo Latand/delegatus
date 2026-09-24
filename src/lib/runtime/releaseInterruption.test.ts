@@ -10,6 +10,7 @@ import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { completeViewerReleaseDemotion } from "@/lib/viewerInstrumentation";
+import { defaultPipelinePorts } from "@/lib/pipelines/engine";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
 import type { RuntimeHostClient } from "./client";
@@ -79,6 +80,9 @@ afterEach(async () => {
 function journalClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
     snapshot: async () => journal.snapshot(),
+    /* The host answers `session-read` from its journal; delivery reads the
+       session through it before it enqueues a continuation. */
+    readSession: async (identity) => journal.readSession(identity),
     append: async (event) => journal.append(event),
     command: async (command) => journal.executeOperation(command),
     operationStatus: async (operationId, options) => options?.currentRetryLeaf
@@ -1001,4 +1005,41 @@ test("a seat that names an alias of the cut conversation is recorded on the obli
   });
   expect(obligationsFor(cut.registryFile).map((obligation) => obligation.seat))
     .toEqual([{ project: "seat-aliased", seatEpoch: 5 }]);
+});
+
+test("the pipeline engine reads a continuation the successor submitted as arrived once its reservation delivered (#1835 review)", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("codex", cutSessionId(21), deadEngine(2_000_001_121));
+    await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_121));
+    const ledger = createFakeDeliveryLedger();
+    const boot = await successorBoot(cut.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    expect(continuationsIn(ledger)).toHaveLength(1);
+
+    /* The store still reads `submitted`: the queue answered on admission, and
+       only a later startup pass records the arrival. */
+    const [obligation] = obligationsFor(cut.registryFile);
+    expect(obligation?.state).toBe("submitted");
+    const registry = new AgentRegistry(cut.registryFile);
+    const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)
+      .find((delivery) => delivery.clientMessageId === obligation!.id);
+    expect(reservation).toMatchObject({ state: "delivered" });
+    expect(reservation!.deliveredAt).not.toBeNull();
+
+    /* What the stage tick reads: arrived, at the reservation's delivery. */
+    setAgentRegistryForTests(registry);
+    try {
+      expect(defaultPipelinePorts().conversationInterruption!(cut.conversationId)).toEqual({
+        state: "delivered",
+        recordedAt: obligation!.recordedAt,
+        resolvedAt: reservation!.deliveredAt,
+      });
+    } finally {
+      setAgentRegistryForTests(null);
+    }
+  } finally {
+    journal.close();
+  }
 });

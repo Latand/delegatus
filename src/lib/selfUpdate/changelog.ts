@@ -1,5 +1,6 @@
 /* Keep a Changelog parsing and the delta between two revisions of
    CHANGELOG.md (#2007). Pure: no file or git access here. */
+import { linkDefinitions, resolveReferences } from "./changelogMarkup";
 import type { DeltaSummary } from "./types";
 
 export interface ChangelogSection { type: string; items: string[] }
@@ -11,7 +12,6 @@ const VERSION_HEADING = /^##\s+\[([^\]]+)\]/;
 const TYPE_HEADING = /^###\s+(.+?)\s*$/;
 const BULLET = /^[-*]\s+(.*)$/;
 export const ITEMS_PER_TYPE = 8;
-export const ITEM_CHARS = 160;
 
 export function parseChangelog(text: string): ChangelogVersion[] {
   const versions: ChangelogVersion[] = [];
@@ -62,13 +62,18 @@ function isUnreleased(heading: string): boolean {
 }
 
 /** Every version heading present at the new revision and absent at the old
-    one, whole, plus the Unreleased items the old revision did not have. */
+    one, whole, plus the Unreleased items the old revision did not have. An
+    entry's reference-style links (`[#2096]`) are rewritten as inline links
+    from the new revision's own definitions, so each entry carries its
+    targets. */
 export function changelogDelta(oldText: string | null, newText: string | null): ChangelogDelta {
   const before = parseChangelog(oldText ?? "");
   const after = parseChangelog(newText ?? "");
   const known = new Set(before.map((version) => version.heading));
+  const definitions = linkDefinitions(newText ?? "");
   const entries: ChangelogEntry[] = [];
   const headings: string[] = [];
+  const add = (type: string, text: string) => entries.push({ type, text: resolveReferences(text, definitions) });
 
   const oldUnreleased = new Set(
     before.filter((version) => isUnreleased(version.heading))
@@ -76,32 +81,17 @@ export function changelogDelta(oldText: string | null, newText: string | null): 
   );
   for (const version of after.filter((candidate) => isUnreleased(candidate.heading))) {
     for (const section of version.sections) {
-      for (const text of section.items) if (!oldUnreleased.has(text)) entries.push({ type: section.type, text });
+      for (const text of section.items) if (!oldUnreleased.has(text)) add(section.type, text);
     }
   }
   for (const version of after) {
     if (isUnreleased(version.heading) || known.has(version.heading)) continue;
     headings.push(version.heading);
     for (const section of version.sections) {
-      for (const text of section.items) entries.push({ type: section.type, text });
+      for (const text of section.items) add(section.type, text);
     }
   }
   return { headings, entries };
-}
-
-/** The first sentence, kept whole when it fits. A longer one loses its
-    parenthetical asides first, then ends at the last clause boundary (or
-    word) that fits, so the summary never stops mid-word or mid-name. */
-export function firstSentence(text: string): string {
-  const match = /^(.+?[.!?])(?=\s+[A-Z(`"]|$)/.exec(text);
-  let sentence = (match ? match[1]! : text).trim();
-  if (sentence.length <= ITEM_CHARS) return sentence;
-  sentence = sentence.replace(/\s*\([^()]*\)/g, "").replace(/\s+([,.;:])/g, "$1");
-  if (sentence.length <= ITEM_CHARS) return sentence;
-  const room = sentence.slice(0, ITEM_CHARS);
-  const clause = Math.max(...[", ", "; ", ": ", " — "].map((mark) => room.lastIndexOf(mark)));
-  const end = clause >= ITEM_CHARS / 2 ? clause : room.lastIndexOf(" ");
-  return `${sentence.slice(0, end > 0 ? end : ITEM_CHARS - 1).replace(/[\s,;:—]+$/, "")}…`;
 }
 
 export function summarizeDelta(delta: ChangelogDelta, commitCount: number): DeltaSummary {
@@ -117,7 +107,9 @@ export function summarizeDelta(delta: ChangelogDelta, commitCount: number): Delt
     counts: [...byType].map(([type, items]) => ({ type, count: items.length })),
     groups: [...byType].map(([type, items]) => ({
       type,
-      items: items.slice(0, ITEMS_PER_TYPE).map(firstSentence),
+      /* Whole: the surface shows each item's lead and expands the rest
+         (`splitItem`), which a cut made here could only do mid-markup. */
+      items: items.slice(0, ITEMS_PER_TYPE),
       more: Math.max(0, items.length - ITEMS_PER_TYPE),
     })),
   };

@@ -30,6 +30,7 @@ const { loadPipelines, savePipelines, pipelineIdentity, pipelineRevision } = awa
 const { durableStageTurnEvidence } = await import("./durableEvidence");
 const { edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed } = await import("./failEdgeBudget");
 const { saveTasks } = await import("@/lib/tasks/store");
+const { interruptionObligationDirectory, interruptionObligationStore } = await import("@/lib/runtime/interruptionObligations");
 type PipelinePorts = import("./engine").PipelinePorts;
 type Pipeline = import("./types").Pipeline;
 type PipelineStageStopResult = import("./engine").PipelineStageStopResult;
@@ -3712,6 +3713,315 @@ test("a dead structured host past grace fails through the stage fail edge (#973)
     input: "historical attempt completed without a valid final JSON verdict",
     activatedBy: { stageId: "build", attempt: 1, edge: "fail" },
   });
+});
+
+const HISTORICAL_VERDICT_MISS = "historical attempt completed without a valid final JSON verdict";
+const DEPLOY_CUT_HOLD = "a Viewer deployment cut this stage's turn; the stage stays open for the continuation the successor owes it";
+const READ_ONLY_RERUN = "the stage host was lost before it reported a verdict; the read-only stage runs again on the same head";
+
+/**
+ * The interruption obligations a Viewer release records (#1835), read by the
+ * engine through its production port: an isolated registry is seated, the
+ * obligation goes into that registry's own store, and every read builds the
+ * default ports afresh so a later update is what the next tick sees. The
+ * harness clock is moved to the present first, because the store retires
+ * resolved records by their real age.
+ */
+function deployCutObligations(h: ReturnType<typeof harness>, name: string) {
+  h.advanceWallClock(Date.now());
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `${name}-agent-registry.json`));
+  setAgentRegistryForTests(registry);
+  h.ports.conversationInterruption = (conversationId) => defaultPipelinePorts().conversationInterruption!(conversationId);
+  const store = interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  const record = (conversationId: string, recordedAt: string) => store.record({
+    conversationId: conversationId as `conversation_${string}`,
+    engine: "codex",
+    hostKey: `codex:${name}`,
+    path: "/codex/stage-1.jsonl",
+    owner: { pid: 4242, startIdentity: `${name}-owner` },
+    claimEpoch: 1,
+    turnRef: `${name}-turn`,
+    boundary: `viewer-release:${name}`,
+    reason: "viewer-release",
+    recordedAt,
+    checkpoint: { lastEventKind: "tool_call", lastEventAt: null },
+    seat: null,
+  }).obligation;
+  return { registry, store, record, restore: () => setAgentRegistryForTests(null) };
+}
+
+test("a stage turn a deploy cut stays open past the host grace while its continuation is owed (#1835)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "owed-cut");
+  try {
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const cutAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => cutAt;
+    const obligation = cut.record("conversation_stage_1", cutAt);
+    /* The incident's order: the controller looks at 11:20, four minutes after
+       the 11:16 cut, while the successor has not yet delivered anything. */
+    h.advanceWallClock(4 * 60_000);
+
+    await tickPipelines([], h.ports);
+
+    const held = loadPipelines()[0]!;
+    expect(held).toMatchObject({ state: "running", stateDetail: DEPLOY_CUT_HOLD });
+    expect(held.runs[0]!.attempts[0]).toMatchObject({ state: "running", completedAt: null, error: null });
+    expect(held.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
+    expect(h.calls.some((call) => call.startsWith("stop-host:"))).toBe(false);
+
+    /* The successor delivered the continuation: the host is judged from that
+       moment, so a minute later it is still inside its grace. */
+    cut.store.update(obligation.id, { state: "delivered", resolvedAt: h.ports.now(), resolution: "delivered" });
+    h.advanceWallClock(60_000);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    expect(loadPipelines()[0]!.stateDetail).not.toBe(DEPLOY_CUT_HOLD);
+
+    /* A host that stays gone after its continuation is judged as before. */
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: HISTORICAL_VERDICT_MISS });
+  } finally {
+    cut.restore();
+  }
+});
+
+test("a continuation that arrived while its obligation still reads submitted starts the host grace from its arrival (#1835 review)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "submitted-cut");
+  try {
+    /* The registry stamps an arrival with the real time, so the stage runs
+       on a harness clock three minutes behind it: the cut is recorded at the
+       harness's now and the continuation arrives about three minutes later. */
+    h.advanceWallClock(Date.now() - 3 * 60_000 - Date.parse(h.ports.now()));
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const cutAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => cutAt;
+    const obligation = cut.record("conversation_stage_1", cutAt);
+
+    /* The successor's startup admits the continuation under the obligation's
+       id and records `submitted`, which is all the queue told it; the delivery
+       arrives in the registry and the obligation is left as it was. */
+    const registry = cut.registry;
+    const reservation = registry.holdDelivery(obligation.conversationId, "A Viewer deployment interrupted your turn", obligation.id);
+    cut.store.update(obligation.id, { state: "submitted", operationId: reservation.command.operationId, attempts: 1 });
+    const arrived = registry.recordDeliveryOutcome(reservation.id, "delivered");
+    const arrivedAt = Date.parse(arrived.deliveredAt!);
+    expect(cut.store.list()[0]).toMatchObject({ state: "submitted", resolvedAt: null });
+
+    /* A minute after the arrival the host is inside its grace, and the stage
+       no longer says it waits for a continuation. */
+    h.advanceWallClock(arrivedAt + 60_000 - Date.parse(h.ports.now()));
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    expect(loadPipelines()[0]!.stateDetail).not.toBe(DEPLOY_CUT_HOLD);
+
+    /* The resumed host is lost again: it is judged once its grace from the
+       arrival has passed, by whichever of the ordinary verdicts its paced
+       recovery checks reach first, well before the thirty-minute hold ends. */
+    for (let tick = 0; tick < 4 && loadPipelines()[0]!.runs[0]!.attempts[0]!.state === "running"; tick += 1) {
+      h.advanceWallClock(tick === 0 ? 3 * 60_000 : 30_000);
+      await tickPipelines([], h.ports);
+    }
+    const judged = loadPipelines()[0]!;
+    expect(["failed", "needs_decision"]).toContain(judged.runs[0]!.attempts[0]!.state);
+    expect(judged.stateDetail).not.toBe(DEPLOY_CUT_HOLD);
+    expect(Date.parse(h.ports.now()) - arrivedAt).toBeLessThanOrEqual(5 * 60_000);
+  } finally {
+    cut.restore();
+  }
+});
+
+test("a re-hosted stage whose deploy cut is still owed gets no verdict request ahead of its continuation (#1835 review)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "rehosted-cut");
+  try {
+    await runningStructuredStage(h);
+    /* The successor adopted the host: it reports hosted and idle, and the
+       durable turn ends in the no-response record written after the cut. */
+    h.setConversationActive(false);
+    h.ports.conversationHostUnavailableSince = async () => null;
+    const asked: string[] = [];
+    h.ports.resumeSeveredTurn = async (input) => {
+      asked.push(input.clientMessageId);
+      return true;
+    };
+    const cutAt = h.ports.now();
+    cut.record("conversation_stage_1", cutAt);
+    h.advanceWallClock(60_000);
+    h.durableTurns.set("/codex/stage-1.jsonl", {
+      turn: "terminal",
+      message: { text: "turn aborted", ts: Date.parse(h.ports.now()) },
+    });
+    h.advanceWallClock(60_000);
+
+    await tickPipelines([], h.ports);
+
+    const held = loadPipelines()[0]!;
+    expect(asked).toEqual([]);
+    expect(held).toMatchObject({ state: "running", stateDetail: DEPLOY_CUT_HOLD });
+    expect(held.runs[0]!.attempts[0]).toMatchObject({ state: "running", completedAt: null, error: null });
+    expect(held.runs[0]!.attempts[0]!.verdictRequest).toBeUndefined();
+    expect(held.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
+  } finally {
+    cut.restore();
+  }
+});
+
+test("a held deploy cut still settles on the stage's own verdict, and an owed cut stops holding past its bound (#1835)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "bounded-cut");
+  try {
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const cutAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => cutAt;
+    cut.record("conversation_stage_1", cutAt);
+    h.advanceWallClock(31 * 60_000);
+
+    await tickPipelines([], h.ports);
+
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: HISTORICAL_VERDICT_MISS });
+  } finally {
+    cut.restore();
+  }
+
+  const reported = harness();
+  const reportedCut = deployCutObligations(reported, "reported-cut");
+  try {
+    await runningStructuredStage(reported);
+    reported.setConversationActive(false);
+    const cutAt = reported.ports.now();
+    reported.ports.conversationHostUnavailableSince = async () => cutAt;
+    reportedCut.record("conversation_stage_1", cutAt);
+    reported.advanceWallClock(4 * 60_000);
+    reported.durableTurns.set("/codex/stage-1.jsonl", {
+      turn: "terminal",
+      message: { text: PASS_TEXT, ts: Date.parse(reported.ports.now()) },
+    });
+
+    await tickPipelines([], reported.ports);
+
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: { status: "pass" } });
+  } finally {
+    reportedCut.restore();
+  }
+});
+
+/** Strips the pane from a stage's latest attempt, so it is a structured host. */
+function structuredLatest(stageIndex: number): void {
+  const pipeline = loadPipelines()[0]!;
+  pipeline.runs[stageIndex]!.attempts.at(-1)!.paneId = null;
+  savePipelines([pipeline]);
+}
+
+test("a read-only stage whose host was lost re-runs on the same head instead of firing its fail edge (#1835)", async () => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "codex", access: "read-only", prompt: "Review {{task}}", next: null, onFail: { to: "fix", maxRounds: 1 } },
+    { id: "fix", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Fix {{prev.output}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const loseHost = async () => {
+    structuredLatest(0);
+    h.setConversationActive(false);
+    const lostAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => lostAt;
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+  };
+
+  await loseHost();
+
+  const rerun = loadPipelines()[0]!;
+  expect(rerun.state).toBe("running");
+  expect(rerun.cursor).toMatchObject({ stageId: "review", state: "pending" });
+  expect(rerun.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: null, error: READ_ONLY_RERUN });
+  expect(rerun.runs[1]!.attempts).toHaveLength(0);
+
+  await tickPipelines([], h.ports);
+  const second = loadPipelines()[0]!;
+  expect(second.runs[0]!.attempts).toHaveLength(2);
+  expect(second.runs[0]!.attempts[1]).toMatchObject({ n: 2, state: "running", input: second.runs[0]!.attempts[0]!.input });
+  expect(second.runs[1]!.attempts).toHaveLength(0);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(2);
+
+  /* Bounded: a host that keeps dying is not a deploy. After two re-runs the
+     ordinary routing applies again. */
+  await loseHost();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(3);
+  await loseHost();
+  const routed = loadPipelines()[0]!;
+  expect(routed.runs[0]!.attempts[2]).toMatchObject({ state: "failed", error: HISTORICAL_VERDICT_MISS });
+  expect(routed.cursor).toMatchObject({ stageId: "fix", activatedBy: { stageId: "review", attempt: 3, edge: "fail" } });
+});
+
+test("skip-stage over a lost host's pushed head adopts it instead of resetting behind the remote (#1871)", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  const lostAt = h.ports.now();
+  h.ports.conversationHostUnavailableSince = async () => lostAt;
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  const base = parked.lastPassedCommit;
+  expect(base).not.toBe(STAGE_HEAD);
+
+  const skipped = await patchPipeline(parked.id, { action: "skip-stage" }, h.ports);
+
+  expect(skipped.error).toBeUndefined();
+  expect(loadPipelines()[0]!.lastPassedCommit).toBe(STAGE_HEAD);
+  expect(h.calls).not.toContain(`git reset --hard ${base}`);
+  expect(h.calls).toContain(`git reset --hard ${STAGE_HEAD}`);
+});
+
+/** A read-only review parked exactly as lane 4a6cd090's was after a restart. */
+async function reviewParkedAfterRestart(h: ReturnType<typeof harness>) {
+  const pipeline = await create(h.ports, [
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "codex", access: "read-only", prompt: "Review {{task}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  makeStructuredAttempt();
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  const parkedAt = h.ports.now();
+  const reason = "canonical stage transcript is not yet readable after structured stage termination";
+  attempt.state = "needs_decision";
+  attempt.completedAt = parkedAt;
+  attempt.error = `stage verdict recovery exhausted after 3 checks: ${reason}`;
+  attempt.verdictRecovery = { state: "exhausted", checks: 3, maxChecks: 3, startedAt: parkedAt, lastCheckedAt: parkedAt, nextCheckAt: null, reason, messageTs: null };
+  stored.state = "needs_decision";
+  stored.stateDetail = attempt.error;
+  savePipelines([stored]);
+  h.ports.spawnReceipt = (launchId) => launchId === attempt.launchId ? {
+    state: "completed",
+    launchId,
+    conversationId: attempt.conversationId!,
+    sessionId: attempt.sessionId,
+    "transcript": attempt.agentPath,
+    paneId: null,
+  } : null;
+  return { pipeline, launchId: attempt.launchId! };
+}
+
+test("a review cut by a restart retries from the completed launch the card names (#1871)", async () => {
+  const h = harness();
+  const { pipeline, launchId } = await reviewParkedAfterRestart(h);
+
+  const retried = await patchPipeline(pipeline.id, { action: "retry-stage", stageId: "review", launchId }, h.ports);
+
+  expect(retried.error).toBeUndefined();
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", cursor: { stageId: "review", state: "pending" } });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
 });
 
 test("a dead structured host with an invalid terminal verdict still takes the fail edge (#973)", async () => {
@@ -10824,12 +11134,18 @@ test("a review flow paused on the scan in a phase past spawning parks at once (#
   expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toBeUndefined();
 });
 
-test("a failed receipt that staged a session is not re-dispatched into a read-write worktree (#1678 review)", async () => {
+test("a failed receipt that staged a session is not re-dispatched into a read-write worktree holding changes (#1678 review)", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
   ] as never);
   await tickPipelines([], h.ports);
+  /* The staged host left an edit behind, so only retry-stage's reset may
+     clear the way for another writer. */
+  const baseExec = h.ports.exec;
+  h.ports.exec = (rawCommand, rawArgs, cwd) => rawArgs[0] === "status"
+    ? { code: 0, stdout: " M src/partial-edit.ts\n", stderr: "" }
+    : baseExec(rawCommand, rawArgs, cwd);
   const claims: string[] = [];
   let spawnCalls = 0;
   h.ports.spawnAgent = async (_input, onReserved) => {
@@ -10883,6 +11199,49 @@ test("a failed receipt that staged a session still retries a read-only stage (#1
   h.advanceWallClock(scheduled.at(-1)!);
   await tickPipelines([], h.ports);
   expect(spawnCalls).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
+});
+
+test("a read-write launch the deploy handover failed after staging waits and relaunches when its worktree is untouched (#1835)", async () => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  /* The incident's header build attempt 2: the runtime host went away while
+     the release changed hands, after the launch had staged its session. */
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls === 1) {
+      await onReserved({ launchId: "launch-handover", conversationId: "conversation_handover" });
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-handover"
+    ? { ...failedReceipt("launch-handover", "conversation_handover", HOST_UNAVAILABLE), staged: true }
+    : null;
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); }, sleep: forbiddenSleep });
+
+  await tickPipelines([], h.ports);
+
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.stateDetail).toStartWith("stage spawn deferred: ");
+  expect(waiting.runs[0]!.attempts[0]).toMatchObject({
+    state: "pending",
+    launchId: null,
+    retiredLaunches: [{ launchId: "launch-handover" }],
+  });
+
+  /* The successor answers: the same attempt launches once more. */
+  h.advanceWallClock(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
 });
 
