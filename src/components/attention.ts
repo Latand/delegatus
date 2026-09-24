@@ -287,11 +287,11 @@ export function buildAttentionQueue(
  * an item answered elsewhere silently drops out and the next press serves the
  * next-oldest remaining item (queue head forward, tail backward). Wraps.
  */
-export function nextAttention(
-  queue: AttentionItem[],
+export function nextAttention<T extends { id: string }>(
+  queue: readonly T[],
   currentId: string | null,
   dir: 1 | -1,
-): AttentionItem | null {
+): T | null {
   if (!queue.length) return null;
   const index = currentId === null ? -1 : queue.findIndex((item) => item.id === currentId);
   if (index === -1) return dir === 1 ? queue[0]! : queue[queue.length - 1]!;
@@ -313,11 +313,11 @@ export interface AttentionCyclePointer {
  * `nextAttention` (the sole authority); an empty queue leaves the pointer
  * untouched.
  */
-export function advanceAttentionCycle(
+export function advanceAttentionCycle<T extends { id: string }>(
   pointer: AttentionCyclePointer,
-  queue: AttentionItem[],
+  queue: readonly T[],
   dir: 1 | -1,
-): AttentionItem | null {
+): T | null {
   const next = nextAttention(queue, pointer.current, dir);
   if (next) pointer.current = next.id;
   return next;
