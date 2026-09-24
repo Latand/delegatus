@@ -923,6 +923,456 @@
           }
         }
       ]
+    },
+    {
+      "walk": "overview-reload",
+      "steps": [
+        {
+          "n": 1,
+          "label": "overview",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-favicon",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "task-reload",
+          "want": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-favicon",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 4,
+          "label": "pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-favicon",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 5,
+          "label": "pipeline-reload",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-favicon",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 6,
+          "label": "conversation",
+          "want": {
+            "screen": "chat",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-5",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 7,
+          "label": "conversation-reload",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-5",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 8,
+          "label": "back-to-pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-favicon",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 9,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-favicon",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 10,
+          "label": "back-to-overview",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "",
+            "historyLength": 5
+          }
+        }
+      ]
+    },
+    {
+      "walk": "link-project",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=repo-a1b2a1b2a1b2a1b2",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-favicon",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "conversation",
+          "want": {
+            "screen": "chat",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-5",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 4,
+          "label": "task-link",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 5,
+          "label": "task-link-back",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-5",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 6,
+          "label": "pipeline-link",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 7,
+          "label": "pipeline-link-back",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-5",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 8,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-favicon",
+            "historyLength": 5
+          }
+        }
+      ]
+    },
+    {
+      "walk": "link-overview",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-favicon",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "conversation",
+          "want": {
+            "screen": "chat",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-5",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 4,
+          "label": "task-link",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 5,
+          "label": "task-link-back",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-5",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 6,
+          "label": "pipeline-link",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 7,
+          "label": "pipeline-link-back",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-5",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-5",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 8,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-favicon",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-favicon",
+            "historyLength": 5
+          }
+        }
+      ]
     }
   ],
   "failures": []

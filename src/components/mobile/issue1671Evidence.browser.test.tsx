@@ -2197,6 +2197,12 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  *             from the task screen: Back returns to the task
  *   reload    a reload on the task, the pipeline and the conversation keeps
  *             the screen, and Back still goes where it went before
+ *   overview-reload  the same reloads over the phone's Overview, where each
+ *             screen is drawn by its own project: the screen waits for its
+ *             data, and the history does not grow
+ *   link-project, link-overview  a link in a conversation to another
+ *             project's task, then to its lane: one entry each, and one Back
+ *             returns to the conversation
  *
  * Frames go to `LLV_PHONE_BACK_FRAMES` (default `.artifacts/phone-back`, not
  * committed), prefixed by `LLV_PHONE_BACK_PREFIX` so a run on the code before
@@ -2405,6 +2411,59 @@ browserTest("#2105: Back and the phone's screen history follow the path the oper
       await back("back-to-task", { screen: "task", id: "t-many", sheet: null });
       await back("back-to-board", { screen: "board", sheet: null });
     });
+
+    /* Over the Overview a screen is drawn by its own project's dashboard, and
+       a reload brings the stack back before any answer names that project:
+       the screen waits for its data rather than going home, and nothing is
+       pushed again. */
+    const overview = `${fixtureBase}/?overview=1`;
+    const overviewShown = async (page: Page) => {
+      await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+      await page.locator('[data-phone-kanban-tab="assigned"]').click();
+      await page.waitForSelector('[data-phone-card="task:t-favicon"]', { timeout: 10_000 });
+    };
+    const entries = (page: Page) => page.evaluate(() => history.length);
+    await walk("overview-reload", async ({ page, step, back, fail }) => {
+      await step("overview", async () => { await page.goto(overview); await overviewShown(page); }, { screen: "board", sheet: null });
+      await step("task", () => page.locator('[data-phone-card="task:t-favicon"]').click(), { screen: "task", id: "t-favicon", sheet: null });
+      let length = await entries(page);
+      await step("task-reload", () => page.reload(), { screen: "task", id: "t-favicon", sheet: null });
+      if ((await entries(page)) !== length) fail(`a reload on the task grew the history from ${length} to ${await entries(page)}`);
+      await step("pipeline", () => page.locator('[data-phone-task-lane="lane-favicon"] [data-open-stages]').click(), { screen: "pipeline", id: "lane-favicon", sheet: null });
+      length = await entries(page);
+      await step("pipeline-reload", () => page.reload(), { screen: "pipeline", id: "lane-favicon", sheet: null });
+      if ((await entries(page)) !== length) fail(`a reload on the pipeline grew the history from ${length} to ${await entries(page)}`);
+      const chat = await step("conversation", () => page.locator('[data-mobile2-pipeline="lane-favicon"] [data-stage-open="implement"]').first().click(), { screen: "chat", sheet: null });
+      length = await entries(page);
+      await step("conversation-reload", () => page.reload(), { screen: "chat", id: chat.id ?? undefined, sheet: null });
+      if ((await entries(page)) !== length) fail(`a reload on the conversation grew the history from ${length} to ${await entries(page)}`);
+      await back("back-to-pipeline", { screen: "pipeline", id: "lane-favicon", sheet: null });
+      await back("back-to-task", { screen: "task", id: "t-favicon", sheet: null });
+      await back("back-to-overview", { screen: "board", sheet: null });
+    });
+
+    /* A link in a message to another project's task or lane (the MCP call
+       card's chip) writes one entry, over the conversation it was read in, and
+       one Back returns there — on a project's board and over the Overview. */
+    const delegatus = `repo-${"a1b2".repeat(4)}`;
+    const link = (page: Page, kind: "task" | "pipeline", id: string) =>
+      page.evaluate(({ kind, id }) => { window.dispatchEvent(new CustomEvent("llv:mcp-navigate", { detail: { kind, id } })); }, { kind, id });
+    for (const [name, url] of [["link-project", `${fixtureBase}/?overview=1#p=${delegatus}`], ["link-overview", overview]] as const) {
+      await walk(name, async ({ page, step, back, fail }) => {
+        await step("board", async () => { await page.goto(url); await overviewShown(page); }, { screen: "board", sheet: null });
+        await step("task", () => page.locator('[data-phone-card="task:t-favicon"]').click(), { screen: "task", id: "t-favicon", sheet: null });
+        const chat = await step("conversation", () => page.locator('[data-phone-task-lane="lane-favicon"] button[data-stage="implement"]').first().click(), { screen: "chat", sheet: null });
+        let length = await entries(page);
+        await step("task-link", () => link(page, "task", "t-many"), { screen: "task", id: "t-many", sheet: null });
+        if ((await entries(page)) !== length + 1) fail(`a task link wrote ${(await entries(page)) - length} entries`);
+        await back("task-link-back", { screen: "chat", id: chat.id ?? undefined, sheet: null });
+        length = await entries(page);
+        await step("pipeline-link", () => link(page, "pipeline", "lane-many-review"), { screen: "pipeline", id: "lane-many-review", sheet: null });
+        if ((await entries(page)) !== length) fail(`a pipeline link after Back grew the history from ${length} to ${await entries(page)}`);
+        await back("pipeline-link-back", { screen: "chat", id: chat.id ?? undefined, sheet: null });
+        await back("back-to-task", { screen: "task", id: "t-favicon", sheet: null });
+      });
+    }
   } finally {
     await browser.close();
     stop();

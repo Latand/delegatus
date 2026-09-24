@@ -49,6 +49,11 @@ interface Props {
   /** The rows are a restored earlier answer, not yet confirmed (#2071): the
       board draws them, and the first run still waits for `loaded`. */
   cached?: boolean;
+  /** Whether a screen stacked over the phone's Overview that no project draws
+      is truly unplaceable: the answer that names every task, lane and
+      conversation is in, and no link is still resolving. Until then a stack
+      restored by a reload (#2105) is only waiting for its data. */
+  placesKnown?: boolean;
   /** Attention clock owned by Viewer — keeps summary badges in step with the queue. */
   now: number;
   /** Consecutive `/api/files` failures (issue #696). Above zero the board is
@@ -82,7 +87,7 @@ const NO_FLOWS: Flow[] = [];
  * that used to live here was a second, smaller board beside the real one, and
  * the rail already lists the projects it listed.
  */
-export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, cached = false, now, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null, onOpenConversation }: Props) {
+export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, cached = false, placesKnown = loaded, now, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null, onOpenConversation }: Props) {
   const { t, locale } = useLocale();
   const isMobile = useIsMobile();
   const mobileNav = useMobileNavStore();
@@ -135,8 +140,10 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
      before its data does: a task and a lane come from the payload the door
      was drawn from, and a conversation opened over the Overview carries its
      project from the open (`openOverOverview`), whether or not the poll has
-     carried its file yet. */
-  const stranded = isMobile && !["board", "accounts"].includes(topScreen(mobileNavState).kind);
+     carried its file yet. A reload is the one arrival ahead of its data: the
+     stack comes back from the entry before any answer names its projects, so
+     it is judged only once the answer is in (#2105). */
+  const stranded = isMobile && placesKnown && !["board", "accounts"].includes(topScreen(mobileNavState).kind);
   useEffect(() => {
     if (stranded) mobileNav.home();
   }, [stranded, mobileNav]);

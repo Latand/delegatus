@@ -45,7 +45,7 @@ import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows"
 import { KeepAwakeProvider } from "./KeepAwakeControl";
 import { needsDecisionPipelineRows } from "./mobile/mobileBoardModel";
 import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
-import { getMobileNav, readMobileNavEntry, screenKey, standsOnOwnUrl, topScreen, useMobileNavStore, type MobileNavConfig } from "./mobile/mobileNav";
+import { getMobileNav, readMobileNavEntry, screenKey, standsOnOwnUrl, topScreen, useMobileNavStore, type MobileNavConfig, type MobileScreen } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import { overviewLiftProject, overviewPipelineRows, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
@@ -550,7 +550,10 @@ function ViewerApp() {
     dispatchCatalogPin({ kind: "release" });
     setFocusRequest(null);
     localStorage.setItem(PROJECT_KEY, nextProject);
-    /* The phone shell lands on the board with no sheet open (mobile v2 §3.3). */
+    /* The phone shell lands on the board with no sheet open (mobile v2 §3.3),
+       and an entry written in this same gesture names the project it is now
+       drawn in, before the render that takes the new project (#2105). */
+    phoneRef.current = { ...phoneRef.current, project: nextProject };
     getMobileNav().home();
   }, []);
 
@@ -558,6 +561,17 @@ function ViewerApp() {
     applyProject(nextProject);
     recordProjectNavigation(projectUrl(nextProject));
   }, [applyProject]);
+
+  /* A phone screen of another project, from a link (#2105): a task or a lane a
+     message names. Over the Overview it goes on the stack like any screen, and
+     its own project's dashboard draws it. On a project's board that project
+     becomes the one drawn, with no entry of its own, and the screen is the one
+     entry the link writes: Back returns to the place the operator left, in its
+     own project. */
+  const openPhoneScreenElsewhere = useCallback((screen: MobileScreen, target: string) => {
+    if (phoneRef.current.project !== OVERVIEW) applyProject(target);
+    mobileNav.push(screen);
+  }, [applyProject, mobileNav]);
 
   /* Opening or closing the dock is a statement about THIS project (#1149): it
      is remembered under the project's own key, so the projects the operator is
@@ -1380,6 +1394,7 @@ function ViewerApp() {
             flows={flows}
             loaded={loaded}
             cached={cached}
+            placesKnown={loaded && scopeCertified && !pendingHash}
             now={clock}
             catalogFailures={catalogFailures}
             onSelectProject={selectProject}
@@ -1420,6 +1435,7 @@ function ViewerApp() {
             onUserNavigate={cancelPendingIntent}
             onOpenCatalogFile={openCatalogFile}
             onCloseFile={releaseCatalogFile}
+            onOpenElsewhere={isMobile ? openPhoneScreenElsewhere : undefined}
           />
         )}
         </BarIslandProvider>

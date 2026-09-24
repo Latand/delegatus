@@ -68,7 +68,7 @@ import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipeli
 import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
 import { MobileTaskScreen } from "./mobile/MobileTaskScreen";
 import { useTaskMutations } from "./kanban/useTaskMutations";
-import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
+import { topScreen, useMobileNav, useMobileNavStore, type MobileScreen, type MobileSheetName } from "./mobile/mobileNav";
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
 import { KanbanBoard } from "./kanban/KanbanBoard";
@@ -185,6 +185,10 @@ interface Props {
   onOpenCatalogFile?: (file: FileEntry) => void;
   /** Releases any retained list/search pin when its displayed node closes. */
   onCloseFile?: (path: string) => void;
+  /** The phone: a screen of ANOTHER project (a task or a lane a link names).
+      The Viewer draws it over the place the operator is, with no history
+      entry of its own for the project (#2105). */
+  onOpenElsewhere?: (screen: MobileScreen, project: string) => void;
 }
 
 /** Manual additions and removals of scheme nodes, persisted per project. */
@@ -405,6 +409,7 @@ function ProjectDashboardView({
   onUserNavigate,
   onOpenCatalogFile,
   onCloseFile,
+  onOpenElsewhere,
 }: Props) {
   const { t, locale } = useLocale();
   const isMobile = useIsMobile();
@@ -1220,6 +1225,13 @@ function ProjectDashboardView({
 
   const openTask = (task: BoardTask) => {
     if (task.project !== project) {
+      /* On the phone the task's screen goes over the place the operator is,
+         one entry, and Back returns there (#2105). */
+      if (isMobile && onOpenElsewhere) {
+        onUserNavigate?.();
+        onOpenElsewhere({ kind: "task", id: task.id }, task.project);
+        return;
+      }
       sessionStorage.setItem("llvTaskFocus", task.id);
       gotoProject(task.project);
       return;
@@ -1228,7 +1240,8 @@ function ProjectDashboardView({
   };
 
   /* A pipeline link (an MCP call card's chip, #1695): the desktop Board reveals and focuses the card that holds
-     the pipeline, through the same anchor a focus handoff uses. The phone has no card to reveal. */
+     the pipeline, through the same anchor a focus handoff uses. The phone has no card to reveal; it opens the
+     pipeline's screen, over the place the operator is (#2105). */
   const revealPipeline = (id: string) => {
     if (isMobile) return;
     onUserNavigate?.();
@@ -1248,6 +1261,13 @@ function ProjectDashboardView({
       if (detail.kind !== "pipeline") return;
       const pipeline = pipelines.find((candidate) => candidate.id === id);
       if (!pipeline) return;
+      if (isMobile && onOpenElsewhere) {
+        onUserNavigate?.();
+        const top = topScreen(mobileNav.getState());
+        if (pipeline.project !== project) onOpenElsewhere({ kind: "pipeline", id: pipeline.id }, pipeline.project);
+        else if (top.kind !== "pipeline" || top.id !== pipeline.id) mobileNav.push({ kind: "pipeline", id: pipeline.id });
+        return;
+      }
       if (pipeline.project !== project) {
         sessionStorage.setItem("llvPipelineFocus", id);
         gotoProject(pipeline.project);
