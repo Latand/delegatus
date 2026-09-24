@@ -11,10 +11,10 @@
 
 Delegatus is a local app for handing your software work to coding agents.
 Each project gets an orchestrator: an agent you tell what you want shipped.
-It keeps the project's tasks, runs a pipeline for each piece of work (build,
-review, fix, merge, and the project's release step where it has one),
-watches the agents it started and reports back to you. It asks you only when
-a decision is yours. You follow the work and steer it from the project's
+It keeps the project's tasks and runs a pipeline for each piece of work:
+build, review, fix. It merges what passes review, runs the project's release
+step where it has one, watches the agents it started and reports back to
+you. It asks you only when a decision is yours. You follow the work and steer it from the project's
 board, in a browser or on your phone.
 
 The agents are Claude Code, Codex and GitHub Copilot on your own accounts,
@@ -59,8 +59,9 @@ agents on them yourself as well.
 
 A pipeline takes a task and a specification and runs up to eight agent
 stages in its own git worktree and branch. Each stage has a role (builder,
-reviewer, verifier, deployer and others) that sets the engine, model, effort
-and whether it may change the repository. A stage ends by reporting a
+reviewer, verifier, architect and others) that sets the engine, model, effort
+and whether it may change the repository. A stage cannot take the deployer
+role, so a deploy stays outside the pipeline. A stage ends by reporting a
 verdict: pass moves to the next stage, fail follows the stage's fail edge
 (usually back to the builder) within a round budget, and "needs decision"
 stops and asks you. A "needs decision" that carries findings on a stage with
@@ -83,9 +84,10 @@ definitions, roles and the HTTP API, and
 
 ### Agents and accounts
 
-Stages run Claude Code, Codex or GitHub Copilot agents, and so can you:
-launch one from a task or the Create button, pick the model and reasoning
-effort, and send messages, images and files from the composer. Interrupt,
+Pipeline stages run Claude Code or Codex agents. You can launch any of
+Claude Code, Codex or GitHub Copilot yourself from a task or the Create
+button, pick the model and reasoning effort, and send messages, images and
+files from the composer. Interrupt,
 resume or stop an agent from its window. Agents reach the same board, tasks,
 pipelines and conversations through the bundled
 [MCP server](#mcp-server-for-agents), which is how the orchestrator does its
