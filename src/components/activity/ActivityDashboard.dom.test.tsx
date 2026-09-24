@@ -58,7 +58,7 @@ const CLIENT = "repo-5555eeee6666ffff7777aaaa8888bbbb";
 const ALWAYS: Interval = { start: 0, end: Number.MAX_SAFE_INTEGER };
 
 function input(date: string, hhmm: string, project: string, host = "workstation"): HumanInput {
-  return { ids: [`${host}:${date}:${hhmm}`], at: at(date, hhmm), host, source: "ingest", project, kind: "message", surface: "desktop", hash: null };
+  return { ids: [`${host}:${date}:${hhmm}`], at: at(date, hhmm), host, source: "transcripts", project, kind: "message", surface: "desktop", hash: null };
 }
 function source(kind: HostSourceRead["source"], state: HostSourceRead["state"], covered: Interval[]): HostReport["sources"][number] {
   return { source: kind, state, scope: "all", covered, inputs: 0, excluded: {}, exportedAt: null, readAt: state === "read" ? NOW : null, error: null };

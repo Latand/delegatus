@@ -35,7 +35,7 @@ const CLIENT_OLD = "repo-local-client";
 const ALWAYS: Interval = { start: 0, end: Number.MAX_SAFE_INTEGER };
 
 function input(date: string, hhmm: string, project: string, host = "workstation"): HumanInput {
-  return { ids: [`${host}:${date}:${hhmm}:${project}`], at: at(date, hhmm), host, source: host === "workstation" ? "ingest" : "pull", project, kind: "message", surface: "desktop", hash: null };
+  return { ids: [`${host}:${date}:${hhmm}:${project}`], at: at(date, hhmm), host, source: "transcripts", project, kind: "message", surface: "desktop", hash: null };
 }
 
 function source(kind: HostSourceRead["source"], state: HostSourceRead["state"], covered: Interval[], error: string | null = null): HostReport["sources"][number] {

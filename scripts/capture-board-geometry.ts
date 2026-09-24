@@ -93,7 +93,10 @@
  * its breakdowns, the drawer, the day, hour and Agents tooltips, Today with
  * the stage host unread for three hours, the same home with none of your
  * input read, and a home with no data at all; the phone at 390 × 844 keeps
- * the prototype's layout. It checks sideways overflow, the 7-day page ending
+ * the prototype's layout. It also filters the page to one project
+ * (`?project=`): every project, one project chosen (en and uk), the header's
+ * picker open, and the phone with one project chosen, and requires the
+ * server's scoped totals to equal that project's row. It checks sideways overflow, the 7-day page ending
  * inside 900 px, the trust chip and the Rhythm legend on one line, cut text,
  * tooltips inside the viewport, and the marks on the unread and flagged days.
  * With ACTIVITY_RENDER_DIR set, the images are copied there.
@@ -4342,6 +4345,11 @@ interface ActivityReading {
   truncated: string[];
   tooltip: { text: string; inside: boolean } | null;
   drawer: { flags: string[]; hosts: Array<{ host: string; complete: string | null }> } | null;
+  /** The project the page is scoped to, as its chip reads, and the rows drawn chosen. */
+  scope: string | null;
+  selected: string[];
+  /** Options in the open project picker, or null when it is closed. */
+  pickerOptions: number | null;
   words: number;
   /* The narrow layout's own markers. */
   tiles: number;
@@ -4394,6 +4402,9 @@ function readActivity(): ActivityReading {
       flags: Array.from(drawer.querySelectorAll("[data-activity-flag]")).map((flag) => flag.textContent ?? ""),
       hosts: Array.from(drawer.querySelectorAll<HTMLElement>("[data-activity-host]")).map((host) => ({ host: host.dataset.activityHost ?? "", complete: host.dataset.complete ?? null })),
     } : null,
+    scope: document.querySelector("[data-activity-scope-chip]")?.textContent ?? null,
+    selected: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-project][data-selected=true]")).map((row) => row.dataset.activityProject ?? ""),
+    pickerOptions: document.querySelector("[data-activity-picker=open]") ? document.querySelectorAll("[data-activity-picker-option]").length : null,
     words: (root.innerText.match(/\S+/g) ?? []).length,
     tiles: document.querySelectorAll("[data-activity-tile]").length,
     days: document.querySelectorAll("[data-activity-day]").length,
@@ -4641,6 +4652,35 @@ async function activityMain(): Promise<void> {
     const phone = await capture("phone-7d", "range=7d&view=days", { phone: true });
     must(phone.layout === "narrow" && phone.tiles === 4 && phone.days === 7, `phone: ${phone.layout} layout, ${phone.tiles} tiles, ${phone.days} days`);
 
+    /* The whole page filtered to one project: orchard-client, billable and
+       held by the stage host, which was not read for two days and whose
+       agents nothing pulls. The server's scoped answer is the project's row
+       in its unscoped one, and the page draws that answer. */
+    const orchard = keyOf("orchard-client");
+    type Figures = { humanMs: number; humanHours: number; requests: number; wallMs: number; supervisedMs: number; unattendedMs: number; agentHoursMs: number; coverage: unknown; agentCoverage: unknown };
+    const figures = (value: Figures) => ({ humanMs: value.humanMs, humanHours: value.humanHours, requests: value.requests, wallMs: value.wallMs, supervisedMs: value.supervisedMs, unattendedMs: value.unattendedMs, agentHoursMs: value.agentHoursMs, coverage: value.coverage, agentCoverage: value.agentCoverage });
+    const unscoped = await (await fetch(`${baseUrl}/api/activity?range=7d`)).json() as { projects: Array<Figures & { project: string | null; name: string | null }> };
+    const scopedApi = await (await fetch(`${baseUrl}/api/activity?range=7d&project=${encodeURIComponent(orchard)}`)).json() as { scope: { project: string; name: string | null } | null; totals: Figures };
+    const orchardRow = unscoped.projects.find((row) => row.project === orchard)!;
+    report.projectFilterApi = { scope: scopedApi.scope, scoped: figures(scopedApi.totals), row: figures(orchardRow) };
+    must(JSON.stringify(figures(scopedApi.totals)) === JSON.stringify(figures(orchardRow)), `project filter: the scoped totals ${JSON.stringify(figures(scopedApi.totals))} are not the row ${JSON.stringify(figures(orchardRow))}`);
+    must(scopedApi.scope?.project === orchard, `project filter: the answer is scoped to ${JSON.stringify(scopedApi.scope)}`);
+    const rowYou = week.projects.find((row) => row.project === orchard)?.you ?? "";
+    const allProjects = await capture("desktop-project-all", "range=7d");
+    must(allProjects.scope === null && allProjects.selected.length === 0, `all projects: scope ${allProjects.scope}, selected ${allProjects.selected.join(",")}`);
+    const scoped = await capture("desktop-project-selected", `range=7d&project=${encodeURIComponent(orchard)}`);
+    must(scoped.scope === "orchard-client" && scoped.selected.join() === orchard, `one project: chip ${scoped.scope}, selected ${scoped.selected.join(",")}`);
+    must(rowYou !== "" && scoped.hero.replace(/\s/g, "").includes(rowYou.replace(/\s/g, "")), `one project: the hero "${scoped.hero}" is not the row's "${rowYou}"`);
+    must(scoped.agents.startsWith("≥"), `one project: its agents, missing the stage host, read "${scoped.agents}"`);
+    must(scoped.chip?.state === "lower", `one project: the chip reads ${scoped.chip?.state}`);
+    must(scoped.projects.length === allProjects.projects.length, `one project: the list holds ${scoped.projects.length} rows, not ${allProjects.projects.length}`);
+    const picker = await capture("desktop-project-picker", "range=7d", { act: async (page) => { await page.click("[data-activity-picker-trigger]"); await page.waitForSelector("[data-activity-picker=open]"); } });
+    must((picker.pickerOptions ?? 0) >= ACTIVITY_REPOS.length, `picker: ${picker.pickerOptions} options`);
+    const scopedUk = await capture("desktop-project-selected-uk", `range=7d&project=${encodeURIComponent(orchard)}`, { lang: "uk" });
+    must(scopedUk.scope === "orchard-client" && scopedUk.chip?.state === "lower", `one project uk: chip ${scopedUk.scope}, trust ${scopedUk.chip?.state}`);
+    const phoneScoped = await capture("phone-project-selected", `range=7d&view=projects&project=${encodeURIComponent(orchard)}`, { phone: true });
+    must(phoneScoped.layout === "narrow" && phoneScoped.scope === "orchard-client" && phoneScoped.tiles === 4, `phone, one project: ${phoneScoped.layout} layout, chip ${phoneScoped.scope}, ${phoneScoped.tiles} tiles`);
+
     /* Today with the stage host unread from 09:00 to 12:00. */
     writeStage([
       { name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start },
@@ -4659,7 +4699,8 @@ async function activityMain(): Promise<void> {
     fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ACTIVITY_STAGE_PROJECTS.map(keyOf) }] }));
     const unread = await capture("desktop-unread-7d", "range=7d");
     must(unread.chip?.state === "none" && unread.chip.text === "Your time not read", `unread: the chip reads ${unread.chip?.state} "${unread.chip?.text}"`);
-    must(unread.hero.includes("Unknown") && unread.agents.startsWith("≈"), `unread: hero ${unread.hero}, agents ${unread.agents}`);
+    /* The stage host's agents are not read either: agent time is at least what reads. */
+    must(unread.hero.includes("Unknown") && unread.agents.startsWith("≥≈"), `unread: hero ${unread.hero}, agents ${unread.agents}`);
     must(!("supervised" in unread.cells) && !("unattended" in unread.cells) && !("you" in unread.cells), `unread: cells ${JSON.stringify(unread.cells)}`);
     const unreadUk = await capture("desktop-unread-1280x800-uk", "range=7d", { lang: "uk", size: [1280, 800] });
     must(unreadUk.chip?.text === "Ваш час не прочитано", `unread uk: the chip reads "${unreadUk.chip?.text}"`);
