@@ -4,6 +4,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
 import { isoNow } from "./helpers";
+import { internalConversationKind } from "./internalConversations";
 import { mutateTasks } from "./store";
 import type { BoardTask, TaskAssignment, TaskOrigin } from "./types";
 
@@ -45,6 +46,10 @@ export interface MembershipInput {
       the work it reviews). When none holds a task, the fallback placeholder
       binds them beside the launch itself. */
   inherit?: readonly MembershipIdentity[];
+  /** The placeholder is created already named: nothing will ever refine it (a
+      conversation that has ended, an orchestrator seat), so its admission
+      title is its title rather than a wait for a first action. */
+  titled?: boolean;
 }
 
 export type MembershipResult =
@@ -230,8 +235,9 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
     placement: "unplaced",
     /* The admission title (first prompt, pipeline goal) is a placeholder
        title: the refinement stays pending until an agent's first action or an
-       operator edit names the task. */
-    origin: { kind: input.origin.kind, key: input.origin.key, refinement: "pending" },
+       operator edit names the task — unless the admission knows nothing will
+       ever refine it, and then that title is the task's name. */
+    origin: { kind: input.origin.kind, key: input.origin.key, refinement: input.titled && input.title?.trim() ? "titled" : "pending" },
     assignments: [],
     createdAt: now,
     updatedAt: now,
@@ -284,7 +290,24 @@ export const ADMISSION_BATCH = 50;
 export function admissibleConversation(entry: FileEntry): boolean {
   if (!entry.project || !entry.path || entry.path.startsWith("spawn:")) return false;
   if (entry.root !== "claude-projects" && entry.root !== "codex-sessions") return false;
-  return !entry.path.includes("/subagents/");
+  if (entry.path.includes("/subagents/")) return false;
+  /* A rotation's summarizer and a one-line probe mint no task of their own. */
+  return internalConversationKind(entry) === null;
+}
+
+/** How long a transcript may sit untouched, with no process behind it, before
+    the admission treats its conversation as over. */
+export const CONVERSATION_ENDED_AFTER_MS = 30 * 60_000;
+
+/**
+ * Whether no agent is left to name this conversation's task: nothing runs
+ * behind it and its transcript has been quiet past the bound. The backfill
+ * that adopted months-old sessions on 2026-09-20 gave each a placeholder
+ * waiting for a first action that could never come.
+ */
+export function conversationEnded(entry: Pick<FileEntry, "proc" | "activity" | "mtime">, nowMs: number): boolean {
+  if (entry.proc === "running" || entry.activity === "live") return false;
+  return nowMs - entry.mtime * 1000 >= CONVERSATION_ENDED_AFTER_MS;
 }
 
 interface CoveredIndex {
@@ -331,7 +354,9 @@ const isCovered = (index: CoveredIndex, entry: Pick<FileEntry, "path" | "convers
  * a recorded task claims one fallback task for its container and binds every
  * stage conversation it materialized; a pipeline that already carries task ids
  * covers its stage conversations by that record. Roots get one placeholder
- * titled from their first prompt. A child joins the task its parent holds: it
+ * titled from their first prompt, already named when the conversation has
+ * ended ({@link conversationEnded}); helpers and probes get none
+ * (`internalConversations.ts`). A child joins the task its parent holds: it
  * is planned once the parent is covered (already held, or planned earlier in
  * this pass), so parent and child never split across two placeholders; a
  * child whose parent transcript is gone gets its own placeholder.
@@ -341,6 +366,7 @@ export function planAdmissions(
   tasks: readonly BoardTask[],
   pipelines: readonly Pipeline[],
   batch = ADMISSION_BATCH,
+  nowMs = Date.now(),
 ): MembershipInput[] {
   const covered = coveredBy(tasks);
   const plans: MembershipInput[] = [];
@@ -385,6 +411,7 @@ export function planAdmissions(
         project: entry.project,
         origin: { kind: "conversation", key: entry.conversationId ?? entry.path },
         title: entry.title,
+        ...(conversationEnded(entry, nowMs) ? { titled: true } : {}),
         identity: { conversationId: entry.conversationId ?? null, path: entry.path, engine: entry.engine === "claude" || entry.engine === "codex" ? entry.engine : null },
         ...(inherit.length ? { inherit } : {}),
       });

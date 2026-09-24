@@ -491,7 +491,7 @@ function redactForDigest(value: string): string {
   return identityRedact(hardenedRedact(value));
 }
 
-const DIGEST_INSTRUCTIONS = `You are compacting the rotation history of a project manager agent's mandate. Write a digest of the material below for the manager's successor. Use exactly these three headings and short bullet points under each:
+export const DIGEST_INSTRUCTIONS = `You are compacting the rotation history of a project manager agent's mandate. Write a digest of the material below for the manager's successor. Use exactly these three headings and short bullet points under each:
 
 Decisions:
 Blockers:
