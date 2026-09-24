@@ -1,0 +1,115 @@
+diff --git a/src/app/globals.css b/src/app/globals.css
+index e1f14ea..8501571 100644
+--- a/src/app/globals.css
++++ b/src/app/globals.css
+@@ -661,3 +661,11 @@ body {
+       0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent) !important;
+   }
+ }
++
++/* Press and open/close motion (#2148 round 2) is off under reduced motion:
++   the press still lands, the button just does not move. */
++@media (prefers-reduced-motion: reduce) {
++  .kb .btn, .kb .card .add, .pblock .pb-act, .kb .gsheet, .kb .gsheet-scrim,
++  .kb .card .history::details-content, .kb .draft-added::details-content { transition: none; }
++  .kb .btn:active, .kb .card .add:active, .pblock .pb-act:active { scale: none; }
++}
+diff --git a/src/components/ComposerBar.tsx b/src/components/ComposerBar.tsx
+index e9ec132..4308fee 100644
+--- a/src/components/ComposerBar.tsx
++++ b/src/components/ComposerBar.tsx
+@@ -430,10 +430,11 @@ export function ComposerBar({
+              control is the 32 px visual inside the 44 px target, so the tint
+              goes on that span and never on the whole block. */
+           style={isMobile || dictationRecording || slotKind !== "send" ? undefined : sendIdleStyle}
++          /* Send answers a press (make-interfaces-feel-better #12), unless motion is reduced. */
+           className={
+             isMobile
+-              ? `ml-auto flex h-11 shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 aria-disabled:opacity-40 ${slotWide ? "min-w-11 px-0.5" : "w-11"}`
+-              : `inline-flex shrink-0 items-center justify-center rounded-control border text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 aria-disabled:opacity-40 ${iconBtn} ${
++              ? `group/send ml-auto flex h-11 shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 aria-disabled:opacity-40 ${slotWide ? "min-w-11 px-0.5" : "w-11"}`
++              : `inline-flex shrink-0 items-center justify-center rounded-control border text-white transition-[scale] duration-[120ms] ease-out motion-safe:enabled:active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 aria-disabled:opacity-40 ${iconBtn} ${
+                   dictationRecording ? "border-danger bg-danger hover:opacity-90" : sendIdleClassName
+                 }`
+           }
+@@ -441,7 +442,7 @@ export function ComposerBar({
+           {isMobile ? (
+             <span
+               style={slotSubmits && !dictationRecording && effectiveCanSend ? sendIdleStyle : undefined}
+-              className={`inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-control border text-ui font-semibold ${slotWide ? "px-2.5" : ""} ${
++              className={`inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-control border text-ui font-semibold transition-[scale] duration-[120ms] ease-out motion-safe:group-enabled/send:group-active/send:scale-[0.96] ${slotWide ? "px-2.5" : ""} ${
+                 dictationRecording ? "border-danger bg-danger text-white" : slotFill
+               }`}
+             >
+diff --git a/src/components/kanban/kanbanBoard.css b/src/components/kanban/kanbanBoard.css
+index 6d9863e..dd0e4e4 100644
+--- a/src/components/kanban/kanbanBoard.css
++++ b/src/components/kanban/kanbanBoard.css
+@@ -107,9 +107,14 @@
+   display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+   border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-card);
+   font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); box-shadow: var(--shadow-1);
+-  transition: border-color var(--motion-fast), background var(--motion-fast);
++  transition: border-color var(--motion-fast), background var(--motion-fast), scale var(--motion-fast) ease-out;
+ }
+ .kb .btn:hover { border-color: var(--border-strong); }
++/* A discrete button answers a press (make-interfaces-feel-better #12): 0.96
++   for as long as it is held, springing back from wherever it got to. Cards,
++   rows, tabs and chips stay still: they are hit many times a minute (#19). */
++.kb .btn:active:not(:disabled), .kb .card .add:active { scale: 0.96; }
++.kb .card .add { transition: background var(--motion-fast), scale var(--motion-fast) ease-out; }
+ .kb .btn svg { width: 15px; height: 15px; }
+ .kb .btn .count { color: var(--color-muted); font-weight: 400; }
+ .kb .btn.hidden-pill[data-count="0"] { display: none; }
+@@ -955,11 +960,23 @@
+ .kb .dir-TB .pport.in { top: -5px; left: calc(50% - 4.5px); }
+ .kb .dir-TB .pport.out { bottom: -5px; left: calc(50% - 4.5px); }
+ .kb .dir-TB .pport.out.fail { bottom: auto; left: auto; right: -5px; top: calc(66% - 4.5px); border-color: color-mix(in srgb, var(--color-danger) 60%, var(--border-strong)); }
+-.kb .card .history { display: flex; flex-direction: column; gap: 4px; }
++.kb .card .history { display: block; }
+ .kb .card .history summary { list-style: none; display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-label); color: var(--color-muted); cursor: pointer; border-radius: 4px; padding: 2px 4px; margin-left: -4px; min-height: 22px; }
+ .kb .card .history summary::-webkit-details-marker { display: none; }
+ .kb .card .history summary:hover { background: var(--surface-well); color: var(--color-secondary); }
+ .kb .card .history summary .chev { width: 12px; height: 12px; transition: transform var(--motion-fast); }
++/* Past attempts opens and closes by height, interruptibly (#4): the content
++   box animates between 0 and its own height, and a second click mid-way
++   reverses from where it is. Chrome animates the content box of a block
++   <details> only, so the column and its 4 px gap move into that box. */
++.kb .card .history, .kb .draft-added { interpolate-size: allow-keywords; }
++.kb .card .history::details-content { display: flex; flex-direction: column; gap: 4px; }
++.kb .card .history > summary + * { margin-top: 4px; }
++.kb .card .history::details-content, .kb .draft-added::details-content {
++  height: 0; overflow: clip;
++  transition: height var(--motion-base) var(--ease-standard), content-visibility var(--motion-base) allow-discrete;
++}
++.kb .card .history[open]::details-content, .kb .draft-added[open]::details-content { height: auto; }
+ .kb .card .history[open] summary .chev { transform: rotate(90deg); }
+ .kb .card .history summary .hl { white-space: nowrap; font-weight: 700; color: var(--color-secondary); }
+ .kb .card .history summary .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@@ -995,6 +1012,12 @@
+ 
+ /* The sheet: over the board and under its menus, receipts and the full-window reader. */
+ .kb .gsheet-scrim { position: fixed; inset: 0; z-index: 62; background: rgb(10 10 16 / 0.32); display: flex; align-items: stretch; justify-content: center; padding: 12px; }
++/* The sheet rises 8 px and fades in; the scrim fades. It unmounts on close,
++   so the exit is the instant one. */
++.kb .gsheet-scrim { transition: opacity var(--motion-base) var(--ease-standard); }
++@starting-style { .kb .gsheet-scrim { opacity: 0; } }
++.kb .gsheet { transition: translate var(--motion-slow) var(--ease-standard), opacity var(--motion-base) var(--ease-standard); }
++@starting-style { .kb .gsheet { translate: 0 8px; opacity: 0; } }
+ .kb .gsheet { width: min(1480px, 100%); display: flex; flex-direction: column; min-height: 0; border-radius: var(--radius-surface); background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--shadow-2); overflow: hidden; }
+ .kb .gsheet header { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 16px; border-bottom: 1px solid var(--border-default); min-height: 52px; }
+ .kb .gsheet header .kind { height: 20px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 999px; font-size: var(--text-caption); font-weight: 700; color: var(--color-muted); border: 1px solid var(--border-default); flex-shrink: 0; }
+diff --git a/src/components/pipelines/pipelineBlock.css b/src/components/pipelines/pipelineBlock.css
+index 1a1efb3..eace317 100644
+--- a/src/components/pipelines/pipelineBlock.css
++++ b/src/components/pipelines/pipelineBlock.css
+@@ -144,6 +144,9 @@
+   font-size: var(--text-ui); font-weight: 600; line-height: 1.25; color: var(--color-primary); text-align: center;
+ }
+ .pblock .pb-act:hover:not(:disabled) { border-color: var(--border-strong); }
++/* Retry and Skip answer a press (make-interfaces-feel-better #12). */
++.pblock .pb-act { transition: border-color var(--motion-fast), scale var(--motion-fast) ease-out; }
++.pblock .pb-act:active:not(:disabled) { scale: 0.96; }
+ .pblock .pb-act:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+ .pblock .pb-act.primary { background: var(--color-brand); border-color: var(--color-brand); color: var(--color-on-brand); }
+ .pblock .pb-act:disabled { opacity: 0.5; }

@@ -1,0 +1,31 @@
+diff --git a/src/components/kanban/kanbanBoard.css b/src/components/kanban/kanbanBoard.css
+index 6d9863e..71bfd3c 100644
+--- a/src/components/kanban/kanbanBoard.css
++++ b/src/components/kanban/kanbanBoard.css
+@@ -382,7 +382,7 @@
+ .pident[data-engine="claude"] { color: var(--color-claude-mark); }
+ .pident[data-engine="codex"] { color: var(--color-codex-mark); }
+ .pident[data-identity="configured"] { color: var(--color-muted); }
+-.pident .imodel { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.pident .imodel { font: 600 var(--text-caption) var(--font-sans); font-variant-numeric: tabular-nums; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ .pident .ieffort { font-size: var(--text-caption); color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
+ .pident .iengine { font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
+ .pident[data-identity="configured"] .imodel,
+@@ -771,7 +771,7 @@
+ .kb .reader .ch-engine, .kb .pane .ch-engine { height: 18px; display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-caption); font-weight: 700; color: var(--color-secondary); flex-shrink: 0; }
+ .kb .reader .ch-model, .kb .pane .ch-model { display: inline-flex; align-items: center; gap: 5px; }
+ .kb .reader .ch-effort, .kb .pane .ch-effort { font-weight: 600; color: var(--color-secondary); }
+-.kb .reader .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
++.kb .reader .ch-model { font: 600 var(--text-caption) var(--font-sans); font-variant-numeric: tabular-nums; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+ .kb .reader .ch-tree { display: inline-flex; align-items: center; gap: 3px; font: var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-muted); white-space: nowrap; }
+ .kb .reader .ch-tree svg { width: 11px; height: 11px; }
+ .kb .reader .rlatest { text-align: left; font-size: var(--text-ui); color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 24px; padding: 0 4px; border-radius: 6px; }
+@@ -1081,7 +1081,7 @@
+ .kb .pane .ch-meta.pane-id { margin-top: -2px; }
+ .kb .pane .ch-meta .spacer { flex: 1; }
+ 
+-.kb .pane .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
++.kb .pane .ch-model { font: 600 var(--text-caption) var(--font-sans); font-variant-numeric: tabular-nums; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+ .kb .stage-detail :is(.ch-stage, .ch-ctx) { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; }
+ 
+ /* A waiting stage opened on its card. */

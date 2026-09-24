@@ -1,0 +1,42 @@
+diff --git a/src/components/kanban/kanbanBoard.css b/src/components/kanban/kanbanBoard.css
+index 6d9863e..5e0d62f 100644
+--- a/src/components/kanban/kanbanBoard.css
++++ b/src/components/kanban/kanbanBoard.css
+@@ -1035,6 +1035,9 @@
+ .kb .pane.tone-review { border-top: 3px solid var(--color-info); }
+ .kb .pane.tone-needs { border-top: 3px solid var(--color-warning); }
+ .kb .pane.tone-bad { border-top: 3px solid var(--color-danger); }
++/* A running stage says so with its dot and word; the coloured top rule is
++   kept for what needs the operator or failed. */
++.kb .gsheet .pane:is(.tone-active, .tone-review) { border-top: 1px solid var(--border-default); }
+ .kb .pane.tone-idle { background: color-mix(in srgb, var(--surface-card) 75%, var(--surface-canvas)); border-style: dashed; }
+ .kb .pane.pane-flash { animation: kb-pane-flash 600ms var(--ease-standard) 2; }
+ @keyframes kb-pane-flash { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 45%, transparent); border-color: var(--color-accent); } }
+diff --git a/src/styles/roleFrames.css b/src/styles/roleFrames.css
+index 4d10f53..4282777 100644
+--- a/src/styles/roleFrames.css
++++ b/src/styles/roleFrames.css
+@@ -145,6 +145,23 @@
+ :root[data-role-frame="ribbon"] .kb .reader .role-mark { margin-left: -11px; }
+ :root[data-role-frame="ribbon"] .kb .seat-head .role-mark { margin-left: -12px; }
+ :root[data-role-frame="ribbon"] [data-role-host="dock"] .role-mark { margin-left: -12px; }
++/* Inside the Stages sheet two or three conversations stand side by side, and
++   a gradient ring and a ribbon on each made them compete as peers. There the
++   frame is the rail: a neutral border with the role on its left edge and the
++   role's name in its ink. Wherever one conversation is open the ribbon stays. */
++:root[data-role-frame="ribbon"] .kb .gsheet .reader.conv[data-role-host] {
++  border: 1px solid var(--border-default); border-left: 4px solid var(--role);
++  background: var(--surface-card); padding: 8px 12px 10px 9px;
++}
++:root[data-role-frame="ribbon"] .kb .gsheet .reader.conv[data-role-host]::after { display: none; }
++:root[data-role-frame="ribbon"] .kb .gsheet .reader .role-mark {
++  height: auto; margin-left: 0; padding: 0; gap: 7px; color: var(--role-ink); letter-spacing: 0.06em;
++  background: none; clip-path: none;
++}
++:root[data-role-frame="ribbon"] .kb .gsheet .reader .role-mark-emblem {
++  width: 22px; height: 22px; border-radius: 6px; color: #fff; background: var(--role-fill);
++  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
++}
+ /* The phone: a gradient hairline under the bar, the ribbon in the title cell. */
+ :root[data-role-frame="ribbon"] [data-role-host="phone"] [data-mobile2-bar] {
+   border-bottom-color: transparent;
