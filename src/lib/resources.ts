@@ -26,6 +26,8 @@ import {
   structuredHostStamp,
   type AgentProcess,
 } from "@/lib/scanner/process";
+import { resourceWorkerRequestProblem } from "@/lib/resourceWorkerRequest";
+import { readViewerTree } from "@/lib/resourceViewerTree";
 import { overlayResourceSessionTitles } from "@/lib/session/titleProjection";
 import { readTranscriptHosts, type TranscriptHost, type TranscriptHostSnapshot } from "@/lib/agent/transcriptHost";
 import { captureTmuxAttachReferences, type TmuxAttachReference } from "@/lib/tmux";
@@ -33,7 +35,7 @@ import { statePath } from "@/lib/configDir";
 import { fsyncPath } from "@/lib/state/durableJson";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
-import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, type ResourcesPayload } from "./types";
+import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, type ResourcesPayload, type ResourcesViewer } from "./types";
 
 /**
  * System memory pressure + per-agent-session memory attribution, the data
@@ -139,10 +141,44 @@ export function parseResourcesFixture(raw: string): ResourcesPayload {
     && typeof system.capturedAt === "string"
     && Number.isFinite(Date.parse(system.capturedAt))
   );
-  if (!candidate || !validSystem || !Array.isArray(candidate.sessions) || candidate.sessions.length !== 0) {
-    throw new Error("invalid resources fixture: expected system metrics and an empty sessions list");
+  /* Rows a fixture lists are shown and never killable: the kill allowlist a
+     fixture read notes is always empty. */
+  if (!candidate || !validSystem || !Array.isArray(candidate.sessions)
+    || candidate.sessions.length > RESOURCE_OBSERVATION_MAX_SESSIONS
+    || !candidate.sessions.every(validResourceSession)) {
+    throw new Error("invalid resources fixture: expected system metrics and a sessions list");
   }
-  return { system: system ?? null, sessions: [] };
+  const sessionsCapturedAt = candidate.sessionsCapturedAt;
+  if (sessionsCapturedAt !== undefined && sessionsCapturedAt !== null
+    && (typeof sessionsCapturedAt !== "string" || !Number.isFinite(Date.parse(sessionsCapturedAt)))) {
+    throw new Error("invalid resources fixture: sessionsCapturedAt must be an ISO time or null");
+  }
+  if (candidate.sessionsStale !== undefined && typeof candidate.sessionsStale !== "boolean") {
+    throw new Error("invalid resources fixture: sessionsStale must be a boolean");
+  }
+  if (candidate.viewer !== undefined && candidate.viewer !== null && !validResourceViewer(candidate.viewer)) {
+    throw new Error("invalid resources fixture: viewer must be a Delegatus process section");
+  }
+  return {
+    system: system ?? null,
+    sessions: candidate.sessions,
+    ...(sessionsCapturedAt !== undefined ? { sessionsCapturedAt } : {}),
+    ...(candidate.sessionsStale !== undefined ? { sessionsStale: candidate.sessionsStale } : {}),
+    ...(candidate.viewer !== undefined ? { viewer: candidate.viewer } : {}),
+  };
+}
+
+function validResourceViewer(value: unknown): value is ResourcesViewer {
+  if (!record(value) || value.actionable !== false || typeof value.capturedAt !== "string"
+    || !Number.isFinite(Date.parse(value.capturedAt))
+    || !finiteNonNegative(value.rssBytes) || !finiteNonNegative(value.swapBytes)
+    || !Number.isSafeInteger(value.procCount) || !Array.isArray(value.processes)) return false;
+  return value.processes.every((item) => record(item)
+    && Number.isSafeInteger(item.pid) && (item.pid as number) > 0
+    && (item.role === "server" || item.role === "runtime-host" || item.role === "worker")
+    && typeof item.name === "string"
+    && finiteNonNegative(item.rssBytes) && finiteNonNegative(item.swapBytes)
+    && Number.isSafeInteger(item.procCount));
 }
 
 function captureSystemMemory(proc: Pick<ProcBackend, "systemMemory"> = procBackend): ResourcesPayload["system"] {
@@ -394,14 +430,27 @@ export function resourceWorkerFileSnapshot(
   }));
 }
 
+/** The handed-over file list: titles and conversation identity projected from
+    the registry, then cut back to exactly the fields the worker accepts. The
+    title projection writes more than titles: every spawned conversation's
+    transcript also gets its project metadata (`projectName`, `projectRoot`,
+    `projectOwnership`), and a request carrying those keys is refused whole,
+    which is how every collection failed from 2026-09-20 (#2110). */
+export function resourceWorkerFileHandoff(
+  entries: ResourceFileObservation[],
+  overlay: (entries: FileEntry[]) => void = overlayResourceSessionTitles,
+): ResourceWorkerFileObservation[] {
+  const files = resourceWorkerFileSnapshot(entries, () => null);
+  overlay(files as FileEntry[]);
+  return resourceWorkerFileSnapshot(files, () => null);
+}
+
 /** The Viewer's file observation, titles and conversation identity already
     projected from the registry. The collector worker takes it as handed over:
     the registry is the Viewer's to read, never the worker's (#1870). */
 export async function readResourceFileSnapshot(fresh: boolean): Promise<ResourceWorkerFileObservation[]> {
   const scan = fresh ? await currentResourceFileScan() : await completedFileScan({ revalidate: false });
-  const files = resourceWorkerFileSnapshot(scan.snapshot.files, () => null);
-  overlayResourceSessionTitles(files as FileEntry[]);
-  return files;
+  return resourceWorkerFileHandoff(scan.snapshot.files);
 }
 
 /** The outermost consecutive ancestor carrying this viewer's host stamp.
@@ -1080,7 +1129,7 @@ function validResourceSession(value: unknown): boolean {
   return typeof value.target === "string" && value.target.length > 0
     && Number.isSafeInteger(value.panePid) && (value.panePid as number) > 0
     && nullableString(value.path)
-    && (value.engine === "claude" || value.engine === "codex" || value.engine === null)
+    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot" || value.engine === null)
     && nullableString(value.title)
     && nullableString(value.project)
     && (value.activity === "live" || value.activity === "recent" || value.activity === "stalled" || value.activity === "idle" || value.activity === null)
@@ -1141,7 +1190,7 @@ function validStructuredHostKillRef(value: unknown): value is StructuredHostKill
        recycled since (#1199). */
     && typeof value.startIdentity === "string" && value.startIdentity.length > 0
     && nullableString(value.bootEpoch)
-    && (value.engine === "claude" || value.engine === "codex")
+    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot")
     && nullableString(value.sessionId)
     && nullableString(value.conversationId)
     && nullableBoolean(value.seat)
@@ -1347,13 +1396,24 @@ async function collectResourcesInWorker(
     if (inputTimer) clearTimeout(inputTimer);
   });
   const hosts = await hostsTask;
-  const request = JSON.stringify({
+  const requestValue = {
     type: "collect",
     fresh,
     files,
     identityEpoch: systemBootEpoch(),
     hosts,
-  }) + "\n";
+  };
+  /* The worker would refuse it anyway; naming the field here puts the cause in
+     the Viewer's own failure record. */
+  const requestProblem = resourceWorkerRequestProblem(requestValue);
+  if (requestProblem) {
+    throw new ResourceCollectorFailureError(
+      "collector-crash",
+      "worker-input",
+      `resource collector request refused before spawn: ${requestProblem}`,
+    );
+  }
+  const request = JSON.stringify(requestValue) + "\n";
   const outputMaxBytes = limits.outputMaxBytes ?? RESOURCE_WORKER_OUTPUT_MAX_BYTES;
   if (Buffer.byteLength(request) > RESOURCE_WORKER_OUTPUT_MAX_BYTES) {
     throw new ResourceCollectorFailureError(
@@ -2097,8 +2157,23 @@ async function collectResourcesInWorker(
     worker.once("close", onWorkerClose);
     let output = "";
     worker.stdout.setEncoding("utf8");
-    const onStdout = (chunk: string) => {
+    const onStdout = (received: string) => {
+      let chunk = received;
       outputBytes += Buffer.byteLength(chunk);
+      /* The handshake can share one read with the output behind it. Taking it
+         before the limit check lets a limit failure in the same chunk clean up
+         a proven namespace promptly; with nothing proven, cleanup waited out
+         the one-second SIGKILL fallback. */
+      if (containmentRequested && !containmentProven && !outcome) {
+        const pending = output + chunk;
+        const newline = pending.indexOf("\n");
+        const line = newline < 0 ? "" : pending.slice(0, newline);
+        if (newline >= 0 && acceptContainmentHandshake(line)) {
+          outputBytes -= Buffer.byteLength(line) + 1;
+          output = "";
+          chunk = pending.slice(newline + 1);
+        }
+      }
       if (outputBytes > outputMaxBytes + (containmentRequested && !containmentProven ? 512 : 0)) {
         finish({
           type: "failure",
@@ -2213,7 +2288,11 @@ async function collectResourcesInWorker(
 function fixtureRead(payload: ResourcesPayload, fresh: boolean): ResourcesRead {
   const capturedAt = Date.now();
   return {
-    payload,
+    payload: {
+      ...payload,
+      sessionsCapturedAt: payload.sessionsCapturedAt === undefined ? new Date(capturedAt).toISOString() : payload.sessionsCapturedAt,
+      sessionsStale: payload.sessionsStale ?? false,
+    },
     diagnostic: {
       fresh,
       status: "complete",
@@ -2241,18 +2320,38 @@ function resourceCacheAttribution(
   };
 }
 
+/** The most a working collector lets the session table age: the cache window
+    plus one bounded revalidation. Anything older was left by a collector that
+    stopped producing, whatever the last read reported. */
+const SESSIONS_STALE_AFTER_MS = CACHE_MS + RESOURCE_OBSERVE_TIMEOUT_MS;
+
+/** The session table's own capture time, and whether it is still current. */
+function sessionTableStamp(
+  observation: ResourceObservation<CollectedResources> | null,
+  failed: boolean,
+  now: number,
+): Required<Pick<ResourcesPayload, "sessionsCapturedAt" | "sessionsStale">> {
+  if (!observation) return { sessionsCapturedAt: null, sessionsStale: true };
+  return {
+    sessionsCapturedAt: new Date(observation.completedAt).toISOString(),
+    sessionsStale: failed || now - observation.completedAt > SESSIONS_STALE_AFTER_MS,
+  };
+}
+
 function resourceReadFromResult(
   result: ResourceCollectorResult<CollectedResources>,
   captureSystem: () => ResourcesPayload["system"],
   fresh: boolean,
   servedFromCache = false,
+  now = Date.now(),
 ): ResourcesRead {
   const { observation, failure } = result;
   const cache = resourceCacheAttribution(observation, result.collectorId, servedFromCache || failure !== undefined);
+  const stamp = sessionTableStamp(observation, failure !== undefined, now);
   if (!observation) {
     if (!failure) throw new Error("resource collector returned no observation or failure");
     return {
-      payload: { system: captureSystem(), sessions: [] },
+      payload: { system: captureSystem(), sessions: [], ...stamp },
       diagnostic: {
         fresh,
         status: "failed",
@@ -2274,7 +2373,7 @@ function resourceReadFromResult(
   }
   if (failure) {
     return {
-      payload: fresh ? payload : { ...payload, system: captureSystem() },
+      payload: { ...payload, ...(fresh ? {} : { system: captureSystem() }), ...stamp },
       diagnostic: {
         fresh,
         status: "failed",
@@ -2291,7 +2390,7 @@ function resourceReadFromResult(
     };
   }
   return {
-    payload: fresh ? payload : { ...payload, system: captureSystem() },
+    payload: { ...payload, ...(fresh ? {} : { system: captureSystem() }), ...stamp },
     diagnostic: {
       ...diagnostic,
       fresh,
@@ -2315,6 +2414,7 @@ export function createResourcesReader(
     initial?: ResourceObservation<CollectedResources> | null;
     persist?: (observation: ResourceObservation<CollectedResources>) => boolean;
     readFiles?: (fresh: boolean) => Promise<ResourceWorkerFileObservation[]>;
+    readHostRecords?: () => Promise<StructuredHostRecord[]>;
     workerLimits?: ResourceWorkerLimits;
     workerProcessRuntime?: ResourceWorkerProcessRuntime;
   } = {},
@@ -2340,9 +2440,22 @@ export function createResourcesReader(
       options.workerLimits,
       globalStore.__llvResourceTargetEpoch ?? 0,
       options.workerProcessRuntime,
+      options.readHostRecords,
     ),
   });
   let lastPersistedGeneration = options.initial?.generation ?? 0;
+  /* A failed collection used to leave no trace outside the read that served
+     it, so a request contract that broke on 2026-09-20 went unnoticed for four
+     days (#2110). Each failed generation is logged once, with its cause chain. */
+  let lastLoggedFailureGeneration = -1;
+  const logFailure = (result: ResourceCollectorResult<CollectedResources>) => {
+    if (!result.failure || result.generation <= lastLoggedFailureGeneration) return;
+    lastLoggedFailureGeneration = result.generation;
+    const { reason, diagnostic } = result.failure;
+    const chain = [diagnostic.message, ...diagnostic.causes.filter((cause) => cause !== diagnostic.message)].join(" <- ");
+    const stderr = diagnostic.stderr?.trim() ? ` stderr: ${diagnostic.stderr.trim().slice(-500)}` : "";
+    console.error(`[resources] collection ${result.generation} failed (${reason}, ${diagnostic.cause}): ${chain}${stderr}`);
+  };
   const persist = (observation: ResourceObservation<CollectedResources>) => {
     if (observation.degradedReason || observation.generation <= lastPersistedGeneration) return;
     const succeeded = options.persist?.(observation) ?? true;
@@ -2364,6 +2477,7 @@ export function createResourcesReader(
     const task = collector.observe(latest.generation, observeTimeoutMs, false)
       .then((result) => {
         if (result.failure) {
+          logFailure(result);
           latestBackgroundFailure = result;
           return;
         }
@@ -2388,7 +2502,7 @@ export function createResourcesReader(
       }
       persist(latest);
       if (latestBackgroundFailure) {
-        return resourceReadFromResult(latestBackgroundFailure, captureSystem, false, true);
+        return resourceReadFromResult(latestBackgroundFailure, captureSystem, false, true, now());
       }
       return resourceReadFromResult({
         observation: latest,
@@ -2396,7 +2510,7 @@ export function createResourcesReader(
         startedAt: latest.startedAt,
         completedAt: latest.completedAt,
         collectorId,
-      }, captureSystem, false, true);
+      }, captureSystem, false, true, now());
     }
     const fence = fresh ? collector.fence() : -1;
     const result = await collector.observe(
@@ -2408,7 +2522,8 @@ export function createResourcesReader(
       persist(result.observation);
       clearBackgroundFailure(result.observation);
     }
-    return resourceReadFromResult(result, captureSystem, fresh);
+    logFailure(result);
+    return resourceReadFromResult(result, captureSystem, fresh, false, now());
   };
 
   return {
@@ -2456,12 +2571,18 @@ export function resetResourcesForTests(): void {
     `fresh` forces a rebuild — used right after a kill so the freed memory and
     the shorter session list show up immediately. */
 export async function readResources(fresh = false): Promise<ResourcesPayload> {
-  const fixturePath = process.env.LLV_RESOURCES_FIXTURE;
-  if (fixturePath) {
-    noteSessionTargets([]);
-    return parseResourcesFixture(readFileSync(fixturePath, "utf8"));
-  }
-  return (await resourcesReader().read(fresh)).payload;
+  return (await readResourcesWithDiagnostic(fresh)).payload;
+}
+
+/** The Viewer's own tree is measured on every read, beside the system block,
+    so it is as current as the RAM bars and never inherits the session table's
+    age. A current table's session roots are handed in so agent trees stay out
+    of it; a stale table's pids may since belong to anything, so the tree then
+    relies on the host stamp and the command line alone. */
+function withViewerSection(read: ResourcesRead): ResourcesRead {
+  const agentRoots = read.payload.sessionsStale ? [] : read.payload.sessions.map((session) => session.panePid);
+  const viewer = readViewerTree(agentRoots);
+  return { ...read, payload: { ...read.payload, viewer } };
 }
 
 export async function readResourcesWithDiagnostic(fresh = false): Promise<ResourcesRead> {
@@ -2470,5 +2591,5 @@ export async function readResourcesWithDiagnostic(fresh = false): Promise<Resour
     noteSessionTargets([]);
     return fixtureRead(parseResourcesFixture(readFileSync(fixturePath, "utf8")), fresh);
   }
-  return resourcesReader().read(fresh);
+  return withViewerSection(await resourcesReader().read(fresh));
 }

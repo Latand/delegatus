@@ -3,9 +3,9 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import type { ResourceSession } from "@/lib/types";
+import type { ResourceSession, ResourcesViewer } from "@/lib/types";
 
-import { CleanupPanel } from "./ResourcesFooter";
+import { CleanupPanel, stickySnap } from "./ResourcesFooter";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -65,12 +65,15 @@ function stubFetch(): KillCall[] {
 
 const mounted: Array<() => void> = [];
 
-function mount(sessions: ResourceSession[]): HTMLElement {
+function mount(
+  sessions: ResourceSession[],
+  extra: { sessionsStale?: boolean; sessionsCapturedAt?: string | null; viewer?: ResourcesViewer | null } = {},
+): HTMLElement {
   const element = document.createElement("div");
   document.body.append(element);
   const root: Root = createRoot(element);
   flushSync(() => {
-    root.render(<CleanupPanel sessions={sessions} now={NOW} onRefresh={async () => {}} onClose={() => {}} />);
+    root.render(<CleanupPanel sessions={sessions} now={NOW} {...extra} onRefresh={async () => {}} onClose={() => {}} />);
   });
   mounted.push(() => {
     flushSync(() => { root.unmount(); });
@@ -258,4 +261,57 @@ test("kill all arms first, then force-kills the live hosts too but never an unti
   click(buttonLabelled(view, "Confirm"));
   await settle();
   expect(calls.map((call) => [call.body.target, call.body.intent])).toEqual([["structured:claude:live", "all"]]);
+});
+
+const VIEWER: ResourcesViewer = {
+  actionable: false,
+  capturedAt: hoursAgo(0),
+  rssBytes: 4 * 1024 ** 3,
+  swapBytes: 512 * 1024 ** 2,
+  procCount: 5,
+  processes: [
+    { pid: 10, role: "server", name: "bun-container", rssBytes: 1_300 * 1024 ** 2, swapBytes: 0, procCount: 1 },
+    { pid: 20, role: "runtime-host", name: "main", rssBytes: 700 * 1024 ** 2, swapBytes: 0, procCount: 1 },
+    { pid: 11, role: "worker", name: "accountMigrationController.worker", rssBytes: 1_000 * 1024 ** 2, swapBytes: 512 * 1024 ** 2, procCount: 1 },
+  ],
+};
+
+test("rows from a failed refresh carry their capture time and a stale banner (#2110)", () => {
+  /* fmtAge reads the wall clock, so the capture is four days before it. */
+  const view = mount([host({ target: "structured:claude:lane" })], { sessionsStale: true, sessionsCapturedAt: new Date(Date.now() - 96 * 3_600_000).toISOString() });
+
+  const banner = view.querySelector('[data-testid="resources-sessions-stale"]')?.textContent ?? "";
+  expect(banner).toContain("the last refresh failed");
+  expect(banner).toContain("4d");
+  expect(view.querySelectorAll('[data-testid="resource-host-row"]')).toHaveLength(1);
+});
+
+test("an empty table after a failed collection never reads as no agents running (#2110)", () => {
+  const view = mount([], { sessionsStale: true, sessionsCapturedAt: null });
+
+  expect(view.textContent).toContain("the session list could not be collected");
+  expect(view.textContent).not.toContain("no agent sessions running");
+});
+
+test("Delegatus's own processes are listed with their memory and no kill control (#1817)", () => {
+  const view = mount([host({ target: "structured:claude:lane" })], { viewer: VIEWER });
+
+  const section = view.querySelector('[data-testid="resources-viewer-section"]')!;
+  expect(section.textContent).toContain("Delegatus itself");
+  expect(section.textContent).toContain("4.0 GiB");
+  expect(section.textContent).toContain("nothing here can be killed");
+  const rows = [...section.querySelectorAll('[data-testid="resources-viewer-process"]')].map((row) => row.textContent);
+  expect(rows).toEqual([
+    "web server1.3 GiB",
+    "runtime host700 MiB",
+    "worker · accountMigrationController.worker1000 MiB + 512 MiB swap",
+  ]);
+  expect(section.querySelectorAll("button")).toHaveLength(0);
+  /* The bulk kills count agent rows only. */
+  expect(buttonLabelled(view, "Kill all agents")?.textContent).toContain("(1)");
+});
+
+test("the rail keeps the table's stamp and the Viewer section between polls", () => {
+  const first = stickySnap(null, { system: null, sessions: [], sessionsStale: true, sessionsCapturedAt: null, viewer: VIEWER }, NOW);
+  expect(first.data).toMatchObject({ sessionsStale: true, sessionsCapturedAt: null, viewer: VIEWER });
 });

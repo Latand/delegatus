@@ -2007,6 +2007,15 @@ export const uk: Record<keyof typeof en, Message> = {
   "resources.killAllConfirm": "Підтвердити — убити {n}?",
   "resources.killAllHint": "примусово закрити кожен хост агента зі списку, разом із активними — чистий старт, щоб наступний spawn/повідомлення пішли правильно. Твої шели, вебзастосунок, runtime-хост, воркери міграції акаунтів і невідмічені місця оркестратора не чіпає.",
   "resources.killAllNone": "немає сесій агентів для закриття",
+  "resources.sessionsStale": "рядки зняті {age}: останнє оновлення не вдалося, тож частини цих хостів може вже не бути",
+  "resources.sessionsUnavailable": "список сесій не вдалося зібрати: останнє оновлення не вдалося",
+  "resources.sessionsStaleDot": "список сесій застарів: знято {age}",
+  "resources.viewer": "Delegatus",
+  "resources.viewerTitle": "Сам Delegatus",
+  "resources.viewerHint": "вебсервер, runtime-хост і їхні воркери. Це не агенти, і звідси нічого з цього не закрити.",
+  "resources.viewerServer": "вебсервер",
+  "resources.viewerRuntimeHost": "runtime-хост",
+  "resources.viewerWorker": "воркер",
   "resources.close": "Закрити",
 
   // Attach controls (ResourcesFooter rows) — issue #68

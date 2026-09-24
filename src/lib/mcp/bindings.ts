@@ -3825,8 +3825,20 @@ async function resources(args: McpToolArgs, dependencies: ViewerMcpDomainDepende
   const payload = result?.payload ?? await dependencies.readResources(fresh);
   const capturedAt = payload.system?.capturedAt ?? null;
   const capturedMs = capturedAt === null ? NaN : Date.parse(capturedAt);
-  return redactPayload({ ...payload, freshness: {
+  /* #2110: the session table has its own age. Rows a failed collection fell
+     back on are marked one by one, so a reader that skips freshness still
+     cannot take a days-old host for a running one. */
+  const sessionsCapturedAt = payload.sessionsCapturedAt ?? null;
+  const sessionsMs = sessionsCapturedAt === null ? NaN : Date.parse(sessionsCapturedAt);
+  const sessionsStale = payload.sessionsStale ?? null;
+  const sessions = sessionsStale === true
+    ? payload.sessions.map((session) => ({ ...session, stale: true, capturedAt: sessionsCapturedAt }))
+    : payload.sessions;
+  return redactPayload({ ...payload, sessions, freshness: {
     requestedAt, capturedAt, capturedAtScope: "system", ageMs: Number.isFinite(capturedMs) ? Math.max(0, Date.now() - capturedMs) : null,
+    sessionsCapturedAt,
+    sessionsAgeMs: Number.isFinite(sessionsMs) ? Math.max(0, Date.now() - sessionsMs) : null,
+    sessionsStale,
     refreshRequested: fresh,
     refreshSucceeded: fresh && result ? result.diagnostic.status === "complete" && result.diagnostic.cache.status === "miss" : null,
     cache: result?.diagnostic.cache.status ?? "unknown",

@@ -2070,6 +2070,15 @@ export const en = {
   "resources.killAllConfirm": "Confirm — kill {n}?",
   "resources.killAllHint": "force-kill every agent host listed here, live ones included — a clean slate so the next spawn/message routes cleanly. Your shells, the web app, the runtime host, account-migration workers and unticked orchestrator seats are left alone.",
   "resources.killAllNone": "no agent sessions to kill",
+  "resources.sessionsStale": "rows captured {age}: the last refresh failed, so some of these hosts may no longer run",
+  "resources.sessionsUnavailable": "the session list could not be collected: the last refresh failed",
+  "resources.sessionsStaleDot": "the session list is stale: captured {age}",
+  "resources.viewer": "Delegatus",
+  "resources.viewerTitle": "Delegatus itself",
+  "resources.viewerHint": "the web server, the runtime host and their workers. These are not agents, and nothing here can be killed from this list.",
+  "resources.viewerServer": "web server",
+  "resources.viewerRuntimeHost": "runtime host",
+  "resources.viewerWorker": "worker",
   "resources.close": "Close",
 
   // Attach controls (ResourcesFooter rows) — issue #68

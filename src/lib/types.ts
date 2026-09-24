@@ -814,8 +814,43 @@ export interface ResourceSession {
   turnBusy?: boolean | null;
 }
 
+/** One process of Delegatus's own release (#1817): the web server, the runtime
+    host, or a worker one of them started. */
+export interface ResourcesViewerProcess {
+  pid: number;
+  role: "server" | "runtime-host" | "worker";
+  /** Short label: the worker's module name, or the executable's basename. */
+  name: string;
+  /** Totals across this process and every descendant listed under it. */
+  rssBytes: number;
+  swapBytes: number;
+  procCount: number;
+}
+
+/** Memory held by Delegatus itself. It is measured on every read together with
+    the system block, so it is as current as the RAM bars, and it is not
+    actionable: nothing here can be killed from the resources surface. */
+export interface ResourcesViewer {
+  actionable: false;
+  capturedAt: string;
+  rssBytes: number;
+  swapBytes: number;
+  procCount: number;
+  processes: ResourcesViewerProcess[];
+}
+
 /** GET /api/resources response. `system` is null when no platform probe worked. */
 export interface ResourcesPayload {
   system: ResourcesSystem | null;
   sessions: ResourceSession[];
+  /** When the session table was captured. The system block carries its own
+      time; the rows can be older when they come from an earlier collection.
+      Null when no collection ever produced rows. */
+  sessionsCapturedAt?: string | null;
+  /** The rows are not a current capture: the last refresh failed and the table
+      fell back on an earlier collection, or that collection is older than a
+      working collector would ever let it get. */
+  sessionsStale?: boolean;
+  /** Delegatus's own process tree; null when it could not be measured. */
+  viewer?: ResourcesViewer | null;
 }
