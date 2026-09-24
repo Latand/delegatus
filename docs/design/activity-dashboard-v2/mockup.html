@@ -257,7 +257,7 @@ const COPY = {
   en: {
     back: "Board", title: "Activity",
     today: "Today", d7: "7 days", d30: "30 days",
-    trustOk: "All sources read", trustLow: "Lower bound", trustNone: "Nothing read",
+    trustOk: "All sources read", trustLow: "Lower bound", trustNone: "Your time not read",
     how: "How it's counted",
     you: "You", agents: "Agents", reported: "reported",
     byMinute: "{v} by the minute", billable: "{v} billable",
@@ -266,7 +266,7 @@ const COPY = {
     unknown: "Unknown", noneRead: "No host was read for this range.", connect: "Connect a host",
     todayX: "Today", hoursUnit: "h", minUnit: "min",
     bandUnread: "{host} not read",
-    rhythm: "Rhythm", lFull: "1 h", lHalf: "½ h", lAlone: "agents without you", lUnclear: "unclear", lUnread: "not read",
+    rhythm: "Rhythm", lYou: "You:", lFull: "1 h", lHalf: "½ h", lAlone: "agents without you", lUnclear: "unclear", lUnread: "not read",
     splitUnknown: "Split unknown: your time was not read.",
     projects: "Projects", colYou: "You", colAgents: "Agents", billTag: "billable",
     more: "+ {n} more",
@@ -312,7 +312,7 @@ const COPY = {
   uk: {
     back: "Дошка", title: "Активність",
     today: "Сьогодні", d7: "7 днів", d30: "30 днів",
-    trustOk: "Усі джерела прочитано", trustLow: "Нижня межа", trustNone: "Нічого не прочитано",
+    trustOk: "Усі джерела прочитано", trustLow: "Нижня межа", trustNone: "Ваш час не прочитано",
     how: "Як рахується",
     you: "Ви", agents: "Агенти", reported: "у звіті",
     byMinute: "{v} похвилинно", billable: "{v} оплачуваних",
@@ -321,7 +321,7 @@ const COPY = {
     unknown: "Невідомо", noneRead: "За цей період не прочитано жодного хоста.", connect: "Підʼєднати хост",
     todayX: "Сьогодні", hoursUnit: "год", minUnit: "хв",
     bandUnread: "{host}: не прочитано",
-    rhythm: "Ритм", lFull: "1 год", lHalf: "½ год", lAlone: "агенти без вас", lUnclear: "неясно", lUnread: "не прочитано",
+    rhythm: "Ритм", lYou: "Ви:", lFull: "1 год", lHalf: "½ год", lAlone: "агенти без вас", lUnclear: "неясно", lUnread: "не прочитано",
     splitUnknown: "Розподіл невідомий: ваш час не прочитано.",
     projects: "Проєкти", colYou: "Ви", colAgents: "Агенти", billTag: "оплачуваний",
     more: "+ ще {n}",
@@ -1003,7 +1003,7 @@ function render() {
     <div class="grid${showRhythm ? "" : " no-rhythm"}">
       <section class="card main" data-card="main">${figures()}<div class="chart-wrap" id="chart"></div></section>
       ${showRhythm ? `<section class="card rhythm" data-card="rhythm"><div class="sec-head"><h2>${C.rhythm}</h2><div class="spacer"></div>
-        <div class="legend">${EMPTY ? "" : `<span class="item"><span class="sw you"></span>${C.lFull}</span><span class="item"><span class="sw you-half"></span>${C.lHalf}</span><span class="item"><span class="sw una"></span>${C.lAlone}</span>`}<span class="item"><span class="sw unr"></span>${C.lUnclear}</span><span class="item"><span class="sw hatch"></span>${C.lUnread}</span></div></div>
+        <div class="legend">${EMPTY ? "" : `<span class="item" style="margin-right:-6px;font-weight:600;color:var(--color-secondary)">${C.lYou}</span><span class="item"><span class="sw you"></span>${C.lFull}</span><span class="item"><span class="sw you-half"></span>${C.lHalf}</span><span class="item"><span class="sw una"></span>${C.lAlone}</span>`}<span class="item"><span class="sw unr"></span>${C.lUnclear}</span><span class="item"><span class="sw hatch"></span>${C.lUnread}</span></div></div>
         <div id="rhythm" style="margin-top:10px"></div></section>` : ""}
       <aside class="card projects" data-card="projects"><div class="inner" id="plist"></div></aside>
     </div>${STATE === "drawer" ? drawer() : ""}`;

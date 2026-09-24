@@ -1,6 +1,10 @@
 # Activity dashboard v2: the desktop presentation
 
-- Status: concept and static mockup, design stage. No product code changed.
+- Status: built on PR #2126. The desktop page is `ActivityDesktop` and the
+  components beside it in `src/components/activity/`, from 1024 px wide; the
+  presentation fields are in `src/lib/activity/method.ts` and
+  `src/lib/activity/report.ts`. "Build" below lists where the build differs
+  from this concept.
 - Grounded on: PR #2126, branch `pipeline/activity-dashboard-prototype` at
   `e40861caa`. The counting method, the sources and the API stay as
   `docs/design/activity-dashboard.md` defines them. This document replaces
@@ -166,7 +170,7 @@ question. Everything that explains the method lives behind one drawer.
 │      ▇▇     ░    ░  ░  ▇▇     ▨             ▇▇   ▇▇   │                              │
 │     Fri 18 Sat 19 Sun 20 Mon 21 Tue 22 Wed 23 Today   │                              │
 ├───────────────────────────────────────────────────────┤                              │
-│ Rhythm      ■ 1 h ■ ½ h ■ agents without you ▨ unclear ▨ not read                    │
+│ Rhythm  You: ■ 1 h ■ ½ h ■ agents without you ▨ unclear ▨ not read                   │
 │ Fri 18  ▒▒▒▒·····▇▇▇▇▒▇▇▇▇▆▆··▆▒▒                      │                              │
 │ …one row per day, 24 hour cells                       │                              │
 │ Today   ··▒▒····▆▇▇▇▆▆                                │                              │
@@ -353,8 +357,11 @@ Under half-hour rounding the same bins are labelled `40+ min` and
 `10–39 min`.
 
 Legend, top right of the card:
-`■ 1 h  ■ ½ h  ■ agents without you  ▨ unclear  ▨ not read`; with nothing
-read it keeps only the two hatches, the only marks drawn.
+`You: ■ 1 h  ■ ½ h  ■ agents without you  ▨ unclear  ▨ not read`. "You:"
+names the subject of the two indigo swatches once, so "1 h" never reads as
+"1 h of what"; the legend stays on one line at 1280×800 in Ukrainian
+(`Ви: ■ 1 год  ■ ½ год  …`). With none of your input read it keeps only the
+two hatches, the only marks drawn.
 Hour axis `00 06 12 18 24` under the grid. Rows are 18 px for 7 days and
 7 px for 30 days (every Monday and today labelled); on Today the rhythm card
 is hidden, because the main chart is already hourly.
@@ -422,7 +429,7 @@ One chip in the header, 28 px tall:
 |---|---|
 | every expected host read for the range, no flagged day | `✓ All sources read` (success check, secondary text) |
 | any host unread for part of the range, or a probable missing source | `⚠ Lower bound` (warning tone) |
-| nothing read for the range | `⚠ Nothing read` (warning tone) |
+| none of your input read for the range | `⚠ Your time not read` (warning tone). It names what went unread: agent time may still be read and drawn beside it, so the chip never claims that nothing was read. It fits the header at 1280 px in Ukrainian (`Ваш час не прочитано`) |
 
 Both the chip and `ⓘ How it's counted` open the same right-hand drawer
 (460 px, scrim over the page, closes on Escape and on the scrim). The chip
@@ -513,7 +520,7 @@ in the list and its detail, agent-hours in the drawer.
 | lower bound (a host unread for part of the range) | `≥ 27.5 h`; `≥` on minutes and billable; Agents meter gains its unclear part when agents worked on a project the host holds | `≥ 4` on the affected days; agent time there on the host's projects is unclear (hatched), on other projects supervised or unattended as usual | grey hatch where a host was unread and nothing else applies; teal hatch where agents worked mostly on the host's projects, solid teal where they worked on others | `≥` on projects the unread host holds, `?` where that leaves zero; their expanded unclear part names its days | `⚠ Lower bound` |
 | probable missing source (a flagged day) | as lower bound | amber `?` on the day's cap; the whole agent column unclear, every project | every cell of the day hatched | no mark on the rows (it would mark all of them); an expanded row names the day on its unclear part | `⚠ Lower bound`; one row in the drawer |
 | Today, a host unread for some hours | `≥ 1.5 h` and `≥` on its line | the hatched band behind those hours, labelled; read minutes drawn over it; agent minutes there unclear on the host's projects | (hidden on Today) | `≥` / `?` as above | `⚠ Lower bound`; the drawer names the hours |
-| nothing read for the range | `Unknown` (32 px), "No host was read for this range." and `🔌 Connect a host` (opens the drawer at Hosts) | agent columns only, every one unclear; muted `?` on every cap | agents teal-hatched, the rest grey-hatched | `?` in the You column, sorted by Agents | `⚠ Nothing read` |
+| none of your input read for the range | `Unknown` (32 px), "No host was read for this range." and `🔌 Connect a host` (opens the drawer at Hosts) | agent columns only, every one unclear; muted `?` on every cap | agents teal-hatched, the rest grey-hatched | `?` in the You column, sorted by Agents | `⚠ Your time not read` |
 | agent index not built yet | unchanged | your columns only | your cells only | agents column `…` | unchanged; the drawer says "Agent time appears after the first transcript scan." |
 | a project with no agent time | – | – | – | `–` in the Agents column | – |
 | future hours today | – | nothing drawn | nothing drawn | – | – |
@@ -531,29 +538,29 @@ source was read. A flag that applies to the whole range
 ## Copy
 
 Every visible string of the main view, the tooltips, the project detail and
-the drawer. `{…}` are values. Units follow the app: `h`/`m` and `год`/`хв`;
-decimals use a comma in Ukrainian.
+the drawer, under the keys the build uses (`src/lib/i18n/en.ts`, `uk.ts`).
+`{…}` are values. Units follow the app: `h`/`m` and `год`/`хв`; decimals use
+a comma in Ukrainian. The phone layout keeps the prototype's own keys, so
+nothing it shows changes wording; where the desktop words a string
+differently, it has a key of its own.
 
-| key (proposed) | en | uk |
+| key | en | uk |
 |---|---|---|
 | `activity.back` (kept) | Board | Дошка |
 | `activity.title` (kept) | Activity | Активність |
 | `activity.range.*` (kept) | Today / 7 days / 30 days | Сьогодні / 7 днів / 30 днів |
 | `activity.trust.ok` | All sources read | Усі джерела прочитано |
 | `activity.trust.lower` | Lower bound | Нижня межа |
-| `activity.trust.none` | Nothing read | Нічого не прочитано |
+| `activity.trust.none` | Your time not read | Ваш час не прочитано |
 | `activity.how` | How it's counted | Як рахується |
 | `activity.fig.you` | You | Ви |
 | `activity.fig.agents` | Agents | Агенти |
 | `activity.fig.reported` | reported | у звіті |
 | `activity.fig.byMinute` | {value} by the minute | {value} похвилинно |
-| `activity.tile.billable` (reworded) | {value} billable | {value} оплачуваних |
+| `activity.fig.billable` | {value} billable | {value} оплачуваних |
 | `activity.fig.supervised` | {value} supervised | {value} під наглядом |
 | `activity.fig.unattended` | {value} unattended | {value} без нагляду |
 | `activity.fig.unclear` | {value} unclear | {value} неясно |
-| `activity.project.unclearOn` | {value} unclear ({days}) | {value} неясно ({days}) |
-| `activity.project.days` | {n} day / days | {n} день / дні / днів / дня |
-| `activity.list.and2` / `andMore` | {a} and {b} / {a}, {b} and {n} more | {a} і {b} / {a}, {b} та ще {n} |
 | `activity.fig.splitUnknown` | Split unknown: your time was not read. | Розподіл невідомий: ваш час не прочитано. |
 | `activity.unknown` (kept) | Unknown | Невідомо |
 | `activity.fig.noneRead` | No host was read for this range. | За цей період не прочитано жодного хоста. |
@@ -561,46 +568,47 @@ decimals use a comma in Ukrainian.
 | `activity.fig.indexing` | Indexing transcripts… | Індексуємо транскрипти… |
 | `activity.fig.wall` | time at least one agent worked | час, коли працював хоча б один агент |
 | `activity.fig.agentHours` | agent-hours: parallel agents each counted | агенто-години: паралельні агенти окремо |
-| `activity.chart.today` | Today | Сьогодні |
+| `activity.chart.aria` / `ariaToday` (screen readers) | Your reported hours and agent time, per day / Your minutes and agent minutes, per hour today | Ваші години у звіті й час агентів, по днях / Ваші хвилини й хвилини агентів, по годинах сьогодні |
+| `activity.chart.pair` (screen readers) | {day}: you {you}, agents {agents} | {day}: ви {you}, агенти {agents} |
 | `activity.chart.unitH` | h | год |
 | `activity.chart.unitMin` | min | хв |
 | `activity.chart.unread` | {host} not read | {host}: не прочитано |
 | `activity.rhythm.title` | Rhythm | Ритм |
+| `activity.rhythm.you` | You: | Ви: |
 | `activity.rhythm.full` | 1 h | 1 год |
 | `activity.rhythm.half` | ½ h | ½ год |
 | `activity.rhythm.full40` / `half10` (half-hour rounding) | 40+ min / 10–39 min | 40+ хв / 10–39 хв |
 | `activity.rhythm.alone` | agents without you | агенти без вас |
 | `activity.rhythm.unclear` | unclear | неясно |
 | `activity.rhythm.unread` | not read | не прочитано |
+| `activity.rhythm.aria` (screen readers) | Your reported hours and agents working without you, per day and hour | Ваші години у звіті й агенти без вас, по днях і годинах |
 | `activity.view.projects` (kept) | Projects | Проєкти |
 | `activity.col.you` | You | Ви |
 | `activity.col.agents` | Agents | Агенти |
+| `activity.col.sort` (screen readers) | Sort by {column} | Сортувати: {column} |
 | `activity.project.billable` (kept) | billable | оплачуваний |
-| `activity.projects.more` | + {n} more | + ще {n} |
+| `activity.projects.more` | + {count} more | + ще {count} |
+| `activity.projects.none` | No projects in this range. | За цей період проєктів немає. |
 | `activity.unattributed` (kept) | No project | Без проєкту |
-| `activity.project.byMinute` | {value} by the minute | {value} похвилинно |
-| `activity.project.requests` (kept) | {n} input / inputs | {n} ввід / вводи / вводів / вводу |
-| `activity.project.agents` (kept) | {n} agent / agents | {n} агент / агенти / агентів / агента |
-| `activity.project.reassigned` (reworded) | {value} counted under a later input's project | {value} зараховано проєкту пізнішого вводу |
-| `activity.project.agentHours` | {value} agent-hours | {value} агенто-годин |
-| `activity.project.hosts` | Hosts | Хости |
-| `activity.project.more` | More detail | Докладніше |
-| `activity.breakdown.surface` (reworded) | Surface | Поверхня |
-| `activity.breakdown.kind` (reworded) | Input | Ввід |
-| `activity.breakdown.engine` (reworded) | Engine | Рушій |
-| `activity.breakdown.role` (reworded) | Role | Роль |
-| `activity.breakdown.pipelines` (reworded) | Pipelines | Пайплайни |
-| `activity.breakdown.note` | Surface and input share out your time; engine, role and pipelines share out agent-hours. | Поверхня і ввід ділять ваш час; рушій, роль і пайплайни — агенто-години. |
+| `activity.project.requests` (kept) | {count} input / inputs | {count} ввід / вводи / вводів / вводу |
+| `activity.project.agents` (kept) | {count} agent / agents | {count} агент / агенти / агентів / агента |
+| `activity.detail.reassigned` | {value} counted under a later input's project | {value} зараховано проєкту пізнішого вводу |
+| `activity.detail.agentHours` | {value} agent-hours | {value} агенто-годин |
+| `activity.detail.unclearOn` | {value} unclear ({days}) | {value} неясно ({days}) |
+| `activity.detail.days` | {count} day / days | {count} день / дні / днів / дня |
+| `activity.list.and2` / `andMore` | {a} and {b} / {a}, {b} and {count} more | {a} і {b} / {a}, {b} та ще {count} |
+| `activity.detail.hosts` | Hosts | Хости |
+| `activity.detail.more` | More detail | Докладніше |
+| `activity.detail.surface` / `kind` / `engine` / `role` / `pipelines` | Surface / Input / Engine / Role / Pipelines | Поверхня / Ввід / Рушій / Роль / Пайплайни |
+| `activity.detail.note` | Surface and input share out your time; engine, role and pipelines share out agent-hours. | Поверхня і ввід ділять ваш час; рушій, роль і пайплайни — агенто-години. |
 | `activity.surface.*`, `activity.kind.*`, `activity.role.unregistered` (kept) | Desktop browser, Phone, Terminal, …; Messages, Answers, Voice, …; not in the registry | (kept) |
-| `activity.tip.reported` | reported | у звіті |
 | `activity.tip.byMinute` | by the minute | похвилинно |
 | `activity.tip.agents` | agents | агенти |
 | `activity.tip.supervised` / `unattended` / `unclear` | supervised / unattended / unclear | під наглядом / без нагляду / неясно |
 | `activity.tip.lower` | {host} not read: your time is at least this. | {host} не прочитано: вашого часу щонайменше стільки. |
-| `activity.tip.unclear` | Unclear: your input for {projects} was not read, so it may have been supervised. | Неясно: ваш ввід для {projects} не прочитано, тож це міг бути нагляд. |
+| `activity.tip.unclearNote` | Unclear: your input for {projects} was not read, so it may have been supervised. | Неясно: ваш ввід для {projects} не прочитано, тож це міг бути нагляд. |
 | `activity.tip.unclearAny` | Unclear: agent time on projects whose input from you was not read then. It may have been supervised. | Неясно: час агентів на проєктах, ваш ввід для яких тоді не прочитано. Це міг бути нагляд. |
 | `activity.tip.missing` | A workday reads zero while agents ran: a source is probably missing. | Робочий день показує нуль, хоча агенти працювали: ймовірно, бракує джерела. |
-| `activity.cell.you` / `agents` | You / Agents | Ви / Агенти |
 | `activity.cell.notRead` | not read ({host}) | не прочитано ({host}) |
 | `activity.cell.missing` | not read (a source is probably missing) | не прочитано (ймовірно, бракує джерела) |
 | `activity.cell.none` | no input | без вводу |
@@ -609,10 +617,13 @@ decimals use a comma in Ukrainian.
 | `activity.drawer.range` | This range | Цей період |
 | `activity.drawer.method` | Method | Метод |
 | `activity.drawer.flagLower` | {host} was not read {when}. Your hours then may be higher. | {when}: {host} не прочитано, тож ваших годин тоді могло бути більше. |
-| `activity.drawer.when.days` / `when.today` | on {days} / today, {span} | {days} / сьогодні, {span} |
+| `activity.drawer.whenDays` / `whenToday` | on {days} / today, {span} | {days} / сьогодні, {span} |
 | `activity.drawer.flagMissing` | {day} reads zero on a workday while agents ran. A source is probably missing. | {day} — робочий день із нулем, хоча агенти працювали. Ймовірно, бракує джерела. |
-| `activity.drawer.m1` | Each of your inputs opens a 10-minute window; overlapping windows merge. A minute counts once, for the project of the latest input. | Кожен ваш ввід відкриває вікно на 10 хвилин; вікна, що перетинаються, зливаються. Хвилина рахується один раз — для проєкту останнього вводу. |
+| `activity.drawer.flagMissingMany` (more than three flagged days) | {count} workdays read zero while agents ran ({days}). A source is probably missing. | {count} робочих днів із нулем, хоча агенти працювали ({days}). Ймовірно, бракує джерела. |
+| `activity.drawer.m1` | Each of your inputs opens a {window}-minute window; overlapping windows merge. A minute counts once, for the project of the latest input. | Кожен ваш ввід відкриває вікно на {window} хвилин; вікна, що перетинаються, зливаються. Хвилина рахується один раз — для проєкту останнього вводу. |
+| `activity.drawer.m1Episodes` (a break above the window) | Each of your inputs opens a {window}-minute window, and inputs at most {break} minutes apart join one episode. A minute counts once, for the project of the latest input. | Кожен ваш ввід відкриває вікно на {window} хвилин, а вводи з проміжком до {break} хвилин складають один епізод. Хвилина рахується один раз — для проєкту останнього вводу. |
 | `activity.drawer.m2` | Reported hours weigh each clock hour: under 10 minutes 0, 10–39 half an hour, 40 or more a full hour. The hour goes to the project with the most minutes. | Години у звіті зважують кожну годину за годинником: менше 10 хвилин — 0, 10–39 — пів години, 40 і більше — година. Година дістається проєкту з найбільшою кількістю хвилин. |
+| `activity.drawer.m2Half` (half-hour rounding) | Reported hours round each project's day to the nearest half hour, and any time at all is at least half an hour. | Години у звіті округлюють день кожного проєкту до пів години, і будь-який час — щонайменше пів години. |
 | `activity.drawer.m3` | Only your own input counts. Stage prompts, agent-to-agent messages, notifications and injected text are left out. | Рахується лише ваш власний ввід. Промпти етапів, повідомлення між агентами, сповіщення та вставлений текст не враховуються. |
 | `activity.drawer.m4` | Agent time (≈) runs from each message to the agent's last reply. Inside your time on the same project it is supervised; where a host holding that project was not read, or on a day that probably misses a source, it is unclear; the rest is unattended, including time you spent on another project. Your time and agent time are never added. | Час агентів (≈) триває від повідомлення до останньої відповіді агента. У межах вашого часу на тому ж проєкті це нагляд; де хост цього проєкту не прочитано або дню ймовірно бракує джерела — неясно; решта — без нагляду, зокрема поки ви працювали над іншим проєктом. Ваш час і час агентів ніколи не додаються. |
 | `activity.drawer.m5` | Days and hours are in {tz}. | Дні й години — за {tz}. |
@@ -620,21 +631,26 @@ decimals use a comma in Ukrainian.
 | `activity.drawer.hostGap` | Not read {when} | Не прочитано: {when} |
 | `activity.hosts.thisHost` (kept) | this host | цей хост |
 | `activity.drawer.srcBoth` | Request ledger and transcript export | Журнал запитів і експорт транскриптів |
+| `activity.drawer.srcLedger` | Request ledger | Журнал запитів |
 | `activity.hosts.transcripts` (kept) | Transcript export | Експорт транскриптів |
 | `activity.hosts.notConnected` (kept) | Not connected: its time reads Unknown | (kept) |
 | `activity.drawer.excluded` | Excluded as not your input | Виключено як не ваш ввід |
 | `activity.coverage.title` (kept) | What each surface contributes | Що дає кожна поверхня |
-| `activity.drawer.foot` | Agent time indexed {when}. {n} agents are not in the registry, so their roles are unknown. | Час агентів проіндексовано {when}. {n} агентів немає в реєстрі, тож їхні ролі невідомі. |
-| `activity.failed` (kept) + `Retry` | The activity report could not be loaded. · Retry | Не вдалося завантажити звіт про активність. · Повторити |
+| `activity.drawer.indexed` | Agent time indexed {when}. | Час агентів проіндексовано {when}. |
+| `activity.drawer.unregistered` | {count} agents are not in the registry, so their roles are unknown. | {count} агентів немає в реєстрі, тож їхні ролі невідомі. |
+| `activity.drawer.indexing` | Agent time appears after the first transcript scan. | Час агентів зʼявиться після першого сканування транскриптів. |
+| `activity.table.day` (screen readers) | Day | День |
+| `activity.failed` (kept) + `activity.retry` | The activity report could not be loaded. · Retry | Не вдалося завантажити звіт про активність. · Повторити |
 
-The surface table collapses to three lines in the drawer:
-"Browser, tablet, phone: every request, voice included" / "Terminal: prompts
-a CLI records as typed by a person, through a host's export" / "Outside
-Delegatus (editors, Telegram, GitHub review): not seen", with the Ukrainian
-lines in the mockup. The prototype's `activity.subtitle`, `activity.tile.*`
+The surface table collapses to three lines in the drawer
+(`activity.drawer.surf1`–`surf3`): "Browser, tablet, phone: every request,
+voice included" / "Terminal: prompts a CLI records as typed by a person,
+through a host's export" / "Outside Delegatus (editors, Telegram, GitHub
+review): not seen", with the Ukrainian lines in the dictionary. The desktop
+page no longer shows the prototype's `activity.subtitle`, `activity.tile.*`
 sub-lines, `activity.gap.*` banner strings, `activity.legend.*`,
-`activity.breakdown.host` (the Hosts line replaces it) and
-`activity.coverage.*Counted` / `*Missing` rows leave the page.
+`activity.breakdown.*` titles and `activity.coverage.*Counted` / `*Missing`
+rows; the phone layout still does.
 
 ## Number formats
 
@@ -757,12 +773,22 @@ interface AgentSplit {
 
 interface ProjectActivity {
   // …existing fields…
-  /** The dates (in the zone) its unattendedUnreadMs falls on, oldest first. */
+  /** The dates (in the zone) holding at least a minute of its
+      unattendedUnreadMs, oldest first. */
   unclearDays: string[];
+}
+
+interface ActivityHostRow {
+  // …existing fields…
+  /** The stretches of the range, up to now, the host was not read for: the
+      drawer's "Not read on 22–23 Sept" and Today's band. */
+  unread: Interval[];
 }
 
 interface DayActivity {
   // …existing fields…
+  /** One of the weekdays checked for a probable missing source (settings). */
+  workday: boolean;
   /** One entry per clock hour of the day in the zone (23 or 25 on DST days). */
   hours: Array<{
     start: number;              // the hour's start, ms
@@ -828,6 +854,33 @@ the agent split), `projects[]` (hours, `humanReassignedMs`, `coverage`,
 `billable`, `requests`, `conversations`, `byHost`, `bySurface`, `byKind`,
 `byEngine`, `byRole`, `pipelines`, the agent split), `coverage.hosts`,
 `indexedAtMs`, `unregisteredConversations`, `billableConfigured`.
+
+## Build
+
+What the build does that this concept did not say, or says differently:
+
+- **Keys.** The Copy table lists the keys the build uses. Strings the phone
+  layout still shows keep their prototype keys and wording; the desktop words
+  them under its own (`activity.fig.billable`, `activity.detail.*`).
+- **Presentation fields beyond the proposal**: `DayActivity.workday` (weekend
+  labels follow the configured workdays, not Saturday and Sunday) and
+  `ActivityHostRow.unread`. `unclearDays` names a day only when it holds at
+  least a minute of unclear time. An hour's `project` and `agentProject` are
+  null when the hour holds none; the page reads that as "no project" only
+  when the hour has minutes.
+- **`+ N more`** opens the whole list, scrolling inside the card.
+- **Focus.** A day pair shows its frame only when a keyboard reached it; a
+  pointer gets the tooltip alone. A Rhythm row takes focus and moves by hour
+  with the arrow keys.
+- **More than three flagged days** in the drawer are one row that lists them.
+- **Dates** come from `Intl` (`18 – 24 Sept` in Chrome's en-GB, `18–24 вер.`).
+- **Renders** of the built page, from a seeded home with the invented data
+  above: `BOARD_CAPTURE_CASE=activity bun scripts/capture-board-geometry.ts`
+  against a production build, copied with
+  `ACTIVITY_RENDER_DIR=~/Pictures/delegatus-review/activity-dashboard-v2/build`.
+  The case checks the 7-day page ending inside 900 px, the trust chip and the
+  Rhythm legend on one line (also at 1280×800 in Ukrainian), no cut text, and
+  tooltips inside the viewport, and writes every reading to `activity.json`.
 
 ## Phone
 

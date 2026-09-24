@@ -81,18 +81,22 @@
  * sideways, and 44 px targets on the phone.
  *
  * With BOARD_CAPTURE_CASE=activity it renders the activity dashboard
- * (docs/design/activity-dashboard.md) on a home seeded with invented work:
- * three git repositories whose Claude transcripts the Viewer's own scan
- * indexes (the agent axis), a request ledger that starts nine days back, this
- * host's own transcript export up to last midnight (its terminal input; today
- * reads as a lower bound until it is exported), a stage host export that stops
- * two days back (so the last two days read unknown), `hosts.json`,
- * `settings.json`, and one weekday with agent work and no input (the
- * probable-missing-source flag); then the same page on a home with no data at
- * all. At 1440 × 900 and 390 × 844 it captures the day view,
- * the project view with one row open, the 30-day view and the empty home, and
- * checks for sideways overflow, the unknown days and the flagged day. With
- * ACTIVITY_RENDER_DIR set, the images are copied there.
+ * (docs/design/activity-dashboard-v2.md) on a home seeded with the design's
+ * invented, uneven work: thirteen projects with a long tail, ten of them git
+ * repositories whose Claude transcripts the Viewer's own scan indexes (the
+ * agent axis), a request ledger and this host's own export for the whole
+ * month, a stage host holding two projects whose export stops two days back,
+ * a heavy Monday, an empty weekend with night runs, a workday with agent work
+ * and no input (the probable-missing-source flag), and `hosts.json` and
+ * `settings.json` with two billable projects. At 1440 × 900 it captures 7
+ * days (en and uk, and 1280 × 800 in uk), 30 days, Today, a project open with
+ * its breakdowns, the drawer, the day, hour and Agents tooltips, Today with
+ * the stage host unread for three hours, the same home with none of your
+ * input read, and a home with no data at all; the phone at 390 × 844 keeps
+ * the prototype's layout. It checks sideways overflow, the 7-day page ending
+ * inside 900 px, the trust chip and the Rhythm legend on one line, cut text,
+ * tooltips inside the viewport, and the marks on the unread and flagged days.
+ * With ACTIVITY_RENDER_DIR set, the images are copied there.
  *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
@@ -4206,20 +4210,28 @@ async function resourcesMain(): Promise<void> {
 /* ------------------------------------------------------------------------- */
 
 const ACTIVITY_TZ = "Europe/Kyiv";
-const ACTIVITY_REPOS = ["harbor-ledger", "lantern-api", "atlas-docs"] as const;
+/* Invented projects (docs/design/activity-dashboard-v2.md, "The mockup"): ten
+   with agent work, as repositories whose Claude transcripts the Viewer
+   indexes, and three with your input alone, under plain keys. The stage host
+   holds orchard-client and harbor-ledger; the workstation holds every
+   project. */
+const ACTIVITY_REPOS = ["orchard-client", "lantern-api", "harbor-ledger", "kestrel-cli", "atlas-docs", "mesa-infra", "tidewater-app", "bramble-etl", "pebble-ui", "sorrel-bot"] as const;
 type ActivityRepo = typeof ACTIVITY_REPOS[number];
+type ActivityProject = ActivityRepo | "fennel-site" | "cobalt-auth" | "juniper-notes";
+const ACTIVITY_STAGE_PROJECTS: readonly ActivityProject[] = ["orchard-client", "harbor-ledger"];
+const ACTIVITY_BILLABLE: readonly ActivityProject[] = ["orchard-client", "harbor-ledger"];
 
 function activityRepoDir(name: ActivityRepo): string {
   return path.join(HOME, "Projects", name);
 }
 
-/** One invented Claude conversation per repository and day: a user record
-    opens each turn and assistant records carry it to its end. */
-function writeActivityTranscript(repo: ActivityRepo, day: number, turns: Array<{ start: number; minutes: number }>): void {
+/** One invented Claude conversation: a user record opens each turn and
+    assistant records carry it to its end. */
+function writeActivityTranscript(repo: ActivityRepo, file: number, turns: Array<{ start: number; minutes: number }>): void {
   if (!turns.length) return;
   const folder = path.join(HOME, ".claude/projects", projectSlug(activityRepoDir(repo)));
   fs.mkdirSync(folder, { recursive: true });
-  const id = `${String(ACTIVITY_REPOS.indexOf(repo) + 1).padStart(4, "0")}${String(day).padStart(4, "0")}-2026-4000-8000-000000000000`;
+  const id = `${String(ACTIVITY_REPOS.indexOf(repo) + 1).padStart(4, "0")}${String(file).padStart(4, "0")}-2026-4000-8000-000000000000`;
   const lines: unknown[] = [];
   for (const [index, turn] of turns.entries()) {
     const stamp = (offsetMin: number) => new Date(turn.start + offsetMin * 60_000).toISOString();
@@ -4232,42 +4244,146 @@ function writeActivityTranscript(repo: ActivityRepo, day: number, turns: Array<{
   fs.writeFileSync(path.join(folder, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
 }
 
+/** A stretch of your input: one input every six minutes, on the workstation
+    (its request ledger, or its export for terminal prompts) or the stage host
+    (its export). */
+type ActivitySession = [at: string, minutes: number, project: ActivityProject, host: "ws" | "stage", surface?: "phone" | "tablet" | "terminal"];
+/** A stretch an agent worked. */
+type ActivityRun = [at: string, minutes: number, repo: ActivityRepo];
+interface ActivityPlan { sessions: ActivitySession[]; runs: ActivityRun[] }
+
+/* The last week, uneven on purpose: a full Friday, an empty weekend with
+   night runs, a heavy Monday, a workday nobody asked anything while agents
+   ran (the stage host unread, the day flagged), a Wednesday read on the
+   workstation alone, and today. */
+const ACTIVITY_PLANS: Record<"normal" | "heavy" | "flagged" | "lower" | "saturday" | "sunday" | "today", ActivityPlan> = {
+  normal: {
+    sessions: [["08:10", 95, "orchard-client", "stage"], ["09:50", 70, "lantern-api", "ws"], ["11:05", 45, "harbor-ledger", "ws", "phone"], ["13:00", 110, "orchard-client", "ws"], ["15:00", 55, "kestrel-cli", "ws"], ["16:00", 50, "lantern-api", "ws", "terminal"], ["17:05", 25, "fennel-site", "ws"]],
+    runs: [["00:20", 200, "lantern-api"], ["08:10", 150, "orchard-client"], ["13:00", 130, "orchard-client"], ["15:00", 70, "kestrel-cli"], ["16:00", 60, "lantern-api"], ["21:30", 120, "tidewater-app"], ["22:00", 70, "bramble-etl"]],
+  },
+  heavy: {
+    sessions: [["07:40", 110, "orchard-client", "stage"], ["09:35", 80, "harbor-ledger", "stage"], ["11:00", 60, "lantern-api", "ws"], ["12:10", 95, "orchard-client", "ws", "phone"], ["13:50", 85, "lantern-api", "ws"], ["15:20", 60, "atlas-docs", "ws"], ["16:25", 55, "mesa-infra", "ws"], ["17:25", 50, "kestrel-cli", "ws", "terminal"], ["18:20", 40, "harbor-ledger", "ws"], ["19:05", 30, "cobalt-auth", "ws"]],
+    runs: [["01:00", 210, "lantern-api"], ["07:40", 180, "orchard-client"], ["09:35", 120, "harbor-ledger"], ["12:10", 110, "orchard-client"], ["13:50", 150, "lantern-api"], ["15:20", 110, "atlas-docs"], ["16:25", 40, "mesa-infra"], ["20:00", 150, "tidewater-app"], ["22:10", 60, "pebble-ui"]],
+  },
+  flagged: {
+    sessions: [],
+    runs: [["00:30", 135, "tidewater-app"], ["10:00", 55, "kestrel-cli"]],
+  },
+  lower: {
+    sessions: [["09:55", 55, "lantern-api", "ws"], ["11:00", 45, "kestrel-cli", "ws"], ["14:00", 60, "lantern-api", "ws"], ["15:30", 70, "lantern-api", "ws", "terminal"], ["17:00", 30, "atlas-docs", "ws"]],
+    runs: [["01:00", 95, "harbor-ledger"], ["11:00", 80, "kestrel-cli"], ["14:00", 110, "lantern-api"], ["18:00", 50, "lantern-api"], ["20:10", 30, "mesa-infra"], ["22:00", 35, "sorrel-bot"]],
+  },
+  saturday: { sessions: [], runs: [["01:00", 240, "lantern-api"], ["11:30", 50, "orchard-client"], ["19:00", 80, "tidewater-app"]] },
+  sunday: { sessions: [], runs: [["02:00", 180, "atlas-docs"], ["14:10", 40, "bramble-etl"]] },
+  today: {
+    sessions: [["08:40", 35, "atlas-docs", "ws"], ["09:15", 100, "orchard-client", "stage"], ["11:00", 55, "harbor-ledger", "ws"], ["13:05", 90, "orchard-client", "ws"], ["14:40", 50, "juniper-notes", "ws"], ["16:00", 80, "lantern-api", "ws"], ["18:10", 60, "orchard-client", "stage"], ["19:40", 45, "lantern-api", "ws", "phone"]],
+    runs: [["02:30", 100, "atlas-docs"], ["09:00", 180, "orchard-client"], ["13:05", 120, "orchard-client"], ["16:00", 95, "lantern-api"], ["20:30", 60, "pebble-ui"]],
+  },
+};
+
+/** The month behind the week: workdays of two to five stretches over a
+    long tail of projects, some watched agent runs, a night run now and then. */
+function generatedActivityPlan(weekday: number, seed: number): ActivityPlan {
+  let state = seed >>> 0;
+  const random = () => ((state = (state * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const pick = <T,>(list: readonly T[]) => list[Math.floor(random() * list.length)]!;
+  const hhmm = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  const runs: ActivityRun[] = [];
+  if (random() < 0.6) runs.push([hhmm(30 + Math.floor(random() * 120)), 60 + Math.floor(random() * 150), pick(["lantern-api", "tidewater-app", "atlas-docs", "sorrel-bot"] as const)]);
+  if (weekday === 0 || weekday === 6) return { sessions: [], runs };
+  const weighted: readonly ActivityProject[] = ["orchard-client", "orchard-client", "orchard-client", "lantern-api", "lantern-api", "tidewater-app", "tidewater-app", "harbor-ledger", "kestrel-cli", "kestrel-cli", "mesa-infra", "cobalt-auth", "fennel-site", "atlas-docs"];
+  const sessions: ActivitySession[] = [];
+  let at = 8 * 60 + Math.floor(random() * 60);
+  const count = 2 + Math.floor(random() * 4);
+  for (let index = 0; index < count && at < 19 * 60; index += 1) {
+    const project = pick(weighted);
+    const minutes = 40 + Math.floor(random() * 80);
+    const host = ACTIVITY_STAGE_PROJECTS.includes(project) && random() < 0.5 ? "stage" : "ws";
+    sessions.push([hhmm(at), minutes, project, host, host === "ws" && random() < 0.2 ? "phone" : undefined]);
+    if ((ACTIVITY_REPOS as readonly string[]).includes(project) && random() < 0.8) runs.push([hhmm(at), minutes + Math.floor(random() * 60), project as ActivityRepo]);
+    at += minutes + 10 + Math.floor(random() * 70);
+  }
+  return { sessions, runs };
+}
+
 interface ActivityReading {
   width: number;
+  height: number;
   scrollWidth: number;
-  pageScrollWidth: number;
-  pageClientWidth: number;
-  pageHeight: number;
+  layout: string;
+  /** The bottom of the lowest card, and whether the document scrolls. */
+  pageEnd: number;
+  documentScrolls: boolean;
+  chip: { state: string; text: string; height: number; width: number } | null;
+  legend: { text: string; height: number; width: number; right: number; cardRight: number } | null;
+  header: { height: number; bottom: number } | null;
+  hero: string;
+  agents: string;
+  split: string;
+  caps: Array<{ key: string; text: string }>;
+  pairs: number;
+  rhythmRows: number;
+  cells: Record<string, number>;
+  projects: Array<{ project: string; coverage: string | null; you: string; agents: string }>;
+  foldedMore: string | null;
+  truncated: string[];
+  tooltip: { text: string; inside: boolean } | null;
+  drawer: { flags: string[]; hosts: Array<{ host: string; complete: string | null }> } | null;
+  words: number;
+  /* The narrow layout's own markers. */
   tiles: number;
-  days: Array<{ date: string; coverage: string | null; missing: string | null; text: string }>;
-  projects: Array<{ project: string; coverage: string | null }>;
-  hosts: Array<{ host: string; connected: string | null; complete: string | null; terminalUnread: boolean }>;
-  expanded: number;
+  days: number;
 }
 
 function readActivity(): ActivityReading {
   const root = document.querySelector<HTMLElement>("[data-activity-page]")!;
+  const rect = (element: Element | null) => element?.getBoundingClientRect() ?? null;
+  const chip = document.querySelector<HTMLElement>("[data-activity-trust]");
+  const legend = document.querySelector<HTMLElement>("[data-activity-legend]");
+  const rhythm = document.querySelector<HTMLElement>("[data-activity-rhythm]");
+  const cards = ["[data-activity-main]", "[data-activity-rhythm]", "[data-activity-projects]"].map((selector) => rect(document.querySelector(selector))?.bottom ?? 0);
+  const tooltip = document.querySelector<HTMLElement>("[data-activity-tooltip]");
+  const tip = rect(tooltip);
+  const drawer = document.querySelector<HTMLElement>("[data-activity-drawer]");
+  const cells: Record<string, number> = {};
+  for (const cell of document.querySelectorAll<SVGElement>("[data-activity-cell]")) cells[cell.dataset.activityCell ?? ""] = (cells[cell.dataset.activityCell ?? ""] ?? 0) + 1;
+  const visible = (element: HTMLElement) => !element.closest(".sr-only") && element.getClientRects().length > 0;
   return {
     width: window.innerWidth,
+    height: window.innerHeight,
     scrollWidth: document.documentElement.scrollWidth,
-    pageScrollWidth: root.scrollWidth,
-    pageClientWidth: root.clientWidth,
-    pageHeight: root.scrollHeight,
-    tiles: document.querySelectorAll("[data-activity-tile]").length,
-    days: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-day]")).map((row) => ({
-      date: row.dataset.activityDay ?? "",
+    layout: root.dataset.activityLayout ?? "narrow",
+    pageEnd: Math.max(...cards),
+    documentScrolls: root.scrollHeight > root.clientHeight + 1,
+    chip: chip ? { state: chip.dataset.activityTrust ?? "", text: chip.textContent ?? "", height: chip.getBoundingClientRect().height, width: chip.getBoundingClientRect().width } : null,
+    legend: legend ? { text: legend.textContent ?? "", height: legend.getBoundingClientRect().height, width: legend.getBoundingClientRect().width, right: legend.getBoundingClientRect().right, cardRight: rhythm?.getBoundingClientRect().right ?? 0 } : null,
+    header: rect(document.querySelector("header")) ? { height: rect(document.querySelector("header"))!.height, bottom: rect(document.querySelector("header"))!.bottom } : null,
+    hero: document.querySelector("[data-activity-figure=you]")?.textContent ?? "",
+    agents: document.querySelector("[data-activity-agents-value]")?.textContent ?? "",
+    split: document.querySelector("[data-activity-split]")?.textContent ?? "",
+    caps: Array.from(document.querySelectorAll<SVGElement>("[data-activity-cap]")).map((cap) => ({ key: cap.dataset.activityCap ?? "", text: cap.textContent ?? "" })),
+    pairs: document.querySelectorAll("[data-activity-pair]").length,
+    rhythmRows: document.querySelectorAll("[data-activity-rhythm-row]").length,
+    cells,
+    projects: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-projects] [data-activity-project]")).map((row) => ({
+      project: row.dataset.activityProject ?? "",
       coverage: row.dataset.coverage ?? null,
-      missing: row.querySelector<HTMLElement>("[data-activity-missing-source]")?.dataset.activityMissingSource ?? null,
-      text: row.querySelector("[data-activity-day-totals]")?.textContent ?? "",
+      you: row.querySelector("[data-activity-project-you]")?.textContent ?? "",
+      agents: row.querySelector("[data-activity-project-agents]")?.textContent ?? "",
     })),
-    projects: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-project]")).map((row) => ({ project: row.dataset.activityProject ?? "", coverage: row.dataset.coverage ?? null })),
-    hosts: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-host]")).map((row) => ({
-      host: row.dataset.activityHost ?? "",
-      connected: row.dataset.connected ?? null,
-      complete: row.dataset.complete ?? null,
-      terminalUnread: row.querySelector("[data-activity-terminal-unread]") !== null,
-    })),
-    expanded: document.querySelectorAll("[data-activity-project-details]").length,
+    foldedMore: document.querySelector<HTMLElement>("[data-activity-projects-more]")?.textContent ?? null,
+    /* Text cut by its box: a truncated name, a label that ran out of room. */
+    truncated: Array.from(root.querySelectorAll<HTMLElement>("span, div, button, h1, h2, a"))
+      .filter((element) => visible(element) && element.children.length === 0 && element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX !== "visible")
+      .map((element) => element.textContent ?? ""),
+    tooltip: tooltip && tip ? { text: tooltip.textContent ?? "", inside: tip.left >= 0 && tip.top >= 0 && tip.right <= window.innerWidth && tip.bottom <= window.innerHeight } : null,
+    drawer: drawer ? {
+      flags: Array.from(drawer.querySelectorAll("[data-activity-flag]")).map((flag) => flag.textContent ?? ""),
+      hosts: Array.from(drawer.querySelectorAll<HTMLElement>("[data-activity-host]")).map((host) => ({ host: host.dataset.activityHost ?? "", complete: host.dataset.complete ?? null })),
+    } : null,
+    words: (root.innerText.match(/\S+/g) ?? []).length,
+    tiles: document.querySelectorAll("[data-activity-tile]").length,
+    days: document.querySelectorAll("[data-activity-day]").length,
   };
 }
 
@@ -4284,21 +4400,50 @@ async function activityMain(): Promise<void> {
     git(dir, "commit", "-m", `${repo}: first commit`);
   }
   const now = Date.now();
-  const days = zonedDays(now, 10, ACTIVITY_TZ);
-  const at = (day: number, hh: number, mm: number) => days[day]!.start + (hh * 60 + mm) * 60_000;
-  const past = (time: number) => time < now - 60_000;
-  /* The most recent weekday among days 3-7: agents work, nobody asks. */
+  /* Index 29 is today; the last week is 23-29. */
+  const days = zonedDays(now, 30, ACTIVITY_TZ);
+  const TODAY = 29;
+  const clock = (day: number, hhmm: string) => {
+    const [hh, mm] = hhmm.split(":").map(Number) as [number, number];
+    return days[day]!.start + (hh * 60 + mm) * 60_000;
+  };
   const weekday = (day: number) => new Date(`${days[day]!.date}T12:00:00Z`).getUTCDay();
-  const flagDay = [7, 6, 5, 4, 3].find((day) => weekday(day) >= 1 && weekday(day) <= 5) ?? 7;
+  const workday = (day: number) => weekday(day) >= 1 && weekday(day) <= 5;
+  /* The stage host was not read the two days before today. */
+  const STAGE_UNREAD = [TODAY - 2, TODAY - 1];
+  const heavyDay = [TODAY - 3, TODAY - 4, TODAY - 5, TODAY - 6].find(workday) ?? TODAY - 3;
+  const planOf = (day: number): ActivityPlan => {
+    if (day === TODAY) return ACTIVITY_PLANS.today;
+    if (weekday(day) === 6 && day >= TODAY - 6) return ACTIVITY_PLANS.saturday;
+    if (weekday(day) === 0 && day >= TODAY - 6) return ACTIVITY_PLANS.sunday;
+    if (day === TODAY - 2) return ACTIVITY_PLANS.flagged;
+    if (day === TODAY - 1) return ACTIVITY_PLANS.lower;
+    if (day === heavyDay) return ACTIVITY_PLANS.heavy;
+    if (day >= TODAY - 6) return ACTIVITY_PLANS.normal;
+    return generatedActivityPlan(weekday(day), 7919 * (day + 1));
+  };
+  const plans = days.map((_, day) => planOf(day));
+  const flagDay = TODAY - 2;
 
-  for (let day = 2; day <= 9; day += 1) {
-    const turns = (repo: ActivityRepo) => {
-      if (repo === "harbor-ledger" && day >= 3 && day !== flagDay) return [{ start: at(day, 9, 4), minutes: 80 }, { start: at(day, 14, 8), minutes: 95 }];
-      if (repo === "lantern-api" && day !== flagDay) return [{ start: at(day, 11, 1), minutes: 50 }, ...(day % 2 === 0 ? [{ start: at(day, 1, 30), minutes: 150 }] : [])];
-      if (repo === "atlas-docs" && (day === flagDay || day === 7)) return [{ start: at(day, 10, 0), minutes: 120 }, { start: at(day, 15, 0), minutes: 60 }];
-      return [];
-    };
-    for (const repo of ACTIVITY_REPOS) writeActivityTranscript(repo, day, turns(repo).filter((turn) => past(turn.start + turn.minutes * 60_000)));
+  /* Agent transcripts: one per project and day in the last week, one per
+     project for the month behind it. */
+  let transcripts = 0;
+  for (const repo of ACTIVITY_REPOS) {
+    const older: Array<{ start: number; minutes: number }> = [];
+    for (const [day, plan] of plans.entries()) {
+      const turns = plan.runs.filter(([, , name]) => name === repo)
+        .map(([at, minutes]) => ({ start: clock(day, at), minutes }))
+        .filter((turn) => turn.start + turn.minutes * 60_000 < now - 60_000);
+      if (day < TODAY - 6) older.push(...turns);
+      else if (turns.length) {
+        writeActivityTranscript(repo, day, turns);
+        transcripts += 1;
+      }
+    }
+    if (older.length) {
+      writeActivityTranscript(repo, 0, older);
+      transcripts += 1;
+    }
   }
 
   const failures: string[] = [];
@@ -4307,15 +4452,16 @@ async function activityMain(): Promise<void> {
   const baseUrl = `http://127.0.0.1:${port}`;
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
-  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity", flagDay: days[flagDay]!.date };
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity", days: { first: days[0]!.date, today: days[TODAY]!.date, flagged: days[flagDay]!.date, heavy: days[heavyDay]!.date, stageUnread: STAGE_UNREAD.map((day) => days[day]!.date) } };
   const shots: string[] = [];
+  const activityDir = path.join(STATE_DIR, "activity");
   try {
     server = startServer(port);
     await waitForServer(baseUrl, server);
     await waitForBoard(baseUrl, false);
     /* The project keys the scan gave the repositories: the ledger names the same ones. */
     const keys = await (async () => {
-      const deadline = Date.now() + 120_000;
+      const deadline = Date.now() + 180_000;
       while (Date.now() < deadline) {
         const files = ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? [];
         const of = (repo: ActivityRepo) => files.find((file) => file.path?.includes(projectSlug(activityRepoDir(repo))))?.project;
@@ -4325,130 +4471,185 @@ async function activityMain(): Promise<void> {
       }
       throw new Error("the seeded repositories never scanned");
     })();
+    const keyOf = (project: ActivityProject) => (keys as Record<string, string>)[project] ?? project;
 
-    /* This host's ledger, from day 1 on; nothing on the flagged day. */
-    const activityDir = path.join(STATE_DIR, "activity");
+    /* Your input: the workstation's request ledger, its own export (terminal
+       prompts), and the stage host's export. Nothing on the flagged day, and
+       nothing from the stage host while it was not read. */
     fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
-    const rows: Array<Record<string, unknown>> = [];
-    const row = (time: number, repo: ActivityRepo, kind: string, surface: string) => {
-      if (past(time)) rows.push({ v: 1, key: ledgerRowKey(`seed-${rows.length}-${time}`), at: time, kind, surface, project: keys[repo] });
-    };
-    row(at(1, 16, 0), "atlas-docs", "task", "desktop");
-    for (let day = 3; day <= 9; day += 1) {
-      if (day === flagDay) continue;
-      row(at(day, 9, 2), "harbor-ledger", "message", "desktop");
-      row(at(day, 9, 14), "harbor-ledger", "message", "desktop");
-      row(at(day, 9, 31), "harbor-ledger", "decision", "desktop");
-      row(at(day, 14, 6), "harbor-ledger", "voice", "phone");
-      row(at(day, 14, 28), "harbor-ledger", "message", "phone");
-      row(at(day, 15, 20), "harbor-ledger", "task", "desktop");
-      row(at(day, 11, 3), "lantern-api", "message", "desktop");
-      row(at(day, 11, 38), "lantern-api", "answer", "tablet");
-      if (day === 7) {
-        row(at(day, 16, 0), "atlas-docs", "task", "desktop");
-        row(at(day, 16, 8), "atlas-docs", "message", "desktop");
+    const kinds = ["message", "message", "answer", "message", "decision", "message", "voice"] as const;
+    const ledger: Array<Record<string, unknown>> = [];
+    const terminal: Parameters<typeof exportLines>[1][number][] = [];
+    const stage: Parameters<typeof exportLines>[1][number][] = [];
+    for (const [day, plan] of plans.entries()) {
+      for (const [at, minutes, project, host, surface] of plan.sessions) {
+        if (host === "stage" && STAGE_UNREAD.includes(day)) continue;
+        for (let offset = 0, index = 0; offset <= minutes - 10; offset += 6, index += 1) {
+          const time = clock(day, at) + offset * 60_000;
+          if (time >= now - 60_000) break;
+          const kind = kinds[index % kinds.length]!;
+          if (host === "stage") stage.push({ ids: [messageId("codex", `stage-${day}-${at}-${offset}`)], at: time, host: "stage", source: "transcripts", project: keyOf(project), kind: "message", surface: "unknown", hash: null });
+          else if (surface === "terminal") terminal.push({ ids: [messageId("claude-prompt", `workstation-${day}-${at}-${offset}`)], at: time, host: "workstation", source: "transcripts", project: keyOf(project), kind: "message", surface: "terminal", hash: null });
+          else ledger.push({ v: 1, key: ledgerRowKey(`seed-${ledger.length}-${time}`), at: time, kind, surface: surface ?? "desktop", project: keyOf(project) });
+        }
       }
     }
-    for (const entry of rows) {
+    for (const entry of ledger) {
       const file = path.join(activityDir, `requests-${new Date(entry.at as number).toISOString().slice(0, 10)}.jsonl`);
       fs.appendFileSync(file, JSON.stringify(entry) + "\n", { mode: 0o600 });
     }
-    /* The stage host: its export speaks for days 2-7, so the last two days read unknown. */
-    const stageInputs = [];
-    for (let day = 2; day <= 7; day += 1) {
-      if (day === flagDay) continue;
-      for (const [hh, mm] of [[10, 5], [10, 12], [10, 40], [12, 15], [17, 30], [17, 45]] as const) {
-        stageInputs.push({ ids: [messageId("codex", `stage-${day}-${hh}-${mm}`)], at: at(day, hh, mm), host: "stage", source: "transcripts" as const, project: "orchard-client", kind: "message" as const, surface: "unknown" as const, hash: null });
-      }
-    }
-    const stageDir = path.join(activityDir, "hosts", "stage");
-    fs.mkdirSync(stageDir, { recursive: true });
-    fs.writeFileSync(path.join(stageDir, "human-input.jsonl"), exportLines({
-      host: "stage", coveredFrom: days[2]!.start, coveredUntil: days[8]!.start, exportedAt: days[8]!.start + 3_600_000, records: stageInputs.length + 57,
-      excluded: { "agent-message": 14, "stage-template": 6, notification: 4, unmarked: 9, attachment: 3, duplicate: 11 },
-    }, stageInputs));
-    /* This host's own export, run last midnight: every store read from day 1,
-       with a few prompts typed into an agent's terminal. Today is not in it. */
-    const terminalInputs = [];
-    for (const day of [4, 6]) {
-      if (day === flagDay) continue;
-      for (const [hh, mm] of [[19, 5], [19, 20]] as const) {
-        terminalInputs.push({ ids: [messageId("claude-prompt", `workstation-${day}-${hh}-${mm}`)], at: at(day, hh, mm), host: "workstation", source: "transcripts" as const, project: keys["lantern-api"], kind: "message" as const, surface: "terminal" as const, hash: null });
-      }
-    }
+    const endOfToday = days[TODAY]!.end;
+    /* The workstation's export reads every store there, to the end of today. */
     const localDir = path.join(activityDir, "hosts", "workstation");
     fs.mkdirSync(localDir, { recursive: true });
     fs.writeFileSync(path.join(localDir, "human-input.jsonl"), exportLines({
-      host: "workstation", coveredFrom: days[1]!.start, coveredUntil: days[9]!.start, exportedAt: days[9]!.start + 60_000, records: terminalInputs.length + 212,
+      host: "workstation", coveredFrom: days[0]!.start - 86_400_000, coveredUntil: endOfToday, exportedAt: now, records: terminal.length + 212,
       excluded: { "agent-message": 61, "stage-template": 9, recovery: 7, notification: 22, injected: 48, unmarked: 5, duplicate: 64 },
-    }, terminalInputs));
-    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ["orchard-client"] }] }));
-    fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: ACTIVITY_TZ, billable: ["orchard-client"] }));
+    }, terminal));
+    /* The stage host's exports: the month up to the unread days, then today. */
+    const stageDir = path.join(activityDir, "hosts", "stage");
+    const writeStage = (spans: Array<{ name: string; from: number; until: number }>) => {
+      fs.rmSync(stageDir, { recursive: true, force: true });
+      fs.mkdirSync(stageDir, { recursive: true });
+      for (const [index, span] of spans.entries()) {
+        const inside = stage.filter((input) => input.at >= span.from && input.at < span.until);
+        fs.writeFileSync(path.join(stageDir, `${span.name}.jsonl`), exportLines({
+          host: "stage", coveredFrom: span.from, coveredUntil: span.until, exportedAt: Math.min(span.until, now), records: inside.length + 20,
+          excluded: index ? {} : { "agent-message": 14, "stage-template": 6, notification: 4, unmarked: 9, attachment: 3, duplicate: 11 },
+        }, inside));
+      }
+    };
+    writeStage([{ name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start }, { name: "today", from: days[TODAY]!.start, until: endOfToday }]);
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ACTIVITY_STAGE_PROJECTS.map(keyOf) }] }));
+    fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: ACTIVITY_TZ, billable: ACTIVITY_BILLABLE.map(keyOf) }));
 
-    /* Wait for the Viewer's own index to carry the agent axis. */
-    const deadline = Date.now() + 300_000;
-    let ready = false;
-    while (Date.now() < deadline && !ready) {
-      const body = await (await fetch(`${baseUrl}/api/activity?range=7d`)).json() as { coverage?: { agentIndex?: string }; totals?: { wallMs?: number } };
-      ready = body.coverage?.agentIndex === "ok" && (body.totals?.wallMs ?? 0) > 3_600_000;
-      if (!ready) await Bun.sleep(3_000);
+    /* Wait for the Viewer's own index to carry every seeded conversation. */
+    const deadline = Date.now() + 420_000;
+    let indexed = 0;
+    while (Date.now() < deadline) {
+      const body = await (await fetch(`${baseUrl}/api/activity?range=30d`)).json() as { coverage?: { agentIndex?: string }; projects?: Array<{ conversations: number }> };
+      indexed = body.coverage?.agentIndex === "ok" ? (body.projects ?? []).reduce((sum, row) => sum + row.conversations, 0) : 0;
+      if (indexed >= transcripts) break;
+      await Bun.sleep(3_000);
     }
-    must(ready, "the agent axis never appeared: the transcript index did not cover the seeded conversations");
+    must(indexed >= transcripts, `the agent axis carries ${indexed} of ${transcripts} seeded conversations`);
+    report.api7d = await (await fetch(`${baseUrl}/api/activity?range=7d`)).json();
 
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    const capture = async (surface: "desktop" | "phone", query: string, name: string, lang: "en" | "uk" = "en", expand?: string) => {
-      const phone = surface === "phone";
-      const width = phone ? 390 : 1440;
+    const capture = async (name: string, query: string, options: { lang?: "en" | "uk"; phone?: boolean; size?: [number, number]; act?: (page: Page) => Promise<void> } = {}) => {
+      const [width, height] = options.phone ? [390, 844] : options.size ?? [1440, 900];
       const context = await browser!.newContext({
-        viewport: { width, height: phone ? 844 : 900 },
+        viewport: { width, height },
         reducedMotion: "reduce",
-        ...(phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+        ...(options.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
       });
       await context.addInitScript(seedInit);
-      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), options.lang ?? "en");
       const page = await context.newPage();
       await page.goto(`${baseUrl}/activity?${query}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
       await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
-      if (expand) {
-        await page.click(`[data-activity-project="${expand}"] > button`);
-        await page.waitForSelector("[data-activity-project-details]", { timeout: 10_000 });
-      }
       await page.waitForTimeout(400);
-      const first = await page.evaluate(readActivity);
-      await page.setViewportSize({ width, height: Math.min(Math.max(first.pageHeight, phone ? 844 : 900), 7_000) });
-      await page.waitForTimeout(300);
+      if (options.act) {
+        await options.act(page);
+        await page.waitForTimeout(300);
+      }
+      if (options.phone) {
+        const first = await page.evaluate(readActivity);
+        const full = await page.evaluate(() => document.querySelector<HTMLElement>("[data-activity-page]")!.scrollHeight);
+        if (full > first.height) await page.setViewportSize({ width, height: Math.min(full, 7_000) });
+        await page.waitForTimeout(300);
+      }
       const reading = await page.evaluate(readActivity);
-      const tag = `${surface}-${name}${lang === "uk" ? "-uk" : ""}`;
-      const file = path.join(OUT_DIR, `activity-${tag}.png`);
+      const file = path.join(OUT_DIR, `activity-${name}.png`);
       await page.screenshot({ path: file });
       shots.push(file);
-      report[tag] = reading;
-      must(reading.scrollWidth <= reading.width + 1 && reading.pageScrollWidth <= reading.pageClientWidth + 1, `${tag}: the page runs ${reading.scrollWidth - reading.width}px / ${reading.pageScrollWidth - reading.pageClientWidth}px sideways`);
-      must(reading.tiles === 4, `${tag}: ${reading.tiles} tiles`);
+      report[name] = reading;
+      must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+      if (!options.phone) {
+        must(reading.layout === "desktop", `${name}: the ${reading.layout} layout at ${width}px`);
+        must(reading.chip !== null && reading.chip.height <= 30, `${name}: the trust chip is ${reading.chip?.height ?? "missing"}px tall`);
+        must(reading.header !== null && reading.header.height <= 36, `${name}: the header is ${reading.header?.height ?? "missing"}px tall`);
+        /* One line of 11 px text is about 16.5 px; two would be 33. */
+        if (reading.legend) must(reading.legend.height <= 20 && reading.legend.right <= reading.legend.cardRight, `${name}: the Rhythm legend takes ${reading.legend.height}px, right edge ${reading.legend.right} of ${reading.legend.cardRight}`);
+        const cut = reading.truncated.filter((text) => text.trim());
+        must(cut.length === 0, `${name}: text cut by its box: ${JSON.stringify(cut)}`);
+        if (reading.tooltip) must(reading.tooltip.inside, `${name}: the tooltip leaves the viewport`);
+      }
       await context.close();
       return reading;
     };
+    const date = (day: number) => days[day]!.date;
+    const hoverPair = (day: number) => async (page: Page) => { await page.hover(`[data-activity-pair="${date(day)}"] rect[tabindex]`); };
 
-    for (const surface of ["desktop", "phone"] as const) {
-      const week = await capture(surface, "range=7d&view=days", "day-7d");
-      const byDate = new Map(week.days.map((day) => [day.date, day]));
-      must(week.days.length === 7, `${surface}: ${week.days.length} day rows in 7 days`);
-      for (const day of [8, 9]) must(byDate.get(days[day]!.date)?.coverage === "unknown", `${surface}: ${days[day]!.date} reads ${byDate.get(days[day]!.date)?.coverage}, the stage host was not read then`);
-      for (const day of [4, 5, 6, 7].filter((value) => value !== flagDay)) must(byDate.get(days[day]!.date)?.coverage === "complete", `${surface}: ${days[day]!.date} reads ${byDate.get(days[day]!.date)?.coverage}`);
-      must(byDate.get(days[flagDay]!.date)?.missing?.includes("agent-activity") === true, `${surface}: the flagged weekday ${days[flagDay]!.date} shows ${byDate.get(days[flagDay]!.date)?.missing ?? "no flag"}`);
-      const projectView = await capture(surface, "range=7d&view=projects", "projects-7d", "en", keys["harbor-ledger"]);
-      must(projectView.expanded === 1, `${surface}: ${projectView.expanded} project rows open`);
-      must(projectView.projects.find((row) => row.project === "orchard-client")?.coverage === "unknown", `${surface}: the stage host's project does not read unknown`);
-      /* Today's terminal input on this host is not exported yet: a lower bound. */
-      must(projectView.projects.find((row) => row.project === keys["harbor-ledger"])?.coverage === "unknown", `${surface}: harbor-ledger reads complete with today's terminal input unread`);
-      const workstation = projectView.hosts.find((host) => host.host === "workstation");
-      must(workstation?.connected === "true" && workstation.complete === "false" && workstation.terminalUnread, `${surface}: the workstation row does not say its terminal input is unread: ${JSON.stringify(workstation)}`);
-      const month = await capture(surface, "range=30d&view=days", "day-30d");
-      must(month.days.length === 30, `${surface}: ${month.days.length} day rows in 30 days`);
-      must(month.days.filter((day) => day.coverage === "unknown").length >= 20, `${surface}: days before the ledger do not read unknown`);
-      must(month.hosts.some((host) => host.host === "stage" && host.connected === "true"), `${surface}: the stage host is not listed as read`);
-    }
-    await capture("desktop", "range=7d&view=days", "day-7d", "uk");
+    /* 7 days, en and uk, and at 1280 × 800 in uk. */
+    const week = await capture("desktop-7d", "range=7d");
+    must(week.pairs === 7 && week.rhythmRows === 7, `7d: ${week.pairs} day pairs and ${week.rhythmRows} rhythm rows`);
+    must(week.pageEnd <= 900 && !week.documentScrolls, `7d: the page ends at ${week.pageEnd}px and scrolls ${week.documentScrolls}`);
+    must(week.chip?.state === "lower", `7d: the chip reads ${week.chip?.state}`);
+    const capOf = (reading: ActivityReading, day: number) => reading.caps.find((cap) => cap.key === date(day))?.text ?? "";
+    if (workday(flagDay)) must(capOf(week, flagDay) === "?", `7d: the flagged ${date(flagDay)} reads ${capOf(week, flagDay)}`);
+    must(capOf(week, TODAY - 1).startsWith("≥"), `7d: ${date(TODAY - 1)}, the stage host unread, reads ${capOf(week, TODAY - 1)}`);
+    must(week.split.includes("unclear"), `7d: the Agents split has no unclear part: ${week.split}`);
+    must(week.legend?.text.startsWith("You:") === true, `7d: the Rhythm legend reads ${week.legend?.text}`);
+    for (const project of ACTIVITY_STAGE_PROJECTS) must(week.projects.find((row) => row.project === keyOf(project))?.coverage === "unknown", `7d: ${project}, held by the unread stage host, reads complete`);
+    must(week.projects.find((row) => row.project === keyOf("lantern-api"))?.coverage === "complete", "7d: lantern-api reads a lower bound");
+    await capture("desktop-7d-uk", "range=7d", { lang: "uk" });
+    const narrow = await capture("desktop-1280x800-uk", "range=7d", { lang: "uk", size: [1280, 800] });
+    must(!narrow.documentScrolls, `1280 × 800 uk: the page scrolls (ends at ${narrow.pageEnd}px)`);
+
+    /* 30 days and Today. */
+    const month = await capture("desktop-30d", "range=30d");
+    must(month.pairs === 30 && month.rhythmRows === 30, `30d: ${month.pairs} pairs, ${month.rhythmRows} rows`);
+    must(month.pageEnd <= 900, `30d: the page ends at ${month.pageEnd}px`);
+    await capture("desktop-30d-uk", "range=30d", { lang: "uk" });
+    const today = await capture("desktop-today", "range=today");
+    must(today.rhythmRows === 0 && today.pairs === 24, `today: ${today.pairs} hour pairs, ${today.rhythmRows} rhythm rows`);
+
+    /* The project detail, its breakdowns, the drawer and the tooltips. */
+    await capture("desktop-projects", "range=7d", {
+      act: async (page) => {
+        await page.click(`[data-activity-project="${keyOf("harbor-ledger")}"] > button`);
+        await page.waitForSelector("[data-activity-project-details]");
+        await page.click("[data-activity-more-detail]");
+        await page.waitForSelector("[data-activity-breakdowns]");
+      },
+    });
+    const drawer = await capture("desktop-drawer", "range=7d", { act: async (page) => { await page.click("[data-activity-trust]"); await page.waitForSelector("[data-activity-drawer]"); } });
+    must((drawer.drawer?.flags.length ?? 0) >= (workday(flagDay) ? 2 : 1), `drawer: ${JSON.stringify(drawer.drawer?.flags)}`);
+    must(drawer.drawer?.hosts.find((host) => host.host === "stage")?.complete === "false", "drawer: the stage host reads complete");
+    await capture("desktop-drawer-uk", "range=7d", { lang: "uk", act: async (page) => { await page.click("[data-activity-trust]"); await page.waitForSelector("[data-activity-drawer]"); } });
+    await capture("desktop-hover-lower", "range=7d", { act: hoverPair(TODAY - 1) });
+    await capture("desktop-hover-heavy", "range=7d", { act: hoverPair(heavyDay) });
+    await capture("desktop-hover-flagged", "range=7d", { act: hoverPair(flagDay) });
+    await capture("desktop-hover-cell", "range=7d", { act: async (page) => { await page.locator(`[data-activity-rhythm-row="${date(TODAY - 1)}"] rect[data-activity-cell]`).nth(18).hover(); } });
+    await capture("desktop-hover-agents", "range=7d", { act: async (page) => { await page.hover("[data-activity-figure=agents]"); } });
+
+    /* The phone keeps the prototype's layout. */
+    const phone = await capture("phone-7d", "range=7d&view=days", { phone: true });
+    must(phone.layout === "narrow" && phone.tiles === 4 && phone.days === 7, `phone: ${phone.layout} layout, ${phone.tiles} tiles, ${phone.days} days`);
+
+    /* Today with the stage host unread from 09:00 to 12:00. */
+    writeStage([
+      { name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start },
+      { name: "today-morning", from: days[TODAY]!.start, until: clock(TODAY, "09:00") },
+      { name: "today-afternoon", from: clock(TODAY, "12:00"), until: endOfToday },
+    ]);
+    const gap = await capture("desktop-today-gap", "range=today");
+    must(gap.chip?.state === "lower", `today with a gap: the chip reads ${gap.chip?.state}`);
+    await capture("desktop-today-gap-uk", "range=today", { lang: "uk" });
+    const gapHour = await capture("desktop-today-gap-hover", "range=today", { act: async (page) => { await page.hover(`[data-activity-pair="${clock(TODAY, "10:00")}"] rect[tabindex]`); } });
+    must(gapHour.tooltip?.text.includes("not read (Stage host)") === true, `today with a gap: the 10:00 tooltip reads ${gapHour.tooltip?.text}`);
+
+    /* None of your input read, agent time still read. */
+    fs.rmSync(activityDir, { recursive: true, force: true });
+    fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ACTIVITY_STAGE_PROJECTS.map(keyOf) }] }));
+    const unread = await capture("desktop-unread-7d", "range=7d");
+    must(unread.chip?.state === "none" && unread.chip.text === "Your time not read", `unread: the chip reads ${unread.chip?.state} "${unread.chip?.text}"`);
+    must(unread.hero.includes("Unknown") && unread.agents.startsWith("≈"), `unread: hero ${unread.hero}, agents ${unread.agents}`);
+    must(!("supervised" in unread.cells) && !("unattended" in unread.cells) && !("you" in unread.cells), `unread: cells ${JSON.stringify(unread.cells)}`);
+    const unreadUk = await capture("desktop-unread-1280x800-uk", "range=7d", { lang: "uk", size: [1280, 800] });
+    must(unreadUk.chip?.text === "Ваш час не прочитано", `unread uk: the chip reads "${unreadUk.chip?.text}"`);
 
     /* A home with no data at all. */
     await stop(server);
@@ -4458,11 +4659,12 @@ async function activityMain(): Promise<void> {
     fs.mkdirSync(STATE_DIR, { recursive: true });
     server = startServer(port);
     await waitForServer(baseUrl, server);
-    for (const surface of ["desktop", "phone"] as const) {
-      const empty = await capture(surface, "range=30d&view=days", "empty-30d");
-      must(empty.days.every((day) => day.coverage === "unknown"), `${surface}: an empty home has a day that reads complete`);
-      must(empty.hosts.length === 1 && empty.hosts[0]!.connected === "false", `${surface}: an empty home lists ${JSON.stringify(empty.hosts)}`);
-    }
+    const empty = await capture("desktop-empty", "range=7d");
+    must(empty.chip?.state === "none" && empty.hero.includes("Unknown"), `empty: chip ${empty.chip?.state}, hero ${empty.hero}`);
+    must(empty.caps.every((cap) => cap.text === "?"), `empty: caps ${JSON.stringify(empty.caps)}`);
+    await capture("desktop-empty-uk", "range=7d", { lang: "uk" });
+    const emptyPhone = await capture("phone-empty", "range=30d&view=days", { phone: true });
+    must(emptyPhone.days === 30, `empty phone: ${emptyPhone.days} day rows`);
   } finally {
     if (browser) await browser.close().catch(() => {});
     await stop(server);
@@ -4480,7 +4682,7 @@ async function activityMain(): Promise<void> {
     process.exitCode = 1;
     console.error(`activity dashboard acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log("activity dashboard acceptance passed at 1440 × 900 and 390 × 844.");
+    console.log("activity dashboard acceptance passed at 1440 × 900, 1280 × 800 and 390 × 844.");
   }
 }
 
