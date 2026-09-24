@@ -1569,6 +1569,8 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     if (result.legacyReviewPreview) throw new McpToolRefusal(message, { legacyReviewPreview: result.legacyReviewPreview });
     if (action === "publish" || action === "takeover") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
+    /* A stale guard names what moved, so the caller re-reads before retrying. */
+    if (result.code === "STAGE_CHANGED") throw new McpToolRefusal(message, { code: result.code, field: result.field, status: result.status });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
@@ -1629,24 +1631,23 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
 }
 
 /**
- * The launch a retry-stage names (#1845). The engine takes a stage retry as a
- * receipt retry when the request names the stage, and then requires the
- * attempt's launchId beside it, which an agent had no way to read short of the
- * whole record; a seat naming only the stage was refused. A stageId without a
- * launchId is completed here with the launch of that stage's current attempt,
- * read from the record this call saw, so the engine still refuses the retry
- * when the attempt moved on before the write. A stage whose attempt never had
- * a launch is fenced by expectedStageId instead, and the engine retries it as
- * it retries a lane with no stage named.
+ * The stage a retry-stage names (#1845). The engine reads a request carrying
+ * stageId as an explicit launch-receipt retry: it then needs that attempt's
+ * launchId beside it and accepts only a receipt that settled failed or
+ * conflicted, which refuses every stage whose agent started and then failed or
+ * parked. A stageId without a launchId therefore becomes the guard the engine
+ * reads as "retry the stage you wait on": expectedStageId, and expectedAttempt
+ * from the record this call saw, so a stage or attempt that moved on before
+ * the write is refused with STAGE_CHANGED. A launchId the caller names is
+ * passed through unchanged, for the engine to judge as a receipt retry.
  */
 function retryStageLaunch(request: Record<string, unknown>, pipeline: Pipeline | null): void {
   if (typeof request.stageId !== "string" || request.launchId !== undefined || !pipeline) return;
-  const launchId = latestOperationalStageAttempt(pipeline, request.stageId)?.launchId;
-  if (typeof launchId === "string" && launchId) {
-    request.launchId = launchId;
-    return;
+  if (request.expectedStageId !== undefined && request.expectedStageId !== request.stageId) {
+    throw new McpToolRefusal(`retry-stage names stage ${request.stageId} and expectedStageId ${String(request.expectedStageId)}; name one stage`, { code: "STAGE_CHANGED", field: "expectedStageId", status: 400 });
   }
-  if (request.expectedStageId === undefined) request.expectedStageId = request.stageId;
+  request.expectedStageId = request.stageId;
+  if (request.expectedAttempt === undefined) request.expectedAttempt = latestOperationalStageAttempt(pipeline, request.stageId)?.n ?? 0;
   delete request.stageId;
 }
 

@@ -461,9 +461,12 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     const edits = Object.fromEntries(lineEditKeys.map((key) => [key, input[key]])) as LineEdits;
     const edited = applyLineEdits(task.details, edits, "the details");
     if (!edited.ok) return { ok: false, error: edited.error, status: 400, code: "TASK_INVALID_FIELD", field: edited.field };
-    const details = normalizeDetails(edited.value);
-    if (!details.ok) return details;
-    patch.details = details.details;
+    /* Stored as edited: trimming the whole field, as a whole-field write does,
+       would strip the indent of the line an edit uncovers at the top. */
+    if (edited.value !== null && edited.value.length > TASK_DETAILS_LIMIT) {
+      return { ok: false, error: `Task details must be no longer than ${TASK_DETAILS_LIMIT} characters`, status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+    }
+    patch.details = edited.value ?? undefined;
   }
   if (Object.hasOwn(input, "status")) {
     const status = normalizeStatus(input.status);

@@ -1,11 +1,14 @@
 /**
- * retry-stage over MCP names the launch it retries (#1845, second slice).
+ * retry-stage over MCP names the stage it retries (#1845, second slice).
  *
- * The engine takes a retry that names its stage as a receipt retry and then
- * needs the failed attempt's launchId beside it. An agent had no way to read
- * that id short of the whole record, so a seat naming the stage was refused
- * with "receipt retry requires both stageId and launchId". The tool now fills
- * the launch from the record it reads, and the stage read answers it too.
+ * The engine reads a retry that carries stageId as an explicit launch-receipt
+ * retry: it needs that attempt's launchId beside it and retries only a receipt
+ * that settled failed or conflicted. A seat naming only the stage was refused
+ * with "receipt retry requires both stageId and launchId", and a launchId
+ * filled in for it would still be refused for every stage whose agent started
+ * and then failed or parked. The tool sends such a stage as expectedStageId
+ * and expectedAttempt instead, which retries the stage the lane waits on
+ * whatever ended its attempt and refuses one that moved on.
  */
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -15,6 +18,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
+import type { PipelineSpawnReceipt } from "@/lib/pipelines/engine";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 // Establish every state root before importing production bindings.
@@ -33,19 +37,34 @@ const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("./server");
 const { pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
 const { savePipelines, loadPipelines } = await import("@/lib/pipelines/store");
+const { defaultPipelinePorts, getPipeline, patchPipeline } = await import("@/lib/pipelines/engine");
 expect(loadPipelines()).toEqual([]);
 
-const LAUNCH = "launch_failed_build";
+const LAUNCH = "launch_build_2";
 
-/** A lane parked on its build stage, whose current attempt is a failed launch. */
-function parkedPipeline(launchId: string | null = LAUNCH): Pipeline {
+/** A lane parked on its build stage. By default the agent started and its
+    stage ended on a fail verdict; `launchFailed` makes it a launch that never
+    produced an agent, and `launchId: null` one that never launched at all. */
+function parkedPipeline(options: { launchFailed?: boolean; launchId?: string | null } = {}): Pipeline {
   const [, pipeline] = pipelineCorpus(2, 2);
   pipeline!.state = "needs_decision";
-  pipeline!.stateDetail = "the build launch failed";
   pipeline!.cursor = { ...pipeline!.cursor!, stageId: "build", state: "pending" };
   const latest = pipeline!.runs.find((run) => run.stageId === "build")!.attempts.at(-1)!;
-  Object.assign(latest, { state: "failed", verdict: null, launchId, paneId: null, error: "structured spawn transport failed" });
+  const launchId = options.launchId === undefined ? LAUNCH : options.launchId;
+  if (options.launchFailed) {
+    pipeline!.stateDetail = "the build launch failed";
+    Object.assign(latest, { state: "failed", verdict: null, launchId, paneId: null, completedAt: null, error: "structured spawn transport failed" });
+  } else {
+    pipeline!.stateDetail = "build: tests fail";
+    Object.assign(latest, { state: "failed", verdict: { status: "fail", findings: ["tests fail"] }, launchId, conversationId: "conversation_build_2", paneId: null, error: null });
+  }
   return pipeline!;
+}
+
+function receiptFor(state: PipelineSpawnReceipt["state"]) {
+  return (launchId: string): PipelineSpawnReceipt | null => launchId === LAUNCH
+    ? { state, launchId, conversationId: "conversation_build_2", sessionId: null, "transcript": null, paneId: null } as PipelineSpawnReceipt
+    : null;
 }
 
 async function protocol(overrides?: Record<string, unknown>) {
@@ -62,7 +81,19 @@ async function protocol(overrides?: Record<string, unknown>) {
   return { client, call, close: async () => { await client.close(); await server.close(); } };
 }
 
-test("retry-stage naming only the stage reaches the engine with that stage's failed launch", async () => {
+/** The MCP tools over the real engine, whose launch receipts are the ones given. */
+function engineWithReceipts(spawnReceipt: (launchId: string) => PipelineSpawnReceipt | null, extra: Record<string, unknown> = {}) {
+  /* A failed receipt is claimed for the retry in the agent registry, which this
+     sandbox leaves empty; the claim is the engine's and succeeds here. */
+  const ports = { ...defaultPipelinePorts(), spawnReceipt, claimSpawnRetry: () => "claimed" as const };
+  return protocol({
+    readPipelineRecord: getPipeline,
+    patchPipeline: (id: string, request: never) => patchPipeline(id, request, ports),
+    ...extra,
+  });
+}
+
+test("retry-stage naming only the stage reaches the engine as the stage and attempt it waits on", async () => {
   const pipeline = parkedPipeline();
   const requests: Array<Record<string, unknown>> = [];
   const p = await protocol({
@@ -73,23 +104,95 @@ test("retry-stage naming only the stage reaches the engine with that stage's fai
   try {
     const named = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
     expect(named.isError).toBe(false);
-    expect(requests.at(-1)).toMatchObject({ action: "retry-stage", stageId: "build", launchId: LAUNCH });
+    expect(requests.at(-1)).toMatchObject({ action: "retry-stage", expectedStageId: "build", expectedAttempt: 2 });
+    expect(requests.at(-1)).not.toHaveProperty("stageId");
+    expect(requests.at(-1)).not.toHaveProperty("launchId");
 
     /* A launch the caller names is passed as given, for the engine to judge. */
     await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build", launchId: "launch_older" });
     expect(requests.at(-1)).toMatchObject({ stageId: "build", launchId: "launch_older" });
+    expect(requests.at(-1)).not.toHaveProperty("expectedAttempt");
 
     /* With no stage named, nothing is added: the engine picks the attempt. */
     await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage" });
-    expect(requests.at(-1)).not.toHaveProperty("launchId");
+    expect(requests.at(-1)).not.toHaveProperty("expectedStageId");
     expect(requests.at(-1)).not.toHaveProperty("stageId");
+
+    /* A stage and a guard naming another stage are refused before the engine. */
+    const count = requests.length;
+    const conflicting = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build", expectedStageId: "review" });
+    expect(conflicting.isError).toBe(true);
+    expect(conflicting.raw).toContain("STAGE_CHANGED");
+    expect(requests.length).toBe(count);
   } finally {
     await p.close();
   }
 });
 
-test("retry-stage on a stage whose attempt never launched is fenced by expectedStageId instead", async () => {
-  const pipeline = parkedPipeline(null);
+test("retry-stage by stage retries a stage whose agent started and ended on a fail verdict", async () => {
+  const pipeline = parkedPipeline();
+  savePipelines([pipeline]);
+  const p = await engineWithReceipts(receiptFor("completed"));
+  try {
+    const read = await p.call("get_pipeline", { pipelineId: pipeline.id, stageId: "build" });
+    expect(read.answer).toMatchObject({ attempt: { launchId: LAUNCH } });
+
+    const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
+    expect(retried.raw).not.toContain("retry was cancelled");
+    expect(retried.isError).toBe(false);
+    /* Accepted: the lane leaves its park and re-provisions for attempt 3. */
+    expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
+  } finally {
+    await p.close();
+  }
+});
+
+test("retry-stage by stage still retries a launch that failed, with or without its launchId", async () => {
+  for (const launchId of [undefined, LAUNCH]) {
+    const pipeline = parkedPipeline({ launchFailed: true });
+    savePipelines([pipeline]);
+    const p = await engineWithReceipts(receiptFor("failed"));
+    try {
+      const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build", ...(launchId ? { launchId } : {}) });
+      expect(retried.isError).toBe(false);
+      expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
+    } finally {
+      await p.close();
+    }
+  }
+});
+
+test("retry-stage by stage is refused with STAGE_CHANGED when the lane waits on another stage or attempt", async () => {
+  const pipeline = parkedPipeline();
+  savePipelines([pipeline]);
+  const p = await engineWithReceipts(receiptFor("completed"));
+  try {
+    const otherStage = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "review" });
+    expect(otherStage.isError).toBe(true);
+    expect(otherStage.raw).toContain("STAGE_CHANGED");
+    expect(otherStage.raw).toContain("expectedStageId");
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  } finally {
+    await p.close();
+  }
+
+  /* The record the tool read still showed attempt 1; the engine sees attempt 2. */
+  const stale = structuredClone(pipeline);
+  stale.runs.find((run) => run.stageId === "build")!.attempts.pop();
+  const q = await engineWithReceipts(receiptFor("completed"), { readPipelineRecord: (id: string) => (id === stale.id ? stale : null) });
+  try {
+    const olderAttempt = await q.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
+    expect(olderAttempt.isError).toBe(true);
+    expect(olderAttempt.raw).toContain("STAGE_CHANGED");
+    expect(olderAttempt.raw).toContain("expectedAttempt");
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  } finally {
+    await q.close();
+  }
+});
+
+test("retry-stage on a stage whose attempt never launched is fenced the same way", async () => {
+  const pipeline = parkedPipeline({ launchFailed: true, launchId: null });
   const requests: Array<Record<string, unknown>> = [];
   const p = await protocol({
     readPipelineRecord: (id: string) => (id === pipeline.id ? pipeline : null),
@@ -99,33 +202,13 @@ test("retry-stage on a stage whose attempt never launched is fenced by expectedS
   try {
     const answer = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
     expect(answer.isError).toBe(false);
-    expect(requests.at(-1)).toMatchObject({ action: "retry-stage", expectedStageId: "build" });
+    expect(requests.at(-1)).toMatchObject({ action: "retry-stage", expectedStageId: "build", expectedAttempt: 2 });
     expect(requests.at(-1)).not.toHaveProperty("stageId");
     expect(requests.at(-1)).not.toHaveProperty("launchId");
-  } finally {
-    await p.close();
-  }
-});
-
-test("the engine no longer refuses a stage-named retry for a missing launchId, and the stage read answers the launch", async () => {
-  const pipeline = parkedPipeline();
-  savePipelines([pipeline]);
-  const p = await protocol();
-  try {
-    const read = await p.call("get_pipeline", { pipelineId: pipeline.id, stageId: "build" });
-    expect(read.isError).toBe(false);
-    expect(read.answer).toMatchObject({ attempt: { launchId: LAUNCH, state: "failed" } });
-
-    /* The launch has no receipt in this sandbox, so the engine still refuses —
-       now on the receipt it looked up, which it only does once it has the
-       launch, rather than on the request's shape. */
-    const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
-    expect(retried.raw).not.toContain("receipt retry requires both stageId and launchId");
-    expect(retried.raw).toContain("the clicked launch receipt is no longer available");
 
     const tool = (await p.client.listTools()).tools.find((candidate) => candidate.name === "pipeline_action")!;
     const properties = tool.inputSchema.properties as Record<string, { description?: string }>;
-    expect(properties.launchId?.description ?? "").toContain("retry-stage");
+    expect(properties.launchId?.description ?? "").toContain("only for an attempt whose launch failed");
   } finally {
     await p.close();
   }

@@ -103,6 +103,28 @@ test("update_task edits one line of details, keeps the rest and the text, and an
   }
 });
 
+test("a line edit leaves every line it did not touch byte for byte, the indent of the line it uncovers at the top included", async () => {
+  const p = await protocol();
+  try {
+    const indented = "Context:\n  - keep this indent\n  - second";
+    const created = await p.call("create_task", { project: "line-edits", text: HUMAN, details: indented });
+    const id = created.answer.taskId as string;
+    expect(stored(id).details).toBe(indented);
+
+    const removed = await p.call("update_task", { taskId: id, removeLine: { prefix: "Context:" } });
+    expect(removed.isError).toBe(false);
+    expect(stored(id).details).toBe("  - keep this indent\n  - second");
+    expect(removed.answer).toMatchObject({ detailsLength: "  - keep this indent\n  - second".length });
+
+    /* The HTTP PATCH stores the same bytes. */
+    const replaced = await PATCH(request(`http://localhost/api/tasks/${id}`, "PATCH", { replaceLine: { index: 1, text: "  - second, edited" } }), { params: Promise.resolve({ id }) });
+    expect(replaced.status).toBe(200);
+    expect(stored(id).details).toBe("  - keep this indent\n  - second, edited");
+  } finally {
+    await p.close();
+  }
+});
+
 test("update_task refuses an ambiguous or missing prefix, a line edit beside details, and an edit past the limit, storing nothing", async () => {
   const p = await protocol();
   try {
