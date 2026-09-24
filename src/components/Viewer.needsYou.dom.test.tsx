@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { PRODUCT_NAME } from "@/lib/brand";
+import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
 import { translate } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
@@ -90,12 +91,12 @@ const ATLAS = "repo-bbbb000011112222";
 const NAMES: Record<string, string> = { [LEDGER]: "acme-ledger", [ATLAS]: "dune-atlas" };
 
 const workingTurn = { startedAt: (NOW - 120) * 1000, endedAt: null };
-function conversation(path: string, project: string, title: string): FileEntry {
+function conversation(path: string, project: string, title: string, extra: Partial<FileEntry> = {}): FileEntry {
   return {
     root: "claude-projects", name: path.split("/").pop(), path, project, title, engine: "claude", kind: "session", fmt: "claude",
     parent: null, mtime: NOW - 30, size: 2_048, activity: "live", proc: "running", pid: null, model: "opus",
     pendingQuestion: null, waitingInput: null, conversationId: `conversation_${path.replace(/\W/g, "_")}`,
-    lastTurn: workingTurn, lastAgentWorkAt: (NOW - 30) * 1000,
+    lastTurn: workingTurn, lastAgentWorkAt: (NOW - 30) * 1000, ...extra,
   } as unknown as FileEntry;
 }
 const REVISION = ["task-v1:00000000", "0000", "4000", "8000", "000000000001"].join("-");
@@ -138,6 +139,10 @@ function lane(dismissed: boolean): Pipeline {
 
 let laneDismissed = false;
 const posted: Array<Record<string, unknown>> = [];
+/** Conversations a test adds to the scan after the Viewer mounts. */
+let laterFiles: FileEntry[] = [];
+/** Every board mutation the store sent, in order. */
+const boardWrites: BoardMutationV1[] = [];
 
 const emptyBoard = (): BoardProjectStateV1 => ({
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
@@ -152,7 +157,7 @@ function stubFetch(): void {
     const method = (init?.method ?? "GET").toUpperCase();
     if (url.startsWith("/api/files")) {
       return Response.json({
-        files: FILES,
+        files: [...FILES, ...laterFiles],
         projectCatalog: [LEDGER, ATLAS].map((project) => ({ project, conversations: 1, smt: NOW - 30 })),
         projectDisplayNames: NAMES,
         flows: [], pipelines: [lane(laneDismissed)], workflows: [], tasks: TASKS, systemHealth: { tmux: { status: "healthy" } },
@@ -166,6 +171,7 @@ function stubFetch(): void {
       const key = body?.project ?? new URL(url, "http://localhost").searchParams.get("project") ?? "";
       const current = boards.get(key) ?? emptyBoard();
       if (!body) return Response.json({ ok: true, board: current });
+      boardWrites.push(...(body.mutations ?? []));
       const reduced = applyBoardMutations(current, body.mutations ?? []);
       const next = { ...reduced, schemaVersion: 1, revision: current.revision + 1, pathAliases: reduced.pathAliases ?? {} } as BoardProjectStateV1;
       boards.set(key, next);
@@ -194,6 +200,8 @@ beforeEach(async () => {
   phone = false;
   laneDismissed = false;
   posted.length = 0;
+  laterFiles = [];
+  boardWrites.length = 0;
   boards.clear();
   resetFilesClientCacheForTests();
   resetDismissalOverlayForTests();
@@ -256,6 +264,18 @@ const islandCount = (host: HTMLElement) => {
 };
 /** The phone bar's ⚠ count; the badge is not drawn at all at zero. */
 const phoneBadge = (host: HTMLElement) => Number(host.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? "0");
+/** The next scan, the way a files change asks for it. */
+async function rescan(): Promise<void> {
+  await act(async () => { dom.dispatchEvent(new dom.Event(FILES_CHANGED_EVENT)); });
+}
+async function press(key: string): Promise<void> {
+  await act(async () => {
+    (dom.document.body as unknown as HTMLElement).dispatchEvent(new dom.KeyboardEvent("keydown", { key, bubbles: true }) as unknown as Event);
+  });
+}
+/** Whether the board's convergence has seeded `path` as a root. */
+const seeded = (path: string) => boardWrites.some((mutation) => mutation.kind === "reconcile-roots" && mutation.roots.includes(path));
+const filterControl = (host: HTMLElement) => host.querySelector("[data-attention-filter]");
 const card = (host: HTMLElement, id: string) => host.querySelector(`.card[data-id="${id}"]`) as HTMLElement | null;
 /** Whether keyboard focus sits on the card: where «Next ›» and N land. */
 const focused = (host: HTMLElement, id: string) => {
@@ -308,10 +328,42 @@ test("desktop: «Next ›» on the lane's own board lands on its card", async ()
 test("desktop: the N key walks the same list and reaches the lane", async () => {
   const host = await mountOn(LEDGER);
 
-  await act(async () => {
-    (dom.document.body as unknown as HTMLElement).dispatchEvent(new dom.KeyboardEvent("keydown", { key: "n", bubbles: true }) as unknown as Event);
-  });
+  await press("n");
   await until(() => focused(host, LEDGER_CARD));
+});
+
+test("desktop: after a jump to the lane the board still seeds a conversation the next scan brings", async () => {
+  const host = await mountOn(LEDGER);
+  await click(host.querySelector("[data-attention-next]"));
+  await until(() => focused(host, LEDGER_CARD));
+
+  /* The lane's focus request stays behind once its card is revealed; it must
+     not hold the board's membership in place. */
+  const fresh = "/sessions/ledger-fresh.jsonl";
+  laterFiles = [conversation(fresh, LEDGER, "Fresh look at the ledger totals")];
+  await rescan();
+  await until(() => seeded(fresh));
+});
+
+test("desktop: with only a lane waiting the island offers no filter, and F arms none", async () => {
+  const host = await mountOn(LEDGER);
+  expect(islandCount(host)).toBe(1);
+  expect(filterControl(host)).toBeNull();
+  await press("f");
+  expect(filterControl(host)).toBeNull();
+
+  /* A conversation starts waiting: the filter appears, unpressed, so the F
+     above left nothing armed behind the missing control. */
+  const asking = "/sessions/ledger-asking.jsonl";
+  laterFiles = [conversation(asking, LEDGER, "Planner of the ledger cutover", {
+    activity: "idle", proc: null, lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: (NOW - 600) * 1000 },
+    pendingQuestion: { kind: "question", toolUseId: "tool-ledger", transcriptPath: asking, pid: 1, paneTarget: null, askedAt: iso(540), questions: [{ question: "Which cutover date?", header: "Cutover", multiSelect: false, options: [] }] },
+  } as Partial<FileEntry>)];
+  await rescan();
+  await until(() => islandCount(host) === 2);
+  expect(filterControl(host)?.getAttribute("aria-pressed")).toBe("false");
+  await press("f");
+  expect(filterControl(host)?.getAttribute("aria-pressed")).toBe("true");
 });
 
 test("desktop: a lane dismissed on its card leaves the island's count with the column's", async () => {

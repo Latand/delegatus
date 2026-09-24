@@ -1499,7 +1499,10 @@ function ProjectDashboardView({
      the server arrangement. */
   useEffect(() => {
     if (!board.loaded || board.sync === "unavailable") return;
-    if (focusRequest && !pendingFocusTarget(focusRequest.path, files)) return;
+    /* A conversation request holds convergence until its file is scanned. A
+       lane request (#2129) names a card, never a scanned path, and nothing
+       clears it once revealed, so it must not hold anything. */
+    if (focusRequest && !laneFocusId(focusRequest.path) && !pendingFocusTarget(focusRequest.path, files)) return;
     board.mutate(
       planBoardConvergence({
         files,

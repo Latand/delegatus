@@ -881,12 +881,13 @@ function ViewerApp() {
     };
   }, [queueOpen]);
 
-  /* «Show only needs me» filter: React-only state that auto-disables when the
-     queue empties — a filter surviving reload would silently gray the whole
-     board (D6). The popover follows the same emptiness rule. Desktop-only,
-     like the F key: the mobile strip and map render without the dimming
-     channel, so the funnel stays hidden there and the state clears if the
-     viewport shrinks into the phone layout mid-session. */
+  /* «Show only needs me» filter: React-only state that auto-disables once no
+     conversation waits (below, beside the paths it keeps lit) — a filter
+     surviving reload would silently gray the whole board (D6). The popover
+     closes when the queue empties. Desktop-only, like the F key: the mobile
+     strip and map render without the dimming channel, so the funnel stays
+     hidden there and the state clears if the viewport shrinks into the phone
+     layout mid-session. */
   const [attentionFilter, setAttentionFilter] = useState(false);
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
@@ -895,7 +896,6 @@ function ViewerApp() {
   useEffect(() => {
     if (needsYou.length) return;
     setQueueOpen(false);
-    setAttentionFilter(false);
   }, [needsYou.length]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -1107,9 +1107,17 @@ function ViewerApp() {
     () => needsYou.flatMap((entry) => (entry.kind === "conversation" ? [entry.item.file.path] : [])).sort().join("\n"),
     [needsYou],
   );
+  /* The filter keeps waiting conversations lit, so it exists only while one
+     waits: a queue of parked lanes alone (#2129) leaves it nothing to keep,
+     and switched on it would dim the whole board. */
+  const attentionFilterable = attentionKey !== "";
+  /* eslint-disable-next-line react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!attentionFilterable) setAttentionFilter(false);
+  }, [attentionFilterable]);
   const attentionPaths = useMemo<ReadonlySet<string> | null>(
-    () => (attentionFilter ? new Set(attentionKey.split("\n").filter(Boolean)) : null),
-    [attentionFilter, attentionKey],
+    () => (attentionFilter && attentionFilterable ? new Set(attentionKey.split("\n")) : null),
+    [attentionFilter, attentionFilterable, attentionKey],
   );
 
   /* N never leaves the current project (D4): the same items and order the
@@ -1198,7 +1206,7 @@ function ViewerApp() {
         event.preventDefault();
         openAttentionEntry(next);
       } else if (event.key === "f" || event.key === "F") {
-        if (!needsYou.length) return;
+        if (!attentionFilterable) return;
         event.preventDefault();
         setAttentionFilter((value) => !value);
       } else if (event.key === "b" || event.key === "B") {
@@ -1216,7 +1224,7 @@ function ViewerApp() {
     };
     window.addEventListener("keydown", onDown);
     return () => window.removeEventListener("keydown", onDown);
-  }, [isMobile, projectEntries, needsYou.length, openAttentionEntry, openSearch, toggleRail]);
+  }, [isMobile, projectEntries, attentionFilterable, openAttentionEntry, openSearch, toggleRail]);
 
   /* A popover click is a deliberate act, so unlike the N hotkey it may switch
      the project; the focus hand-off glides the board to the node. */
@@ -1305,7 +1313,7 @@ function ViewerApp() {
         filterActive={attentionFilter}
         onToggleQueue={() => setQueueOpen((value) => !value)}
         onNext={advanceGlobalAttention}
-        onToggleFilter={() => setAttentionFilter((value) => !value)}
+        onToggleFilter={attentionFilterable ? () => setAttentionFilter((value) => !value) : undefined}
       />
       {queueOpen ? (
         <div

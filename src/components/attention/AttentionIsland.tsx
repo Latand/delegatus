@@ -20,7 +20,9 @@ interface Props {
   onToggleQueue: () => void;
   /** Advance the shared cycle; −1 (Shift-click) mirrors Shift-N. */
   onNext: (dir: 1 | -1) => void;
-  onToggleFilter: () => void;
+  /** Absent while no conversation waits: the filter keeps conversations lit,
+      so a queue of parked lanes alone offers no filter (#2129). */
+  onToggleFilter?: () => void;
 }
 
 /**
@@ -79,7 +81,7 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
       <button
         type="button"
         data-attention-next
-        className="inline-flex items-center gap-0.5 py-1 pl-2 pr-1.5 text-[12px] font-bold text-warning hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+        className={`inline-flex items-center gap-0.5 py-1 pl-2 ${onToggleFilter ? "pr-1.5" : "pr-2.5"} text-[12px] font-bold text-warning hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40`}
         aria-label={t("attention.nextHint")}
         aria-keyshortcuts="n shift+n"
         title={t("attention.nextHint")}
@@ -88,20 +90,24 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
         {t("attention.next")}
         <ChevronRight className="h-3.5 w-3.5" aria-hidden />
       </button>
-      <div className="h-4 w-px shrink-0 bg-warning/45" aria-hidden />
-      <button
-        type="button"
-        data-attention-filter
-        className={`px-2 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
-          filterActive ? "bg-warning/30 text-warning" : "text-warning/70 hover:bg-warning/15 hover:text-warning"
-        }`}
-        aria-pressed={filterActive}
-        title={filterActive ? t("attention.filterOff") : t("attention.filterOn")}
-        aria-label={filterActive ? t("attention.filterOff") : t("attention.filterOn")}
-        onClick={onToggleFilter}
-      >
-        <Filter className="h-3.5 w-3.5" aria-hidden />
-      </button>
+      {onToggleFilter ? (
+        <>
+          <div className="h-4 w-px shrink-0 bg-warning/45" aria-hidden />
+          <button
+            type="button"
+            data-attention-filter
+            className={`px-2 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+              filterActive ? "bg-warning/30 text-warning" : "text-warning/70 hover:bg-warning/15 hover:text-warning"
+            }`}
+            aria-pressed={filterActive}
+            title={filterActive ? t("attention.filterOff") : t("attention.filterOn")}
+            aria-label={filterActive ? t("attention.filterOff") : t("attention.filterOn")}
+            onClick={onToggleFilter}
+          >
+            <Filter className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </>
+      ) : null}
     </div>
   );
 }
