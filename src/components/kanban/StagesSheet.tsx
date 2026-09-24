@@ -86,7 +86,6 @@ export function StagesSheet(props: {
   const [zoom, setZoom] = useState<SheetZoom>("fit");
   const [focus, setFocus] = useState<string | null>(props.initialFocus ?? order[0]?.id ?? null);
   const [inView, setInView] = useState<ReadonlySet<string>>(new Set());
-  const [firstInView, setFirstInView] = useState(0);
   const lane = useRef<HTMLDivElement>(null);
   const sheet = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
@@ -99,16 +98,13 @@ export function StagesSheet(props: {
     if (!element) return;
     const bounds = element.getBoundingClientRect();
     const seen = new Set<string>();
-    let first = -1;
-    element.querySelectorAll<HTMLElement>(".pane[data-stage]").forEach((pane, index) => {
+    element.querySelectorAll<HTMLElement>(".pane[data-stage]").forEach((pane) => {
       const rect = pane.getBoundingClientRect();
       if (rect.right > bounds.left + 40 && rect.left < bounds.right - 40) {
         seen.add(pane.dataset.stage!);
-        if (first < 0) first = index;
       }
     });
     setInView((current) => (current.size === seen.size && [...seen].every((id) => current.has(id)) ? current : seen));
-    setFirstInView(Math.max(0, first));
   }, []);
 
   const scrollLaneTo = useCallback((stageId: string, smooth = true) => {
@@ -213,6 +209,14 @@ export function StagesSheet(props: {
           <span className="pstate-chip" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
           <span className="progress">{t("kanban.stages.headProgress", { count: order.length, progress: pipelineProgress(t, summary, nameOf) })}</span>
           <span className="grow" />
+          {/* The lane's controls live in the head, so no bar of their own sits
+              between the graph and the stages. */}
+          <div className="lane-bar">
+            <button type="button" className="btn quiet" data-collapse-finished="" disabled={!finished.length} onClick={() => props.onFoldMany(finished, true)}>{t("kanban.stages.collapseFinished")}</button>
+            <button type="button" className="btn quiet" data-expand-all="" onClick={() => props.onFoldMany(order.map((stage) => stage.id), false)}>{t("kanban.stages.expandAll")}</button>
+            <button type="button" className="icon-btn" aria-label={t("kanban.stages.previous")} data-lane-prev="" onClick={() => step(-1)}><ChevronRight flip /></button>
+            <button type="button" className="icon-btn" aria-label={t("kanban.stages.next")} data-lane-next="" onClick={() => step(1)}><ChevronRight /></button>
+          </div>
           <button type="button" className="btn quiet gtoggle" aria-pressed={graph} data-sheet-graph="" onClick={() => setGraph((current) => !current)}>
             <GraphGlyph />
             <span>{t("kanban.graph.graph")}</span>
@@ -227,32 +231,38 @@ export function StagesSheet(props: {
           <button type="button" className="icon-btn" data-sheet-close="" aria-label={t("kanban.stages.close")} onClick={props.onClose}><CloseGlyph /></button>
         </header>
 
-        <nav className="gs-nav" aria-label={t("kanban.stages.navAria")}>
-          {order.map((stage, index) => {
-            const state = views.get(stage.id)?.state ?? "pending";
-            /* The numbered chips carry the same engine mark and effort ladder as
-               the graph node, so a minimized stage still says who runs it (#1743). */
-            const identity = stageIdentity(pipeline, stage);
-            return (
-              <button
-                key={stage.id}
-                type="button"
-                className={`navchip tone-${STAGE_TONE[state]}${inView.has(stage.id) ? " in-view" : ""}`}
-                data-nav-stage={stage.id}
-                aria-current={focus === stage.id}
-                aria-label={`${t("kanban.stages.navChipAria", { n: index + 1, stage: nameOf(stage), state: graphStateWord(t, state) })}. ${identityTitle(t, identity)}`}
-                onClick={() => reach(stage.id)}
-              >
-                <span className="nidx num">{index + 1}</span>
-                <i className="pdot" aria-hidden="true" />
-                <StageIdentity identity={identity} density="chip" name={<span className="nlbl">{nameOf(stage)}</span>} />
-              </button>
-            );
-          })}
-          {summary.loops.map((loop) => (
-            <LoopChip key={`${loop.from.id}->${loop.to.id}`} loop={loop} from={nameOf(loop.from)} to={nameOf(loop.to)} />
-          ))}
-        </nav>
+        {/* Each stage is drawn once (#2148). While the graph is shown it is the
+            navigation (a node reaches its pane, as a chip did) and it already
+            carries the loop on its fail edge, so the chip strip is the graph's
+            collapsed form and shows only when the graph is hidden. */}
+        {graph ? null : (
+          <nav className="gs-nav" aria-label={t("kanban.stages.navAria")}>
+            {order.map((stage, index) => {
+              const state = views.get(stage.id)?.state ?? "pending";
+              /* The numbered chips carry the same engine mark and effort ladder as
+                 the graph node, so a minimized stage still says who runs it (#1743). */
+              const identity = stageIdentity(pipeline, stage);
+              return (
+                <button
+                  key={stage.id}
+                  type="button"
+                  className={`navchip tone-${STAGE_TONE[state]}${inView.has(stage.id) ? " in-view" : ""}`}
+                  data-nav-stage={stage.id}
+                  aria-current={focus === stage.id}
+                  aria-label={`${t("kanban.stages.navChipAria", { n: index + 1, stage: nameOf(stage), state: graphStateWord(t, state) })}. ${identityTitle(t, identity)}`}
+                  onClick={() => reach(stage.id)}
+                >
+                  <span className="nidx num">{index + 1}</span>
+                  <i className="pdot" aria-hidden="true" />
+                  <StageIdentity identity={identity} density="chip" name={<span className="nlbl">{nameOf(stage)}</span>} />
+                </button>
+              );
+            })}
+            {summary.loops.map((loop) => (
+              <LoopChip key={`${loop.from.id}->${loop.to.id}`} loop={loop} from={nameOf(loop.from)} to={nameOf(loop.to)} />
+            ))}
+          </nav>
+        )}
 
         <div className="gs-body">
           {graph ? (
@@ -276,15 +286,6 @@ export function StagesSheet(props: {
               ) : null}
             </div>
           ) : null}
-          <div className="lane-bar">
-            <span className="pos num">{t("kanban.stages.position", { k: firstInView + 1, n: order.length })}</span>
-            <span className="lane-count num">{t("kanban.stages.inView", { count: inView.size })}</span>
-            <span className="grow" />
-            <button type="button" className="btn quiet" data-collapse-finished="" disabled={!finished.length} onClick={() => props.onFoldMany(finished, true)}>{t("kanban.stages.collapseFinished")}</button>
-            <button type="button" className="btn quiet" data-expand-all="" onClick={() => props.onFoldMany(order.map((stage) => stage.id), false)}>{t("kanban.stages.expandAll")}</button>
-            <button type="button" className="icon-btn" aria-label={t("kanban.stages.previous")} data-lane-prev="" onClick={() => step(-1)}><ChevronRight flip /></button>
-            <button type="button" className="icon-btn" aria-label={t("kanban.stages.next")} data-lane-next="" onClick={() => step(1)}><ChevronRight /></button>
-          </div>
           <div
             ref={lane}
             className="lane"
@@ -429,12 +430,12 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         {glyph}
         <span className="pane-title">
           <span className="pname">{index + 1}. {name}</span>
-          {/* One line under the pane title, inside a 340-440 px pane that also
-              carries the state and the pane's controls: mark, model and ladder,
-              with the words in the row's own title and `aria-label` (#1743). */}
+          {/* The column head says which stage and where it stands. Who runs it
+              (engine, model, effort) is said once, by the conversation's own
+              header under it or, before the stage starts, by the draft's
+              identity row; the words stay in the row's title (#1743). */}
           <span className="prole" title={identityTitle(t, identity)}>
             <span className="prole-role">{roleNameById(t, roleId)}</span>
-            <StageIdentity identity={identity} density="line" />
             {stage.kind === "review-loop" ? <span className="prole-kind">{t("kanban.stages.reviewLoop")}</span> : null}
           </span>
         </span>
@@ -447,7 +448,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
           <MoreGlyph />
         </button>
       </div>
-      <div className="pane-sub">{bits}</div>
+      {/* A stage that never ran says when it starts once, in its draft. */}
+      {neverRan ? null : <div className="pane-sub">{bits}</div>}
       {attempts.length > 1 ? (
         <div className="attempts" role="group" aria-label={t("kanban.stages.attempts")}>
           {attempts.map((attempt) => {

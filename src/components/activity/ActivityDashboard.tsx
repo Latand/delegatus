@@ -10,6 +10,8 @@ import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { useLocale, type Locale, type MessageKey, type TFunction } from "@/lib/i18n";
 
 import { ActivityDesktop } from "./ActivityDesktop";
+import { ActivityScopeChip } from "./ActivityProjectPicker";
+import { nothingRead, projectFromSearch } from "./format";
 
 /*
  * The activity dashboard. From 1024 px wide it draws the desktop page
@@ -67,6 +69,12 @@ function duration(ms: number, t: TFunction): string {
 /** Agent figures are approximate (message timestamps), and say so. */
 function approx(ms: number, t: TFunction): string {
   return t("activity.approx", { value: duration(ms, t) });
+}
+
+/** An agent figure that misses a host whose agent turns were not read is a
+    lower bound: `≥ ≈ 3 h 10 m`. */
+function agentFigure(ms: number, lower: boolean, t: TFunction): string {
+  return lower ? t("activity.atLeast", { value: approx(ms, t) }) : approx(ms, t);
 }
 
 /** Human time under its coverage: a lower bound when a host was not read,
@@ -400,10 +408,13 @@ function Breakdown({ title, rows, kind, t }: {
   );
 }
 
-function ProjectRow({ row, max, expanded, onToggle, hosts, locale, t }: {
+function ProjectRow({ row, max, expanded, selected, onToggle, hosts, locale, t }: {
   row: ActivityProjectRow;
   max: number;
   expanded: boolean;
+  /** A project row selects its project, and reads pressed while the page is
+      scoped to it; the row with no project only opens its detail. */
+  selected: boolean | null;
   onToggle(): void;
   hosts: readonly HostReport[];
   locale: Locale;
@@ -413,13 +424,14 @@ function ProjectRow({ row, max, expanded, onToggle, hosts, locale, t }: {
   const detailsId = `activity-project-${row.project ?? "unattributed"}`;
   const unread = row.coverage.complete ? null : t("activity.unread", { hosts: hostList(row.coverage.missingHosts, hosts, t) });
   return (
-    <li className="border-t border-border first:border-t-0" data-activity-project={row.project ?? ""} data-coverage={row.coverage.complete ? "complete" : "unknown"}>
+    <li className="border-t border-border first:border-t-0" data-activity-project={row.project ?? ""} data-coverage={row.coverage.complete ? "complete" : "unknown"} data-selected={selected ? "true" : undefined}>
       <button
         type="button"
-        aria-expanded={expanded}
+        aria-pressed={selected ?? undefined}
+        aria-expanded={selected === null ? expanded : undefined}
         aria-controls={detailsId}
         onClick={onToggle}
-        className="grid w-full grid-cols-[minmax(0,220px)_minmax(0,1fr)_20px] items-center gap-x-4 px-4 py-3 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 max-sm:grid-cols-[minmax(0,1fr)_20px] max-sm:gap-y-2"
+        className={`grid w-full grid-cols-[minmax(0,220px)_minmax(0,1fr)_20px] items-center gap-x-4 px-4 py-3 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 max-sm:grid-cols-[minmax(0,1fr)_20px] max-sm:gap-y-2 ${selected ? "bg-sunken shadow-[inset_3px_0_0_var(--color-accent)]" : ""}`}
       >
         <div className="min-w-0">
           <div className="truncate text-[13px] font-semibold text-primary" title={name}>{name}</div>
@@ -439,8 +451,8 @@ function ProjectRow({ row, max, expanded, onToggle, hosts, locale, t }: {
           </div>
           <div className="flex items-center gap-2">
             <Bar value={row.wallMs} max={max} kind="agent" supervised={row.supervisedMs} />
-            <span className="w-[132px] shrink-0 text-[11px] tabular-nums text-primary max-sm:w-[118px]">
-              <span className="font-semibold">{approx(row.wallMs, t)}</span>
+            <span className="w-[132px] shrink-0 text-[11px] tabular-nums text-primary max-sm:w-[118px]" title={row.agentCoverage.complete ? undefined : t("activity.detail.agentsNotRead", { hosts: hostList(row.agentCoverage.missingHosts, hosts, t) })}>
+              <span className="font-semibold">{agentFigure(row.wallMs, !row.agentCoverage.complete, t)}</span>
             </span>
           </div>
         </div>
@@ -557,6 +569,12 @@ function HostsTable({ hosts, locale, tz, t }: { hosts: readonly ActivityHostRow[
                       {t("activity.hosts.terminalUnread")}
                     </div>
                   ) : null}
+                  {host.agentsComplete === false && !host.local ? (
+                    <div className="mt-0.5 flex items-start gap-1 text-warning" data-activity-agents-unread="">
+                      <TriangleAlert className="mt-[2px] h-3 w-3 shrink-0" aria-hidden />
+                      {t("activity.hosts.agentsUnread")}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="py-1.5 text-muted max-sm:block max-sm:py-0.5">
                   <span className="font-semibold sm:hidden">{t("activity.hosts.excluded")}: </span>
@@ -631,29 +649,46 @@ function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; 
 /* The page                                                                 */
 /* ------------------------------------------------------------------------ */
 
-export function ActivityDashboard({ initialRange, initialView }: { initialRange: RangeKey; initialView: ActivityView }) {
+/** The query of one read: the range, and the project the page is scoped to. */
+export function activityQuery(range: RangeKey, project: string | null): string {
+  const search = new URLSearchParams({ range });
+  if (project !== null) search.set("project", project);
+  return search.toString();
+}
+
+export function ActivityDashboard({ initialRange, initialView, initialProject = null }: {
+  initialRange: RangeKey;
+  initialView: ActivityView;
+  /** `?project=`: the project the whole page is scoped to, or none. */
+  initialProject?: string | null;
+}) {
   const { t, locale } = useLocale();
   const desktop = useDesktop();
   const [range, setRange] = useState<RangeKey>(initialRange);
   const [view, setView] = useState<ActivityView>(initialView);
+  const [project, setProject] = useState<string | null>(initialProject);
   const [sort, setSort] = useState<ProjectSort>("human");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [data, setData] = useState<ActivityResponse | null>(null);
+  /* The project the answer on screen was asked for. */
+  const [dataFor, setDataFor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const request = useRef(0);
 
   /* No zone is sent: days and hours follow the zone in the settings
-     (Europe/Kyiv unless changed), whatever zone this device is in. */
-  const load = useCallback(async (target: RangeKey) => {
+     (Europe/Kyiv unless changed), whatever zone this device is in. A
+     project's figures are the server's own count for that project. */
+  const load = useCallback(async (target: RangeKey, scope: string | null) => {
     const id = ++request.current;
     setLoading(true);
     try {
-      const response = await fetch(`/api/activity?range=${target}`, { cache: "no-store" });
+      const response = await fetch(`/api/activity?${activityQuery(target, scope)}`, { cache: "no-store" });
       if (!response.ok) throw new Error(String(response.status));
       const body = (await response.json()) as ActivityResponse;
       if (id !== request.current) return;
       setData(body);
+      setDataFor(scope);
       setFailed(false);
     } catch {
       if (id === request.current) setFailed(true);
@@ -663,27 +698,59 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
   }, []);
 
   useEffect(() => {
-    void load(range);
+    void load(range, project);
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void load(range);
+      if (document.visibilityState === "visible") void load(range, project);
     }, REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [load, range]);
+  }, [load, range, project]);
 
-  /* The range and view live in the address, so a reload or a shared link
-     opens the same page. */
+  /* The range, view and project live in the address, so a reload or a shared
+     link opens the same page. Choosing or clearing a project is a step Back
+     undoes; a range or view switch replaces the entry it is on. */
   useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.set("range", range);
     url.searchParams.set("view", view);
-    window.history.replaceState(window.history.state, "", url);
-  }, [range, view]);
+    if (project !== null) url.searchParams.set("project", project);
+    else url.searchParams.delete("project");
+    if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
+  }, [range, view, project]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const search = new URLSearchParams(window.location.search);
+      const range = search.get("range");
+      setProject(projectFromSearch(window.location.search));
+      if (RANGES.includes(range as RangeKey)) setRange(range as RangeKey);
+      setView(search.get("view") === "projects" ? "projects" : "days");
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const selectProject = useCallback((next: string | null) => {
+    setProject(next);
+    setExpanded(null);
+    const url = new URL(window.location.href);
+    if (next !== null) url.searchParams.set("project", next);
+    else url.searchParams.delete("project");
+    if (url.href !== window.location.href) window.history.pushState(null, "", url);
+  }, []);
 
   const names = useMemo(() => {
     const map = new Map<string | null, string>();
     for (const row of data?.projects ?? []) map.set(row.project, projectName(row.project, row.name, t));
     return map;
   }, [data, t]);
+  /* The chosen project as the page names it. The answer says which key it
+     counted (an older key of a project reads under its current one); until
+     it arrives, the key asked for. */
+  const scope = project === null ? null : (() => {
+    const answered = dataFor === project ? data?.scope ?? null : null;
+    const key = answered?.project ?? project;
+    return { project: key, name: names.get(key) ?? answered?.name ?? projectName(key, null, t) };
+  })();
 
   const projects = useMemo(() => {
     const rows = [...(data?.projects ?? [])];
@@ -697,7 +764,10 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
   const tz = data?.params.tz ?? "Europe/Kyiv";
   const totals = data?.totals;
   const incomplete = totals ? !totals.coverage.complete : false;
+  const agentsIncomplete = totals ? !totals.agentCoverage.complete : false;
   const noAgentIndex = data !== null && data.coverage.agentIndex !== "ok";
+  const unread = data ? nothingRead(data) : false;
+  const scopedRow = scope ? data?.projects.find((row) => row.project === scope.project) : undefined;
   const roundingName = data ? t(data.params.rounding === "half-hour" ? "activity.rounding.halfHour" : "activity.rounding.clockHour") : "";
 
   if (desktop) {
@@ -706,9 +776,11 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
         data={data}
         range={range}
         onRange={(next) => { setRange(next); setExpanded(null); }}
+        scope={scope}
+        onProject={selectProject}
         loading={loading}
         failed={failed}
-        onRetry={() => void load(range)}
+        onRetry={() => void load(range, project)}
         locale={locale}
         t={t}
       />
@@ -727,7 +799,10 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
             {t("activity.back")}
           </a>
           <div className="min-w-0 flex-1">
-            <h1 className="text-[15px] font-bold text-primary">{t("activity.title")}</h1>
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+              <h1 className="text-[15px] font-bold text-primary">{t("activity.title")}</h1>
+              {scope ? <ActivityScopeChip name={scope.name} onClear={() => selectProject(null)} t={t} /> : null}
+            </div>
             <p className="text-[11.5px] text-muted">{t("activity.subtitle")}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 max-sm:w-full max-sm:flex-col max-sm:items-stretch">
@@ -752,7 +827,7 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
 
         {data && totals ? (
           <div className={`flex flex-col gap-4 transition-opacity ${loading ? "opacity-60" : ""}`} data-activity-loaded={data.range.key}>
-            {incomplete || totals.missingSourceDays || noAgentIndex ? (
+            {incomplete || agentsIncomplete || totals.missingSourceDays || noAgentIndex ? (
               <div className="flex flex-col gap-1 rounded-[12px] border border-border bg-card px-4 py-3 text-[12px] leading-snug text-secondary" data-activity-gap="">
                 {incomplete ? (
                   <p className="flex items-start gap-1.5">
@@ -760,6 +835,15 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
                     <span>
                       <span className="font-semibold text-primary">{t("activity.gap.incompleteTitle")}</span>{" "}
                       {t("activity.gap.incomplete", { hosts: hostList(totals.coverage.missingHosts, hosts, t) })}
+                    </span>
+                  </p>
+                ) : null}
+                {agentsIncomplete ? (
+                  <p className="flex items-start gap-1.5" data-activity-gap-agents="">
+                    <TriangleAlert className="mt-[2px] h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
+                    <span>
+                      <span className="font-semibold text-primary">{t("activity.gap.agentsTitle")}</span>{" "}
+                      {t("activity.gap.agents", { hosts: hostList(totals.agentCoverage.missingHosts, hosts, t) })}
                     </span>
                   </p>
                 ) : null}
@@ -775,25 +859,25 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
                 testId="human"
                 label={t("activity.tile.human")}
                 value={humanFigure(totals.humanMs, totals.coverage, t)}
-                sub={!totals.coverage.complete && totals.humanMs === 0 ? t("activity.tile.humanUnknown") : (
+                sub={unread ? t("activity.tile.humanUnknown") : !totals.coverage.complete && totals.humanMs === 0 ? t("activity.fig.notReadOn", { hosts: hostList(totals.coverage.missingHosts, hosts, t) }) : (
                   <>
                     {t("activity.tile.humanSub", { hours: reportHours(totals.humanHours, locale, t), mode: roundingName })}
-                    {data.billableConfigured ? <><br />{reportHours(totals.billableHours, locale, t, "activity.tile.billable")}</> : null}
+                    {data.billableConfigured && (!scope || scopedRow?.billable) ? <><br />{reportHours(totals.billableHours, locale, t, "activity.tile.billable")}</> : null}
                   </>
                 )}
               />
-              <Tile testId="agent" label={t("activity.tile.agent")} value={approx(totals.wallMs, t)} sub={t("activity.tile.agentSub")} />
+              <Tile testId="agent" label={t("activity.tile.agent")} value={agentFigure(totals.wallMs, agentsIncomplete, t)} sub={t("activity.tile.agentSub")} />
               <Tile
                 testId="split"
                 label={t("activity.tile.split")}
-                value={approx(totals.supervisedMs, t)}
-                sub={t("activity.tile.splitSub", { unattended: approx(totals.unattendedMs, t) })}
+                value={agentFigure(totals.supervisedMs, agentsIncomplete, t)}
+                sub={t("activity.tile.splitSub", { unattended: agentFigure(totals.unattendedMs, agentsIncomplete, t) })}
               >
                 <div className="mt-2" aria-hidden>
                   <Bar value={totals.wallMs} max={totals.wallMs} kind="agent" supervised={totals.supervisedMs} />
                 </div>
               </Tile>
-              <Tile testId="agent-hours" label={t("activity.tile.agentHours")} value={approx(totals.agentHoursMs, t)} sub={t("activity.tile.agentHoursSub")} />
+              <Tile testId="agent-hours" label={t("activity.tile.agentHours")} value={agentFigure(totals.agentHoursMs, agentsIncomplete, t)} sub={t("activity.tile.agentHoursSub")} />
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -823,13 +907,18 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
                   <ul>
                     {projects.map((row) => {
                       const key = row.project ?? "";
+                      const selectable = row.project !== null;
+                      const selected = selectable && scope?.project === row.project;
                       return (
                         <ProjectRow
                           key={key}
                           row={row}
                           max={projectMax}
-                          expanded={expanded === key}
-                          onToggle={() => setExpanded((current) => (current === key ? null : key))}
+                          expanded={selectable ? selected : expanded === key}
+                          selected={selectable ? selected : null}
+                          onToggle={() => (selectable
+                            ? selectProject(selected ? null : row.project)
+                            : setExpanded((current) => (current === key ? null : key)))}
                           hosts={hosts}
                           locale={locale}
                           t={t}

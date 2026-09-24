@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { DayActivity, HourActivity } from "@/lib/activity/method";
 
-import { agentParts, approxText, clockText, dayMonth, dayShort, hostName, hoursNumber, hoursText, minutesText } from "./format";
+import { agentParts, approxAtLeast, approxText, clockText, dayMonth, dayShort, hostName, hoursNumber, hoursText, minutesText, scopeHosts } from "./format";
 import { MARK_FILL, Tooltip, type TipAnchor } from "./marks";
 import { DayTip, HourTip, type TipContext } from "./tips";
 
@@ -122,8 +122,9 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
   const ticks: number[] = [];
   for (let value = 0; value <= yMax; value += step) ticks.push(value);
 
-  /* Today: each stretch a host did not read, as one band behind those hours. */
-  const bands = today && day0 ? data.coverage.hosts.flatMap((host) => host.unread
+  /* Today: each stretch a host did not read, as one band behind those hours;
+     on a project's page, only the hosts that can hold that project. */
+  const bands = today && day0 ? scopeHosts(data).flatMap((host) => host.unread
     .map((span) => ({ host: host.host, start: Math.max(span.start, day0.start), end: Math.min(span.end, day0.end, data.range.now) }))
     .filter((span) => span.end > span.start)) : [];
   const hourX = (at: number) => axisW + slot * ((at - (day0?.start ?? 0)) / HOUR);
@@ -167,7 +168,7 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
   const pairLabel = (col: Column): string => {
     if (col.hour) return t("activity.chart.pair", { day: clockText(col.hour.start, locale, tz), you: minutesText(col.hour.humanMs, t), agents: approxText(col.hour.supervisedMs + col.hour.unattendedMs, t) });
     const cap = capLabel(col);
-    return t("activity.chart.pair", { day: dayShort(col.day, locale, tz), you: cap?.text === "?" ? "?" : `${col.day.coverage.complete ? "" : "≥ "}${hoursText(col.day.humanHours, locale, t)}`, agents: approxText(col.day.wallMs, t) });
+    return t("activity.chart.pair", { day: dayShort(col.day, locale, tz), you: cap?.text === "?" ? "?" : `${col.day.coverage.complete ? "" : "≥ "}${hoursText(col.day.humanHours, locale, t)}`, agents: approxAtLeast(col.day.wallMs, !col.day.agentCoverage.complete, t) });
   };
 
   return (

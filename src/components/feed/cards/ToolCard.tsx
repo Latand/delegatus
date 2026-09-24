@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { useCollapsedTools } from "../toolDisclosure";
 
+import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { getLocale } from "@/lib/i18n";
 
@@ -86,15 +87,22 @@ function RowStatusChip({ event }: { event: ToolEvent }) {
 /* One quiet metadata row over the command: exit status, wall-clock span, and
    cwd — the auditable header a terminal client shows, folded into a
    single wrapping line so it never stacks into its own multi-row card. Renders
-   nothing when a call carries none of them (a plain non-shell tool). */
-function ToolMeta({ event }: { event: ToolEvent }) {
+   nothing when a call carries none of them (a plain non-shell tool).
+
+   On a finger the command's copy target ends this row (#2148), so the command
+   under it keeps the height of its text. The 44 px target overhangs the row by
+   10 px each way, which keeps its icon level with the row's words, and the
+   row's bottom margin grows by as much, so the target ends where the command
+   starts and covers none of it. */
+function ToolMeta({ event, coarse }: { event: ToolEvent; coarse: boolean }) {
   const start = hhmm(event.ts);
   const end = event.endTs !== undefined ? hhmm(event.endTs) : "";
   const span = end && start ? tr("tools.ranAt", { start, end }) : "";
   const exit = exitLabel(event);
-  if (!event.cwd && !span && !exit) return null;
+  const commandCopy = coarse && event.command ? event.command : "";
+  if (!event.cwd && !span && !exit && !commandCopy) return null;
   return (
-    <div className="mb-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted">
+    <div className={`${commandCopy ? "mb-2.5" : "mb-1"} flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted`}>
       {exit ? (
         <span className={`inline-flex items-center gap-1 font-semibold ${statusClass(event.status)}`}>
           <StatusIcon status={event.status} className="h-3 w-3" />
@@ -110,6 +118,11 @@ function ToolMeta({ event }: { event: ToolEvent }) {
           <CopyButton text={event.cwd} label={tr("tools.copyCwd")} className="shrink-0 p-0.5" />
         </span>
       ) : null}
+      {commandCopy ? (
+        <span className="-my-2.5 ml-auto inline-flex shrink-0" data-command-copy="meta">
+          <CopyButton text={commandCopy} label={tr("tools.copyCommand")} className={MESSAGE_ACTION} />
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -119,23 +132,26 @@ function ToolMeta({ event }: { event: ToolEvent }) {
    user did not open), wrapped instead of scrolled so a long line stays fully
    visible and never forces document-level horizontal overflow on 390px.
 
-   The block is at least as tall as its copy control (#1978). A one-line
-   command is ~20px, and on a coarse pointer the control is 44px pinned 6px
-   down, so it hung 30px into the output below — over the output's own copy
-   control, pinned 6px into that block. 50px is the inset plus the coarse
-   size; the fine pointer's 22px control already fits beside one line. */
-function CommandBlock({ command }: { command: string }) {
+   A 44 px coarse-pointer control pinned 6px down hung 30px out of a one-line
+   command, over the output's own control (#1978), and reserving a 50px band
+   for it left a blank strip under every short command. On a finger the
+   control now ends the meta row above instead (#2148), so the block is the
+   height of its text; the fine pointer's 22px control fits beside one line
+   and stays pinned in the gutter. */
+function CommandBlock({ command, coarse }: { command: string; coarse: boolean }) {
   return (
-    <div className="group/cmd relative [@media(pointer:coarse)]:min-h-[50px]">
-      <pre className={`max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] py-0.5 font-mono text-ui text-primary ${ACTION_GUTTER}`}>
+    <div className="group/cmd relative">
+      <pre className={`max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] py-0.5 font-mono text-ui text-primary ${coarse ? "" : ACTION_GUTTER}`}>
         <span className="select-none text-muted">$ </span>
         {command}
       </pre>
-      <CopyButton
-        text={command}
-        label={tr("tools.copyCommand")}
-        className={`absolute right-[6px] top-[6px] ${MESSAGE_ACTION} group-hover/cmd:opacity-100`}
-      />
+      {coarse ? null : (
+        <CopyButton
+          text={command}
+          label={tr("tools.copyCommand")}
+          className={`absolute right-[6px] top-[6px] ${MESSAGE_ACTION} group-hover/cmd:opacity-100`}
+        />
+      )}
     </div>
   );
 }
@@ -161,11 +177,12 @@ export function ToolBody({ event }: { event: ToolEvent }) {
      even when the result body is empty (issue #502). */
   const emptyFollowUp = isFollowUpCall(event) && !event.outputPreview.trim() && event.stderr === undefined && event.status !== "err";
   const showOutput = !emptyFollowUp && (!hasDiff || Boolean(event.outputPreview.trim()));
+  const coarse = useCoarsePointer();
   return (
     <div className="mb-1 mt-1 rounded-surface bg-sunken px-2.5 py-2">
       <ToolChips chips={event.chips} />
-      <ToolMeta event={event} />
-      {event.command ? <CommandBlock command={event.command} /> : null}
+      <ToolMeta event={event} coarse={coarse} />
+      {event.command ? <CommandBlock command={event.command} coarse={coarse} /> : null}
       {event.orchestration ? <OrchestrationCard orchestration={event.orchestration} source={event.command} /> : null}
       {hasDiff && event.body?.type === "diff" ? <DiffCard body={event.body} /> : null}
       {showOutput ? (

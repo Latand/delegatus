@@ -16,6 +16,7 @@ import { SelectedContextBadge } from "../SelectedContextBadge";
 import { CopyButton } from "./CopyButton";
 import { InboxImageCard } from "./InboxImage";
 import { md, mdBlocks, mdImages } from "./markdown";
+import { BUBBLE_MEASURE, READING_MEASURE } from "./measure";
 import { UserMessageRow } from "./UserMessageRow";
 import { useMessageProvenance, type ProvenanceLookup } from "./messageProvenance";
 import { tr, type Item } from "./parse";
@@ -144,25 +145,27 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
     const fillStyle = { "--engine-mark-cut": `var(--color-${item.engine === "codex" ? "codex" : item.engine === "openclaw" ? "openclaw" : "claude"})` } as CSSProperties;
     if (isMobile) {
       /* Mobile v2 (#1439, lane 4; README §2.6, §4.2): content gets the width.
-         No avatar column; the header is one 44 px row — engine glyph, engine
-         name, time, then the read-aloud and copy targets — and the prose
-         starts under it at 15 px. The wrapper carries no vertical margin and
-         nothing negative: the header's own height is the gap above the
-         message, so it can never overlap the text. */
+         No avatar column. The message reads content first (#2148): a one-line caption
+         (engine glyph, engine name, time), the prose at 15 px, and then the
+         read-aloud and copy targets in one quiet row where the text ends.
+         The targets keep 44 px; the row's negative margins give 12 px of that
+         back to the gaps around it, where there is nothing else to hit.
+         The read-aloud anchor (`data-tts-message`) wraps the whole message, so
+         the control finds its text with `closest()` as on the desktop. */
       const time = mobileClock(item.ts);
       return (
-        <div className="group/msg" data-mobile-message="agent">
-          <div data-mobile-message-header className="flex h-11 w-full items-center gap-1.5 text-label text-muted">
+        <div className="group/msg pt-2" data-mobile-message="agent" data-tts-message={`${item.engine}:${item.ts}`}>
+          <div data-mobile-message-header className="mb-1 flex h-5 w-full items-center gap-1.5 text-label text-muted">
             <AvatarIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden />
             <span className="font-semibold text-secondary">{ENGINE_LABEL[item.engine]}</span>
-            <span className="ml-auto flex shrink-0 items-center gap-1">
-              {time ? <span className="tabular-nums">{time}</span> : null}
-              {speakText ? <SpeakButton text={speakText} /> : null}
-              <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
-            </span>
+            {time ? <span className="tabular-nums">· {time}</span> : null}
           </div>
-          <div className="w-full whitespace-pre-wrap break-words text-title leading-[1.45]" data-tts-message={`${item.engine}:${item.ts}`}>
+          <div className="w-full whitespace-pre-wrap break-words text-title leading-[1.45]">
             <div className="contents" data-tts-body>{mdBlocks(item.text)}</div>
+          </div>
+          <div data-mobile-message-actions className="-mx-3 -my-1.5 flex h-11 items-center">
+            {speakText ? <SpeakButton text={speakText} /> : null}
+            <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
           </div>
         </div>
       );
@@ -179,8 +182,13 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
             identity — the engine/timestamp pair `speakableAnswer` groups on —
             so a control on the first block of a multi-block answer can claim
             the rest of it and stop at the next answer. The body wrapper is
-            `display: contents`, so it changes no layout. */}
-        <div className="min-w-0 flex-1 whitespace-pre-wrap break-words" data-tts-message={`${item.engine}:${item.ts}`}>
+            `display: contents`, so it changes no layout.
+
+            The answer is set at the reading measure (#2148), and its header
+            row sits inside it, so the time and the controls end where the text
+            ends. Tool calls and diffs are items of their own and keep the full
+            width. */}
+        <div className={`min-w-0 flex-1 ${READING_MEASURE} whitespace-pre-wrap break-words`} data-tts-message={`${item.engine}:${item.ts}`}>
           {/* Issue #698: this cluster used to be `absolute right-0 top-0` over a
               body with no reserved gutter — on a coarse pointer the 44px buttons
               sat permanently at 60% opacity on the first lines of the message,
@@ -204,30 +212,32 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
      because that tail repeats itself turn over turn and is only ever read when
      something sounded wrong. */
   if (item.kind === "voice") {
+    /* Its copy control sits where the typed bubble's does: beside it on the
+       desktop, under it at the trailing edge on the phone. */
+    const copy = <CopyButton text={item.input || item.delta} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
     return (
-      <div className="group/msg my-3 flex items-start justify-end gap-1.5">
-        <CopyButton
-          text={item.input || item.delta}
-          label={tr("feed.copyMd")}
-          className={`mt-2 ${MESSAGE_ACTION}`}
-        />
-        <div className={isMobile ? "max-w-[86%] rounded-surface bg-user px-3 py-[9px] text-title leading-[1.45]" : "max-w-[75%] rounded-surface bg-user px-4 py-2.5"}>
-          <span className="mb-1 flex items-center gap-1 text-caption uppercase tracking-wide text-muted">
-            <Mic className="h-3 w-3" aria-hidden />
-            {tr("feed.voiceTurn")}
-          </span>
-          {item.input ? (
-            <p className="whitespace-pre-wrap break-words">{item.input}</p>
-          ) : null}
-          {item.delta ? (
-            <details className="mt-1.5">
-              <summary className="cursor-pointer list-none text-caption text-muted [&::-webkit-details-marker]:hidden">
-                {tr("feed.voiceContext")}
-              </summary>
-              <pre className="mt-1 whitespace-pre-wrap break-words text-label text-secondary">{item.delta}</pre>
-            </details>
-          ) : null}
+      <div className="group/msg my-3 flex flex-col items-end">
+        <div className="flex w-full items-start justify-end gap-1.5">
+          {isMobile ? null : <span className="mt-2 flex shrink-0">{copy}</span>}
+          <div className={isMobile ? "max-w-[86%] rounded-surface bg-user px-3 py-[9px] text-title leading-[1.45]" : `${BUBBLE_MEASURE} rounded-surface bg-user px-4 py-2.5`}>
+            <span className="mb-1 flex items-center gap-1 text-caption uppercase tracking-wide text-muted">
+              <Mic className="h-3 w-3" aria-hidden />
+              {tr("feed.voiceTurn")}
+            </span>
+            {item.input ? (
+              <p className="whitespace-pre-wrap break-words">{item.input}</p>
+            ) : null}
+            {item.delta ? (
+              <details className="mt-1.5">
+                <summary className="cursor-pointer list-none text-caption text-muted [&::-webkit-details-marker]:hidden">
+                  {tr("feed.voiceContext")}
+                </summary>
+                <pre className="mt-1 whitespace-pre-wrap break-words text-label text-secondary">{item.delta}</pre>
+              </details>
+            ) : null}
+          </div>
         </div>
+        {isMobile ? <div data-mobile-message-actions className="-mr-3 -my-1.5 flex h-11 items-center">{copy}</div> : null}
       </div>
     );
   }

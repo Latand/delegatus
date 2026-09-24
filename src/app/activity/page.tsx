@@ -16,7 +16,7 @@ function first(value: string | string[] | undefined): string | undefined {
 
 /** Human interaction time and agent activity per day and per project
     (docs/design/activity-dashboard.md). `?range=` and `?view=` open it on a
-    given range and view. */
+    given range and view, and `?project=` scopes it to one project. */
 export default async function ActivityPage({
   searchParams,
 }: {
@@ -25,10 +25,12 @@ export default async function ActivityPage({
   const params = await searchParams;
   const range = first(params.range);
   const view = first(params.view);
+  const project = first(params.project)?.trim();
   return (
     <ActivityDashboard
       initialRange={RANGES.includes(range as RangeKey) ? range as RangeKey : "7d"}
       initialView={view === "projects" ? "projects" : "days" satisfies ActivityView}
+      initialProject={project ? project : null}
     />
   );
 }

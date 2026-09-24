@@ -3,8 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { turnConversations } from "./agentSource";
 import { dedupeCandidates } from "./humanInput";
 import { ingestTranscripts, type IngestSource } from "./ingest";
+import { activityReport, clampMethodParams } from "./method";
 import { ActivityStore, LOCAL_HOST_KEY } from "./store";
 import type { ConversationResolution, TranscriptFacts } from "./transcriptExport";
 
@@ -255,6 +257,50 @@ describe("the continuous ingest", () => {
     const second = await ingestWithBudget([source(older), source(newer)], budget);
     expect([second.filesRead, second.filesSkipped, second.filesDeferred, second.coveredUntil]).toEqual([1, 1, 0, NOW]);
     expect(stored((store) => store.count(LOCAL_HOST_KEY))).toBe(2);
+  });
+
+  test("a Codex subagent thread is its own agent for agent-hours, in its parent's project", async () => {
+    /* The parent works 06:00-07:00 and the thread it spawned 06:10-06:50,
+       beside it. The registry names the parent's conversation for both
+       rollouts, which is what folded the thread into the parent. */
+    const parent = write("sessions/rollout-parent.jsonl", [
+      codexMeta("2026-09-23T06:00:00Z"),
+      codexEvent("2026-09-23T06:00:00Z", "task_started"),
+      codexWork("2026-09-23T06:59:00Z"),
+      codexEvent("2026-09-23T07:00:00Z", "task_complete"),
+    ]);
+    const thread = write("sessions/rollout-thread.jsonl", [
+      { timestamp: "2026-09-23T06:10:00Z", type: "session_meta", payload: { id: "thread", cwd: "/work/harbor", originator: "llv-structured-host", source: { subagent: { thread_spawn: { parent_thread_id: "parent" } } } } },
+      codexEvent("2026-09-23T06:10:00Z", "task_started"),
+      codexWork("2026-09-23T06:45:00Z"),
+      codexEvent("2026-09-23T06:50:00Z", "task_complete"),
+    ]);
+    const parentConversation = () => (): ConversationResolution => ({
+      project: "harbor", launch: "operator", registered: true, conversation: "conversation:parent",
+      agent: { role: "implementer", pipelineId: "p-1", stageId: "build" },
+    });
+    await ingest([source(parent), source(thread)], { resolver: parentConversation });
+
+    const turns = stored((store) => store.turns(LOCAL_HOST_KEY, 0, NOW));
+    expect(turns).toHaveLength(2);
+    expect(new Set(turns.map((turn) => turn.conversation)).size).toBe(2);
+    const agents = turnConversations(turns, "", { start: 0, end: NOW }, NOW, (project) => project);
+    expect(agents.map((agent) => [agent.project, agent.role, agent.stageId]).sort()).toEqual([["harbor", "implementer", "build"], ["harbor", "implementer", "build"]]);
+
+    const report = activityReport({
+      params: clampMethodParams({ tz: "UTC" }),
+      range: "today",
+      nowMs: NOW,
+      anchors: [],
+      hosts: [{ host: "local", projects: "all", since: null, covered: [{ start: 0, end: NOW }] }],
+      agents,
+    });
+    const harbor = report.projects.find((row) => row.project === "harbor")!;
+    /* Wall-clock is the parent's hour; agent-hours count the thread's 40
+       minutes beside it. */
+    expect(harbor.wallMs).toBe(60 * 60_000);
+    expect(harbor.agentHoursMs).toBe(100 * 60_000);
+    expect(harbor.conversations).toBe(2);
   });
 });
 

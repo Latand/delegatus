@@ -1,0 +1,115 @@
+diff --git a/src/components/mobile/MobileTaskScreen.tsx b/src/components/mobile/MobileTaskScreen.tsx
+index 18c8091..d54288b 100644
+--- a/src/components/mobile/MobileTaskScreen.tsx
++++ b/src/components/mobile/MobileTaskScreen.tsx
+@@ -632,6 +632,31 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
+   const laneBlock = (summary: KanbanPipeline) => {
+     const { pipeline } = summary;
+     const needs = pipelineNeedsYou(pipeline);
++    /* A live lane shows its stages as the pipeline screen draws them: numbered
++       rows with who runs each, and the current stage's report and "Open
++       conversation", so the usual next tap is on this screen. A finished
++       lane keeps the one-row chain. */
++    if (!pipelineEnded(pipeline)) {
++      return (
++        <div key={pipeline.id} data-phone-task-lane={pipeline.id} data-needs={needs ? "1" : undefined} className="shrink-0">
++          <PipelineBlock
++            summary={summary}
++            density="screen"
++            embedded
++            nowMs={nowMs}
++            taskTitle={pendingTitle ? null : title}
++            acting={lane.acting(pipeline)}
++            onOpenStage={openStage}
++            onOpenStages={props.onOpenPipeline}
++            onMenu={(entry) => {
++              setLaneFor(entry.id);
++              nav.openSheet("lane");
++            }}
++            onAnswer={lane.answer}
++          />
++        </div>
++      );
++    }
+     return (
+       <div
+         key={pipeline.id}
+diff --git a/src/components/pipelines/PipelineBlock.tsx b/src/components/pipelines/PipelineBlock.tsx
+index 738bd7a..33cce18 100644
+--- a/src/components/pipelines/PipelineBlock.tsx
++++ b/src/components/pipelines/PipelineBlock.tsx
+@@ -419,6 +419,11 @@ export interface PipelineBlockProps {
+   /** Screen density: the heading, which the screen's bar watches to take the
+       title once it scrolls away. */
+   headingRef?: React.Ref<HTMLHeadingElement>;
++  /** Screen density inside another screen (the phone task screen): no
++      heading, since the screen above already names the task, no Attach
++      (it is in the lane's ⋯), and the "Stages" line opens the pipeline
++      screen and carries the lane's ⋯. */
++  embedded?: boolean;
+   /** Card density: what the card adds about its other pipelines ("+1
+       paused"), at the right end of the block's last line. */
+   aside?: React.ReactNode;
+@@ -779,22 +784,39 @@ function ScreenBlock(props: PipelineBlockProps & {
+   };
+   /* A finished lane has no current stage: what closed it is the last report. */
+   const lastReport = ended ? (pipeline.stageReports ?? []).at(-1) ?? null : null;
++  const moved = pipelineMovedAtMs(pipeline);
+   return (
+     <section className="pblock" aria-label={t("kanban.pipelineAria", { title: pipelineTitle(t, pipeline), progress: pipelineProgress(t, summary, nameOf) })} {...props.root}>
+-      <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>
++      {props.embedded ? null : <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>}
+       <div className="pb-links-row">
+         <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} />
+-        {props.onWorkLinks ? (
++        {props.onWorkLinks && !props.embedded ? (
+           <button type="button" className="pb-attach" data-work-links-open={pipeline.id} onClick={(event) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, event.currentTarget)}>
+             {t("workLinks.attach")}
+           </button>
+         ) : null}
+       </div>
+       {lastReport ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={lastReport} names={names} shown={ANSWER_FINDINGS} /></div> : null}
+-      <p className="pb-section" data-stages-count={pipeline.stages.length}>
+-        {t("mobile2.pipeline.stages")}
+-        <span className="pb-count">{pipeline.stages.length}</span>
+-      </p>
++      {props.embedded ? (
++        <div className="pb-section-row">
++          <button type="button" className="pb-section pb-section-open" data-open-stages={pipeline.id} data-stages-count={pipeline.stages.length} disabled={!props.onOpenStages} onClick={() => props.onOpenStages?.(pipeline)}>
++            {t("mobile2.pipeline.stages")}
++            <span className="pb-count">{pipeline.stages.length}</span>
++            {moved === null ? null : <span className="pb-count">· {humanizeDuration(blockAgeSeconds((nowMs - moved) / 1000))}</span>}
++            <ChevronRight />
++          </button>
++          {props.onMenu ? (
++            <button type="button" className="pb-icon" aria-label={t("kanban.pipelineAct.menu")} aria-haspopup="menu" data-pipeline-menu={pipeline.id} onClick={(event) => props.onMenu!(pipeline, event.currentTarget)}>
++              <MoreGlyph />
++            </button>
++          ) : null}
++        </div>
++      ) : (
++        <p className="pb-section" data-stages-count={pipeline.stages.length}>
++          {t("mobile2.pipeline.stages")}
++          <span className="pb-count">{pipeline.stages.length}</span>
++        </p>
++      )}
+       <ol className="pb-stages" data-chain={pipeline.id}>
+         {foldPassed ? (
+           <li className="pb-stage passed-fold tone-ok">
+diff --git a/src/components/pipelines/pipelineBlock.css b/src/components/pipelines/pipelineBlock.css
+index 1a1efb3..97667fa 100644
+--- a/src/components/pipelines/pipelineBlock.css
++++ b/src/components/pipelines/pipelineBlock.css
+@@ -207,6 +207,12 @@
+ }
+ .pblock .pb-section { margin: 2px 0 0; display: flex; align-items: baseline; gap: 6px; font-size: var(--text-ui); font-weight: 600; color: var(--color-secondary); }
+ .pblock .pb-section .pb-count { font-size: var(--text-label); color: var(--color-muted); font-variant-numeric: tabular-nums; }
++/* Embedded in the task screen: the section line is the way into the
++   pipeline screen, with the lane's ⋯ at its end. */
++.pblock .pb-section-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin: 2px -10px -4px 0; }
++.pblock .pb-section-open { margin: 0; min-height: 44px; align-items: center; padding: 0 8px 0 2px; border-radius: var(--radius-control); }
++.pblock .pb-section-open > svg { width: 14px; height: 14px; color: var(--color-muted); }
++.pblock .pb-section-open:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+ .pblock .pb-stages { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); overflow: hidden; }
+ .pblock .pb-stage + .pb-stage { border-top: 1px solid var(--border-default); }
+ /* The current stage: its tone's stripe on a raised ground. */

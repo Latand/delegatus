@@ -1,0 +1,32 @@
+diff --git a/src/components/runtime/McpCallCard.tsx b/src/components/runtime/McpCallCard.tsx
+index 67c431e..7881fef 100644
+--- a/src/components/runtime/McpCallCard.tsx
++++ b/src/components/runtime/McpCallCard.tsx
+@@ -150,7 +150,7 @@ export function McpCallCard({
+      behind the quiet Details disclosure. An error is never quiet: its text gets
+      its own visible line under the row. */
+   return (
+-    <article data-testid="mcp-call-card" data-state={state} className="group/mcp relative my-1 ml-9">
++    <article data-testid="mcp-call-card" data-state={state} className="group/mcp relative my-1 ml-9 max-md:ml-0">
+       {state === "pending" ? (
+         <div data-testid="mcp-call-progress" className="absolute inset-x-0 top-0 h-0.5 animate-pulse bg-gradient-to-r from-transparent via-accent to-transparent" />
+       ) : null}
+@@ -180,6 +180,10 @@ export function McpCallCard({
+           {description.links.map((link) => (
+             <LinkChip key={`${link.kind}:${link.id}`} link={link} conversationAvailability={conversationAvailability} />
+           ))}
++          {/* The outcome, the duration and the time wrap as one group at the
++              row's trailing edge, so a narrow row never strands the time
++              alone under the badge. */}
++          <span className="ml-auto inline-flex shrink-0 items-center gap-2">
+           <span
+             className={`inline-flex shrink-0 items-center ${
+               state === "error" ? "text-danger" : state === "success" ? "text-success" : "text-accent"
+@@ -191,6 +195,7 @@ export function McpCallCard({
+           </span>
+           {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
+           {hhmm(event.ts) ? <span className="shrink-0 text-caption tabular-nums text-muted">{hhmm(event.ts)}</span> : null}
++          </span>
+         </summary>
+         <div className="ml-5 mt-1 text-[10.5px] text-muted">
+           {description.subtitle ? (

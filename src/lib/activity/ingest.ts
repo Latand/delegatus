@@ -140,6 +140,22 @@ function awaitsRegistry(facts: TranscriptFacts, resolution: ConversationResoluti
     : codexSessionKind(facts.sessionMeta) === "delegatus";
 }
 
+/**
+ * Whose turns a transcript's turns are. Copies of one session in two stores
+ * share its file name, so an unregistered one is still one conversation. A
+ * Codex subagent thread is its own agent working beside its parent: the
+ * registry can name the parent's conversation for its rollout, and its turns
+ * joined into the parent's would count parallel work once. It keeps the
+ * parent's project, role and stage (the resolution's) and takes its own key.
+ */
+export function turnOwnerConversation(file: string, facts: TranscriptFacts, resolution: ConversationResolution): string {
+  const session = `session:${path.basename(file, ".jsonl")}`;
+  if (!resolution.conversation) return session;
+  return facts.engine === "codex" && codexSessionKind(facts.sessionMeta) === "subagent"
+    ? `${resolution.conversation}\0${session}`
+    : resolution.conversation;
+}
+
 function earliestOf(records: ReadonlyArray<{ at: number }>): number | null {
   let earliest: number | null = null;
   for (const rec of records) if (earliest === null || rec.at < earliest) earliest = rec.at;
@@ -216,9 +232,7 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
             prompted = classified.prompted;
           }
           owner = {
-            /* Copies of one session in two stores share its file name, so an
-               unregistered one is still one conversation. */
-            conversation: resolution.conversation ?? `session:${path.basename(source.path, ".jsonl")}`,
+            conversation: turnOwnerConversation(source.path, transcript, resolution),
             project: resolution.project,
             engine: transcript.engine,
             role: resolution.agent?.role ?? UNREGISTERED_ROLE,

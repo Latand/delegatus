@@ -1,0 +1,96 @@
+diff --git a/src/components/kanban/StagesSheet.tsx b/src/components/kanban/StagesSheet.tsx
+index b03369b..b7d6cc7 100644
+--- a/src/components/kanban/StagesSheet.tsx
++++ b/src/components/kanban/StagesSheet.tsx
+@@ -213,6 +213,14 @@ export function StagesSheet(props: {
+           <span className="pstate-chip" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
+           <span className="progress">{t("kanban.stages.headProgress", { count: order.length, progress: pipelineProgress(t, summary, nameOf) })}</span>
+           <span className="grow" />
++          {/* The lane's controls live in the head, so no bar of their own sits
++              between the graph and the stages. */}
++          <div className="lane-bar">
++            <button type="button" className="btn quiet" data-collapse-finished="" disabled={!finished.length} onClick={() => props.onFoldMany(finished, true)}>{t("kanban.stages.collapseFinished")}</button>
++            <button type="button" className="btn quiet" data-expand-all="" onClick={() => props.onFoldMany(order.map((stage) => stage.id), false)}>{t("kanban.stages.expandAll")}</button>
++            <button type="button" className="icon-btn" aria-label={t("kanban.stages.previous")} data-lane-prev="" onClick={() => step(-1)}><ChevronRight flip /></button>
++            <button type="button" className="icon-btn" aria-label={t("kanban.stages.next")} data-lane-next="" onClick={() => step(1)}><ChevronRight /></button>
++          </div>
+           <button type="button" className="btn quiet gtoggle" aria-pressed={graph} data-sheet-graph="" onClick={() => setGraph((current) => !current)}>
+             <GraphGlyph />
+             <span>{t("kanban.graph.graph")}</span>
+@@ -227,6 +235,11 @@ export function StagesSheet(props: {
+           <button type="button" className="icon-btn" data-sheet-close="" aria-label={t("kanban.stages.close")} onClick={props.onClose}><CloseGlyph /></button>
+         </header>
+ 
++        {/* Each stage is drawn once. While the graph is shown it is the
++            navigation (a node reaches its pane, as a chip did) and it already
++            carries the loop on its fail edge, so the chip strip is the graph's
++            collapsed form and shows only when the graph is hidden. */}
++        {graph ? null : (
+         <nav className="gs-nav" aria-label={t("kanban.stages.navAria")}>
+           {order.map((stage, index) => {
+             const state = views.get(stage.id)?.state ?? "pending";
+@@ -253,6 +266,7 @@ export function StagesSheet(props: {
+             <LoopChip key={`${loop.from.id}->${loop.to.id}`} loop={loop} from={nameOf(loop.from)} to={nameOf(loop.to)} />
+           ))}
+         </nav>
++        )}
+ 
+         <div className="gs-body">
+           {graph ? (
+@@ -276,15 +290,6 @@ export function StagesSheet(props: {
+               ) : null}
+             </div>
+           ) : null}
+-          <div className="lane-bar">
+-            <span className="pos num">{t("kanban.stages.position", { k: firstInView + 1, n: order.length })}</span>
+-            <span className="lane-count num">{t("kanban.stages.inView", { count: inView.size })}</span>
+-            <span className="grow" />
+-            <button type="button" className="btn quiet" data-collapse-finished="" disabled={!finished.length} onClick={() => props.onFoldMany(finished, true)}>{t("kanban.stages.collapseFinished")}</button>
+-            <button type="button" className="btn quiet" data-expand-all="" onClick={() => props.onFoldMany(order.map((stage) => stage.id), false)}>{t("kanban.stages.expandAll")}</button>
+-            <button type="button" className="icon-btn" aria-label={t("kanban.stages.previous")} data-lane-prev="" onClick={() => step(-1)}><ChevronRight flip /></button>
+-            <button type="button" className="icon-btn" aria-label={t("kanban.stages.next")} data-lane-next="" onClick={() => step(1)}><ChevronRight /></button>
+-          </div>
+           <div
+             ref={lane}
+             className="lane"
+@@ -429,12 +434,12 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
+         {glyph}
+         <span className="pane-title">
+           <span className="pname">{index + 1}. {name}</span>
+-          {/* One line under the pane title, inside a 340-440 px pane that also
+-              carries the state and the pane's controls: mark, model and ladder,
+-              with the words in the row's own title and `aria-label` (#1743). */}
++          {/* The column head says which stage and where it stands. Who runs it
++              (engine, model, effort) is said once, by the conversation's own
++              header under it or, before the stage starts, by the draft's
++              identity row; the words stay in the row's title (#1743). */}
+           <span className="prole" title={identityTitle(t, identity)}>
+             <span className="prole-role">{roleNameById(t, roleId)}</span>
+-            <StageIdentity identity={identity} density="line" />
+             {stage.kind === "review-loop" ? <span className="prole-kind">{t("kanban.stages.reviewLoop")}</span> : null}
+           </span>
+         </span>
+diff --git a/src/components/kanban/kanbanBoard.css b/src/components/kanban/kanbanBoard.css
+index 6d9863e..d44c846 100644
+--- a/src/components/kanban/kanbanBoard.css
++++ b/src/components/kanban/kanbanBoard.css
+@@ -1017,6 +1017,9 @@
+ .kb .gs-graph { flex-shrink: 0; max-height: 34%; overflow: auto; padding: 10px 12px; border-bottom: 1px solid var(--border-default); background-color: var(--surface-canvas); background-image: radial-gradient(var(--kb-grid-dot) 1px, transparent 1px); background-size: 18px 18px; }
+ .kb .gs-graph .pgraph-box { overflow: visible; margin: 0; padding: 0; }
+ .kb .lane-bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px 0; flex-shrink: 0; }
++/* In the sheet's head: no padding of its own, a hairline before the Graph toggle. */
++.kb .gsheet header .lane-bar { padding: 0 10px 0 0; margin-right: 2px; border-right: 1px solid var(--border-default); }
++.kb .gs-body > .lane { padding-top: 12px; }
+ .kb .lane-bar .lane-count { font-size: var(--text-label); color: var(--color-muted); }
+ .kb .lane-bar .grow { flex: 1; }
+ .kb .lane-bar .btn { height: 28px; white-space: nowrap; }
+@@ -1159,6 +1162,9 @@
+   .kb .lane { scroll-snap-type: x mandatory; padding: 8px 10px 10px; }
+   .kb .lane-conn { flex-basis: 8px; font-size: 0; }
+   .kb .lane-bar .btn.quiet { padding: 0 8px; }
++  /* Too narrow for one head row: the lane's controls take a second line. */
++  .kb .gsheet header { flex-wrap: wrap; }
++  .kb .gsheet header .lane-bar { order: 10; flex-basis: 100%; justify-content: flex-end; border-right: 0; }
+ }
+ @media (pointer: coarse) {
+   .kb .navchip { height: 44px; }

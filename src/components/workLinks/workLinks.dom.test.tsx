@@ -130,6 +130,16 @@ const click = (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   flushSync(() => (element as HTMLElement).click());
 };
+/* A task card draws one ⋯ (#2148): each lane's actions are a group in it,
+   headed by the lane's title when the card holds more than one. */
+const menuRows = () => [...document.querySelectorAll<HTMLElement>('.menu .head, .menu [role^="menuitem"]')];
+const laneAttach = (host: HTMLElement, laneTitle: string) => {
+  click(card(host).querySelector("[data-menu]"));
+  const rows = menuRows();
+  const head = rows.findIndex((row) => row.classList.contains("head") && row.textContent === laneTitle);
+  expect(head).toBeGreaterThan(-1);
+  return rows.slice(head + 1).find((row) => row.textContent?.includes("Attach PR or issue to the pipeline…"));
+};
 
 test("each lane row draws its own chips at the end of its chain line, and a lane with no PR says so as plain text", async () => {
   const host = mount();
@@ -173,12 +183,18 @@ test("the card's row draws each link once: what no lane row draws, then three ch
   expect([...panel.querySelectorAll("[data-work-link-detach]")].map((button) => button.getAttribute("data-work-link-detach"))).toEqual(["acme/widgets#2059"]);
 });
 
-test("the pipeline menu's attach form sends attach-link with what was typed, and draws the answer at once", async () => {
+test("the card's ⋯ names the task's Attach and each lane's apart, and a lane's attach form sends attach-link with what was typed, and draws the answer at once", async () => {
   const host = mount({ pipelines: { "p-two": { links: [], noPr: true } }, tasks: {} });
   await tick();
-  const section = card(host).querySelector('.pblock[data-pipeline="p-two"]')!;
-  click(section.querySelector("[data-pipeline-menu]"));
-  const attach = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("Attach PR or issue…"));
+  /* The lane draws no ⋯ of its own on a task card. */
+  expect(card(host).querySelector('.pblock[data-pipeline="p-two"] [data-pipeline-menu]')).toBeNull();
+  const attach = laneAttach(host, "A lane with nothing published");
+  const labels = menuRows().map((row) => `${row.classList.contains("head") ? "head" : "item"}:${row.querySelector(".lbl")?.firstChild?.textContent ?? row.textContent}`);
+  expect(labels.filter((label) => label.includes("Attach PR or issue") || label.startsWith("head:"))).toEqual([
+    "head:Move to", "head:Colour", "item:Attach PR or issue…",
+    "head:Header chips", "item:Attach PR or issue to the pipeline…",
+    "head:A lane with nothing published", "item:Attach PR or issue to the pipeline…",
+  ]);
   click(attach);
   await tick();
   const input = document.querySelector<HTMLInputElement>('[data-work-links-panel="pipeline:p-two"] [data-work-link-input]')!;
@@ -200,8 +216,7 @@ test("an attach on a pipeline redraws the task card that aggregates it from the 
   const host = mount({ pipelines: { "p-two": { links: [], noPr: true } }, tasks: {} });
   await tick();
   expect(card(host).querySelector('[data-work-links="t-chips"]')).toBeNull();
-  click(card(host).querySelector('.pblock[data-pipeline="p-two"] [data-pipeline-menu]'));
-  click([...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("Attach PR or issue…")));
+  click(laneAttach(host, "A lane with nothing published"));
   await tick();
   const input = document.querySelector<HTMLInputElement>('[data-work-links-panel="pipeline:p-two"] [data-work-link-input]')!;
   const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;

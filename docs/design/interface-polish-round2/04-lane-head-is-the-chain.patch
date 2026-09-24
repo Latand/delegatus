@@ -1,0 +1,213 @@
+diff --git a/src/components/kanban/KanbanBoard.tsx b/src/components/kanban/KanbanBoard.tsx
+index ec00cbf..56a4ffe 100644
+--- a/src/components/kanban/KanbanBoard.tsx
++++ b/src/components/kanban/KanbanBoard.tsx
+@@ -51,7 +51,7 @@ import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type Reade
+ import { stagePanelKey } from "./KanbanCard";
+ import { operationalAttempts } from "./pipelineGraph";
+ import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
+-import { stageNames } from "./PipelineSection";
++import { pipelineTitle, stageNames } from "./PipelineSection";
+ import { stageDraftKey, StageDrafts } from "./stageDrafts";
+ import { StagesSheet, type SheetPane } from "./StagesSheet";
+ import { textField, withField } from "./taskText";
+@@ -1154,6 +1154,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
+       onPick: (color) => setColor(card, color),
+     };
+     if (value.kind === "colour") return { label: t("kanban.colour"), items: [{ type: "head", label: t("kanban.colour") }, swatches] };
++    /* One ⋯ per card: each lane's actions are a group here, headed by the
++       lane's title when the card holds more than one. */
++    const laneGroups = card.pipelines.flatMap((entry): KanbanMenuItem[] => {
++      const lane = pipelineMenu({ kind: "pipeline", cardId: card.id, pipelineId: entry.pipeline.id });
++      if (!lane) return [];
++      const head = card.pipelines.length > 1 ? pipelineTitle(t, entry.pipeline) : t("kanban.pipelineAct.menu");
++      return [{ type: "sep" }, { type: "head", label: head }, ...lane.items.filter((entryItem) => entryItem.type !== "head")];
++    });
+     return {
+       label: t("kanban.cardActions", { title }),
+       items: [
+@@ -1168,6 +1176,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
+         { type: "item", label: t("kanban.rename"), kbd: "Enter", keepFocus: true, onSelect: () => startEdit(card, "title") },
+         { type: "item", label: card.description ? t("kanban.editDescription") : t("kanban.addDescription"), kbd: "E", keepFocus: true, onSelect: () => startEdit(card, "description") },
+         ...(card.task ? [linksItem({ kind: "task", id: card.task.id })] : []),
++        ...laneGroups,
+         { type: "sep" },
+         card.holdsSeat
+           ? { type: "item", label: t("kanban.hideFromBoard"), why: t("kanban.seatProtected"), disabled: true, onSelect: () => {} }
+diff --git a/src/components/kanban/KanbanCard.tsx b/src/components/kanban/KanbanCard.tsx
+index f46790d..bd26c94 100644
+--- a/src/components/kanban/KanbanCard.tsx
++++ b/src/components/kanban/KanbanCard.tsx
+@@ -454,7 +454,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
+       onToggleGraph={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
+       onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
+       onOpenStages={(pipeline) => props.onOpenSheet(card.id, pipeline)}
+-      onMenu={(pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
++      /* No ⋯ of its own: the lane's actions are a group in the card's ⋯. */
+       onWorkLinks={onWorkLinks}
+       onAnswer={onAnswer ? (pipeline, answer) => onAnswer(card.id, title, pipeline, answer) : undefined}
+     />
+diff --git a/src/components/pipelines/PipelineBlock.tsx b/src/components/pipelines/PipelineBlock.tsx
+index 738bd7a..900fb72 100644
+--- a/src/components/pipelines/PipelineBlock.tsx
++++ b/src/components/pipelines/PipelineBlock.tsx
+@@ -497,54 +497,72 @@ export function PipelineBlock(props: PipelineBlockProps) {
+   const age = moved === null ? null : fmtAge(moved / 1000);
+   const graphOpen = Boolean(props.graphOpen && props.onToggleGraph && props.onOpenStage);
+   const report = !needs && pipeline.stageReports?.length ? pipeline.stageReports.at(-1)! : null;
+-  return (
+-    <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root}>
+-      <div className="pb-head">
++  const opener = (
++    <button
++      type="button"
++      className="pb-open"
++      data-open-stages={pipeline.id}
++      aria-label={`${t("kanban.pipelineAria", { title, progress })}. ${t("kanban.stages.expandTitle")}`}
++      title={pipeline.task || title}
++      disabled={!props.onOpenStages}
++      onClick={() => props.onOpenStages?.(pipeline)}
++    >
++      {showTitle ? <span className="pb-title" data-pipeline-title={pipeline.id}>{title}</span> : null}
++      <span className="pb-meta">
++        {word ? <span className="pstate-word" data-pstate={pipeline.state}>{word}</span> : null}
++        {word && age ? <span className="pb-sep" aria-hidden="true">·</span> : null}
++        {age ? <span className="pb-when">{age}</span> : null}
++      </span>
++      <ChevronRight />
++    </button>
++  );
++  const acting = props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null;
++  const controls = (
++    <>
++      {props.onToggleGraph && props.onOpenStage ? (
+         <button
+           type="button"
+-          className="pb-open"
+-          data-open-stages={pipeline.id}
+-          aria-label={`${t("kanban.pipelineAria", { title, progress })}. ${t("kanban.stages.expandTitle")}`}
+-          title={pipeline.task || title}
+-          disabled={!props.onOpenStages}
+-          onClick={() => props.onOpenStages?.(pipeline)}
++          className="pb-icon pb-graph-toggle"
++          aria-pressed={graphOpen}
++          aria-label={graphOpen ? t("kanban.graph.showSummary") : t("kanban.graph.showGraph")}
++          title={graphOpen ? t("kanban.graph.summary") : t("kanban.graph.graph")}
++          data-graph-toggle={pipeline.id}
++          onClick={() => props.onToggleGraph!(!graphOpen)}
+         >
+-          {showTitle ? <span className="pb-title" data-pipeline-title={pipeline.id}>{title}</span> : null}
+-          <span className="pb-meta">
+-            {word ? <span className="pstate-word" data-pstate={pipeline.state}>{word}</span> : null}
+-            {word && age ? <span className="pb-sep" aria-hidden="true">·</span> : null}
+-            {age ? <span className="pb-when">{age}</span> : null}
+-          </span>
+-          <ChevronRight />
++          {graphOpen ? <ListGlyph /> : <GraphGlyph />}
+         </button>
+-        {props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null}
+-        <span className="pb-grow" />
+-        {props.onToggleGraph && props.onOpenStage ? (
+-          <button
+-            type="button"
+-            className="pb-icon pb-graph-toggle"
+-            aria-pressed={graphOpen}
+-            aria-label={graphOpen ? t("kanban.graph.showSummary") : t("kanban.graph.showGraph")}
+-            title={graphOpen ? t("kanban.graph.summary") : t("kanban.graph.graph")}
+-            data-graph-toggle={pipeline.id}
+-            onClick={() => props.onToggleGraph!(!graphOpen)}
+-          >
+-            {graphOpen ? <ListGlyph /> : <GraphGlyph />}
+-          </button>
+-        ) : null}
+-        {props.onMenu ? (
+-          <button
+-            type="button"
+-            className="pb-icon"
+-            aria-label={t("kanban.pipelineAct.menu")}
+-            aria-haspopup="menu"
+-            data-pipeline-menu={pipeline.id}
+-            onClick={(event) => props.onMenu!(pipeline, event.currentTarget)}
+-          >
+-            <MoreGlyph />
+-          </button>
+-        ) : null}
+-      </div>
++      ) : null}
++      {props.onMenu ? (
++        <button
++          type="button"
++          className="pb-icon"
++          aria-label={t("kanban.pipelineAct.menu")}
++          aria-haspopup="menu"
++          data-pipeline-menu={pipeline.id}
++          onClick={(event) => props.onMenu!(pipeline, event.currentTarget)}
++        >
++          <MoreGlyph />
++        </button>
++      ) : null}
++    </>
++  );
++  /* One head (#2148 round 2). When the lane carries the task's own title and
++     its actions live in the card's ⋯ (no `onMenu` of its own), the stage
++     chain IS the head: the age and the way into the stages trail it on the
++     same row, and nothing above it repeats the card. A lane with a title or a
++     menu of its own keeps its head row; at 390 px the chain, the age and a
++     44 px ⋯ do not fit one line. */
++  const chainHead = !showTitle && !graphOpen && !props.onMenu;
++  return (
++    <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root}>
++      {chainHead ? null : (
++        <div className="pb-head">
++          {opener}
++          {acting}
++          <span className="pb-grow" />
++          {controls}
++        </div>
++      )}
+       {graphOpen ? (
+         <>
+           <GraphSlot summary={summary} names={names} selected={selected} onOpenStage={props.onOpenStage!} />
+@@ -554,6 +572,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
+         <div className="pb-chain">
+           <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={props.onOpenStage} />
+           <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
++          {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
+         </div>
+       )}
+       {answers ? (
+diff --git a/src/components/pipelines/pipelineBlock.css b/src/components/pipelines/pipelineBlock.css
+index 1a1efb3..65916bd 100644
+--- a/src/components/pipelines/pipelineBlock.css
++++ b/src/components/pipelines/pipelineBlock.css
+@@ -51,7 +51,9 @@
+ 
+ /* ── The block ───────────────────────────────────────────────────────────── */
+ .pblock { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex-shrink: 0; }
+-.pblock[data-density="task"] { padding: 6px 0 4px; border-top: 1px solid var(--border-default); }
++/* Grouped by space, not a rule: 12 px from the description (the card's 6 px
++   gap plus this margin), and the chain row is the lane's head. */
++.pblock[data-density="task"] { padding: 0 0 2px; margin-top: 6px; }
+ .pblock .pb-grow { flex: 1 1 0; min-width: 0; }
+ .pblock .pb-sep { color: var(--color-muted); opacity: 0.8; }
+ 
+@@ -120,6 +122,10 @@
+    squeeze the pills, and never take more than half the row. */
+ .pblock .pb-links { flex: 0 1 auto; justify-content: flex-end; margin-top: 2px; max-width: 50%; }
+ .pblock .pb-links.end { max-width: none; }
++/* The head's tail on the chain row: the graph toggle, then the age and the
++   way into the stages, whose chevron ends the row at the card's edge. */
++.pblock .pb-tail { flex: none; display: inline-flex; align-items: center; gap: 2px; margin-left: auto; min-height: 22px; }
++.pblock .pb-tail .pb-open { margin-left: 0; margin-right: -4px; }
+ .pblock .pb-graph { min-width: 0; }
+ 
+ .pblock .stage-report { margin: 2px 0 0; font-size: var(--text-label); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@@ -251,7 +257,7 @@
+ /* ── The phone's task screen (#2072 slice 5): each lane row in its own card ── */
+ /* The card's frame replaces the hairline, and the head's title wraps over
+    its state instead of sharing one line with it at 390 px. */
+-.phone-lane > .pblock[data-density="task"] { border-top: 0; padding: 4px 0 2px; }
++.phone-lane > .pblock[data-density="task"] { margin-top: 0; padding: 4px 0 2px; }
+ .phone-lane .pblock .pb-open { flex: 1 1 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 3px; align-items: center; }
+ .phone-lane .pblock .pb-title { grid-column: 1; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: var(--text-body); line-height: 1.3; overflow-wrap: anywhere; }
+ .phone-lane .pblock .pb-meta { grid-column: 1; }

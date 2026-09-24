@@ -117,6 +117,11 @@ export interface HostCoverage {
   since: number | null;
   /** The stretches its sources were read for. */
   covered: readonly Interval[];
+  /** The stretches its agent turns were read for. They reach this host only
+      through the host's own record (this host's ingest or index, another
+      host's pull); an export or a ledger carries none. Absent, the same as
+      `covered`. */
+  agents?: readonly Interval[];
 }
 
 export interface Coverage {
@@ -589,21 +594,27 @@ export function agentTurns(rows: readonly AgentRow[], range: Interval, nowMs: nu
 /* Coverage across hosts                                                    */
 /* ------------------------------------------------------------------------ */
 
-function holdsProject(host: HostCoverage, project: string | null | undefined): boolean {
-  /* A day's total (undefined) and unattributed time (null) can come from any host. */
+/** Whether a host can hold a project's input and agents. A day's total
+    (undefined) and unattributed time (null) can come from any host. */
+export function holdsProject(host: Pick<HostCoverage, "projects">, project: string | null | undefined): boolean {
   if (project === undefined || project === null || host.projects === "all") return true;
   return host.projects.includes(project);
 }
+
+/** The two axes a host is read for: your input, and its agents' turns. */
+export type CoverageAxis = "human" | "agents";
 
 /**
  * The stretches of `window` that some expected host holding `project` was
  * not read for, and which hosts. Undefined asks about every project at once.
  * An empty answer is the only state in which a zero may be shown as zero.
+ * `agents` asks the same of the hosts' agent turns.
  */
 export function uncoveredSpans(
   window: Interval,
   hosts: readonly HostCoverage[],
   project?: string | null,
+  axis: CoverageAxis = "human",
 ): { spans: Interval[]; hosts: string[] } {
   const spans: Interval[] = [];
   const missing: string[] = [];
@@ -612,7 +623,8 @@ export function uncoveredSpans(
     if (!holdsProject(host, project)) continue;
     const required = { start: Math.max(window.start, host.since ?? window.start), end: window.end };
     if (required.end <= required.start) continue;
-    const gaps = subtractIntervals([required], unionIntervals([...host.covered]));
+    const read = axis === "agents" ? host.agents ?? host.covered : host.covered;
+    const gaps = subtractIntervals([required], unionIntervals([...read]));
     if (gaps.length) {
       spans.push(...gaps);
       missing.push(host.host);
@@ -621,8 +633,8 @@ export function uncoveredSpans(
   return { spans: unionIntervals(spans), hosts: [...new Set(missing)].sort() };
 }
 
-function coverageOf(window: Interval, hosts: readonly HostCoverage[], project?: string | null): Coverage {
-  const { hosts: missingHosts } = uncoveredSpans(window, hosts, project);
+function coverageOf(window: Interval, hosts: readonly HostCoverage[], project?: string | null, axis: CoverageAxis = "human"): Coverage {
+  const { hosts: missingHosts } = uncoveredSpans(window, hosts, project, axis);
   return { complete: missingHosts.length === 0, missingHosts };
 }
 
@@ -649,6 +661,12 @@ export interface ReportInput {
   billable?: readonly string[];
   /** Weekdays (0 = Sunday) checked for a probable missing source. */
   workdays?: readonly number[];
+  /** One project's view of the page: `totals` and `days` count that project
+      alone, each figure the same number its row in `projects` carries. The
+      method runs over every input as it always does (a minute still goes to
+      the most recent input, an hour to the project with most of it) and the
+      view keeps that project's share; `projects` still lists every project. */
+  scope?: { project: string | null };
 }
 
 export interface AgentSplit {
@@ -702,6 +720,9 @@ export interface DayActivity extends AgentSplit {
   /** Complete when every expected host was read for the whole day (up to
       now); otherwise the human figures are a lower bound. */
   coverage: Coverage;
+  /** The same for agent turns: incomplete, the agent figures are a lower
+      bound. */
+  agentCoverage: Coverage;
   /** The stretches of the day some expected host was not read for. */
   unknown: Interval[];
   humanMs: number;
@@ -738,6 +759,9 @@ export interface ProjectActivity extends AgentSplit {
   byHost: Record<string, number>;
   /** Complete when every host holding the project was read for the range. */
   coverage: Coverage;
+  /** Complete when every host holding the project had its agent turns read
+      for the range. */
+  agentCoverage: Coverage;
   /** Agent-hours by engine and by role id. */
   byEngine: Record<string, number>;
   byRole: Record<string, number>;
@@ -751,6 +775,8 @@ export interface ProjectActivity extends AgentSplit {
 export interface ActivityReport {
   range: { key: RangeKey; start: number; end: number; now: number };
   params: MethodParams;
+  /** The project `totals` and `days` count, or null for every project. */
+  scope: { project: string | null } | null;
   totals: AgentSplit & {
     humanMs: number;
     humanHours: number;
@@ -758,7 +784,10 @@ export interface ActivityReport {
     requests: number;
     unregisteredConversations: number;
     coverage: Coverage;
-    /** Days flagged as a probable missing source. */
+    agentCoverage: Coverage;
+    /** Days flagged as a probable missing source. A flag is a fact of the
+        whole day, so a project's view keeps it: that day's input was not
+        read, for this project too. */
     missingSourceDays: number;
   };
   days: DayActivity[];
@@ -878,6 +907,7 @@ export function activityReport(input: ReportInput): ActivityReport {
       byKind: zeroRecord(REQUEST_KINDS),
       byHost: {},
       coverage: coverageOf(rangeWindow, input.hosts, projectOf(key)),
+      agentCoverage: coverageOf(rangeWindow, input.hosts, projectOf(key), "agents"),
       byEngine: {},
       byRole: {},
       pipelines: [],
@@ -934,6 +964,7 @@ export function activityReport(input: ReportInput): ActivityReport {
     requests: 0,
     unregisteredConversations: agents.filter((agent) => agent.role === UNREGISTERED_ROLE).length,
     coverage: coverageOf(rangeWindow, input.hosts),
+    agentCoverage: coverageOf(rangeWindow, input.hosts, undefined, "agents"),
     missingSourceDays: 0,
     ...emptySplit(),
   };
@@ -990,6 +1021,7 @@ export function activityReport(input: ReportInput): ActivityReport {
         .map((key) => ({ project: projectOf(key), humanMs: projectMs.get(key) ?? 0, humanHours: reportHours.get(key) ?? 0 }))
         .sort((a, b) => b.humanHours - a.humanHours || b.humanMs - a.humanMs || projectKey(a.project).localeCompare(projectKey(b.project))),
       coverage: { complete: uncovered.hosts.length === 0, missingHosts: uncovered.hosts },
+      agentCoverage: coverageOf(window, input.hosts, undefined, "agents"),
       unknown: uncovered.spans,
       humanMs,
       humanHours,
@@ -1025,12 +1057,14 @@ export function activityReport(input: ReportInput): ActivityReport {
      Nothing here moves a figure computed above. */
   const flagged = unionIntervals(dayRows.filter((day) => day.missingSource).map((day) => ({ start: day.start, end: Math.min(day.end, limit) })));
   const wallByProject = new Map<string, Interval[]>();
+  const unclearByProject = new Map<string, Interval[]>();
   const unclearParts: Interval[] = [];
   for (const [key, list] of agentsByProject) {
     const wall = unionIntervals(list.flatMap((agent) => agent.activity));
     wallByProject.set(key, wall);
     const unread = unionIntervals([...uncoveredSpans(rangeWindow, input.hosts, projectOf(key)).spans, ...flagged]);
     const unclear = subtractIntervals(intersectIntervals(wall, unread), own.get(key) ?? []);
+    unclearByProject.set(key, unclear);
     const row = projects.get(key)!;
     row.unattendedUnreadMs = totalMs(unclear);
     row.unclearDays = days.filter((day) => totalMs(clipIntervals(unclear, day.start, day.end)) >= MINUTE_MS).map((day) => day.date);
@@ -1067,12 +1101,129 @@ export function activityReport(input: ReportInput): ActivityReport {
       };
     });
   }
+  const view = input.scope
+    ? projectView(input.scope.project, {
+      params, limit, rangeWindow, hosts: input.hosts, segments, billableSegments, dayRows,
+      agents: agentsByProject.get(projectKey(input.scope.project)) ?? [],
+      supervision: own.get(projectKey(input.scope.project)) ?? [],
+      unclear: unclearByProject.get(projectKey(input.scope.project)) ?? [],
+      requests: projects.get(projectKey(input.scope.project))?.requests ?? 0,
+      missingSourceDays: totals.missingSourceDays,
+    })
+    : null;
   return {
     range: { key: input.range, start: rangeStart, end: rangeEnd, now: nowMs },
     params,
-    totals,
-    days: dayRows,
+    scope: input.scope ? { project: input.scope.project } : null,
+    totals: view?.totals ?? totals,
+    days: view?.days ?? dayRows,
     projects: [...projects.values()].sort((a, b) => b.humanMs - a.humanMs || b.wallMs - a.wallMs
       || projectKey(a.project).localeCompare(projectKey(b.project))),
   };
+}
+
+/** What `activityReport` computed over every input, for one project's view. */
+interface ProjectViewInput {
+  params: MethodParams;
+  limit: number;
+  rangeWindow: Interval;
+  hosts: readonly HostCoverage[];
+  /** Human time of every project, one minute once, clipped to the range. */
+  segments: readonly HumanSegment[];
+  billableSegments: readonly HumanSegment[];
+  /** Every project's days, for the days' own facts: dates, workdays, flags. */
+  dayRows: readonly DayActivity[];
+  /** The project's agents, their activity clipped to the range. */
+  agents: ReadonlyArray<{ activity: Interval[]; role: string }>;
+  /** The project's own episodes: what supervises its agents. */
+  supervision: readonly Interval[];
+  /** Its agents' time outside its episodes while its input was not read. */
+  unclear: readonly Interval[];
+  requests: number;
+  missingSourceDays: number;
+}
+
+/**
+ * One project's totals and days (ReportInput.scope). Every figure is the
+ * project's share of what the method already decided over all inputs, so it
+ * is the number that project's row carries: its minutes after one-minute-once,
+ * the report hours whose clock hours it won, its agents against its own
+ * episodes, and its hosts' coverage. A day keeps its flag, which is about the
+ * day and not about a project.
+ */
+function projectView(project: string | null, input: ProjectViewInput): { totals: ActivityReport["totals"]; days: DayActivity[] } {
+  const { params, limit, hosts } = input;
+  const key = projectKey(project);
+  const mine = input.segments.filter((segment) => projectKey(segment.project) === key);
+  const activities = input.agents.map((agent) => agent.activity);
+  const wall = unionIntervals(activities.flat());
+  const supervised = intersectIntervals(wall, input.supervision);
+  const inWindow = (list: readonly Interval[], window: Interval) => totalMs(clipIntervals(list, window.start, window.end));
+  const totals: ActivityReport["totals"] = {
+    humanMs: 0,
+    humanHours: 0,
+    billableHours: 0,
+    requests: input.requests,
+    unregisteredConversations: input.agents.filter((agent) => agent.role === UNREGISTERED_ROLE).length,
+    coverage: coverageOf(input.rangeWindow, hosts, project),
+    agentCoverage: coverageOf(input.rangeWindow, hosts, project, "agents"),
+    missingSourceDays: input.missingSourceDays,
+    ...emptySplit(),
+  };
+  const days = input.dayRows.map((whole): DayActivity => {
+    const window = { start: whole.start, end: Math.min(whole.end, limit) };
+    const uncovered = uncoveredSpans(window, hosts, project);
+    const daySegments = clipIntervals(mine, whole.start, whole.end);
+    const humanMs = totalMs(daySegments);
+    const humanHours = dayReportHours(input.segments, whole, params.rounding).get(key) ?? 0;
+    const billableHours = dayReportHours(input.billableSegments, whole, params.rounding).get(key) ?? 0;
+    const split = window.end > window.start ? agentSplit(activities, input.supervision, window) : emptySplit();
+    split.unattendedUnreadMs = inWindow(input.unclear, window);
+    const agentLane = [
+      ...clipIntervals(supervised, window.start, window.end).map((item) => ({ ...item, supervised: true })),
+      ...subtractIntervals(clipIntervals(wall, window.start, window.end), supervised).map((item) => ({ ...item, supervised: false })),
+    ];
+    const day: DayActivity = {
+      date: whole.date,
+      start: whole.start,
+      end: whole.end,
+      workday: whole.workday,
+      /* An hour's weight is the project's only when it won the hour, so the
+         day's cells add up to its report hours as the whole page's do. */
+      hours: clockHourShares(input.segments, whole).map((share) => {
+        const hour = { start: share.start, end: Math.min(share.end, limit) };
+        const mineMs = inWindow(mine, hour);
+        const wallMs = inWindow(wall, hour);
+        const supervisedMs = inWindow(supervised, hour);
+        return {
+          start: share.start,
+          humanMs: mineMs,
+          weight: params.rounding === "clock-hour" ? (share.winner === key ? clockHourWeight(share.coveredMs) : 0) as 0 | 0.5 | 1 : null,
+          project: mineMs > 0 ? project : null,
+          supervisedMs,
+          unattendedMs: wallMs - supervisedMs,
+          unattendedUnreadMs: inWindow(input.unclear, hour),
+          agentProject: wallMs > 0 ? project : null,
+          unreadHosts: hour.end > hour.start ? uncoveredSpans(hour, hosts, project).hosts : [],
+        };
+      }),
+      projects: humanMs > 0 || humanHours > 0 ? [{ project, humanMs, humanHours }] : [],
+      coverage: { complete: uncovered.hosts.length === 0, missingHosts: uncovered.hosts },
+      agentCoverage: coverageOf(window, hosts, project, "agents"),
+      unknown: uncovered.spans,
+      humanMs,
+      humanHours,
+      billableHours,
+      missingSource: whole.missingSource,
+      human: mergeLabelled(daySegments, (segment) => segment.host).map(({ start, end, label }) => ({ start, end, project, host: label })),
+      agent: mergeLabelled(agentLane, (item) => item.supervised).map(({ start, end, label }) => ({ start, end, supervised: label })),
+      ...split,
+    };
+    totals.humanMs += humanMs;
+    totals.humanHours += humanHours;
+    totals.billableHours += billableHours;
+    addSplit(totals, split);
+    return day;
+  });
+  return { totals, days };
 }

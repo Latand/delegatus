@@ -53,6 +53,14 @@ export function approxText(ms: number, t: TFunction): string {
   return text === null ? "–" : t("activity.approx", { value: text });
 }
 
+/** Agent time where a host's agent turns were not read: `≥ ≈ 8 h 50 m`, and
+    `?` for none, since a lower bound of zero says nothing. */
+export function approxAtLeast(ms: number, lower: boolean, t: TFunction): string {
+  const text = approxText(ms, t);
+  if (!lower) return text;
+  return text === "–" ? "?" : `≥ ${text}`;
+}
+
 /** Agent-hours are a count of hours: halves below 10, whole above. */
 export function agentHoursText(ms: number, locale: Locale): string {
   const hours = ms / (60 * MINUTE);
@@ -190,15 +198,45 @@ export function roleName(role: string, t: TFunction): string {
 
 export type TrustState = "ok" | "lower" | "none";
 
+/** The hosts whose reading bears on the figures shown: every host, or on a
+    project's page the hosts that can hold that project. */
+export function scopeHosts(data: ActivityResponse): ActivityResponse["coverage"]["hosts"] {
+  return data.coverage.hosts.filter((host) => host.inScope !== false);
+}
+
 /** None of your input was read: every expected host was unread for the whole
     range and nothing counted. Agent time may still have been read. */
 export function nothingRead(data: ActivityResponse): boolean {
   const window = Math.min(data.range.end, data.range.now) - data.range.start;
-  return data.totals.humanMs === 0 && data.totals.requests === 0 && data.coverage.hosts.length > 0
+  const hosts = scopeHosts(data);
+  return data.totals.humanMs === 0 && data.totals.requests === 0 && hosts.length > 0
+    && hosts.every((host) => host.unread.reduce((sum, span) => sum + span.end - span.start, 0) >= window);
+}
+
+/** None of your input was read for any project: every expected host was
+    unread for the whole range and no row counted any. The Projects list and
+    the picker judge their rows by this, whatever project the page is scoped
+    to. Unscoped, the same as `nothingRead`. */
+export function listUnread(data: ActivityResponse): boolean {
+  const window = Math.min(data.range.end, data.range.now) - data.range.start;
+  return data.coverage.hosts.length > 0 && data.projects.every((row) => row.humanMs === 0 && row.requests === 0)
     && data.coverage.hosts.every((host) => host.unread.reduce((sum, span) => sum + span.end - span.start, 0) >= window);
+}
+
+/** Your time says nothing: nothing was read, or a host holding it was not
+    read and nothing counted (a lower bound of zero). */
+export function youUnknown(data: ActivityResponse): boolean {
+  return nothingRead(data) || (!data.totals.coverage.complete && data.totals.humanMs === 0);
 }
 
 export function trustState(data: ActivityResponse): TrustState {
   if (nothingRead(data)) return "none";
-  return data.totals.coverage.complete && data.totals.missingSourceDays === 0 ? "ok" : "lower";
+  const { totals } = data;
+  return totals.coverage.complete && totals.agentCoverage.complete && totals.missingSourceDays === 0 ? "ok" : "lower";
+}
+
+/** The project the page is scoped to, from the address: `?project=`. */
+export function projectFromSearch(search: string): string | null {
+  const value = new URLSearchParams(search).get("project")?.trim();
+  return value ? value : null;
 }
