@@ -44,6 +44,7 @@ import {
   selfUpdatePaths,
   watchRestartRequests,
 } from "./self-update-supervisor.mjs";
+import { findLegacySystemdUnits, legacySystemdNotice } from "./legacySystemd.mjs";
 
 discardWakatimeEnvironmentCredential();
 
@@ -970,6 +971,10 @@ async function main() {
     console.log(version);
     return;
   }
+
+  /* Before anything can fail on a port the old unit still holds. */
+  const legacyNotice = legacySystemdNotice(findLegacySystemdUnits(), LANG);
+  if (legacyNotice) console.error(`${legacyNotice}\n`);
 
   let runtime;
   try {

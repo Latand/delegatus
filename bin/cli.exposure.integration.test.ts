@@ -168,6 +168,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/appDir.mjs"), path.join(bin, "appDir.mjs")),
     copyFile(path.resolve("bin/envAlias.mjs"), path.join(bin, "envAlias.mjs")),
     copyFile(path.resolve("bin/self-update-supervisor.mjs"), path.join(bin, "self-update-supervisor.mjs")),
+    copyFile(path.resolve("bin/legacySystemd.mjs"), path.join(bin, "legacySystemd.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),
     writeFile(path.join(nextBin, "next"), `
 const hostnameIndex = process.argv.indexOf("--hostname");
@@ -245,6 +246,31 @@ test("the checkout next start path keeps the default listener on loopback", asyn
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
+});
+
+test("a machine that still has the retired systemd unit is told how to move to Docker, and the Viewer still starts", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const unitDir = path.join(fixture.env.XDG_CONFIG_HOME!, "systemd", "user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(path.join(unitDir, "agent-log-viewer.service"), "[Service]\n");
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("The systemd install of Delegatus is retired: Docker is the only install.", 10_000);
+  await output.waitFor("Delegatus v", 10_000);
+  await waitForStatus("127.0.0.1", port, 200);
+  expect(output.text()).toContain("systemctl --user disable --now agent-log-viewer.service\n");
+  expect(output.text()).toContain(`rm ${path.join(unitDir, "agent-log-viewer.service")}\n`);
+  expect(output.text()).toContain("https://github.com/Latand/delegatus/blob/main/docs/docker.md");
+  expect(output.text().split("systemd install of Delegatus is retired").length).toBe(2);
+  expect(child.exitCode).toBeNull();
 });
 
 test("a pre-existing non-loopback listener does not impersonate a widened Viewer bind", async () => {
