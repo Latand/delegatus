@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "ae01a742bf9265b6977ff14e74bcde0dfc9a3dbc431c133139c0e2f4542d93d4",
+  "generatorSha256": "06630f4a4c45c4cdf0e4c013c7759161627a225640fc8e5919085fcedc25415c",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "f9893d4dd60bd734ad91fb73455cd8c190790d75656d1149903ced7b9ebd01df",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -15,8 +15,14 @@
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 15,
-      "sha256": "0954032fe699d660132bc39e9bb4f960702c0242bc576498cee8b9dc4e6dddea"
+      "rasterTiles": 14,
+      "renderBack": {
+        "worstTileMean": 3.08,
+        "changedTileShare": 0,
+        "meanDifference": 0.203,
+        "ringsClipped": 1
+      },
+      "sha256": "cc017f6dad96cbd61b655f9213f010cbf3af3f968922a961347228d558eb3c25"
     },
     {
       "path": "conversation.svg",
@@ -26,8 +32,14 @@
         "height": 960
       },
       "colorScheme": "dark",
-      "rasterTiles": 24,
-      "sha256": "d7e945db08fe6e4fa0814fc0f88a4a91e789aa66215d40fe260d26dd5627f772"
+      "rasterTiles": 22,
+      "renderBack": {
+        "worstTileMean": 3.301,
+        "changedTileShare": 0,
+        "meanDifference": 0.323,
+        "ringsClipped": 2
+      },
+      "sha256": "74112ca1cb7f5d20990094cb22e7d6675421e55c424bb683292611e7af9aa483"
     },
     {
       "path": "pipeline.svg",
@@ -37,8 +49,14 @@
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 33,
-      "sha256": "eae90a2b58b394ffd00b59bbd6a17871b0750772ea148c0ece73756fb446f421"
+      "rasterTiles": 26,
+      "renderBack": {
+        "worstTileMean": 6.827,
+        "changedTileShare": 0.001,
+        "meanDifference": 0.322,
+        "ringsClipped": 3
+      },
+      "sha256": "cd6185a097cc808758330e8de8c74ce25896936f679642f112a5748b93ec1c0d"
     },
     {
       "path": "accounts.svg",
@@ -48,30 +66,48 @@
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 17,
-      "sha256": "e037b3dee1f8d33cf109ec8e2b044a0c5369bb4962716ae7a800c22dc704025a"
+      "rasterTiles": 16,
+      "renderBack": {
+        "worstTileMean": 3.103,
+        "changedTileShare": 0,
+        "meanDifference": 0.231,
+        "ringsClipped": 1
+      },
+      "sha256": "84577d7337e5817d2982d7581b5a1520458c0acc46e9e66808489d441bfc2f58"
     },
     {
       "path": "phone-conversation.svg",
-      "description": "The same conversation on a 390 px phone screen, its test run expanded.",
+      "description": "The same conversation on a phone screen, its test run expanded.",
       "viewport": {
-        "width": 390,
-        "height": 844
+        "width": 392,
+        "height": 848
       },
       "colorScheme": "dark",
       "rasterTiles": 5,
-      "sha256": "da8ad1ba6eb707574db5e0c2dbbd5760f841527dbca71fbb5eed55c02f1c7fd6"
+      "renderBack": {
+        "worstTileMean": 2.999,
+        "changedTileShare": 0,
+        "meanDifference": 0.427,
+        "ringsClipped": 0
+      },
+      "sha256": "84031be238c615971a99eda80a4a90b614b8178094a967b80ceb5b14fb3a0d68"
     },
     {
       "path": "phone-board.svg",
-      "description": "A project's board on a 390 px phone: the four status columns as tabs, with the card that needs you pinned first.",
+      "description": "A project's board on a phone: the four status columns as tabs, with the card that needs you pinned first.",
       "viewport": {
-        "width": 390,
-        "height": 844
+        "width": 392,
+        "height": 848
       },
       "colorScheme": "dark",
       "rasterTiles": 4,
-      "sha256": "865daf24fde8a1878a8ab23f2b3bb7b86d5725c1f13de3267696f2df86384927"
+      "renderBack": {
+        "worstTileMean": 3.064,
+        "changedTileShare": 0,
+        "meanDifference": 0.178,
+        "ringsClipped": 0
+      },
+      "sha256": "4aa63e0c80646e3d990a6c34dd9611709d03df910d6ff7fd1cdc37b9077c0205"
     }
   ]
 }
