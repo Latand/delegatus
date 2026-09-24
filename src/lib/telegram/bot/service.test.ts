@@ -16,7 +16,7 @@ import type { TgUpdate } from "./store";
 
 const BOT_ID = 4242424;
 const TOKEN = fakeBotToken(String(BOT_ID));
-const SECRET = TOKEN.slice(TOKEN.indexOf(":") + 1);
+const TOKEN_TAIL = TOKEN.slice(TOKEN.indexOf(":") + 1);
 const NOW = new Date("2026-09-24T12:00:00Z");
 const T0 = Math.floor(NOW.getTime() / 1000) - 600;
 
@@ -109,7 +109,7 @@ test("connect requires a bot, stores the token owner-only, and never returns it"
   expect(fs.statSync(telegramBotTokenPath()).mode & 0o777).toBe(0o600);
   expect(fs.statSync(statePath("telegram", "bot.sqlite")).mode & 0o777).toBe(0o600);
   const serialized = JSON.stringify(status) + JSON.stringify(service.listChats());
-  expect(serialized).not.toContain(SECRET);
+  expect(serialized).not.toContain(TOKEN_TAIL);
   expect(serialized).not.toContain(String(BOT_ID));
 });
 

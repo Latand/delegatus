@@ -18,7 +18,7 @@ const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityH
 
 const BOT_ID = 4242424;
 const TOKEN = fakeBotToken(String(BOT_ID));
-const SECRET = TOKEN.slice(TOKEN.indexOf(":") + 1);
+const TOKEN_TAIL = TOKEN.slice(TOKEN.indexOf(":") + 1);
 /* A capability-shaped value for an invented conversation. */
 const AGENT_CAPABILITY = "A".repeat(43);
 const AGENT = { [VIEWER_SPAWN_CAPABILITY_HEADER]: AGENT_CAPABILITY };
@@ -63,7 +63,7 @@ async function text(response: Response): Promise<string> {
 }
 
 function leaks(body: string): boolean {
-  return body.includes(SECRET) || body.includes(TOKEN) || body.includes(String(BOT_ID));
+  return body.includes(TOKEN_TAIL) || body.includes(TOKEN) || body.includes(String(BOT_ID));
 }
 
 async function connected() {

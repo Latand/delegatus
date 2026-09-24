@@ -49,9 +49,9 @@ const DESCRIPTION_MAX = 300;
     `[token]`, then bounds the text. Telegram's descriptions do not echo the
     token today; this guards a future change on their side. */
 export function scrubTokenText(value: string, token: string): string {
-  const secret = token.slice(token.indexOf(":") + 1);
+  const tail = token.slice(token.indexOf(":") + 1);
   let scrubbed = value.split(token).join("[token]");
-  if (secret.length >= 8) scrubbed = scrubbed.split(secret).join("[token]");
+  if (tail.length >= 8) scrubbed = scrubbed.split(tail).join("[token]");
   return scrubbed.length > DESCRIPTION_MAX ? `${scrubbed.slice(0, DESCRIPTION_MAX - 1)}…` : scrubbed;
 }
 

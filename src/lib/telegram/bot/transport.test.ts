@@ -13,7 +13,7 @@ const { UnsafeTelegramSessionError } = await import("../sessionStore");
 const { fakeBotToken } = await import("./fakeTransport");
 
 const TOKEN = fakeBotToken();
-const SECRET = TOKEN.slice(TOKEN.indexOf(":") + 1);
+const TOKEN_TAIL = TOKEN.slice(TOKEN.indexOf(":") + 1);
 
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
@@ -33,9 +33,9 @@ test("token never serialised: the transport exposes only call, and stringifies t
   expect(Object.keys(transport)).toEqual(["call"]);
   expect(JSON.stringify(transport)).toBe("{}");
   const inspected = util.inspect(transport, { depth: 10, showHidden: true });
-  expect(inspected).not.toContain(SECRET);
+  expect(inspected).not.toContain(TOKEN_TAIL);
   expect(inspected).not.toContain(TOKEN);
-  expect(String(transport)).not.toContain(SECRET);
+  expect(String(transport)).not.toContain(TOKEN_TAIL);
 });
 
 test("the token reaches only the request URL, and a successful answer passes through", async () => {
@@ -55,7 +55,7 @@ test("a fetch rejection that quotes the request URL comes back as a bare code", 
   });
   const result = await transport.call("getUpdates", {});
   expect(result).toEqual({ ok: false, kind: "network_failed", status: null, description: null, retryAfterSeconds: null, migrateToChatId: null });
-  expect(JSON.stringify(result)).not.toContain(SECRET);
+  expect(JSON.stringify(result)).not.toContain(TOKEN_TAIL);
 });
 
 test("a request that outlives its timeout is timed_out, and an outer abort ends it too", async () => {
@@ -74,7 +74,7 @@ test("Telegram's description is passed through with the token cut out, and its p
   const transport = createBotApiTransport(TOKEN, async () => jsonResponse({
     ok: false,
     error_code: 429,
-    description: `Too Many Requests for bot${TOKEN} (secret ${SECRET})`,
+    description: `Too Many Requests for bot${TOKEN} (tail ${TOKEN_TAIL})`,
     parameters: { retry_after: 7 },
   }, 429));
   const result = await transport.call("sendMessage", {});
@@ -82,7 +82,7 @@ test("Telegram's description is passed through with the token cut out, and its p
     ok: false,
     kind: "http",
     status: 429,
-    description: "Too Many Requests for bot[token] (secret [token])",
+    description: "Too Many Requests for bot[token] (tail [token])",
     retryAfterSeconds: 7,
     migrateToChatId: null,
   });
