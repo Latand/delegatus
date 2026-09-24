@@ -25,6 +25,8 @@ export interface Revision { version: string; sha: string; short: string; date: s
 
 export interface CommitLine { short: string; subject: string }
 
+/** Up to eight whole changelog items of one type, each in its inline Markdown
+    with reference links already inline (`changelogDelta`), and how many more. */
 export interface DeltaGroup { type: string; items: string[]; more: number }
 
 export interface DeltaSummary {

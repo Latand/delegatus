@@ -126,31 +126,18 @@ describe("summarizeDelta", () => {
     ]);
   });
 
-  test("keeps each item's first sentence", () => {
+  test("keeps each item whole; the surface decides what a collapsed item shows", () => {
     const summary = summarizeDelta(changelogDelta(OLD, NEW), 5);
-    expect(summary.groups[0]!.items[0]).toBe("A self-update prototype checks for a newer revision.");
+    expect(summary.groups[0]!.items[0]).toBe("A self-update prototype checks for a newer revision. It builds in place and restarts each process on request (#2007)");
   });
 
-  test("cuts a long first sentence to at most 160 characters on a word boundary", () => {
-    const long = `- ${"word ".repeat(60).trim()} (#1)`;
-    const text = `## [Unreleased]\n\n### Added\n\n${long}\n`;
-    const item = summarizeDelta(changelogDelta("", text), 1).groups[0]!.items[0]!;
-    expect(item.length).toBeLessThanOrEqual(160);
-    expect(item.endsWith(" word…")).toBe(true);
-  });
-
-  test("a long sentence drops its parenthetical asides, then ends on a clause boundary", () => {
-    const item = [
-      "- Attention requests, reply suggestions and per-project seat tick settings are",
-      "  stored in SQLite (`state.sqlite`, collections `attention`,",
-      "  `reply_suggestions` and `seat_tick_settings`) instead of `attention.json`,",
-      "  `reply-suggestions.json` and `seat-tick-settings.json`. A write commits only",
-      "  the rows it changed (#1905).",
-    ].join("\n");
-    const text = `## [Unreleased]\n\n### Changed\n\n${item}\n`;
-    const cut = summarizeDelta(changelogDelta("", text), 1).groups[0]!.items[0]!;
-    expect(cut).toBe("Attention requests, reply suggestions and per-project seat tick settings are stored in SQLite instead of `attention.json`…");
-    expect(cut.length).toBeLessThanOrEqual(160);
+  test("reference-style links resolve from the new revision's own definitions", () => {
+    const withLinks = (text: string, url: string) => `${text}\n[#2003]: ${url}\n`;
+    const next = withLinks(NEW.replace("per project (#2003)", "per project ([#2003], [#1999])"), "https://x.dev/pull/2003");
+    const fixed = summarizeDelta(changelogDelta(withLinks(OLD, "https://x.dev/old"), next), 5).groups[1]!;
+    expect(fixed.type).toBe("Fixed");
+    /* Resolved where the new file defines it; an undefined one is left as written. */
+    expect(fixed.items[0]).toBe("A seat tick keeps one standing card per project ([#2003](https://x.dev/pull/2003), [#1999])");
   });
 
   test("shows eight items per type and counts the rest", () => {
