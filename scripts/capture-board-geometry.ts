@@ -4373,7 +4373,7 @@ async function activityMain(): Promise<void> {
     }
     must(ready, "the agent axis never appeared: the transcript index did not cover the seeded conversations");
 
-    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
     const capture = async (surface: "desktop" | "phone", query: string, name: string, lang: "en" | "uk" = "en", expand?: string) => {
       const phone = surface === "phone";
       const width = phone ? 390 : 1440;

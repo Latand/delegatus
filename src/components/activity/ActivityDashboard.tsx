@@ -91,12 +91,13 @@ function roleName(role: string, t: TFunction): string {
   return role;
 }
 
-function hostName(host: string, hosts: readonly HostReport[]): string {
-  return hosts.find((entry) => entry.host === host)?.label ?? host;
+function hostName(host: string, hosts: readonly HostReport[], t: TFunction): string {
+  const entry = hosts.find((candidate) => candidate.host === host);
+  return entry?.label ?? (entry?.local ? t("activity.hosts.thisHostName") : host);
 }
 
-function hostList(ids: readonly string[], hosts: readonly HostReport[]): string {
-  return ids.map((id) => hostName(id, hosts)).join(", ");
+function hostList(ids: readonly string[], hosts: readonly HostReport[], t: TFunction): string {
+  return ids.map((id) => hostName(id, hosts, t)).join(", ");
 }
 
 const ENGINE_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot" };
@@ -231,7 +232,7 @@ function DayRow({ day, tz, nowMs, names, hosts, locale, t }: {
         aria-label={summary}
         onPointerMove={track}
         onPointerDown={track}
-        onPointerLeave={() => setHover(null)}
+        onPointerLeave={(event) => { if (event.pointerType !== "touch") setHover(null); }}
       >
         <div className="relative h-3 overflow-hidden rounded-[3px] bg-sunken" data-activity-lane="human">
           {HOUR_TICKS.slice(1, -1).map((hour) => (
@@ -271,13 +272,13 @@ function DayRow({ day, tz, nowMs, names, hosts, locale, t }: {
             <div className="flex items-center gap-1.5 text-secondary">
               <Swatch kind="human" />
               {hoverHuman
-                ? t("activity.tooltip.human", { project: names.get(hoverHuman.project) ?? t("activity.unattributed"), host: hostName(hoverHuman.host, hosts) })
+                ? t("activity.tooltip.human", { project: names.get(hoverHuman.project) ?? t("activity.unattributed"), host: hostName(hoverHuman.host, hosts, t) })
                 : t("activity.tooltip.noHuman")}
             </div>
             {hoverUnknown ? (
               <div className="flex items-center gap-1.5 text-secondary">
                 <Swatch kind="unknown" />
-                {t("activity.tooltip.unknown", { hosts: hostList(day.coverage.missingHosts, hosts) })}
+                {t("activity.tooltip.unknown", { hosts: hostList(day.coverage.missingHosts, hosts, t) })}
               </div>
             ) : null}
             <div className="flex items-center gap-1.5 text-secondary">
@@ -288,7 +289,7 @@ function DayRow({ day, tz, nowMs, names, hosts, locale, t }: {
         ) : null}
       </div>
       <div className="flex flex-col gap-0.5 text-[11px] tabular-nums max-sm:order-2 max-sm:flex-row max-sm:flex-wrap max-sm:gap-x-3" data-activity-day-totals="">
-        <span className="flex items-center gap-1.5 text-primary" title={day.coverage.complete ? undefined : t("activity.unread", { hosts: hostList(day.coverage.missingHosts, hosts) })}>
+        <span className="flex items-center gap-1.5 text-primary" title={day.coverage.complete ? undefined : t("activity.unread", { hosts: hostList(day.coverage.missingHosts, hosts, t) })}>
           <Swatch kind={day.coverage.complete || day.humanMs > 0 ? "human" : "unknown"} />
           {day.missingSource ? <MissingSource reasons={day.missingSource} t={t} /> : (
             <>
@@ -393,7 +394,7 @@ function ProjectRow({ row, max, expanded, onToggle, hosts, locale, t }: {
 }) {
   const name = projectName(row.project, row.name, t);
   const detailsId = `activity-project-${row.project ?? "unattributed"}`;
-  const unread = row.coverage.complete ? null : t("activity.unread", { hosts: hostList(row.coverage.missingHosts, hosts) });
+  const unread = row.coverage.complete ? null : t("activity.unread", { hosts: hostList(row.coverage.missingHosts, hosts, t) });
   return (
     <li className="border-t border-border first:border-t-0" data-activity-project={row.project ?? ""} data-coverage={row.coverage.complete ? "complete" : "unknown"}>
       <button
@@ -439,7 +440,7 @@ function ProjectRow({ row, max, expanded, onToggle, hosts, locale, t }: {
             {row.humanReassignedMs > 0 ? ` ${t("activity.project.reassigned", { value: duration(row.humanReassignedMs, t) })}` : ""}
           </p>
           <div className="grid grid-cols-3 gap-5 max-sm:grid-cols-1 max-sm:gap-4">
-            <Breakdown kind="human" t={t} title={t("activity.breakdown.host")} rows={Object.entries(row.byHost).sort((a, b) => b[1] - a[1]).map(([host, ms]) => ({ key: host, label: hostName(host, hosts), ms }))} />
+            <Breakdown kind="human" t={t} title={t("activity.breakdown.host")} rows={Object.entries(row.byHost).sort((a, b) => b[1] - a[1]).map(([host, ms]) => ({ key: host, label: hostName(host, hosts, t), ms }))} />
             <Breakdown kind="human" t={t} title={t("activity.breakdown.surface")} rows={SURFACES.map((surface) => ({ key: surface, label: t(`activity.surface.${surface}` as MessageKey), ms: row.bySurface[surface] }))} />
             <Breakdown kind="human" t={t} title={t("activity.breakdown.kind")} rows={REQUEST_KINDS.map((kind) => ({ key: kind, label: t(`activity.kind.${kind}` as MessageKey), ms: row.byKind[kind] }))} />
             <Breakdown kind="agent" t={t} title={t("activity.breakdown.engine")} rows={Object.entries(row.byEngine).sort((a, b) => b[1] - a[1]).map(([engine, ms]) => ({ key: engine, label: ENGINE_NAMES[engine] ?? engine, ms }))} />
@@ -488,15 +489,15 @@ function sourceLine(source: HostReport["sources"][number], locale: Locale, tz: s
 function HostsTable({ hosts, locale, tz, t }: { hosts: readonly HostReport[]; locale: Locale; tz: string; t: TFunction }) {
   return (
     <div className="mt-1 overflow-x-auto">
-      <table className="w-full min-w-[560px] border-collapse text-left text-[11.5px] max-sm:min-w-0" data-activity-hosts="">
-        <thead>
+      <table className="w-full min-w-[560px] border-collapse text-left text-[11.5px] max-sm:block max-sm:min-w-0" data-activity-hosts="">
+        <thead className="max-sm:hidden">
           <tr className="text-[11px] text-muted">
             <th scope="col" className="w-[22%] py-1.5 pr-3 font-semibold">{t("activity.hosts.host")}</th>
             <th scope="col" className="w-[39%] py-1.5 pr-3 font-semibold">{t("activity.hosts.read")}</th>
             <th scope="col" className="py-1.5 font-semibold">{t("activity.hosts.excluded")}</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className="max-sm:block">
           {hosts.map((host) => {
             const connected = host.sources.some((source) => source.state === "read");
             const excluded = EXCLUSION_REASONS
@@ -504,9 +505,9 @@ function HostsTable({ hosts, locale, tz, t }: { hosts: readonly HostReport[]; lo
               .filter(([, count]) => count > 0);
             return (
               <tr key={host.host} className="border-t border-border align-top max-sm:flex max-sm:flex-col max-sm:py-2" data-activity-host={host.host} data-connected={connected ? "true" : "false"}>
-                <th scope="row" className="py-1.5 pr-3 font-semibold text-primary max-sm:py-0.5">
-                  {host.label ?? host.host}
-                  {host.local ? <span className="font-normal text-muted"> · {t("activity.hosts.thisHost")}</span> : null}
+                <th scope="row" className="py-1.5 pr-3 font-semibold text-primary max-sm:block max-sm:py-0.5">
+                  {hostName(host.host, hosts, t)}
+                  {host.local && host.label ? <span className="font-normal text-muted"> · {t("activity.hosts.thisHost")}</span> : null}
                   {!connected ? (
                     <span className="mt-0.5 flex items-center gap-1 font-semibold text-warning">
                       <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
@@ -514,10 +515,11 @@ function HostsTable({ hosts, locale, tz, t }: { hosts: readonly HostReport[]; lo
                     </span>
                   ) : null}
                 </th>
-                <td className="py-1.5 pr-3 text-secondary max-sm:py-0.5">
+                <td className="py-1.5 pr-3 text-secondary max-sm:block max-sm:py-0.5">
                   {host.sources.map((source) => <div key={source.source}>{sourceLine(source, locale, tz, t)}</div>)}
                 </td>
-                <td className="py-1.5 text-muted max-sm:py-0.5">
+                <td className="py-1.5 text-muted max-sm:block max-sm:py-0.5">
+                  <span className="font-semibold sm:hidden">{t("activity.hosts.excluded")}: </span>
                   {excluded.length
                     ? excluded.map(([reason, count]) => t("activity.hosts.excludedItem", { reason: t(`activity.exclusion.${reason}` as MessageKey), count })).join(", ")
                     : t("activity.hosts.excludedNone")}
@@ -556,20 +558,26 @@ function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; 
       <HostsTable hosts={coverage.hosts} locale={locale} tz={params.tz} t={t} />
       <h3 className="mt-4 text-[12px] font-semibold text-primary">{t("activity.coverage.title")}</h3>
       <div className="mt-1 overflow-x-auto">
-        <table className="w-full min-w-[560px] border-collapse text-left text-[11.5px] max-sm:min-w-0" data-activity-coverage="">
-          <thead>
+        <table className="w-full min-w-[560px] border-collapse text-left text-[11.5px] max-sm:block max-sm:min-w-0" data-activity-coverage="">
+          <thead className="max-sm:hidden">
             <tr className="text-[11px] text-muted">
               <th scope="col" className="w-[22%] py-1.5 pr-3 font-semibold">{t("activity.coverage.surface")}</th>
               <th scope="col" className="w-[39%] py-1.5 pr-3 font-semibold">{t("activity.coverage.counted")}</th>
               <th scope="col" className="py-1.5 font-semibold">{t("activity.coverage.missing")}</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="max-sm:block">
             {COVERAGE_ROWS.map((row) => (
               <tr key={row.key} className="border-t border-border align-top max-sm:flex max-sm:flex-col max-sm:py-2">
-                <th scope="row" className="py-1.5 pr-3 font-semibold text-primary max-sm:py-0.5">{t(row.surface)}</th>
-                <td className="py-1.5 pr-3 text-secondary max-sm:py-0.5">{t(row.counted)}</td>
-                <td className="py-1.5 text-muted max-sm:py-0.5">{t(row.missing)}</td>
+                <th scope="row" className="py-1.5 pr-3 font-semibold text-primary max-sm:block max-sm:py-0.5">{t(row.surface)}</th>
+                <td className="py-1.5 pr-3 text-secondary max-sm:block max-sm:py-0.5">
+                  <span className="font-semibold sm:hidden">{t("activity.coverage.counted")}: </span>
+                  {t(row.counted)}
+                </td>
+                <td className="py-1.5 text-muted max-sm:block max-sm:py-0.5">
+                  <span className="font-semibold sm:hidden">{t("activity.coverage.missing")}: </span>
+                  {t(row.missing)}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -695,7 +703,7 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
                     <TriangleAlert className="mt-[2px] h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
                     <span>
                       <span className="font-semibold text-primary">{t("activity.gap.incompleteTitle")}</span>{" "}
-                      {t("activity.gap.incomplete", { hosts: hostList(totals.coverage.missingHosts, hosts) })}
+                      {t("activity.gap.incomplete", { hosts: hostList(totals.coverage.missingHosts, hosts, t) })}
                     </span>
                   </p>
                 ) : null}
@@ -711,7 +719,7 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
                 testId="human"
                 label={t("activity.tile.human")}
                 value={humanFigure(totals.humanMs, totals.coverage, t)}
-                sub={(
+                sub={!totals.coverage.complete && totals.humanMs === 0 ? t("activity.tile.humanUnknown") : (
                   <>
                     {t("activity.tile.humanSub", { hours: reportHours(totals.humanHours, locale, t), mode: roundingName })}
                     {data.billableConfigured ? <><br />{reportHours(totals.billableHours, locale, t, "activity.tile.billable")}</> : null}
