@@ -5,6 +5,7 @@ import { taskRevision } from "./revision";
 import { isoNow } from "./helpers";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { admissionSnapshot } from "./groupHide";
+import { readTaskIconInput } from "./taskIcon";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
 import { TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
@@ -34,7 +35,8 @@ export const RECENT_CREATES_CAP = 100;
 export type TaskRefusal = { ok: false; error: string; status: number; code?: string; field?: string };
 
 export type TaskCommandResult =
-  | { ok: true; tasks: BoardTask[]; task: BoardTask }
+  /* `notes` says what a write clamped instead of refusing (an unknown icon). */
+  | { ok: true; tasks: BoardTask[]; task: BoardTask; notes?: string[] }
   | TaskRefusal;
 
 /** A `clientRequestId → taskId` receipt, persisted in `tasks.json` so a replay
@@ -45,7 +47,7 @@ export interface RecentCreate {
 }
 
 export type CreateTaskResult =
-  | { ok: true; tasks: BoardTask[]; task: BoardTask; recentCreates: RecentCreate[]; replay: boolean }
+  | { ok: true; tasks: BoardTask[]; task: BoardTask; recentCreates: RecentCreate[]; replay: boolean; notes?: string[] }
   | TaskRefusal;
 
 export interface CreateTaskInput {
@@ -65,6 +67,9 @@ export interface CreateTaskInput {
       the board shows; `"hidden"` creates it off the board, which is how a
       caller records work while the board is full. */
   board?: unknown;
+  /** A lucide icon name (#2102), read by `readTaskIconInput`: one that names
+      no icon creates the task without one and adds a note to the answer. */
+  icon?: unknown;
 }
 
 export interface PatchTaskInput {
@@ -84,6 +89,10 @@ export interface PatchTaskInput {
   /** One of `TASK_COLORS`, or "none" to clear the label. Leaves `updatedAt`
       unchanged when it is the whole patch (with `hide`). */
   color?: unknown;
+  /** A lucide icon name (#2102); `null`, "" or "none" clears it. A name that
+      is no lucide icon clears it too, with a note in the answer, never a
+      refusal. Presentation, like `color`: `updatedAt` stays. */
+  icon?: unknown;
   /** `true` hides the task's whole group from the kanban board, `false` shows
       it again. Requires the revision fence. Leaves `updatedAt` unchanged when
       it is the whole patch (with `color`). */
@@ -321,6 +330,7 @@ export function createTask(
 
   const source = normalizeSource(input.source);
   if (source === null) return { ok: false, error: "invalid task source", status: 400 };
+  const icon = Object.hasOwn(input, "icon") ? readTaskIconInput(input.icon) : { kind: "clear" as const };
 
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
@@ -345,6 +355,7 @@ export function createTask(
     ...(attachments.attachments ? { attachments: attachments.attachments } : {}),
     ...(source ? { source } : {}),
     ...(board ? { board } : {}),
+    ...(icon.kind === "set" ? { icon: icon.icon } : {}),
     assignments: [],
     createdAt: now,
     updatedAt: now,
@@ -352,11 +363,11 @@ export function createTask(
   const nextRecent = clientRequestId
     ? [...recentCreates.filter((entry) => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId: id }].slice(-RECENT_CREATES_CAP)
     : recentCreates;
-  return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false };
+  return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(icon.kind === "clamped" ? { notes: [icon.note] } : {}) };
 }
 
 /** Presentation of a task, never work on it: `updatedAt` stays (see below). */
-const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "hide", "attachLinks", "detachLinks", "linkKind"]);
+const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "hide", "attachLinks", "detachLinks", "linkKind"]);
 
 function editTaskWorkLinks(
   task: BoardTask,
@@ -470,6 +481,12 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (!color) return { ok: false, error: `color must be one of none, ${TASK_COLORS.join(", ")}`, status: 400, code: "TASK_INVALID_FIELD", field: "color" };
     patch.color = color === "none" ? undefined : color;
   }
+  const notes: string[] = [];
+  if (Object.hasOwn(input, "icon")) {
+    const icon = readTaskIconInput(input.icon);
+    patch.icon = icon.kind === "set" ? icon.icon : undefined;
+    if (icon.kind === "clamped") notes.push(icon.note);
+  }
   /* Hiding a group writes the hide and nothing else: no assignment, runtime,
      pipeline, flow, delivery or process state is touched, by design. */
   if (Object.hasOwn(input, "hide")) {
@@ -515,8 +532,8 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
 
-  /* A colour label or a group hide is presentation of the task, never work on
-     it: `updatedAt` stays, so the board's ranking and age and the seat tick's
+  /* A colour label, an icon or a group hide is presentation of the task, never
+     work on it: `updatedAt` stays, so the board's ranking and age and the seat tick's
      reading of card movement (its quiet guard, its "assigned, nothing started
      it" window) are unchanged by them. The revision still moves, because it
      hashes every field, so the fence and board freshness keep working, and a
@@ -533,11 +550,12 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (updated.placement === "unplaced") delete updated.pos;
   if (Object.hasOwn(patch, "details") && patch.details === undefined) delete updated.details;
   if (Object.hasOwn(patch, "color") && patch.color === undefined) delete updated.color;
+  if (Object.hasOwn(patch, "icon") && patch.icon === undefined) delete updated.icon;
   if (Object.hasOwn(patch, "groupHidden") && patch.groupHidden === undefined) delete updated.groupHidden;
   if (Object.hasOwn(patch, "workLinks") && patch.workLinks === undefined) delete updated.workLinks;
   const tasks = existing.slice();
   tasks[index] = updated;
-  return { ok: true, tasks, task: updated };
+  return { ok: true, tasks, task: updated, ...(notes.length ? { notes } : {}) };
 }
 
 export interface MembershipDeps {

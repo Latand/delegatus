@@ -165,6 +165,10 @@ export interface BoardTask {
   board?: TaskBoardVisibility;
   /** Colour label; absent means none. */
   color?: TaskColor;
+  /** A lucide icon name, kebab-case (#2102); absent means none, and the board
+      then draws a suggestion from the title (`taskIconSuggest.ts`) that is
+      never stored. Written only through `readTaskIconInput`. */
+  icon?: string;
   /** PRs and issues attached to the task by hand (#2059). The card adds the
       links of every pipeline the task carries at read time. */
   workLinks?: import("@/lib/forge/workLinks").StoredWorkLink[];

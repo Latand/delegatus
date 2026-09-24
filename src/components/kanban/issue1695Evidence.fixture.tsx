@@ -31,13 +31,17 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * scenario also answers the account routes: the accounts and their limits, the
  * project's accounts, a conversation's account switch and a stage's account,
  * with hooks for the migration record, a committed switch, a refusal and a lost
- * answer. Every
- * request the Viewer makes is answered here; nothing reaches a server, a store
+ * answer. With `&icons=1` (#2102) some tasks carry a stored lucide icon, so a
+ * board shows stored, suggested and default icons side by side. Every
+ * request the Viewer makes is answered here, except the task icons' drawings,
+ * which the evidence server reads from lucide itself; nothing reaches a store
  * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
 
 const PROJECT = "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+/* #2102: stored icons on some tasks; the others draw the title's suggestion or the quiet default. */
+const ICONS = new URLSearchParams(location.search).get("icons") === "1";
 const EDITING = SCENARIO === "editing";
 /* K5a: the pipelines' review stages are bound to review flows with rounds. K5b's Stages build on them. */
 /* #1839: the same tier scenario, with the windows arriving the way the provider
@@ -857,6 +861,16 @@ if (OVERVIEW_SCOPE) {
     task("t-mesh-quiet", "done", "Write the migration notes", "", 6 * 60 * MIN, [meshQuiet!], { project: MESH }),
   );
 }
+if (ICONS) {
+  const stored: Record<string, string> = {
+    "t-upload": "cloud-upload", "t-disk": "hard-drive", "t-auth": "key-round", "t-interrupt": "hand",
+    "t-many": "kanban", "t-review-spent": "bot", "t-ledger": "landmark", "t-mesh": "network",
+  };
+  for (let index = 0; index < tasks.length; index += 1) {
+    const icon = stored[tasks[index]!.id];
+    if (icon) tasks[index] = { ...tasks[index]!, icon } as BoardTask;
+  }
+}
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
   const hide = (id: string, by: "operator" | "agent", secondsAgo: number) => {
@@ -1163,9 +1177,12 @@ function fixtureWorkLinks(): FilesWorkLinks {
 }
 const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
 
+/* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
+const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   if (url.pathname === "/api/files") {
     /* #1820's first run: an installation with nothing in it at all. */
     /* Nothing is working in the quiet installation: every conversation has
@@ -1272,6 +1289,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (body.color === "none") delete next.color;
       else next.color = body.color as BoardTask["color"];
     }
+    /* The picker only ever sends a lucide name or "none" (#2102). */
+    if (body.icon !== undefined) {
+      if (body.icon === "none" || body.icon === null) delete next.icon;
+      else next.icon = String(body.icon);
+    }
     /* Agent-facing details (#1834), on the route's own terms: a string sets it,
        null or an empty string clears the field rather than leaving it empty. */
     if (body.details !== undefined) {
@@ -1287,7 +1309,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     } else if (body.hide === false) {
       delete next.groupHidden;
     }
-    const presentationOnly = Object.keys(body).every((key) => key === "color" || key === "hide" || key === "expectedProject" || key === "expectedRevision");
+    const presentationOnly = Object.keys(body).every((key) => key === "color" || key === "icon" || key === "hide" || key === "expectedProject" || key === "expectedRevision");
     next.updatedAt = presentationOnly ? current.updatedAt : new Date().toISOString();
     next.revision = REV(revision++);
     tasks[index] = next;

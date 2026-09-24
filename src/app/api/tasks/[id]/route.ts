@@ -20,7 +20,7 @@ type TaskRouteContext = {
 export async function PATCH(
   req: NextRequest,
   ctx: TaskRouteContext,
-): Promise<NextResponse<{ ok: true; task: BoardTask; workLinks?: ResolvedWorkLinks } | ApiError>> {
+): Promise<NextResponse<{ ok: true; task: BoardTask; workLinks?: ResolvedWorkLinks; notes?: string[] } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -48,7 +48,7 @@ export async function PATCH(
   }
   /* #2059: the card redraws its links from this answer, not the next poll. */
   const links = Object.hasOwn(body, "attachLinks") || Object.hasOwn(body, "detachLinks") ? taskWorkLinks(result.task, loadPipelines()) : null;
-  return NextResponse.json({ ok: true, task: result.task, ...(links ? { workLinks: links } : {}) });
+  return NextResponse.json({ ok: true, task: result.task, ...(links ? { workLinks: links } : {}), ...(result.notes ? { notes: result.notes } : {}) });
 }
 
 export async function DELETE(_req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true } | ApiError>> {

@@ -7401,3 +7401,149 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     expect(failures).toEqual([]);
   }, 900_000);
 });
+
+describe("#2102 task icons on the desktop board and the Overview", () => {
+  /* Every card of the pipeline-block scenario and of the Overview, with some
+     tasks carrying a stored icon (`&icons=1`), at 1440 and 1080 px, in en and
+     uk, light and dark. Each icon is lucide's own drawing, served the way the
+     Viewer serves it. Gated per card: the icon is the head's first box and has
+     loaded; its glyph keeps a gap from the title's ink; the title still runs
+     from the icon to the tools (the flex-1 rule), so the icon takes no room
+     from it; and the glyph sits level with the title's first line. The picker
+     is opened from a card's icon, searched and used, and the write is read
+     back from the fixture. Frames go to TASK_ICONS_PNG_DIR. A card is
+     `content-visibility: auto`: off screen its SVG is not laid out at all, so
+     each card is brought into view and given two frames before it is read. */
+  const measureIcons = `(async () => {
+    const out = { cards: 0, loaded: 0, sources: { stored: 0, suggested: 0, default: 0 }, problems: [], offsets: [] };
+    for (const card of document.querySelectorAll("[data-kanban-board] .card")) {
+      if (!card.getClientRects().length) continue;
+      card.scrollIntoView({ block: "center" });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const id = card.getAttribute("data-id");
+      const head = card.querySelector(":scope > .head");
+      const icon = head && head.firstElementChild && head.firstElementChild.classList.contains("task-icon") ? head.firstElementChild : null;
+      if (!icon) { out.problems.push({ id, problem: "no icon before the title" }); continue; }
+      out.cards += 1;
+      const shown = icon.querySelector("[data-task-icon]");
+      const svg = shown && shown.querySelector("svg");
+      if (svg) out.loaded += 1;
+      else { out.problems.push({ id, problem: "icon not drawn", icon: shown && shown.getAttribute("data-task-icon") }); continue; }
+      out.sources[shown.getAttribute("data-icon-source")] += 1;
+      const title = head.querySelector(":scope > .title");
+      const text = title && title.querySelector(".clamp");
+      if (!title || !text) { out.problems.push({ id, problem: "no title" }); continue; }
+      const tools = head.querySelector(":scope > .tools");
+      const glyph = svg.getBoundingClientRect(), box = title.getBoundingClientRect(), row = head.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const lines = [...range.getClientRects()].filter((rect) => rect.width * rect.height > 0.5).sort((a, b) => a.top - b.top);
+      if (!lines.length) { out.problems.push({ id, problem: "title paints nothing" }); continue; }
+      const inkLeft = Math.min(...lines.map((rect) => rect.left));
+      if (inkLeft - glyph.right < 4) out.problems.push({ id, problem: "icon meets the title", gap: Math.round(inkLeft - glyph.right) });
+      const end = tools ? tools.getBoundingClientRect().left - (parseFloat(getComputedStyle(head).columnGap) || 0) : row.right;
+      if (end - box.right > 2) out.problems.push({ id, problem: "the title stops short of the tools", short: Math.round(end - box.right) });
+      if (box.left - glyph.right > 12) out.problems.push({ id, problem: "space between the icon and the title", gap: Math.round(box.left - glyph.right) });
+      const offset = (glyph.top + glyph.bottom) / 2 - (lines[0].top + lines[0].bottom) / 2;
+      out.offsets.push(Math.round(offset * 10) / 10);
+      if (Math.abs(offset) > 1.5) out.problems.push({ id, problem: "icon is not level with the first line", offset: Math.round(offset * 10) / 10 });
+    }
+    return out;
+  })()`;
+  type IconReading = { cards: number; loaded: number; sources: Record<"stored" | "suggested" | "default", number>; problems: unknown[]; offsets: number[] };
+  const iconsDrawn = () => [...document.querySelectorAll("[data-kanban-board] .card .task-icon [data-task-icon]")].every((element) => element.querySelector("svg"));
+
+  browserTest("icons lead every card's title without taking its room, on the board and the Overview, at 1440 and 1080 px, en and uk, light and dark; the picker searches and writes", async () => {
+    const out = path.resolve(".artifacts/task-icons");
+    const pngDir = process.env.TASK_ICONS_PNG_DIR ?? "/var/tmp/llv-task-icons-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, IconReading> = {};
+    const failures: string[] = [];
+    const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
+    const surfaces = [
+      { name: "board", query: "?scenario=pipeline-block&icons=1", ready: '[data-kanban-board] .card[data-id="task:t-upload"]' },
+      { name: "overview", query: "?scenario=issue1820&icons=1", ready: '[data-kanban-board] .card[data-id="task:t-ledger"]' },
+    ] as const;
+    try {
+      for (const surface of surfaces) {
+        for (const lang of ["en", "uk"] as const) {
+          for (const width of [1440, 1080] as const) {
+            for (const scheme of ["light", "dark"] as const) {
+              const label = `${surface.name}-${width}-${lang}-${scheme}`;
+              const { context, page, pageErrors } = await openFixture(browser, `${server.base}${surface.query}`, { width, height: 1000 }, scheme, lang);
+              try {
+                await context.addInitScript(seatFolded);
+                await page.reload();
+                await page.waitForSelector(surface.ready, { timeout: 30_000 });
+                await page.waitForFunction(iconsDrawn, undefined, { timeout: 15_000 }).catch(() => {});
+                /* A folded card is the board's other density: its head, icon included, is all it keeps. */
+                if (surface.name === "board") await page.locator(`${card("t-disk")} .icon-btn.fold`).click();
+                await page.waitForTimeout(300);
+                const reading = await page.evaluate(measureIcons) as IconReading;
+                if (surface.name === "board" && await page.locator(`${card("t-disk")}[data-collapsed="1"] .head > .task-icon [data-task-icon] svg`).count() !== 1) failures.push(`${label}: the folded card lost its icon`);
+                /* Reading brought every card into view; the frame is taken from the top-left again. */
+                await page.evaluate(() => {
+                  for (const element of document.querySelectorAll<HTMLElement>("[data-kanban-board], [data-kanban-board] *")) {
+                    if (element.scrollTop) element.scrollTop = 0;
+                    if (element.scrollLeft) element.scrollLeft = 0;
+                  }
+                  window.scrollTo(0, 0);
+                });
+                await page.waitForTimeout(200);
+                frames[label] = reading;
+                if (reading.cards < 5) failures.push(`${label}: ${reading.cards} cards with an icon, expected at least 5`);
+                if (!reading.sources.stored || !reading.sources.suggested || !reading.sources.default) failures.push(`${label}: stored, suggested and default icons should all show, got ${JSON.stringify(reading.sources)}`);
+                if (reading.problems.length) failures.push(`${label}: ${reading.problems.length} problems — ${JSON.stringify(reading.problems.slice(0, 4))}`);
+                await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+                if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+
+                /* The picker, from a card whose icon is only suggested. */
+                if (surface.name === "board" && (width === 1440 || scheme === "light")) {
+                  const target = page.locator(`${card("t-links")} [data-icon-menu]`);
+                  await target.click();
+                  await page.waitForSelector(".icon-popover [data-task-icon-picker] [data-icon-choice] svg", { timeout: 10_000 });
+                  await page.waitForTimeout(200);
+                  const frame = async (name: string) => {
+                    const box = await page.locator(".icon-popover").boundingBox();
+                    const anchor = await target.boundingBox();
+                    if (!box || !anchor) { failures.push(`${label}: no picker to draw for ${name}`); return; }
+                    if (box.x < 0 || box.y < 0 || box.x + box.width > width || box.y + box.height > 1000) failures.push(`${label}: the picker leaves the window ${JSON.stringify(box)}`);
+                    const left = Math.max(0, Math.min(box.x, anchor.x) - 24), top = Math.max(0, Math.min(box.y, anchor.y) - 24);
+                    const right = Math.min(width, Math.max(box.x + box.width, anchor.x + anchor.width + 360) + 24), bottom = Math.min(1000, Math.max(box.y + box.height, anchor.y + anchor.height) + 24);
+                    await page.screenshot({ path: path.join(pngDir, `${label}-picker-${name}.png`), clip: { x: left, y: top, width: right - left, height: bottom - top } });
+                  };
+                  await frame("common");
+                  await page.locator(".icon-popover [data-task-icon-search]").fill("rock");
+                  await page.waitForFunction(() => document.querySelector(".icon-popover [data-icon-choice]")?.getAttribute("data-icon-choice") === "rocket", undefined, { timeout: 10_000 }).catch(() => {});
+                  await page.waitForTimeout(250);
+                  const first = await page.locator(".icon-popover [data-icon-choice]").first().getAttribute("data-icon-choice");
+                  if (first !== "rocket") failures.push(`${label}: "rock" finds ${first} first, expected rocket`);
+                  await frame("search");
+                  await page.locator('.icon-popover [data-icon-choice="rocket"]').click();
+                  await page.waitForTimeout(400);
+                  const after = await page.locator(`${card("t-links")} .task-icon [data-task-icon]`).evaluate((element) => [element.getAttribute("data-task-icon"), element.getAttribute("data-icon-source")]);
+                  if (after[0] !== "rocket" || after[1] !== "stored") failures.push(`${label}: after picking, the card shows ${JSON.stringify(after)}`);
+                  const written = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence.taskPatches.filter((patch) => patch.id === "t-links").map((patch) => patch.body.icon));
+                  if (written.at(-1) !== "rocket") failures.push(`${label}: the fixture received ${JSON.stringify(written)}, expected an icon write of rocket`);
+                  await page.locator(card("t-links")).screenshot({ path: path.join(pngDir, `${label}-card-picked.png`) });
+                }
+              } finally {
+                await context.close();
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/task-icons", { recursive: true });
+    fs.writeFileSync("evidence/task-icons/geometry.json", `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});

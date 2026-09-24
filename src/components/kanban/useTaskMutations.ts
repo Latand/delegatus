@@ -26,13 +26,14 @@ import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
  * its status) or shows a newer write, so a card never blinks back to its old
  * column between the response and the next poll.
  *
- * Field edits (#1695 K4b) — the colour label, the group hide, the task's text
- * and its agent-facing details (#1834) — ride the same per-task queue and the same revision memory, so an edit
+ * Field edits (#1695 K4b) — the colour label, the icon (#2102), the group
+ * hide, the task's text and its agent-facing details (#1834) — ride the same
+ * per-task queue and the same revision memory, so an edit
  * and a status move of one task never race each other's guard. Their 409 is
  * read the same way:
  * - the server already holds the value: settled;
- * - a colour or a hide: sent once more with the stored guard, since the label
- *   and the hide say nothing about what else changed;
+ * - a colour, an icon or a hide: sent once more with the stored guard, since
+ *   the label, the icon and the hide say nothing about what else changed;
  * - text and details: sent again while the stored field is still the value the
  *   edit started from. When only another part of the text moved (an agent rewrote the
  *   description under a new title), the caller's `rebase` puts the edit onto
@@ -56,6 +57,8 @@ export type PatchResult = { ok: true; task: BoardTask } | { ok: false; status: n
 
 export type TaskFieldChange =
   | { field: "color"; value: TaskColor | null }
+  /* A lucide icon name (#2102); null clears it. */
+  | { field: "icon"; value: string | null }
   /* `replaces` names the stored hide (its `at`) of a group that came back to
      the board: hiding it again is a new hide, even though the row has one. */
   | { field: "hide"; value: boolean; replaces?: string | null }
@@ -79,7 +82,7 @@ export type FieldEditOutcome =
   | { kind: "conflict"; field: TaskField; task: BoardTask; serverValue: unknown }
   | { kind: "failed"; field: TaskField; error: string; status: number; code?: string };
 
-export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus } | { color: TaskColor | "none" } | { hide: boolean } | { text: string } | { details: string });
+export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus } | { color: TaskColor | "none" } | { icon: string } | { hide: boolean } | { text: string } | { details: string });
 
 export interface TaskMutationPorts {
   patch(id: string, body: PatchBody): Promise<PatchResult>;
@@ -111,6 +114,7 @@ interface FieldOverride {
 /** The field as a stored row holds it. */
 export function fieldValue(task: BoardTask, field: TaskField): unknown {
   if (field === "color") return task.color ?? null;
+  if (field === "icon") return task.icon ?? null;
   if (field === "hide") return Boolean(task.groupHidden);
   if (field === "details") return task.details ?? "";
   return task.text;
@@ -119,6 +123,7 @@ export function fieldValue(task: BoardTask, field: TaskField): unknown {
 /** The change that would show `value` in `field`. */
 function changeOf(field: TaskField, value: unknown): TaskFieldChange {
   if (field === "color") return { field, value: (value as TaskColor | null) ?? null };
+  if (field === "icon") return { field, value: typeof value === "string" && value ? value : null };
   if (field === "hide") return { field, value: Boolean(value) };
   if (field === "details") return { field, value: String(value ?? "") };
   return { field, value: String(value ?? "") };
@@ -127,6 +132,7 @@ function changeOf(field: TaskField, value: unknown): TaskFieldChange {
 /** Whether a stored row already shows `change`. */
 export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
   if (change.field === "color") return (task.color ?? null) === change.value;
+  if (change.field === "icon") return (task.icon ?? null) === change.value;
   if (change.field === "text") return task.text === change.value;
   if (change.field === "details") return (task.details ?? "") === change.value;
   if (!change.value) return !task.groupHidden;
@@ -134,7 +140,7 @@ export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
 }
 
 /** The edits a board shows ahead of the poll, per task. */
-export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; hide?: boolean; text?: string; details?: string }>;
+export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; icon?: string | null; hide?: boolean; text?: string; details?: string }>;
 
 /**
  * The tasks a board draws: the stored rows with the edits this device has sent
@@ -158,6 +164,10 @@ export function drawnTasks(tasks: readonly BoardTask[], edits: FieldEdits, stamp
     if ("color" in edit) {
       if (edit.color) next.color = edit.color;
       else delete next.color;
+    }
+    if ("icon" in edit) {
+      if (edit.icon) next.icon = edit.icon;
+      else delete next.icon;
     }
     if (edit.hide === true) {
       let at = stamps.get(task.id);
@@ -320,6 +330,7 @@ export class TaskStatusMutations {
   private bodyFor(change: TaskFieldChange, guard: { project: string; revision: string }): PatchBody {
     const fence = { expectedProject: guard.project, expectedRevision: guard.revision };
     if (change.field === "color") return { ...fence, color: change.value ?? "none" };
+    if (change.field === "icon") return { ...fence, icon: change.value ?? "none" };
     if (change.field === "hide") return { ...fence, hide: change.value };
     if (change.field === "details") return { ...fence, details: change.value };
     return { ...fence, text: change.value };
