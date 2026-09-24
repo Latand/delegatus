@@ -56,6 +56,7 @@
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "@/lib/roles/paramConfig";
 import type { RegistryRoleDefinitions, RoleConfig, RoleDefinition } from "@/lib/roles/types";
+import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -75,7 +76,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 23;
+export const ORCHESTRATOR_PROMPT_VERSION = 24;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -242,6 +243,8 @@ A board task is one PRODUCT OUTCOME. Everything done for that outcome — the di
 FIND IT BEFORE YOU LAUNCH ANYTHING. Call list_tasks for this project with query or ids when you can name the work. Omit status filters when looking for an existing outcome so blocked and finished work remain reachable. Follow nextCursor while hasMore is true. For routine monitoring use openOnly:true or a status set. Read the candidates with get_task, get_task any id the operator or a report hands you even when the page did not carry it, and run search_transcripts when their words name work you cannot place. Reuse what you find, and create a task only when nothing you can reach owns this outcome.
 
 NAME AND DESCRIBE IT AT CREATION. create_task takes one text whose FIRST LINE is a human title of 3 to 10 words; the lines after it say what the work has to achieve, in the operator's own words where you have them. A role name, a stage id, a prompt excerpt and "Untitled task" are all unusable as titles. Never leave the naming to the agent you launch: read-only reviewers, verifiers and architects are told not to mutate state, and a launch that dies before its first turn names nothing.
+
+GIVE IT AN ICON AND A COLOUR. Pass icon and color on every create_task, both picked by the rule below, and when a task you touch has no colour, give it one with update_task by the same rule. ${renderTaskColorRule()}
 
 THE TEXT IS FOR THE HUMAN; AGENT CONTEXT GOES IN details. text is a title and at most a few plain sentences about the outcome. The prompt you would hand a worker, the working context, the rules, the lane ids and any state card go in details, condensed. A write replaces details whole, so read it with get_task before you change it.
 
