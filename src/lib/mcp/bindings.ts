@@ -1492,11 +1492,14 @@ function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipel
     ...(delivery.disposition === "comparison" ? { conflict: `Target owned by ${delivery.ownerId} at epoch ${delivery.epoch}; comparison lane created with Viewer publication disabled` } : {}) };
 }
 
+const PIPELINE_CREATION_QUEUED_NOTE = "Pipeline state is not writable right now (a Viewer deployment is handing over, or the store is busy), so this pipeline is queued under the pipelineId above. The serving release stores and starts it on its next controller pass; get_pipeline answers once it is stored. Do not create it again.";
+
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolPayload> {
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
   if (context?.dispatch) context.dispatch.attempted = true;
   const result = await createPipelineFromRequest(request as CreatePipelineRequest, undefined, {
     creationRequest: { key: `create_pipeline:${requestId(args)}`, digest: requestDigest("create_pipeline", request) },
+    queueWhenBusy: true,
   });
   if (!result.pipeline) {
     if (context?.dispatch) context.dispatch.attempted = false;
@@ -1509,7 +1512,18 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
     throw result.violations?.length ? new McpToolRefusal(message, { violations: result.violations }) : new Error(message);
   }
-  if (result.pipeline.state !== "draft") requestPipelineTick();
+  if (result.pipeline.state !== "draft" || result.queued) requestPipelineTick();
+  /* #1835: the store refused the write before admission — a deploy handover
+     fences it — so the record waits in the creation queue under this id. */
+  if (result.queued) {
+    return redactPayload({
+      ...pipelineAcknowledgement(result.pipeline),
+      queued: true,
+      queuedBecause: result.queued.reason,
+      note: PIPELINE_CREATION_QUEUED_NOTE,
+      ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+    });
+  }
   /* #1845: an acknowledgement, never the record. The record echoed the spec,
      every stage prompt and every composed role scaffold back to the caller that
      had just sent them — a median 10 KB per create. get_pipeline reads it. */

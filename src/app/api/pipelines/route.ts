@@ -125,6 +125,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
     if (originRejection) return originRejection;
     const result = await createPipelineFromRequest(body, undefined, {
       allowOperatorDraftWithoutLineage: !isAgentInitiatedSpawn(req),
+      queueWhenBusy: true,
     });
     if (!result.pipeline) return NextResponse.json({
       error: result.error ?? "could not create pipeline",
@@ -132,8 +133,15 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
       ...(result.details ? { details: result.details } : {}),
       ...(result.violations?.length ? { violations: result.violations } : {}),
     }, { status: result.status ?? 400 });
-    if (result.pipeline.state !== "draft") requestPipelineTick();
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.warnings?.length ? { warnings: result.warnings } : {}) }, { status: 201 });
+    if (result.pipeline.state !== "draft" || result.queued) requestPipelineTick();
+    /* #1835: refused by the store before admission, so queued for the serving
+       release's controller; 202 says the record is not stored yet. */
+    return NextResponse.json({
+      ok: true,
+      pipeline: result.pipeline,
+      ...(result.queued ? { queued: result.queued } : {}),
+      ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+    }, { status: result.queued ? 202 : 201 });
   } catch (error) {
     /* #1766: the registry lock was never taken, so no pipeline was created.
        Say so, and say the same request may be repeated — a 500 leaves a caller
