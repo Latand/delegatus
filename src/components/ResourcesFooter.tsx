@@ -4,7 +4,7 @@ import { startTransition, useEffect, useRef, useState } from "react";
 
 import { createFreshAwareCoalescer } from "@/lib/asyncCoalescer";
 import { useLocale } from "@/lib/i18n";
-import type { ResourceSession, ResourcesPayload } from "@/lib/types";
+import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/types";
 
 import { X } from "./icons";
 import { AttachControls } from "./resources/AttachControls";
@@ -58,7 +58,7 @@ function MemoryRow({ label, usedPercent, color, note }: { label: string; usedPer
 /** A poll that failed or lost its system probe keeps the previous numbers on
     screen (same sticky pattern as LimitsFooter), marked stale from the first
     poll that had to lean on them. */
-interface ResourcesSnap {
+export interface ResourcesSnap {
   data: ResourcesPayload;
   at: number;
   staleSince: number | null;
@@ -105,10 +105,10 @@ export function createResourcesLoader(
   };
 }
 
-function stickySnap(prev: ResourcesSnap | null, next: ResourcesPayload, at: number): ResourcesSnap {
+export function stickySnap(prev: ResourcesSnap | null, next: ResourcesPayload, at: number): ResourcesSnap {
   const carriedSystem = next.system === null && (prev?.data.system ?? null) !== null;
   return {
-    data: { system: next.system ?? prev?.data.system ?? null, sessions: next.sessions },
+    data: { ...next, system: next.system ?? prev?.data.system ?? null },
     at,
     staleSince: carriedSystem ? (prev?.staleSince ?? at) : null,
   };
@@ -180,6 +180,9 @@ export function ResourcesFooter() {
 
   const system = snap?.data.system ?? null;
   const sessions = snap?.data.sessions ?? [];
+  const viewer = snap?.data.viewer ?? null;
+  const sessionsStale = snap?.data.sessionsStale === true;
+  const sessionsCapturedAt = snap?.data.sessionsCapturedAt ?? null;
   /* No probe ever succeeded and no sessions either: nothing to show. */
   if (!snap || (!system && sessions.length === 0)) return null;
 
@@ -188,7 +191,7 @@ export function ResourcesFooter() {
   const swapUsedPct = system && system.swapTotal > 0 ? (100 * system.swapUsed) / system.swapTotal : 0;
 
   return (
-    <div ref={panelRef} className="relative shrink-0 border-t border-border">
+    <div ref={panelRef} className="relative shrink-0 border-t border-border" data-resources-footer>
       <button
         type="button"
         aria-expanded={open}
@@ -196,10 +199,15 @@ export function ResourcesFooter() {
         onClick={() => setOpen((value) => !value)}
         className="block w-full px-3.5 pb-2.5 pt-2 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
-        {snap.staleSince ? (
+        {snap.staleSince || sessionsStale ? (
           <span
             className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-warning"
-            title={t("resources.stale", { stale: fmtAge(snap.staleSince) })}
+            data-testid="resources-stale-dot"
+            title={snap.staleSince
+              ? t("resources.stale", { stale: fmtAge(snap.staleSince) })
+              : sessionsCapturedAt
+                ? t("resources.sessionsStaleDot", { age: fmtAge(Date.parse(sessionsCapturedAt) / 1000) })
+                : t("resources.sessionsUnavailable")}
           />
         ) : null}
         {system ? (
@@ -218,6 +226,16 @@ export function ResourcesFooter() {
                 note={t("resources.used", { amount: fmtBytes(system.swapUsed) })}
               />
             ) : null}
+            {viewer ? (
+              <span
+                className="mt-1.5 flex items-baseline justify-between"
+                data-testid="resources-viewer-line"
+                title={t("resources.viewerHint")}
+              >
+                <span className="text-[11px] font-semibold text-primary">{t("resources.viewer")}</span>
+                <span className="text-[11px] tabular-nums text-muted">{viewerAmount(viewer, t)}</span>
+              </span>
+            ) : null}
             <span className="mt-1.5 block text-right text-[9.5px] tabular-nums text-muted">
               {t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) })}
             </span>
@@ -227,7 +245,15 @@ export function ResourcesFooter() {
         )}
       </button>
       {open ? (
-        <CleanupPanel sessions={sessions} now={snap.at} onRefresh={() => loadRef.current(true)} onClose={() => setOpen(false)} />
+        <CleanupPanel
+          sessions={sessions}
+          now={snap.at}
+          sessionsStale={sessionsStale}
+          sessionsCapturedAt={sessionsCapturedAt}
+          viewer={viewer}
+          onRefresh={() => loadRef.current(true)}
+          onClose={() => setOpen(false)}
+        />
       ) : null}
     </div>
   );
@@ -291,12 +317,20 @@ async function killSession(
 export function CleanupPanel({
   sessions,
   now,
+  sessionsStale = false,
+  sessionsCapturedAt = null,
+  viewer = null,
   onRefresh,
   onClose,
 }: {
   sessions: ResourceSession[];
   /** Unix seconds of the snapshot poll — the render-stable "now" for idle-age math. */
   now: number;
+  /** The rows come from an earlier capture a failed refresh fell back on. */
+  sessionsStale?: boolean;
+  sessionsCapturedAt?: string | null;
+  /** Delegatus's own processes, listed without any kill control. */
+  viewer?: ResourcesViewer | null;
   onRefresh: () => Promise<void>;
   onClose: () => void;
 }) {
@@ -401,8 +435,12 @@ export function CleanupPanel({
   const killAllCount = bulkKillTargets(sessions, tickedSeats).length;
 
   return (
-    <div className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(430px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[12px] border border-border bg-card shadow-2 sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0`}>
-      <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+    <div data-resources-panel className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(430px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[12px] border border-border bg-card shadow-2 sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0`}>
+      {/* The stale mark lives in the header, which never scrolls: a banner at
+          the top of the list scrolled away and left the counts, the rows and
+          the bulk controls reading as a current capture (#2110). */}
+      <header className="border-b border-border px-3 py-2">
+        <div className="flex items-center gap-2">
         <span className="text-[12.5px] font-bold">{t("resources.title")}</span>
         {sessions.length ? (
           <span className="text-[11px] tabular-nums text-muted" data-testid="resources-counts">
@@ -421,15 +459,27 @@ export function CleanupPanel({
         >
           <X className="h-3.5 w-3.5" aria-hidden />
         </button>
+        </div>
+        {sessionsStale ? (
+          <div
+            className="mt-1.5 rounded-[8px] border border-warning/50 bg-warning/10 px-2.5 py-1.5 text-[11px] font-semibold text-warning"
+            data-testid="resources-sessions-stale"
+          >
+            {sessionsCapturedAt
+              ? t("resources.sessionsStale", { age: fmtAge(Date.parse(sessionsCapturedAt) / 1000) })
+              : t("resources.sessionsUnavailable")}
+          </div>
+        ) : null}
       </header>
       <div className="max-h-[min(420px,60vh)] overflow-y-auto py-1">
         {sessions.length === 0 ? (
-          <div className="px-3 py-4 text-center text-[12px] text-muted">{t("resources.empty")}</div>
+          sessionsStale ? null : <div className="px-3 py-4 text-center text-[12px] text-muted">{t("resources.empty")}</div>
         ) : (
           sessions.map((session) => (
             <SessionRow
               key={session.target}
               session={session}
+              stale={sessionsStale}
               busy={busy.has(session.target)}
               armed={armed === session.target}
               seatTicked={tickedSeats.has(session.target)}
@@ -440,6 +490,7 @@ export function CleanupPanel({
             />
           ))
         )}
+        {viewer ? <ViewerSection viewer={viewer} /> : null}
       </div>
       <footer className="flex items-center gap-2 border-t border-border px-3 py-2">
         <span className="text-[11px] text-muted">{t("resources.bulkLabel")}</span>
@@ -512,6 +563,51 @@ export function CleanupPanel({
   );
 }
 
+function viewerAmount(viewer: ResourcesViewer, t: ReturnType<typeof useLocale>["t"]): string {
+  return fmtBytes(viewer.rssBytes) + (viewer.swapBytes > 0 ? " " + t("resources.swapShare", { amount: fmtBytes(viewer.swapBytes) }) : "");
+}
+
+const VIEWER_ROLE_COPY = {
+  server: "resources.viewerServer",
+  "runtime-host": "resources.viewerRuntimeHost",
+  worker: "resources.viewerWorker",
+} as const;
+
+/** Delegatus's own processes (#1817). Listed so every capacity judgement sees
+    the memory the release itself holds; no row carries a kill control, since
+    ending any of them ends Delegatus itself. */
+function ViewerSection({ viewer }: { viewer: ResourcesViewer }) {
+  const { t } = useLocale();
+  return (
+    <section className="mt-1 border-t border-border px-3 pb-1 pt-2" data-testid="resources-viewer-section" aria-label={t("resources.viewerTitle")}>
+      <div className="flex items-baseline gap-2">
+        <span className="text-[11.5px] font-bold text-primary">{t("resources.viewerTitle")}</span>
+        <span className="ml-auto shrink-0 text-[11px] font-bold tabular-nums">{viewerAmount(viewer, t)}</span>
+      </div>
+      <p className="mt-0.5 text-[10.5px] leading-snug text-muted">{t("resources.viewerHint")}</p>
+      <ul className="mt-1">
+        {viewer.processes.map((item) => (
+          <li
+            key={item.pid}
+            className="flex items-baseline gap-2 py-0.5"
+            data-testid="resources-viewer-process"
+            title={[item.name, "pid " + item.pid, t("resources.procs", { count: item.procCount })].join(" · ")}
+          >
+            <span className="min-w-0 flex-1 truncate text-[11px]">
+              <span className="font-semibold">{t(VIEWER_ROLE_COPY[item.role])}</span>
+              {item.role === "worker" ? <span className="text-muted">{" · " + item.name}</span> : null}
+            </span>
+            <span className="shrink-0 text-right text-[11px] tabular-nums text-muted">
+              {fmtBytes(item.rssBytes)}
+              {item.swapBytes > 0 ? " " + t("resources.swapShare", { amount: fmtBytes(item.swapBytes) }) : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** Last two path segments — enough to recognize a worktree or project dir. */
 function tailPath(dir: string): string {
   const parts = dir.split("/").filter(Boolean);
@@ -527,6 +623,7 @@ const OWNERSHIP_COPY = {
 
 function SessionRow({
   session,
+  stale = false,
   busy,
   armed,
   seatTicked,
@@ -536,6 +633,8 @@ function SessionRow({
   onRefresh,
 }: {
   session: ResourceSession;
+  /** The row comes from an earlier capture a failed refresh fell back on. */
+  stale?: boolean;
   busy: boolean;
   armed: boolean;
   seatTicked: boolean;
@@ -565,17 +664,30 @@ function SessionRow({
      agent mid-turn with one stray tap. */
   const needsArm = live && !armed;
   return (
-    <div className="px-3 py-1.5 hover:bg-canvas" data-testid={structured ? "resource-host-row" : "resource-pane-row"} data-target={session.target}>
-      <div className="flex items-center gap-2">
-        <span className={`h-2 w-2 shrink-0 rounded-full ${activityDot(session.activity ?? "idle")}`} />
+    <div
+      className={`px-3 py-1.5 hover:bg-canvas ${stale ? "opacity-70" : ""}`}
+      data-testid={structured ? "resource-host-row" : "resource-pane-row"}
+      data-target={session.target}
+      data-stale={stale ? "true" : undefined}
+    >
+      {/* The chips take a second line under the title. The panel is never
+          wider than 430 px, and in one line the ownership badge and the seat
+          tick left an orchestrator's title 8 px in Ukrainian and pushed Kill
+          out of the panel on a phone. */}
+      <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1">
+        {/* A stale row's activity is what it was at capture time; a green dot
+            would claim a turn nobody has seen running since. The kill guard
+            above still reads it, so a host that was live then stays armed. */}
+        <span className={`h-2 w-2 shrink-0 rounded-full ${stale ? "border border-strong" : activityDot(session.activity ?? "idle")}`} />
         <span
           className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
           style={{ backgroundColor: tint.soft, color: tint.color }}
         >
-          {session.engine === "codex" ? "Codex" : session.engine === "claude" ? "Claude" : "?"}
+          {session.engine === "codex" ? "Codex" : session.engine === "claude" ? "Claude" : session.engine === "copilot" ? "Copilot" : "?"}
         </span>
         <span
           className="min-w-0 flex-1"
+          data-resource-title
           title={[session.cwd, session.target, t("resources.procs", { count: session.procCount })].filter(Boolean).join(" · ")}
         >
           <span className="block truncate text-[12px] font-semibold">
@@ -593,6 +705,17 @@ function SessionRow({
             {session.turnBusy === true ? " · " + t("resources.hostBusy") : ""}
           </span>
         </span>
+        {stale || ownership || session.seat === true || (structured && (session.seat === null || session.seat === undefined)) ? (
+          <span className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 col-start-3 row-start-2">
+        {stale ? (
+          <span
+            className="shrink-0 rounded-full border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[9.5px] font-semibold text-warning"
+            data-testid="resource-row-stale"
+            title={t("resources.rowStaleHint")}
+          >
+            {t("resources.rowStale")}
+          </span>
+        ) : null}
         {ownership ? (
           <span
             className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9.5px] font-semibold ${ownership.tone}`}
@@ -620,7 +743,9 @@ function SessionRow({
             {t("resources.hostSeatUnknown")}
           </span>
         ) : null}
-        <span className="shrink-0 text-right">
+          </span>
+        ) : null}
+        <span className="col-start-4 row-start-1 shrink-0 text-right">
           <span className="block text-[11.5px] font-bold tabular-nums">{fmtBytes(session.rssBytes)}</span>
           {session.swapBytes > 0 ? (
             <span className="block text-[10px] tabular-nums text-muted">
@@ -635,7 +760,7 @@ function SessionRow({
           title={live ? t("resources.killLiveHint") : t(structured ? "resources.killHostHint" : "resources.killHint")}
           onClick={() => (needsArm ? onArm() : onKill())}
           className={[
-            "inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-[8px] border px-2 py-1 text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 sm:min-h-0 sm:min-w-0",
+            "inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-[8px] border px-2 py-1 text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 col-start-5 row-start-1 sm:min-h-0 sm:min-w-0",
             busy ? "cursor-wait opacity-50" : "",
             armed
               ? "border-danger bg-danger text-white"
