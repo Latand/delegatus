@@ -628,7 +628,7 @@ export class TelegramBotService {
       if (claim.row.state === "failed") {
         throw new TelegramBotError("send_partial", `an earlier send under this clientRequestId posted only part of its text (message ids ${claim.row.messageIds.join(", ")}); send only the remaining text, under a new clientRequestId`, { sentMessageIds: claim.row.messageIds });
       }
-      throw new TelegramBotError("send_uncertain", "an earlier send under this clientRequestId never finished, so it may already be posted; check telegram_bot_messages before sending again under a new clientRequestId");
+      throw new TelegramBotError("send_uncertain", "an earlier send under this clientRequestId never finished, so it may already be posted and the bot cannot check; send again under a new clientRequestId only if a duplicate is acceptable");
     }
 
     const transport = this.transport();
@@ -660,6 +660,11 @@ export class TelegramBotService {
           store.completeSend({ callerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now: this.deps.now() });
           store.failSend(callerKey, clientRequestId, "send_partial", sent.map((message) => message.messageId));
           throw new TelegramBotError("send_partial", `parts 1–${sent.length} of ${parts.length} were posted (message ids ${sent.map((message) => message.messageId).join(", ")}); the rest failed: ${error.message}. Send only the remaining text, under a new clientRequestId`, { sentMessageIds: sent.map((message) => message.messageId) });
+        }
+        if (result.kind === "timed_out") {
+          /* Telegram may have posted it. The row stays pending, so a retry
+             under this key answers send_uncertain instead of posting twice. */
+          throw new TelegramBotError("send_uncertain", "Telegram did not answer in time, so the message may already be posted and the bot cannot check; send again under a new clientRequestId only if a duplicate is acceptable");
         }
         store.failSend(callerKey, clientRequestId, error.code, []);
         throw error;

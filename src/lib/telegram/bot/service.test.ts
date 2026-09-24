@@ -287,6 +287,23 @@ test("a repeated clientRequestId answers the first post and never posts again; a
   await hanging;
 });
 
+test("a send Telegram did not answer in time stays uncertain and is never posted again under its key", async () => {
+  await allowedTeam();
+  transport.script("sendMessage", unreachable("timed_out"));
+  const timedOut = await refusal(() => service.send({ conversationId: "conversation_writer", clientRequestId: "req-slow", chat: "team-reports", text: "slow" }));
+  expect(timedOut.code).toBe("send_uncertain");
+  expect(timedOut.retryable).toBe(false);
+  const again = await refusal(() => service.send({ conversationId: "conversation_writer", clientRequestId: "req-slow", chat: "team-reports", text: "slow" }));
+  expect(again.code).toBe("send_uncertain");
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+
+  /* Unreachable means nothing went out, so the same key may try again. */
+  transport.script("sendMessage", unreachable("network_failed"));
+  expect((await refusal(() => service.send({ conversationId: "conversation_writer", clientRequestId: "req-down", chat: "team-reports", text: "down" }))).code).toBe("network_failed");
+  transport.script("sendMessage", ok({ message_id: 62, date: T0 + 102 }));
+  expect(await service.send({ conversationId: "conversation_writer", clientRequestId: "req-down", chat: "team-reports", text: "down" })).toMatchObject({ messageIds: [62], alreadySent: false });
+});
+
 test("long plain text is split into at most four parts; only the first replies; html is never split", async () => {
   await allowedTeam();
   let id = 70;
