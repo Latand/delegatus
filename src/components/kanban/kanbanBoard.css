@@ -1221,13 +1221,15 @@
 /* Below a desktop width the head cannot hold the title and the lane's
    controls in one row (at 820 px the title kept 40 px), so the controls take
    a line of their own, at its end (#2148). Everything else stays on the first
-   line: the title and the progress start from nothing and share what is left,
-   so they ellipsize rather than wrap. */
+   line: the title and the progress start from nothing and grow to at most
+   their own width, so they ellipsize rather than wrap, and the space left over
+   goes before the Graph toggle. */
 @media (max-width: 1023px) {
   .kb .gsheet header { flex-wrap: wrap; }
-  .kb .gsheet header h2 { flex: 2 1 0; }
-  .kb .gsheet header .progress { flex: 1 1 0; }
+  .kb .gsheet header h2 { flex: 2 1 0; max-width: max-content; }
+  .kb .gsheet header .progress { flex: 1 1 0; max-width: max-content; }
   .kb .gsheet header .grow { display: none; }
+  .kb .gsheet header .gtoggle { margin-left: auto; }
   .kb .gsheet header .lane-bar { order: 10; flex-basis: 100%; justify-content: flex-end; padding-right: 0; margin-right: 0; border-right: 0; }
 }
 @media (pointer: coarse) {

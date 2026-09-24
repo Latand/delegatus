@@ -1,0 +1,327 @@
+{
+  "readings": {
+    "no-preference": {
+      "button": "Details",
+      "answer": "Retry Implement",
+      "presses": {
+        "btn": {
+          "selector": "[data-press-probe=\"btn\"]",
+          "width": 73,
+          "x": 569,
+          "pressedLeft": 569.46,
+          "scale": "0.96",
+          "hitInside": true,
+          "hit": "button.btn.quiet.details-toggle",
+          "clicks": 1
+        },
+        "btn-no-hit-layer": {
+          "selector": "[data-press-probe=\"btn\"]",
+          "width": 73,
+          "x": 569,
+          "pressedLeft": 569.46,
+          "scale": "0.96",
+          "hitInside": true,
+          "hit": "button.btn.quiet.details-toggle",
+          "clicks": 1
+        },
+        "answer": {
+          "selector": "[data-press-probe=\"answer\"]",
+          "width": 212,
+          "x": 783.16,
+          "pressedLeft": 786.39,
+          "scale": "0.96",
+          "hitInside": true,
+          "hit": "button.pb-act.primary",
+          "clicks": 1
+        },
+        "answer-no-hit-layer": {
+          "selector": "[data-press-probe=\"answer\"]",
+          "width": 212,
+          "x": 783.16,
+          "pressedLeft": 786.39,
+          "scale": "0.96",
+          "hitInside": false,
+          "hit": "div.pb-actions",
+          "clicks": 0
+        }
+      },
+      "history": {
+        "closed": 22,
+        "heights": [
+          22,
+          38.2,
+          88.2,
+          120.7,
+          141,
+          154.9,
+          164.7,
+          171.9,
+          177,
+          180.6,
+          183,
+          184.2,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6
+        ],
+        "settled": 184.6,
+        "open": false
+      },
+      "reversed": {
+        "closed": 22,
+        "heights": [
+          22,
+          38.2,
+          88.2,
+          120.7,
+          141,
+          116.2,
+          74,
+          52.8,
+          40.2,
+          32.1,
+          26.9,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22,
+          22
+        ],
+        "settled": 22,
+        "open": false
+      },
+      "sheet": [
+        0,
+        0,
+        0.1,
+        0.41,
+        0.61,
+        0.82,
+        0.88,
+        0.95,
+        0.98,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "reduce": {
+      "button": "Details",
+      "answer": "Retry Implement",
+      "presses": {
+        "btn": {
+          "selector": "[data-press-probe=\"btn\"]",
+          "width": 73,
+          "x": 569,
+          "pressedLeft": 568,
+          "scale": "none",
+          "hitInside": true,
+          "hit": "button.btn.quiet.details-toggle",
+          "clicks": 1
+        },
+        "answer": {
+          "selector": "[data-press-probe=\"answer\"]",
+          "width": 212,
+          "x": 783.16,
+          "pressedLeft": 782.16,
+          "scale": "none",
+          "hitInside": true,
+          "hit": "button.pb-act.primary",
+          "clicks": 1
+        }
+      },
+      "history": {
+        "closed": 22,
+        "heights": [
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6,
+          184.6
+        ],
+        "settled": 184.6,
+        "open": false
+      },
+      "reversed": null,
+      "sheet": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "card": {
+      "pills": 0,
+      "opacity": {
+        "rest": "0.35",
+        "hovered": "1",
+        "focused": "1"
+      },
+      "placed": {
+        "gapX": 0,
+        "gapY": 4,
+        "radios": 4
+      }
+    },
+    "sheet-head-640": {
+      "header": {
+        "left": 0,
+        "right": 640,
+        "top": 0,
+        "bottom": 79,
+        "width": 640
+      },
+      "title": {
+        "left": 12,
+        "right": 263,
+        "top": 13,
+        "bottom": 31,
+        "width": 251
+      },
+      "laneBar": {
+        "left": 12,
+        "right": 634,
+        "top": 44,
+        "bottom": 72,
+        "width": 622
+      },
+      "close": {
+        "left": 606,
+        "right": 634,
+        "top": 8,
+        "bottom": 36,
+        "width": 28
+      },
+      "overflow": 0
+    },
+    "sheet-head-820": {
+      "header": {
+        "left": 13,
+        "right": 807,
+        "top": 13,
+        "bottom": 102,
+        "width": 794
+      },
+      "title": {
+        "left": 93,
+        "right": 337,
+        "top": 27,
+        "bottom": 49,
+        "width": 244
+      },
+      "laneBar": {
+        "left": 29,
+        "right": 797,
+        "top": 65,
+        "bottom": 93,
+        "width": 768
+      },
+      "close": {
+        "left": 769,
+        "right": 797,
+        "top": 24,
+        "bottom": 52,
+        "width": 28
+      },
+      "overflow": 0
+    },
+    "sheet-head-1100": {
+      "header": {
+        "left": 13,
+        "right": 1087,
+        "top": 13,
+        "bottom": 65,
+        "width": 1074
+      },
+      "title": {
+        "left": 93,
+        "right": 323,
+        "top": 28,
+        "bottom": 49,
+        "width": 230
+      },
+      "laneBar": {
+        "left": 558,
+        "right": 843,
+        "top": 25,
+        "bottom": 53,
+        "width": 285
+      },
+      "close": {
+        "left": 1049,
+        "right": 1077,
+        "top": 25,
+        "bottom": 53,
+        "width": 28
+      },
+      "overflow": 0
+    }
+  },
+  "failures": []
+}
