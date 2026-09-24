@@ -1,8 +1,9 @@
 # Activity dashboard: human interaction time and agent activity per project
 
-- Status: design for a prototype (one builder stage, PR left open, no deploy, no merge)
+- Status: prototype built (one builder stage, PR left open, no deploy, no merge)
 - Grounded base: `main` at `bfd58b846fa21e84138b7e74f64f0fb34c73b852`
 - Prior work read: #473 (WakaTime integration), #763 and its landed Phase 0 (#767, #1017, #1623), the scanner activity model, the view presence heartbeat, the transcript search index
+- Revised by three operator corrections on 2026-09-24 (below). Where the first draft of this document and a correction disagree, the correction wins and the text here already follows it.
 
 ## Originating requirement
 
@@ -27,10 +28,10 @@ The pinned specification added the views (per day with a day strip and
 totals, per project with a ranking and breakdown, a Today / 7 days / 30 days
 picker) and the rules on sources, privacy, the #zvit fence and no deployment.
 
-### Operator correction, 2026-09-24 (paraphrased by the orchestrator)
+### Operator correction 1: supervised agent work is the operator's work
 
 It replaces the specification line "agent work never counts toward human
-hours" and is the basis of the counting method below.
+hours" (paraphrased by the orchestrator):
 
 > 1. Supervised agent work IS the operator's work. After each real operator
 >    request the operator is watching the agent: at least a 10-15 minute
@@ -49,474 +50,516 @@ hours" and is the basis of the counting method below.
 >    method (window length, T, rounding) and say which values are defaults.
 >    Do not change the #zvit path itself.
 
-The elided part of point 4 points at the operator's reference memory
-`worktime-zvit-method.md` and restates both versions of the method. They are
-summarised in [Counting method](#counting-method) below.
+### Operator correction 2: human input comes from more than one host
+
+Paraphrased. A worktime scan that read only this workstation reported no paid
+activity for 2026-09-23 after the client work moved to a separate stage host.
+A read-only inventory of that host found 81 candidate human-input records for
+2026-09-23 and 91 for 2026-09-22, all real operator decisions. A calculation
+that reads one host therefore undercounts without saying so. Required:
+
+1. Every human-input event carries its host and source. Each host is read
+   through a pluggable source; hosts that are not connected are listed, and a
+   day or project whose host was not read shows coverage *unknown*. A zero is
+   shown only when every expected source was read.
+2. Copies are deduplicated by stable prompt or message ids across mirrors,
+   account-store copies, resumes, continuations and fan-out, with a documented
+   (timestamp, canonical-hash) rule only where no id exists.
+3. Agent relays, generated stage prompts, spawn, bridge and injected prompts
+   and automation are never human input.
+4. Human time stays its own axis beside agent time (correction 1).
+5. Privacy is unchanged: events carry ids, times, a host, a project and a kind.
+6. Tests: two hosts where only the remote one has input (hours come from it,
+   coverage complete); the same with the remote host missing (coverage unknown,
+   never zero); a mirror and continuation duplicate counted once; a relay and a
+   stage prompt excluded. One render shows the unknown-coverage state.
+
+### Operator correction 3: six counting rules from a real recount
+
+Paraphrased. A recount the operator had to fix on 2026-09-24 roughly doubled
+once the stage host was read; one day went from 0 h to 8.5 h. The rules:
+
+1. **Every host with a Viewer or agent transcript store is a source.** Client
+   work runs through a stage Viewer on another host, which the local Codex
+   home, account stores and shared mirror never see. An unread host is unknown.
+2. **Dedupe across stores by prompt id or event id.** The same message sits in
+   shared mirrors and account stores, sometimes on both machines. Id-less
+   copies with identical canonical content within 90 s count once; only a hash
+   is stored.
+3. **Count only real operator input.** Exclude spawn and role scaffolds,
+   reviewer, auditor and deployer templates, bridge, automation and recovery
+   notifications, injected skill hints, auto-attached screenshots, and
+   worker-to-manager messages that arrive with role=user. The reliable positive
+   signal is the `llv:structured-user` operator-origin marker; unmarked
+   role=user records are treated conservatively and counted per exclusion
+   reason.
+4. **Sessions span days.** Every message is bucketed by its own timestamp in
+   Europe/Kyiv (configurable), never by the session's start date or directory.
+5. **Project attribution comes from the conversation's context** (its project,
+   cwd or task binding), never from words in the text.
+6. **Sanity check.** A workday with 0 h human time while an expected source is
+   unread, or while agent activity shows the operator was working somewhere, is
+   flagged as a probable missing source and never presented as a clean zero.
+
+The method itself was restated: each operator message opens a 10-minute
+window, windows combine within each clock hour, 10-39 minutes weigh 0.5 h and
+40 or more 1 h, and one hour goes to one project. Billable tagging is a
+setting; the dashboard covers every project and the paid report path is
+untouched.
 
 ## Decision
 
-1. **Human axis.** Each validated direct-operator request is recorded once, at
-   the server ingress that admits it, into a new local append-only request
-   ledger. The ledger holds a timestamp, a kind, a surface, a project key and a
-   dedupe key. It does not depend on `LLV_WAKATIME_ENABLED` and it does not
-   touch the WakaTime queue. Human time is the operator's episode method
-   applied to those requests (defaults: 10-minute window, 30-minute break,
-   rounding to the nearest half hour).
-2. **Agent axis.** Agent activity is built from the full-history transcript
-   search index that the Viewer already maintains (`transcript-search.sqlite`).
-   The query reads only path, speaker and timestamp. A turn is taken as the span
-   from a user message to the last assistant message before the next user
-   message. Provenance comes from registry and pipeline joins: engine, role,
-   pipeline, stage and conversation.
-3. **Overlap.** Agent wall-clock time is split into *supervised* (inside a
-   human episode of the same project) and *unattended* (everything else). The
-   two axes are shown side by side and neither is subtracted from the other.
-4. **Page.** A `/activity` page with desktop and phone layouts, backed by a
-   pure calculation module and one `GET /api/activity` route.
-5. **Coverage.** Human history starts on the day the ledger is installed.
-   Earlier days are drawn as *not recorded*, which is different from zero.
-   Every gap below is also shown in the UI.
+1. **Human axis: human-input events from every expected host.** An event is
+   `{ ids, at, host, source, project, kind, surface, hash }`. Two sources exist
+   and more can be added behind the same interface:
+   - `ledger`: this host's request ledger, written at each direct-operator
+     ingress (exact, with the browser surface), from its first row on.
+   - `transcripts`: an export file per host, produced on that host by
+     `scripts/export-human-input.ts` from all of its transcript stores, keeping
+     only real operator input, and copied into `activity/hosts/<host>/`.
+2. **Coverage.** The expected hosts are this one, the hosts in
+   `activity/hosts.json`, and any host with an export directory. The stretch a
+   host's sources did not cover is *unknown* for the projects that host holds.
+   A figure missing a host is a lower bound (`≥`); nothing read is `Unknown`.
+3. **Counting method.** The operator's method, parameterised: engagement
+   window `W`, episode threshold `T`, rounding. Defaults follow the restated
+   method and the recount that used it: `W = 10`, `T = W`, clock-hour weights,
+   Europe/Kyiv. `T = 30` with half-hour rounding is the 2026-07-29 refinement.
+4. **Agent axis.** From the full-history transcript search index on this host
+   (path, speaker and time only), joined to the registry for conversation, role
+   and pipeline stage, split into *supervised* (inside a human episode of the
+   same project) and *unattended*.
+5. **Sanity flag.** A zero-hour workday with an unread source or with at least
+   30 minutes of agent wall-clock is a probable missing source.
+6. **Page.** `/activity`, desktop and phone, backed by the pure module
+   `src/lib/activity/method.ts` and one `GET /api/activity`.
 
 ## Prior work: what is reused and what is wrong or missing
 
 | prior work | what it is | reused | wrong or missing for this dashboard |
 |---|---|---|---|
-| #473 WakaTime sync (`src/lib/wakatime/sync.ts`, `docs/design/wakatime-integration.md`) | 60 s scheduler that turns scanner turn windows into WakaTime heartbeats | the idea of turn windows, and the operator/agent provenance split | Agent turns and operator points go onto **one** WakaTime timeline, which unions them (`docs/wakatime.md`, "Activity mapping"), so WakaTime totals cannot supply either axis on its own. The stream state is keyed by opaque digests with no role or pipeline, and it exists only while enabled. It also needs an external account and network. Rejected as a source. |
-| #763 Phase 0 (`src/lib/wakatime/operatorActivity.ts`) | `recordDirectOperatorWakatimeActivity` at every validated operator ingress | **the ingress sites and the authority rule**: they are exactly the request events the method needs | Returns `null` unless `LLV_WAKATIME_ENABLED=1` (`operatorActivity.ts:69`). A point is queued in the WakaTime outbox and deleted after delivery, so nothing local survives. It carries no surface and no kind. When attribution fails it throws, and callers refuse the action (`http.ts:267`, `tasks/[id]/spawn/route.ts:318`). A dashboard ledger must never do that. |
-| #763 issue body (never built) | operator-event ledger, 30-min episodes, `max(last - first, 10 min)`, 0.5 h rounding, #zvit delivery | T = 30 min and 0.5 h rounding survive as defaults | The ledger, episode calculator and rollup were never implemented. The issue closed on Phase 0, which re-scoped it to WakaTime emission. `max(last - first, 10 min)` gives the **last** request of a long episode no window, which the correction rules out ("at least a 10-15 minute engagement window per request"). The delivery half belongs to #zvit and stays out of scope. |
-| scanner activity model (`src/lib/scanner/activity.ts`) | point-in-time liveness: `live` / `recent` / `stalled` / `idle` from mtime and tail turn state (20 s, 180 s, 900 s; `activity.ts:425-455`) | nothing for ranges | It has no history: every verdict is relative to *now*. `recentTurnWindowsFor` (`turnDuration.ts:131`) parses only the 128 KiB tail (`activity.ts:350`). Of the 2,135 transcripts written in the last 30 days (5.2 GB), 2,026 are larger than that tail, so tail windows cannot reconstruct a week. |
-| view presence heartbeat (`src/hooks/useViewPresence.ts`, `src/lib/view/presenceStore.ts`) | every 10 s: device kind, visibility, `inputSequence` on pointerdown / keydown / touchstart / wheel, project on screen | the device classification (`detectDeviceKind`, `useViewPresence.ts:71`) moves to a shared pure module | It keeps 120 s of state (`presenceStore.ts:34`). It measures screen input, which is not a request, so the method does not count it (see Deferred). A new view session counts as an interaction on its first heartbeat, with no input (`presenceStore.ts:249`), so it would inflate time if it were ever used. |
-| transcript search index (`src/lib/search/transcriptSearch.ts`) | incremental full-history index of user and assistant message rows with timestamps, project and engine | **the agent-axis source** | It holds no tool-only records, so it can only approximate turns (measured below). It has no index on time: a range query scans the table (measured below). |
+| #473 WakaTime sync (`src/lib/wakatime/sync.ts`, `docs/design/wakatime-integration.md`) | 60 s scheduler that turns scanner turn windows into WakaTime heartbeats | the idea of turn windows, and the operator/agent provenance split | Agent turns and operator points go onto **one** WakaTime timeline, which unions them (`docs/wakatime.md`, "Activity mapping"), so WakaTime totals cannot supply either axis on its own. The stream state is keyed by opaque digests with no role or pipeline, and it exists only while enabled. It needs an external account and network. Rejected as a source. |
+| #763 Phase 0 (`src/lib/wakatime/operatorActivity.ts`) | `recordDirectOperatorWakatimeActivity` at every validated operator ingress | **the ingress sites and the authority rule** | Returns `null` unless `LLV_WAKATIME_ENABLED=1`. A point is queued in the WakaTime outbox and deleted after delivery, so nothing local survives. It carries no surface and no kind. When attribution fails it throws, and callers refuse the action. The dashboard ledger never refuses. |
+| #763 issue body (never built) | operator-event ledger, 30-min episodes, 0.5 h rounding, #zvit delivery | the episode parameterisation | Never implemented. Its `max(last - first, 10 min)` gives the last request of a long episode no window, which correction 1 rules out. The delivery half belongs to #zvit and stays out of scope. |
+| scanner activity model (`src/lib/scanner/activity.ts`) | point-in-time liveness from mtime and tail turn state | nothing for ranges | It has no history: every verdict is relative to *now*, and its tail parse covers under 5% of recent transcripts. |
+| view presence heartbeat (`src/hooks/useViewPresence.ts`) | device kind, visibility and input sequence every 10 s | the device rule, moved to `src/lib/view/device.ts` | Screen input is not a request; a new view session counts as input on its first heartbeat. Not used for time. |
+| transcript search index (`src/lib/search/transcriptSearch.ts`) | incremental full-history index of message rows | **the agent-axis source** | No tool-only records, so turns are approximate (measured below); no time index before this change. It cannot supply human input: it drops the provenance fields the operator-only rule needs. |
+| delivery provenance (`src/lib/runtime/claudeMessageProvenance.ts`, `submissionIdentity.ts`, `codexStructuredUserText.ts`) | per-row operator/agent origin of Delegatus deliveries, and the client message id | **the positive operator signal and the request key** | Present only on a host that runs Delegatus and still holds its delivery ledgers. |
 
 ## Sources inventory
 
-### Human axis: direct-operator request ingress (recorded by the new ledger)
+### Human axis, source 1: the request ledger (this host)
 
 Every site below already classifies the caller with
-`directOperatorActivityAuthority` (`src/lib/agent/operatorAuthority.ts:139`).
-That function refuses agents that present their conversation capability and
-Viewer-internal services (monitor, MCP, orchestrator) that present the signed
-service header. Anything else that is same-origin counts as the operator.
+`directOperatorActivityAuthority` (`src/lib/agent/operatorAuthority.ts:139`),
+which refuses agents that present their conversation capability and Viewer
+services (monitor, MCP, orchestrator) that present the signed service header.
+The ledger call sits beside the WakaTime call, after it, and never refuses.
 
-| # | surface of the request | kind | site | status |
-|---|---|---|---|---|
-| 1 | browser composer send (legacy host path) | `message` | `src/app/api/conversation-host/handlers.ts:133-148` (`recordAuthorizedOperatorActivity`), called at `:387` | existing WakaTime hook; add ledger |
-| 2 | dialog key in a pending CLI dialog | `dialog` | same helper, called at `handlers.ts:291` | existing; add ledger |
-| 3 | structured send / steer / inject / answer | `message` (`answer` for answer) | `src/lib/runtime/http.ts:257-266` | existing; add ledger |
-| 4 | pending-question answer | `answer` | `src/app/api/answer/route.ts:128-130` | existing; add ledger |
-| 5 | task send (fan-out to the task's agents) | `message`, recorded once per request | `src/app/api/tasks/[id]/send/route.ts:89-91` | existing; add ledger |
-| 6 | task spawn | `spawn` | `src/app/api/tasks/[id]/spawn/route.ts:311-313` | existing; add ledger |
-| 7 | direct spawn | `spawn` | `src/lib/agent/spawnCommand.ts:454-470` | existing; add ledger |
-| 8 | voice: final user utterance in a live realtime call | `voice` | `src/lib/runtime/realtimeControl.ts:405-419` (only the live realtime peer is admitted) | existing; add ledger |
-| 9 | pipeline decision answer | `decision` | `src/app/api/pipelines/[id]/route.ts:57`, action `resolve-decision`, after success | **new** |
-| 10 | pipeline create | `pipeline` | `src/app/api/pipelines/route.ts:112`, after success | **new** |
-| 11 | task create, and task edit of text / details / status | `task` | `src/app/api/tasks/route.ts:29`, `src/app/api/tasks/[id]/route.ts:20`, after success | **new** |
+| # | surface of the request | kind | site (current tree) |
+|---|---|---|---|
+| 1 | browser composer send (legacy host path) | `message` | `src/app/api/conversation-host/handlers.ts:150` |
+| 2 | dialog key in a pending CLI dialog | `dialog` | same helper, called for `dialog-key` |
+| 3 | structured send / steer / inject / answer | `message`, `answer` | `src/lib/runtime/http.ts:275` |
+| 4 | pending-question answer | `answer` | `src/app/api/answer/route.ts:141` |
+| 5 | task send, recorded once however many agents it reaches | `message` | `src/app/api/tasks/[id]/send/route.ts:106` |
+| 6 | task spawn | `spawn` | `src/app/api/tasks/[id]/spawn/route.ts:324` |
+| 7 | direct spawn | `spawn` | `src/lib/agent/spawnCommand.ts:478` |
+| 8 | final utterance in a live voice call | `voice` | `src/lib/runtime/realtimeControl.ts:427` (user agent passed by `src/app/api/runtime/realtime/route.ts`) |
+| 9 | pipeline decision answer | `decision` | `src/app/api/pipelines/[id]/route.ts:96` |
+| 10 | pipeline create | `pipeline` | `src/app/api/pipelines/route.ts:140` |
+| 11 | task create, and task edit of text, details or status | `task` | `src/app/api/tasks/route.ts:64`, `src/app/api/tasks/[id]/route.ts:56` |
 
-Board layout moves, colours, hide/show, pins and attention dismissals are
-interaction, but they are not requests: they instruct no agent. The method
-does not count them, so they are not recorded.
+Board moves, colours, icons, links and hides instruct no agent and are not
+recorded. **Surface** comes from the request's `User-Agent` through
+`requestSurface` (`src/lib/view/device.ts`): `desktop`, `tablet`, `phone`, or
+`other` for a caller with no browser user agent. Delegatus ships no native
+desktop app, so "web" and "desktop" are one surface: a desktop browser.
 
-**Surface** comes from the request's `User-Agent`, classified with the same
-rule the presence heartbeat uses. `detectDeviceKind` moves from
-`src/hooks/useViewPresence.ts:71` to a pure `src/lib/view/device.ts` that both
-sides import. The classes are `desktop`, `tablet`, `phone` and `other` (no
-browser user agent, for example a script calling the same-origin API).
-Delegatus ships no native desktop application and no installable web-app
-manifest (`public/` holds no manifest). The spec's "web" and "desktop" are
-therefore one surface as far as the server can tell: a desktop browser. The
-UI says so.
+### Human axis, source 2: a host's transcript export
+
+`scripts/export-human-input.ts` runs on the host it reads. Its core is
+`src/lib/activity/transcriptExport.ts` and the rules are in
+`src/lib/activity/humanInput.ts`.
+
+| fact | where it comes from |
+|---|---|
+| the stores | the Claude and Codex homes (`ROOTS`, `src/lib/scanner/roots.ts`), every account store and retired archive (`claudeProjectRoots`, `codexSessionRoots`), the shared mirror (`sharedClaudeProjectsRoot`), and any `--root` |
+| which files | every `.jsonl` modified since the window began (`listTranscriptFiles`); the date directory a session was filed under is ignored |
+| Claude record | `type: "user"` with text: `uuid`, `promptId`, `promptSource` (`typed`, `sdk`, `system`), `turnOrigin`, `isMeta`, `isSidechain`, `isCompactSummary`, `entrypoint`, `cwd`, `timestamp` (`parseClaudeUserRecord`) |
+| Codex record | `response_item` message with role `user`: its `id`, the `llv:structured-user` marker (origin and delivery key), `timestamp`; the session's `session_meta` `originator`, `source` and `cwd` (`parseCodexUserRecord`, `codexSessionKind`) |
+| origin of a delivery | the marker; otherwise `claudeMessageProvenance` and `submissionIdentities` on a host that runs Delegatus, which also give the client message id |
+| how a conversation was launched | the host registry: a pipeline membership (stage), a lineage edge or delegation depth of 1 or more (delegated spawn), otherwise the operator |
+| project | the registry's ownership, else the conversation's cwd through `resolveProjectAttribution` |
+
+The export is placed under `activity/hosts/<host>/` on the host that runs the
+dashboard. The source reads every file there; each file's manifest names the
+span it speaks for (`exportSource`, `src/lib/activity/hostSources.ts`).
+
+### Expected hosts and settings
+
+| file | shape | default when absent |
+|---|---|---|
+| `activity/hosts.json` | `{ v: 1, local: { id, label }, hosts: [{ id, label, projects, since }] }` | this host is `local`; no other host is expected unless it has an export directory |
+| `activity/settings.json` | `{ v: 1, tz, billable: [project keys], workdays: [0-6] }` | Europe/Kyiv, nothing billable, Monday to Friday |
+
+`projects` scopes a host (`"all"` or a list): its absence makes only those
+projects unknown. `since` says when the host started holding work.
 
 ### Agent axis
 
 | fact | source | site |
 |---|---|---|
-| message rows (speaker, seconds timestamp) for every scanned transcript, full history | `transcript-search.sqlite`, tables `transcript_files` and `transcript_messages` | schema `src/lib/search/transcriptSearch.ts:236-257`; row classification `:334-380` (text parts only, `:318`; tool results and tool-only records excluded) |
-| which transcripts are indexed, with canonical project | scan catalog feed | `src/lib/scanner/discover.ts:185-220` (openclaw excluded) |
-| paths removed from the scan are removed from the index | `options.complete` prune | `transcriptSearch.ts:549` |
-| conversation id, engine, role for a path | registry | `conversationForPath` (`src/lib/agent/registry.ts:779`), `agentRole` (`:265`) |
-| project attribution precedence | `resolveProjectAttribution` | `src/lib/session/projectResolution.ts` (fallback: the index's project, passed through `canonicalProject`) |
-| pipeline and stage for a conversation | pipeline attempts | `src/lib/pipelines/types.ts:345` (`attempt.conversationId`), read with `loadPipelinesForList()` (`src/lib/pipelines/store.ts:1053`) |
+| message rows (path, speaker, time) for every indexed transcript | `transcript-search.sqlite` through `readTranscriptActivity` | `src/lib/search/transcriptSearch.ts:763`; covering index at `:269` |
+| which transcripts are indexed, with the board's project | scan catalog feed | `src/lib/scanner/discover.ts` (`transcriptIndexFeed`) |
+| conversation and role for a path | registry | `conversationForPath`, `conversationAgentRole` (`src/lib/agent/spawnAdmission.ts:275`) |
+| pipeline and stage | registry memberships of kind `pipeline` (container id, stage id), which survive pipeline archival | `src/lib/activity/agentSource.ts` |
 
 ### Sources considered and not used
 
 | source | why not |
 |---|---|
-| WakaTime API or `wakatime-state.json` | Operator and agent time are unioned in one timeline. The data exists only while the integration is enabled and is drained after delivery. It needs network and a key. |
-| Runtime journal events | Keeps the newest 20,000 rows (`docs/runtime-journal-retention.md`), which is days, not 30 days. |
-| Claude delivery ledger (`claude-delivery-ledger/`, `src/lib/runtime/claudeStreamBrokerHost.ts:96-101`) and Codex `o.`/`a.` origin markers (`src/lib/runtime/codexStructuredUserText.ts:106-110`) | They could backfill operator messages from before the ledger existed, but the delivery ledger stores message bodies, and backfill needs the #763 canonical-instruction dedupe across fan-out, resume and account mirrors. Deferred. |
-| Lifecycle journal (`src/lib/lifecycle/vocabulary.ts`) | Stage-level only; ad-hoc conversations are absent. |
-| Presence heartbeat | Screen input, not requests. Deferred. |
+| WakaTime API or state | Operator and agent time are unioned in one timeline, only while enabled, drained after delivery. |
+| Runtime journal events | Keeps the newest 20,000 rows, which is days. |
+| Presence heartbeat | It measures screen input, and the method counts requests. |
+| Reading transcripts live on each dashboard request | Five gigabytes on this host alone; the export runs once per host and the dashboard reads its small result. |
 
 ## Counting method
 
-This is the operator's method, taken from their reference memory
-`worktime-zvit-method.md` and the refinement they approved on 2026-07-29
-(used for a real sent report). It is written here as one parameterised
-definition. The calculation module implements exactly this, and the review
-stage checks the module against it.
+The operator's method as one parameterised definition, implemented in
+`src/lib/activity/method.ts` and checked by `method.test.ts`.
 
-### The two versions the operator used
+### The three statements of the method
 
-- **Original.** Each human message opens a ~10-minute engagement window.
-  Windows combine. Covered minutes are weighted per clock hour: 10-39 min =
-  0.5 h, 40+ min = 1 h. Large gaps are breaks. Fan-out, copied and resumed
-  sessions dedupe to one canonical instruction. Spawn, bridge and automation
-  prompts are excluded.
-- **Refinement (2026-07-29).** Upper-bound episodes: supervised spans count.
-  An unattended gap longer than T = 30 min breaks an episode. Round to 0.5 h.
+- **Original.** Each operator message opens a 10-minute window; windows
+  combine; covered minutes are weighed per clock hour: 10-39 min = 0.5 h,
+  40+ min = 1 h; fan-out and copies dedupe; generated prompts are excluded.
+- **Refinement (2026-07-29).** Supervised spans between messages closer than
+  T = 30 min count whole; round to 0.5 h.
+- **Restated (2026-09-24), and used for the recount the operator accepted.**
+  10-minute window per operator message, windows combined within each clock
+  hour, the weights above, one hour to one project, days and hours in
+  Europe/Kyiv.
 
 ### One definition
 
-Parameters:
-
 | parameter | meaning | default | allowed |
 |---|---|---|---|
-| `W` | engagement window after each request | **10 min** | 10-15 min (clamped) |
-| `T` | break threshold: a gap to the next request above `T` ends the episode | **30 min** | `W` to 120 min (clamped; `T < W` becomes `W`) |
-| `rounding` | how raw minutes become report hours | **`half-hour`** | `half-hour`, `clock-hour` |
-| `tz` | the IANA zone that decides days and clock hours | the browser's zone | any IANA zone; an invalid one falls back to the server zone |
+| `W` | engagement window after each input | **10 min** | 10-15 min (clamped) |
+| `T` | a gap to the next input above `T` ends the episode | **= W** | `W` to 120 min (clamped; below `W` becomes `W`) |
+| `rounding` | raw minutes to report hours | **`clock-hour`** | `clock-hour`, `half-hour` |
+| `tz` | the zone of days and clock hours | **Europe/Kyiv** (settings) | any IANA zone; an invalid one falls back to the settings zone |
 
-Inputs are the **anchors**: the request events in the ledger for the range,
-deduplicated by key, each with `at`, `project`, `surface` and `kind`.
+Inputs are the merged, deduplicated human inputs of every expected host,
+read from `T` before the first day so an episode reaching into the range is
+counted exactly.
 
-1. **Episodes, per project.** Sort one project's anchors by time. Consecutive
-   anchors whose gap is `<= T` belong to one episode. An episode covers
-   `[first anchor, last anchor + W]`, clipped at *now*. A lone request covers
-   exactly `W`.
-2. **Raw human minutes.** For a project and a day: the length of the union of
-   that project's episodes, cut at the day's boundaries in `tz`.
-3. **One minute is counted once across projects.** The day's total is the
-   union of all projects' episodes. A minute covered by episodes of several
-   projects goes to the project of the most recent anchor at or before that
-   minute. Per-project rows therefore sum to the total, and the rows show
-   the overlapping minutes that were reassigned.
-4. **Surface and kind breakdown.** Inside an episode, every minute belongs to
-   the most recent anchor at or before it. Its surface and kind label the
-   minute, so the breakdowns partition the same total.
-5. **Report hours.**
-   - `half-hour` (refinement): per project per day, raw minutes are rounded to
-     the nearest 0.5 h, and any non-zero raw time is at least 0.5 h.
-   - `clock-hour` (original): per clock hour in `tz`, each project's covered
-     minutes are weighed as follows: under 10 min = 0, 10-39 min = 0.5 h,
-     40+ min = 1 h. One clock hour goes to one project, the one with the most
-     covered minutes in it (ties go to the more recent anchor).
-   Raw minutes stay the primary figure. Report hours are the secondary one,
-   and the chosen mode is named beside them.
+1. **Episodes, per project, across hosts.** Sort one project's inputs by time.
+   Consecutive inputs at most `T` apart share an episode, which covers
+   `[first, last + W]`, clipped at now. With `T = W` the episodes are exactly
+   the union of the per-input windows.
+2. **One minute is counted once.** The union of every episode is cut into
+   segments; each segment belongs to the most recent input at or before it
+   among the episodes covering it. That input's project, host, surface and
+   kind label the minutes, so the per-project, per-host, per-surface and
+   per-kind figures all partition the same total.
+3. **Days and hours.** Each minute falls in the day and clock hour of the zone
+   where it lies. A session that runs past midnight puts each message on its
+   own day. Day length follows the zone (a 25-hour day on 2026-10-25 in Kyiv).
+4. **Report hours.**
+   - `clock-hour`: every window in a clock hour combines; the hour's covered
+     minutes weigh under 10 = 0, 10-39 = 0.5 h, 40+ = 1 h; the hour goes to the
+     project with the most of its minutes (a tie to the more recent input).
+   - `half-hour`: each project's raw time per day rounds to the nearest 0.5 h
+     (a tie rounds up), and any non-zero time is at least 0.5 h.
+5. **Billable.** The billable figure repeats steps 1-4 on the billable
+   projects' inputs alone, as a paid report would, so a request to another
+   project never takes a billable minute.
 
-**How the two versions reconcile.** With `T = W` the episodes are exactly the
-union of per-request `[t, t + W]` windows, which is the original method. With
-`T = 30 min` they are the refinement's upper-bound episodes. The defaults
-(`W = 10`, `T = 30`, `half-hour`) are the refinement, because it is the later,
-operator-approved version and was used for a real report. Unit tests pin both
-readings.
+Raw minutes stay the primary figure; report hours are secondary and name
+their mode.
 
-**The one intended difference from the #763 issue text.** #763 wrote the
-episode length as `max(last - first, 10 min)`, which gives the last request no
-window whenever the episode is longer than 10 minutes. The correction says
-every request has at least a `W` window, so an episode ends at `last + W`.
+## Cross-host human input
 
-**What never opens or extends an episode.** Only direct-operator ingress
-writes anchors. So these add zero human time, whatever the agents do:
+### Only real operator input counts
 
-- agent work after `last + W` when no next request comes within `T`;
-- pipeline dispatch, seat ticks, monitors, flows and any other automation;
-- delegated spawns, bridge relays, MCP `send_message` and injected prompts
-  (refused by `directOperatorActivityAuthority`).
+`classifyUserRecord` (`src/lib/activity/humanInput.ts:266`) keeps a record
+only on a positive signal:
 
-**Dedupe.** A request is recorded once, at admission. A fan-out task send is
-one anchor, and resumed, copied or migrated transcripts never create
-anchors. Retries share one key, because the key is a digest of the ingress's
-existing idempotency key (`clientMessageId`, `clientRequestId`,
-`clientAttemptId`, the realtime `operatorEventId`). This removes the need for
-the #763 transcript dedupe on everything recorded from now on.
+1. the `llv:structured-user` marker with operator origin (`ctx=o.…` or
+   `origin=operator`);
+2. the host's delivery provenance naming the operator, which also yields the
+   client message id;
+3. the engine's own record that a person typed it (`promptSource: "typed"` or
+   `turnOrigin: "human"`), surface `terminal`.
 
-### What the method does not include
+Everything else is excluded and counted by reason in the export manifest,
+which the page lists per host:
 
-The operator's original method also adds WakaTime **editor** durations. The
-specification limits human time to Delegatus surfaces, so editor time is out
-of this dashboard, and the coverage panel says so.
+| reason | what it catches |
+|---|---|
+| `scaffold` | the first prompt of a delegated spawn, or an unmarked role scaffold of an operator launch |
+| `stage-template` | a pipeline stage's first prompt (builder, reviewer, auditor, deployer…), marked or not |
+| `notification` | task, bridge, seat and recovery notifications, `promptSource: "system"`, compaction summaries |
+| `injected` | system reminders, skill hints, AGENTS.md and environment context, local command output, other `isMeta` records |
+| `attachment` | an auto-attached screenshot (`isMeta` image records) |
+| `agent-message` | a message from one agent to another that arrived with role=user (`a.` marker, or provenance naming an agent) |
+| `subagent` | a Claude sidechain or a Codex subagent session |
+| `automation` | `codex exec` sessions and SDK sessions no Viewer owns |
+| `interrupt` | an interrupt marker |
+| `unmarked` | no positive signal at all |
+| `duplicate` | a copy of an input already counted |
+
+### Copies count once
+
+1. **The id rule.** Records that share any stable id are one input: Claude
+   `promptId` and `uuid`, the Codex item `id`, the delivery key in a marker, and
+   the request key from provenance (the same key the request ledger stores).
+   Mirrors, account-store copies, resumes and continuations copy these ids.
+2. **The fallback rule, only between inputs no id joins.** Identical canonical
+   content (the marker line dropped, whitespace collapsed) within 90 s of the
+   input's first copy is one input. This catches an id-less copy and a
+   Delegatus fan-out, whose copies in different conversations each got their
+   own ids. Two records of one conversation that both carry ids stay two.
+   Only a SHA-256 of the canonical content is kept.
+3. **Across hosts.** The merge applies the id rule over every host, and the
+   fallback rule between hosts (same hash within 90 s).
+4. **The ledger and the transcripts of one host.** Inside the span a host's
+   ledger covers, that host's transcript inputs that came through Delegatus
+   (surface `unknown`) are dropped: the ledger recorded each Delegatus request
+   once, at ingress, fan-out included. Terminal-typed input still counts from
+   the transcripts.
+
+Duplicates change request counts. They barely change hours, because a copy
+within 90 s adds at most 90 s to a union of 10-minute windows.
+
+### Coverage: unknown is never zero
+
+`uncoveredSpans` (`method.ts:601`) returns, for a window and optionally a
+project, the stretches some expected host holding that project was not read
+for. A day, a project row and the range each carry `{ complete, missingHosts }`:
+
+- complete: the figure is exact, and a zero is a real zero;
+- incomplete with time read: the figure is a lower bound, shown `≥ 2 h 10 m`;
+- incomplete with nothing read: `Unknown`.
+
+A host listed with explicit projects gets a row for each of them even when
+nothing was read, so a missing host's projects read `Unknown` and never vanish.
+A host's `since` date removes the requirement before it.
+
+### Probable missing source
+
+A workday (Monday to Friday by default) is flagged when its human time is zero
+and either an expected host was not read for it, or agents ran at least 30
+minutes of wall-clock that day. The page shows "Probable missing source" in
+the warning tone with an icon, never `0 m`.
 
 ## Agent axis calculation
 
-1. **Rows.** `SELECT transcript_path, speaker, timestamp FROM transcript_messages WHERE sort_timestamp BETWEEN ? AND ? AND timestamp IS NOT NULL`,
-   plus a small margin before the range start, so that a turn crossing the
-   start is seen. The body column is never selected.
-2. **Turns per transcript.** In time order, a `user` row opens a turn. The
-   turn ends at the last `assistant` row before the next `user` row. Assistant
-   rows before any user row open a turn at the first of them. Turns with no
-   assistant row, or with zero length, are dropped. The last turn ends at its
-   last assistant row. Every turn is clipped to the range and to *now*.
-3. **Conversation activity** is the union of that transcript's turns.
-   Transcripts that belong to one conversation (registry generations) are
-   unioned together.
-4. **Per project and day:**
-   - *agent wall-clock*: the union over the project's conversations, meaning
-     time when at least one agent worked;
-   - *agent-hours*: the sum of per-conversation activity, meaning parallel
-     work counted once per agent;
-   - *supervised*: agent wall-clock inside the project's human episodes from
-     step 1 of the counting method (before the cross-project reassignment);
-   - *unattended*: agent wall-clock minus supervised. The same split is
-     applied to agent-hours.
-5. **Provenance per conversation:** engine (from the index), conversation id
-   and `agentRole` (registry, via `conversationForPath`), pipeline id and stage
-   id (pipeline attempts). Anything that does not resolve is `unregistered`.
-   The breakdowns are by engine, by role, and the top pipelines by id.
+1. **Rows.** `SELECT id, speaker, transcript_path, timestamp FROM transcript_messages WHERE sort_timestamp BETWEEN ? AND ? AND timestamp IS NOT NULL`,
+   from six hours before the range. The body is never selected.
+2. **Turns per transcript.** A user row opens a turn that ends at the last
+   assistant row before the next user row; assistant rows before any user row
+   open a turn at the first of them. Empty and zero-length turns are dropped;
+   turns clip to the range and to now.
+3. **Conversation activity** is the union of its transcripts' turns.
+4. **Per project and day:** wall-clock (at least one agent working),
+   agent-hours (each agent counted), supervised (inside the same project's
+   human episodes) and unattended.
+5. **Provenance:** engine from the index, role from the registry, pipeline and
+   stage from the registry's pipeline membership; anything unknown is
+   `unregistered`.
 
-**Accuracy, measured on a copy of real data (2026-09-24).** Over 1,100
-conversations active in the last 7 days, this approximation totals 362.9 h,
-against 356.7 h from the canonical classifier (`recentTurnWindowsFromRecords`,
-`turnDuration.ts:55`) run over the full transcripts: +1.7% in aggregate.
-Per conversation the mean absolute deviation is 19% (4,057 of 21,403
-minutes), and 62 conversations are off by more than 20% or 5 minutes. The
-largest misses are turns that ended in tool calls with no final text.
-Per-project and per-day totals, which aggregate many conversations, are
-reliable. Per-conversation and per-stage figures are not, so the prototype
-shows no per-conversation durations. The UI labels agent time "approximate:
-from message timestamps".
+**Accuracy (measured by the investigation, 2026-09-24).** Over 1,100
+conversations active in 7 days the approximation totals 362.9 h against
+356.7 h from the canonical turn classifier: +1.7% in aggregate, 19% mean
+absolute deviation per conversation. The page labels agent figures `≈` and
+shows no per-conversation durations.
 
-**Query cost, measured (read-only, 2026-09-24).** The time filter scans the
-whole table: 6.5 s cold, 131-170 ms warm, 69,331 rows for 30 days. The
-prototype adds one covering index when the writer opens the database, in the
-same `CREATE INDEX IF NOT EXISTS` style the file already uses
-(`transcriptSearch.ts:205`, `:215`, `:258`):
+**Query cost.** The covering index
+`transcript_messages_time(sort_timestamp, speaker, transcript_path, timestamp)`
+is created when the writer opens the database. On a synthetic index of 300,000
+rows (199 MB), a 30-day read of about 100,000 rows took 77 ms on first read
+and 67-69 ms warm through the index (`SEARCH … USING COVERING INDEX`), against
+115-123 ms warm as a table scan with the index dropped; the investigation
+measured 6.5 s for the cold scan on the real 5 GB table. The read goes through
+the read-only query connection and is cached for 60 s per range and zone.
 
-```sql
-CREATE INDEX IF NOT EXISTS transcript_messages_time
-  ON transcript_messages(sort_timestamp, speaker, transcript_path, timestamp);
-```
-
-The dashboard reads through the read-only query connection and never opens
-the writer. The computed agent axis is cached in memory for 60 s per
-`(range, tz)`. The builder measures the indexed query on a synthetic database
-of 300k rows and puts the number in the PR. Nobody copies or migrates the
-operator's index.
+**This host only.** The agent axis reads this host's index. Agent work on the
+stage host is not on the page yet (see Deferred).
 
 ## Coverage gaps
 
-The UI shows these in a "What is counted" panel and marks each affected day.
+The page shows these in its "What is counted" panel, with a hosts table.
 
-### By surface (human axis)
+### By host
 
-| surface | observed and counted | not observed, or observed but not counted |
+| host state | effect | shown as |
 |---|---|---|
-| Desktop browser | every request kind in the ingress table | reading, scrolling and board browsing between requests (observable through presence, and not a request under the method); board layout edits; anything done in a terminal attached to an agent host |
-| Tablet | same as desktop | same. An iPad that asks for the desktop site reads as `desktop` (user-agent rule) |
-| Phone browser | same as desktop, including voice | same |
-| Voice call (any device) | each final user utterance in a live realtime call | listening to the assistant, and partial speech. Dictation into the composer counts only when it is sent |
-| Other same-origin client (script, CLI without a capability) | counted as `other`, because the authority rule treats it as the operator (the documented residual in `operatorAuthority.ts`) | whether a human was behind it |
-| Outside Delegatus: editors, terminals attached to a host, Telegram, GitHub review | nothing | all of it. Zero here means *not observed* |
+| read for the whole window | exact figures | plain figures |
+| read for part of it (an old export, a ledger that started later) | lower bound | `≥` figure, hatched unknown stretch, tooltip naming the host |
+| listed and never read | unknown | `Unknown`, "Not connected" in the hosts table, flagged workdays |
+| an export file for another host, or malformed | covers nothing | "unreadable" in the hosts table |
+
+### By surface
+
+| surface | observed and counted | not observed, or observed and not counted |
+|---|---|---|
+| Desktop browser | every request kind in the ledger table | reading and scrolling between requests, board moves |
+| Tablet | same as desktop | same; an iPad that asks for the desktop site reads as desktop |
+| Phone | same as desktop, including voice | same |
+| Voice call | each final utterance in a live call | listening, partial speech, dictation never sent |
+| Terminal | prompts an agent CLI records as typed by a person, through the host's export | a client that records no such flag: excluded as unmarked |
+| Other same-origin client | counted as `other` (the authority rule's documented residual) | whether a person was behind it |
+| Outside Delegatus: editors, Telegram, GitHub review | nothing | all of it |
 
 ### By time and source
 
 | gap | effect | shown as |
 |---|---|---|
-| Ledger install date | no human data before it | days before it drawn hatched as "Not recorded", never as 0 h |
-| A ledger write that fails (disk, permissions) | that request is missing | one `[activity] request_not_stored` diagnostic with an outcome class; the action itself proceeds |
-| Agent approximation | turns that end in tool calls with no final text end early; open or zombie turns end at their last text | "approximate" label on every agent figure |
-| Transcripts that are not indexed | openclaw sessions, and transcripts deleted from disk (the index prunes them) | named in the panel |
-| Index lag | the current turn appears after the next scan has indexed it | "updated <time>" beside agent figures |
-| Registry or pipeline join misses | role and pipeline become `unregistered` | an `unregistered` bucket in the breakdowns |
-| Human anchors with no resolved project | the time is kept | an `Unattributed` project row |
+| Before a host's first ledger row or export span | unknown for that host | hatched, `Unknown` or `≥` |
+| An unwritable ledger | that request is missing | one `[activity] request_not_stored` diagnostic with an outcome class |
+| Agent approximation | turns ending in tool calls end early | `≈` on every agent figure |
+| Transcripts not indexed (OpenClaw, deleted) | missing agent time | named in the panel |
+| Registry misses | role and pipeline `unregistered` | a bucket in the breakdowns |
+| Inputs with no resolved project | kept | a `No project` row |
 
 ## Privacy boundary
 
-- **Ledger rows** (`statePath("activity/requests-YYYY-MM-DD.jsonl")`, UTC day
-  files, mode `0600`, directory `0700`) hold exactly
-  `{ "v": 1, "key": <sha256 hex>, "at": <ms>, "kind": <enum>, "surface": <enum>, "project": <project key> | null }`.
-  There is no conversation id, path, title, text, account or device id. The
-  key is `sha256("delegatus-activity-request-v1\0" + idempotencyKey)`, or
-  random bytes when the ingress has no key. The prototype keeps 90 days and
-  prunes older day files when a new day file is created.
-- **The agent query** selects no body column. Transcript paths never leave
-  the server: the API names conversations by registry id and never by path.
-- **API and UI** carry timestamps, durations, counts, enums, project keys and
-  display names, pipeline, stage and conversation ids, and role ids. They
-  carry no conversation, task or pipeline **titles**, because titles are
-  derived from prompt text (a pipeline card's title is its prompt's first
-  line). They carry no model names or account names.
-- **Fixtures and tests** use invented projects, ids and times. The privacy
-  gate runs on the PR. Render images stay outside the repository.
-- **#zvit fence.** `src/lib/wakatime/**` and WakaTime payloads, cadence and
-  state are untouched. The ledger call sits beside the existing WakaTime call,
-  never inside it. #zvit reads WakaTime and its own sources, so nothing the
-  prototype adds reaches it.
+- **Ledger rows** (`activity/requests-YYYY-MM-DD.jsonl`, mode `0600`,
+  directory `0700`, 90-day retention) hold exactly
+  `{ v, key, at, kind, surface, project }`. The key is
+  `sha256("delegatus-activity-request-v1\0" + idempotencyKey)`, or random.
+- **Export rows** hold a manifest `{ v, type, host, coveredFrom, coveredUntil, exportedAt, records, excluded }`
+  (counts only) and one line per input
+  `{ v, type, ids, hash, at, host, project, kind, surface }`. The ids are
+  SHA-256 digests of the raw ids under a domain string; the hash is a SHA-256
+  of the canonical content. No text, path, session id or title is written.
+  The exporter reads text only in memory, to classify and to hash.
+- **The agent query** selects no body; transcript paths never leave the
+  server.
+- **API and UI** carry times, durations, counts, enums, project keys and
+  names, host ids and the operator's own host labels, pipeline and stage ids,
+  and role ids. No titles, model names or account names.
+- **Fixtures and tests** use invented projects, ids, hosts and text.
+- **#zvit fence.** `src/lib/wakatime/**` is untouched; the ledger call sits
+  beside the WakaTime call.
 
 ## Prototype scope
 
 ### What it does
 
-**`src/lib/activity/method.ts` (pure, no I/O).** It holds the counting
-method and the agent-axis calculation above:
+- `src/lib/activity/method.ts` (pure): parameters, interval algebra, the
+  zone calendar, episodes, one-minute-once segments, both roundings, the
+  billable pass, agent turns, host coverage, the missing-source flag, and
+  `activityReport`.
+- `src/lib/activity/humanInput.ts` (pure): record parsing for both engines,
+  session kinds, the operator-only classifier, the dedupe rules, the merge
+  across sources and hosts, and the export row format.
+- `src/lib/activity/transcriptExport.ts` and `scripts/export-human-input.ts`:
+  the per-host exporter (`--host`, `--from`, `--to`, `--tz`, `--out`,
+  `--root`, `--only-roots`, `--no-registry`). It claims the `tool` state
+  owner, reads the registry and delivery ledgers, and writes only its `--out`.
+- `src/lib/activity/hostSources.ts`: `hosts.json`, the ledger source, the
+  export source, and `readHumanInputs`.
+- `src/lib/activity/requestLedger.ts`: `recordOperatorRequest` at the eleven
+  ingress sites and `readRequests`.
+- `src/lib/activity/agentSource.ts`, `settings.ts`, `report.ts`, and
+  `GET /api/activity` (`range`, `tz`, `window`, `break`, `rounding`, all
+  clamped; behind `rejectCrossOrigin`).
+- `src/lib/view/device.ts`: the device rules, shared by the presence heartbeat
+  and the ledger.
+- `/activity` (`src/app/activity/page.tsx`,
+  `src/components/activity/ActivityDashboard.tsx`), reached from the desktop
+  rail's "More" menu and the phone's board menu: range and view controls,
+  four tiles (your time with report hours and the billable figure when
+  configured, agents working, supervised agent time with its split, agent-hours),
+  a day view with a two-lane 24-hour strip per day, a project ranking with
+  breakdowns by host, surface, input kind, engine, role and pipeline, and the
+  "What is counted" panel with the hosts table. English and Ukrainian.
 
-```ts
-interface MethodParams { windowMs: number; breakMs: number; rounding: "half-hour" | "clock-hour"; tz: string }
-interface Anchor { at: number; project: string | null; surface: Surface; kind: RequestKind }
-interface AgentRow { transcriptPath: string; speaker: "user" | "assistant"; atMs: number }
-function clampMethodParams(input: Partial<Record<keyof MethodParams, unknown>>): MethodParams
-function humanEpisodes(anchors: Anchor[], params: MethodParams, nowMs: number): Episode[]
-function agentTurns(rows: AgentRow[], range: TimeRange, nowMs: number): Map<string, Interval[]>
-function activityReport(input: ReportInput): ActivityReport // days, projects, coverage
-```
+### Tests, by path
 
-**`src/lib/activity/requestLedger.ts`.** It holds
-`recordOperatorRequest(request, { kind, idempotencyKey?, conversationId?, path?, project? })`
-and `readRequests(fromMs, toMs)`.
+- `src/lib/activity/method.test.ts`: W and T, `T = W` equals the union of
+  windows, the clip at now, one minute once across projects, surface and kind
+  partitions, fan-out, agent-only time adds nothing, a long unattended run,
+  the supervised split, both roundings including hour-level clock weights, the
+  Kyiv midnight split and the 25-hour day, the defaults, two hosts (remote
+  input with complete coverage; the remote host missing gives unknown and a
+  flag), project-scoped hosts, `since`, a session crossing midnight in Kyiv, the
+  missing-source flag on a workday and not on a Sunday, and the billable pass.
+- `src/lib/activity/humanInput.test.ts`: marker-only counting, a
+  worker-to-manager role=user message excluded, the typed flag, each exclusion
+  reason, session kinds, mirror and continuation copies once, the 90 s
+  fallback, same-conversation messages kept apart, fan-out, cross-host
+  dedupe, ledger precedence, and an export round trip with no text.
+- `src/lib/activity/transcriptExport.test.ts`: files chosen by mtime, each
+  message on its own Kyiv day, the manifest's exclusion counts, context over
+  keywords for the project, and no text or path in the export.
+- `src/lib/activity/hostSources.test.ts`: the two-host fixture with real
+  export files (complete, then the stage host missing), an export that ends
+  early, a mislabelled file, cross-host dedupe, and the hosts file.
+- `src/lib/activity/requestLedger.test.ts`, `src/app/api/activity/route.test.ts`,
+  `src/lib/runtime/http.activityLedger.test.ts`,
+  `src/app/api/tasks/activityLedger.test.ts`, and the exporter's case in
+  `src/lib/stateOwnership.entryPoints.test.ts`.
 
-- Recording never throws. It resolves the project with the same precedence
-  `operatorActivity.ts` uses, and falls back to `null` instead of refusing.
-- The surface comes from the `User-Agent`.
-- It writes with `appendFileSync`, so a Viewer release succession cannot
-  corrupt a file. Reads dedupe by key.
-- It is called at the 11 ingress sites in the table, only where
-  `directOperatorActivityAuthority(req).ok`. For site 8 the realtime route
-  passes the user agent down to `executeRealtimeControl`.
+### Renders
 
-**`src/lib/view/device.ts`.** `detectDeviceKind` and `detectBrowser` move
-here from `src/hooks/useViewPresence.ts`, which re-imports them.
-
-**Search index.** The covering index above.
-
-**`GET /api/activity`.** It takes `range=today|7d|30d`, `tz`, `window`,
-`break` and `rounding`. All inputs are clamped: a bad value gets its default
-and never an error. The route runs behind `rejectCrossOrigin`. It answers
-`{ generatedAt, params, coverage, days[], projects[] }`, where:
-
-- `days[]` has, per day: human raw minutes, report hours, episodes as
-  `[start, end, project]`, agent wall-clock segments marked supervised or
-  unattended, agent-hours, and a `recorded` flag.
-- `projects[]` has, per project: human minutes and hours; human minutes by
-  surface and by kind; agent wall-clock, supervised, unattended and
-  agent-hours; agent-hours by engine and by role; and the top five pipelines
-  by id with their stage ids.
-
-**`/activity` page.** `src/app/activity/page.tsx` renders a client component
-`src/components/activity/ActivityDashboard.tsx`, reached by one link from the
-desktop project header menu and one from the phone menu. Read
-`node_modules/next/dist/docs/` for page conventions first. The strings use
-the existing `en` and `uk` i18n, and the styling follows
-`docs/design/viewer-design-system.md`. There is no chart library: bars and
-strips are CSS or SVG.
-
-- *Header*: a Today / 7 days / 30 days segmented control, and a Day /
-  Projects view switch.
-- *Totals*: separate tiles for human time (raw, then report hours with the
-  mode named), agent wall-clock, supervised versus unattended, and
-  agent-hours. Human and agent use two fixed hues. Unattended agent time is
-  the agent hue hatched. No tile adds the two axes together.
-- *Day view*: one row per day (a single row for Today) with a 24-hour strip
-  of two lanes, human episodes above and agent activity below, split into
-  supervised and unattended, plus the day's totals. Days before the ledger
-  existed are hatched and labelled "Not recorded".
-- *Project view*: a ranking by human time, with agent time as a sort option.
-  Each row has a human bar, an agent bar with its supervised share, and both
-  times, and it expands into the breakdowns: surface, kind, engine, role,
-  pipeline ids.
-- *What is counted*: the method parameters in words, the per-surface
-  coverage table, the ledger start date and the approximation note.
-- *Phone (390 px)*: the same content stacked in one column, with a 2x2 grid
-  of tiles, full-width strips, and project rows showing two stacked bars.
-  The 24-hour strip keeps hour ticks every 6 hours.
-
-**Tests, run by path:**
-
-- `src/lib/activity/method.test.ts`:
-  - a lone request is `W`;
-  - gaps of 29 and 31 minutes with `T = 30`;
-  - `T = W` equals the union of per-request windows (the original method);
-  - an episode ends at `last + W`;
-  - the clip at now;
-  - a midnight split in `Europe/Kyiv`, including the 2026-10-25 DST change;
-  - cross-project minutes are counted once, and the project rows sum to the
-    total;
-  - surface and kind breakdowns partition the total;
-  - both rounding modes, including 0.5 h minimum and the clock-hour weights;
-  - agent-only hours add zero human time;
-  - the supervised and unattended split;
-  - agent turns from rows (a leading assistant row, zero-length turns
-    dropped, clipping);
-  - parameter clamping.
-- `src/lib/activity/requestLedger.test.ts`:
-  - append, read and dedupe;
-  - an unwritable directory does not throw, and emits the diagnostic;
-  - retention;
-  - a row carries exactly the six allowed keys.
-- A route test for `/api/activity`: a cross-origin request is refused, and
-  the response holds no path and no text.
-- Ingress tests on `src/lib/runtime/http.ts` and
-  `src/app/api/tasks/[id]/route.ts`: an operator request writes one row; an
-  agent capability or internal-service request writes none; a failing ledger
-  still admits the action.
-
-**Renders.** Add an `activity` case to `scripts/capture-board-geometry.ts`
-(`BOARD_CAPTURE_CASE=activity`), the existing real-browser driver on a seeded
-home against the production build. Do not write a new driver.
-
-- *Seed*: invented projects; ledger day files that start partway through the
-  30-day range; and a search index built by the seeded scan from invented
-  transcripts (or seeded directly, if the scan is too slow). Include at least
-  one day with agent activity and no requests, which shows all-unattended
-  agent time.
-- *Captures* at 1440x900 and 390x844: day view (7 days), project view with
-  one row expanded, and the empty/gap state (30 days with hatched unrecorded
-  days, plus a home with no data at all).
-- *Output*: `~/Pictures/delegatus-review/activity-dashboard/`.
-
-**Verification.**
-
-- `bunx tsc --noEmit`, with the exit code captured.
-- The touched tests, by path.
-- `bun run build` with an isolated config root (`LLV_STATE_DIR` or
-  `XDG_CONFIG_HOME` under a temp directory).
-- `bun scripts/privacy-publication-gate.ts --base <merge-base>`.
-- Open a PR to `main` and leave it open. No merge and no deploy.
+The `activity` case of `scripts/capture-board-geometry.ts`
+(`BOARD_CAPTURE_CASE=activity`) seeds a home with invented projects, a local
+ledger, a stage host export, invented transcripts indexed by the Viewer's own
+scan, and `hosts.json`, then captures at 1440 x 900 and 390 x 844: the day
+view, the project view with one row expanded, the unknown-coverage state (the
+stage host listed and not connected), and a home with no data at all. Output:
+`~/Pictures/delegatus-review/activity-dashboard/`.
 
 ### What it does not do
 
-- No backfill of human requests from before installation.
-- No change to WakaTime or #zvit, and no export for them.
-- No settings UI for `W`, `T` or rounding: they are query parameters with
-  defaults, and the page shows the defaults.
-- No per-conversation or per-stage durations (see the accuracy figures).
-- No persisted rollups: the report is computed per request, with a 60 s
-  cache for the agent axis.
-- No new background scheduler, worker or timer.
-- No use of the presence heartbeat for time.
+- No network pull of remote exports: a host's file is copied in by hand.
+- No agent axis for other hosts.
+- No backfill of this host's own history unless its exporter is run for it.
+- No settings UI; `hosts.json` and `settings.json` are edited as files.
+- No per-conversation or per-stage durations.
+- No change to WakaTime, #zvit or their data; no background scheduler.
 
 ## Deferred — not currently justified
 
 | item | why deferred | what would justify it |
 |---|---|---|
-| Backfilling operator requests from transcripts (Codex `o.` markers, Claude delivery ledger origin) | Needs the #763 canonical-instruction dedupe across fan-out, resume and account mirrors. The Claude ledger stores bodies. Ingress recording is exact from now on. | The operator asks for pre-install history. |
-| A canonical turn-window index (incremental full-transcript parse with `classifyTurnRecord`, including tool activity and silent gaps) | The approximation is within 1.7% in aggregate. A second 5 GB parse pipeline and state are heavy for a prototype. | Per-conversation or per-stage agent durations become a requirement (measured error today: 19% per conversation). |
-| Viewing time from the presence heartbeat | The method anchors on requests. Screen input without a request is not engagement under it. The presence store also counts a page load as input. | The operator folds viewing into the method, with its own window. |
-| WakaTime editor durations on the human axis | Outside Delegatus surfaces, which the specification excludes. It is part of #zvit's own inputs. | The operator wants one combined worktime view. |
-| A project priority list for cross-project minutes (billing rule) | Recency assignment is enough for a dashboard. Priority is a billing concern of #zvit. | The dashboard's report hours are used for billing. |
-| A settings UI for method parameters | Query parameters and defaults cover the prototype. | The operator changes them regularly. |
-| Recording board layout, colour and hide actions | They are not requests. | The method changes. |
+| Pulling a remote host's export over SSH or from its Viewer | Needs access decisions per host; a copied file proves the model first. | The operator wants the dashboard current without a manual step. |
+| Agent axis from other hosts | The export could carry turn intervals; the prototype keeps it to human input, which the corrections are about. | Supervised/unattended split for stage-host projects. |
+| A canonical turn-window index | The approximation is within 1.7% in aggregate. | Per-conversation agent durations become a requirement. |
+| Settings UI for hosts, zone and billable tags | Files cover the prototype. | The operator edits them regularly. |
+| Viewing time from the presence heartbeat | Not engagement under the method. | The method changes. |
 
 ## Options considered
 
 | decision | options | chosen and why |
 |---|---|---|
-| Human source | ingress ledger / transcript extraction / WakaTime / presence | The **ingress ledger**. It is exact, needs no dedupe, can carry a surface, and costs one line at sites that already classify the operator. Transcript extraction cannot see the surface, needs dedupe, and would require reading bodies. WakaTime unions the axes. Presence measures input, not requests. |
-| Agent source | scanner tail windows / search index / new canonical index / WakaTime streams | The **search index**. It already holds full history, costs nothing new at runtime, and measured within 1.7% of canonical. Tail windows cover under 5% of recent transcripts. A canonical index is deferred. WakaTime streams have no role or pipeline and exist only while enabled. |
-| Human episode tail | `max(last - first, W)` (#763) / `last + W` | **`last + W`**, as the correction requires. |
-| Cross-project minutes | count per project (sum can exceed the total) / priority list / most recent request | **Most recent request**. Rows sum to the total, and it matches the idea of the operator watching what they last asked for. |
-| Where the page lives | a hash route inside the board SPA / a separate `/activity` route | **A separate route**. It is independent of `Viewer.tsx` state and is simple to capture at both widths. |
+| Human source | ingress ledger / transcripts / WakaTime / presence | **Both the ledger and per-host transcript exports**: the ledger is exact with a surface; transcripts are the only record on a host without the ledger and for history, and they are what the operator's recount used. |
+| Reading remote hosts | live reads / network pull / exported files | **Exported files**: the dashboard stays cheap, the exporter runs where the stores and delivery ledgers are, and nothing crosses a host boundary but ids, hashes and times. |
+| Counting unmarked records | count / exclude and report | **Exclude and report per reason**, as correction 3 asks. |
+| Defaults | refinement (T = 30, half-hour) / restated method (T = W, clock-hour) | **The restated method**, which the operator used for the accepted recount; the refinement stays a parameter. |
+| Clock-hour weight | winner's minutes / the hour's combined minutes | **The hour's combined minutes**, since windows combine within the hour before it is weighed and given to one project. |
+| Cross-project minutes | per project / priority list / most recent input | **Most recent input**: rows sum to the total. |
+| Where the page lives | a hash route in the board / `/activity` | **`/activity`**, independent of the board's state. |
 
 ## Validation against the requirement
 
-| requirement (relay, spec, correction) | how the design meets it |
+| requirement | how the prototype meets it |
 |---|---|
-| Human interaction time and agent activity shown separately, WakaTime-like views per day and per project, range picker | Two axes with their own tiles, lanes and bars. Day view, project view, and Today / 7 days / 30 days. |
-| Human time only from real interaction on Delegatus web, desktop and mobile, with each source named with its surface | Only validated direct-operator ingress writes anchors, and each anchor carries a surface. The surface table names what each surface does and does not contribute. |
-| Coverage gaps stated and visible | The gap tables here and in the "What is counted" panel, hatched unrecorded days, and the approximation label. |
-| Agent provenance: engine, role, pipeline/stage, conversation | The per-conversation join, with breakdowns by engine, role and pipeline/stage id. |
-| Supervised agent work counts as human time; unattended, automation, spawn, bridge and injected work never does | Episodes span between requests up to `T`, plus `W` after the last. Only operator ingress anchors episodes. Automation and relays are refused by the authority rule. |
-| Two overlapping axes, neither subtracted, overlap visible | Supervised versus unattended split of agent time, with both axes shown in full. |
-| The operator's method applied, parameterised, defaults stated | The Counting method section: `W = 10`, `T = 30`, `half-hour` by default. `T = W` reproduces the original, and `clock-hour` reproduces its weights. |
-| Prior work inspected; what is sound reused, what is wrong named | The prior-work table. |
-| No personal information, prompts, bodies or secrets in metrics, API or UI | The privacy boundary: a six-key ledger row, no body column, no titles, no paths. |
-| #zvit path and data unchanged | WakaTime code and payloads are untouched, and the ledger sits beside the WakaTime call. |
-| No deployment, no merge, live state never touched | The PR is left open. Tests and builds use isolated roots, and renders use a seeded home. |
+| Human time and agent time separately, per day and per project, range picker | Two axes with their own tiles, lanes and bars; day and project views; Today / 7 days / 30 days. |
+| Human time from real interaction, each source named with its surface | Ledger rows carry the browser surface; exports carry `terminal` or `unknown`; the surface table says what each contributes. |
+| Coverage gaps stated and visible | Hosts table, hatched unknown stretches, `≥` and `Unknown` figures, the surface and gap tables. |
+| Agent provenance: engine, role, pipeline/stage, conversation | Breakdowns by engine, role and pipeline with stage ids; conversations counted per project. |
+| Supervised agent work counts, unattended never does (correction 1) | Episodes cover supervised spans; only operator input opens them; the agent axis is split. |
+| Human input from every host, unknown never zero (corrections 2, 3.1) | Per-host sources, `hosts.json`, coverage per day and project, the two-host tests. |
+| Dedupe by ids, 90 s hash fallback (2.2, 3.2) | The id rule, the fallback rule, cross-host merge, ledger precedence; tested. |
+| Only real operator input (2.3, 3.3) | Positive signals only; exclusions counted per reason; tested for relays, stage prompts and role=user worker messages. |
+| Messages bucketed by their own time in Kyiv (3.4) | Anchors carry their own time; files chosen by mtime; zone from settings; tested across midnight. |
+| Project from context (3.5) | Registry ownership or cwd; tested against a name in the text. |
+| Probable missing source (3.6) | The workday flag; tested; shown in the warning tone. |
+| The operator's method, parameterised, defaults stated | `W = 10`, `T = W`, clock-hour, Europe/Kyiv; refinement by parameter. |
+| Privacy | Six-key ledger rows; export rows with digests and a hash; no body anywhere. |
+| #zvit untouched, no deploy, no merge | WakaTime code unchanged; PR left open; tests and builds on isolated roots; renders from a seeded home. |

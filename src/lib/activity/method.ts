@@ -164,14 +164,6 @@ export interface AgentConversation {
 /* Parameters                                                               */
 /* ------------------------------------------------------------------------ */
 
-export function serverTimeZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-}
-
 export function validTimeZone(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim() || value.length > 64) return null;
   try {
@@ -352,15 +344,6 @@ export function zonedDate(date: string, tz: string): ZonedDay | null {
   const [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])];
   if (m < 1 || m > 12 || d < 1 || d > 31) return null;
   return zonedDayAt(y, m, d, tz);
-}
-
-/** The wall-clock day containing `t`. */
-export function zonedDay(t: number, tz: string): ZonedDay {
-  const w = wallClock(t, tz);
-  const day = zonedDayAt(w.y, w.m, w.d, tz);
-  /* A zone whose midnight does not exist on some date begins that day later;
-     the instant still belongs to it. */
-  return t < day.start ? { ...day, start: t } : day;
 }
 
 /** The last `days` wall-clock days ending with the day of `nowMs`, oldest first. */
@@ -818,7 +801,7 @@ export function activityReport(input: ReportInput): ActivityReport {
     if (anchor.at >= rangeStart && anchor.at <= limit) projectKeys.add(projectKey(anchor.project));
   }
   /* A project a host is known to hold gets a row even with no input read:
-     when that host was not read, the row says unknown instead of vanishing. */
+     when that host was not read, the row stays and reads unknown. */
   for (const host of input.hosts) if (host.projects !== "all") for (const project of host.projects) projectKeys.add(projectKey(project));
   const rangeWindow = { start: rangeStart, end: limit };
   const projects = new Map<string, ProjectActivity>();

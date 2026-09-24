@@ -757,8 +757,8 @@ export interface TranscriptActivityRead {
 
 /**
  * Dated message rows with `fromSec <= timestamp <= toSec`, for the activity
- * dashboard: path, speaker and time only. The body is never selected, and an
- * absent index is reported as unavailable rather than created.
+ * dashboard: path, speaker and time only. The body is never selected. An
+ * absent index is reported as unavailable, and this read never creates one.
  */
 export function readTranscriptActivity(fromSec: number, toSec: number): TranscriptActivityRead {
   if (!fs.existsSync(statePath("transcript-search.sqlite"))) {

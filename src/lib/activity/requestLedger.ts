@@ -104,8 +104,8 @@ function cleanProject(project: string | null | undefined): string | null {
   return value && value !== UNRESOLVED_PROJECT ? value : null;
 }
 
-/** The same precedence the WakaTime operator point uses, except that a target
-    it cannot attribute yields null instead of a refusal. */
+/** The same precedence the WakaTime operator point uses. A target it cannot
+    attribute yields a null project, and the request is still recorded. */
 function resolveProject(input: OperatorRequestInput, dependencies: RequestLedgerDependencies): string | null {
   if (input.project !== undefined) return cleanProject(input.project);
   try {

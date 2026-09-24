@@ -68,6 +68,18 @@
  * their markdown heading or HTML element id, and a sibling `retry.ts:180` /
  * `retry.ts:180:5` link opens the file at that line.
  *
+ * With BOARD_CAPTURE_CASE=activity it renders the activity dashboard
+ * (docs/design/activity-dashboard.md) on a home seeded with invented work:
+ * three git repositories whose Claude transcripts the Viewer's own scan
+ * indexes (the agent axis), a request ledger that starts nine days back, a
+ * stage host export that stops two days back (so the last two days read
+ * unknown), `hosts.json`, `settings.json`, and one weekday with agent work and
+ * no input (the probable-missing-source flag); then the same page on a home
+ * with no data at all. At 1440 × 900 and 390 × 844 it captures the day view,
+ * the project view with one row open, the 30-day view and the empty home, and
+ * checks for sideways overflow, the unknown days and the flagged day. With
+ * ACTIVITY_RENDER_DIR set, the images are copied there.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -3955,8 +3967,269 @@ async function filePreviewMain(): Promise<void> {
   }
 }
 
-/* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), instead of the camera probes. */
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=activity: the activity dashboard                         */
+/* ------------------------------------------------------------------------- */
+
+const ACTIVITY_TZ = "Europe/Kyiv";
+const ACTIVITY_REPOS = ["harbor-ledger", "lantern-api", "atlas-docs"] as const;
+type ActivityRepo = typeof ACTIVITY_REPOS[number];
+
+function activityRepoDir(name: ActivityRepo): string {
+  return path.join(HOME, "Projects", name);
+}
+
+/** One invented Claude conversation per repository and day: a user record
+    opens each turn and assistant records carry it to its end. */
+function writeActivityTranscript(repo: ActivityRepo, day: number, turns: Array<{ start: number; minutes: number }>): void {
+  if (!turns.length) return;
+  const folder = path.join(HOME, ".claude/projects", projectSlug(activityRepoDir(repo)));
+  fs.mkdirSync(folder, { recursive: true });
+  const id = `${String(ACTIVITY_REPOS.indexOf(repo) + 1).padStart(4, "0")}${String(day).padStart(4, "0")}-2026-4000-8000-000000000000`;
+  const lines: unknown[] = [];
+  for (const [index, turn] of turns.entries()) {
+    const stamp = (offsetMin: number) => new Date(turn.start + offsetMin * 60_000).toISOString();
+    lines.push({ type: "user", uuid: `${id}-u${index}`, timestamp: stamp(0), cwd: activityRepoDir(repo), sessionId: id, message: { role: "user", content: `Next step ${index + 1} for ${repo}.` } });
+    for (let minute = 2; minute < turn.minutes; minute += 17) {
+      lines.push({ type: "assistant", uuid: `${id}-a${index}-${minute}`, timestamp: stamp(minute), cwd: activityRepoDir(repo), sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Progress on ${repo}, minute ${minute}.` }] } });
+    }
+    lines.push({ type: "assistant", uuid: `${id}-a${index}-end`, timestamp: stamp(turn.minutes), cwd: activityRepoDir(repo), sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Done with step ${index + 1}.` }] } });
+  }
+  fs.writeFileSync(path.join(folder, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+}
+
+interface ActivityReading {
+  width: number;
+  scrollWidth: number;
+  pageScrollWidth: number;
+  pageClientWidth: number;
+  pageHeight: number;
+  tiles: number;
+  days: Array<{ date: string; coverage: string | null; missing: string | null; text: string }>;
+  projects: Array<{ project: string; coverage: string | null }>;
+  hosts: Array<{ host: string; connected: string | null }>;
+  expanded: number;
+}
+
+function readActivity(): ActivityReading {
+  const root = document.querySelector<HTMLElement>("[data-activity-page]")!;
+  return {
+    width: window.innerWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    pageScrollWidth: root.scrollWidth,
+    pageClientWidth: root.clientWidth,
+    pageHeight: root.scrollHeight,
+    tiles: document.querySelectorAll("[data-activity-tile]").length,
+    days: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-day]")).map((row) => ({
+      date: row.dataset.activityDay ?? "",
+      coverage: row.dataset.coverage ?? null,
+      missing: row.querySelector<HTMLElement>("[data-activity-missing-source]")?.dataset.activityMissingSource ?? null,
+      text: row.querySelector("[data-activity-day-totals]")?.textContent ?? "",
+    })),
+    projects: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-project]")).map((row) => ({ project: row.dataset.activityProject ?? "", coverage: row.dataset.coverage ?? null })),
+    hosts: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-host]")).map((row) => ({ host: row.dataset.activityHost ?? "", connected: row.dataset.connected ?? null })),
+    expanded: document.querySelectorAll("[data-activity-project-details]").length,
+  };
+}
+
+async function activityMain(): Promise<void> {
+  const { zonedDays } = await import("../src/lib/activity/method");
+  const { exportLines, messageId, ledgerRowKey } = await import("../src/lib/activity/humanInput");
+  for (const dir of [OUT_DIR, path.join(BASE, "git-home"), path.join(BASE, "tmp"), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions")]) fs.mkdirSync(dir, { recursive: true });
+  for (const repo of ACTIVITY_REPOS) {
+    const dir = activityRepoDir(repo);
+    fs.mkdirSync(dir, { recursive: true });
+    git(dir, "init", "--initial-branch=main", ".");
+    fs.writeFileSync(path.join(dir, "README.md"), `# ${repo}\n`, "utf8");
+    git(dir, "add", "README.md");
+    git(dir, "commit", "-m", `${repo}: first commit`);
+  }
+  const now = Date.now();
+  const days = zonedDays(now, 10, ACTIVITY_TZ);
+  const at = (day: number, hh: number, mm: number) => days[day]!.start + (hh * 60 + mm) * 60_000;
+  const past = (time: number) => time < now - 60_000;
+  /* The most recent weekday among days 3-7: agents work, nobody asks. */
+  const weekday = (day: number) => new Date(`${days[day]!.date}T12:00:00Z`).getUTCDay();
+  const flagDay = [7, 6, 5, 4, 3].find((day) => weekday(day) >= 1 && weekday(day) <= 5) ?? 7;
+
+  for (let day = 2; day <= 9; day += 1) {
+    const turns = (repo: ActivityRepo) => {
+      if (repo === "harbor-ledger" && day >= 3 && day !== flagDay) return [{ start: at(day, 9, 4), minutes: 80 }, { start: at(day, 14, 8), minutes: 95 }];
+      if (repo === "lantern-api" && day !== flagDay) return [{ start: at(day, 11, 1), minutes: 50 }, ...(day % 2 === 0 ? [{ start: at(day, 1, 30), minutes: 150 }] : [])];
+      if (repo === "atlas-docs" && (day === flagDay || day === 7)) return [{ start: at(day, 10, 0), minutes: 120 }, { start: at(day, 15, 0), minutes: 60 }];
+      return [];
+    };
+    for (const repo of ACTIVITY_REPOS) writeActivityTranscript(repo, day, turns(repo).filter((turn) => past(turn.start + turn.minutes * 60_000)));
+  }
+
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity", flagDay: days[flagDay]!.date };
+  const shots: string[] = [];
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    /* The project keys the scan gave the repositories: the ledger names the same ones. */
+    const keys = await (async () => {
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        const files = ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? [];
+        const of = (repo: ActivityRepo) => files.find((file) => file.path?.includes(projectSlug(activityRepoDir(repo))))?.project;
+        const found = Object.fromEntries(ACTIVITY_REPOS.map((repo) => [repo, of(repo)]));
+        if (ACTIVITY_REPOS.every((repo) => found[repo])) return found as Record<ActivityRepo, string>;
+        await Bun.sleep(2_000);
+      }
+      throw new Error("the seeded repositories never scanned");
+    })();
+
+    /* This host's ledger, from day 1 on; nothing on the flagged day. */
+    const activityDir = path.join(STATE_DIR, "activity");
+    fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
+    const rows: Array<Record<string, unknown>> = [];
+    const row = (time: number, repo: ActivityRepo, kind: string, surface: string) => {
+      if (past(time)) rows.push({ v: 1, key: ledgerRowKey(`seed-${rows.length}-${time}`), at: time, kind, surface, project: keys[repo] });
+    };
+    row(at(1, 16, 0), "atlas-docs", "task", "desktop");
+    for (let day = 3; day <= 9; day += 1) {
+      if (day === flagDay) continue;
+      row(at(day, 9, 2), "harbor-ledger", "message", "desktop");
+      row(at(day, 9, 14), "harbor-ledger", "message", "desktop");
+      row(at(day, 9, 31), "harbor-ledger", "decision", "desktop");
+      row(at(day, 14, 6), "harbor-ledger", "voice", "phone");
+      row(at(day, 14, 28), "harbor-ledger", "message", "phone");
+      row(at(day, 15, 20), "harbor-ledger", "task", "desktop");
+      row(at(day, 11, 3), "lantern-api", "message", "desktop");
+      row(at(day, 11, 38), "lantern-api", "answer", "tablet");
+      if (day === 7) {
+        row(at(day, 16, 0), "atlas-docs", "task", "desktop");
+        row(at(day, 16, 8), "atlas-docs", "message", "desktop");
+      }
+    }
+    for (const entry of rows) {
+      const file = path.join(activityDir, `requests-${new Date(entry.at as number).toISOString().slice(0, 10)}.jsonl`);
+      fs.appendFileSync(file, JSON.stringify(entry) + "\n", { mode: 0o600 });
+    }
+    /* The stage host: its export speaks for days 2-7, so the last two days read unknown. */
+    const stageInputs = [];
+    for (let day = 2; day <= 7; day += 1) {
+      if (day === flagDay) continue;
+      for (const [hh, mm] of [[10, 5], [10, 12], [10, 40], [12, 15], [17, 30], [17, 45]] as const) {
+        stageInputs.push({ ids: [messageId("codex", `stage-${day}-${hh}-${mm}`)], at: at(day, hh, mm), host: "stage", source: "transcripts" as const, project: "orchard-client", kind: "message" as const, surface: "unknown" as const, hash: null });
+      }
+    }
+    const stageDir = path.join(activityDir, "hosts", "stage");
+    fs.mkdirSync(stageDir, { recursive: true });
+    fs.writeFileSync(path.join(stageDir, "human-input.jsonl"), exportLines({
+      host: "stage", coveredFrom: days[2]!.start, coveredUntil: days[8]!.start, exportedAt: days[8]!.start + 3_600_000, records: stageInputs.length + 57,
+      excluded: { "agent-message": 14, "stage-template": 6, notification: 4, unmarked: 9, attachment: 3, duplicate: 11 },
+    }, stageInputs));
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ["orchard-client"] }] }));
+    fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: ACTIVITY_TZ, billable: ["orchard-client"] }));
+
+    /* Wait for the Viewer's own index to carry the agent axis. */
+    const deadline = Date.now() + 300_000;
+    let ready = false;
+    while (Date.now() < deadline && !ready) {
+      const body = await (await fetch(`${baseUrl}/api/activity?range=7d`)).json() as { coverage?: { agentIndex?: string }; totals?: { wallMs?: number } };
+      ready = body.coverage?.agentIndex === "ok" && (body.totals?.wallMs ?? 0) > 3_600_000;
+      if (!ready) await Bun.sleep(3_000);
+    }
+    must(ready, "the agent axis never appeared: the transcript index did not cover the seeded conversations");
+
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const capture = async (surface: "desktop" | "phone", query: string, name: string, lang: "en" | "uk" = "en", expand?: string) => {
+      const phone = surface === "phone";
+      const width = phone ? 390 : 1440;
+      const context = await browser!.newContext({
+        viewport: { width, height: phone ? 844 : 900 },
+        reducedMotion: "reduce",
+        ...(phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+      });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/activity?${query}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
+      if (expand) {
+        await page.click(`[data-activity-project="${expand}"] > button`);
+        await page.waitForSelector("[data-activity-project-details]", { timeout: 10_000 });
+      }
+      await page.waitForTimeout(400);
+      const first = await page.evaluate(readActivity);
+      await page.setViewportSize({ width, height: Math.min(Math.max(first.pageHeight, phone ? 844 : 900), 7_000) });
+      await page.waitForTimeout(300);
+      const reading = await page.evaluate(readActivity);
+      const tag = `${surface}-${name}${lang === "uk" ? "-uk" : ""}`;
+      const file = path.join(OUT_DIR, `activity-${tag}.png`);
+      await page.screenshot({ path: file });
+      shots.push(file);
+      report[tag] = reading;
+      must(reading.scrollWidth <= reading.width + 1 && reading.pageScrollWidth <= reading.pageClientWidth + 1, `${tag}: the page runs ${reading.scrollWidth - reading.width}px / ${reading.pageScrollWidth - reading.pageClientWidth}px sideways`);
+      must(reading.tiles === 4, `${tag}: ${reading.tiles} tiles`);
+      await context.close();
+      return reading;
+    };
+
+    for (const surface of ["desktop", "phone"] as const) {
+      const week = await capture(surface, "range=7d&view=days", "day-7d");
+      const byDate = new Map(week.days.map((day) => [day.date, day]));
+      must(week.days.length === 7, `${surface}: ${week.days.length} day rows in 7 days`);
+      for (const day of [8, 9]) must(byDate.get(days[day]!.date)?.coverage === "unknown", `${surface}: ${days[day]!.date} reads ${byDate.get(days[day]!.date)?.coverage}, the stage host was not read then`);
+      for (const day of [4, 5, 6, 7].filter((value) => value !== flagDay)) must(byDate.get(days[day]!.date)?.coverage === "complete", `${surface}: ${days[day]!.date} reads ${byDate.get(days[day]!.date)?.coverage}`);
+      must(byDate.get(days[flagDay]!.date)?.missing?.includes("agent-activity") === true, `${surface}: the flagged weekday ${days[flagDay]!.date} shows ${byDate.get(days[flagDay]!.date)?.missing ?? "no flag"}`);
+      const projectView = await capture(surface, "range=7d&view=projects", "projects-7d", "en", keys["harbor-ledger"]);
+      must(projectView.expanded === 1, `${surface}: ${projectView.expanded} project rows open`);
+      must(projectView.projects.find((row) => row.project === "orchard-client")?.coverage === "unknown", `${surface}: the stage host's project does not read unknown`);
+      must(projectView.projects.find((row) => row.project === keys["harbor-ledger"])?.coverage === "complete", `${surface}: harbor-ledger does not read complete`);
+      const month = await capture(surface, "range=30d&view=days", "day-30d");
+      must(month.days.length === 30, `${surface}: ${month.days.length} day rows in 30 days`);
+      must(month.days.filter((day) => day.coverage === "unknown").length >= 20, `${surface}: days before the ledger do not read unknown`);
+      must(month.hosts.some((host) => host.host === "stage" && host.connected === "true"), `${surface}: the stage host is not listed as read`);
+    }
+    await capture("desktop", "range=7d&view=days", "day-7d", "uk");
+
+    /* A home with no data at all. */
+    await stop(server);
+    server = null;
+    fs.rmSync(path.join(HOME, ".claude/projects"), { recursive: true, force: true });
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    for (const surface of ["desktop", "phone"] as const) {
+      const empty = await capture(surface, "range=30d&view=days", "empty-30d");
+      must(empty.days.every((day) => day.coverage === "unknown"), `${surface}: an empty home has a day that reads complete`);
+      must(empty.hosts.length === 1 && empty.hosts[0]!.connected === "false", `${surface}: an empty home lists ${JSON.stringify(empty.hosts)}`);
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(HOME).join("$HOME"));
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "activity.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  const target = process.env.ACTIVITY_RENDER_DIR?.trim();
+  if (target) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const file of [...shots, path.join(OUT_DIR, "activity.json")]) fs.copyFileSync(file, path.join(target, path.basename(file)));
+  }
+  console.log(`activity dashboard captures: ${OUT_DIR}${target ? ` (copied to ${target})` : ""}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`activity dashboard acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("activity dashboard acceptance passed at 1440 × 900 and 390 × 844.");
+  }
+}
+
+/* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
+else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
 else if ((SEAT_CASES as readonly string[]).includes(process.env.BOARD_CAPTURE_CASE ?? "")) await seatsMain(process.env.BOARD_CAPTURE_CASE as SeatCase);
