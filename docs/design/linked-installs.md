@@ -1,8 +1,10 @@
 # Linked installs: one Delegatus reads another, peer to peer
 
 Status: design, 2026-09-25. Read-only design stage; nothing here is built yet.
-Grounded in `main` at `534edaf72`, which is PR #2159 (activity records itself)
-merged; every activity file cited below is on `main`.
+Every code claim was checked against `origin/main` at `534edaf72`, which is
+PR #2159 (activity records itself) merged; every activity file cited below is
+on `main`. This branch's merge base is the older `46f47bec1`; the branch
+changes only this document, so the difference does not touch what is cited.
 
 ## Originating requirement
 
@@ -88,17 +90,14 @@ builds on that pull.
 | Onboarding | `src/components/onboarding/OnboardingDialog.tsx`, `src/lib/onboarding/steps.ts` | Steps `engines, agents, phone, voice, tour, check`; a marker written before a new step reads it as "not visited". Re-entry rows live in `ProjectRail.tsx` and `menuEntries.tsx`. |
 | Settings | none | There is no Settings page or dialog in the app today (no `src/components/settings`, no `settings.*` i18n keys). The "Settings → Linked installs" place has to be created (§8.1). |
 
-Three facts found in the code shape the primary case:
+Four facts found in the code shape the primary case:
 
 1. **A Delegatus behind a public domain answers 403 on every browser route
    today.** A reverse proxy that keeps the public `Host` delivers
    `Host: delegatus.example.com`, which `rejectForeignHost` refuses. Nothing in
    the repo declares a public host: there is no `LLV_PUBLIC_URL`, and
    `x-forwarded-proto` is read only to mark a cookie `secure`. The public case
-   therefore needs a declared public address before any peer work (§3.1). That
-   same pin also keeps a public install with `LLV_TOKEN` unset from serving its
-   board to the internet, so declaring a public address must require the
-   access key.
+   therefore needs a declared public address before any peer work (§3.1).
 2. **The trusted local entry vouches for any request that says it is local.**
    `vouchedCredential` decides on the `Host` header alone. `docs/docker.md`
    recommends trusting the local entry, and agents on the Docker shape need it
@@ -115,6 +114,17 @@ Three facts found in the code shape the primary case:
    credential sent as `Authorization: Bearer` through the local entry would be
    replaced by the operator's own. The peer credential therefore travels in its
    own header (§2.4).
+4. **Without the access key, the Host pin stops no direct caller.** The pin
+   refuses a foreign `Host`, but a caller writes the `Host` it likes:
+   `rejectForeignHost` (`sameOrigin.ts:43-47`) admits anyone who sends
+   `Host: 127.0.0.1`, and `proxy()` (`proxy.ts:50-53`) lets every request
+   through while `LLV_TOKEN` is unset. So any port of B that a stranger can
+   reach (a LAN proxy, a public proxy, an ssh tunnel on another machine)
+   gives that stranger the board and spawn, whatever address is saved. The
+   key can also disappear at run time: `disablePhoneAccess` unsets it on a
+   loopback CLI install (`phoneAccess.ts:398`). §3.1 therefore checks the key
+   at every point where it is **used**: per request, per action and at
+   boot.
 
 ## 2. Pairing
 
@@ -123,8 +133,8 @@ Three facts found in the code shape the primary case:
 - **B** is the install being read (it grants). **A** is the install that reads.
 - A **grant** lives on B: one peer, its scopes, the sha256 of its token.
 - A **link** lives on A: one peer's address, transport, token, and the host id
-  A files its rows under. A host id belongs to exactly one link or push grant;
-  a second one cannot take it.
+  A files its rows under. A host id belongs to exactly one live link or push
+  grant; a second one cannot take it while that one lives (§4.4).
 - A **code** is minted on B for one pairing: a public id plus a secret, single
   use, 10 minutes.
 
@@ -137,11 +147,17 @@ mutual pairing is deferred (§11).
  B (operator, in Settings)             A (operator, in the connect form)
  ─────────────────────────             ────────────────────────────────
  "Allow a connection", scopes ticked
-   POST /api/links/codes      ──►  code R4TZ-K7QM9-XTD2P, expires 10:41
+ (refused without the access key)
+   POST /api/links/codes      ──►  code R4TZ7M-K7QM9-XTD2P, expires 10:41
                                    operator reads it to A's screen
                                    types B's address + code
                                    POST /api/links/peers {url, code, name}
                                      A's server checks the URL policy (§3.2)
+                  ◄── POST https://b/api/peer/v1/pair/probe {id}   ×3,
+                      Host: 127.0.0.1 / localhost / [::1]  (§2.5)
+ answer {vouched}; a vouched probe
+ burns the code and marks this
+ install open-to-internet   ──►        any vouched:true → stop, peer-open
                   ◄── POST https://b/api/peer/v1/pair {code, install:A}
  look up the code by its id; verify
  the secret hash, unexpired, unused,
@@ -150,8 +166,10 @@ mutual pairing is deferred (§11).
                   ──► 200 {grant:{id, token, scopes}, install:B,
                            storeId, feeds}
                                      A refuses if storeId is its own store
-                                     or another link's (§4.4), else stores
-                                     the link (token 0600) and pulls at once
+                                     or a live link's; takes over a removed
+                                     or revoked host with that store (§4.4);
+                                     stores the link (token 0600) and pulls
+                                     at once
 ```
 
 The browser on A never sees the token and never talks to B: A's Viewer makes
@@ -159,9 +177,15 @@ every peer request server-side, so CORS and cookies never enter it.
 
 ### 2.3 Code and token
 
-- **Code:** `IIII-SSSSS-SSSSS` in Crockford base32, case-insensitive, `I`/`L`
-  read as `1` and `O` as `0`. The first 4 symbols are the code's **public id**
-  (a lookup handle that anyone may see); the next 10 are the **secret** (50 bits).
+- **Code:** `IIIIII-SSSSS-SSSSS` in Crockford base32, case-insensitive, `I`/`L`
+  read as `1` and `O` as `0`. The first 6 symbols are the code's **public id**
+  (a lookup handle, 30 bits); the next 10 are the **secret** (50 bits). The id
+  is not a secret, but it is long enough that nobody finds an open code by
+  scanning: at most a few codes are open at once, so hitting one takes about
+  2³⁰ requests inside its 10 minutes, and a request naming no open code
+  changes nothing (§2.5). With a 4-symbol id (2²⁰) a fast scanner could find
+  the open code through its `429` and burn it; that denies pairing, never
+  reveals the secret, and is what the longer id prevents.
   B stores the id in plain text and the secret as sha256, with the expiry,
   scopes, a remaining-attempts counter and a failed-attempts count, so a
   Viewer restart (a deploy) inside the 10 minutes keeps it and a read of B's
@@ -203,12 +227,39 @@ All of `/api/peer/v1/*` sits behind one guard that runs before routing:
 | `POST /pair` naming an open code's id with a wrong secret | the same `401`; that code loses one attempt |
 | `POST /pair` with the **exact** full code of an expired or used code | `410 {"error":"code-spent"}` |
 | `POST /pair` naming a code that had 5 failures in the last minute | `429 {"error":"rate-limited"}`, `Retry-After`, for that code only |
+| `POST /pair/probe` whose id names no open code | the same `401` |
+| `POST /pair/probe` naming an open code's id | `200 {"vouched":false}`, or `200 {"vouched":true}` after burning that code (below) |
 
 An unknown `grantId` or code id is compared against a dummy hash, so timing
 does not tell "no such grant" from "wrong token". The `410` is visible only to
 someone who holds the whole code, so it tells a guesser nothing, and it lets
 the user see "expired" apart from "wrong" (§8.4). No endpoint answers
 anonymously: there is no public "hello", version or install id.
+
+**The pairing probe.** B's own self-check (§3.1) often cannot reach B's
+public name, and then it can only say `unverified`. A reaches B from outside
+by definition, so A runs the spoof test for it, just before pairing. A sends
+`POST /api/peer/v1/pair/probe {"id":"<code id>"}` three times, with `Host`
+set to `127.0.0.1`, `localhost` and `[::1]` (every name `isLoopbackHost`
+vouches for, `deploymentProxy.ts:209-219`; a proxy may route each one
+differently), each over a connection aimed at B's checked address with SNI
+set to B's name. B's route answers `vouched: true` when the request carries
+`Authorization: Bearer` equal to the gate key: the probe sent none, so only
+the gateway can have added it. On `vouched: true`, B burns the code and
+records its self-check state as `open-to-internet` (which disables "Allow a
+connection", §3.2), and A stops with `peer-open` and sends nothing more. Any
+other answer (a `421`, a `404` from another site, a closed connection,
+`vouched: false`) means the spoof did not reach B as the operator, and A goes
+on to `POST /pair` with B's real `Host`.
+
+The probe carries only the code's public id. The secret stays off it,
+because a request with a spoofed `Host` may be routed to another site on B's
+box. It
+tells its sender nothing a stranger cannot learn without it: anyone can send
+`Host: 127.0.0.1` to B's proxy and see whether B's board answers. It costs no
+attempt, and naming no open code gets the uniform `401`. The one thing the
+id buys is burning a code, and only on a B that is open to the internet,
+which is when the code should die.
 
 **Pairing rate limit (in the Viewer process), per code:**
 
@@ -239,12 +290,22 @@ anonymously: there is no public "hello", version or install id.
   host stays on /activity as "no longer linked, read up to …") or "Remove and
   delete its history" (`forgetHost`). Until slice 3 adds the choice, removal
   keeps the history (§13).
+- **Connecting again** to a B whose host is still on A, removed with its
+  history kept or `revoked`, continues that host: the new link takes the old
+  host id and cursor and reads on from where the old one stopped, so no row
+  is doubled and nothing is refused (§4.4). A revoked link is replaced in
+  place: its row offers "Connect again", which opens the connect form with
+  the host's name filled in; a successful pairing swaps in the new grant id,
+  token and install id and clears `revoked`. The name typed in the form
+  becomes the label; the host id stays the old one, and the form says
+  "Continues the history of {name}".
 
 ### 2.7 Threat model (read and push grants)
 
 | Threat | What happens | Mitigation |
 |---|---|---|
-| Internet caller sends `Host: 127.0.0.1` through B's proxy | if the proxy reaches a trusted local entry, the gateway vouches for it as the operator: full board and spawn | a public address is refused unless it maps to a non-vouching entry, and the self-check sends exactly this request and fails loudly when it is vouched (§3.1) |
+| Internet caller sends `Host: 127.0.0.1` through B's proxy | if the proxy reaches a trusted local entry, the gateway vouches for it as the operator: full board and spawn | a public address is refused unless it maps to a non-vouching entry; the self-check sends exactly this request and fails loudly when it is vouched (§3.1); when the self-check cannot reach B's own name, A's pairing probe sends it from outside and burns the code (§2.5) |
+| Any caller reaches B while B's access key is off (a LAN proxy, a public proxy, an ssh tunnel on A) | B's gate lets every request through and the Host pin admits `Host: 127.0.0.1`: board and spawn for everyone on that path | the key is checked where it is used (§3.1): no non-loopback address is saved or admitted, no code is minted and no check reports `ok` while it is off; turning phone access off keeps it while links need it |
 | Token at rest on B | B holds hashes only | a copy of B's state yields no usable token |
 | Token at rest on A | plain text in `<state>/links/peers.json` (0600, dir 0700, like `records.sqlite` and `service.env`) | readable by A's operator uid, root, the Viewer container, and every agent Delegatus runs on A as that uid. A keyring is not used: the Docker install has no Secret Service. Blast radius below. |
 | Stolen read token | the thief reads B's activity feed (fields in §5) until revoked | read-only scope; no write, no transcript, no spawn; B shows per grant "last used" and request counts (today, last 7 days), so a second reader shows as a doubled count; revoke on B. B does not show a caller address: behind a same-box proxy every request arrives from `127.0.0.1`, and `X-Forwarded-For` is caller-written (§11). |
@@ -300,16 +361,62 @@ install"):
   `recordViewerEntries` (`src/runtime-host/viewerEntries.ts`). On save, and at
   boot, the Viewer puts its host into its own environment as `LLV_PUBLIC_HOST`
   (the `phoneAccess.ts` pattern), and `allowedHostNames()` adds it beside
-  `LLV_TS_HOST`, so the operator can use B's UI at its domain.
-- **Refusals when saving:**
-  - a public address (neither loopback nor private) while `LLV_TOKEN` is unset
-    (`needs-access-key`), because adding it to the Host pin would open the
-    board to the internet. The message offers to turn the access key on, the
-    same key phone access uses;
+  `LLV_TS_HOST` **only while `LLV_TOKEN` is set**, read per request like
+  every other part of the gate (`phoneAccess.ts:24-25`), so the operator can
+  use B's UI at its domain.
+- **The access key, checked where it is used.** Any address other than
+  loopback, private LAN addresses included, means someone other than this
+  machine's own processes can reach the Viewer, and fact 4 (§1) says the pin
+  alone keeps nobody out. So `LLV_TOKEN` is read afresh at each of these
+  points:
+  - **saving** any non-loopback address (public or private) is refused with
+    `needs-access-key` while the key is off;
+  - **the Host pin** admits `LLV_PUBLIC_HOST` only while the key is on, per
+    request. A saved address is not admitted while the key is missing, for
+    whatever reason; the boot rule below puts the key back at every start, so
+    this is the net for a key lost at run time;
+  - **"Check this address"** reports `needs-access-key` without probing while
+    the key is off, and never `ok`;
+  - **minting a code** (every scope) is refused with `needs-access-key` while
+    the key is off, and "Allow a connection" is disabled with that reason. A
+    code means another machine is about to reach this one, by whatever path,
+    including an ssh tunnel this install cannot see, so the key is a
+    precondition of every link, whatever address it uses;
+  - **turning phone access off** keeps the key while a non-loopback address
+    is saved or any grant exists: `disablePhoneAccess` already keeps it for a
+    non-loopback bind and on Docker (`phoneAccess.ts:394-398`), and gains this
+    third reason;
+  - **at boot**, a saved non-loopback address or any grant is a remembered
+    choice that gates the process, exactly as the phone-access flag does
+    (#2024): beside `restorePhoneAccessGate` in
+    `src/lib/viewerInstrumentation.ts:812-814`, before the first request, a
+    key the environment set is kept, otherwise the key file is read or
+    minted (`getToken()`), and a key that cannot be put in place stops the
+    Viewer (the `PhoneGateRefusal` rule), because the proxy or tunnel in
+    front of it may be live. A CLI install started on loopback, whose
+    launcher sets no key (`bin/cli.mjs:878-881` covers only a non-loopback
+    bind), would otherwise come back from a restart open to that proxy.
+    Whoever authenticates against a release it did not start (the runtime
+    host's trusted local entry, the deploy adapter's health probes) finds
+    that key through `viewerBootGateKey` (`src/lib/access/phoneAccessBootGate.ts:45-57`,
+    used by `viewerReleaseCredentialResolver`, `deploymentProxy.ts:176-201`),
+    which today reads the key file only while the phone-access flag exists.
+    It gains the second condition, read from the same root: a saved
+    non-loopback address in `links/self.json` or a grant in
+    `links/grants.json` under the state directory the environment names.
+    Without that, a Docker release gated by the links rule would lock the
+    trusted local entry and the MCP clients behind it out.
+
+  The Settings section shows the `needs-access-key` state as a red line with
+  a "Turn on the access key" button, which puts the same key phone access
+  uses in place (`getToken()`, as `enablePhoneAccess` does at
+  `phoneAccess.ts:283-298`; on Docker the key `service.env` set is kept).
+- **Other refusals when saving:**
   - a public address while `publicEntry()` is none (`needs-remote-entry`);
   - an `http://` address that is not loopback or private (`http-public`, §3.2).
-- **"Check this address"** runs two probes from B to its own public URL, each
-  with a fresh one-time nonce in `X-Delegatus-Self`, both over `node:https`
+- **"Check this address"** runs a reach probe and three spoof probes from B
+  to its own public URL, each with a fresh one-time nonce in
+  `X-Delegatus-Self`, all over `node:https`
   with the connection and SNI aimed at the public name:
   1. **Reach:** `POST {publicUrl}/api/peer/v1/self-check` with the public
      `Host`. The route answers a valid nonce with `200 {"host":"<Host it
@@ -317,16 +424,21 @@ install"):
      carries an `Authorization: Bearer` equal to the gate key. The probe sends
      no `Authorization`, so a credential on it can only have been added by the
      gateway.
-  2. **Spoof:** the same request with `Host: 127.0.0.1`. It passes when the
-     proxy refuses it (`421`, `444`, `404` from another site, a closed
-     connection) or when it arrives with `vouched: false`. It fails when it
-     arrives with `vouched: true`.
+  2. **Spoof:** the same request three times, with `Host` set to
+     `127.0.0.1`, `localhost` and `[::1]` (all three are loopback to
+     `isLoopbackHost`, `deploymentProxy.ts:209-219`, and a proxy may route
+     each name differently). Each passes when the proxy refuses it (`421`,
+     `444`, `404` from another site, a closed connection) or when it arrives
+     with `vouched: false`. One arriving with `vouched: true` fails the check.
 
   Outcomes shown:
-  - "Reachable at this address" (and the date checked): probe 1 answered with
-    the public host and `vouched: false`, and probe 2 passed;
+  - "Turn on the access key first" (`needs-access-key`): the key is off, so
+    nothing is probed; every port a stranger can reach is open (§1, fact 4);
+  - "Reachable at this address" (and the date checked): the key is on, probe
+    1 answered with the public host and `vouched: false`, and all three spoof
+    probes passed;
   - **"Anyone on the internet can use this board as you"** (`open-to-internet`,
-    red): probe 2 arrived vouched, or probe 1 arrived vouched. "Allow a
+    red): a spoof probe arrived vouched, or probe 1 did. "Allow a
     connection" is disabled, and the message names the fix: point the proxy at
     the public entry port above, or stop trusting the local entry;
   - "Your proxy replaces the address it was called at" (`host-rewritten`):
@@ -335,9 +447,11 @@ install"):
     board; treated as `open-to-internet` when it also arrived vouched;
   - "The certificate is not valid" (TLS failure);
   - "This server could not reach its own address, so the proxy could not be
-    checked" (`unverified`): a server often cannot reach its own public name
-    (hairpin NAT). This warns, shows the proxy rule with the port, and does not
-    block, because nothing more can be seen from inside.
+    checked here" (`unverified`): a server often cannot reach its own public
+    name (hairpin NAT). This warns, shows the proxy rule with the port, and
+    does not block minting, because the other install runs the same spoof
+    test from outside before it pairs (the pairing probe, §2.5). A vouched
+    probe there burns the code and turns this state into `open-to-internet`.
 
   The check runs on save, on "Check", and again before each code is minted, so
   a proxy changed after saving is caught at the next pairing. To anyone
@@ -369,17 +483,17 @@ request, and again after DNS resolution:
 - There is no "ignore certificate errors" switch. A self-signed LAN box uses
   `http://` on its private address, or Tailscale; certificate pinning is
   deferred (§11).
-- B adds one rule of its own: "Allow a connection" is disabled while B's
-  saved public address is plain `http://` on a public host, or its last check
-  was `open-to-internet`.
+- B adds rules of its own: "Allow a connection" is disabled while B's access
+  key is off (`needs-access-key`, §3.1), its saved public address is plain
+  `http://` on a public host, or its last check was `open-to-internet`.
 
 ### 3.3 Secondary transports
 
 | Transport | How | Work needed |
 |---|---|---|
 | Tailscale | phone access already publishes B at `https://<machine>.<tailnet>.ts.net` through the remote entry, gated by `LLV_TOKEN`, with a valid certificate. For the link it is the public-HTTPS case exactly. | none beyond §3.1; "use the Tailscale address" is one suggestion |
-| LAN | On the Docker install the runtime host binds 8898 and the Viewer binds to `127.0.0.1`, so a LAN link needs a proxy on B that listens on the LAN address and targets the public entry (§3.1). A CLI install can instead bind `delegatus --hostname 0.0.0.0` (`bin/cli.mjs`), which has no trusted entry. A uses `http://192.168.x.y:port`. | warning shown; the proxy rule is shown in Settings |
-| ssh tunnel | `ssh -L 18897:127.0.0.1:<public entry port> b` (8897 on a Docker install with a remote entry); A links `http://127.0.0.1:18897`. **Never** a tunnel to a trusted 8898: every process and account on A would reach B as its operator. The Settings screen shows the tunnel line with the right port. The user keeps the tunnel alive. | none |
+| LAN | **Precondition: B's access key is on.** Without it, anyone on the network who reaches the proxy writes `Host: 127.0.0.1` and gets the board (§1, fact 4), so B refuses to save the LAN address and to mint a code (§3.1). On the Docker install the runtime host binds 8898 and the Viewer binds to `127.0.0.1`, so a LAN link needs a proxy on B that listens on the LAN address and targets the public entry (§3.1). A CLI install can instead bind `delegatus --hostname 0.0.0.0` (`bin/cli.mjs`), which has no trusted entry and whose launcher sets the key for any non-loopback bind (`bin/cli.mjs:878-881`). B saves `http://192.168.x.y:port` as its address; A links the same. | warning shown; the proxy rule is shown in Settings |
+| ssh tunnel | **Precondition: B's access key is on.** A tunnel ends on A, so every process and account on A reaches B through it; with B's key off they are all B's operator. B cannot see a tunnel, which is why minting any code needs the key (§3.1). `ssh -L 18897:127.0.0.1:<public entry port> b` (8897 on a Docker install with a remote entry); A links `http://127.0.0.1:18897`. **Never** a tunnel to a trusted 8898: the gateway would vouch for every one of those processes even with the key on. The Settings screen shows the tunnel line with the right port. The user keeps the tunnel alive. | none |
 | ssh pull | `pull.ts`, kept. The connect form's "Connect over ssh instead" writes an ssh link (an alias from the operator's ssh config) so no file is edited. `activity/hosts.json` `pull` entries keep working and show in the list as "set in hosts.json". Slice 3 hardens the ssh options (§6). | form option; links store reads both |
 | push (B → A) | when B cannot be reached from A (a laptop behind NAT, A a public server), B sends its pages to A (§4.6) | slice 4 |
 
@@ -473,13 +587,34 @@ when the store cannot be read.
 - **Same install under two host ids** (an HTTPS link and an ssh link to the same
   B, added in either order, would double every row and every hour on
   /activity). The store id is the one identity every transport returns (the
-  ssh reader already sends it), so the check lives in `pullHost` and runs on
-  **every page**, before anything is written: when the page's `storeId` equals
-  another host's `remoteStore`, the page is refused with `same-install` and
-  nothing is stored; when it equals A's own `activity_meta.store_id`, the same
-  error says "This is this install". The pair answer carries `storeId` too, so
-  an HTTPS pairing is refused before a link is saved. The store gains one
-  lookup, `hostWithRemoteStore(storeId)`.
+  ssh reader already sends it). The store gains one lookup,
+  `hostWithRemoteStore(storeId)`, and the rule has two places:
+  - **When a link is made**, A knows B's `storeId` before saving anything:
+    the HTTPS pair answer carries it, and the ssh form reads the reader's
+    `state` line first (one page, `LLV_ACTIVITY_LIMIT=1`; the reader clamps
+    to `1..20000`, `pull.ts:55`). Then:
+
+    | `hostWithRemoteStore(storeId)` finds | A does |
+    |---|---|
+    | nothing | saves the link under the host id typed in the form |
+    | A's own `activity_meta.store_id` | refuses, `same-install` "This is this install" |
+    | a host with a **live** link: an active or failing link, a push grant, or a `hosts.json` `pull` entry | refuses, `same-install` "already linked as {name}" |
+    | a host whose link was removed with its history kept, or whose link is `revoked` | **takes that host over**: the new link gets the old host id, and the host's `cursor`, `remoteStore` and kinds stay as they are, so the first pull reads on from the old cursor. A revoked link is replaced in place (§2.6). |
+
+    A takeover writes no row and resets nothing: the rows already under that
+    host id are B's rows, and the cursor is B's version, which the same store
+    id says is still valid. If B's store changed meanwhile, the id would not
+    match and there is no takeover; if B's store rolled back under the same
+    id, the existing `latest < cursor` rule re-reads it whole.
+  - **On every page**, inside `pullHost` and before anything is written, for
+    every transport: when the page's `storeId` equals a different host's
+    `remoteStore`, the page is refused with `same-install` and nothing is
+    stored; when it equals A's own store id, the same error says "This is
+    this install". This is the net for what bypasses the form: a
+    `hosts.json` entry written by hand, or B's store copied to another box.
+    For a hand-written entry whose twin is only kept history, the message
+    names the fix ("rename this entry to {name} to continue its history, or
+    delete that history").
 
 ### 4.5 Versions, row kinds and backpressure
 
@@ -772,7 +907,8 @@ design adds only this section.
   is within the interval plus 10 minutes of now, otherwise "{n} behind");
   **error** in words (§8.4); clock offset when above 2 minutes; row count.
   Actions: Read now, Rename (the display label only; the host id is fixed),
-  Remove (with the keep or delete history choice from slice 3, §2.6).
+  Remove (with the keep or delete history choice from slice 3, §2.6); a
+  `revoked` link shows "Connect again" instead of Read now (§2.6).
 - **Grant row fields:** name, scopes, created, last used, requests today and
   in 7 days. Action: Revoke.
 - **"Allow a connection"** opens:
@@ -782,7 +918,7 @@ design adds only this section.
 │ On the other machine, choose "Connect to another │
 │ install" and enter:                              │
 │   Address  https://delegatus.example.com  [Copy] │
-│   Code     R4TZ-K7QM9-XTD2P               [Copy] │
+│   Code     R4TZ7M-K7QM9-XTD2P             [Copy] │
 │   Expires in 9:41 · works once                   │
 │   No wrong attempts                              │
 │ It may:  ☑ read this install's activity          │
@@ -791,9 +927,9 @@ design adds only this section.
 └──────────────────────────────────────────────────┘
 ```
 
-  Disabled, with the reason, while this install has no saved address, its
-  address is plain http on a public host, or its last check was
-  `open-to-internet`. Opening it re-runs the check (§3.1). "No wrong
+  Disabled, with the reason, while the access key is off
+  (`needs-access-key`), this install has no saved address, its address is
+  plain http on a public host, or its last check was `open-to-internet`. Opening it re-runs the check (§3.1). "No wrong
   attempts" becomes "2 wrong attempts" as they arrive. The countdown reaching
   zero turns the panel into "Expired" with "Make a new code". A successful
   pairing replaces the panel with "Connected: {name} can now read this
@@ -862,18 +998,21 @@ vps-2         Not connected                    [Connect this machine]
 | `not-delegatus` | That address answers, but not as a Delegatus that can link. Check the address, or update Delegatus there. | Ця адреса відповідає, але не як Delegatus, що підтримує зв'язування. Перевірте адресу або оновіть там Delegatus. |
 | `version` | {name} runs a Delegatus version this one cannot read. Update the older one. | {name} працює на версії Delegatus, яку ця не може прочитати. Оновіть старішу. |
 | `install-changed` | That address now answers as a different install. Nothing was read. If it was reinstalled, remove this link and connect again. | За цією адресою тепер інша інсталяція. Нічого не прочитано. Якщо її перевстановили, видаліть цей зв'язок і під'єднайтеся знову. |
-| `same-install` | This is the same install as {name}, which is already linked. Nothing was stored. | Це та сама інсталяція, що й {name}, вона вже під'єднана. Нічого не збережено. |
+| `same-install` (live link) | This is the same install as {name}, which is already linked. Nothing was stored. | Це та сама інсталяція, що й {name}, вона вже під'єднана. Нічого не збережено. |
+| `same-install` (`hosts.json` entry, twin is kept history) | This is the same install as {name}, whose history is kept here. Rename this entry to {name} to continue that history, or delete that history first. | Це та сама інсталяція, що й {name}, чия історія тут збережена. Перейменуйте цей запис на {name}, щоб продовжити ту історію, або спершу видаліть її. |
+| takeover (not an error) | Continues the history of {name}. | Продовжує історію {name}. |
 | `same-install` (own store) | This is this install. There is nothing to link. | Це ця сама інсталяція. Під'єднувати нічого. |
 | `no-ingest` | {name} has not recorded any activity yet. Update it to a version that records activity. | {name} ще не записав жодної активності. Оновіть його до версії, що записує активність. |
 | `malformed` | {name} sent data this install could not read. Nothing from that answer was stored. | {name} надіслав дані, які ця інсталяція не змогла прочитати. З цієї відповіді нічого не збережено. |
 | `quota` | {name} sent more than its daily allowance; receiving is paused until {time}. | {name} надіслав більше за денну норму; приймання призупинено до {time}. |
 | `quota` (total) | {name} reached its size limit here; nothing more is received from it. Remove its history or the link. | {name} досяг ліміту розміру тут; від нього більше нічого не приймається. Видаліть його історію або зв'язок. |
 | LAN warning | Plain http on a local network: anyone on this network can read what is sent. | Звичайний http у локальній мережі: будь-хто в цій мережі може прочитати те, що передається. |
-| `needs-access-key` | A public address needs the access key on, or anyone on the internet could open this board. Turn on the access key first. | Для публічної адреси потрібен ключ доступу, інакше будь-хто в інтернеті зможе відкрити цю дошку. Спершу увімкніть ключ доступу. |
+| `needs-access-key` | The access key is off, so anyone who can reach this install can open this board as you. Turn on the access key before giving it an address or letting another machine connect. | Ключ доступу вимкнено, тож будь-хто, хто може достукатися до цієї інсталяції, відкриє цю дошку від вашого імені. Увімкніть ключ доступу, перш ніж давати їй адресу чи дозволяти під'єднання іншої машини. |
 | `needs-remote-entry` | This install trusts every request that arrives on port {port} from this machine, so a public proxy cannot point there. Add a remote entry port, or stop trusting the local entry, then save again. | Ця інсталяція довіряє кожному запиту, що надходить на порт {port} з цієї машини, тож публічний проксі не можна спрямовувати туди. Додайте порт віддаленого входу або вимкніть довіру до локального входу, потім збережіть знову. |
 | `open-to-internet` | Anyone on the internet can use this board as you: a request that claims to be local passed through your proxy and was trusted. Point the proxy at 127.0.0.1:{port} instead. Connections are disabled until the check passes. | Будь-хто в інтернеті може користуватися цією дошкою від вашого імені: запит, що видає себе за локальний, пройшов через ваш проксі й отримав довіру. Спрямуйте проксі на 127.0.0.1:{port}. Під'єднання вимкнено, доки перевірка не пройде. |
+| `peer-open` (on A) | {address} is open to the internet: a request that claimed to be local reached it as its owner. Nothing was sent, and the code was cancelled there. Its owner must point the proxy at the port shown in its Settings, then make a new code. | {address} відкрита в інтернет: запит, що видавав себе за локальний, дістався до неї як до власника. Нічого не надіслано, а код там скасовано. Її власник має спрямувати проксі на порт, указаний у її налаштуваннях, і створити новий код. |
 | `host-rewritten` | Your proxy replaces the address it was called at. Keep the Host header in the proxy and point it at 127.0.0.1:{port}. | Ваш проксі підміняє адресу, за якою до нього звернулися. Збережіть заголовок Host у проксі та спрямуйте його на 127.0.0.1:{port}. |
-| `unverified` | This server could not reach its own address, so the proxy could not be checked. Make sure it points at 127.0.0.1:{port}. Other machines may still reach it. | Цей сервер не зміг звернутися до власної адреси, тому проксі не перевірено. Переконайтеся, що він спрямований на 127.0.0.1:{port}. Інші машини все одно можуть до нього достукатися. |
+| `unverified` | This server could not reach its own address, so the proxy could not be checked from here. Make sure it points at 127.0.0.1:{port}. A machine that connects checks it again from outside. | Цей сервер не зміг звернутися до власної адреси, тому проксі звідси не перевірено. Переконайтеся, що він спрямований на 127.0.0.1:{port}. Машина, що під'єднується, перевірить його ще раз ззовні. |
 | code burned | This code was burned after too many wrong attempts. Make a new one. | Цей код анульовано після забагатьох хибних спроб. Створіть новий. |
 
 ## 9. Operator-facing API (A's and B's own UI)
@@ -884,10 +1023,11 @@ Same-origin browser routes, behind `rejectCrossOrigin` and the normal gate:
 GET    /api/links                     self, links (outbound), grants (inbound), open codes
 PUT    /api/links/self                {label?, publicUrl?}
                                       → self | {code: "http-public" | "needs-access-key" | "needs-remote-entry"}
-POST   /api/links/self/check          → {state: "ok" | "tls" | "unverified" | "host-rewritten" | "open-to-internet",
-                                         checkedAt, entryPort}
+POST   /api/links/self/check          → {state: "needs-access-key" | "ok" | "tls" | "unverified" | "host-rewritten"
+                                                | "open-to-internet", checkedAt, entryPort}
+POST   /api/links/access-key          → {on: true}   (the key phone access uses; §3.1)
 POST   /api/links/codes               {scopes: ["activity:read"] | ["activity:push"], hostName?}
-                                      → {id, code, expiresAt} | {code: "open-to-internet" | …}
+                                      → {id, code, expiresAt} | {code: "needs-access-key" | "open-to-internet" | …}
 DELETE /api/links/codes/<id>
 POST   /api/links/peers               {url, code, name}         → link | {code: <§8.4 code>}
 POST   /api/links/peers/ssh           {alias, name}             → link
@@ -896,7 +1036,7 @@ DELETE /api/links/peers/<id>?history=keep|delete
 DELETE /api/links/grants/<id>
 ```
 
-Peer routes (§2.5 guard): `POST /pair`, `GET /info`, `GET /activity`,
+Peer routes (§2.5 guard): `POST /pair`, `POST /pair/probe`, `GET /info`, `GET /activity`,
 `DELETE /grant`, `GET|POST /push/activity`, `POST /self-check`, all under
 `/api/peer/v1/`.
 
@@ -904,7 +1044,9 @@ Files, all under `<state>/links/`, 0600 in a 0700 directory, written
 atomically: `self.json`, `peers.json` (links, tokens), `grants.json` (grant
 hashes, request counts, code ids and hashes). They are created on the first
 operator action, never at startup, so no `assertStateStartupMutation` step is
-involved; the Viewer (owner `viewer`) is the only writer. `readHostsConfig`
+involved; the Viewer (owner `viewer`) is the only writer. The boot gate
+(§3.1) only reads them; the key file it may mint is the one
+`restorePhoneAccessGate` already mints at the same point of the same boot. `readHostsConfig`
 gains the links as expected hosts beside `activity/hosts.json`; an id present
 in both is the link.
 
@@ -1056,11 +1198,11 @@ continue unless B's operator chooses "Revoke and stop its runs".
 | later metadata (conversations, tasks, agent state) | §7, §10.1 |
 | no ssh needed, no server of ours, no central user database | §2, §3, §5.2; ssh stays one transport (§3.3) |
 | pull over an HTTP endpoint, configured by the user | §4.1; configured in the UI only (§8) |
-| no duplicates | keyed upsert (§4.2); the same install under two host ids refused on every page (§4.4) |
+| no duplicates | keyed upsert (§4.2); the same install under two host ids refused on every page, and a reconnect continues the old host instead (§4.4) |
 | no silent gaps | version cursor (§4.2); kinds negotiated so no row sits below a cursor unread (§4.5); push pages carry their base (§4.6); unreachable time shown as unknown (§3.4) |
 | resumable | cursor committed with each page (§4.2, §4.6) |
 | public HTTPS domain first; http refused for public addresses | §3.1, §3.2 |
-| endpoints closed without a token; uniform 401; rate-limited pairing | §2.4, §2.5; the proxy cannot turn a stranger into the operator (§3.1) |
+| endpoints closed without a token; uniform 401; rate-limited pairing | §2.4, §2.5; the access key is required wherever the install is reachable, and the proxy cannot turn a stranger into the operator, checked from inside (§3.1) and from the pairing peer (§2.5) |
 | exactly which fields leave; no third party | §5 |
 | an install behind a proxy learns and shows its public URL | §3.1 |
 | does the ssh pull leak data | §6 |
@@ -1081,7 +1223,9 @@ slices; 5 and 6 are the later phase.
 ### Slice 1 — this install's public address (fixes today's 403 on its own)
 
 Scope: `self.json`; `LLV_PUBLIC_HOST` set on save and at boot and admitted by
-`allowedHostNames()`; refusals `needs-access-key`, `needs-remote-entry`,
+`allowedHostNames()` only while `LLV_TOKEN` is set; the boot gate for a saved
+non-loopback address and `disablePhoneAccess` keeping the key (§3.1); "Turn on
+the access key"; refusals `needs-access-key`, `needs-remote-entry`,
 `http-public`; `publicEntry()` shared with phone access
 (`dockerTailnetEntry`); the `/api/peer/v1/self-check` route with its nonce and
 the §2.5 `401` for anything else (the `/api/peer/` proxy exemption lands here,
@@ -1091,18 +1235,33 @@ the "This install" section only; en and uk strings for its states.
 Acceptance:
 - a Viewer with a saved public address serves its browser routes at that
   `Host`; without one, the same `Host` is still refused;
-- a public address cannot be saved while `LLV_TOKEN` is off, or while the
-  stable port is a trusted local entry with no remote entry;
-- behind a stand-in proxy that passes the client's `Host` through, a request
-  sent with `Host: 127.0.0.1` through the proxy aimed at the remote entry
-  reaches the Viewer **unvouched**, and the check reports `ok`;
+- no non-loopback address can be saved while `LLV_TOKEN` is off: saving
+  `http://192.168.x.y:port` with the key off is refused `needs-access-key`,
+  as is a public `https://` address; a public address cannot be saved while
+  the stable port is a trusted local entry with no remote entry;
+- with `LLV_PUBLIC_HOST` set and `LLV_TOKEN` unset (a saved address whose key
+  was removed), a request with the public `Host` is refused and the check
+  reports `needs-access-key` without probing;
+- a Viewer that boots with a saved public address and no key in its
+  environment gates itself before its first request (the key file is read
+  or minted), or refuses to start when no key can be put in place; turning
+  phone access off on a loopback CLI install keeps the key while an address
+  is saved;
+- behind a stand-in proxy that passes the client's `Host` through, requests
+  sent with `Host` `127.0.0.1`, `localhost` and `[::1]` through the proxy
+  aimed at the remote entry reach the Viewer **unvouched**, and the check
+  reports `ok`;
 - the same proxy aimed at a trusted local entry makes the check report
   `open-to-internet` (the red path is exercised beside the green one);
 - a proxy that rewrites `Host` to loopback reports `host-rewritten`; a
   public URL the server cannot reach reports `unverified` and does not block
   saving.
 
-Tests: `sameOrigin` tests for `LLV_PUBLIC_HOST`; the refusal table; a
+Tests: `sameOrigin` tests for `LLV_PUBLIC_HOST` with the key on and off; the
+refusal table (private and public addresses, key on and off); the boot gate
+beside the `restorePhoneAccessGate` tests, and `viewerBootGateKey` returning
+the key file for a saved address with no phone flag, in an isolated state
+directory; a
 self-check test that boots a gateway (`serveViewerLocalEntry`, isolated
 gateway file, port `0`) and a stand-in pass-through proxy in front of it,
 once on each entry, asserting the `vouched` flag the route reports and that
@@ -1113,9 +1272,11 @@ rendered at 390 px and desktop.
 
 ### Slice 2 — pair and pull activity over HTTPS, managed in Settings
 
-Scope: `peers.json` / `grants.json`; codes with public id, pairing, grants,
+Scope: `peers.json` / `grants.json`; codes with public id (refused while the
+key is off), the pairing probe, pairing, grants,
 revoke on B, remove on A (keeps history: the host shows "No longer linked ·
-read up to {date}"; the delete choice arrives in slice 3); the §2.5 guard and
+read up to {date}"; the delete choice arrives in slice 3); reconnecting takes
+over a removed or revoked host (§4.4), with "Connect again" on a revoked row; the §2.5 guard and
 per-code rate limit; URL policy; `GET /activity` with `types` and `GET
 /info`; an HTTP transport for `pullHost` (the transport interface becomes
 "fetch one page → NDJSON text"; ssh keeps shipping the reader); the served
@@ -1128,8 +1289,19 @@ counts, `LinkConnectForm`; en and uk strings.
 Acceptance:
 - two isolated installs pair by address and code; A's /activity shows B's
   rows under the chosen host id within one interval;
+- minting a code on B with `LLV_TOKEN` off is refused `needs-access-key`, and
+  "Allow a connection" renders disabled with that reason;
+- with a pass-through proxy in front of a **trusted** local entry and B's
+  self-probe forced to `unverified`, pairing is refused: A's probe arrives
+  vouched, A shows `peer-open`, B's code is burned and B shows
+  `open-to-internet`; the same proxy in front of the remote entry pairs;
+- a link removed with its history kept, then paired again to the same B:
+  rows continue under the old host id from the old cursor, with no
+  duplicates and no refusal; the same after B revokes and A uses "Connect
+  again"; a second live link to the same B is still refused `same-install`;
 - wrong secret → `code-rejected` and the open code shows one wrong attempt; a
-  request naming no open code changes no counter; the 6th failure on a code
+  request naming no open code changes no counter; a probe naming no open
+  code gets the uniform `401` and costs no attempt; the 6th failure on a code
   within a minute → `rate-limited` for that code only while another code
   pairs; 20 failures burn it; the exact expired or used code → `code-spent`;
 - every unauthenticated request under `/api/peer/` (no header, wrong token,
@@ -1153,7 +1325,11 @@ table including a name resolving to mixed public and private addresses;
 untouched while replacing `Authorization`; end-to-end: two installs, pull
 across three pages with `limit=2`, a replayed page changes nothing, a
 recreated store on B is re-read whole, `install` change refused, the same
-store under two host ids refused in both orders; **kind negotiation**: an A
+store under two host ids refused in both orders; the takeover table of
+§4.4 row by row, including a pull whose cursor was mid-history at removal;
+the pairing probe against both entries of a real gateway
+(`serveViewerLocalEntry`, port `0`) behind the stand-in proxy, once per
+loopback name; **kind negotiation**: an A
 that reads only `input` pulls to the end, then learns `turn` and receives the
 turns written before it learned them, with input rows unchanged; a row of an
 unrequested kind fails the page; the Settings section in both viewports.
@@ -1170,7 +1346,8 @@ Acceptance: the one `LinkConnectForm` renders in all three places (asserted by
 a DOM test mounting each entry point); a not-connected host row links with
 its own id prefilled; a peer 7 minutes ahead shows the offset and is not
 reported behind; a marker from before the step lands on it once; an ssh link
-made in the UI pulls exactly like a hosts.json entry; `sshTransport` passes
+made in the UI pulls exactly like a hosts.json entry, and one made for a B
+whose HTTPS link was removed with its history kept continues that host; `sshTransport` passes
 `StrictHostKeyChecking=yes`, `ForwardAgent=no` and `ClearAllForwardings=yes`;
 remove with delete leaves no rows for that host.
 
@@ -1237,19 +1414,24 @@ Observed on the operator's machines before slice 1 is accepted:
 
 1. **The public server's proxy.** Which reverse proxy fronts the public
    install, and which port it targets. The rule (§3.1) is that it targets the
-   public entry, never a trusted 8898; the self-check's spoof probe detects a
-   violation only when the server can reach its own name. The first real
-   deployment should be looked at once by sending `curl
-   https://<domain>/api/pipelines -H 'Host: 127.0.0.1'` from outside and
-   confirming it is not answered as the operator. That same probe tells
-   whether such a server is exposed **today**, before any link exists.
+   public entry, never a trusted 8898; the self-check's spoof probes detect a
+   violation from inside when the server can reach its own name, and the
+   pairing probe (§2.5) detects it from the connecting install otherwise. Until
+   a first pairing, a server whose self-check says `unverified` is known only
+   by a look from outside: `curl https://<domain>/api/pipelines -H 'Host:
+   127.0.0.1'` (and with `localhost`, `[::1]`) should not be answered as the
+   operator. That same request tells whether such a server is exposed
+   **today**, before any link exists.
 2. **Hairpin reachability.** Whether the release container can reach its own
    public name. It decides whether "Check this address" can verify the proxy
    there or only report `unverified`.
 3. **`LLV_TOKEN` and the gateway file on the public install.** The first
    install to declare a public address must have the access key on and, if
    its local entry is trusted, a remote entry port; the operator should
-   confirm that is how their server is run.
+   confirm that is how their server is run. On Docker, a key the boot gate
+   mints reaches the trusted local entry through `viewerBootGateKey` (§3.1);
+   the first deployment with a saved address and no `service.env` key should
+   confirm MCP clients on 8898 keep working.
 
 Decided by the operator (the design picks a default in each case):
 
@@ -1260,7 +1442,7 @@ Decided by the operator (the design picks a default in each case):
 5. **Plain HTTP on private networks for read grants.** Default: allowed with a
    warning on RFC 1918 and link-local addresses, refused on `100.64/10` and
    for dispatch. The stricter choice is HTTPS or loopback only everywhere.
-6. **Code shape and limits.** Default 4-symbol id + 10-symbol secret, 10
+6. **Code shape and limits.** Default 6-symbol id + 10-symbol secret, 10
    minutes, single use, 5 failures a minute and 20 in total per code.
 7. **Push budgets.** Default 50 000 rows and 32 MB per grant per day, 500 000
    rows per linked host.
