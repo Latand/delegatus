@@ -112,6 +112,11 @@ const REVIEW_SPENT = SCENARIO === "issue1938" || FLAT;
    a context past the rotation line, twenty previous seats and a running host
    with its Stop host control — every element the row has to keep readable. */
 const SEAT_HEAD = SCENARIO === "seat-head";
+/* Ghost cards: placeholder tasks no agent will name. A conversation the
+   backfill adopted months after it ended, a launch that never produced a
+   transcript (the leaked fixture's), a young task whose agent is still at
+   work, and a named task whose conversation this board did not load. */
+const GHOSTS = SCENARIO === "ghost-tasks";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -736,7 +741,9 @@ const flows = PIPELINES ? [
   reviewFlow("flow-upload-review-api", uploadApi, uploadRevApi, ["REQUEST_CHANGES", "APPROVE"], 5 * 60 * MIN),
   reviewFlow("flow-compact-review", compactBuild, compactRev, ["APPROVE"], 2 * 24 * 60 * MIN),
   reviewFlow("flow-rounds-review", roundsBuild!, roundsReview!, ["REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "APPROVE"], 3 * 60 * MIN),
-] : LOOSE ? [reviewFlow("flow-export-review", exportImpl, exportReview!, ["APPROVE"], 30 * MIN)] : [];
+] : LOOSE ? [reviewFlow("flow-export-review", exportImpl, exportReview!, ["APPROVE"], 30 * MIN)] : [];/* Ghost cards: the conversations behind them. */
+const ghostOld = GHOSTS ? add(conversation("ghost-backfill", L("Migrate the invoice CSV importer to the new parser", "Перенести імпорт рахунків CSV на новий парсер"), { mtime: now - 3 * 24 * 60 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
+const ghostYoung = GHOSTS ? add(conversation("ghost-young", L("Starting on the settings audit", "Починаю аудит налаштувань"), working({ plan: { current: L("Reading the settings screen", "Читаю екран налаштувань") } }))) : null;
 
 let revision = 1;
 function task(id: string, status: TaskStatus, title: string, description: string, updatedAgo: number, members: FileEntry[] = [], over: Partial<BoardTask> = {}): BoardTask {
@@ -789,6 +796,23 @@ const tasks: BoardTask[] = [
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
+  ...(GHOSTS ? [
+    task("t-ghost-backfill", "assigned", L("Migrate the invoice CSV importer to the new parser", "Перенести імпорт рахунків CSV на новий парсер"), "", 3 * 24 * 60 * MIN, [ghostOld!], {
+      origin: { kind: "conversation", key: "conversation_ghost-backfill", refinement: "pending" },
+      assignments: [{ path: ghostOld!.path, conversationId: ghostOld!.conversationId, panePid: null, state: "linked", error: null, at: iso(3 * 24 * 60 * MIN) }],
+    } as Partial<BoardTask>),
+    task("t-ghost-fixture", "assigned", "Exercise legacy spawn fixture", "", 20 * 60 * MIN, [], {
+      origin: { kind: "launch", key: "launch-ghost-fixture", refinement: "pending" },
+      assignments: [{ launchId: "launch-ghost-fixture", conversationId: "conversation_ghost-fixture", path: null, panePid: null, state: "linked", error: null, at: iso(20 * 60 * MIN), engine: "codex" }],
+    } as Partial<BoardTask>),
+    task("t-ghost-young", "assigned", L("Audit the settings screen", "Аудит екрана налаштувань"), "", 3 * MIN, [ghostYoung!], {
+      origin: { kind: "launch", key: "launch-ghost-young", refinement: "pending" },
+      createdAt: iso(3 * MIN),
+    } as Partial<BoardTask>),
+    task("t-ghost-elsewhere", "assigned", L("Tune the upload retries", "Налаштувати повтори завантаження"), "", 26 * 60 * MIN, [], {
+      assignments: [{ path: "/elsewhere/upload-retries.jsonl", conversationId: "conversation_upload-retries", panePid: null, state: "linked", error: null, at: iso(26 * 60 * MIN) }],
+    } as Partial<BoardTask>),
+  ] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
@@ -1261,7 +1285,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* A draft pane's directory suggestions (K9a): the fixture's one checkout. */
   if (url.pathname === "/api/spawn" && method === "GET") return json({ dirs: ["/repo"], cwd: null });
-  if (url.pathname.startsWith("/api/tasks/") && method === "PATCH") {
+  if (url.pathname.startsWith("/api/tasks/") && !url.pathname.endsWith("/assignment") && method === "PATCH") {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     evidence.taskPatches.push({ id, body });
@@ -1324,6 +1348,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const current = tasks[index]!;
     if (method === "POST") {
       const next = { ...current, assignments: [...current.assignments, { path: String(body.path), panePid: null, state: "handoff", error: null, at: new Date().toISOString() }], revision: REV(revision++) } as BoardTask;
+      tasks[index] = next;
+      return json({ ok: true, task: next });
+    }
+    /* «Launch did not start» dismissed: the row is kept as failed, and an
+       unnamed launch placeholder with nothing else on it is done. */
+    if (method === "PATCH") {
+      const assignments = current.assignments.map((assignment) => (assignment.launchId === body.launchId
+        ? { ...assignment, state: "failed" as const, error: "launch did not start (dismissed)", at: new Date().toISOString() }
+        : assignment));
+      const settled = current.origin?.refinement === "pending" && assignments.every((assignment) => assignment.state === "failed");
+      const next = { ...current, assignments, ...(settled ? { status: "done" as const } : {}), revision: REV(revision++) } as BoardTask;
       tasks[index] = next;
       return json({ ok: true, task: next });
     }

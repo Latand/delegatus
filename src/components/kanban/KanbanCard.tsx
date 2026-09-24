@@ -638,7 +638,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         <div className="unstarted" role="list" aria-label={t("kanban.launchNotStarted")}>
           {card.unstarted.map((launch) => (
             <div key={launch.key} role="listitem" className="unstarted-row" data-launch-not-started={launch.key} title={t("kanban.launchNotStartedHint")}>
-              <span className="label">{t("kanban.launchNotStarted")}</span>
+              <span className="what">{t("kanban.launchNotStarted")}</span>
               <span className="age num">{ageLabel(t, launch.atMs, nowMs)}</span>
               {props.onDismissLaunch ? (
                 <button

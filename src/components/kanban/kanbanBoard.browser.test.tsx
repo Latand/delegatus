@@ -7547,3 +7547,160 @@ describe("#2102 task icons on the desktop board and the Overview", () => {
     expect(failures).toEqual([]);
   }, 900_000);
 });
+
+describe("ghost cards: no «Untitled task» wall, and every counted conversation opens", () => {
+  /* The `ghost-tasks` scenario: a conversation the backfill adopted after it
+     ended, a launch that never produced a transcript, a young task whose
+     agent is still working, and a named task whose conversation this board
+     did not load. On the desktop at 1440 px and on the phone at 390 px, in en
+     and uk: an ended placeholder shows its conversation's title, only the
+     young one still says its name is coming, the launch that did not start
+     is listed as such with a Dismiss and counts no conversation, and the
+     conversation the board did not load opens from its own row. The dismiss
+     is sent and the card leaves the column. Frames go to GHOST_TASKS_PNG_DIR;
+     every frame is taken before any gate is read, so the same case renders
+     the "before" frames on a tree without the change. */
+  const GHOSTS = ["t-ghost-backfill", "t-ghost-fixture", "t-ghost-young", "t-ghost-elsewhere"] as const;
+  const read = `(() => {
+    const out = {};
+    for (const id of ${JSON.stringify(GHOSTS)}) {
+      const card = document.querySelector('[data-kanban-board] .card[data-id="task:' + id + '"]');
+      if (!card) { out[id] = null; continue; }
+      const title = card.querySelector(".head .title");
+      out[id] = {
+        title: (title && title.textContent || "").trim(),
+        pending: Boolean(card.querySelector(".head .title.pending")),
+        conversations: card.querySelector("[data-foot-conversations]")?.getAttribute("data-foot-conversations") ?? null,
+        notStarted: card.querySelectorAll("[data-launch-not-started]").length,
+        notLoaded: card.querySelectorAll("[data-not-loaded]").length,
+      };
+    }
+    return out;
+  })()`;
+  type Reading = Record<string, { title: string; pending: boolean; conversations: string | null; notStarted: number; notLoaded: number } | null>;
+
+  browserTest("ended placeholders borrow their conversation's title, a launch that never started is listed apart with a Dismiss, and a conversation off the board opens — desktop and phone, en and uk", async () => {
+    const out = path.resolve(".artifacts/ghost-tasks");
+    const pngDir = process.env.GHOST_TASKS_PNG_DIR ?? "/var/tmp/llv-ghost-tasks-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=ghost-tasks`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const untitled = translate(lang, "kanban.untitled");
+        /* Desktop. */
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 1440, height: 1000 }, "light", lang);
+          try {
+            await page.waitForSelector(card("t-ghost-fixture"), { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            for (const id of GHOSTS) {
+              const element = page.locator(card(id));
+              if (await element.count()) {
+                await element.scrollIntoViewIfNeeded();
+                await element.screenshot({ path: path.join(pngDir, `${label}-${id}.png`) });
+              }
+            }
+            await page.locator(card("t-ghost-fixture")).scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(pngDir, `${label}-board.png`) });
+            const reading = await page.evaluate(read) as Reading;
+            readings[label] = reading;
+            const at = (id: string) => reading[id];
+            if (at("t-ghost-backfill")?.pending || at("t-ghost-backfill")?.title === untitled) failures.push(`${label}: the ended placeholder still reads «${untitled}»`);
+            if (at("t-ghost-fixture")?.pending) failures.push(`${label}: the launch that never started still waits for a name`);
+            if (at("t-ghost-fixture")?.conversations !== null) failures.push(`${label}: the launch that never started counts ${at("t-ghost-fixture")?.conversations} conversation(s)`);
+            if (at("t-ghost-fixture")?.notStarted !== 1) failures.push(`${label}: no «launch did not start» row`);
+            if (!at("t-ghost-young")?.pending) failures.push(`${label}: the young task no longer waits for its agent's name`);
+            if (at("t-ghost-elsewhere")?.conversations !== "1" || at("t-ghost-elsewhere")?.notLoaded !== 1) failures.push(`${label}: the conversation off the board is not counted with its own open row ${JSON.stringify(at("t-ghost-elsewhere"))}`);
+            /* The conversation off the board opens by its own link. */
+            const open = page.locator(`${card("t-ghost-elsewhere")} [data-not-loaded]`);
+            if (await open.count()) {
+              await open.click();
+              await page.waitForTimeout(200);
+              const hash = await page.evaluate(() => location.hash);
+              if (!hash.includes("upload-retries")) failures.push(`${label}: opening the off-board conversation set ${JSON.stringify(hash)}`);
+            }
+            /* Dismiss: the row is sent and the ghost leaves the Assigned column. */
+            const dismiss = page.locator(`${card("t-ghost-fixture")} [data-launch-dismiss]`);
+            if (await dismiss.count()) {
+              await dismiss.click();
+              await page.waitForTimeout(800);
+              const sent = await page.evaluate(() => (window as unknown as { evidence: { assignments: Array<{ method: string; id: string; body: Record<string, unknown> }> } }).evidence.assignments.filter((entry) => entry.method === "PATCH"));
+              if (sent.length !== 1 || sent[0]!.id !== "t-ghost-fixture" || sent[0]!.body.dismiss !== "launch-did-not-start") failures.push(`${label}: the dismiss sent ${JSON.stringify(sent)}`);
+              const column = await page.locator(card("t-ghost-fixture")).evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? null).catch(() => null);
+              if (column === "assigned") failures.push(`${label}: the dismissed ghost is still in Assigned`);
+              await page.screenshot({ path: path.join(pngDir, `${label}-after-dismiss.png`) });
+            }
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        /* Phone. */
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(600);
+            const titles: Record<string, string | null> = {};
+            for (const id of GHOSTS) {
+              const element = page.locator(`[data-phone-card="task:${id}"]`);
+              if (!await element.count()) { titles[id] = null; continue; }
+              await element.first().scrollIntoViewIfNeeded();
+              await element.first().screenshot({ path: path.join(pngDir, `${label}-${id}.png`) });
+              titles[id] = (await element.first().locator("[data-phone-card-title]").textContent())?.trim() ?? null;
+            }
+            await page.locator('[data-phone-card="task:t-ghost-fixture"]').first().scrollIntoViewIfNeeded().catch(() => {});
+            await page.screenshot({ path: path.join(pngDir, `${label}-board.png`) });
+            if (titles["t-ghost-backfill"] === untitled) failures.push(`${label}: the ended placeholder still reads «${untitled}»`);
+            if (titles["t-ghost-young"] !== untitled) failures.push(`${label}: the young task no longer waits for its agent's name`);
+            /* The ghost's own screen: no conversation to open, a launch that did not start with its Dismiss. */
+            const ghost = page.locator('[data-phone-card="task:t-ghost-fixture"]');
+            let screen: Record<string, number> | null = null;
+            if (await ghost.count()) {
+              await ghost.first().click();
+              await page.waitForTimeout(800);
+              await page.screenshot({ path: path.join(pngDir, `${label}-task-t-ghost-fixture.png`) });
+              screen = await page.evaluate(() => ({
+                unstarted: document.querySelectorAll("[data-phone-task-unstarted]").length,
+                dismiss: document.querySelectorAll("[data-phone-launch-dismiss]").length,
+                notLoaded: document.querySelectorAll("[data-phone-task-not-loaded]").length,
+              }));
+              if (screen.unstarted !== 1 || screen.dismiss !== 1) failures.push(`${label}: the ghost's screen ${JSON.stringify(screen)}`);
+              await page.goBack().catch(() => {});
+              await page.waitForTimeout(500);
+            }
+            const elsewhere = page.locator('[data-phone-card="task:t-ghost-elsewhere"]');
+            let elsewhereScreen: Record<string, number> | null = null;
+            if (await elsewhere.count()) {
+              await elsewhere.first().click();
+              await page.waitForTimeout(800);
+              await page.screenshot({ path: path.join(pngDir, `${label}-task-t-ghost-elsewhere.png`) });
+              elsewhereScreen = await page.evaluate(() => ({ notLoaded: document.querySelectorAll("[data-phone-task-not-loaded]").length }));
+              if (elsewhereScreen.notLoaded !== 1) failures.push(`${label}: the off-board conversation has no row of its own on the task screen`);
+            }
+            readings[label] = { titles, ghostScreen: screen, elsewhereScreen };
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/ghost-tasks", { recursive: true });
+    fs.writeFileSync("evidence/ghost-tasks/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});

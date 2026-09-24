@@ -1,0 +1,97 @@
+{
+  "readings": {
+    "desktop-1440-en": {
+      "t-ghost-backfill": {
+        "title": "Migrate the invoice CSV importer to the new parser",
+        "pending": false,
+        "conversations": "1",
+        "notStarted": 0,
+        "notLoaded": 0
+      },
+      "t-ghost-fixture": {
+        "title": "Exercise legacy spawn fixture",
+        "pending": false,
+        "conversations": null,
+        "notStarted": 1,
+        "notLoaded": 0
+      },
+      "t-ghost-young": {
+        "title": "Untitled task",
+        "pending": true,
+        "conversations": "1",
+        "notStarted": 0,
+        "notLoaded": 0
+      },
+      "t-ghost-elsewhere": {
+        "title": "Tune the upload retries",
+        "pending": false,
+        "conversations": "1",
+        "notStarted": 0,
+        "notLoaded": 1
+      }
+    },
+    "phone-390-en": {
+      "titles": {
+        "t-ghost-backfill": "Migrate the invoice CSV importer to the new parser",
+        "t-ghost-fixture": "Exercise legacy spawn fixture",
+        "t-ghost-young": "Untitled task",
+        "t-ghost-elsewhere": "Tune the upload retries"
+      },
+      "ghostScreen": {
+        "unstarted": 1,
+        "dismiss": 1,
+        "notLoaded": 0
+      },
+      "elsewhereScreen": {
+        "notLoaded": 1
+      }
+    },
+    "desktop-1440-uk": {
+      "t-ghost-backfill": {
+        "title": "Перенести імпорт рахунків CSV на новий парсер",
+        "pending": false,
+        "conversations": "1",
+        "notStarted": 0,
+        "notLoaded": 0
+      },
+      "t-ghost-fixture": {
+        "title": "Exercise legacy spawn fixture",
+        "pending": false,
+        "conversations": null,
+        "notStarted": 1,
+        "notLoaded": 0
+      },
+      "t-ghost-young": {
+        "title": "Задача без назви",
+        "pending": true,
+        "conversations": "1",
+        "notStarted": 0,
+        "notLoaded": 0
+      },
+      "t-ghost-elsewhere": {
+        "title": "Налаштувати повтори завантаження",
+        "pending": false,
+        "conversations": "1",
+        "notStarted": 0,
+        "notLoaded": 1
+      }
+    },
+    "phone-390-uk": {
+      "titles": {
+        "t-ghost-backfill": "Перенести імпорт рахунків CSV на новий парсер",
+        "t-ghost-fixture": "Exercise legacy spawn fixture",
+        "t-ghost-young": "Задача без назви",
+        "t-ghost-elsewhere": "Налаштувати повтори завантаження"
+      },
+      "ghostScreen": {
+        "unstarted": 1,
+        "dismiss": 1,
+        "notLoaded": 0
+      },
+      "elsewhereScreen": {
+        "notLoaded": 1
+      }
+    }
+  },
+  "failures": []
+}
