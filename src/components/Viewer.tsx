@@ -4,7 +4,8 @@ import { ChevronRight, Crown, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
-import { createTraversalFence, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, retargetRecordedProject } from "@/lib/navigation/focusHistory";
+import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
+import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
 import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { useAgentChimes } from "@/hooks/useAgentChimes";
 import { useArchivedProjects } from "@/hooks/useArchivedProjects";
@@ -45,9 +46,9 @@ import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows"
 import { KeepAwakeProvider } from "./KeepAwakeControl";
 import { needsDecisionPipelineRows } from "./mobile/mobileBoardModel";
 import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
-import { BOARD, getMobileNav, landResolvedConversation, MOBILE_NAV_STATE_KEY, readMobileNavEntry, useMobileNavStore } from "./mobile/mobileNav";
+import { getMobileNav, readMobileNavEntry, screenKey, standsOnOwnUrl, topScreen, useMobileNavStore, type MobileNavConfig, type MobileScreen } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
-import { overviewLiftProject, overviewPipelineRows, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
+import { overviewLiftProject, overviewPipelineRows, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
 import { onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
@@ -82,10 +83,13 @@ export function filesRequestPin(pendingHash: ConversationHash | null, retainedPa
 /** Every fragment key this app speaks, each with a payload: conversation
     (`#c=`), transcript path (`#f=`), project (`#p=`), artifact preview
     (`#a=`, issue #884 — handled by ArtifactPreviewHost) — plus the empty
-    hash. A pasted URL outside this set means nothing here; quietly landing
+    hash, and while the phone layout is up a phone screen (`#task=`,
+    `#pipeline=`, `#pipelines`, `#accounts`, #2105), which only the phone
+    opens. A pasted URL outside this set means nothing here; quietly landing
     on the default view read as a broken deployment, so the shell says so. */
-export function recognizedFragment(hash: string): boolean {
-  return hash === "" || /^#(?:c|f|p|a)=./.test(hash);
+export function recognizedFragment(hash: string, { phone = false }: { phone?: boolean } = {}): boolean {
+  if (hash === "" || /^#(?:c|f|p|a)=./.test(hash)) return true;
+  return phone && /^#(?:(?:task|pipeline)=.|(?:pipelines|accounts)$)/.test(hash);
 }
 
 export type CatalogPinState = { path: string; hydrated: boolean; conversationId: string | null } | null;
@@ -235,20 +239,60 @@ function ViewerApp() {
   /* The project the dashboard draws: the Viewer's own, or the one a screen
      over the phone's Overview belongs to. */
   const dashboardProject = liftedProject ?? project;
-  /* Whether a history replay lands on a screen of the phone's Overview: the
-     Overview is the Viewer's project and the entry is one the phone's stack
-     wrote above its board. Such a replay (Forward, a reload, the hash the
-     entry carries) re-opens the conversation over the Overview and keeps the
-     Overview the project, where any other replay selects the conversation's
-     own project. Read from listeners, so it is kept in a ref. */
+  /* Whether the phone's Overview is up: a conversation that lands there opens
+     over it as a screen. Read from listeners, so it is kept in a ref. */
   const overviewPhoneRef = useRef(false);
   useEffect(() => {
     overviewPhoneRef.current = isMobile && project === OVERVIEW;
   }, [isMobile, project]);
-  const keepsOverview = useCallback(
-    (state: unknown) => overviewPhoneRef.current && (readMobileNavEntry(state)?.screen.kind ?? "board") !== "board",
-    [],
-  );
+
+  /* On the phone its navigation store owns the history (#2105): every screen
+     and every sheet is one entry, standing on its own URL and naming the
+     project it was written on. The store asks here, at the moment it writes,
+     for the project, the board's URL and a conversation's link and typed
+     identity; the values are read through a ref kept current by every render,
+     because a screen is often pushed from an effect in the very commit that
+     changed the project. */
+  const phoneRef = useRef({ mobile: isMobile, project, files: allFiles });
+  phoneRef.current = { mobile: isMobile, project, files: allFiles };
+  const phoneConfig = useMemo<MobileNavConfig>(() => ({
+    project: () => phoneRef.current.project,
+    boardUrl: () => (phoneRef.current.project !== OVERVIEW ? "#p=" + encodeURIComponent(phoneRef.current.project) : location.pathname + location.search),
+    conversation: (id) => {
+      const file = phoneRef.current.files.find((entry) => entry.path === id);
+      if (!file) return null;
+      return { url: formatConversationHash(file), keys: { [FOCUS_HISTORY_STATE_KEY]: focusEntryFor(file, projectKey(file)) } };
+    },
+  }), []);
+  /* Configured during render, before any screen under this one mounts and
+     writes its first entry. */
+  mobileNav.configure(isMobile ? phoneConfig : null);
+  useEffect(() => {
+    if (!isMobile) return;
+    /* The Viewer's own records go through the store: a focus types the
+       conversation's entry, a project selection is one board entry. */
+    return setFocusHistoryOwner({
+      focus: (entry, state, url) => mobileNav.mark({ path: entry.path ?? "", keys: state, url }),
+      project: (url) => mobileNav.enterProject(parseConversationHash(url.includes("#") ? url.slice(url.indexOf("#")) : "").project ?? OVERVIEW, url),
+      retarget: (renamed, state, url) => mobileNav.retargetProject(renamed, state, url),
+    });
+  }, [isMobile, mobileNav]);
+  /* A phone screen's own link opened in a fresh tab (`#task=`, `#pipeline=`)
+     can name a task or a lane of another project than the one this browser
+     showed last: that project draws it, and its entry says so. A traversal
+     restores the project its entry names, so this only ever meets a link. */
+  const phoneTopKey = useSyncExternalStore(mobileNav.subscribe, () => screenKey(topScreen(mobileNav.getState())), () => "board");
+  useEffect(() => {
+    if (!isMobile || project === OVERVIEW) return;
+    const [top] = overviewStackScreens(phoneTopKey);
+    if (top?.kind !== "task" && top?.kind !== "pipeline") return;
+    const owner = overviewScreenProject(top, { tasks, pipelines, files: allFiles });
+    if (!owner || owner === project) return;
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- a link names the project, once */
+    setProject(owner);
+    localStorage.setItem(PROJECT_KEY, owner);
+    mobileNav.retargetProject(owner, null, location.href);
+  }, [isMobile, project, phoneTopKey, tasks, pipelines, allFiles, mobileNav]);
   const dashboardFilesRef = useRef<{ project: string; files: FileEntry[] } | null>(null);
   const dashboardFiles = useMemo(() => {
     if (dashboardProject === OVERVIEW) return [];
@@ -314,8 +358,17 @@ function ViewerApp() {
      the phone, and it unmounts on close so every open starts on «my messages»
      with an empty query. */
   const [searchOpen, setSearchOpen] = useState(false);
-  const openSearch = useCallback(() => setSearchOpen(true), []);
-  const closeSearch = useCallback(() => setSearchOpen(false), []);
+  /* On the phone the palette covers the screen like any sheet, so it is one
+     history entry and Back closes it (#2105). */
+  const phoneSheet = useSyncExternalStore(mobileNav.subscribe, () => mobileNav.getState().sheet, () => null);
+  const openSearch = useCallback(() => {
+    if (phoneRef.current.mobile) mobileNav.openSheet("search");
+    else setSearchOpen(true);
+  }, [mobileNav]);
+  const closeSearch = useCallback(() => {
+    if (phoneRef.current.mobile) mobileNav.closeSheet();
+    else setSearchOpen(false);
+  }, [mobileNav]);
   const [toastPath, setToastPath] = useState<string | null>(null);
   const seenQuestionsRef = useRef<Set<string> | null>(null);
   /* Reopening a file whose project is already selected does not change
@@ -340,7 +393,7 @@ function ViewerApp() {
   const [staleFocusNotice, setStaleFocusNotice] = useState(false);
   /* A pasted URL whose fragment the app cannot interpret (issue #884): name
      the failure instead of quietly showing the default view. */
-  const [unknownFragmentNotice, setUnknownFragmentNotice] = useState(() => !recognizedFragment(location.hash));
+  const [unknownFragmentNotice, setUnknownFragmentNotice] = useState(() => !recognizedFragment(location.hash, { phone: isMobile }));
   /* Mirrors for the popstate replay path, which must read the latest values
      from stable event listeners without re-registering them per poll. */
   const filesRef = useRef<FileEntry[]>([]);
@@ -377,6 +430,22 @@ function ViewerApp() {
          focus entry with its full stored identity; deriving a second, weaker
          intent from the bare hash would drop the project and path support. */
       if (traversalFenceRef.current.swallows(location.hash)) return;
+      /* A traversal onto an entry the phone wrote (#2105): its popstate half
+         already restored the place and the project the entry names, and a
+         screen's own URL never opens anything else. A conversation link on an
+         entry whose screen is not that conversation is not the operator's to
+         follow — it is how Back from a task's agent once reopened the
+         orchestrator. */
+      const phone = phoneRef.current.mobile && standsOnOwnUrl(window.history.state, location.href) ? readMobileNavEntry(window.history.state) : null;
+      if (phone) {
+        setStaleFocusNotice(false);
+        if (topScreen(phone).kind !== "chat") {
+          setPendingHash(null);
+          dispatchCatalogPin({ kind: "release" });
+          setFocusRequest(null);
+          return;
+        }
+      }
       /* Navigation is one of the two exits a durable not-found notice has
          (the other is its dismiss button): a new attempt starts clean. */
       setStaleFocusNotice(false);
@@ -396,7 +465,7 @@ function ViewerApp() {
         /* Back cleared the hash entirely: that entry was the overview. */
         else if (!location.hash) setProject(OVERVIEW);
       }
-      if (!recognizedFragment(location.hash)) setUnknownFragmentNotice(true);
+      if (!recognizedFragment(location.hash, { phone: phoneRef.current.mobile })) setUnknownFragmentNotice(true);
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -411,17 +480,39 @@ function ViewerApp() {
      hashchange path already sets. Untyped entries fall through to it. */
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
+      /* On the phone the store reads the entry first (the same reading its
+         own listener gets): the place, and the project it was written on,
+         which comes back with it — the Overview included (#2098, #2105). */
+      const landing = phoneRef.current.mobile ? mobileNav.land(event.state, event) : null;
+      /* An entry a ‹ passes through on its way to the screen under the one
+         it left: nothing is drawn from it, so nothing of it replays, and its
+         own hashchange is skipped. */
+      if (landing?.kind === "passing") {
+        traversalFenceRef.current.arm(location.hash);
+        return;
+      }
+      const phone = landing?.kind === "phone" ? landing : null;
+      const phoneProject = phone?.entry.project ?? null;
+      const projectMoved = phoneProject !== null && phoneProject !== phoneRef.current.project;
+      if (projectMoved) {
+        setProject(phoneProject);
+        localStorage.setItem(PROJECT_KEY, phoneProject);
+      }
       const entry = parseFocusHistoryState(event.state);
       if (!entry) return;
       /* The browser has already applied this traversal's URL, so the fragment
          read here is exactly the hash whose follow-up hashchange must skip. */
       traversalFenceRef.current.arm(location.hash);
+      /* A phone entry replays its conversation only when that conversation is
+         what the traversal brought on screen: a sheet closed over it, or a
+         pop the store made itself, has nothing to resolve. */
+      if (phone && (topScreen(phone.entry).kind !== "chat" || (!phone.topChanged && !projectMoved))) return;
       setStaleFocusNotice(false);
       dispatchCatalogPin({ kind: "release" });
       setFocusRequest(null);
       /* Cross-project entries select the stored project first, then resolve.
-         A conversation over the phone's Overview replays over it (#2098). */
-      if (!keepsOverview(event.state)) {
+         A phone entry already selected the one it was written on. */
+      if (!phone) {
         setProject(entry.project);
         localStorage.setItem(PROJECT_KEY, entry.project);
       }
@@ -447,7 +538,7 @@ function ViewerApp() {
       window.removeEventListener("popstate", onPop);
       if (staleTimerRef.current !== null) window.clearTimeout(staleTimerRef.current);
     };
-  }, [keepsOverview]);
+  }, [mobileNav]);
 
   useEffect(() => {
     if (!unknownFragmentNotice) return;
@@ -469,7 +560,10 @@ function ViewerApp() {
     dispatchCatalogPin({ kind: "release" });
     setFocusRequest(null);
     localStorage.setItem(PROJECT_KEY, nextProject);
-    /* The phone shell lands on the board with no sheet open (mobile v2 §3.3). */
+    /* The phone shell lands on the board with no sheet open (mobile v2 §3.3),
+       and an entry written in this same gesture names the project it is now
+       drawn in, before the render that takes the new project (#2105). */
+    phoneRef.current = { ...phoneRef.current, project: nextProject };
     getMobileNav().home();
   }, []);
 
@@ -477,6 +571,17 @@ function ViewerApp() {
     applyProject(nextProject);
     recordProjectNavigation(projectUrl(nextProject));
   }, [applyProject]);
+
+  /* A phone screen of another project, from a link (#2105): a task or a lane a
+     message names. Over the Overview it goes on the stack like any screen, and
+     its own project's dashboard draws it. On a project's board that project
+     becomes the one drawn, with no entry of its own, and the screen is the one
+     entry the link writes: Back returns to the place the operator left, in its
+     own project. */
+  const openPhoneScreenElsewhere = useCallback((screen: MobileScreen, target: string) => {
+    if (phoneRef.current.project !== OVERVIEW) applyProject(target);
+    mobileNav.push(screen);
+  }, [applyProject, mobileNav]);
 
   /* Opening or closing the dock is a statement about THIS project (#1149): it
      is remembered under the project's own key, so the projects the operator is
@@ -560,31 +665,19 @@ function ViewerApp() {
      the stack the operator is on,
      full screen and never inside a card, and its own project's dashboard
      draws it (see `liftedProject`), so ‹ lands on the screen under it and in
-     the end on the Overview. The screen goes on first; the focus record then
-     re-types that entry in place, as a stage conversation's does, so the
-     conversation keeps its link without a second entry under it. The focus
-     request is what puts the conversation on its project's board for the
-     screen to show. */
+     the end on the Overview. The screen's entry carries the conversation's
+     link and typed identity (the store writes both, #2105); the focus request
+     is what puts the conversation on its project's board for the screen to
+     show. */
   const openOverOverview = useCallback((file: FileEntry, { catalog = false }: { catalog?: boolean } = {}) => {
     const nav = mobileNav;
-    const stack = nav.getState().stack;
-    const onTop = stack[stack.length - 1];
+    const onTop = topScreen(nav.getState());
     const fileProject = projectKey(file);
     setOpenedOverOverview((known) => (known.get(file.path) === fileProject ? known : new Map(known).set(file.path, fileProject)));
-    if (onTop?.kind !== "chat" || onTop.id !== file.path) {
-      /* The board alone under an entry that names a conversation (a reload on
-         one, a search result's or a pasted link's own entry): that entry
-         becomes the Overview's own, so ‹ from the screen pushed over it lands
-         on the board and not on a replay of it. */
-      if (stack.length === 1 && (location.hash || parseFocusHistoryState(window.history.state))) {
-        window.history.replaceState({ [MOBILE_NAV_STATE_KEY]: { d: 1, screen: BOARD } }, "", location.pathname + location.search);
-      }
-      nav.push({ kind: "chat", id: file.path });
-    }
+    recordFocusNavigation(file, fileProject, { restore: true });
+    if (onTop.kind !== "chat" || onTop.id !== file.path) nav.push({ kind: "chat", id: file.path });
     setPendingHash(null);
     setStaleFocusNotice(false);
-    recordFocusNavigation(file, fileProject, { restore: true });
-    nav.stamp();
     focusNonceRef.current += 1;
     setFocusRequest({ path: file.path, nonce: focusNonceRef.current, catalog });
   }, [mobileNav]);
@@ -617,9 +710,11 @@ function ViewerApp() {
        popstate replay): it re-types the entry the tab is standing on and never
        pushes, so initial restoration adds no duplicate and a replay cannot
        loop. A direct catalog click records the deliberate navigation. On the
-       phone the shell goes home under it, unless the replay landed on an entry
-       the phone's own stack wrote (#2072 slice 5, `landResolvedConversation`). */
-    landResolvedConversation(getMobileNav(), hydrated, window.history.state, () => recordFocusNavigation(file, key, { restore: hydrated }));
+       phone the conversation's own screen is its entry, pushed over the place
+       the operator is (#2105); one in another project goes over that
+       project's board, and the entry the operator left stays under it. */
+    if (phoneRef.current.mobile && key !== phoneRef.current.project) getMobileNav().home();
+    recordFocusNavigation(file, key, { restore: hydrated });
   }, [openOverOverview]);
 
   const openCatalogFile = useCallback((file: FileEntry) => {
@@ -640,7 +735,10 @@ function ViewerApp() {
      continue" stopped at find. */
   const openSearchResult = useCallback((transcriptPath: string) => {
     const hash = transcriptFocusHash(transcriptPath);
-    if (location.hash !== hash) {
+    /* On the phone the conversation's screen writes its own entry over the
+       place the palette was opened on (#2105); a hash of its own under that
+       screen would be a second entry for one open. */
+    if (location.hash !== hash && !phoneRef.current.mobile) {
       location.hash = hash;
       return;
     }
@@ -790,9 +888,9 @@ function ViewerApp() {
        unresolved deep-link intent; a stale pin must never re-steal focus when
        its target shows up in a later poll. */
     setPendingHash(null);
-    /* On the phone a focus is a board landing: the shell drops whatever screen
-       or sheet was open over it (mobile v2 §3.3). */
-    getMobileNav().home();
+    /* On the phone a focus opens the conversation's screen over the place the
+       operator is (#2105), so Back returns there: an attention jump, an
+       accepted handoff and an in-app link each push one entry. */
     /* Every route through here is a deliberate focus (attention jump, crown
        favorite, N-cycle, an accepted handoff's `openPath`): record it. A path
        with no scanned entry still navigates, it just leaves no history. */
@@ -838,6 +936,24 @@ function ViewerApp() {
   useEffect(() => {
     linkResolveRef.current = { allFiles, conversationAliases, launchRoutes };
   }, [allFiles, conversationAliases, launchRoutes]);
+  /* On the phone every in-app conversation link opens through the store
+     (#2105), whether or not the tab knows its target yet: a known one opens in
+     place, and one beyond the payload goes to the resolver as a pinned intent,
+     the way a search result does — never through a hash of its own, which
+     would be a history entry the store did not write (a sheet closed by the
+     same tap would stay under it). */
+  const openConversationIntent = useCallback((intent: ConversationHash) => {
+    const known = linkResolveRef.current;
+    const hit = resolveConversationTarget(known.allFiles, intent, known.conversationAliases, known.launchRoutes);
+    if (hit) {
+      openLinkedFile(hit);
+      return;
+    }
+    setStaleFocusNotice(false);
+    dispatchCatalogPin({ kind: "release" });
+    setFocusRequest(null);
+    setPendingHash(intent);
+  }, [openLinkedFile]);
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -849,6 +965,11 @@ function ViewerApp() {
       const windowTarget = anchor.getAttribute("target");
       if (windowTarget && windowTarget !== "_self") return;
       const intent = parseConversationHash(href);
+      if (phoneRef.current.mobile && (intent.conversationId || intent.filePath)) {
+        event.preventDefault();
+        openConversationIntent(intent);
+        return;
+      }
       const known = linkResolveRef.current;
       const hit = resolveConversationTarget(known.allFiles, intent, known.conversationAliases, known.launchRoutes);
       if (!hit) return;
@@ -857,7 +978,50 @@ function ViewerApp() {
     };
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
-  }, [openLinkedFile]);
+  }, [openLinkedFile, openConversationIntent]);
+  /* A component that navigates by the app's own fragment (a menu row, a
+     banner, a project's archive) asks through `navigateToFragment`; on the
+     phone that is served here, so the store writes the one entry (#2105). */
+  useEffect(() => {
+    if (!isMobile) return;
+    return setFragmentNavigator((hash) => {
+      const intent = parseConversationHash(hash);
+      if (intent.conversationId || intent.filePath) {
+        openConversationIntent(intent);
+        return true;
+      }
+      if (intent.project) {
+        selectProject(intent.project);
+        return true;
+      }
+      return false;
+    });
+  }, [isMobile, openConversationIntent, selectProject]);
+  /* A notification the operator tapped (#2105): the service worker hands its
+     link to the tab (`public/question-push-sw.js`), which opens it as any
+     in-app link — one entry over the place the operator was — and says so;
+     a tab that does not answer is navigated by the worker instead. */
+  useEffect(() => {
+    const worker = typeof navigator !== "undefined" ? navigator.serviceWorker : undefined;
+    if (!worker) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; url?: unknown } | null;
+      if (data?.type !== NOTIFICATION_OPEN_MESSAGE || typeof data.url !== "string") return;
+      let url: URL;
+      try {
+        url = new URL(data.url, location.href);
+      } catch {
+        return;
+      }
+      if (url.origin !== location.origin || url.pathname !== location.pathname || !url.hash) return;
+      navigateToFragment(url.hash);
+      event.ports[0]?.postMessage("taken");
+    };
+    worker.addEventListener("message", onMessage);
+    /* A listener alone does not open the page's message queue. */
+    worker.startMessages();
+    return () => worker.removeEventListener("message", onMessage);
+  }, []);
 
   /* Reveal a card without going to it. `requestFocus` above both materializes
      the node and arms the board's glide; a focus handoff wants only the first,
@@ -1193,7 +1357,11 @@ function ViewerApp() {
                 close();
                 cycleRef.current = item.id;
                 openOverOverview(item.file);
-              } : jumpToItem}
+              } : (item) => {
+                /* The conversation's screen takes the sheet's entry. */
+                close();
+                jumpToItem(item);
+              }}
               onOpenPipeline={(row) => {
                 close();
                 /* Over the Overview a lane of any project goes on top of the
@@ -1302,6 +1470,7 @@ function ViewerApp() {
             flows={flows}
             loaded={loaded}
             cached={cached}
+            placesKnown={loaded && scopeCertified && !pendingHash}
             now={clock}
             catalogFailures={catalogFailures}
             onSelectProject={selectProject}
@@ -1342,6 +1511,7 @@ function ViewerApp() {
             onUserNavigate={cancelPendingIntent}
             onOpenCatalogFile={openCatalogFile}
             onCloseFile={releaseCatalogFile}
+            onOpenElsewhere={isMobile ? openPhoneScreenElsewhere : undefined}
           />
         )}
         </BarIslandProvider>
@@ -1361,7 +1531,7 @@ function ViewerApp() {
           until the header button or `/` opens it, and a selected row leaves
           through the app's own `#f=` deep link so the conversation opens in the
           standard surface with its composer. */}
-      {searchOpen ? <GlobalSearch mobile={isMobile} onClose={closeSearch} onOpen={openSearchResult} /> : null}
+      {(isMobile ? phoneSheet === "search" : searchOpen) ? <GlobalSearch mobile={isMobile} onClose={closeSearch} onOpen={openSearchResult} /> : null}
       {/* #875: the ONE document preview surface. Transcript artifact links
           publish to its bus from anywhere in the feed; it renders nothing until
           one opens, and its state is pure same-document React state — no hash,

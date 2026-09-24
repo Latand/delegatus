@@ -151,7 +151,7 @@ export function TaskSheet({
   );
 
   return (
-    <div className={`fixed inset-0 ${Z.sheet} flex flex-col bg-canvas pb-[env(safe-area-inset-bottom)]`}>
+    <div data-mobile2-sheet="tasks" className={`fixed inset-0 ${Z.sheet} flex flex-col bg-canvas pb-[env(safe-area-inset-bottom)]`}>
       <div className="flex min-h-[52px] shrink-0 items-center gap-2 border-b border-border bg-card px-2 py-1.5">
         {view !== "list" ? (
           <button

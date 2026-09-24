@@ -68,6 +68,18 @@
  * their markdown heading or HTML element id, and a sibling `retry.ts:180` /
  * `retry.ts:180:5` link opens the file at that line.
  *
+ * With BOARD_CAPTURE_CASE=resources it renders the resources footer (#2110,
+ * #1817) from a fixture served through LLV_RESOURCES_FIXTURE: a session table
+ * a failed refresh fell back on four days ago, and the same table current,
+ * each beside Delegatus's own processes. The rail footer and its open panel at
+ * 1280 × 800 in en and uk, light and dark, and the phone's projects sheet with
+ * the footer at its foot and the panel open at 390 × 844. It requires the
+ * Delegatus line in the footer, the stale mark and banner only on the stale
+ * table, the stale text still in the frame with the list scrolled to its end
+ * and a stale tag on every row, a Delegatus section with every process and no
+ * control in it, the panel inside the viewport with nothing overflowing
+ * sideways, and 44 px targets on the phone.
+ *
  * With BOARD_CAPTURE_CASE=activity it renders the activity dashboard
  * (docs/design/activity-dashboard.md) on a home seeded with invented work:
  * three git repositories whose Claude transcripts the Viewer's own scan
@@ -3968,6 +3980,226 @@ async function filePreviewMain(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=resources (#2110, #1817)                                */
+/* ------------------------------------------------------------------------- */
+
+const RESOURCES_FIXTURE = path.join(BASE, "resources.json");
+const GIB = 1024 ** 3;
+const MIB = 1024 ** 2;
+
+/** A session table and Delegatus's own processes, shaped like the machine the
+    issue was reproduced on: four agent hosts, five Delegatus processes. */
+function writeResourcesFixture(stale: boolean): number {
+  const now = Date.now();
+  const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
+  const sessionsCapturedAt = stale ? iso(4 * 86_400_000 - 45 * 60_000) : iso(40_000);
+  const host = (index: number, title: string, role: string, stage: string | null, model: string, rss: number, swap: number, over: Record<string, unknown> = {}) => ({
+    target: `structured:codex:0000000${index}-2110-4000-8000-000000000000`, panePid: 41_000 + index, kind: "structured",
+    path: null, engine: "codex", title, project: "harbor", activity: "idle", lastActiveAt: stale ? iso(4 * 86_400_000 + index * 3_600_000) : iso(index * 1_800_000),
+    cwd: `$HOME/Projects/harbor-pipeline-${index}`, rssBytes: rss, swapBytes: swap, procCount: 5,
+    model, role, conversationId: null, stage, ownership: "owned", seat: false, turnBusy: false, ...over,
+  });
+  const processes = [
+    { pid: 892_225, role: "server", name: "bun-container", rssBytes: 1.3 * GIB, swapBytes: 0, procCount: 1 },
+    { pid: 921_801, role: "runtime-host", name: "main", rssBytes: 690 * MIB, swapBytes: 0, procCount: 1 },
+    { pid: 894_438, role: "worker", name: "accountMigrationController.worker", rssBytes: 1.3 * GIB, swapBytes: 210 * MIB, procCount: 1 },
+    { pid: 894_382, role: "worker", name: "wakatimeSync.worker", rssBytes: 980 * MIB, swapBytes: 0, procCount: 1 },
+    { pid: 2_787_025, role: "worker", name: "filesResponse.worker", rssBytes: 960 * MIB, swapBytes: 0, procCount: 1 },
+    { pid: 894_409, role: "worker", name: "telegram-mcp-server", rssBytes: 52 * MIB, swapBytes: 0, procCount: 1 },
+  ];
+  const fixture = {
+    system: { ramTotal: 32 * GIB, ramAvailable: 2.8 * GIB, swapTotal: 40 * GIB, swapUsed: 17 * GIB, capturedAt: iso(0) },
+    sessions: [
+      host(1, "orchestrator · You are the viewer's built-in Manager for the harbor backlog", "orchestrator", null, "gpt-6-astra", 375 * MIB, 1_000 * MIB, { seat: true }),
+      host(2, "Antispam tier 1: check a cheaper model against the labelled set", "builder", "jev-eval", "gpt-6-astra", 1.1 * GIB, 0, { turnBusy: true, activity: "live" }),
+      host(3, "Keep one owner per repository, pull request and head delivery", "builder", "implement", "gpt-6-astra", 1_030 * MIB, 0),
+      host(4, "Give an exact state for host release operations", "reviewer", "review", "gpt-6-astra", 285 * MIB, 580 * MIB),
+    ],
+    sessionsCapturedAt,
+    sessionsStale: stale,
+    viewer: {
+      actionable: false, capturedAt: iso(0),
+      rssBytes: processes.reduce((total, item) => total + item.rssBytes, 0),
+      swapBytes: processes.reduce((total, item) => total + item.swapBytes, 0),
+      procCount: processes.length,
+      processes,
+    },
+  };
+  fs.writeFileSync(RESOURCES_FIXTURE, JSON.stringify(fixture, null, 2) + "\n", "utf8");
+  return processes.length;
+}
+
+function readResources() {
+  const box = (element: Element | null) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+  };
+  const footer = document.querySelector("[data-resources-footer]");
+  const panel = document.querySelector("[data-resources-panel]");
+  const section = panel?.querySelector('[data-testid="resources-viewer-section"]') ?? null;
+  const scroller = panel?.querySelector(".overflow-y-auto") ?? null;
+  const overflowing = [...(panel?.querySelectorAll("*") ?? [])]
+    .filter((element) => {
+      const style = getComputedStyle(element);
+      if (style.overflowX !== "visible" || style.textOverflow === "ellipsis") return false;
+      return element.scrollWidth > element.clientWidth + 1 && element.clientWidth > 0;
+    })
+    .map((element) => `${element.tagName.toLowerCase()}.${String(element.className).slice(0, 60)}`);
+  return {
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+    pageOverflowX: document.documentElement.scrollWidth - window.innerWidth,
+    footer: box(footer),
+    footerButton: box(footer?.querySelector("button[aria-expanded]") ?? null),
+    viewerLine: footer?.querySelector('[data-testid="resources-viewer-line"]')?.textContent ?? null,
+    staleDot: Boolean(footer?.querySelector('[data-testid="resources-stale-dot"]')),
+    panel: box(panel),
+    panelScrollerOverflowX: scroller ? scroller.scrollWidth - scroller.clientWidth : null,
+    overflowing,
+    staleBanner: panel?.querySelector('[data-testid="resources-sessions-stale"]')?.textContent ?? null,
+    /* Where the stale text is drawn, and whether a scrolling box can take it away. */
+    staleBannerBox: box(panel?.querySelector('[data-testid="resources-sessions-stale"]') ?? null),
+    staleBannerScrolls: Boolean(scroller?.querySelector('[data-testid="resources-sessions-stale"]')),
+    staleRowMarks: panel?.querySelectorAll('[data-testid="resource-host-row"] [data-testid="resource-row-stale"]').length ?? 0,
+    scrollerAtBottom: scroller ? Math.abs(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) <= 1 : null,
+    hostRows: panel?.querySelectorAll('[data-testid="resource-host-row"]').length ?? 0,
+    section: box(section),
+    sectionText: section?.textContent ?? null,
+    sectionControls: section?.querySelectorAll("button, input, select, a[href]").length ?? null,
+    processRows: section?.querySelectorAll('[data-testid="resources-viewer-process"]').length ?? 0,
+    /* The title is the row's identity: it must keep real width beside the chips (#2110 phone rows). */
+    titleWidths: [...(panel?.querySelectorAll('[data-testid="resource-host-row"] [data-resource-title]') ?? [])].map((element) => Math.round(element.getBoundingClientRect().width)),
+    /* Every control drawn inside the panel's box, none pushed past its edge. */
+    controlsOutside: [...(panel?.querySelectorAll("button, select, input") ?? [])].filter((element) => {
+      const r = element.getBoundingClientRect();
+      const p = panel!.getBoundingClientRect();
+      return r.width > 0 && (r.left < p.left - 1 || r.right > p.right + 1);
+    }).map((element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 40)),
+    panelTargets: [...(panel?.querySelectorAll("button, select") ?? [])].map((element) => ({
+      label: (element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 40),
+      h: Math.round(element.getBoundingClientRect().height),
+    })),
+  };
+}
+
+type ResourcesReading = ReturnType<typeof readResources>;
+
+async function resourcesMain(): Promise<void> {
+  seedHome();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  SERVER_EXTRA_ENV.LLV_RESOURCES_FIXTURE = RESOURCES_FIXTURE;
+  let processCount = writeResourcesFixture(true);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit() };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    /* A home with no Viewer state opens the setup guide over everything; this
+       case is about the footer, so the guide is dismissed the way its × does. */
+    const dismissed = await fetch(`${baseUrl}/api/onboarding`, {
+      method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }),
+    });
+    must(dismissed.ok, `dismissing the setup guide answered ${dismissed.status}`);
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const shots = [
+      ...(["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ phone: false, lang, colorScheme, stale: true }))),
+      { phone: false, lang: "en" as const, colorScheme: "light" as const, stale: false },
+      { phone: true, lang: "en" as const, colorScheme: "light" as const, stale: true },
+      { phone: true, lang: "en" as const, colorScheme: "dark" as const, stale: true },
+      { phone: true, lang: "uk" as const, colorScheme: "light" as const, stale: true },
+      { phone: true, lang: "en" as const, colorScheme: "light" as const, stale: false },
+    ];
+    for (const shot of shots) {
+      processCount = writeResourcesFixture(shot.stale);
+      const tag = `${shot.phone ? "phone" : "desktop"}-${shot.lang}-${shot.colorScheme}-${shot.stale ? "stale" : "current"}`;
+      const context = await browser.newContext(shot.phone
+        ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: shot.colorScheme, reducedMotion: "reduce" }
+        : { viewport: { width: 1280, height: 800 }, colorScheme: shot.colorScheme, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), shot.lang);
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/`);
+      if (shot.phone) {
+        await page.waitForSelector('[data-mobile2-open="projects"]', { timeout: 30_000 });
+        await page.click('[data-mobile2-open="projects"]');
+        await page.waitForSelector('[data-mobile2-sheet="projects"]', { timeout: 10_000 });
+      }
+      await page.waitForSelector("[data-resources-footer]", { timeout: 15_000 }).catch(() => {});
+      await page.waitForTimeout(400);
+      const closed = await page.evaluate(readResources);
+      must(closed.footer !== null, `${tag}: the resources footer did not render`);
+      must(Boolean(closed.viewerLine?.includes("Delegatus") && /GiB|MiB/.test(closed.viewerLine)), `${tag}: the footer's Delegatus line reads «${closed.viewerLine}»`);
+      must(closed.staleDot === shot.stale, `${tag}: stale mark ${closed.staleDot} on a ${shot.stale ? "stale" : "current"} table`);
+      if (shot.phone) must((closed.footerButton?.h ?? 0) >= 44, `${tag}: the footer target is ${closed.footerButton?.h}px tall`);
+      if (closed.footer) {
+        const pad = 8;
+        const clip = shot.phone
+          ? { x: 0, y: 0, width: 390, height: 844 }
+          : { x: Math.max(0, closed.footer.x - pad), y: Math.max(0, closed.footer.y - 120), width: closed.footer.w + 2 * pad, height: Math.min(800 - Math.max(0, closed.footer.y - 120), closed.footer.h + 120 + pad) };
+        await page.screenshot({ path: path.join(OUT_DIR, `resources-${tag}-footer.png`), clip });
+      }
+      await page.click("[data-resources-footer] button[aria-expanded]");
+      await page.waitForSelector("[data-resources-panel]", { timeout: 10_000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      const open: ResourcesReading = await page.evaluate(readResources);
+      must(open.panel !== null, `${tag}: the panel did not open`);
+      if (open.panel) {
+        must(open.panel.x >= 0 && open.panel.y >= 0 && open.panel.x + open.panel.w <= open.viewport.w && open.panel.y + open.panel.h <= open.viewport.h,
+          `${tag}: panel ${JSON.stringify(open.panel)} leaves the ${open.viewport.w}×${open.viewport.h} viewport`);
+      }
+      must(open.pageOverflowX <= 0, `${tag}: the page overflows sideways by ${open.pageOverflowX}px`);
+      must((open.panelScrollerOverflowX ?? 0) <= 0, `${tag}: the panel list overflows sideways by ${open.panelScrollerOverflowX}px`);
+      must(open.overflowing.length === 0, `${tag}: overflowing elements ${JSON.stringify(open.overflowing)}`);
+      must(open.hostRows === 4, `${tag}: ${open.hostRows} host rows`);
+      must(shot.stale ? Boolean(open.staleBanner) : open.staleBanner === null, `${tag}: stale banner «${open.staleBanner}» on a ${shot.stale ? "stale" : "current"} table`);
+      must(open.section !== null && open.processRows === processCount, `${tag}: Delegatus section with ${open.processRows} of ${processCount} processes`);
+      must(open.sectionControls === 0, `${tag}: the Delegatus section carries ${open.sectionControls} controls`);
+      if (shot.phone) for (const target of open.panelTargets) must(target.h >= 44, `${tag}: «${target.label}» is ${target.h}px tall`);
+      must(open.titleWidths.length === 4 && open.titleWidths.every((width) => width >= 100), `${tag}: host titles are ${JSON.stringify(open.titleWidths)}px wide`);
+      must(open.controlsOutside.length === 0, `${tag}: controls outside the panel ${JSON.stringify(open.controlsOutside)}`);
+      await page.screenshot({ path: path.join(OUT_DIR, `resources-${tag}-panel.png`) });
+      must(open.staleRowMarks === (shot.stale ? 4 : 0), `${tag}: ${open.staleRowMarks} rows marked stale on a ${shot.stale ? "stale" : "current"} table`);
+      /* The section sits below the rows; scroll the list to its end, where the
+         review found the only stale mark scrolled away (#2110). */
+      await page.evaluate(() => {
+        const scroller = document.querySelector("[data-resources-panel] .overflow-y-auto");
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      });
+      await page.waitForTimeout(150);
+      const scrolled: ResourcesReading = await page.evaluate(readResources);
+      must(scrolled.scrollerAtBottom === true, `${tag}: the panel list did not reach its end`);
+      if (shot.stale) {
+        const mark = scrolled.staleBannerBox;
+        must(!scrolled.staleBannerScrolls, `${tag}: the stale text sits inside the scrolling list`);
+        must(mark !== null && mark.h > 0 && mark.y >= 0 && mark.y + mark.h <= scrolled.viewport.h
+          && scrolled.panel !== null && mark.y >= scrolled.panel.y && mark.y + mark.h <= scrolled.panel.y + scrolled.panel.h,
+          `${tag}: scrolled to the end, the stale text is at ${JSON.stringify(mark)}`);
+      }
+      await page.screenshot({ path: path.join(OUT_DIR, `resources-${tag}-panel-delegatus.png`) });
+      report[tag] = { closed, open, scrolled };
+      await context.close();
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "resources.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`resources measurements: ${path.join(OUT_DIR, "resources.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`resources acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("resources acceptance passed at 1280 × 800 and 390 × 844.");
+  }
+}
+
+/* ------------------------------------------------------------------------- */
 /* BOARD_CAPTURE_CASE=activity: the activity dashboard                         */
 /* ------------------------------------------------------------------------- */
 
@@ -4230,6 +4462,7 @@ async function activityMain(): Promise<void> {
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
+else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
 else if ((SEAT_CASES as readonly string[]).includes(process.env.BOARD_CAPTURE_CASE ?? "")) await seatsMain(process.env.BOARD_CAPTURE_CASE as SeatCase);

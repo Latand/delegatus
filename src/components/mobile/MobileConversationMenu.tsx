@@ -5,6 +5,7 @@ import { ArrowRightLeft, Bot, Boxes, ChevronRight, CornerDownRight, Crown, FoldV
 import { useLocale } from "@/lib/i18n";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
+import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 
 import type { SubagentBadge } from "../scheme/subagentBadgeModel";
 
@@ -245,7 +246,9 @@ export function MobileConversationMenu({
               label={t("mobile2.chat.menuPredecessor", { round: file.continues.round })}
               trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
               onSelect={act(() => {
-                window.location.hash = "#c=" + encodeURIComponent(file.continues!.conversationId);
+                /* The round opens through the store and takes this menu's
+                   entry, so Back returns to the conversation it was read from (#2105). */
+                navigateToFragment("#c=" + encodeURIComponent(file.continues!.conversationId));
               })}
               testId="mobile-menu-predecessor"
               attrs={{ "data-mobile2-menu-row": "predecessor", "data-continues-conversation": file.continues.conversationId }}

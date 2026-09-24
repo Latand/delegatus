@@ -63,6 +63,7 @@ mock.module("@/hooks/useLogTail", () => ({
 const { MobileFocusView } = await import("./MobileFocusView");
 const { MobileSeatCard } = await import("./MobileSeatCard");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
+const { fakeHistory } = await import("./mobileNavTestHistory");
 const { resetOrchestratorSeatCacheForTests } = await import("../orchestrator/useOrchestratorSeat");
 const { resetOrchestratorIncumbentCacheForTests } = await import("../orchestrator/useOrchestratorIncumbent");
 
@@ -213,21 +214,7 @@ const NOW = Date.parse("2100-01-02T12:00:00.000Z") / 1000;
 /* A fake history per mount: the navigation store says which sheet is open
    (§3.3), so an open sheet is never inherited by the next test. */
 function navHost() {
-  let state: unknown = null;
-  const listeners = new Set<(next: unknown) => void>();
-  return {
-    history: {
-      get state() { return state; },
-      pushState(next: unknown) { state = next; },
-      replaceState(next: unknown) { state = next; },
-      back() { for (const listener of [...listeners]) listener(state); },
-    },
-    href: () => "http://localhost/",
-    onPopstate(listener: (next: unknown) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
+  return fakeHistory("http://localhost/").host;
 }
 
 let nav = createMobileNav(navHost());

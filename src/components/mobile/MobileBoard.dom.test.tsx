@@ -47,7 +47,7 @@ mock.module("@/hooks/useConversationCatalog", () => ({
 
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
 const { MobileSheet } = await import("@/components/mobile/MobileSheet");
-const { getMobileNav, topScreen } = await import("@/components/mobile/mobileNav");
+const { getMobileNav, resetMobileNavForTests, topScreen } = await import("@/components/mobile/mobileNav");
 const { receipts } = await import("@/components/mobile/MobileReceipt");
 const { resetOrchestratorSeatCacheForTests } = await import("@/components/orchestrator/useOrchestratorSeat");
 const { buildMobileBoard, needsDecisionPipelineRows } = await import("@/components/mobile/mobileBoardModel");
@@ -274,7 +274,7 @@ beforeEach(() => {
   dom.localStorage.clear();
   resetPhoneKanbanPlaces();
   dom.location.hash = "#p=" + encodeURIComponent(PROJECT);
-  getMobileNav().home();
+  resetMobileNavForTests();
   receipts.dismiss();
   seatAnswer = null;
   seatReads = 0;
