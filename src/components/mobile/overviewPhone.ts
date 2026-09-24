@@ -25,6 +25,10 @@ export interface OverviewScreenLookup {
   tasks: readonly BoardTask[];
   pipelines: readonly Pipeline[];
   files: readonly FileEntry[];
+  /** The project of each conversation opened over the Overview, recorded at
+      the open: a conversation the poll has not carried yet (a catalog row, a
+      search result beyond the scan window) still names its project. */
+  conversationProjects?: ReadonlyMap<string, string>;
 }
 
 /** The screens stacked above the Overview's board, as one comparable
@@ -70,7 +74,7 @@ export function overviewScreenProject(screen: MobileScreen | null, lookup: Overv
   if (screen.kind === "pipeline") return lookup.pipelines.find((pipeline) => pipeline.id === screen.id)?.project ?? null;
   if (screen.kind === "chat") {
     const file = lookup.files.find((entry) => entry.path === screen.id);
-    return file ? projectKey(file) : null;
+    return file ? projectKey(file) : lookup.conversationProjects?.get(screen.id) ?? null;
   }
   return null;
 }

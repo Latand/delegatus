@@ -52,6 +52,11 @@ test("the top of the stack names the project that draws it; a screen that names 
   expect(overviewLiftProject([{ kind: "task", id: "t-gone" }], LOOKUP)).toBeNull();
   expect(overviewLiftProject([], LOOKUP)).toBeNull();
   expect(overviewScreenProject(BOARD, LOOKUP)).toBeNull();
+  /* A conversation opened over the Overview before the poll carries its file
+     names the project the open recorded. */
+  const unscanned = { kind: "chat" as const, id: "/sessions/beyond-the-window.jsonl" };
+  expect(overviewLiftProject([unscanned], LOOKUP)).toBeNull();
+  expect(overviewLiftProject([unscanned], { ...LOOKUP, conversationProjects: new Map([[unscanned.id, "atlas"]]) })).toBe("atlas");
 });
 
 test("the Overview pins in the queue's order over every project: conversations, then lanes parked on the operator", () => {

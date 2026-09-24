@@ -131,7 +131,11 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
      the Viewer cannot place (a task deleted while its screen sat in the
      history, reached again by Forward) leaves the Overview drawn under a
      stack that names it, and every later door would land above it and never
-     show: the stack goes home instead. */
+     show: the stack goes home instead. Nothing opened on purpose lands here
+     before its data does: a task and a lane come from the payload the door
+     was drawn from, and a conversation opened over the Overview carries its
+     project from the open (`openOverOverview`), whether or not the poll has
+     carried its file yet. */
   const stranded = isMobile && !["board", "accounts"].includes(topScreen(mobileNavState).kind);
   useEffect(() => {
     if (stranded) mobileNav.home();

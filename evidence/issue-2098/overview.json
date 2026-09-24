@@ -639,6 +639,21 @@
         "bandBelow": 0,
         "innerHeight": 667
       },
+      "searchScope": {
+        "beforeSearch": {
+          "badge": "8",
+          "stored": "__overview__"
+        },
+        "afterSearch": {
+          "badge": "8",
+          "stored": "__overview__",
+          "band": 0
+        },
+        "searchBack": {
+          "hash": "",
+          "board": true
+        }
+      },
       "hidden": [
         "t-seat",
         "t-quota"
@@ -1283,6 +1298,21 @@
         "bandBelow": 0,
         "innerHeight": 667
       },
+      "searchScope": {
+        "beforeSearch": {
+          "badge": "8",
+          "stored": "__overview__"
+        },
+        "afterSearch": {
+          "badge": "8",
+          "stored": "__overview__",
+          "band": 0
+        },
+        "searchBack": {
+          "hash": "",
+          "board": true
+        }
+      },
       "hidden": [
         "t-seat",
         "t-quota"
@@ -1927,6 +1957,21 @@
         "bandBelow": 0,
         "innerHeight": 735
       },
+      "searchScope": {
+        "beforeSearch": {
+          "badge": "8",
+          "stored": "__overview__"
+        },
+        "afterSearch": {
+          "badge": "8",
+          "stored": "__overview__",
+          "band": 0
+        },
+        "searchBack": {
+          "hash": "",
+          "board": true
+        }
+      },
       "hidden": [
         "t-seat",
         "t-quota"
@@ -2570,6 +2615,21 @@
         "overflowX": 0,
         "bandBelow": 0,
         "innerHeight": 735
+      },
+      "searchScope": {
+        "beforeSearch": {
+          "badge": "8",
+          "stored": "__overview__"
+        },
+        "afterSearch": {
+          "badge": "8",
+          "stored": "__overview__",
+          "band": 0
+        },
+        "searchBack": {
+          "hash": "",
+          "board": true
+        }
       },
       "hidden": [
         "t-seat",

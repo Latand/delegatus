@@ -222,7 +222,10 @@ function ViewerApp() {
   const mobileNav = useMobileNavStore();
   const stackedKey = useSyncExternalStore(mobileNav.subscribe, () => overviewStackKey(mobileNav.getState().stack), () => null);
   const liftKey = isMobile && project === OVERVIEW ? stackedKey : null;
-  const liftFound = overviewLiftProject(overviewStackScreens(liftKey), { tasks, pipelines, files: allFiles });
+  /* Each conversation opened over the Overview, with its project as the open
+     knew it, so its screen is drawn before the poll carries its file. */
+  const [openedOverOverview, setOpenedOverOverview] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const liftFound = overviewLiftProject(overviewStackScreens(liftKey), { tasks, pipelines, files: allFiles, conversationProjects: openedOverOverview });
   const liftFoundProject = liftFound ? canonicalClientProject(liftFound, projectAliases) : null;
   const [liftMemo, setLiftMemo] = useState<{ key: string; project: string } | null>(null);
   if (liftKey && liftFoundProject && (liftMemo?.key !== liftKey || liftMemo.project !== liftFoundProject)) {
@@ -552,8 +555,9 @@ function ViewerApp() {
   );
 
   /* A conversation opened over the phone's Overview (#2098): a card's row,
-     its sheet's «Open first agent», the ⚠ sheet, an arrival, and a replay of
-     one of those. It is a SCREEN pushed onto the stack the operator is on,
+     its sheet's «Open first agent», the ⚠ sheet, an arrival, an in-app link,
+     a search result, and a replay of any of those. It is a SCREEN pushed onto
+     the stack the operator is on,
      full screen and never inside a card, and its own project's dashboard
      draws it (see `liftedProject`), so ‹ lands on the screen under it and in
      the end on the Overview. The screen goes on first; the focus record then
@@ -565,18 +569,21 @@ function ViewerApp() {
     const nav = mobileNav;
     const stack = nav.getState().stack;
     const onTop = stack[stack.length - 1];
+    const fileProject = projectKey(file);
+    setOpenedOverOverview((known) => (known.get(file.path) === fileProject ? known : new Map(known).set(file.path, fileProject)));
     if (onTop?.kind !== "chat" || onTop.id !== file.path) {
-      /* The board alone under an entry that names a conversation is a reload
-         on one: that entry becomes the Overview's own, so ‹ from the screen
-         pushed over it lands on the board and not on a replay of it. */
-      if (stack.length === 1 && parseFocusHistoryState(window.history.state)) {
+      /* The board alone under an entry that names a conversation (a reload on
+         one, a search result's or a pasted link's own entry): that entry
+         becomes the Overview's own, so ‹ from the screen pushed over it lands
+         on the board and not on a replay of it. */
+      if (stack.length === 1 && (location.hash || parseFocusHistoryState(window.history.state))) {
         window.history.replaceState({ [MOBILE_NAV_STATE_KEY]: { d: 1, screen: BOARD } }, "", location.pathname + location.search);
       }
       nav.push({ kind: "chat", id: file.path });
     }
     setPendingHash(null);
     setStaleFocusNotice(false);
-    recordFocusNavigation(file, projectKey(file), { restore: true });
+    recordFocusNavigation(file, fileProject, { restore: true });
     nav.stamp();
     focusNonceRef.current += 1;
     setFocusRequest({ path: file.path, nonce: focusNonceRef.current, catalog });
@@ -586,11 +593,12 @@ function ViewerApp() {
      stays pinned for the displayed conversation so recurring polls preserve
      the node after the transient hash intent resolves. */
   const openPinnedFile = useCallback((file: FileEntry, hydrated = false) => {
-    /* The resolver replaying a conversation over the phone's Overview keeps
-       the Overview: the conversation is a screen on its stack. */
-    if (hydrated && keepsOverview(window.history.state)) {
+    /* On the phone's Overview every landing (a replay, a search result, a
+       pasted link, a catalog row) opens the conversation as a screen over it
+       and keeps the Overview, so ‹ comes back to it (#2098). */
+    if (overviewPhoneRef.current) {
       setStaleFocusNotice(false);
-      dispatchCatalogPin({ kind: "resolve", path: file.path, conversationId: file.conversationId });
+      dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId });
       openOverOverview(file, { catalog: true });
       return;
     }
@@ -612,7 +620,7 @@ function ViewerApp() {
        phone the shell goes home under it, unless the replay landed on an entry
        the phone's own stack wrote (#2072 slice 5, `landResolvedConversation`). */
     landResolvedConversation(getMobileNav(), hydrated, window.history.state, () => recordFocusNavigation(file, key, { restore: hydrated }));
-  }, [keepsOverview, openOverOverview]);
+  }, [openOverOverview]);
 
   const openCatalogFile = useCallback((file: FileEntry) => {
     openPinnedFile(file);
@@ -817,10 +825,15 @@ function ViewerApp() {
      cannot name — beyond the capped feed, or not scanned yet — falls through
      to the browser, and the cold resolver path handles it exactly as before. */
   const openLinkedFile = useCallback((file: FileEntry) => {
+    /* Over the phone's Overview a link opens its conversation over it (#2098). */
+    if (overviewPhoneRef.current) {
+      openOverOverview(file);
+      return;
+    }
     const key = projectKey(file);
     if (key !== project) applyProject(key);
     requestFocus(file.path);
-  }, [project, applyProject, requestFocus]);
+  }, [project, applyProject, requestFocus, openOverOverview]);
   const linkResolveRef = useRef({ allFiles, conversationAliases, launchRoutes });
   useEffect(() => {
     linkResolveRef.current = { allFiles, conversationAliases, launchRoutes };

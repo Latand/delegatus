@@ -82,6 +82,7 @@ const { receipts } = await import("./mobile/MobileReceipt");
 const { getMobileNav } = await import("./mobile/mobileNav");
 const { resetPhoneKanbanPlaces } = await import("./mobile/phoneKanbanPlace");
 const { resetOrchestratorSeatCacheForTests } = await import("./orchestrator/useOrchestratorSeat");
+const { transcriptFocusHash } = await import("./search/GlobalSearch");
 
 const NOW = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((NOW - secondsAgo) * 1_000).toISOString();
@@ -568,3 +569,28 @@ test("Forward and a reload bring a conversation back over the Overview", async (
   expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }]);
 });
 
+
+/* A search result lands through the hash, as `openSearchResult` sends it.
+   On the phone's Overview it opens over the Overview like every other
+   conversation: ‹ comes back to the Overview, which stays the project. */
+test("a search result on the Overview opens its conversation over it, and ‹ comes back to the Overview", async () => {
+  const host = await mountOverview();
+  const badge = () => host.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count");
+  await until(() => badge() === "2");
+  await tap(host.querySelector('[data-phone-kanban-tab="inbox"]'));
+
+  await act(async () => { dom.location.hash = transcriptFocusHash(MESH_LOOSE); });
+  await until(() => Boolean(conversationScreen(host, MESH_LOOSE)));
+  await act(async () => { await Bun.sleep(120); });
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "chat", id: MESH_LOOSE }]);
+  expect(badge()).toBe("2");
+  expect(dom.localStorage.getItem("llvProject")).not.toBe(MESH);
+  expect(inlineConversation(host)).toBeFalsy();
+
+  await back(host);
+  await until(() => Boolean(host.querySelector("[data-phone-kanban]")));
+  await act(async () => { await Bun.sleep(120); });
+  expect(host.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active")).toBe("inbox");
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }]);
+  expect(dom.location.hash).toBe("");
+});

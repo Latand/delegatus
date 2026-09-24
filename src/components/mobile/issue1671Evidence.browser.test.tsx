@@ -2142,6 +2142,19 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
         await page.locator("[data-mobile2-back]").first().click();
         await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 10_000 });
 
+        /* A search result lands through the hash, as the search palette sends
+           it: over the Overview too, and ‹ comes back to the Overview. */
+        const beforeSearch = await scope();
+        await page.evaluate((transcript) => { location.hash = "#f=" + encodeURIComponent(transcript); }, RUNNING_PATH);
+        await page.waitForSelector('[data-mobile2-screen="chat"] [data-feed-state]', { timeout: 10_000 });
+        await pause(page, 900);
+        const afterSearch = { ...(await scope()), band: (await readConversationScreen(page)).bandBelow };
+        if (afterSearch.badge !== beforeSearch.badge || afterSearch.stored !== "__overview__" || afterSearch.band > 0.5) chatFail(`a search result changed the scope or left a band: ${JSON.stringify({ beforeSearch, afterSearch })}`);
+        await page.locator("[data-mobile2-back]").first().click();
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 10_000 });
+        const searchBack = await page.evaluate(() => ({ hash: location.hash, board: Boolean(document.querySelector("[data-phone-kanban]")) }));
+        if (searchBack.hash || !searchBack.board) chatFail(`‹ from a search result landed on ${JSON.stringify(searchBack)}`);
+
         /* ⋯ › Hidden tasks, over the Overview. */
         await page.locator('[data-mobile2-open="menu"]').click();
         await page.locator('[data-mobile2-open="hidden"]').click();
@@ -2151,7 +2164,7 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
         await page.screenshot({ path: path.join(OVERVIEW_OUT, `overview-${key}-hidden.png`) });
         if (hidden.join(",") !== "t-seat,t-quota") failures.push(`${key} hidden: the sheet lists ${hidden.join(",")}`);
         if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
-        results.push({ key, viewport, lang, task, agentScope: { beforeAgent, afterAgent }, backOn, conversation, hidden });
+        results.push({ key, viewport, lang, task, agentScope: { beforeAgent, afterAgent }, backOn, conversation, searchScope: { beforeSearch, afterSearch, searchBack }, hidden });
         await page.close();
       } finally {
         await context.close();
