@@ -26,7 +26,8 @@ fs.mkdirSync(path.join(process.env.LLV_CODEX_HOME, "sessions"), { recursive: tru
 
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { agentRegistry } = await import("@/lib/agent/registry");
-const { loadPipelines, withPipelineMutation } = await import("@/lib/pipelines/store");
+const pipelineStore = await import("@/lib/pipelines/store");
+const { loadPipelines, withPipelineMutation } = pipelineStore;
 const { getPipelines, tickPipelines } = await import("@/lib/pipelines/engine");
 const { publishHotStateAuthority } = await import("@/lib/state/hotStateAuthority");
 const { isoNow } = await import("@/lib/tasks/helpers");
@@ -179,6 +180,42 @@ test("a create that meets a held lease is queued under its id and stored exactly
   expect(pipelinesNamed(task)).toEqual([pipelineId]);
   await tickPipelines([]);
   expect(pipelinesNamed(task)).toEqual([pipelineId]);
+});
+
+test("a queued create the controller refuses when it stores it answers that refusal to the caller's read of its id (#1835)", async () => {
+  process.env.LLV_PIPELINE_LOCK_WAIT_MS = "200";
+  const releaseLease = await holdRegistryLease();
+  const task = "queued then refused";
+  const queued = await service.callTool("create_pipeline", createArgs(`queued-refused-${crypto.randomUUID()}`, task))
+    .finally(releaseLease);
+  expect(queued).toMatchObject({ ok: true, queued: true });
+  const pipelineId = queued.ok ? String(queued.pipelineId) : "";
+
+  /* Before the controller's pass, the read says it is queued. */
+  const waiting = await service.callTool("get_pipeline", { clientRequestId: `read-${crypto.randomUUID()}`, pipelineId });
+  expect(waiting).toMatchObject({ ok: false, details: { code: "pipeline_queued", pipelineId, queuedCreation: { state: "queued" } } });
+
+  /* The store turns it away for a reason no retry changes. */
+  const refusal = spyOn(pipelineStore, "createPipelineWithDelivery").mockImplementationOnce(async () => {
+    throw new Error("idempotency_conflict: creation arguments changed");
+  });
+  try {
+    await tickPipelines([]);
+  } finally {
+    refusal.mockRestore();
+  }
+  expect(pipelinesNamed(task)).toEqual([]);
+
+  const read = await service.callTool("get_pipeline", { clientRequestId: `read-${crypto.randomUUID()}`, pipelineId });
+  expect(read).toMatchObject({
+    ok: false,
+    details: {
+      code: "pipeline_creation_refused",
+      pipelineId,
+      queuedCreation: { state: "refused", error: "idempotency_conflict: creation arguments changed" },
+    },
+  });
+  expect(read.ok ? "" : read.error).toContain("refused when the controller stored it");
 });
 
 test("a completed create still replays its receipt under the same id", async () => {

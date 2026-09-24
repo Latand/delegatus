@@ -5,6 +5,7 @@ import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { carryingTaskWorkLinks, pipelineWorkLinks } from "@/lib/forge/resolve";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
+import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
 import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipelines/engine";
 import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
 import { loadPipelines, pipelineRevision } from "@/lib/pipelines/store";
@@ -46,7 +47,13 @@ export async function GET(
   const { id } = await ctx.params;
   try {
     const pipeline = getPipeline(id);
-    if (!pipeline) return NextResponse.json({ error: "pipeline not found" }, { status: 404 });
+    if (!pipeline) {
+      /* #1835: a create queued during a handover was answered with this id. */
+      const queued = queuedPipelineCreationStatus(id);
+      return NextResponse.json(queued
+        ? { error: queuedPipelineCreationMessage(id, queued), code: queued.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused", queuedCreation: queued }
+        : { error: "pipeline not found" }, { status: 404 });
+    }
     /* #1695 C7 and graph slice 1: the digests a guarded graph edit names as
        `expectedStageDigest` — a stage's for override-stage and set-edge, the
        whole plan's for add-stage, remove-stage and reorder-stage. */

@@ -74,6 +74,49 @@ export function listQueuedPipelineCreations(): QueuedPipelineCreation[] {
   return entries.sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
 }
 
+/** What became of a create queued under this id and not stored: still
+    waiting for a writable store, or refused when the controller stored it. */
+export type QueuedPipelineCreationStatus =
+  | { state: "queued"; queuedAt: string; reason: string }
+  | { state: "refused"; queuedAt: string; refusedAt: string; error: string };
+
+/**
+ * The queue's answer for a pipeline id the store does not hold (#1835). The
+ * caller of a queued create was told to read the id back instead of creating
+ * it again, so a read of that id has to say it is still queued, or why the
+ * controller refused it, where it would otherwise answer "not found" forever.
+ */
+export function queuedPipelineCreationStatus(pipelineId: string): QueuedPipelineCreationStatus | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(pipelineId)) return null;
+  const read = (suffix: string): Record<string, unknown> | null => {
+    try {
+      const value = JSON.parse(fs.readFileSync(path.join(pipelineCreationQueueDir(), `${pipelineId}${suffix}`), "utf8"));
+      return value && typeof value === "object" ? value as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  };
+  const queued = read(QUEUED_SUFFIX);
+  if (queued) return { state: "queued", queuedAt: String(queued.queuedAt ?? ""), reason: String(queued.reason ?? "") };
+  const refused = read(REFUSED_SUFFIX);
+  if (refused) {
+    return {
+      state: "refused",
+      queuedAt: String(refused.queuedAt ?? ""),
+      refusedAt: String(refused.refusedAt ?? ""),
+      error: String(refused.error ?? "the store refused the queued create"),
+    };
+  }
+  return null;
+}
+
+/** The sentence a read of a queued or refused create answers. */
+export function queuedPipelineCreationMessage(pipelineId: string, status: QueuedPipelineCreationStatus): string {
+  return status.state === "queued"
+    ? `pipeline ${pipelineId} is queued and not stored yet (${status.reason}); the serving release stores it on its next controller pass. Do not create it again.`
+    : `pipeline ${pipelineId} was queued during a deploy handover and then refused when the controller stored it: ${status.error}. Nothing was created; fix the request and create it again.`;
+}
+
 /**
  * Stores every queued creation the store now admits, oldest first. A create
  * the store still refuses as busy stays queued for the next pass, and so does

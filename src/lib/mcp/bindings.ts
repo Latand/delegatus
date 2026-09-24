@@ -99,6 +99,7 @@ import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
+import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
 import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
@@ -3432,7 +3433,18 @@ function compactPullRequest(pipeline: Pipeline): { pr?: string } {
 async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const pipeline = getPipelineRecord(pipelineId);
-  if (!pipeline) throw new Error("pipeline not found");
+  if (!pipeline) {
+    /* #1835: a create queued during a handover was answered with this id. */
+    const queued = queuedPipelineCreationStatus(pipelineId);
+    if (queued) {
+      throw new McpToolRefusal(queuedPipelineCreationMessage(pipelineId, queued), {
+        code: queued.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused",
+        pipelineId,
+        queuedCreation: queued,
+      });
+    }
+    throw new Error("pipeline not found");
+  }
   /* #1845: the two narrow reads. A stage read answers what one stage concluded;
      a compact read answers the list row. Without either, the whole record. */
   const stageId = text(args.stageId);
