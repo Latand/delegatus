@@ -2181,6 +2181,10 @@ function advancePipeline(pipeline: Pipeline, stage: PipelineStage, ports: Pipeli
     pipeline.stateDetail = detail;
     pipeline.pausedState = null;
     pipeline.closedAt = ports.now();
+    /* A reap that settled while this final stage still ran never saw its host,
+       and a completed pipeline with a settled reap leaves the controller index,
+       so completion reopens it until a round has probed every attempt (#1728). */
+    if (pipeline.terminalReap?.settledAt) pipeline.terminalReap = { ...pipeline.terminalReap, rounds: 0, settledAt: null };
     return;
   }
   pipeline.cursor = {

@@ -6970,6 +6970,35 @@ test("an adopted stage child is stopped and counted, never silently left running
   expect(loadPipelines()[0]!.stateDetail).toBe("closed; stopped 1 stage host; stopped 1 adopted agent");
 });
 
+test("a completed two-stage pipeline reaps its final stage host too (#1728)", async () => {
+  const h = harness();
+  await create(h.ports);
+  h.setHostsResident(true);
+  h.setStageHost("conversation_stage_1", { outcome: "stopped" });
+  h.setStageHost("conversation_stage_2", { outcome: "stopped" });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  /* The plan host is reaped while build runs, and that clean round settles
+     the reap before the final stage has produced anything. */
+  await tickPipelines([], h.ports);
+  expect(h.calls).toContain("stop-host:plan:1:conversation_stage_1");
+  expect(loadPipelines()[0]!.terminalReap?.settledAt).toEqual(expect.any(String));
+
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("completed");
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(h.calls.filter((call) => call.startsWith("stop-host:"))).toEqual([
+    "stop-host:plan:1:conversation_stage_1",
+    "stop-host:build:1:conversation_stage_2",
+  ]);
+  const completed = loadPipelines()[0]!;
+  expect(completed.terminalReap).toMatchObject({ stopped: 2, settledAttempts: ["plan:1", "build:1"] });
+  expect(completed.terminalReap!.settledAt).toEqual(expect.any(String));
+});
+
 test("an adopted child that cannot be stopped keeps the lane visible (#670)", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
