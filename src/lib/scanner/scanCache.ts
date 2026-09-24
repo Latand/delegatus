@@ -934,6 +934,13 @@ export function fileScanCacheStatus(): { inFlight: boolean; subscribers: number 
   return { inFlight: refresh !== undefined, subscribers: refresh?.subscribers ?? 0 };
 }
 
+/** The project catalog of the last completed (or persisted) scan, without
+    starting one: null until a scan has completed. For a reader that only
+    needs names and must never wait on a full-corpus scan. */
+export function lastScannedProjectCatalog(): FileScanSnapshot["projectCatalog"] | null {
+  return globalFileScanSlot().snapshot?.projectCatalog ?? null;
+}
+
 /** Returns metadata from a completed current generation. The first fresh
     caller reserves a generation beyond existing requests; concurrent fresh
     callers join that pending fence. Older work completes before the fence. */

@@ -263,6 +263,12 @@ function openWriterDatabase(): Database {
       );
     `);
     migrateSearchSchema(db);
+    /* The activity dashboard reads rows by time and never the body; this
+       covers that read (the implicit rowid orders rows sharing a second). */
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS transcript_messages_time
+        ON transcript_messages(sort_timestamp, speaker, transcript_path, timestamp);
+    `);
     secureDatabaseFiles(filename);
     return db;
   } catch (error) {
@@ -730,6 +736,58 @@ function pageItems(
       engine: file.engine,
     };
   });
+}
+
+export interface TranscriptActivityRow {
+  transcriptPath: string;
+  speaker: TranscriptSpeaker;
+  atMs: number;
+  /** Row order among messages that share a second. */
+  seq: number;
+}
+
+export interface TranscriptActivityRead {
+  /** False when no index exists yet: nothing has been scanned. */
+  available: boolean;
+  rows: TranscriptActivityRow[];
+  files: Map<string, { project: string; engine: "claude" | "codex" | "copilot" }>;
+  /** When the newest transcript was indexed, in milliseconds. */
+  indexedAtMs: number | null;
+}
+
+/**
+ * Dated message rows with `fromSec <= timestamp <= toSec`, for the activity
+ * dashboard: path, speaker and time only. The body is never selected. An
+ * absent index is reported as unavailable, and this read never creates one.
+ */
+export function readTranscriptActivity(fromSec: number, toSec: number): TranscriptActivityRead {
+  if (!fs.existsSync(statePath("transcript-search.sqlite"))) {
+    return { available: false, rows: [], files: new Map(), indexedAtMs: null };
+  }
+  const db = openQueryDatabase();
+  try {
+    db.exec("BEGIN");
+    try {
+      const values = db.query(`
+        SELECT id, speaker, transcript_path, timestamp FROM transcript_messages
+        WHERE sort_timestamp BETWEEN ? AND ? AND timestamp IS NOT NULL
+      `).values(fromSec, toSec) as Array<[number, TranscriptSpeaker, string, number]>;
+      const rows: TranscriptActivityRow[] = [];
+      const paths = new Set<string>();
+      for (const [id, speaker, transcriptPath, timestamp] of values) {
+        rows.push({ transcriptPath, speaker, atMs: timestamp * 1_000, seq: id });
+        paths.add(transcriptPath);
+      }
+      const files = new Map<string, { project: string; engine: "claude" | "codex" | "copilot" }>();
+      for (const [pathname, file] of transcriptFiles(db, paths)) files.set(pathname, { project: file.project, engine: file.engine });
+      const newest = db.query<{ newest: number | null }, []>("SELECT MAX(indexed_at) AS newest FROM transcript_files").get()?.newest ?? null;
+      return { available: true, rows, files, indexedAtMs: newest === null ? null : newest * 1_000 };
+    } finally {
+      db.exec("COMMIT");
+    }
+  } finally {
+    db.close();
+  }
 }
 
 /**

@@ -2,6 +2,8 @@ import fs from "node:fs";
 
 import { NextRequest, NextResponse } from "next/server";
 
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
+import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { attachmentPath, sweepAttachments } from "@/lib/tasks/attachments";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds, type TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
@@ -84,6 +86,10 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
      reads the freshest task list (not this request's snapshot), so it never
      evaluates references against stale state. */
   sweepAttachments(loadTasks(), Date.now());
+  /* A replayed create answers the same task, so its id is the key. */
+  if (directOperatorActivityAuthority(req).ok) {
+    recordOperatorRequest(req, { kind: "task", idempotencyKey: `task-create:${result.task.id}`, project: result.task.project });
+  }
   /* An icon that names no lucide icon was clamped to none, and says so (#2102). */
   return NextResponse.json({ ok: true, task: result.task, ...(result.notes ? { notes: result.notes } : {}) });
 }

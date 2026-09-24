@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { withConversationActuation } from "@/lib/deliveryActuation";
 import { structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
@@ -33,6 +34,8 @@ export interface RuntimeHttpDependencies {
   registry?(): AgentRegistry;
   enqueue?: typeof enqueueStructuredMessage;
   recordOperatorActivity?: typeof recordDirectOperatorWakatimeActivity;
+  /** The activity dashboard's request ledger; never throws. */
+  recordOperatorRequest?: typeof recordOperatorRequest;
   /** #1202: retires the conversation's reply drafts when the operator answers. */
   retireReplySuggestions?: typeof retireReplySuggestionsOnOperatorMessage;
   kick?(): void | Promise<void>;
@@ -45,6 +48,7 @@ const DEFAULT_DEPENDENCIES: RuntimeHttpDependencies = {
   registry: agentRegistry,
   enqueue: enqueueStructuredMessage,
   recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+  recordOperatorRequest,
   retireReplySuggestions: retireReplySuggestionsOnOperatorMessage,
   kick: kickStructuredDeliveryQueue,
 };
@@ -267,6 +271,13 @@ async function dispatchRuntimeCommand(
       } catch {
         return refusedBeforeDispatch("direct operator activity could not be recorded");
       }
+    }
+    if ((command.kind === "send" || command.kind === "steer" || command.kind === "inject" || command.kind === "answer") && byOperator) {
+      dependencies.recordOperatorRequest?.(request, {
+        kind: command.kind === "answer" ? "answer" : "message",
+        idempotencyKey: command.idempotencyKey,
+        conversationId: command.conversationId,
+      });
     }
     /* #1202: the operator's own message retires the reply drafts offered under
        the question it answers. Done in the path that accepts the message, so a

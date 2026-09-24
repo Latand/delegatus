@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
+import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { LINE_EDIT_KEYS } from "@/lib/lineEdits";
 import { deleteTask, patchTask, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
@@ -14,6 +16,8 @@ import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const TASK_REQUEST_FIELDS = ["text", "details", "status"] as const;
 
 type TaskRouteContext = {
   params: Promise<{ id: string }>;
@@ -52,6 +56,11 @@ export async function PATCH(
       { error: result.error, ...(result.code ? { code: result.code } : {}), ...(result.field ? { field: result.field } : {}) },
       { status: result.status },
     );
+  }
+  /* An edit of what the task says or where it stands instructs its agents; a
+     move, a colour, an icon, a link or a hide does not, and is not recorded. */
+  if (TASK_REQUEST_FIELDS.some((field) => Object.hasOwn(body, field)) && directOperatorActivityAuthority(req).ok) {
+    recordOperatorRequest(req, { kind: "task", project: result.task.project });
   }
   /* #2059: the card redraws its links from this answer, not the next poll. */
   const links = Object.hasOwn(body, "attachLinks") || Object.hasOwn(body, "detachLinks") ? taskWorkLinks(result.task, loadPipelines()) : null;

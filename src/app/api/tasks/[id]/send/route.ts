@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -42,6 +43,8 @@ interface TaskSendDependencies {
   deliverConversationMessage: typeof deliverConversationMessage;
   mutateTasks: typeof mutateTasks;
   recordOperatorActivity: typeof recordDirectOperatorWakatimeActivity;
+  /** The activity dashboard's request ledger; never throws. */
+  recordOperatorRequest?: typeof recordOperatorRequest;
 }
 
 const productionDependencies: TaskSendDependencies = {
@@ -50,6 +53,7 @@ const productionDependencies: TaskSendDependencies = {
   deliverConversationMessage,
   mutateTasks,
   recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+  recordOperatorRequest,
 };
 
 async function postTaskSend(
@@ -98,6 +102,12 @@ async function postTaskSend(
     } catch {
       return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
     }
+    /* One request, however many agents it fans out to. */
+    dependencies.recordOperatorRequest?.(req, {
+      kind: "message",
+      idempotencyKey: clientRequestId ? `task-send:${clientRequestId}` : null,
+      project: task.project,
+    });
   }
   /* Durable attachment paths ride in the delivery text (the buildImagePayload
      convention: one path per line after the text). The bytes are task-owned

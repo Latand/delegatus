@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import { NextRequest, NextResponse } from "next/server";
 
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { deliverAnswer, DeliveryError, type AnswerInput, type PaneIo } from "@/lib/answer/driver";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -25,6 +26,8 @@ interface AnswerRouteDependencies {
   knownState: typeof knownState;
   resolveTarget: typeof resolveTarget;
   recordOperatorActivity: typeof recordDirectOperatorWakatimeActivity;
+  /** The activity dashboard's request ledger; never throws. */
+  recordOperatorRequest?: typeof recordOperatorRequest;
   deliverAnswer: typeof deliverAnswer;
   confirmAnswered: typeof confirmAnswered;
   paneScreen: typeof paneScreen;
@@ -135,6 +138,12 @@ async function deliver(
     } catch {
       return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
     }
+    dependencies.recordOperatorRequest?.(req, {
+      kind: "answer",
+      idempotencyKey: `question:${toolUseId}`,
+      path: transcriptPath,
+      fallbackEntry: state.entry,
+    });
   }
 
   try {
@@ -155,6 +164,7 @@ const productionDependencies: AnswerRouteDependencies = {
   knownState,
   resolveTarget,
   recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+  recordOperatorRequest,
   deliverAnswer,
   confirmAnswered,
   paneScreen,

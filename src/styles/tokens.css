@@ -138,6 +138,20 @@
   --engine-fill-ink: #ffffff;
   --effort-empty: #93939d;
 
+  /* Activity chart marks (docs/design/activity-dashboard-v2.md, "Colour"):
+     you are the accent, agents the info teal, each with one lighter step
+     validated as an ordinal pair with its base. The light steps sit under
+     3:1, so every value they carry is also printed. Texture means one thing
+     on that page, "your input was not read": the stripe over the unattended
+     step (unclear) and the hatch over the track (not read). */
+  --mark-you: var(--color-accent);
+  --mark-you-half: #9ca2f0;
+  --mark-supervised: var(--color-info);
+  --mark-unattended: #79b9ae;
+  --mark-track: #f1ede6;
+  --mark-hatch: var(--border-strong);
+  --mark-stripe: rgb(255 253 250 / 0.78);
+
   /* ── §1.6 Motion ───────────────────────────────────────────────────────── */
   --motion-fast: 120ms; /* hover, press, chip state         */
   --motion-base: 200ms; /* expand/collapse, fades, popovers */
@@ -225,6 +239,16 @@
     --engine-fill-ink: #121620;
     --effort-empty: #64646f;
 
+    /* The app's dark accent and info sit above the chart lightness band;
+       these steps are inside it. */
+    --mark-you: #7f79e6;
+    --mark-you-half: #4a4786;
+    --mark-supervised: #20a896;
+    --mark-unattended: #296b65;
+    --mark-track: #1f222b;
+    --mark-hatch: #3c404c;
+    --mark-stripe: rgb(25 27 35 / 0.8);
+
     --color-user: #262a36;
 
     --color-diff-add: #3fb950;
@@ -287,6 +311,14 @@
   --color-codex-mark: var(--color-codex);
   --engine-fill-ink: #121620;
   --effort-empty: #64646f;
+
+  --mark-you: #7f79e6;
+  --mark-you-half: #4a4786;
+  --mark-supervised: #20a896;
+  --mark-unattended: #296b65;
+  --mark-track: #1f222b;
+  --mark-hatch: #3c404c;
+  --mark-stripe: rgb(25 27 35 / 0.8);
 
   --color-user: #262a36;
 

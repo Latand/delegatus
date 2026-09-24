@@ -80,6 +80,24 @@
  * control in it, the panel inside the viewport with nothing overflowing
  * sideways, and 44 px targets on the phone.
  *
+ * With BOARD_CAPTURE_CASE=activity it renders the activity dashboard
+ * (docs/design/activity-dashboard-v2.md) on a home seeded with the design's
+ * invented, uneven work: thirteen projects with a long tail, ten of them git
+ * repositories whose Claude transcripts the Viewer's own scan indexes (the
+ * agent axis), a request ledger and this host's own export for the whole
+ * month, a stage host holding two projects whose export stops two days back,
+ * a heavy Monday, an empty weekend with night runs, a workday with agent work
+ * and no input (the probable-missing-source flag), and `hosts.json` and
+ * `settings.json` with two billable projects. At 1440 × 900 it captures 7
+ * days (en and uk, and 1280 × 800 in uk), 30 days, Today, a project open with
+ * its breakdowns, the drawer, the day, hour and Agents tooltips, Today with
+ * the stage host unread for three hours, the same home with none of your
+ * input read, and a home with no data at all; the phone at 390 × 844 keeps
+ * the prototype's layout. It checks sideways overflow, the 7-day page ending
+ * inside 900 px, the trust chip and the Rhythm legend on one line, cut text,
+ * tooltips inside the viewport, and the marks on the unread and flagged days.
+ * With ACTIVITY_RENDER_DIR set, the images are copied there.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -4187,8 +4205,490 @@ async function resourcesMain(): Promise<void> {
   }
 }
 
-/* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), instead of the camera probes. */
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=activity: the activity dashboard                         */
+/* ------------------------------------------------------------------------- */
+
+const ACTIVITY_TZ = "Europe/Kyiv";
+/* Invented projects (docs/design/activity-dashboard-v2.md, "The mockup"): ten
+   with agent work, as repositories whose Claude transcripts the Viewer
+   indexes, and three with your input alone, under plain keys. The stage host
+   holds orchard-client and harbor-ledger; the workstation holds every
+   project. */
+const ACTIVITY_REPOS = ["orchard-client", "lantern-api", "harbor-ledger", "kestrel-cli", "atlas-docs", "mesa-infra", "tidewater-app", "bramble-etl", "pebble-ui", "sorrel-bot"] as const;
+type ActivityRepo = typeof ACTIVITY_REPOS[number];
+type ActivityProject = ActivityRepo | "fennel-site" | "cobalt-auth" | "juniper-notes";
+const ACTIVITY_STAGE_PROJECTS: readonly ActivityProject[] = ["orchard-client", "harbor-ledger"];
+const ACTIVITY_BILLABLE: readonly ActivityProject[] = ["orchard-client", "harbor-ledger"];
+
+function activityRepoDir(name: ActivityRepo): string {
+  return path.join(HOME, "Projects", name);
+}
+
+/** One invented Claude conversation: a user record opens each turn and
+    assistant records carry it to its end. */
+function writeActivityTranscript(repo: ActivityRepo, file: number, turns: Array<{ start: number; minutes: number }>): void {
+  if (!turns.length) return;
+  const folder = path.join(HOME, ".claude/projects", projectSlug(activityRepoDir(repo)));
+  fs.mkdirSync(folder, { recursive: true });
+  const id = `${String(ACTIVITY_REPOS.indexOf(repo) + 1).padStart(4, "0")}${String(file).padStart(4, "0")}-2026-4000-8000-000000000000`;
+  const lines: unknown[] = [];
+  for (const [index, turn] of turns.entries()) {
+    const stamp = (offsetMin: number) => new Date(turn.start + offsetMin * 60_000).toISOString();
+    lines.push({ type: "user", uuid: `${id}-u${index}`, timestamp: stamp(0), cwd: activityRepoDir(repo), sessionId: id, message: { role: "user", content: `Next step ${index + 1} for ${repo}.` } });
+    for (let minute = 2; minute < turn.minutes; minute += 17) {
+      lines.push({ type: "assistant", uuid: `${id}-a${index}-${minute}`, timestamp: stamp(minute), cwd: activityRepoDir(repo), sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Progress on ${repo}, minute ${minute}.` }] } });
+    }
+    lines.push({ type: "assistant", uuid: `${id}-a${index}-end`, timestamp: stamp(turn.minutes), cwd: activityRepoDir(repo), sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Done with step ${index + 1}.` }] } });
+  }
+  fs.writeFileSync(path.join(folder, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+}
+
+/** A stretch of your input: one input every six minutes, on the workstation
+    (its request ledger, or its export for terminal prompts) or the stage host
+    (its export). */
+type ActivitySession = [at: string, minutes: number, project: ActivityProject, host: "ws" | "stage", surface?: "phone" | "tablet" | "terminal"];
+/** A stretch an agent worked. */
+type ActivityRun = [at: string, minutes: number, repo: ActivityRepo];
+interface ActivityPlan { sessions: ActivitySession[]; runs: ActivityRun[] }
+
+/* The last week, uneven on purpose: a full Friday, an empty weekend with
+   night runs, a heavy Monday, a workday nobody asked anything while agents
+   ran (the stage host unread, the day flagged), a Wednesday read on the
+   workstation alone, and today. */
+const ACTIVITY_PLANS: Record<"normal" | "heavy" | "flagged" | "lower" | "saturday" | "sunday" | "today", ActivityPlan> = {
+  normal: {
+    sessions: [["08:10", 95, "orchard-client", "stage"], ["09:50", 70, "lantern-api", "ws"], ["11:05", 45, "harbor-ledger", "ws", "phone"], ["13:00", 110, "orchard-client", "ws"], ["15:00", 55, "kestrel-cli", "ws"], ["16:00", 50, "lantern-api", "ws", "terminal"], ["17:05", 25, "fennel-site", "ws"]],
+    runs: [["00:20", 200, "lantern-api"], ["08:10", 150, "orchard-client"], ["13:00", 130, "orchard-client"], ["15:00", 70, "kestrel-cli"], ["16:00", 60, "lantern-api"], ["21:30", 120, "tidewater-app"], ["22:00", 70, "bramble-etl"]],
+  },
+  heavy: {
+    sessions: [["07:40", 110, "orchard-client", "stage"], ["09:35", 80, "harbor-ledger", "stage"], ["11:00", 60, "lantern-api", "ws"], ["12:10", 95, "orchard-client", "ws", "phone"], ["13:50", 85, "lantern-api", "ws"], ["15:20", 60, "atlas-docs", "ws"], ["16:25", 55, "mesa-infra", "ws"], ["17:25", 50, "kestrel-cli", "ws", "terminal"], ["18:20", 40, "harbor-ledger", "ws"], ["19:05", 30, "cobalt-auth", "ws"]],
+    runs: [["01:00", 210, "lantern-api"], ["07:40", 180, "orchard-client"], ["09:35", 120, "harbor-ledger"], ["12:10", 110, "orchard-client"], ["13:50", 150, "lantern-api"], ["15:20", 110, "atlas-docs"], ["16:25", 40, "mesa-infra"], ["20:00", 150, "tidewater-app"], ["22:10", 60, "pebble-ui"]],
+  },
+  flagged: {
+    sessions: [],
+    runs: [["00:30", 135, "tidewater-app"], ["10:00", 55, "kestrel-cli"]],
+  },
+  lower: {
+    sessions: [["09:55", 55, "lantern-api", "ws"], ["11:00", 45, "kestrel-cli", "ws"], ["14:00", 60, "lantern-api", "ws"], ["15:30", 70, "lantern-api", "ws", "terminal"], ["17:00", 30, "atlas-docs", "ws"]],
+    runs: [["01:00", 95, "harbor-ledger"], ["11:00", 80, "kestrel-cli"], ["14:00", 110, "lantern-api"], ["18:00", 50, "lantern-api"], ["20:10", 30, "mesa-infra"], ["22:00", 35, "sorrel-bot"]],
+  },
+  saturday: { sessions: [], runs: [["01:00", 240, "lantern-api"], ["11:30", 50, "orchard-client"], ["19:00", 80, "tidewater-app"]] },
+  sunday: { sessions: [], runs: [["02:00", 180, "atlas-docs"], ["14:10", 40, "bramble-etl"]] },
+  today: {
+    sessions: [["08:40", 35, "atlas-docs", "ws"], ["09:15", 100, "orchard-client", "stage"], ["11:00", 55, "harbor-ledger", "ws"], ["13:05", 90, "orchard-client", "ws"], ["14:40", 50, "juniper-notes", "ws"], ["16:00", 80, "lantern-api", "ws"], ["18:10", 60, "orchard-client", "stage"], ["19:40", 45, "lantern-api", "ws", "phone"]],
+    runs: [["02:30", 100, "atlas-docs"], ["09:00", 180, "orchard-client"], ["13:05", 120, "orchard-client"], ["16:00", 95, "lantern-api"], ["20:30", 60, "pebble-ui"]],
+  },
+};
+
+/** The month behind the week: workdays of two to five stretches over a
+    long tail of projects, some watched agent runs, a night run now and then. */
+function generatedActivityPlan(weekday: number, seed: number): ActivityPlan {
+  let state = seed >>> 0;
+  const random = () => ((state = (state * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const pick = <T,>(list: readonly T[]) => list[Math.floor(random() * list.length)]!;
+  const hhmm = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  const runs: ActivityRun[] = [];
+  if (random() < 0.6) runs.push([hhmm(30 + Math.floor(random() * 120)), 60 + Math.floor(random() * 150), pick(["lantern-api", "tidewater-app", "atlas-docs", "sorrel-bot"] as const)]);
+  if (weekday === 0 || weekday === 6) return { sessions: [], runs };
+  const weighted: readonly ActivityProject[] = ["orchard-client", "orchard-client", "orchard-client", "lantern-api", "lantern-api", "tidewater-app", "tidewater-app", "harbor-ledger", "kestrel-cli", "kestrel-cli", "mesa-infra", "cobalt-auth", "fennel-site", "atlas-docs"];
+  const sessions: ActivitySession[] = [];
+  let at = 8 * 60 + Math.floor(random() * 60);
+  const count = 2 + Math.floor(random() * 4);
+  for (let index = 0; index < count && at < 19 * 60; index += 1) {
+    const project = pick(weighted);
+    const minutes = 40 + Math.floor(random() * 80);
+    const host = ACTIVITY_STAGE_PROJECTS.includes(project) && random() < 0.5 ? "stage" : "ws";
+    sessions.push([hhmm(at), minutes, project, host, host === "ws" && random() < 0.2 ? "phone" : undefined]);
+    if ((ACTIVITY_REPOS as readonly string[]).includes(project) && random() < 0.8) runs.push([hhmm(at), minutes + Math.floor(random() * 60), project as ActivityRepo]);
+    at += minutes + 10 + Math.floor(random() * 70);
+  }
+  return { sessions, runs };
+}
+
+interface ActivityReading {
+  width: number;
+  height: number;
+  scrollWidth: number;
+  layout: string;
+  /** The bottom of the lowest card, and whether the document scrolls. */
+  pageEnd: number;
+  documentScrolls: boolean;
+  chip: { state: string; text: string; height: number; width: number } | null;
+  legend: { text: string; height: number; width: number; right: number; cardRight: number } | null;
+  header: { height: number; bottom: number } | null;
+  hero: string;
+  agents: string;
+  split: string;
+  caps: Array<{ key: string; text: string }>;
+  pairs: number;
+  rhythmRows: number;
+  cells: Record<string, number>;
+  projects: Array<{ project: string; coverage: string | null; you: string; agents: string }>;
+  foldedMore: string | null;
+  truncated: string[];
+  tooltip: { text: string; inside: boolean } | null;
+  drawer: { flags: string[]; hosts: Array<{ host: string; complete: string | null }> } | null;
+  words: number;
+  /* The narrow layout's own markers. */
+  tiles: number;
+  days: number;
+}
+
+function readActivity(): ActivityReading {
+  const root = document.querySelector<HTMLElement>("[data-activity-page]")!;
+  const rect = (element: Element | null) => element?.getBoundingClientRect() ?? null;
+  const chip = document.querySelector<HTMLElement>("[data-activity-trust]");
+  const legend = document.querySelector<HTMLElement>("[data-activity-legend]");
+  const rhythm = document.querySelector<HTMLElement>("[data-activity-rhythm]");
+  const cards = ["[data-activity-main]", "[data-activity-rhythm]", "[data-activity-projects]"].map((selector) => rect(document.querySelector(selector))?.bottom ?? 0);
+  const tooltip = document.querySelector<HTMLElement>("[data-activity-tooltip]");
+  const tip = rect(tooltip);
+  const drawer = document.querySelector<HTMLElement>("[data-activity-drawer]");
+  const cells: Record<string, number> = {};
+  for (const cell of document.querySelectorAll<SVGElement>("[data-activity-cell]")) cells[cell.dataset.activityCell ?? ""] = (cells[cell.dataset.activityCell ?? ""] ?? 0) + 1;
+  const visible = (element: HTMLElement) => !element.closest(".sr-only") && element.getClientRects().length > 0;
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight,
+    scrollWidth: document.documentElement.scrollWidth,
+    layout: root.dataset.activityLayout ?? "narrow",
+    pageEnd: Math.max(...cards),
+    documentScrolls: root.scrollHeight > root.clientHeight + 1,
+    chip: chip ? { state: chip.dataset.activityTrust ?? "", text: chip.textContent ?? "", height: chip.getBoundingClientRect().height, width: chip.getBoundingClientRect().width } : null,
+    legend: legend ? { text: legend.textContent ?? "", height: legend.getBoundingClientRect().height, width: legend.getBoundingClientRect().width, right: legend.getBoundingClientRect().right, cardRight: rhythm?.getBoundingClientRect().right ?? 0 } : null,
+    header: rect(document.querySelector("header")) ? { height: rect(document.querySelector("header"))!.height, bottom: rect(document.querySelector("header"))!.bottom } : null,
+    hero: document.querySelector("[data-activity-figure=you]")?.textContent ?? "",
+    agents: document.querySelector("[data-activity-agents-value]")?.textContent ?? "",
+    split: document.querySelector("[data-activity-split]")?.textContent ?? "",
+    caps: Array.from(document.querySelectorAll<SVGElement>("[data-activity-cap]")).map((cap) => ({ key: cap.dataset.activityCap ?? "", text: cap.textContent ?? "" })),
+    pairs: document.querySelectorAll("[data-activity-pair]").length,
+    rhythmRows: document.querySelectorAll("[data-activity-rhythm-row]").length,
+    cells,
+    projects: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-projects] [data-activity-project]")).map((row) => ({
+      project: row.dataset.activityProject ?? "",
+      coverage: row.dataset.coverage ?? null,
+      you: row.querySelector("[data-activity-project-you]")?.textContent ?? "",
+      agents: row.querySelector("[data-activity-project-agents]")?.textContent ?? "",
+    })),
+    foldedMore: document.querySelector<HTMLElement>("[data-activity-projects-more]")?.textContent ?? null,
+    /* Text cut by its box: a truncated name, a label that ran out of room. */
+    truncated: Array.from(root.querySelectorAll<HTMLElement>("span, div, button, h1, h2, a"))
+      .filter((element) => visible(element) && element.children.length === 0 && element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX !== "visible")
+      .map((element) => element.textContent ?? ""),
+    tooltip: tooltip && tip ? { text: tooltip.textContent ?? "", inside: tip.left >= 0 && tip.top >= 0 && tip.right <= window.innerWidth && tip.bottom <= window.innerHeight } : null,
+    drawer: drawer ? {
+      flags: Array.from(drawer.querySelectorAll("[data-activity-flag]")).map((flag) => flag.textContent ?? ""),
+      hosts: Array.from(drawer.querySelectorAll<HTMLElement>("[data-activity-host]")).map((host) => ({ host: host.dataset.activityHost ?? "", complete: host.dataset.complete ?? null })),
+    } : null,
+    words: (root.innerText.match(/\S+/g) ?? []).length,
+    tiles: document.querySelectorAll("[data-activity-tile]").length,
+    days: document.querySelectorAll("[data-activity-day]").length,
+  };
+}
+
+async function activityMain(): Promise<void> {
+  const { zonedDays } = await import("../src/lib/activity/method");
+  const { exportLines, messageId, ledgerRowKey } = await import("../src/lib/activity/humanInput");
+  for (const dir of [OUT_DIR, path.join(BASE, "git-home"), path.join(BASE, "tmp"), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions")]) fs.mkdirSync(dir, { recursive: true });
+  for (const repo of ACTIVITY_REPOS) {
+    const dir = activityRepoDir(repo);
+    fs.mkdirSync(dir, { recursive: true });
+    git(dir, "init", "--initial-branch=main", ".");
+    fs.writeFileSync(path.join(dir, "README.md"), `# ${repo}\n`, "utf8");
+    git(dir, "add", "README.md");
+    git(dir, "commit", "-m", `${repo}: first commit`);
+  }
+  const now = Date.now();
+  /* Index 29 is today; the last week is 23-29. */
+  const days = zonedDays(now, 30, ACTIVITY_TZ);
+  const TODAY = 29;
+  const clock = (day: number, hhmm: string) => {
+    const [hh, mm] = hhmm.split(":").map(Number) as [number, number];
+    return days[day]!.start + (hh * 60 + mm) * 60_000;
+  };
+  const weekday = (day: number) => new Date(`${days[day]!.date}T12:00:00Z`).getUTCDay();
+  const workday = (day: number) => weekday(day) >= 1 && weekday(day) <= 5;
+  /* The stage host was not read the two days before today. */
+  const STAGE_UNREAD = [TODAY - 2, TODAY - 1];
+  const heavyDay = [TODAY - 3, TODAY - 4, TODAY - 5, TODAY - 6].find(workday) ?? TODAY - 3;
+  const planOf = (day: number): ActivityPlan => {
+    if (day === TODAY) return ACTIVITY_PLANS.today;
+    if (weekday(day) === 6 && day >= TODAY - 6) return ACTIVITY_PLANS.saturday;
+    if (weekday(day) === 0 && day >= TODAY - 6) return ACTIVITY_PLANS.sunday;
+    if (day === TODAY - 2) return ACTIVITY_PLANS.flagged;
+    if (day === TODAY - 1) return ACTIVITY_PLANS.lower;
+    if (day === heavyDay) return ACTIVITY_PLANS.heavy;
+    if (day >= TODAY - 6) return ACTIVITY_PLANS.normal;
+    return generatedActivityPlan(weekday(day), 7919 * (day + 1));
+  };
+  const plans = days.map((_, day) => planOf(day));
+  const flagDay = TODAY - 2;
+
+  /* Agent transcripts: one per project and day in the last week, one per
+     project for the month behind it. */
+  let transcripts = 0;
+  for (const repo of ACTIVITY_REPOS) {
+    const older: Array<{ start: number; minutes: number }> = [];
+    for (const [day, plan] of plans.entries()) {
+      const turns = plan.runs.filter(([, , name]) => name === repo)
+        .map(([at, minutes]) => ({ start: clock(day, at), minutes }))
+        .filter((turn) => turn.start + turn.minutes * 60_000 < now - 60_000);
+      if (day < TODAY - 6) older.push(...turns);
+      else if (turns.length) {
+        writeActivityTranscript(repo, day, turns);
+        transcripts += 1;
+      }
+    }
+    if (older.length) {
+      writeActivityTranscript(repo, 0, older);
+      transcripts += 1;
+    }
+  }
+
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity", days: { first: days[0]!.date, today: days[TODAY]!.date, flagged: days[flagDay]!.date, heavy: days[heavyDay]!.date, stageUnread: STAGE_UNREAD.map((day) => days[day]!.date) } };
+  const shots: string[] = [];
+  const activityDir = path.join(STATE_DIR, "activity");
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    /* The project keys the scan gave the repositories: the ledger names the same ones. */
+    const keys = await (async () => {
+      const deadline = Date.now() + 180_000;
+      while (Date.now() < deadline) {
+        const files = ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? [];
+        const of = (repo: ActivityRepo) => files.find((file) => file.path?.includes(projectSlug(activityRepoDir(repo))))?.project;
+        const found = Object.fromEntries(ACTIVITY_REPOS.map((repo) => [repo, of(repo)]));
+        if (ACTIVITY_REPOS.every((repo) => found[repo])) return found as Record<ActivityRepo, string>;
+        await Bun.sleep(2_000);
+      }
+      throw new Error("the seeded repositories never scanned");
+    })();
+    const keyOf = (project: ActivityProject) => (keys as Record<string, string>)[project] ?? project;
+
+    /* Your input: the workstation's request ledger, its own export (terminal
+       prompts), and the stage host's export. Nothing on the flagged day, and
+       nothing from the stage host while it was not read. */
+    fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
+    const kinds = ["message", "message", "answer", "message", "decision", "message", "voice"] as const;
+    const ledger: Array<Record<string, unknown>> = [];
+    const terminal: Parameters<typeof exportLines>[1][number][] = [];
+    const stage: Parameters<typeof exportLines>[1][number][] = [];
+    for (const [day, plan] of plans.entries()) {
+      for (const [at, minutes, project, host, surface] of plan.sessions) {
+        if (host === "stage" && STAGE_UNREAD.includes(day)) continue;
+        for (let offset = 0, index = 0; offset <= minutes - 10; offset += 6, index += 1) {
+          const time = clock(day, at) + offset * 60_000;
+          if (time >= now - 60_000) break;
+          const kind = kinds[index % kinds.length]!;
+          if (host === "stage") stage.push({ ids: [messageId("codex", `stage-${day}-${at}-${offset}`)], at: time, host: "stage", source: "transcripts", project: keyOf(project), kind: "message", surface: "unknown", hash: null });
+          else if (surface === "terminal") terminal.push({ ids: [messageId("claude-prompt", `workstation-${day}-${at}-${offset}`)], at: time, host: "workstation", source: "transcripts", project: keyOf(project), kind: "message", surface: "terminal", hash: null });
+          else ledger.push({ v: 1, key: ledgerRowKey(`seed-${ledger.length}-${time}`), at: time, kind, surface: surface ?? "desktop", project: keyOf(project) });
+        }
+      }
+    }
+    for (const entry of ledger) {
+      const file = path.join(activityDir, `requests-${new Date(entry.at as number).toISOString().slice(0, 10)}.jsonl`);
+      fs.appendFileSync(file, JSON.stringify(entry) + "\n", { mode: 0o600 });
+    }
+    const endOfToday = days[TODAY]!.end;
+    /* The workstation's export reads every store there, to the end of today. */
+    const localDir = path.join(activityDir, "hosts", "workstation");
+    fs.mkdirSync(localDir, { recursive: true });
+    fs.writeFileSync(path.join(localDir, "human-input.jsonl"), exportLines({
+      host: "workstation", coveredFrom: days[0]!.start - 86_400_000, coveredUntil: endOfToday, exportedAt: now, records: terminal.length + 212,
+      excluded: { "agent-message": 61, "stage-template": 9, recovery: 7, notification: 22, injected: 48, unmarked: 5, duplicate: 64 },
+    }, terminal));
+    /* The stage host's exports: the month up to the unread days, then today. */
+    const stageDir = path.join(activityDir, "hosts", "stage");
+    const writeStage = (spans: Array<{ name: string; from: number; until: number }>) => {
+      fs.rmSync(stageDir, { recursive: true, force: true });
+      fs.mkdirSync(stageDir, { recursive: true });
+      for (const [index, span] of spans.entries()) {
+        const inside = stage.filter((input) => input.at >= span.from && input.at < span.until);
+        fs.writeFileSync(path.join(stageDir, `${span.name}.jsonl`), exportLines({
+          host: "stage", coveredFrom: span.from, coveredUntil: span.until, exportedAt: Math.min(span.until, now), records: inside.length + 20,
+          excluded: index ? {} : { "agent-message": 14, "stage-template": 6, notification: 4, unmarked: 9, attachment: 3, duplicate: 11 },
+        }, inside));
+      }
+    };
+    writeStage([{ name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start }, { name: "today", from: days[TODAY]!.start, until: endOfToday }]);
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ACTIVITY_STAGE_PROJECTS.map(keyOf) }] }));
+    fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: ACTIVITY_TZ, billable: ACTIVITY_BILLABLE.map(keyOf) }));
+
+    /* Wait for the Viewer's own index to carry every seeded conversation. */
+    const deadline = Date.now() + 420_000;
+    let indexed = 0;
+    while (Date.now() < deadline) {
+      const body = await (await fetch(`${baseUrl}/api/activity?range=30d`)).json() as { coverage?: { agentIndex?: string }; projects?: Array<{ conversations: number }> };
+      indexed = body.coverage?.agentIndex === "ok" ? (body.projects ?? []).reduce((sum, row) => sum + row.conversations, 0) : 0;
+      if (indexed >= transcripts) break;
+      await Bun.sleep(3_000);
+    }
+    must(indexed >= transcripts, `the agent axis carries ${indexed} of ${transcripts} seeded conversations`);
+    report.api7d = await (await fetch(`${baseUrl}/api/activity?range=7d`)).json();
+
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const capture = async (name: string, query: string, options: { lang?: "en" | "uk"; phone?: boolean; size?: [number, number]; act?: (page: Page) => Promise<void> } = {}) => {
+      const [width, height] = options.phone ? [390, 844] : options.size ?? [1440, 900];
+      const context = await browser!.newContext({
+        viewport: { width, height },
+        reducedMotion: "reduce",
+        ...(options.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+      });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), options.lang ?? "en");
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/activity?${query}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
+      await page.waitForTimeout(400);
+      if (options.act) {
+        await options.act(page);
+        await page.waitForTimeout(300);
+      }
+      if (options.phone) {
+        const first = await page.evaluate(readActivity);
+        const full = await page.evaluate(() => document.querySelector<HTMLElement>("[data-activity-page]")!.scrollHeight);
+        if (full > first.height) await page.setViewportSize({ width, height: Math.min(full, 7_000) });
+        await page.waitForTimeout(300);
+      }
+      const reading = await page.evaluate(readActivity);
+      const file = path.join(OUT_DIR, `activity-${name}.png`);
+      await page.screenshot({ path: file });
+      shots.push(file);
+      report[name] = reading;
+      must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+      if (!options.phone) {
+        must(reading.layout === "desktop", `${name}: the ${reading.layout} layout at ${width}px`);
+        must(reading.chip !== null && reading.chip.height <= 30, `${name}: the trust chip is ${reading.chip?.height ?? "missing"}px tall`);
+        must(reading.header !== null && reading.header.height <= 36, `${name}: the header is ${reading.header?.height ?? "missing"}px tall`);
+        /* One line of 11 px text is about 16.5 px; two would be 33. */
+        if (reading.legend) must(reading.legend.height <= 20 && reading.legend.right <= reading.legend.cardRight, `${name}: the Rhythm legend takes ${reading.legend.height}px, right edge ${reading.legend.right} of ${reading.legend.cardRight}`);
+        const cut = reading.truncated.filter((text) => text.trim());
+        must(cut.length === 0, `${name}: text cut by its box: ${JSON.stringify(cut)}`);
+        if (reading.tooltip) must(reading.tooltip.inside, `${name}: the tooltip leaves the viewport`);
+      }
+      await context.close();
+      return reading;
+    };
+    const date = (day: number) => days[day]!.date;
+    const hoverPair = (day: number) => async (page: Page) => { await page.hover(`[data-activity-pair="${date(day)}"] rect[tabindex]`); };
+
+    /* 7 days, en and uk, and at 1280 × 800 in uk. */
+    const week = await capture("desktop-7d", "range=7d");
+    must(week.pairs === 7 && week.rhythmRows === 7, `7d: ${week.pairs} day pairs and ${week.rhythmRows} rhythm rows`);
+    must(week.pageEnd <= 900 && !week.documentScrolls, `7d: the page ends at ${week.pageEnd}px and scrolls ${week.documentScrolls}`);
+    must(week.chip?.state === "lower", `7d: the chip reads ${week.chip?.state}`);
+    const capOf = (reading: ActivityReading, day: number) => reading.caps.find((cap) => cap.key === date(day))?.text ?? "";
+    if (workday(flagDay)) must(capOf(week, flagDay) === "?", `7d: the flagged ${date(flagDay)} reads ${capOf(week, flagDay)}`);
+    must(capOf(week, TODAY - 1).startsWith("≥"), `7d: ${date(TODAY - 1)}, the stage host unread, reads ${capOf(week, TODAY - 1)}`);
+    must(week.split.includes("unclear"), `7d: the Agents split has no unclear part: ${week.split}`);
+    must(week.legend?.text.startsWith("You:") === true, `7d: the Rhythm legend reads ${week.legend?.text}`);
+    for (const project of ACTIVITY_STAGE_PROJECTS) must(week.projects.find((row) => row.project === keyOf(project))?.coverage === "unknown", `7d: ${project}, held by the unread stage host, reads complete`);
+    must(week.projects.find((row) => row.project === keyOf("lantern-api"))?.coverage === "complete", "7d: lantern-api reads a lower bound");
+    await capture("desktop-7d-uk", "range=7d", { lang: "uk" });
+    const narrow = await capture("desktop-1280x800-uk", "range=7d", { lang: "uk", size: [1280, 800] });
+    must(!narrow.documentScrolls, `1280 × 800 uk: the page scrolls (ends at ${narrow.pageEnd}px)`);
+
+    /* 30 days and Today. */
+    const month = await capture("desktop-30d", "range=30d");
+    must(month.pairs === 30 && month.rhythmRows === 30, `30d: ${month.pairs} pairs, ${month.rhythmRows} rows`);
+    must(month.pageEnd <= 900, `30d: the page ends at ${month.pageEnd}px`);
+    await capture("desktop-30d-uk", "range=30d", { lang: "uk" });
+    const today = await capture("desktop-today", "range=today");
+    must(today.rhythmRows === 0 && today.pairs === 24, `today: ${today.pairs} hour pairs, ${today.rhythmRows} rhythm rows`);
+
+    /* The project detail, its breakdowns, the drawer and the tooltips. */
+    await capture("desktop-projects", "range=7d", {
+      act: async (page) => {
+        await page.click(`[data-activity-project="${keyOf("harbor-ledger")}"] > button`);
+        await page.waitForSelector("[data-activity-project-details]");
+        await page.click("[data-activity-more-detail]");
+        await page.waitForSelector("[data-activity-breakdowns]");
+      },
+    });
+    const drawer = await capture("desktop-drawer", "range=7d", { act: async (page) => { await page.click("[data-activity-trust]"); await page.waitForSelector("[data-activity-drawer]"); } });
+    must((drawer.drawer?.flags.length ?? 0) >= (workday(flagDay) ? 2 : 1), `drawer: ${JSON.stringify(drawer.drawer?.flags)}`);
+    must(drawer.drawer?.hosts.find((host) => host.host === "stage")?.complete === "false", "drawer: the stage host reads complete");
+    await capture("desktop-drawer-uk", "range=7d", { lang: "uk", act: async (page) => { await page.click("[data-activity-trust]"); await page.waitForSelector("[data-activity-drawer]"); } });
+    await capture("desktop-hover-lower", "range=7d", { act: hoverPair(TODAY - 1) });
+    await capture("desktop-hover-heavy", "range=7d", { act: hoverPair(heavyDay) });
+    await capture("desktop-hover-flagged", "range=7d", { act: hoverPair(flagDay) });
+    await capture("desktop-hover-cell", "range=7d", { act: async (page) => { await page.locator(`[data-activity-rhythm-row="${date(TODAY - 1)}"] rect[data-activity-cell]`).nth(18).hover(); } });
+    await capture("desktop-hover-agents", "range=7d", { act: async (page) => { await page.hover("[data-activity-figure=agents]"); } });
+
+    /* The phone keeps the prototype's layout. */
+    const phone = await capture("phone-7d", "range=7d&view=days", { phone: true });
+    must(phone.layout === "narrow" && phone.tiles === 4 && phone.days === 7, `phone: ${phone.layout} layout, ${phone.tiles} tiles, ${phone.days} days`);
+
+    /* Today with the stage host unread from 09:00 to 12:00. */
+    writeStage([
+      { name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start },
+      { name: "today-morning", from: days[TODAY]!.start, until: clock(TODAY, "09:00") },
+      { name: "today-afternoon", from: clock(TODAY, "12:00"), until: endOfToday },
+    ]);
+    const gap = await capture("desktop-today-gap", "range=today");
+    must(gap.chip?.state === "lower", `today with a gap: the chip reads ${gap.chip?.state}`);
+    await capture("desktop-today-gap-uk", "range=today", { lang: "uk" });
+    const gapHour = await capture("desktop-today-gap-hover", "range=today", { act: async (page) => { await page.hover(`[data-activity-pair="${clock(TODAY, "10:00")}"] rect[tabindex]`); } });
+    must(gapHour.tooltip?.text.includes("not read (Stage host)") === true, `today with a gap: the 10:00 tooltip reads ${gapHour.tooltip?.text}`);
+
+    /* None of your input read, agent time still read. */
+    fs.rmSync(activityDir, { recursive: true, force: true });
+    fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ACTIVITY_STAGE_PROJECTS.map(keyOf) }] }));
+    const unread = await capture("desktop-unread-7d", "range=7d");
+    must(unread.chip?.state === "none" && unread.chip.text === "Your time not read", `unread: the chip reads ${unread.chip?.state} "${unread.chip?.text}"`);
+    must(unread.hero.includes("Unknown") && unread.agents.startsWith("≈"), `unread: hero ${unread.hero}, agents ${unread.agents}`);
+    must(!("supervised" in unread.cells) && !("unattended" in unread.cells) && !("you" in unread.cells), `unread: cells ${JSON.stringify(unread.cells)}`);
+    const unreadUk = await capture("desktop-unread-1280x800-uk", "range=7d", { lang: "uk", size: [1280, 800] });
+    must(unreadUk.chip?.text === "Ваш час не прочитано", `unread uk: the chip reads "${unreadUk.chip?.text}"`);
+
+    /* A home with no data at all. */
+    await stop(server);
+    server = null;
+    fs.rmSync(path.join(HOME, ".claude/projects"), { recursive: true, force: true });
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    const empty = await capture("desktop-empty", "range=7d");
+    must(empty.chip?.state === "none" && empty.hero.includes("Unknown"), `empty: chip ${empty.chip?.state}, hero ${empty.hero}`);
+    must(empty.caps.every((cap) => cap.text === "?"), `empty: caps ${JSON.stringify(empty.caps)}`);
+    await capture("desktop-empty-uk", "range=7d", { lang: "uk" });
+    const emptyPhone = await capture("phone-empty", "range=30d&view=days", { phone: true });
+    must(emptyPhone.days === 30, `empty phone: ${emptyPhone.days} day rows`);
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(HOME).join("$HOME"));
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "activity.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  const target = process.env.ACTIVITY_RENDER_DIR?.trim();
+  if (target) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const file of [...shots, path.join(OUT_DIR, "activity.json")]) fs.copyFileSync(file, path.join(target, path.basename(file)));
+  }
+  console.log(`activity dashboard captures: ${OUT_DIR}${target ? ` (copied to ${target})` : ""}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`activity dashboard acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("activity dashboard acceptance passed at 1440 × 900, 1280 × 800 and 390 × 844.");
+  }
+}
+
+/* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
+else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
