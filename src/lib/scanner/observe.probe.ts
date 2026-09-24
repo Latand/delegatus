@@ -8,10 +8,10 @@
  * environment is set before it starts removes the ordering question entirely.
  *
  * It also REPORTS the roots it resolved, so the isolation is asserted rather than
- * assumed: the `claude-tasks` root in particular falls back to a live
- * `/tmp/claude-<uid>` when the tmpdir-based candidate does not exist, which would have
- * put the operator's background-task outputs inside a "sandboxed" scan and made the
- * fd-holder scan enumerate processes that own them.
+ * assumed: the `claude-tasks` root in particular follows the temp root rather than
+ * HOME, so a child that inherited the operator's TMPDIR would have put the operator's
+ * background-task outputs inside a "sandboxed" scan and made the fd-holder scan
+ * enumerate processes that own them.
  *
  * Prints one JSON line. Not a test file, so the runner never collects it.
  */
@@ -64,6 +64,8 @@ async function main(): Promise<void> {
     entriesWithPid: warm.snapshot.files.filter((entry) => entry.pid !== null).length,
     entriesWithPaneTarget: warm.snapshot.files.filter((entry) => entry.pendingQuestion?.paneTarget != null).length,
     claudeTaskEntries: warm.snapshot.files.filter((entry) => entry.root === "claude-tasks").length,
+    claudeTaskPaths: warm.snapshot.files.filter((entry) => entry.root === "claude-tasks").map((entry) => entry.path),
+    projectKeys: warm.snapshot.projectCatalog.map((entry) => entry.project),
     afterWarm,
     afterConcurrent,
     /* Distinct arrays, so one caller's title overlay cannot reach another's. */

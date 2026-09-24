@@ -12,23 +12,23 @@ import { DEFAULT_SCHEME_CARDS_PER_PROJECT, DEFAULT_SCHEME_PROJECT_CAP } from "./
 const HOME = os.homedir();
 
 /**
- * Claude Code writes background-task output under a per-uid "claude-<uid>"
- * directory inside the OS temp dir. On Linux `os.tmpdir()` is normally "/tmp"
- * itself, so both candidates below coincide. On macOS `os.tmpdir()` resolves
- * to a per-session path under $TMPDIR (e.g. /var/folders/xx/yyyy/T), which is
- * where the CLI actually creates it — "/tmp/claude-<uid>" would never exist
- * there. Whichever candidate already exists wins; with neither existing yet
- * (fresh install, no background task run so far) the tmpdir-based one is kept
- * since that is what the current platform's CLI would create.
+ * The per-uid directory Claude Code writes background-task output under,
+ * resolved by Claude Code's own rule (its bundled source, 2.1.x):
+ * `join(CLAUDE_CODE_TMPDIR || os.tmpdir(), "claude-" + (getuid() ?? 0))`.
+ * `os.tmpdir()` follows TMPDIR, so a sandboxed install with its own TMPDIR
+ * scans its own tasks and nothing else; with TMPDIR unset it is "/tmp" on
+ * Linux and the per-session folder on macOS. The home plays no part in
+ * Claude's rule, so it plays none here. There is deliberately no fallback to
+ * a live "/tmp/claude-<uid>": that directory belongs to whichever Claude runs
+ * without a TMPDIR, and listing it put another setup's tasks on a fresh
+ * install (#2169).
  */
-function claudeTasksRoot(): string {
-  const uid = process.getuid?.() ?? 1000;
-  const tmpdirCandidate = path.join(os.tmpdir(), "claude-" + uid);
-  const legacyCandidate = "/tmp/claude-" + uid;
-  if (tmpdirCandidate === legacyCandidate) return tmpdirCandidate;
-  if (fs.existsSync(tmpdirCandidate)) return tmpdirCandidate;
-  if (fs.existsSync(legacyCandidate)) return legacyCandidate;
-  return tmpdirCandidate;
+export function claudeTasksRootFor(
+  env: NodeJS.ProcessEnv = process.env,
+  tmpdir: string = os.tmpdir(),
+  uid: number = process.getuid?.() ?? 0,
+): string {
+  return path.join(env.CLAUDE_CODE_TMPDIR || tmpdir, "claude-" + uid);
 }
 
 /**
@@ -67,7 +67,7 @@ export function openclawSessionRoots(): string[] {
 export const ROOTS: Record<RootKey, string> = {
   "codex-sessions": path.join(HOME, ".codex/sessions"),
   "claude-projects": path.join(HOME, ".claude/projects"),
-  "claude-tasks": claudeTasksRoot(),
+  "claude-tasks": claudeTasksRootFor(),
   /* Every OpenClaw scan root is a descendant of this one; the per-agent roots
      that discovery actually walks come from `openclawSessionRoots()`. */
   "openclaw-sessions": path.join(HOME, ".openclaw/agents"),
