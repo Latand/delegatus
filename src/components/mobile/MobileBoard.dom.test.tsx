@@ -6,6 +6,7 @@ import { flushSync } from "react-dom";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { applyBoardMutations } from "@/lib/board/mutations";
 import { translate, type Locale, type TFunction } from "@/lib/i18n";
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -649,7 +650,9 @@ test("a lane parked on a decision holds to Dismiss and Close lane: Dismiss clear
   click(q(page(), '[data-phone-card-action="dismiss"]'));
   expect(getMobileNav().getState().sheet).toBeNull();
   expect(await waitFor(() => dismissals.length === 1)).toBe(true);
-  expect(dismissals[0]).toEqual({ target: { kind: "subjects", subjects: [{ kind: "pipeline", pipelineId: decisionPipeline.id }] }, undo: false, surface: "phone" });
+  /* It names the lane as the card drew it, so a lane that parked again
+     before the tap landed is not cleared. */
+  expect(dismissals[0]).toEqual({ target: { kind: "subjects", subjects: [{ kind: "pipeline", pipelineId: decisionPipeline.id, laneMovedAt: laneMovedAt(decisionPipeline) }] }, undo: false, surface: "phone" });
   expect(receiptNow()!.textContent).toContain(translate("en", "needs.dismissedReceipt", { title: decisionPipeline.task }));
   click(q(receiptNow()!, '[data-mobile2-receipt-undo="undo"]'));
   expect(await waitFor(() => dismissals.length === 2)).toBe(true);

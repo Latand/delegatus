@@ -814,6 +814,9 @@ export function MobileKanban(props: MobileKanbanProps) {
     }
     void sendDismissal(target, subjects, { undo, surface: "phone" }).then((result) => {
       if (!result.ok) showReceipt(t(undo ? "needs.undoFailed" : "needs.dismissFailed", { title, error: result.error }), null, { error: true });
+      /* A lane parked again after the card was drawn: that decision is new,
+         and it stays flagged. */
+      else if (result.outcome.changed?.length) showReceipt(t("needs.changedReceipt", { title }), null);
     });
   }, [t]);
 

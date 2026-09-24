@@ -955,7 +955,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
       ? null
       : show(t("needs.dismissedReceipt", { title }), { label: t("kanban.undo"), run: () => void sendDismissal(target, subjects, { undo: true, surface: "desktop" }) });
     void sendDismissal(target, subjects, { undo, surface: "desktop" }).then((result) => {
-      if (result.ok) return;
+      if (result.ok) {
+        /* A lane parked again after the card was drawn: that decision is new,
+           and it stays flagged. With nothing else cleared, there is nothing to undo. */
+        if (!result.outcome.changed?.length) return;
+        if (receiptId && !result.outcome.dismissed.length) dismiss(receiptId);
+        show(t("needs.changedReceipt", { title }));
+        return;
+      }
       if (receiptId) dismiss(receiptId);
       show(t(undo ? "needs.undoFailed" : "needs.dismissFailed", { title, error: result.error }), undefined, { error: true });
     });

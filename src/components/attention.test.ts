@@ -196,6 +196,25 @@ describe("dismissals", () => {
     expect(attentionId({ ...undated, attentionDismissal: mark(NOW - 100, "toolu_other") }, NOW)).toBe("toolu_q");
   });
 
+  test("a stale card's dismissal does not hide the question asked after it was drawn", () => {
+    /* The card still shows toolu_q1. It was answered and toolu_q2 asked at
+       NOW - 3; the tap lands at NOW, naming the question it drew. */
+    const next = entry({ path: "/q", pendingQuestion: question("toolu_q2", NOW - 3), attentionDismissal: mark(NOW, "toolu_q1") });
+    expect(attentionId(next, NOW)).toBe("toolu_q2");
+    expect(attentionReason(next, NOW)?.dismissal).toBeNull();
+    /* The question it drew stays cleared. */
+    expect(attentionId({ ...next, pendingQuestion: question("toolu_q1", NOW - 60) }, NOW)).toBeNull();
+  });
+
+  test("a dismissal of one reason does not hide a message that turned uncertain after it", () => {
+    /* Owed since NOW - 300, uncertain since a moment ago; a question was
+       cleared at NOW - 180, while the message still asked nothing. */
+    const uncertain = entry({ path: "/d", stuckDelivery: owed(NOW - 300, "delivery-uncertain"), attentionDismissal: mark(NOW - 180, "toolu_q1") });
+    expect(attentionId(uncertain, NOW)).toBe(`/d:delivery:${NOW - 300}`);
+    /* A dismissal of that message itself keeps covering it. */
+    expect(attentionId({ ...uncertain, attentionDismissal: mark(NOW - 60, `/d:delivery:${NOW - 300}`) }, NOW)).toBeNull();
+  });
+
   test("a dismissal whose own time does not parse covers nothing", () => {
     const asked = entry({ path: "/q", pendingQuestion: question("toolu_q", NOW - 60), attentionDismissal: { at: "never", by: { kind: "operator" } } });
     expect(attentionId(asked, NOW)).toBe("toolu_q");

@@ -5,7 +5,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { attentionId } from "../attention";
 import { pipelineAsks } from "../mobile/mobileBoardModel";
-import { layerDismissal, overlayDismissals, resetDismissalOverlayForTests, unlayerDismissal } from "./dismissalOverlay";
+import { layerDismissal, overlayDismissals, resetDismissalOverlayForTests, sendDismissal, unlayerDismissal } from "./dismissalOverlay";
 
 /*
  * The click's side of a dismissal (docs/design/needs-attention.md §5): drawn
@@ -77,4 +77,19 @@ test("a layer the poll never reflected retires after its bound", () => {
   layerDismissal([{ kind: "pipeline", pipelineId: "lane-1" }], { at: iso(NOW), by: { kind: "operator" } }, false, NOW * 1000);
   expect(overlayDismissals([], [parked(NOW - 60)], NOW * 1000)).not.toBeNull();
   expect(overlayDismissals([], [parked(NOW - 60)], NOW * 1000 + 31_000)).toBeNull();
+});
+
+test("a lane that parked again after the card drew it is not drawn over", () => {
+  layerDismissal([{ kind: "pipeline", pipelineId: "lane-1", laneMovedAt: (NOW - 120) * 1000 }], { at: iso(NOW), by: { kind: "operator" } }, true, NOW * 1000);
+  expect(pipelineAsks(overlayDismissals([], [parked(NOW - 120)], NOW * 1000)!.pipelines[0]!)).toBe(false);
+  expect(pipelineAsks(overlayDismissals([], [parked(NOW - 30)], NOW * 1000)!.pipelines[0]!)).toBe(true);
+});
+
+test("a lane the server answers changed comes off the layer when the answer lands", async () => {
+  const subjects = [{ kind: "pipeline" as const, pipelineId: "lane-1", laneMovedAt: (NOW - 120) * 1000 }];
+  const answer = { ok: true, dismissed: [], alreadyClear: [], changed: [{ kind: "pipeline", pipelineId: "lane-1" }], at: iso(NOW), by: { kind: "operator", surface: "desktop" }, undo: false };
+  const fetchFn = (async () => new Response(JSON.stringify(answer), { status: 200 })) as unknown as typeof fetch;
+  const result = await sendDismissal({ kind: "subjects", subjects }, subjects, { surface: "desktop", fetchFn });
+  expect(result).toMatchObject({ ok: true, outcome: { changed: [{ kind: "pipeline", pipelineId: "lane-1" }] } });
+  expect(overlayDismissals([], [parked(NOW - 120)])).toBeNull();
 });

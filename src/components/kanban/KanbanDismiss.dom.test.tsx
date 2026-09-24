@@ -53,6 +53,8 @@ Object.assign(globalThis, {
 /* The dismissal route, answered the way the server answers it. */
 const posted: Array<Record<string, unknown>> = [];
 let refuse = false;
+/* The lanes parked again between the poll and the click. */
+let lanesMoved = false;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   if (url === "/api/attention/dismissals") {
@@ -60,10 +62,13 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     posted.push(body);
     if (refuse) return new Response(JSON.stringify({ ok: false, error: "the store is busy" }), { status: 503 });
     const target = body.target as { subjects?: Array<{ kind: string; conversationId?: string; pipelineId?: string }> };
+    const answered = (target.subjects ?? []).map((subject) => subject.kind === "pipeline" ? { kind: "pipeline", pipelineId: subject.pipelineId } : { kind: "conversation", conversationId: subject.conversationId });
+    const moved = (subject: { kind: string }) => lanesMoved && body.undo !== true && subject.kind === "pipeline";
     return new Response(JSON.stringify({
       ok: true,
-      dismissed: (target.subjects ?? []).map((subject) => subject.kind === "pipeline" ? { kind: "pipeline", pipelineId: subject.pipelineId } : { kind: "conversation", conversationId: subject.conversationId }),
+      dismissed: answered.filter((subject) => !moved(subject)),
       alreadyClear: [],
+      changed: answered.filter(moved),
       at: new Date().toISOString(),
       by: { kind: "operator", surface: "desktop" },
       undo: body.undo === true,
@@ -84,6 +89,7 @@ afterEach(() => {
   localStorage.clear();
   posted.length = 0;
   refuse = false;
+  lanesMoved = false;
   resetDismissalOverlayForTests();
 });
 
@@ -256,4 +262,35 @@ test("a refused dismissal puts the flag back and says why", async () => {
   const card = cardEl(host, "task:a")!;
   expect(card.getAttribute("data-attention")).toBe("needs");
   expect(host.textContent).toContain("Could not clear");
+});
+
+test("a lane that parked again before the click landed stays flagged, and the receipt says it changed", async () => {
+  const parked = {
+    id: "lane-parked",
+    task: "Retire the systemd install path",
+    project: "fixture",
+    state: "needs_decision",
+    cursor: { stageId: "build", state: "needs_decision", input: null, activatedBy: null },
+    stages: [{ id: "build", kind: "run", prompt: "", next: null, effectiveRole: {} }],
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", activatedBy: null, agentPath: null, conversationId: null, launchId: null, sessionId: null, paneId: null, flowId: null, effectiveRole: {}, output: null, verdict: null, error: null, startedAt: iso(900), completedAt: iso(600) }] }],
+    taskIds: ["a"],
+    createdAt: iso(1200),
+  } as unknown as Pipeline;
+  lanesMoved = true;
+  const { host } = mount({ tasks: [task("a", "assigned", "Retire the systemd install path")], files: [], pipelines: [parked] });
+  expect(cardEl(host, "task:a")!.getAttribute("data-attention")).toBe("needs");
+
+  click(cardEl(host, "task:a")!.querySelector("[data-dismiss]"));
+  /* Drawn cleared on the click, as any dismissal is. */
+  expect(cardEl(host, "task:a")!.hasAttribute("data-attention")).toBe(false);
+  expect(host.textContent).toContain("Cleared «");
+  await tick();
+  await tick();
+  /* The card named the lane as it drew it. */
+  expect(posted[0]).toMatchObject({ target: { kind: "task", taskId: "a", subjects: [{ kind: "pipeline", pipelineId: "lane-parked", laneMovedAt: Date.parse(iso(600)) }] } });
+  /* The server stamped nothing: the lane asks again, and the receipt says why
+     instead of offering an Undo of nothing. */
+  expect(cardEl(host, "task:a")!.getAttribute("data-attention")).toBe("needs");
+  expect(host.textContent).toContain("changed since you saw it, so it stays flagged");
+  expect(host.textContent).not.toContain("Cleared «");
 });

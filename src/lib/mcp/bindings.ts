@@ -4775,6 +4775,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
   return {
     dismissed: outcome.dismissed,
     alreadyClear: outcome.alreadyClear,
+    ...(outcome.changed.length ? { changed: outcome.changed } : {}),
     at: outcome.at,
     by: outcome.by,
     undo: outcome.undo,

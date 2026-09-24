@@ -10,6 +10,7 @@ import { Database } from "bun:sqlite";
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
@@ -2188,6 +2189,25 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   /* The dismissal service's own write carries the attribution it derived. */
   const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports);
   expect(serviced.pipeline!.dismissedBy).toEqual({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" });
+
+  /* A card drawn before the lane's last movement clears nothing: that
+     decision is one the operator has not seen. The one it drew, it clears. */
+  const ran = loadPipelines()[0]!;
+  ran.runs[0]!.attempts.push({
+    n: 1, state: "failed", effectiveRole: structuredClone(ran.stages[0]!.effectiveRole),
+    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-09-24T09:00:00.000Z", completedAt: "2026-09-24T09:30:00.000Z",
+    input: null, activatedBy: null, output: null, verdict: null, error: null,
+  });
+  savePipelines([ran]);
+  const lastMove = laneMovedAt(ran);
+  expect(lastMove).toBe(Date.parse("2026-09-24T09:30:00.000Z"));
+  const stale = await setPipelineDismissal(created.id, true, { kind: "operator", surface: "desktop" }, h.ports, lastMove - 1);
+  expect(stale.moved).toBe(true);
+  expect(loadPipelines()[0]!).toMatchObject({ dismissedAt: serviced.pipeline!.dismissedAt, dismissedBy: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" } });
+  const current = await setPipelineDismissal(created.id, true, { kind: "operator", surface: "desktop" }, h.ports, lastMove);
+  expect(current.moved).toBeUndefined();
+  expect(current.pipeline!.dismissedBy).toEqual({ kind: "operator", surface: "desktop" });
 
   const shown = await patchPipeline(created.id, { action: "undismiss" }, h.ports);
   expect(shown.pipeline!.dismissedAt).toBeNull();

@@ -74,6 +74,7 @@ import {
   MIN_STARTED_PIPELINE_STAGES,
 } from "./limits";
 import * as legacyReview from "./legacyReviewDefinition";
+import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
 import { pipelineDeliveryGuidance, renderDecisionInput, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
@@ -6551,6 +6552,9 @@ export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field">
   replayed?: boolean;
   /** attach-link and detach-link (#2059): the request changed nothing. */
   unchanged?: boolean;
+  /** A dismissal that named the lane as a card drew it found it moved since:
+      nothing was stamped (docs/design/needs-attention.md §5). */
+  moved?: boolean;
 };
 
 type WorkLinkErrorCode = "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT";
@@ -7664,7 +7668,8 @@ export async function patchPipeline(
  * dismissal stamps NOW every time, so a lane that parked again after an
  * earlier one is cleared for the decision it waits on today, and it records
  * who cleared it. A draft is never on the board and a closed lane is gone from
- * it already, so neither has a row to clear or bring back.
+ * it already, so neither has a row to clear or bring back. Whether the lane
+ * moved since a card drew it is the caller's check, made under this lock.
  */
 function applyPipelineDismissal(pipeline: Pipeline, dismiss: boolean, by: DismissedBy, now: string): PipelinePatchResult | null {
   if (pipeline.state === "draft" || pipeline.state === "closed") {
@@ -7689,11 +7694,20 @@ function dismissedByActor(actor: PauseResumeActor | null): DismissedBy {
 
 /** The dismissal service's write (`@/lib/attention/dismissals`): the same
     stamp as the `dismiss`/`undismiss` actions, with the attribution the
-    service derived. */
-export async function setPipelineDismissal(id: string, dismiss: boolean, by: DismissedBy, ports: PipelinePorts = defaultPipelinePorts()): Promise<PipelinePatchResult> {
+    service derived. `drawnMovedAt` is the movement the operator's card drew
+    the lane at; a lane that moved since answers `moved` and keeps asking, so
+    a click on a stale card cannot clear a decision nobody has seen. */
+export async function setPipelineDismissal(
+  id: string,
+  dismiss: boolean,
+  by: DismissedBy,
+  ports: PipelinePorts = defaultPipelinePorts(),
+  drawnMovedAt?: number | null,
+): Promise<PipelinePatchResult> {
   return withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
+    if (dismiss && laneMovedSince(pipeline, drawnMovedAt)) return { pipeline, moved: true };
     const refused = applyPipelineDismissal(pipeline, dismiss, by, ports.now());
     if (refused) return refused;
     persist();

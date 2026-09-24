@@ -1,5 +1,6 @@
 import type { NeedReason } from "@/components/attention/needReason";
 import type { DismissalSubjectRequest, DismissalTarget } from "@/lib/attention/dismissalTypes";
+import { drawnLaneMovement } from "@/lib/pipelines/laneMovement";
 
 import type { KanbanCard } from "./kanbanModel";
 
@@ -8,7 +9,9 @@ import type { KanbanCard } from "./kanbanModel";
  * §5): exactly the reasons the card drew, which is the group hide's rule of
  * "what the operator saw". The card's task is the target when it has one, so
  * the server records it against the task; a card no task owns names its
- * subjects alone. Undo names the reasons the card shows as cleared.
+ * subjects alone. Each subject says what the card drew of it: a
+ * conversation's reason id, a lane's last movement. Undo names the reasons
+ * the card shows as cleared.
  */
 export function cardDismissal(card: KanbanCard, undo: boolean): { target: DismissalTarget; subjects: DismissalSubjectRequest[] } {
   const needs = undo ? card.cleared.map((entry) => entry.need) : card.reasons;
@@ -20,7 +23,7 @@ export function cardDismissal(card: KanbanCard, undo: boolean): { target: Dismis
 }
 
 export function subjectOf(need: NeedReason): DismissalSubjectRequest {
-  if (need.subject === "pipeline") return { kind: "pipeline", pipelineId: need.pipeline.id };
+  if (need.subject === "pipeline") return { kind: "pipeline", pipelineId: need.pipeline.id, laneMovedAt: drawnLaneMovement(need.pipeline) };
   return {
     kind: "conversation",
     ...(need.file.conversationId ? { conversationId: need.file.conversationId } : {}),

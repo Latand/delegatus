@@ -148,8 +148,8 @@ export function attentionExpiries(files: readonly FileEntry[]): number[] {
  *
  * `since` is when the wait began, the instant the queue sorts by and the row
  * counts from. `raisedAt` is when it began to need the operator, which is what
- * a dismissal is compared with; the two differ only for an owed message, which
- * waits for half an hour before it asks anything.
+ * a dismissal that names no reason is compared with; the two differ only for
+ * an owed message, which waits for half an hour before it asks anything.
  */
 export interface ConversationReason {
   kind: ConversationReasonKind;
@@ -158,7 +158,7 @@ export interface ConversationReason {
   since: number;
   raisedAt: number;
   /** Whether `since` came from the signal's own clock. An undated reason is
-      compared with a dismissal by its id instead. */
+      covered only by a dismissal that names its id. */
   clocked: boolean;
   /** The agent's own short header for a question, when it wrote one. */
   header: string | null;
@@ -168,17 +168,19 @@ export interface ConversationReason {
 
 /**
  * Whether a recorded dismissal covers this reason (§5, «What brings an item
- * back»): a reason that started at or before the dismissal was seen, and one
- * that started after it is new. An undated reason is compared by its id with
- * the one on screen when it was cleared, so an unreadable clock never hides a
- * new signal. A dismissal whose own time does not parse covers nothing.
+ * back»). A dismissal that names the reason on screen covers that reason and
+ * nothing else: the card may have been drawn before a newer question arrived
+ * or before an owed message turned uncertain, and the tap only saw what it
+ * drew. One that names none (an agent's call) covers what started at or
+ * before it, and never an undated reason. A dismissal whose own time does not
+ * parse covers nothing.
  */
 export function dismissalCovers(reason: Pick<ConversationReason, "id" | "raisedAt" | "clocked">, dismissal: AttentionDismissalMark | null | undefined): boolean {
   if (!dismissal) return false;
   const at = isoSeconds(dismissal.at);
   if (at === null) return false;
-  if (!reason.clocked) return Boolean(dismissal.reasonId) && dismissal.reasonId === reason.id;
-  return reason.raisedAt <= at;
+  if (dismissal.reasonId) return dismissal.reasonId === reason.id;
+  return reason.clocked && reason.raisedAt <= at;
 }
 
 /**
@@ -230,8 +232,8 @@ function undismissedReason(file: FileEntry, now: number): ConversationReason | n
   const deliverySince = blockingStuckDelivery(file, now);
   if (deliverySince !== null) {
     /* It asks from the moment it crossed the half hour, or from admission when
-       the record already calls it uncertain: a dismissal made in between
-       covers the same message, and the next message has a later admission. */
+       the record already calls it uncertain. A card's dismissal names this id,
+       which the next message's later admission changes. */
     const raisedAt = file.stuckDelivery?.state === "delivery-uncertain"
       ? deliverySince
       : deliverySince + DELIVERY_UNCERTAIN_MS / 1000;

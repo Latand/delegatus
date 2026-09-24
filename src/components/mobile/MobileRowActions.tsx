@@ -5,6 +5,7 @@ import { Check, CircleX } from "lucide-react";
 import { X } from "@/components/icons";
 import type { DismissalSubjectRequest, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { useLocale } from "@/lib/i18n";
+import { drawnLaneMovement } from "@/lib/pipelines/laneMovement";
 
 import { sendDismissal } from "../attention/dismissalOverlay";
 import type { MobileBoardConversation, MobileBoardPipelineRow } from "./mobileBoardModel";
@@ -41,13 +42,15 @@ import { ROW_ACTION_TONE, type MobileRowAction } from "./MobileSwipeRow";
  * (docs/design/needs-attention.md §5). The row leaves the queue on the tap;
  * a refusal puts it back and says why. The engine stamps a lane's dismissal
  * with the instant it is made, so a lane that parked again after an earlier
- * one is cleared for the decision it waits on now.
+ * one is cleared for the decision it waits on now; one that parked again
+ * after the row was drawn is not cleared at all, and the row says so.
  */
-function dismissRow(subject: DismissalSubjectRequest, text: string, failed: (error: string) => string): void {
+function dismissRow(subject: DismissalSubjectRequest, text: string, failed: (error: string) => string, changed: string): void {
   const target: DismissalTarget = subject;
   showReceipt(text, { kind: "undo", run: () => void sendDismissal(target, [subject], { undo: true, surface: "phone" }) });
   void sendDismissal(target, [subject], { surface: "phone" }).then((result) => {
     if (!result.ok) showReceipt(failed(result.error), null, { error: true });
+    else if (result.outcome.changed?.length) showReceipt(changed, null);
   });
 }
 
@@ -82,7 +85,7 @@ export function useMobileBoardRowActions({ closeCard, reopenCard, acts = pending
         hint: t("needs.dismissRowHint"),
         icon: <Check className="h-4 w-4" aria-hidden />,
         tone: "accent" as const,
-        run: () => dismissRow(subject, t("needs.dismissedReceipt", { title }), (error) => t("needs.dismissFailed", { title, error })),
+        run: () => dismissRow(subject, t("needs.dismissedReceipt", { title }), (error) => t("needs.dismissFailed", { title, error }), t("needs.changedReceipt", { title })),
       }] : []), {
         key: "close",
         label: t("mobile2.board.swipeClose"),
@@ -106,8 +109,8 @@ export function useMobileBoardRowActions({ closeCard, reopenCard, acts = pending
         icon: <Check className="h-4 w-4" aria-hidden />,
         tone: "accent",
         run: () => {
-          const subject: DismissalSubjectRequest = { kind: "pipeline", pipelineId: pipeline.id };
-          dismissRow(subject, t("needs.dismissedReceipt", { title: task }), (error) => t("needs.dismissFailed", { title: task, error }));
+          const subject: DismissalSubjectRequest = { kind: "pipeline", pipelineId: pipeline.id, laneMovedAt: drawnLaneMovement(pipeline) };
+          dismissRow(subject, t("needs.dismissedReceipt", { title: task }), (error) => t("needs.dismissFailed", { title: task, error }), t("needs.changedReceipt", { title: task }));
         },
       },
       {

@@ -210,7 +210,7 @@ Each subject kind keeps the record it already has, and one module owns both,
     at: string;              // server clock, ISO
     by: DismissedBy;
     reason: ConversationReason["kind"];  // what was on screen, for the record
-    reasonId: string;        // that reason's attentionId, for the no-clock fallback
+    reasonId: string | null; // that reason's attentionId: the one reason the record covers; null for an agent's call
     operationKey?: string;   // MCP idempotency
   }
   type DismissedBy =
@@ -246,9 +246,10 @@ pipeline payload already carries `dismissedAt`.
 
 On the click's side, `src/components/attention/dismissalOverlay.ts` layers a
 dismissal over the polled rows at the one place the Viewer reads them, so the
-card, the phone's ⚠ count and the queue stop flagging it in the same frame. A
-mark stamped on the device covers what the card drew even when the device's
-clock runs behind the one that dated the reason. The server's own instant
+card, the phone's ⚠ count and the queue stop flagging it in the same frame. It
+covers what the card drew and nothing newer, even when the device's clock runs
+behind the server's: a conversation's mark names the reason it drew, and a lane
+that moved since the card drew it is not drawn over. The server's own instant
 replaces it when the request answers, and the layer retires once the poll
 carries it, or after 30 seconds. A refusal takes the layer off and says why.
 
@@ -257,17 +258,42 @@ carries it, or after 30 seconds. A refusal takes the layer off and says why.
 This is the same rule as the phone's Hide and the group hide, "hidden until
 something newer", and it is kept in one place:
 
-- **Conversation.** A reason is dismissed when its `since` is at or before the
-  dismissal's `at`. Every kept reason carries its own start time: `bridgeAsk.at`,
-  `pendingQuestion.askedAt`, `waitingInput.since`, and `stuckDelivery.since`
-  bounded at 30 minutes, whose instant is `since + 30 min`. So a new question,
-  a new orchestrator ask, a new prompt or a newly owed message comes back, and
-  the same one never does. A reason whose time does not parse is compared by
-  its `id` against the one current at the dismissal (stored as
-  `reasonId`), so an unreadable clock never hides a new signal.
+- **Conversation.** A dismissal hides what its maker saw, and nothing newer.
+  - A card's dismissal names the reason it drew (`reasonId`, its attention id)
+    and covers that id alone. The card may be stale: a phone that has just
+    woken can still show question Q1 after Q1 was answered and Q2 asked, and a
+    tap then must not clear Q2. It is equally why a dismissal of one reason
+    never covers an owed message that turns `delivery-uncertain` later, whose
+    start time is its admission and would otherwise read as older than the
+    dismissal. The ids are unique per signal (`toolUseId`, the ask's id, the
+    prompt's and the message's start instants), so the same one never comes
+    back and a new one always does.
+  - An agent's dismissal names no reason: it is compared by time. It covers a
+    reason whose start is at or before `at`. Every kept reason carries its own
+    start time: `bridgeAsk.at`, `pendingQuestion.askedAt`, `waitingInput.since`,
+    and `stuckDelivery.since` bounded at 30 minutes, whose instant is
+    `since + 30 min`. A reason whose time does not parse is never covered by
+    time, so an unreadable clock never hides a new signal. One limit remains
+    on this path: `stuckDelivery` does not say when a message turned
+    `delivery-uncertain`, so an uncertain message counts from its admission,
+    and an agent's dismissal made after the admission but before the message
+    turned uncertain covers it. Closing that needs the delivery record to carry
+    the instant it turned uncertain. The operator's cards are not affected,
+    because they name the reason.
+  - A conversation holds one record, so a newer dismissal replaces an older
+    one. If an older reason resurfaces from under a newer one that was also
+    cleared (an owed message cleared, then a question cleared and answered), it
+    flags again. That errs toward showing the operator something twice.
 - **Pipeline.** `pipelineHiddenFromBoard` stays as it is: the lane comes back
   once `laneMovedAt(pipeline)` (`src/lib/pipelines/laneMovement.ts`) passes
-  `dismissedAt`, meaning a round started, ended, or a verdict was re-read.
+  `dismissedAt`, meaning a round started, ended, or a verdict was re-read. The
+  engine stamps `dismissedAt` with its own clock, so a card's dismissal also
+  says which movement it drew: the card and the phone swipe send
+  `laneMovedAt` with the lane. A lane that moved after that (it parked again
+  between the last poll and the tap) is not stamped. The service answers it as
+  `changed`, and the engine checks the same thing again under its own lock.
+  The surface then puts the lane back at once and says it changed. An agent
+  sends no movement and clears the lane as it stands.
 - **Undo** deletes the conversation record, or runs the pipeline's
   `undismiss`. A dismissal that already came back needs no undo.
 
@@ -282,11 +308,12 @@ something newer", and it is kept in one place:
   task's live assignments plus the pipelines whose `taskIds` include it. A card
   no task owns sends `{ kind: "subjects", subjects }`, which only the
   operator's route accepts. The answer is `{ dismissed: Subject[],
-  alreadyClear: Subject[], at, by }`. A subject with nothing to dismiss (a lane
-  that asks nothing or is already cleared, an undo of nothing) goes in
-  `alreadyClear` and is not an error. A conversation is always recorded: the
-  record says what was seen up to now and cannot hide anything that starts
-  later.
+  alreadyClear: Subject[], changed: Subject[], at, by }`. A subject with
+  nothing to dismiss (a lane that asks nothing or is already cleared, an undo
+  of nothing) goes in `alreadyClear`, a lane that moved since the card drew it
+  goes in `changed`, and neither is an error. A conversation is always
+  recorded: the record names the reason the card drew, or says what was seen
+  up to now, and cannot hide anything that starts later.
 - **Route.** `POST /api/attention/dismissals`, with body
   `{ target, undo? }`, is the operator's (`by: { kind: "operator", surface }`).
   Both cards call it, and so does the phone's swipe action (now "Dismiss" on
@@ -392,18 +419,24 @@ The phone never posts to the request, so a desktop can still follow it.
 
 - `src/components/attention.test.ts`: every reason's kind and id. A rate limit
   and a stalled session raise nothing. A delivery raises at 30 minutes and not
-  at 29. A question beats stalled. A dismissal hides a reason whose `since` is
-  at or before `at`, and a newer question comes back.
+  at 29. A question beats stalled. A dismissal that names a reason hides that
+  reason alone: a question asked after a stale card was drawn, and an owed
+  message that turned uncertain after a dismissal of another reason, both
+  still flag. One that names none hides a reason whose start is at or before
+  `at`, and a newer question comes back.
 - `src/components/mobile/mobileBoardModel.test.ts`,
   `src/components/kanban/kanbanModel.test.ts`,
   `src/components/mobile/phoneKanbanModel.test.ts`: a lane hidden on the phone
   no longer marks the desktop card. `reasons` and `cleared` are populated.
   Stalled and limit rows are in `working`.
 - `src/lib/attention/dismissals.test.ts`: replace, prune, undo, attribution,
-  the pipeline stamp, the task expansion with and without `subjects`, target
-  validation, and the `/api/files` projection of the record.
+  the pipeline stamp, a lane that moved after the card drew it answered
+  `changed` and not stamped (also when it moves under the engine's lock), the
+  task expansion with and without `subjects`, target validation, and the
+  `/api/files` projection of the record.
 - `src/lib/pipelines/engine.test.ts`: a second `dismiss` stamps its own
-  instant and records who made it.
+  instant and records who made it, and a stamp that names a movement older
+  than the lane's last one writes nothing.
 - `src/lib/mcp/dismissAttention.test.ts`, beside the `request_attention`
   cases: a worker is refused with nothing written, the seat and root are
   admitted, a seat of another project is refused, a replay by
@@ -415,7 +448,8 @@ The phone never posts to the request, so a desktop can still follow it.
   shows "Cleared · …" with Undo at once, Undo flags it again, a newer question
   comes back, and a refused dismissal puts the flag back.
 - `src/components/attention/dismissalOverlay.test.ts`: the click's layer, its
-  clock-skew guard, the server's instant, undo and its bound.
+  clock-skew guard, the server's instant, undo and its bound, a lane that
+  parked again after it was drawn, and a `changed` answer taking the layer off.
 - `src/components/attention/AttentionHost.phoneNotice.dom.test.tsx`: a notice
   on the phone layout, delivered while a conversation screen is open, leaves
   the nav stack's top screen and the scroll position unchanged, adds no

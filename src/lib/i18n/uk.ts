@@ -2315,6 +2315,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "needs.undo": "Скасувати",
   "needs.undoAria": "Знову позначити «{title}»",
   "needs.dismissedReceipt": "Знято «{title}»",
+  "needs.changedReceipt": "«{title}» змінилося, відколи ви це бачили, тож позначка лишається",
   "needs.dismissFailed": "Не вдалося зняти «{title}»: {error}",
   "needs.undoFailed": "Не вдалося знову позначити «{title}»: {error}",
   "notices.title": "Від ваших агентів",

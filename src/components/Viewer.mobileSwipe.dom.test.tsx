@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { translate } from "@/lib/i18n";
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -239,7 +240,7 @@ test("phone: Dismiss takes a lane out of the pin and out of the bar's badge on t
 
   /* The server has not answered, and the pin and the count moved together:
      the lane still stands in Inbox, with nothing asked of the operator. */
-  expect(dismissals).toEqual([{ target: { kind: "subjects", subjects: [{ kind: "pipeline", pipelineId: "p-a" }] }, undo: false, surface: "phone" }]);
+  expect(dismissals).toEqual([{ target: { kind: "subjects", subjects: [{ kind: "pipeline", pipelineId: "p-a", laneMovedAt: laneMovedAt(PIPELINES[0]!) }] }, undo: false, surface: "phone" }]);
   expect(pipelinePatches).toEqual([]);
   expect(row(host, "p-a")).toBeNull();
   expect(card(host, "p-a")).not.toBeNull();

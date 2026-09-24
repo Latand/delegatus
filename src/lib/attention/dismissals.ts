@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
 import type { PipelinePatchResult } from "@/lib/pipelines/engine";
-import { laneMovedAt } from "@/lib/pipelines/laneMovement";
+import { laneMovedAt, laneMovedSince } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
@@ -33,9 +33,11 @@ import {
  *    queue, the group hide and the seat monitor already read;
  *  - a task has none: dismissing a task dismisses what is on it.
  *
- * A dismissal hides only what started at or before it, so nothing here ever
- * has to be taken back when something new happens: the reason model compares
- * the two instants (`dismissalCovers`).
+ * A dismissal hides only what its maker saw, so nothing here ever has to be
+ * taken back when something new happens. A card names the reason it drew and
+ * the reason model covers that id alone; an agent names none and is compared
+ * by time (`dismissalCovers`). A lane the card drew is stamped only while it
+ * has not moved since.
  */
 
 export const ATTENTION_DISMISSALS_SCHEMA_VERSION = 1 as const;
@@ -56,7 +58,8 @@ export interface AttentionDismissalV1 {
   by: DismissedBy;
   /** What was on screen, for the record. */
   reason: ConversationReasonKind | null;
-  /** That reason's attention id: what an undated reason is compared by. */
+  /** That reason's attention id: the one reason the record covers. Null for
+      an agent's call, which covers what started at or before `at`. */
   reasonId: string | null;
   /** The MCP operation that wrote it, so a replay answers the first result. */
   operationKey?: string;
@@ -256,7 +259,9 @@ export interface DismissalPorts {
   task(taskId: string): BoardTask | null;
   pipelines(): readonly Pipeline[];
   pipeline(pipelineId: string): Pipeline | null;
-  setPipelineDismissal(pipelineId: string, dismiss: boolean, by: DismissedBy): Promise<PipelinePatchResult>;
+  /** Stamp or clear a lane. `drawnMovedAt`, when stated, is the movement the
+      card drew; a lane that moved since answers `moved` and is not stamped. */
+  setPipelineDismissal(pipelineId: string, dismiss: boolean, by: DismissedBy, drawnMovedAt?: number | null): Promise<PipelinePatchResult>;
 }
 
 export interface DismissOptions {
@@ -283,10 +288,23 @@ function requiredId(value: unknown, field: string): string {
   return id;
 }
 
+/** The lane movement a card drew: epoch ms, null for a lane that never ran a
+    round, undefined when the caller did not say. */
+function drawnMovement(value: unknown): number | null | undefined {
+  if (value === undefined || value === null) return value;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new DismissalError("INVALID_TARGET", "laneMovedAt must be epoch milliseconds or null");
+  return value;
+}
+
+function parsePipeline(subject: Record<string, unknown>): Extract<DismissalSubjectRequest, { kind: "pipeline" }> {
+  const moved = drawnMovement(subject.laneMovedAt);
+  return { kind: "pipeline", pipelineId: requiredId(subject.pipelineId, "pipelineId"), ...(moved !== undefined ? { laneMovedAt: moved } : {}) };
+}
+
 function parseSubject(value: unknown): DismissalSubjectRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new DismissalError("INVALID_TARGET", "a subject must be an object");
   const subject = value as Record<string, unknown>;
-  if (subject.kind === "pipeline") return { kind: "pipeline", pipelineId: requiredId(subject.pipelineId, "pipelineId") };
+  if (subject.kind === "pipeline") return parsePipeline(subject);
   if (subject.kind !== "conversation") throw new DismissalError("INVALID_TARGET", "a subject is a conversation or a pipeline");
   const conversationId = optionalId(subject.conversationId, "conversationId");
   const path = optionalId(subject.path, "path");
@@ -319,7 +337,7 @@ export function parseDismissalTarget(value: unknown, options: { allowSubjects: b
     case "conversation":
       return parseSubject(target);
     case "pipeline":
-      return { kind: "pipeline", pipelineId: requiredId(target.pipelineId, "pipelineId") };
+      return parsePipeline(target);
     case "task":
       return {
         kind: "task",
@@ -353,7 +371,7 @@ function subjectsOf(target: DismissalTarget, ports: DismissalPorts): DismissalSu
     case "conversation":
       return [{ kind: "conversation", conversationId: target.conversationId, path: target.path, reasonId: target.reasonId ?? null }];
     case "pipeline":
-      return [{ kind: "pipeline", pipelineId: target.pipelineId }];
+      return [target];
     case "subjects":
       return target.subjects;
     case "task": {
@@ -375,12 +393,13 @@ function subjectsOf(target: DismissalTarget, ports: DismissalPorts): DismissalSu
 /**
  * Clear (or bring back) what a subject needs the operator for.
  *
- * Every subject the target names is answered once, as `dismissed` or as
+ * Every subject the target names is answered once, as `dismissed`, as
  * `alreadyClear` (a lane that asks nothing, or one already cleared for the
- * decision it waits on; an undo of something nobody cleared). Neither is an
- * error. A conversation is always recorded: the record says what was seen up
- * to now and cannot hide anything that starts later. A target that names
- * nothing the service can find is refused.
+ * decision it waits on; an undo of something nobody cleared), or as `changed`
+ * (a lane that moved after the card drew it, which keeps asking). None is an
+ * error. A conversation is always recorded: the record names the reason the
+ * card drew, or says what was seen up to now, and cannot hide anything that
+ * starts later. A target that names nothing the service can find is refused.
  */
 export async function dismissAttention(target: DismissalTarget, by: DismissedBy, options: DismissOptions = {}): Promise<DismissalOutcome> {
   const ports = options.ports ?? await productionDismissalPorts();
@@ -390,6 +409,7 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
   const requested = subjectsOf(target, ports);
   const dismissed: DismissalSubject[] = [];
   const alreadyClear: DismissalSubject[] = [];
+  const changed: DismissalSubject[] = [];
   const seen = new Set<string>();
 
   const conversations: Array<{ resolved: ResolvedConversation; subject: string; reasonId: string | null; reason: ConversationReasonKind | null }> = [];
@@ -459,15 +479,23 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
       alreadyClear.push(answer);
       continue;
     }
-    const result = await ports.setPipelineDismissal(pipeline.id, !undo, by);
+    /* What the operator saw is the lane as the card drew it. One that parked
+       again since is a decision they have not seen, so nothing is stamped;
+       the engine asks the same again under its own lock. */
+    const drawn = undo ? undefined : request.laneMovedAt;
+    if (laneMovedSince(pipeline, drawn)) {
+      changed.push(answer);
+      continue;
+    }
+    const result = await ports.setPipelineDismissal(pipeline.id, !undo, by, drawn);
     if (!result.pipeline) throw new DismissalError("PIPELINE_REFUSED", result.error ?? "the pipeline refused the dismissal", result.status ?? 409);
-    dismissed.push(answer);
+    (result.moved ? changed : dismissed).push(answer);
   }
 
-  if (!dismissed.length && !alreadyClear.length) {
+  if (!dismissed.length && !alreadyClear.length && !changed.length) {
     throw new DismissalError("NOTHING_TO_DISMISS", "the target names nothing that can need the operator");
   }
-  return { dismissed, alreadyClear, at, by, undo };
+  return { dismissed, alreadyClear, changed, at, by, undo };
 }
 
 /** Production ports, loaded on first use so this module stays free of the
@@ -493,6 +521,6 @@ async function productionDismissalPorts(): Promise<DismissalPorts> {
     task: (taskId) => loadTasks().find((task) => task.id === taskId) ?? null,
     pipelines: () => loadPipelinesForList(),
     pipeline: (pipelineId) => getPipeline(pipelineId) ?? null,
-    setPipelineDismissal: (pipelineId, dismiss, by) => setPipelineDismissal(pipelineId, dismiss, by),
+    setPipelineDismissal: (pipelineId, dismiss, by, drawnMovedAt) => setPipelineDismissal(pipelineId, dismiss, by, undefined, drawnMovedAt),
   };
 }

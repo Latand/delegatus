@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -172,6 +173,47 @@ test("a lane is stamped through the engine; one that asks nothing, or is already
   expect(h.lanes.get("parked")!.dismissedAt).toBeNull();
   const nothing = await dismissAttention({ kind: "pipeline", pipelineId: "running" }, OPERATOR, { ports: h.ports, undo: true });
   expect(nothing.alreadyClear).toEqual([{ kind: "pipeline", pipelineId: "running" }]);
+});
+
+test("a lane that moved after the card drew it is answered changed and keeps asking", async () => {
+  const drawn = lane("parked", "needs_decision");
+  const drawnAt = laneMovedAt(drawn);
+  /* It ran another round and parked again between the poll and the click. */
+  const reparked = lane("parked", "needs_decision", {
+    runs: [{ stageId: "build", attempts: [
+      { n: 1, state: "failed", startedAt: "2026-09-24T09:00:00.000Z", completedAt: "2026-09-24T09:30:00.000Z" },
+      { n: 2, state: "failed", startedAt: "2026-09-24T09:50:00.000Z", completedAt: "2026-09-24T09:59:00.000Z" },
+    ] }],
+  } as Partial<Pipeline>);
+  const h = harness({ lanes: [reparked, lane("still", "needs_review")] });
+  const outcome = await dismissAttention({
+    kind: "subjects",
+    subjects: [
+      { kind: "pipeline", pipelineId: "parked", laneMovedAt: drawnAt },
+      { kind: "pipeline", pipelineId: "still", laneMovedAt: laneMovedAt(lane("still", "needs_review")) },
+    ],
+  }, OPERATOR, { ports: h.ports });
+  expect(outcome.changed).toEqual([{ kind: "pipeline", pipelineId: "parked" }]);
+  expect(outcome.dismissed).toEqual([{ kind: "pipeline", pipelineId: "still" }]);
+  expect(h.writes.map((write) => write.pipelineId)).toEqual(["still"]);
+  expect(h.lanes.get("parked")!.dismissedAt).toBeUndefined();
+
+  /* The engine re-checks under its own lock: a lane that moves after the
+     service read it is answered the same way. */
+  const racing = harness({ lanes: [lane("parked", "needs_decision")] });
+  const write = racing.ports.setPipelineDismissal;
+  racing.ports.setPipelineDismissal = async (pipelineId, dismiss, by, drawnMovedAt) => {
+    racing.lanes.set(pipelineId, reparked);
+    return drawnMovedAt !== undefined && laneMovedAt(reparked) > (drawnMovedAt ?? Number.NEGATIVE_INFINITY)
+      ? { pipeline: reparked, moved: true }
+      : write(pipelineId, dismiss, by, drawnMovedAt);
+  };
+  const raced = await dismissAttention({ kind: "pipeline", pipelineId: "parked", laneMovedAt: drawnAt }, OPERATOR, { ports: racing.ports });
+  expect(raced).toMatchObject({ dismissed: [], changed: [{ kind: "pipeline", pipelineId: "parked" }] });
+
+  /* An agent names no drawn state: the lane is cleared as it stands. */
+  const agent = await dismissAttention({ kind: "pipeline", pipelineId: "parked" }, SEAT, { ports: h.ports });
+  expect(agent.dismissed).toEqual([{ kind: "pipeline", pipelineId: "parked" }]);
 });
 
 test("a task expands to the subjects its card drew, or to everything on it", async () => {

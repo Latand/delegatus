@@ -2392,6 +2392,7 @@ export const en = {
   "needs.undoAria": "Flag «{title}» again",
   "needs.dismissedReceipt": "Cleared «{title}»",
   "needs.dismissFailed": "Could not clear «{title}»: {error}",
+  "needs.changedReceipt": "«{title}» changed since you saw it, so it stays flagged",
   "needs.undoFailed": "Could not flag «{title}» again: {error}",
   /* A request_attention on the phone: a quiet notice, never a move (§6). */
   "notices.title": "From your agents",

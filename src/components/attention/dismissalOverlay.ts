@@ -2,11 +2,9 @@ import { useMemo, useSyncExternalStore } from "react";
 
 import type { AttentionDismissalMark, DismissalOutcome, DismissalSubject, DismissalSubjectRequest, DismissalTarget, DismissedBy } from "@/lib/attention/dismissalTypes";
 import { requestFilesRefresh } from "@/lib/filesEvents";
-import { laneMovedAt } from "@/lib/pipelines/laneMovement";
+import { laneMovedAt, laneMovedSince } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
-
-import { attentionReason } from "../attention";
 
 /*
  * The click's side of a dismissal (docs/design/needs-attention.md §5): the one
@@ -18,19 +16,18 @@ import { attentionReason } from "../attention";
  * count and the queue all stop flagging it in the same frame, and it is
  * replaced by the server's own instant when the request answers. The layer
  * retires once the poll carries that instant, or after a bound, whichever
- * comes first: past that the server is the answer.
+ * comes first: past that the server is the answer. It covers what the card
+ * drew and nothing newer: a conversation's mark names the reason on the card,
+ * and a lane that moved since the card drew it is not drawn over.
  */
 
 /** How long a layered dismissal outlives an answer the poll never reflected. */
 const OVERLAY_TTL_MS = 30_000;
 
 interface ConversationEntry {
-  /** The mark to draw, or null for an undo. */
+  /** The mark to draw, or null for an undo. It names the reason the card
+      drew, which is all it covers, whichever clock dated it. */
   mark: AttentionDismissalMark | null;
-  /** The mark carries this device's clock, not the server's: until the answer
-      replaces it, it covers the reason the card drew even when this clock runs
-      behind the one that dated the reason. */
-  local: boolean;
   /** When the layer stops being drawn whatever the poll says. */
   until: number;
 }
@@ -38,6 +35,11 @@ interface ConversationEntry {
 interface PipelineEntry {
   dismissedAt: string | null;
   dismissedBy: DismissedBy | null;
+  /** The movement the card drew the lane at, when it said. */
+  drawn: number | null | undefined;
+  /** The stamp is this device's clock, not the server's: until the answer
+      replaces it, it covers the movement the card drew even when this clock
+      runs behind the engine's. */
   local: boolean;
   until: number;
 }
@@ -74,11 +76,11 @@ export function layerDismissal(subjects: readonly DismissalSubjectRequest[], mar
   const until = nowMs + OVERLAY_TTL_MS;
   for (const subject of subjects) {
     if (subject.kind === "pipeline") {
-      pipelines.set(subject.pipelineId, { dismissedAt: mark?.at ?? null, dismissedBy: mark?.by ?? null, local, until });
+      pipelines.set(subject.pipelineId, { dismissedAt: mark?.at ?? null, dismissedBy: mark?.by ?? null, drawn: subject.laneMovedAt, local, until });
       continue;
     }
     const key = conversationKey(subject);
-    if (key) conversations.set(key, { mark: mark ? { ...mark, reasonId: subject.reasonId ?? null } : null, local, until });
+    if (key) conversations.set(key, { mark: mark ? { ...mark, reasonId: subject.reasonId ?? null } : null, until });
   }
   notify();
 }
@@ -121,14 +123,7 @@ export function overlayDismissals(
       if (!entry || sameMark(file.attentionDismissal, entry.mark)) return file;
       const next = { ...file };
       delete next.attentionDismissal;
-      if (entry.mark) {
-        /* A mark stamped here covers the reason the card drew, dated by
-           whichever clock dated it. */
-        const drawn = entry.local ? attentionReason(next, nowMs / 1000) : null;
-        next.attentionDismissal = drawn && drawn.id === entry.mark.reasonId
-          ? { ...entry.mark, at: atLeast(entry.mark.at, drawn.raisedAt * 1000) }
-          : entry.mark;
-      }
+      if (entry.mark) next.attentionDismissal = entry.mark;
       return next;
     })
     : [...files];
@@ -136,6 +131,8 @@ export function overlayDismissals(
     ? lanes.map((pipeline) => {
       const entry = pipelines.get(pipeline.id);
       if (!entry || (pipeline.dismissedAt ?? null) === entry.dismissedAt) return pipeline;
+      /* It parked again after the card drew it: that decision is new. */
+      if (entry.dismissedAt && laneMovedSince(pipeline, entry.drawn)) return pipeline;
       const dismissedAt = entry.dismissedAt && entry.local ? atLeast(entry.dismissedAt, laneMovedAt(pipeline)) : entry.dismissedAt;
       return { ...pipeline, dismissedAt, dismissedBy: entry.dismissedBy };
     })
@@ -160,7 +157,8 @@ export type DismissalRequestOutcome =
 /**
  * Clear (or bring back) what a card needs the operator for: one request to
  * `POST /api/attention/dismissals`, drawn at once and replaced by the server's
- * own record when it answers. A refusal takes the layer back off and says why.
+ * own record when it answers. A refusal takes the layer back off and says why,
+ * and so does a lane the server found `changed` since the card drew it.
  */
 export async function sendDismissal(
   target: DismissalTarget,
@@ -197,6 +195,9 @@ export async function sendDismissal(
     const touched = new Set(outcome.dismissed.map(subjectKey));
     layerDismissal(subjects.filter((subject) => touched.has(requestKey(subject)) || subject.kind === "conversation"), { at: outcome.at, by: outcome.by }, false);
   }
+  /* Nothing was stamped for them: they ask for what they wait on now. */
+  const moved = new Set((outcome.changed ?? []).map(subjectKey));
+  if (moved.size) unlayerDismissal(subjects.filter((subject) => moved.has(requestKey(subject))));
   requestFilesRefresh();
   return { ok: true, outcome };
 }

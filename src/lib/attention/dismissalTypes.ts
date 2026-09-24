@@ -26,9 +26,10 @@ export interface AttentionDismissalMark {
   /** Server clock, ISO. */
   at: string;
   by: DismissedBy;
-  /** The reason on screen when it was cleared, when the surface said. It is
-      what an undated reason is compared by, so an unreadable clock never hides
-      a new signal. */
+  /** The reason on screen when it was cleared, when the surface said. A mark
+      that names one covers that reason and nothing else, so a card drawn
+      before a new signal arrived cannot clear it. A mark without one (an
+      agent's call) covers what started at or before `at`. */
   reasonId?: string | null;
 }
 
@@ -41,23 +42,28 @@ export type DismissalSubject =
     drew, when the caller names them, and otherwise to everything on it. */
 export type DismissalTarget =
   | { kind: "conversation"; conversationId?: string; path?: string; reasonId?: string | null }
-  | { kind: "pipeline"; pipelineId: string }
+  | { kind: "pipeline"; pipelineId: string; laneMovedAt?: number | null }
   | { kind: "task"; taskId: string; subjects?: DismissalSubjectRequest[] }
   /** A card no task owns: the subjects it drew, and nothing else. The
       operator's route takes it; the MCP tool names one of the three above. */
   | { kind: "subjects"; subjects: DismissalSubjectRequest[] };
 
 /** A subject named by a card: the member conversation (by id or path) with
-    the reason the card drew for it, or a lane. */
+    the reason the card drew for it, or a lane with the movement the card drew
+    it at (`laneMovedAt`, epoch ms, null for a lane that never ran a round).
+    A lane that moved since is not cleared. */
 export type DismissalSubjectRequest =
   | { kind: "conversation"; conversationId?: string; path?: string; reasonId?: string | null; reason?: ConversationReasonKind | null }
-  | { kind: "pipeline"; pipelineId: string };
+  | { kind: "pipeline"; pipelineId: string; laneMovedAt?: number | null };
 
 export interface DismissalOutcome {
   dismissed: DismissalSubject[];
   /** Subjects with nothing to clear: a lane that asks nothing, or one already
       cleared for the decision it waits on. Not an error. */
   alreadyClear: DismissalSubject[];
+  /** Lanes that moved after the surface drew them: nothing was stamped, and
+      they ask for what they wait on now. Not an error. */
+  changed: DismissalSubject[];
   at: string;
   by: DismissedBy;
   undo: boolean;
