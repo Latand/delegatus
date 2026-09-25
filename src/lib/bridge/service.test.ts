@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { setBridgeReports } from "@/lib/projects/settings";
 import { rememberAcknowledgedVoiceDelivery } from "@/lib/runtime/voiceDelivery";
 import type { FileEntry } from "@/lib/types";
 
@@ -505,4 +506,27 @@ test("canonicalizing does not widen the fence: another seat's directive still se
   const progress = recordManagerReport({ key: "lane-9-progress", class: "status", at: NOW.toISOString(), body: "moving" });
   recordBridgeDirectiveAnswer(progress!.seq, { project: SCOPE.project, seatConversationId: MIGRATED_SEAT }, afterRekey);
   expect(readBridgeReportLog().answeredRefs).toEqual([]);
+});
+
+/* #2146: the project's Bridge reports switch off silences the relay for that
+   project, both while a call is live and at a turn's start, and moves no
+   cursor; switched back on, the reports it still holds arrive as before. */
+test("the voice relay delivers nothing for a project whose bridge reports are off", () => {
+  sandbox();
+  recordManagerReport({ key: "held", class: "completed", at: NOW.toISOString(), body: "merged #12" });
+  expect(setBridgeReports(SCOPE.project, false, "operator")?.enabled).toBe(false);
+
+  expect(pendingBridgeDelivery({ rootIdentity, now: NOW, lastBatchAt: null, scope: SCOPE })).toEqual({ kind: "idle" });
+  expect(bridgeTurnStartPrelude({ rootIdentity, now: NOW, scope: SCOPE })).toBeNull();
+  expect(readBridgeChannel(SCOPE)).toBeNull();
+
+  /* Another project keeps its relay. */
+  const other = { project: "repo-project-b", seatConversationId: "conversation_manager_b" };
+  recordBridgeReport({ key: "other", class: "status", at: NOW.toISOString(), body: "b", project: other.project, targetSeatConversationId: other.seatConversationId });
+  expect(pendingBridgeDelivery({ rootIdentity, now: NOW, lastBatchAt: null, scope: other }).kind).toBe("deliver");
+
+  setBridgeReports(SCOPE.project, true, "operator");
+  const resumed = pendingBridgeDelivery({ rootIdentity, now: NOW, lastBatchAt: null, scope: SCOPE });
+  if (resumed.kind !== "deliver") throw new Error("expected a delivery once reports are back on");
+  expect(resumed.delivery.responses[0]!.text).toContain("merged #12");
 });

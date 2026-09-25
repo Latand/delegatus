@@ -777,6 +777,7 @@
 .kb .seat-head .icon-btn.seat-dock { width: 28px; height: 28px; border-radius: var(--radius-control); color: var(--color-muted); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .kb .seat-head .icon-btn.seat-dock:hover { background: var(--surface-well); color: var(--color-primary); }
 .kb .seat-head .icon-btn.seat-dock svg { width: 15px; height: 15px; }
+.kb .seat-head .icon-btn.seat-reports[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
 /* Collapsed on top: one 40 px strip. */
 .kb .seat.folded .seat-head { min-height: 40px; padding-top: 5px; padding-bottom: 5px; }
 /* Folded on top with nothing for the operator (no answer owed, no failure, no

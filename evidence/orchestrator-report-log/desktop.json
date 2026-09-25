@@ -1,0 +1,365 @@
+{
+  "readings": {
+    "1440-en-light": {
+      "reading": {
+        "layout": "beside",
+        "beside": true,
+        "width": 352,
+        "entries": 30,
+        "classes": [
+          "completed",
+          "review_verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "labels": [
+          "completed",
+          "review verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "fresh": [
+          "1242",
+          "1240",
+          "1239"
+        ],
+        "github": 14,
+        "cards": 9,
+        "older": true,
+        "sideways": 0,
+        "cut": [],
+        "extra": [],
+        "off": null,
+        "offSwitch": null,
+        "empty": null
+      },
+      "older": {
+        "entries": 46
+      },
+      "menu": {
+        "on": {
+          "state": "on",
+          "checked": "true",
+          "label": "Bridge reports",
+          "hint": "The orchestrator logs what it did; the voice relay reads it out.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true
+        },
+        "off": {
+          "state": "off",
+          "checked": "false",
+          "label": "Bridge reports",
+          "hint": "The orchestrator files no reports; the voice relay stays silent.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true
+        }
+      },
+      "offLog": {
+        "layout": "beside",
+        "beside": true,
+        "width": 352,
+        "entries": 0,
+        "classes": [],
+        "labels": [],
+        "fresh": [],
+        "github": 0,
+        "cards": 0,
+        "older": false,
+        "sideways": 0,
+        "cut": [],
+        "extra": [],
+        "off": "Bridge reports are off",
+        "offSwitch": "false",
+        "empty": null
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "bridgeReports": false
+        }
+      ]
+    },
+    "1440-en-dark": {
+      "reading": {
+        "layout": "beside",
+        "beside": true,
+        "width": 352,
+        "entries": 30,
+        "classes": [
+          "completed",
+          "review_verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "labels": [
+          "completed",
+          "review verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "fresh": [
+          "1242",
+          "1240",
+          "1239"
+        ],
+        "github": 14,
+        "cards": 9,
+        "older": true,
+        "sideways": 0,
+        "cut": [],
+        "extra": [],
+        "off": null,
+        "offSwitch": null,
+        "empty": null
+      },
+      "older": {
+        "entries": 46
+      },
+      "menu": {
+        "on": {
+          "state": "on",
+          "checked": "true",
+          "label": "Bridge reports",
+          "hint": "The orchestrator logs what it did; the voice relay reads it out.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true
+        },
+        "off": {
+          "state": "off",
+          "checked": "false",
+          "label": "Bridge reports",
+          "hint": "The orchestrator files no reports; the voice relay stays silent.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true
+        }
+      },
+      "offLog": {
+        "layout": "beside",
+        "beside": true,
+        "width": 352,
+        "entries": 0,
+        "classes": [],
+        "labels": [],
+        "fresh": [],
+        "github": 0,
+        "cards": 0,
+        "older": false,
+        "sideways": 0,
+        "cut": [],
+        "extra": [],
+        "off": "Bridge reports are off",
+        "offSwitch": "false",
+        "empty": null
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "bridgeReports": false
+        }
+      ]
+    },
+    "1440-uk-light": {
+      "reading": {
+        "layout": "beside",
+        "beside": true,
+        "width": 352,
+        "entries": 30,
+        "classes": [
+          "completed",
+          "review_verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "labels": [
+          "завершено",
+          "вердикт ревʼю",
+          "питання",
+          "заблоковано",
+          "помилка",
+          "статус"
+        ],
+        "fresh": [
+          "1242",
+          "1240",
+          "1239"
+        ],
+        "github": 14,
+        "cards": 9,
+        "older": true,
+        "sideways": 0,
+        "cut": [],
+        "extra": [],
+        "off": null,
+        "offSwitch": null,
+        "empty": null
+      },
+      "older": {
+        "entries": 46
+      },
+      "menu": {
+        "on": {
+          "state": "on",
+          "checked": "true",
+          "label": "Звіти оркестратора",
+          "hint": "Оркестратор записує, що зробив; голосовий канал це озвучує.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true
+        },
+        "off": {
+          "state": "off",
+          "checked": "false",
+          "label": "Звіти оркестратора",
+          "hint": "Оркестратор не пише звітів; голосовий канал мовчить.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true
+        }
+      },
+      "offLog": {
+        "layout": "beside",
+        "beside": true,
+        "width": 352,
+        "entries": 0,
+        "classes": [],
+        "labels": [],
+        "fresh": [],
+        "github": 0,
+        "cards": 0,
+        "older": false,
+        "sideways": 0,
+        "cut": [],
+        "extra": [],
+        "off": "Звіти оркестратора вимкнено",
+        "offSwitch": "false",
+        "empty": null
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "bridgeReports": false
+        }
+      ]
+    },
+    "1440-uk-dark": {
+      "reading": {
+        "layout": "beside",
+        "beside": true,
+        "width": 352,
+        "entries": 30,
+        "classes": [
+          "completed",
+          "review_verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "labels": [
+          "завершено",
+          "вердикт ревʼю",
+          "питання",
+          "заблоковано",
+          "помилка",
+          "статус"
+        ],
+        "fresh": [
+          "1242",
+          "1240",
+          "1239"
+        ],
+        "github": 14,
+        "cards": 9,
+        "older": true,
+        "sideways": 0,
+        "cut": [],
+        "extra": [],
+        "off": null,
+        "offSwitch": null,
+        "empty": null
+      },
+      "older": {
+        "entries": 46
+      },
+      "menu": {
+        "on": {
+          "state": "on",
+          "checked": "true",
+          "label": "Звіти оркестратора",
+          "hint": "Оркестратор записує, що зробив; голосовий канал це озвучує.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true
+        },
+        "off": {
+          "state": "off",
+          "checked": "false",
+          "label": "Звіти оркестратора",
+          "hint": "Оркестратор не пише звітів; голосовий канал мовчить.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true
+        }
+      },
+      "offLog": {
+        "layout": "beside",
+        "beside": true,
+        "width": 352,
+        "entries": 0,
+        "classes": [],
+        "labels": [],
+        "fresh": [],
+        "github": 0,
+        "cards": 0,
+        "older": false,
+        "sideways": 0,
+        "cut": [],
+        "extra": [],
+        "off": "Звіти оркестратора вимкнено",
+        "offSwitch": "false",
+        "empty": null
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "bridgeReports": false
+        }
+      ]
+    },
+    "empty": {
+      "layout": "beside",
+      "beside": true,
+      "width": 352,
+      "entries": 0,
+      "classes": [],
+      "labels": [],
+      "fresh": [],
+      "github": 0,
+      "cards": 0,
+      "older": false,
+      "sideways": 0,
+      "cut": [],
+      "extra": [
+        "p"
+      ],
+      "off": null,
+      "offSwitch": null,
+      "empty": "The orchestrator has not reported anything yet."
+    }
+  },
+  "failures": []
+}

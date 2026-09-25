@@ -149,7 +149,7 @@ import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
-import { mergeOnReviewEnabled } from "@/lib/projects/settings";
+import { bridgeReportsEnabled, mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -2571,6 +2571,11 @@ function bridgeReport(args: McpToolArgs, dependencies: ViewerMcpDomainDependenci
 
   const origin = attributionOf(dependencies);
   const project = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
+  /* #2146: the operator turned this project's reports off. An answer, not an
+     error: the caller did nothing wrong, and nothing is stored. */
+  if (project && !bridgeReportsEnabled(project)) {
+    return { recorded: false, replayed: false, bridgeReports: false, message: "bridge reports are off for this project" };
+  }
   const seats = dependencies.authorizedSeats?.()
     ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const targetSeat = project
@@ -2825,6 +2830,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const base = full ? {
     project,
     mergeOnReview: mergeOnReviewEnabled(project),
+    bridgeReports: bridgeReportsEnabled(project),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: pending,
     /* Terminalized pending intents (#878), oldest first: what was attempted
@@ -2845,6 +2851,8 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     project,
     /* #2187 §4.1: whether finished lanes here merge on their own. */
     mergeOnReview: mergeOnReviewEnabled(project),
+    /* #2146: whether this project's bridge reports are on; off, file none. */
+    bridgeReports: bridgeReportsEnabled(project),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: compactOrchestratorSeat(pending),
     intentHistoryCount: history.length,
@@ -3449,19 +3457,26 @@ function compactPullRequest(pipeline: Pipeline): { pr?: string } {
   return pr ? { pr } : {};
 }
 
-/** The compact row says it only when there is something to say: the setting
-    when it is on, and the lane's merge when the runner took it. */
-function compactMergeFields(pipeline: Pipeline): { mergeOnReview?: true; merge?: ReturnType<typeof mergeFields>["merge"] } {
-  const { mergeOnReview, merge } = mergeFields(pipeline);
-  return { ...(mergeOnReview ? { mergeOnReview: true as const } : {}), ...(merge ? { merge } : {}) };
+/** The compact row says it only when there is something to say: each setting
+    when it is away from its default, and the lane's merge when the runner
+    took it. */
+function compactMergeFields(pipeline: Pipeline): { mergeOnReview?: true; bridgeReports?: false; merge?: ReturnType<typeof mergeFields>["merge"] } {
+  const { mergeOnReview, bridgeReports, merge } = mergeFields(pipeline);
+  return {
+    ...(mergeOnReview ? { mergeOnReview: true as const } : {}),
+    ...(bridgeReports ? {} : { bridgeReports: false as const }),
+    ...(merge ? { merge } : {}),
+  };
 }
 
 /** #2187 §4.1: whether the lane's project merges when the review passes, and
-    where the lane's own merge stands when the runner took it. */
-function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number } } {
+    where the lane's own merge stands when the runner took it. #2146: whether
+    the project's bridge reports are on. */
+function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number } } {
   const merge = pipeline.merge;
   return {
     mergeOnReview: mergeOnReviewEnabled(pipeline.project),
+    bridgeReports: bridgeReportsEnabled(pipeline.project),
     ...(merge ? { merge: { state: merge.state, reason: merge.reason, by: merge.by, pr: merge.prNumber } } : {}),
   };
 }
@@ -3643,7 +3658,7 @@ async function listPipelines(
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (pipeline: Pipeline) => {
-    if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline), mergeOnReview: mergeOnReviewEnabled(pipeline.project) };
+    if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline), mergeOnReview: mergeOnReviewEnabled(pipeline.project), bridgeReports: bridgeReportsEnabled(pipeline.project) };
     if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline), ...mergeFields(pipeline) };
     return { ...pipelineCompactRow(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };

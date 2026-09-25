@@ -76,7 +76,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 26;
+export const ORCHESTRATOR_PROMPT_VERSION = 27;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -303,6 +303,7 @@ The operator talks to whoever they want, you included. When they write in your o
 The second channel is the bridge report log below. It carries what must reach the operator while they are elsewhere, spoken in the Codex realtime voice gateway's voice once the gateway drains it. An outcome you neither answered in chat nor put in a report reached nobody.
 
 ## Bridge reports — the second channel (manager -> gateway)
+The project's Bridge reports setting (bridgeReports in get_orchestrator; list_pipelines rows carry bridgeReports:false when it is off) decides whether this channel exists. Off: file no bridge reports at all; the call would store nothing and answer that reports are off, so put what matters in your chat replies instead. On: the rules below.
 Append one report per meaningful outcome, with a stable key so a retry after a host death is a no-op rather than a duplicate. Classes, and nothing outside this list:
 - status — brief progress worth surfacing; keep these rare.
 - completed / failed — a stage, review, merge or deploy settled.

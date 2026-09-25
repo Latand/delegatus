@@ -72,8 +72,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 26, and a v25 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(26);
+test("the default mandate is at version 27, and a v26 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(27);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -88,9 +88,11 @@ test("the default mandate is at version 26, and a v25 seat reads as stale", () =
      stop-after-fix is the explicit stop, and that new review-loop stages are
      stored as a reviewer and a fix stage. v26 (#2187, D1 = A) puts every
      automatic merge, the seat's too, under the project's merge setting and
-     says when to mark the lane that finishes a task. */
-  expect(orchestratorMandateStale(25)).toBe(true);
-  expect(orchestratorMandateStale(26)).toBe(false);
+     says when to mark the lane that finishes a task. v27 (#2146) says to file
+     no bridge reports while the project's Bridge reports setting is off. */
+  expect(orchestratorMandateStale(26)).toBe(true);
+  expect(orchestratorMandateStale(27)).toBe(false);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Off: file no bridge reports at all");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('onExhausted?: "advance" | "stop-after-fix" | "park"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Use stop-after-fix only when the operator asked to look before merge");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("review-loop stages are converted to a reviewer and a fix stage when you create or add them");
@@ -118,6 +120,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   24: "3053cebbd39a69790a168102612399f4bb971b95893b1c001cf41197c9452109",
   25: "36b7de5003aead298b5bd6294aec840139503042f01260c3e797e89c512ed4d2",
   26: "4da3e6ed8d2f92540fc4fb1bcab2373a7173ca673736250ee235d8219b19b547",
+  27: "1135c1274c1dc36fcc1f595035837e13f0913a818ed7d59ce1db79791de01a37",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,

@@ -3543,3 +3543,178 @@ browserTest("#2187: a pipeline that finishes its task says so on the phone at 39
   fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * #2146 — the orchestrator's report log on the phone at 390 × 844, en and uk,
+ * dark and light: one tap from the seat's conversation (the bar's report log
+ * button, 44 px) opens its own screen — this project's bridge reports, newest
+ * first, each a local time, a class word and the body as written, links on
+ * `#123` and the board's card ids, «new» on what arrived since the last look,
+ * and «Show older» under the page. The ⋯ sheet carries "Bridge reports" on and
+ * then off by its own 44 px switch, and off, the screen is one line with the
+ * switch. No sideways overflow, no text over text or a control.
+ *
+ *   REPORT_LOG_PNG_DIR=… LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2146"
+ */
+browserTest("#2146: the seat's report log is one tap from its conversation on the phone at 390, en and uk, and the ⋯ sheet switches it off", async () => {
+  const out = path.resolve(process.env.REPORT_LOG_PNG_DIR ?? ".artifacts/report-log");
+  const evidence = path.resolve("evidence/orchestrator-report-log");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const readLog = (page: Page) => page.evaluate(() => {
+    const log = document.querySelector("[data-report-log]");
+    const scroller = log?.querySelector(".overflow-y-auto") as HTMLElement | null;
+    const rows = [...(log?.querySelectorAll("[data-report-entry]") ?? [])];
+    const older = log?.querySelector<HTMLElement>("[data-report-log-older]") ?? null;
+    /* The ink of every text on screen in the log, to find text over text. */
+    const ink: Array<{ text: string; el: Element; r: { l: number; t: number; r: number; b: number } }> = [];
+    if (log) {
+      const walker = document.createTreeWalker(log, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue?.trim() || !node.parentElement) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width * rect.height < 1 || rect.bottom < 0 || rect.top > innerHeight) continue;
+          ink.push({ text: node.nodeValue.trim().slice(0, 30), el: node.parentElement, r: { l: rect.left, t: rect.top, r: rect.right, b: rect.bottom } });
+        }
+      }
+    }
+    const overlaps: string[] = [];
+    for (let i = 0; i < ink.length; i++) {
+      for (let j = i + 1; j < ink.length; j++) {
+        const a = ink[i]!;
+        const b = ink[j]!;
+        if (a.el === b.el) continue;
+        const area = Math.max(0, Math.min(a.r.r, b.r.r) - Math.max(a.r.l, b.r.l)) * Math.max(0, Math.min(a.r.b, b.r.b) - Math.max(a.r.t, b.r.t));
+        if (area > 1) overlaps.push(`${a.text} | ${b.text}`);
+      }
+    }
+    return {
+      pageSideways: document.documentElement.scrollWidth - innerWidth,
+      overlaps: overlaps.slice(0, 6),
+      screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen") ?? null,
+      entries: rows.length,
+      classes: [...new Set(rows.map((row) => row.getAttribute("data-report-class")))],
+      fresh: rows.filter((row) => row.hasAttribute("data-report-new")).length,
+      github: log?.querySelectorAll("[data-report-link=github]").length ?? 0,
+      cards: log?.querySelectorAll("[data-report-link=card]").length ?? 0,
+      olderHeight: older ? Math.round(older.getBoundingClientRect().height) : null,
+      sideways: scroller ? scroller.scrollWidth - scroller.clientWidth : 0,
+      off: log?.querySelector("[data-report-log-off] p")?.textContent ?? null,
+      offSwitch: log?.querySelector("[data-report-log-off] [data-bridge-reports-switch]")?.getAttribute("aria-checked") ?? null,
+    };
+  });
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      for (const scheme of ["dark", "light"] as const) {
+        const t = (name: string, params?: Record<string, string | number>) => translate(lang, name as never, params);
+        const key = `390-${lang}-${scheme}`;
+        const fail = (text: string) => failures.push(`${key}: ${text}`);
+        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${fixtureBase}/?kanban=1#p=atlas`);
+          await page.waitForSelector("[data-mobile2-seat-open]", { timeout: 20_000 });
+          await pause(page, 600);
+          await page.locator("[data-mobile2-seat-open]").click();
+          await page.waitForSelector('[data-mobile2-open="reports"]', { timeout: 10_000 });
+          await pause(page, 600);
+          await page.screenshot({ path: path.join(out, `phone-chat-${key}.png`) });
+          const button = await rectOf(page, '[data-mobile2-open="reports"]');
+          if (!button || button.width < 44 || button.height < 44) fail(`the report log button is ${JSON.stringify(button)}`);
+          /* One tap opens it; the operator last looked three reports ago. */
+          await page.locator('[data-mobile2-open="reports"]').click();
+          await page.waitForSelector("[data-report-log] [data-report-entry]", { timeout: 10_000 });
+          const third = await page.evaluate(() => [...document.querySelectorAll("[data-report-entry]")][3]!.getAttribute("data-report-entry"));
+          await page.locator("[data-mobile2-back]").first().click();
+          await page.waitForSelector('[data-mobile2-open="reports"]', { timeout: 10_000 });
+          await page.evaluate((seq) => localStorage.setItem("llvReportLogSeen:atlas", String(seq)), third);
+          await page.locator('[data-mobile2-open="reports"]').click();
+          await page.waitForSelector("[data-report-log] [data-report-entry]", { timeout: 10_000 });
+          await page.mouse.move(0, 0);
+          await pause(page, 500);
+          await page.screenshot({ path: path.join(out, `phone-log-${key}.png`) });
+          const log = await readLog(page);
+          if (log.screen !== "reports") fail(`screen ${log.screen}`);
+          if (log.entries !== 30 || log.classes.length !== 6) fail(`entries ${log.entries}, classes ${log.classes.join(",")}`);
+          if (log.fresh !== 3) fail(`${log.fresh} new marks`);
+          if (!log.github || !log.cards) fail(`links: ${log.github} GitHub, ${log.cards} cards`);
+          if (log.sideways > 0 || log.pageSideways > 0) fail(`overflows sideways: log ${log.sideways}, page ${log.pageSideways}`);
+          if (log.overlaps.length) fail(`text over text: ${JSON.stringify(log.overlaps)}`);
+          await page.evaluate(() => {
+            const scroller = document.querySelector("[data-report-log] .overflow-y-auto")!;
+            scroller.scrollTop = scroller.scrollHeight;
+          });
+          await pause(page, 300);
+          await page.screenshot({ path: path.join(out, `phone-log-end-${key}.png`) });
+          const end = await readLog(page);
+          if ((end.olderHeight ?? 0) < 44) fail(`Show older is ${end.olderHeight}px tall`);
+
+          /* The ⋯ sheet: Bridge reports on, then off by its own switch. */
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"] [data-bridge-reports]', { timeout: 10_000 });
+          await page.waitForFunction(() => [...document.querySelectorAll('[data-mobile2-sheet="menu"] [role=switch]')].every((toggle) => !toggle.hasAttribute("disabled")), undefined, { timeout: 10_000 });
+          await page.locator('[data-mobile2-sheet="menu"] [data-bridge-reports]').scrollIntoViewIfNeeded();
+          await pause(page, 500);
+          await page.screenshot({ path: path.join(out, `phone-menu-${key}-on.png`) });
+          const readRow = () => page.evaluate(() => {
+            const element = document.querySelector('[data-mobile2-sheet="menu"] [data-bridge-reports]')!;
+            const toggle = element.querySelector<HTMLElement>("[data-bridge-reports-switch]")!;
+            const name = element.querySelector("span.flex-1")!;
+            const a = name.getBoundingClientRect();
+            const b = toggle.getBoundingClientRect();
+            return {
+              state: element.getAttribute("data-bridge-reports"),
+              label: name.textContent?.trim() ?? "",
+              hint: element.querySelector('[role="status"]')?.textContent?.trim() ?? "",
+              switchSize: [Math.round(b.width), Math.round(b.height)],
+              labelMeetsSwitch: Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5,
+              inside: b.right <= window.innerWidth && a.left >= 0,
+            };
+          });
+          const on = await readRow();
+          await page.locator('[data-mobile2-sheet="menu"] [data-bridge-reports-switch]').click();
+          await page.waitForFunction(() => document.querySelector('[data-mobile2-sheet="menu"] [data-bridge-reports]')?.getAttribute("data-bridge-reports") === "off", undefined, { timeout: 10_000 });
+          await pause(page, 400);
+          await page.screenshot({ path: path.join(out, `phone-menu-${key}-off.png`) });
+          const off = await readRow();
+          if (on.state !== "on" || on.label !== t("projectSettings.bridgeReports") || on.hint !== t("projectSettings.bridgeReports.on")) fail(`on ${JSON.stringify(on)}`);
+          if (off.state !== "off" || off.hint !== t("projectSettings.bridgeReports.off")) fail(`off ${JSON.stringify(off)}`);
+          for (const entry of [on, off]) {
+            if (entry.switchSize[0]! < 44 || entry.switchSize[1]! < 44) fail(`switch under 44 px: ${entry.switchSize.join("×")}`);
+            if (entry.labelMeetsSwitch || !entry.inside) fail(`geometry ${JSON.stringify(entry)}`);
+          }
+          await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-close]').click();
+          await page.waitForFunction(() => !document.querySelector('[data-mobile2-sheet="menu"]'), undefined, { timeout: 10_000 });
+          await page.waitForSelector("[data-report-log-off]", { timeout: 10_000 });
+          await pause(page, 400);
+          await page.screenshot({ path: path.join(out, `phone-log-off-${key}.png`) });
+          const offLog = await readLog(page);
+          if (offLog.off !== t("reportLog.off") || offLog.offSwitch !== "false" || offLog.entries !== 0) fail(`off screen ${JSON.stringify(offLog)}`);
+          const offSwitch = await rectOf(page, "[data-report-log-off] [data-bridge-reports-switch]");
+          if (!offSwitch || offSwitch.height < 44) fail(`the off screen's switch is ${JSON.stringify(offSwitch)}`);
+          results.push({ key, button, log, end: { olderHeight: end.olderHeight }, menu: { on, off }, offLog });
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          await page.close();
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

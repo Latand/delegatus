@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
@@ -25,9 +27,12 @@ const noop = () => undefined;
  * conversation also has a card on the board behind the panel, and the one
  * hoisted composer must render HERE while both are on screen.
  */
-export function OrchestratorConversation({ file, projectName, hostControls = true }: {
+export function OrchestratorConversation({ file, projectName, hostControls = true, transcriptSlot }: {
   file: FileEntry;
   projectName: string;
+  /** Drawn in the transcript's place with the composer kept under it: the
+      report log, where the panel is too narrow to hold it beside (#2146). */
+  transcriptSlot?: ReactNode;
   /** False where the surface's own header carries the host control (the
       kanban seat, #1695), so it is not a second row here. */
   hostControls?: boolean;
@@ -40,18 +45,20 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-orchestrator-conversation={file.conversationId ?? file.path}>
       {deadHost ? <DeadHostBanner file={file} /> : null}
-      <ToolDisclosurePolicy value="collapsed">
-        <LogFeed
-          file={file}
-          showSvc={false}
-          lineFilter=""
-          onStatus={noop}
-          paused={false}
-          follow
-          setFollow={noop}
-          compact
-        />
-      </ToolDisclosurePolicy>
+      {transcriptSlot ?? (
+        <ToolDisclosurePolicy value="collapsed">
+          <LogFeed
+            file={file}
+            showSvc={false}
+            lineFilter=""
+            onStatus={noop}
+            paused={false}
+            follow
+            setFollow={noop}
+            compact
+          />
+        </ToolDisclosurePolicy>
+      )}
       {hostControls ? <ProcessStatusControls file={file} hideChip /> : null}
       <AgentControlStrip file={file} />
       <TmuxComposer
