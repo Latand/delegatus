@@ -13,12 +13,12 @@ import {
   SEAT_TOP_MIN_WIDTH, useKanbanSeat,
 } from "./kanbanSeatStore";
 
-/** The board's room for the seat on top: its container less the 20 px margins. */
+/** The board's room for the seat on top: its container less the board's edge on each side (`--kb-edge`). */
 function seatRoom(section: HTMLElement | null): number {
   const parent = section?.parentElement;
   if (!parent) return Number.POSITIVE_INFINITY;
   const style = parent.ownerDocument.defaultView?.getComputedStyle(parent);
-  return parent.clientWidth - (parseFloat(style?.paddingLeft ?? "") || 0) - (parseFloat(style?.paddingRight ?? "") || 0) - 40;
+  return parent.clientWidth - (parseFloat(style?.paddingLeft ?? "") || 0) - (parseFloat(style?.paddingRight ?? "") || 0) - 2 * (parseFloat(style?.getPropertyValue("--kb-edge") ?? "") || 20);
 }
 
 /**

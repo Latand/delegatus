@@ -1,0 +1,593 @@
+{
+  "readings": {
+    "1440x900-1-en": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        }
+      ],
+      "rail": {
+        "x": 264,
+        "y": 154,
+        "width": 184,
+        "height": 107
+      },
+      "overlaps": [],
+      "head": "1 agent open",
+      "pageErrors": []
+    },
+    "1440x900-3-en": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_rounds-review",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review",
+          "card": "Rework the retry banner until review passes",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_upload-plan",
+          "role": "architect",
+          "readerRole": "architect",
+          "name": "Plan",
+          "card": "Redesign attachment upload for large files",
+          "dot": "idle"
+        }
+      ],
+      "rail": {
+        "x": 264,
+        "y": 154,
+        "width": 184,
+        "height": 194
+      },
+      "overlaps": [],
+      "head": "3 agents open",
+      "pageErrors": []
+    },
+    "1440x900-7-en": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_rounds-review",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review",
+          "card": "Rework the retry banner until review passes",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_upload-plan",
+          "role": "architect",
+          "readerRole": "architect",
+          "name": "Plan",
+          "card": "Redesign attachment upload for large files",
+          "dot": "idle"
+        },
+        {
+          "key": "conversation_upload-ui",
+          "role": "builder",
+          "readerRole": "builder",
+          "name": "Build ui",
+          "card": "Redesign attachment upload for large files",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_export-impl",
+          "role": "neutral",
+          "readerRole": "neutral",
+          "name": "Implementer: simplify the export settings",
+          "card": "Simplify the export settings sheet",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_links-impl",
+          "role": "builder",
+          "readerRole": "builder",
+          "name": "Implement",
+          "card": "Repair old links in the release notes",
+          "dot": "idle"
+        },
+        {
+          "key": "conversation_search-rev",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "idle"
+        }
+      ],
+      "rail": {
+        "x": 264,
+        "y": 154,
+        "width": 184,
+        "height": 367
+      },
+      "overlaps": [],
+      "head": "7 agents open",
+      "pageErrors": [],
+      "jumped": {
+        "key": "conversation_search-rev",
+        "headInWindow": true
+      },
+      "cycled": {
+        "key": "conversation_search-ver-2",
+        "headInWindow": true
+      }
+    },
+    "1920x1080-1-en": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        }
+      ],
+      "rail": {
+        "x": 268,
+        "y": 114,
+        "width": 180,
+        "height": 107
+      },
+      "overlaps": [],
+      "head": "1 agent open",
+      "pageErrors": []
+    },
+    "1920x1080-3-en": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_rounds-review",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review",
+          "card": "Rework the retry banner until review passes",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_upload-plan",
+          "role": "architect",
+          "readerRole": "architect",
+          "name": "Plan",
+          "card": "Redesign attachment upload for large files",
+          "dot": "idle"
+        }
+      ],
+      "rail": {
+        "x": 268,
+        "y": 114,
+        "width": 180,
+        "height": 194
+      },
+      "overlaps": [],
+      "head": "3 agents open",
+      "pageErrors": []
+    },
+    "1920x1080-7-en": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_rounds-review",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review",
+          "card": "Rework the retry banner until review passes",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_upload-plan",
+          "role": "architect",
+          "readerRole": "architect",
+          "name": "Plan",
+          "card": "Redesign attachment upload for large files",
+          "dot": "idle"
+        },
+        {
+          "key": "conversation_upload-ui",
+          "role": "builder",
+          "readerRole": "builder",
+          "name": "Build ui",
+          "card": "Redesign attachment upload for large files",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_export-impl",
+          "role": "neutral",
+          "readerRole": "neutral",
+          "name": "Implementer: simplify the export settings",
+          "card": "Simplify the export settings sheet",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_links-impl",
+          "role": "builder",
+          "readerRole": "builder",
+          "name": "Implement",
+          "card": "Repair old links in the release notes",
+          "dot": "idle"
+        },
+        {
+          "key": "conversation_search-rev",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "idle"
+        }
+      ],
+      "rail": {
+        "x": 268,
+        "y": 114,
+        "width": 180,
+        "height": 367
+      },
+      "overlaps": [],
+      "head": "7 agents open",
+      "pageErrors": [],
+      "jumped": {
+        "key": "conversation_search-rev",
+        "headInWindow": true
+      },
+      "cycled": {
+        "key": "conversation_search-ver-2",
+        "headInWindow": true
+      }
+    },
+    "1600x900-7-en": {
+      "tier": "compact",
+      "segments": [],
+      "rail": {
+        "x": 268,
+        "y": 114,
+        "width": 36,
+        "height": 36
+      },
+      "overlaps": [],
+      "head": "7",
+      "listed": 7,
+      "jumped": {
+        "key": "conversation_upload-ui",
+        "headInWindow": true
+      },
+      "pageErrors": []
+    },
+    "1440x900-1-uk": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        }
+      ],
+      "rail": {
+        "x": 264,
+        "y": 154,
+        "width": 184,
+        "height": 107
+      },
+      "overlaps": [],
+      "head": "1 агент відкритий",
+      "pageErrors": []
+    },
+    "1440x900-3-uk": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_rounds-review",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review",
+          "card": "Rework the retry banner until review passes",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_upload-plan",
+          "role": "architect",
+          "readerRole": "architect",
+          "name": "Plan",
+          "card": "Redesign attachment upload for large files",
+          "dot": "idle"
+        }
+      ],
+      "rail": {
+        "x": 264,
+        "y": 154,
+        "width": 184,
+        "height": 194
+      },
+      "overlaps": [],
+      "head": "3 агенти відкриті",
+      "pageErrors": []
+    },
+    "1440x900-7-uk": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_rounds-review",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review",
+          "card": "Rework the retry banner until review passes",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_upload-plan",
+          "role": "architect",
+          "readerRole": "architect",
+          "name": "Plan",
+          "card": "Redesign attachment upload for large files",
+          "dot": "idle"
+        },
+        {
+          "key": "conversation_upload-ui",
+          "role": "builder",
+          "readerRole": "builder",
+          "name": "Build ui",
+          "card": "Redesign attachment upload for large files",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_export-impl",
+          "role": "neutral",
+          "readerRole": "neutral",
+          "name": "Implementer: simplify the export settings",
+          "card": "Simplify the export settings sheet",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_links-impl",
+          "role": "builder",
+          "readerRole": "builder",
+          "name": "Implement",
+          "card": "Repair old links in the release notes",
+          "dot": "idle"
+        },
+        {
+          "key": "conversation_search-rev",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "idle"
+        }
+      ],
+      "rail": {
+        "x": 264,
+        "y": 154,
+        "width": 184,
+        "height": 367
+      },
+      "overlaps": [],
+      "head": "7 агентів відкрито",
+      "pageErrors": [],
+      "jumped": {
+        "key": "conversation_search-rev",
+        "headInWindow": true
+      },
+      "cycled": {
+        "key": "conversation_search-ver-2",
+        "headInWindow": true
+      }
+    },
+    "1920x1080-1-uk": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        }
+      ],
+      "rail": {
+        "x": 268,
+        "y": 114,
+        "width": 180,
+        "height": 107
+      },
+      "overlaps": [],
+      "head": "1 агент відкритий",
+      "pageErrors": []
+    },
+    "1920x1080-3-uk": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_rounds-review",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review",
+          "card": "Rework the retry banner until review passes",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_upload-plan",
+          "role": "architect",
+          "readerRole": "architect",
+          "name": "Plan",
+          "card": "Redesign attachment upload for large files",
+          "dot": "idle"
+        }
+      ],
+      "rail": {
+        "x": 268,
+        "y": 114,
+        "width": 180,
+        "height": 194
+      },
+      "overlaps": [],
+      "head": "3 агенти відкриті",
+      "pageErrors": []
+    },
+    "1920x1080-7-uk": {
+      "tier": "full",
+      "segments": [
+        {
+          "key": "conversation_search-ver-2",
+          "role": "verifier",
+          "readerRole": "verifier",
+          "name": "Verify · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_rounds-review",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review",
+          "card": "Rework the retry banner until review passes",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_upload-plan",
+          "role": "architect",
+          "readerRole": "architect",
+          "name": "Plan",
+          "card": "Redesign attachment upload for large files",
+          "dot": "idle"
+        },
+        {
+          "key": "conversation_upload-ui",
+          "role": "builder",
+          "readerRole": "builder",
+          "name": "Build ui",
+          "card": "Redesign attachment upload for large files",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_export-impl",
+          "role": "neutral",
+          "readerRole": "neutral",
+          "name": "Implementer: simplify the export settings",
+          "card": "Simplify the export settings sheet",
+          "dot": "live"
+        },
+        {
+          "key": "conversation_links-impl",
+          "role": "builder",
+          "readerRole": "builder",
+          "name": "Implement",
+          "card": "Repair old links in the release notes",
+          "dot": "idle"
+        },
+        {
+          "key": "conversation_search-rev",
+          "role": "reviewer",
+          "readerRole": "reviewer",
+          "name": "Review · 2",
+          "card": "Restore search results after the index rebuild",
+          "dot": "idle"
+        }
+      ],
+      "rail": {
+        "x": 268,
+        "y": 114,
+        "width": 180,
+        "height": 367
+      },
+      "overlaps": [],
+      "head": "7 агентів відкрито",
+      "pageErrors": [],
+      "jumped": {
+        "key": "conversation_search-rev",
+        "headInWindow": true
+      },
+      "cycled": {
+        "key": "conversation_search-ver-2",
+        "headInWindow": true
+      }
+    },
+    "1600x900-7-uk": {
+      "tier": "compact",
+      "segments": [],
+      "rail": {
+        "x": 268,
+        "y": 114,
+        "width": 36,
+        "height": 36
+      },
+      "overlaps": [],
+      "head": "7",
+      "listed": 7,
+      "jumped": {
+        "key": "conversation_upload-ui",
+        "headInWindow": true
+      },
+      "pageErrors": []
+    }
+  },
+  "failures": []
+}

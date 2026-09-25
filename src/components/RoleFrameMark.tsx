@@ -2,7 +2,7 @@
 
 import { BadgeCheck, Bot, Brush, DraftingCompass, Hammer, Radar, Rocket, ScanEye, Waypoints, type LucideIcon } from "lucide-react";
 
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type TFunction } from "@/lib/i18n";
 import type { FrameRole } from "@/lib/roleFrames";
 
 import { roleNameById } from "./builderCopy";
@@ -20,9 +20,19 @@ const EMBLEM: Record<FrameRole, LucideIcon> = {
 };
 
 /** The role's name as the role registry's copy has it; `neutral` reads «Agent». */
+export function frameRoleName(t: TFunction, role: FrameRole): string {
+  return role === "neutral" ? t("roleFrame.neutral") : roleNameById(t, role);
+}
+
 export function useFrameRoleName(role: FrameRole): string {
   const { t } = useLocale();
-  return role === "neutral" ? t("roleFrame.neutral") : roleNameById(t, role);
+  return frameRoleName(t, role);
+}
+
+/** The role's emblem alone, for a surface that names the role elsewhere. */
+export function RoleEmblem({ role, strokeWidth = 2.25 }: { role: FrameRole; strokeWidth?: number }) {
+  const Emblem = EMBLEM[role];
+  return <Emblem strokeWidth={strokeWidth} aria-hidden />;
 }
 
 /**
@@ -35,11 +45,10 @@ export function useFrameRoleName(role: FrameRole): string {
 export function RoleFrameMark({ role }: { role: FrameRole }) {
   const { t } = useLocale();
   const name = useFrameRoleName(role);
-  const Emblem = EMBLEM[role];
   return (
     <span className="role-mark" data-role-mark={role} title={t("roleFrame.markTitle", { role: name })}>
       <span className="role-mark-emblem" aria-hidden>
-        <Emblem strokeWidth={2.25} />
+        <RoleEmblem role={role} />
       </span>
       <span className="role-mark-word">{name}</span>
     </span>

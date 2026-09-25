@@ -22,7 +22,7 @@ import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TaskIconPicker } from "@/components/tasks/TaskIconPicker";
 import { sendDismissal } from "@/components/attention/dismissalOverlay";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
-import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
+import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, OPEN_RAIL_WIDTH, openRailTier, type KanbanLayoutMode, type OpenRailTier } from "./kanbanLayout";
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
@@ -49,6 +49,8 @@ import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kan
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
 import { stagePanelKey } from "./KanbanCard";
+import { cycleOpenAgent, openAgents } from "./openAgents";
+import { OPEN_AGENTS_SHORTCUT, OpenAgentsList, OpenAgentsRail } from "./OpenAgentsRail";
 import { operationalAttempts } from "./pipelineGraph";
 import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { pipelineTitle, stageNames } from "./PipelineSection";
@@ -289,6 +291,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
     | { kind: "account"; target: AccountTarget }
     | { kind: "links"; target: WorkLinkTarget }
+    | { kind: "agents" }
   >();
   const { receipts, show, dismiss } = useReceipts();
   const latestUndo = useRef<{ receiptId: number; run: () => void } | null>(null);
@@ -513,6 +516,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
+  /* The agents open on the board, for the rail at its side. */
+  const railAgents = useMemo(() => openAgents(t, readerViews, openReaders, props.now), [t, readerViews, openReaders, props.now]);
+  const railKeysRef = useRef<readonly string[]>([]);
+  railKeysRef.current = railAgents.map((agent) => agent.key);
+  const railShown = railAgents.length > 0;
+  const [railTier, setRailTier] = useState<OpenRailTier>("full");
   /* A write this browser refused leaves every reader open on this page; the
      operator is told once that they will not come back after a reload. */
   const toldUnremembered = useRef(false);
@@ -557,7 +566,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
     const apply = () => {
       const barWidth = element.getBoundingClientRect().width;
-      setMode(kanbanLayoutModeBeside(barWidth - (aside?.getBoundingClientRect().width ?? 0), seat?.getBoundingClientRect().width ?? 0));
+      const beside = barWidth - (aside?.getBoundingClientRect().width ?? 0);
+      const seatWidth = seat?.getBoundingClientRect().width ?? 0;
+      /* The open-agents rail takes its strip out of what the seat leaves. */
+      const tier = openRailTier(beside - seatWidth);
+      setRailTier(tier);
+      setMode(kanbanLayoutModeBeside(beside, seatWidth + (railShown ? OPEN_RAIL_WIDTH[tier] : 0)));
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
     };
@@ -568,7 +582,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (aside) observer.observe(aside);
     if (seat) observer.observe(seat);
     return () => observer.disconnect();
-  }, [hasAside, seatSide]);
+  }, [hasAside, seatSide, railShown]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
@@ -1130,7 +1144,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       });
       return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
     }
-    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon") return null;
+    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon" || open.value.kind === "agents") return null;
     if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
     if (open.value.kind === "pipeline" || open.value.kind === "stage") return pipelineMenu(open.value);
     const value = open.value;
@@ -1803,13 +1817,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
     disown(key);
     memory.update((readers) => foldReader(readers, key, folded));
   }, [memory, disown]);
-  const closeReaderFor = useCallback((key: string) => {
+  const closeReaderFor = useCallback((key: string, refocusCard = true) => {
     disown(key);
     const cardId = ownersRef.current.get(key)?.cardId;
     setFullReader((current) => (current === key ? null : current));
     setLooseReader((current) => (current?.key === key ? null : current));
     memory.update((readers) => closeReader(readers, key));
-    if (cardId) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`)?.focus({ preventScroll: true }));
+    if (cardId && refocusCard) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`)?.focus({ preventScroll: true }));
   }, [memory, disown]);
   const openReaderMenu = useCallback((key: string, anchor: HTMLElement, stop: ReaderStop) => menu.setOpen({ anchor, value: { kind: "reader", key, stop } }), [menu]);
 
@@ -1949,6 +1963,64 @@ export function KanbanBoard(props: KanbanBoardProps) {
     };
   }, []);
   const focusedView = focusedReader ? readerViews.find((view) => view.readerKey === focusedReader && !view.folded) : undefined;
+
+  /* ── The open-agents rail ────────────────────────────────────────────── */
+  /* A segment takes the board to its agent the way the card's own tile does:
+     the card revealed and scrolled to, the reader unfolded and focused. A
+     reader that has the whole window gives it up first, or the one asked for
+     would open under it. */
+  const readerViewsRef = useRef(readerViews);
+  readerViewsRef.current = readerViews;
+  const jumpToAgent = useCallback((key: string) => {
+    const view = readerViewsRef.current.find((candidate) => candidate.readerKey === key);
+    if (!view) return;
+    setFullReader((current) => (current && current !== key ? null : current));
+    openReaderFor(view.file);
+  }, [openReaderFor]);
+  const closeFromRail = useCallback((key: string) => closeReaderFor(key, false), [closeReaderFor]);
+  const closeAllAgents = useCallback(() => {
+    const keys = new Set(railKeysRef.current);
+    for (const key of keys) disown(key);
+    setFullReader((current) => (current && keys.has(current) ? null : current));
+    memory.update((readers) => readers.filter((reader) => !keys.has(reader.key)));
+    menu.close(false);
+    /* The rail goes with the last agent; the board keeps the keyboard. */
+    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(".board-frame")?.focus({ preventScroll: true }));
+  }, [memory, disown, menu]);
+  /* The compact tier's list goes with the last agent it listed. */
+  const agentsListOpen = menu.open?.value.kind === "agents";
+  useEffect(() => {
+    if (agentsListOpen && !railShown) menu.close(false);
+  }, [agentsListOpen, railShown, menu]);
+  const railCurrent = focusedReader && railAgents.some((agent) => agent.key === focusedReader) ? focusedReader : null;
+  const railCurrentRef = useRef(railCurrent);
+  railCurrentRef.current = railCurrent;
+  const jumpRef = useRef(jumpToAgent);
+  jumpRef.current = jumpToAgent;
+  /* Alt+J and Alt+K walk the open agents from the one the operator is in,
+     from inside a composer too. Read by the key's place (`code`), so the
+     chord is the same under every keyboard layout. */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.defaultPrevented) return;
+      const step = event.code === OPEN_AGENTS_SHORTCUT.next ? 1 : event.code === OPEN_AGENTS_SHORTCUT.previous ? -1 : 0;
+      if (!step || sheetOpen.current) return;
+      const root = rootRef.current;
+      if (!root?.isConnected || root.closest("[hidden], [inert]")) return;
+      const keys = railKeysRef.current;
+      if (!keys.length) return;
+      event.preventDefault();
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>("[data-kanban-reader]") : null;
+      const from = active && root.contains(active) ? active.dataset.kanbanReader ?? null : railCurrentRef.current;
+      const next = cycleOpenAgent(keys, from, step);
+      if (next) {
+        menu.close(false);
+        jumpRef.current(next);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menu]);
   const focusedPath = focusedView?.file.path ?? null;
   /* The bus drops a report that reproduces the current slice, which is what the
      `presenceSignature` memo used to spare this effect; the measurement calls
@@ -2065,6 +2137,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       : null;
   const openMenu = menuFor();
   const trayOpen = menu.open?.value.kind === "tray" ? menu.open : null;
+  const agentsOpen = menu.open?.value.kind === "agents" ? menu.open : null;
   const linkOpen = menu.open?.value.kind === "link" ? menu.open : null;
   const stopOpen = menu.open?.value.kind === "stop" ? menu.open : null;
   const accountOpen = menu.open?.value.kind === "account" ? menu.open : null;
@@ -2347,7 +2420,20 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {seatSide && seatView}
       <div className="kb-page">
       {seatSide ? null : seatView}
-      <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
+      <div className={`board-frame${railShown ? " with-rail" : ""}`} id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
+      {/* The open agents stand beside the columns, below a seat on top, so the seat keeps its width. */}
+      {railShown ? (
+        <OpenAgentsRail
+          agents={railAgents}
+          tier={railTier}
+          current={railCurrent}
+          listOpen={menu.open?.value.kind === "agents"}
+          onJump={jumpToAgent}
+          onClose={closeFromRail}
+          onCloseAll={closeAllAgents}
+          onShowList={(anchor) => menu.setOpen({ anchor, value: { kind: "agents" } })}
+        />
+      ) : null}
       {!loaded ? (
         /* The columns it is loading, in the tracks this width gives them (#2071). */
         <KanbanColumnsSkeleton mode={mode} style={boardStyle} />
@@ -2457,6 +2543,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
             </button>
           )) : <p className="note">{t("kanban.linkPickerEmpty")}</p>}
           <p className="note">{t("kanban.linkPickerNote")}</p>
+        </KanbanPopover>
+      ) : null}
+      {agentsOpen && railShown ? (
+        <KanbanPopover anchor={agentsOpen.anchor} within={rootRef.current} label={t("kanban.openAgents.aria", { count: railAgents.length })} onClose={menu.close} initialFocus="[data-open-agent-jump]" className="open-agents">
+          <div className="head num">{t("kanban.openAgents.head", { count: railAgents.length })}</div>
+          <OpenAgentsList
+            agents={railAgents}
+            current={railCurrent}
+            onJump={(key) => { menu.close(false); jumpToAgent(key); }}
+            onClose={closeFromRail}
+            onCloseAll={closeAllAgents}
+          />
         </KanbanPopover>
       ) : null}
       {trayOpen ? (
