@@ -60,8 +60,16 @@ import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
 import { useSeatSurface } from "./useSeatSurface";
 import { ReportLog } from "./reportLog/ReportLog";
 
-/** The seat's width from which the report log sits beside the chat (#2146). */
-export const REPORT_LOG_SPLIT_WIDTH = 720;
+/* The report log beside the chat (#2146). It first opened at a 720 px seat
+   as a 300 px column, which left the chat 420 px; the chat now keeps at least
+   1.5 times that, and the log is never narrower than a readable column. */
+/** The narrowest chat the log may sit beside. */
+export const REPORT_LOG_CHAT_MIN_WIDTH = 630;
+/** The log column's width range; between the two it is 34% of the seat. */
+export const REPORT_LOG_MIN_WIDTH = 360;
+export const REPORT_LOG_MAX_WIDTH = 440;
+/** The seat's width from which the report log sits beside the chat. */
+export const REPORT_LOG_SPLIT_WIDTH = REPORT_LOG_CHAT_MIN_WIDTH + REPORT_LOG_MIN_WIDTH;
 const reportLogBesideKey = (project: string) => `llvReportLogBeside:${project}`;
 
 /** Whether the log beside the chat is open for `project`: open unless hidden. */
@@ -746,7 +754,10 @@ export function OrchestratorPanel({
           ) : file && reportsOpen && reportsSplit ? (
             <div className="flex min-h-0 min-w-0 flex-1" data-report-log-layout="beside">
               <OrchestratorConversation file={file} projectName={projectName} hostControls={false} />
-              <div className="flex min-h-0 w-[clamp(300px,34%,440px)] shrink-0 flex-col border-l border-border">
+              <div
+                className="flex min-h-0 shrink-0 flex-col border-l border-border"
+                style={{ width: `clamp(${REPORT_LOG_MIN_WIDTH}px, 34%, ${REPORT_LOG_MAX_WIDTH}px)` }}
+              >
                 <ReportLog key={project} project={project} variant="column" />
               </div>
             </div>
