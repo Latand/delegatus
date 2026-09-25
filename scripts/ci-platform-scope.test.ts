@@ -29,7 +29,14 @@ const WORKFLOW = ".github/workflows/platform.yml";
 function fixture(): string {
   return tree({
     [WORKFLOW]: "jobs:\n  leg:\n    steps:\n      - run: bun test src/feature.test.ts\n",
-    "src/feature.test.ts": 'import { feature } from "./feature";\nimport path from "node:path";\nconst child = path.join(import.meta.dir, "child.ts");\n',
+    "src/feature.test.ts": [
+      'import { feature } from "./feature";',
+      'import path from "node:path";',
+      'const child = path.join(import.meta.dir, "child.ts");',
+      'const contender = path.join(import.meta.dir, "fixtures", "contender.ts");',
+      'const upward = path.resolve(import.meta.dir, "..", "scripts", "upward.ts");',
+      'const bare = path.join(root, "beside.ts");',
+    ].join("\n"),
     "src/feature.ts": [
       'import { helper } from "@/lib/helper";',
       'import type { Shape } from "./shapes";',
@@ -47,6 +54,10 @@ function fixture(): string {
     "src/ports.ts": "export type Ports = 1;\n",
     "src/lazy.ts": "export const lazy = 1;\n",
     "src/child.ts": "console.log(1);\n",
+    "src/fixtures/contender.ts": 'import { deep } from "../deep";\nconsole.log(deep);\n',
+    "src/contender.ts": "console.log(1);\n",
+    "scripts/upward.ts": "console.log(1);\n",
+    "src/beside.ts": "console.log(1);\n",
     "src/unrelated.ts": "export const unrelated = 1;\n",
     "src/elsewhere.test.ts": "export {};\n",
   });
@@ -58,9 +69,21 @@ function decide(root: string, changed: string[] | null, prefixes: string[] = [])
 
 test("a change to anything the job imports, transitively, or spawns by path runs it", () => {
   const root = fixture();
-  for (const file of ["src/feature.test.ts", "src/feature.ts", "src/lib/helper.ts", "src/deep.ts", "src/lazy.ts", "src/child.ts"]) {
+  for (const file of ["src/feature.test.ts", "src/feature.ts", "src/lib/helper.ts", "src/deep.ts", "src/lazy.ts", "src/child.ts", "src/beside.ts"]) {
     expect({ file, run: decide(root, [file]).run }).toEqual({ file, run: true });
   }
+});
+
+test("a child spawned through a path chain anchored at the file's directory runs it, in a subdirectory or above", () => {
+  const root = fixture();
+  for (const file of ["src/fixtures/contender.ts", "scripts/upward.ts"]) {
+    expect({ file, run: decide(root, [file]).run }).toEqual({ file, run: true });
+  }
+  // The chain's last segment is not also read as a bare name beside the test.
+  expect(decide(root, ["src/contender.ts"]).run).toBe(false);
+  // A fixture the pull request deleted still matches its chain.
+  fs.rmSync(path.join(root, "src", "fixtures", "contender.ts"));
+  expect(decide(root, ["src/fixtures/contender.ts"]).run).toBe(true);
 });
 
 test("a change the job never executes skips it, type-only imports and prose included", () => {
@@ -127,12 +150,22 @@ test("the real platform jobs reach the modules they run and not the board", () =
   for (const file of ["src/lib/limits.ts", "src/lib/agent/cli.ts", "src/lib/proc/darwinArgv.ts", "src/lib/accounts/claudeCredentials.ts"]) {
     expect({ file, reached: macos.has(file) }).toEqual({ file, reached: true });
   }
-  for (const file of ["scripts/verify-platform-backend.ts", "src/lib/proc/windows.ts", "src/runtime-host/runtimeHostFence.ts", "bin/server-runtime.test.ts"]) {
+  /* The fence contenders runtimeHostFence.test.ts spawns from its fixtures
+     directory, which a bare-name rule resolving beside the test never reached. */
+  for (const file of [
+    "scripts/verify-platform-backend.ts",
+    "src/lib/proc/windows.ts",
+    "src/runtime-host/runtimeHostFence.ts",
+    "bin/server-runtime.test.ts",
+    "src/runtime-host/fixtures/runtimeHostFenceContender.ts",
+    "src/runtime-host/fixtures/runtimeHostFenceLegacyNullIdentity.ts",
+  ]) {
     expect({ file, reached: windows.has(file) }).toEqual({ file, reached: true });
   }
   for (const reached of [macos, windows]) expect(reached.has("src/components/kanban/KanbanBoard.tsx")).toBe(false);
   expect(platformScope({ root: repositoryRoot, workflow: macosWorkflow, prefixes: [], changed: ["src/components/kanban/KanbanBoard.tsx"] }).run).toBe(false);
   expect(platformScope({ root: repositoryRoot, workflow: windowsWorkflow, prefixes: [], changed: ["src/lib/limits.ts"] }).run).toBe(false);
+  expect(platformScope({ root: repositoryRoot, workflow: windowsWorkflow, prefixes: ["src/lib/proc/"], changed: ["src/runtime-host/fixtures/runtimeHostFenceContender.ts"] }).run).toBe(true);
 });
 
 test("each platform job keeps its name and is skipped only on a scope that ran and said no", () => {

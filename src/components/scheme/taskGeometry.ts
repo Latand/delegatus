@@ -458,6 +458,7 @@ function cubicHitsAny(
   x2: number,
   y2: number,
   obstacles: readonly SchemeRect[],
+  work?: RouteWork,
 ): boolean {
   if (!obstacles.length) return false;
   /* Broad phase: a cubic never leaves the convex hull of its four control points,
@@ -484,6 +485,7 @@ function cubicHitsAny(
     const nx = cubicAt(t, x1, c1x, c2x, x2);
     const ny = cubicAt(t, y1, c1y, c2y, y2);
     for (const rect of near) {
+      if (work) work.obstacleTests++;
       if (segHitsRect(px, py, nx, ny, rect, ROUTE_CLEARANCE)) return true;
     }
     px = nx;
@@ -526,9 +528,9 @@ function segsToD(segs: readonly RouteSeg[]): string {
   return d;
 }
 
-function segsHitAny(segs: readonly RouteSeg[], obstacles: readonly SchemeRect[]): boolean {
+function segsHitAny(segs: readonly RouteSeg[], obstacles: readonly SchemeRect[], work?: RouteWork): boolean {
   for (const s of segs) {
-    if (cubicHitsAny(s.x1, s.y1, s.c1x, s.c1y, s.c2x, s.c2y, s.x2, s.y2, obstacles)) return true;
+    if (cubicHitsAny(s.x1, s.y1, s.c1x, s.c1y, s.c2x, s.c2y, s.x2, s.y2, obstacles, work)) return true;
   }
   return false;
 }
@@ -586,8 +588,10 @@ function detourRoute(
   edge: { x1: number; y1: number; x2: number; y2: number },
   obstacles: readonly SchemeRect[],
   lane: number,
+  work?: RouteWork,
 ): TaskEdgeRoute | null {
   const { x1, y1, x2, y2 } = edge;
+  if (work) work.obstacleTests += obstacles.length;
   const hit = obstacles.filter((r) => segHitsRect(x1, y1, x2, y2, r, ROUTE_CLEARANCE));
   if (!hit.length) return null;
   let minX = Infinity;
@@ -610,7 +614,7 @@ function detourRoute(
   for (const side of sides) {
     for (let off = DETOUR_MARGIN; off <= DETOUR_MARGIN + DETOUR_MAX_EXTRA; off += DETOUR_EXTRA_STEP) {
       const segs = vertical ? verticalDetour(edge, box, side, off, laneOff) : horizontalDetour(edge, box, side, off, laneOff);
-      if (!segsHitAny(segs, obstacles)) {
+      if (!segsHitAny(segs, obstacles, work)) {
         const run = segs[1]!; // middle segment is the corridor
         const corridor: RouteCorridor = vertical
           ? { axis: "v", pos: run.x1, lo: Math.min(run.y1, run.y2), hi: Math.max(run.y1, run.y2) }
@@ -677,6 +681,7 @@ export function routeTaskEdge(
   edge: { x1: number; y1: number; x2: number; y2: number },
   obstacles: readonly SchemeRect[],
   lane = 0,
+  work?: RouteWork,
 ): TaskEdgeRoute {
   const { x1, y1, x2, y2 } = edge;
   const dx = x2 - x1;
@@ -703,7 +708,7 @@ export function routeTaskEdge(
     crosses: false,
   });
 
-  if (!obstacles.length || !cubicHitsAny(x1, y1, base.c1x, base.c1y, base.c2x, base.c2y, x2, y2, obstacles)) {
+  if (!obstacles.length || !cubicHitsAny(x1, y1, base.c1x, base.c1y, base.c2x, base.c2y, x2, y2, obstacles, work)) {
     return build(base);
   }
 
@@ -716,7 +721,7 @@ export function routeTaskEdge(
         c2x: base.c2x + perpX * off,
         c2y: base.c2y + perpY * off,
       };
-      if (!cubicHitsAny(x1, y1, handles.c1x, handles.c1y, handles.c2x, handles.c2y, x2, y2, obstacles)) {
+      if (!cubicHitsAny(x1, y1, handles.c1x, handles.c1y, handles.c2x, handles.c2y, x2, y2, obstacles, work)) {
         return build(handles);
       }
     }
@@ -725,7 +730,7 @@ export function routeTaskEdge(
   /* No bow cleared it — a pane is too large to escape with a single cubic. Route
      an orthogonal detour around it; only if that is boxed in do we admit the
      crossing and let the layer fade the base curve. */
-  const detour = detourRoute(edge, obstacles, lane);
+  const detour = detourRoute(edge, obstacles, lane, work);
   if (detour) return detour;
 
   return { ...build(base), crosses: true };
@@ -1030,7 +1035,8 @@ function segIntersection(a1: RoutePoint, a2: RoutePoint, b1: RoutePoint, b2: Rou
    flattens within a few splits. Collinear overlap (a shared corridor) gives a
    parallel chord test and no false crossing. A crossing within `SHARED_ENDPOINT_EPS`
    of a point the edges legitimately share (a fan-in/out endpoint) is ignored. */
-function cubicPairCross(a: RouteSeg, b: RouteSeg, shared: readonly RoutePoint[], depth: number): boolean {
+function cubicPairCross(a: RouteSeg, b: RouteSeg, shared: readonly RoutePoint[], depth: number, work?: RouteWork): boolean {
+  if (work) work.pairTests++;
   if (!boundsOverlap(segBounds(a), segBounds(b))) return false;
   const flatA = segFlat(a);
   const flatB = segFlat(b);
@@ -1043,17 +1049,17 @@ function cubicPairCross(a: RouteSeg, b: RouteSeg, shared: readonly RoutePoint[],
   const bs = flatB ? [b] : splitCubic(b);
   for (const sa of as) {
     for (const sb of bs) {
-      if (cubicPairCross(sa, sb, shared, depth - 1)) return true;
+      if (cubicPairCross(sa, sb, shared, depth - 1, work)) return true;
     }
   }
   return false;
 }
 
 /* Do two routed paths cross anywhere other than a point they legitimately share? */
-function routesCross(a: readonly RouteSeg[], b: readonly RouteSeg[], shared: readonly RoutePoint[]): boolean {
+function routesCross(a: readonly RouteSeg[], b: readonly RouteSeg[], shared: readonly RoutePoint[], work?: RouteWork): boolean {
   for (const sa of a) {
     for (const sb of b) {
-      if (cubicPairCross(sa, sb, shared, CUBIC_MAX_DEPTH)) return true;
+      if (cubicPairCross(sa, sb, shared, CUBIC_MAX_DEPTH, work)) return true;
     }
   }
   return false;
@@ -1084,6 +1090,18 @@ const CROSS_REDUCE_MAX = 48;
    the fade handles it. Also caps the per-edge cost in a pathological
    all-overlapping cluster. */
 const CROSS_BUSY = 4;
+
+/** What one {@link routeTaskEdges} call spent, counted so a caller can bound the
+    cost of a board by the work done rather than by a clock. */
+export interface RouteWork {
+  /** Single-edge routes computed: every edge's first route, then each bow the
+      crossing reduction and the corridor spacing try. */
+  routes: number;
+  /** Segment-against-obstacle tests the routes ran after the control-hull cull. */
+  obstacleTests: number;
+  /** Cubic–cubic crossing tests visited, the recursion's splits included. */
+  pairTests: number;
+}
 
 /**
  * Routes every task edge together (issue #17): lanes fan coincident edges apart
@@ -1127,6 +1145,7 @@ export function routeTaskEdges(
   edges: readonly TaskEdgeGeom[],
   cards: readonly TaskEdgeObstacle[],
   containers: readonly SchemeRect[],
+  work?: RouteWork,
 ): Map<string, TaskEdgeRoute> {
   /* Corridor groups drive both the lanes (fan overlapping edges apart) and the
      set of edges the reduction must not perturb — moving a fanned edge off its
@@ -1140,8 +1159,12 @@ export function routeTaskEdges(
 
   const byKey = new Map<string, TaskEdgeGeom>(edges.map((edge) => [edge.key, edge]));
   const state = new Map<string, { route: TaskEdgeRoute; cubics: RouteSeg[]; box: Bounds }>();
+  const routeOne = (edge: TaskEdgeGeom, obstacles: readonly SchemeRect[], lane: number): TaskEdgeRoute => {
+    if (work) work.routes++;
+    return routeTaskEdge(edge, obstacles, lane, work);
+  };
   const routeInto = (edge: TaskEdgeGeom, lane: number) => {
-    const route = routeTaskEdge(edge, edgeObstacles(edge, cards, containers), lane);
+    const route = routeOne(edge, edgeObstacles(edge, cards, containers), lane);
     const cubics = parseCubics(route.d);
     state.set(edge.key, { route, cubics, box: cubicsBounds(cubics) });
   };
@@ -1158,7 +1181,7 @@ export function routeTaskEdges(
     let total = 0;
     for (const [otherKey, other] of state) {
       if (otherKey === key || !boundsOverlap(box, other.box)) continue;
-      if (routesCross(cubics, other.cubics, sharedEndpoints(edge, byKey.get(otherKey)!))) total++;
+      if (routesCross(cubics, other.cubics, sharedEndpoints(edge, byKey.get(otherKey)!), work)) total++;
     }
     return total;
   };
@@ -1184,7 +1207,7 @@ export function routeTaskEdges(
            on (obstacle-crossing?, edge-crossings). */
         let bestObstacle = current.route.crosses ? 1 : 0;
         for (const bow of CROSS_BOWS) {
-          const route = routeTaskEdge(edge, obstacles, laneBase + bow);
+          const route = routeOne(edge, obstacles, laneBase + bow);
           const candObstacle = route.crosses ? 1 : 0;
           if (candObstacle > bestObstacle) continue; // would re-enter an obstacle — reject
           const cubics = parseCubics(route.d);
@@ -1231,7 +1254,7 @@ export function routeTaskEdges(
            corridor entirely (no rail to share); the outward stack guarantees one
            within a lane per placed corridor. Bounded by CORRIDOR_LANE_MAX. */
         for (let step = 1; step <= CORRIDOR_LANE_MAX; step++) {
-          const route = routeTaskEdge(edge, obstacles, laneBase + step);
+          const route = routeOne(edge, obstacles, laneBase + step);
           if (!route.crosses && (!route.corridor || !clashes(route.corridor))) {
             const cubics = parseCubics(route.d);
             state.set(edge.key, { route, cubics, box: cubicsBounds(cubics) });
@@ -1256,7 +1279,7 @@ export function routeTaskEdges(
       const sa = state.get(a.key)!;
       const sb = state.get(b.key)!;
       if (!boundsOverlap(sa.box, sb.box)) continue;
-      if (!routesCross(sa.cubics, sb.cubics, sharedEndpoints(a, b))) continue;
+      if (!routesCross(sa.cubics, sb.cubics, sharedEndpoints(a, b), work)) continue;
       faded.add(a.key < b.key ? b.key : a.key);
     }
   }

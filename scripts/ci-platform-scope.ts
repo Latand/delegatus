@@ -38,6 +38,11 @@ export const ALWAYS_IN_SCOPE = ["package.json", "bun.lock", "bunfig.toml", "tsco
 const SOURCE_EXTENSIONS = ["", ".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", "/index.ts", "/index.tsx", "/index.js"];
 const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)["'`]([^"'`$]+)["'`]/g;
 const PATH_LITERAL = /["'`]([\w@.\-/]+\.(?:ts|tsx|mts|cts|js|mjs|cjs|json|py|sh))["'`]/g;
+/** `path.join(import.meta.dir, "fixtures", "child.ts")`: a chain of literals
+    anchored at the file's own directory, which may reach below or above it. */
+const ANCHORED_PATH = /\bpath\.(?:join|resolve)\(\s*(?:import\.meta\.dirname|import\.meta\.dir|__dirname)((?:\s*,\s*["'`][^"'`$]*["'`])+)\s*,?\s*\)/g;
+const STRING_LITERAL = /["'`]([^"'`$]*)["'`]/g;
+const SOURCE_FILE = /\.(?:ts|tsx|mts|cts|js|mjs|cjs|json|py|sh)$/;
 /** Erased before anything runs: `import type` and `export type` statements,
     and `import("./x").Name` written in a type position. */
 const TYPE_ONLY_STATEMENT = /^\s*(?:import|export)\s+type\s[^;]*;/gm;
@@ -71,9 +76,16 @@ export function executedPaths(root: string, entries: readonly string[]): Set<str
     visited.add(file);
     reached.add(path.relative(root, file));
     if (!isFile(file)) continue;
-    const text = fs.readFileSync(file, "utf8").replace(TYPE_ONLY_STATEMENT, "").replace(TYPE_ONLY_IMPORT, "");
+    const source = fs.readFileSync(file, "utf8").replace(TYPE_ONLY_STATEMENT, "").replace(TYPE_ONLY_IMPORT, "");
     const targets: string[] = [];
-    for (const match of text.matchAll(IMPORT_SPECIFIER)) targets.push(...candidates(root, file, match[1]!));
+    for (const match of source.matchAll(IMPORT_SPECIFIER)) targets.push(...candidates(root, file, match[1]!));
+    for (const match of source.matchAll(ANCHORED_PATH)) {
+      const segments = [...match[1]!.matchAll(STRING_LITERAL)].map((literal) => literal[1]!);
+      if (SOURCE_FILE.test(segments.at(-1)!)) targets.push(path.join(path.dirname(file), ...segments));
+    }
+    /* An anchored chain is resolved whole above; its last segment is not also
+       a bare name beside the file. */
+    const text = source.replace(ANCHORED_PATH, "");
     for (const match of text.matchAll(PATH_LITERAL)) {
       const literal = match[1]!;
       if (literal.startsWith("@/") || literal.startsWith("./") || literal.startsWith("../")) {
