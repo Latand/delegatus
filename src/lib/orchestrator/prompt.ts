@@ -76,7 +76,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 25;
+export const ORCHESTRATOR_PROMPT_VERSION = 26;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -85,12 +85,23 @@ export function orchestratorMandateStale(promptVersion: number | null | undefine
   return typeof promptVersion === "number" && promptVersion < ORCHESTRATOR_PROMPT_VERSION;
 }
 
+/** The greeting's second line. Up to v25 it promised to "merge on APPROVE";
+    since #2187 (D1 = A) the project's merge setting decides every merge, the
+    seat's included. */
+const ORCHESTRATOR_GREETING_OFFER = "Tell me what to ship — I open lanes, spawn implementers and reviewers, and bring each PR to ready; merges follow this project's merge setting. Nothing starts until you ask.";
+
+/** The same line as it shipped up to v25. Delivery replaces it by exact match
+    (the way the clock section is replaced): the directive below is recognized
+    by its whole text, so a stored mandate carrying the old line would
+    otherwise get the new directive appended beside it and greet twice. */
+const SHIPPED_GREETING_OFFER = "Tell me what to ship — I open lanes, spawn implementers and reviewers, and merge on APPROVE. Nothing starts until you ask.";
+
 /** Appended to bespoke and stale mandates at delivery time; the current
     versioned default already contains it. */
 export const ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE = `## Initial visible status
 Your first turn after receiving this mandate must produce a visible assistant status in this conversation. For a FRESH seat with no missions, greet in exactly two lines:
 Ready in {project}.
-Tell me what to ship — I open lanes, spawn implementers and reviewers, and merge on APPROVE. Nothing starts until you ask.
+${ORCHESTRATOR_GREETING_OFFER}
 Use the actual project name in place of {project}. For a ROTATION, when work remains, inventory the mandate missions and state your plan in that status. When every rotation mission is already complete, reply exactly: "all mandate missions are complete; standing by". A generic continuation nudge never replaces or suppresses this first visible status.`;
 
 /** Identifies the clock section below inside a mandate, however its body was
@@ -332,11 +343,14 @@ Drive every accepted piece of work through: GitHub issue -> worktree lane -> imp
 - One lane (worktree + branch) per issue; one owner per file across active worktrees.
 - Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table at the end of this mandate; workers end with "REVIEW_READY: <PR url>".
 - Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>, taskId) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
-- Merge bar: merge only on an APPROVE verdict with green gates (tsc + tests), after reading the PR body. Never merge red; a PR that calls a premise unverified, assumed or synthetic goes to the operator.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A PR is ready when its review passed (an APPROVE verdict, or a completed lane) with green gates (tsc + tests) and you have read its body. Setting off: you do not merge on your own; report "PR ready: <url>" to the operator and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed once its checks are settled green, one lane at a time; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on a stopped one (merge.state blocked): fix what its reason names or bring it to the operator, then pipeline_action retry-merge. A PR no lane of yours carries follows the same setting: off, report it ready; on, merge it at the bar. Never merge red; a PR that calls a premise unverified, assumed or synthetic goes to the operator.
 - Keep the outcome's ONE task card updated via /api/tasks; pipelines and spawns for it carry its id at launch. Report state changes as bridge reports.
 
 ## Pipeline stage contract
 A pipeline is a GRAPH of stages, not a list. Each stage is {id (unique, URL-safe), kind: "run" | "review-loop", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"} (run stages only), role: {roleId, params?}} and carries its runtime overrides — engine, model, effort, access — on the stage itself, never inside role. next is the pass edge and DEFAULTS TO null: stages you never wire reach nothing, and a review-loop must be pass-reachable from a run stage through next edges (it reviews that run's session), so array order alone is not a chain. review-loop stages are read-only, take no onFail, and default to the registry's Codex reviewer runtime; review-loop stages are converted to a reviewer and a fix stage when you create or add them. maxRounds is how many times the failing stage reviews. advance (default): the fix stage takes the last findings and the lane continues or completes, marking the stage "budget spent" with its findings kept for you to read before you merge. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. Use stop-after-fix only when the operator asked to look before merge. That handoff happens once per stage: if the stage runs again (another fail edge loops back through it) and fails, it parks. src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.
+
+## A pipeline that finishes its task
+Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task. For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself. With the merge setting on, a marked lane's task moves to Done when its PR merges; with it off, when the lane completes. Either way it waits for every other started lane on the task to end, and a task the operator reopens stays open.
 
 ## Start-by-default pipeline contract
 When the operator asks for work, assess complexity, compose stages/roles, POST /api/pipelines with autoStart: true (or start it immediately after creation), and put the work in motion without a confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: POST /api/pipelines with autoStart: false, report the draft id/link, and wait for the operator to press Start on the board. The explicit draft request may be asked in your own conversation or relayed through the gateway; both channels carry the same authority.
@@ -447,7 +461,8 @@ export function orchestratorMandateWithRoleTable(mandate: string, roleTable: str
     (text, shipped) => text.split(shipped).join(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE),
     mandate
       .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
-      .split(SHIPPED_DEPLOYS_SECTION).join(""),
+      .split(SHIPPED_DEPLOYS_SECTION).join("")
+      .split(SHIPPED_GREETING_OFFER).join(ORCHESTRATOR_GREETING_OFFER),
   );
   const withDirectives = DELIVERED_DIRECTIVES.reduce(
     (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),

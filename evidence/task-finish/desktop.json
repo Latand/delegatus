@@ -1,0 +1,333 @@
+{
+  "readings": {
+    "1440-en-light-toggle": {
+      "patches": [
+        {
+          "id": "p-finish-marked",
+          "body": {
+            "action": "link-task",
+            "taskId": "t-finish-marked",
+            "finishes": false
+          }
+        }
+      ]
+    },
+    "1440-en-light": {
+      "cards": [
+        {
+          "task": "t-finish-marked",
+          "column": "assigned",
+          "flags": [
+            {
+              "pipeline": "p-finish-marked",
+              "state": "marked",
+              "text": "finishes the task",
+              "color": "rgb(108, 108, 121)",
+              "inChain": true,
+              "beforeLinks": true
+            }
+          ],
+          "laneWaits": [],
+          "cardWait": null,
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-finish-hold",
+          "column": "assigned",
+          "flags": [],
+          "laneWaits": [
+            "finishes the task once 1 other pipeline ends"
+          ],
+          "cardWait": "Done waits for 1 more pipeline",
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-finish-done",
+          "column": "done",
+          "flags": [
+            {
+              "pipeline": "p-finish-done",
+              "state": "finished",
+              "text": "finished the task",
+              "color": "rgb(23, 122, 55)",
+              "inChain": true,
+              "beforeLinks": true
+            }
+          ],
+          "laneWaits": [],
+          "cardWait": null,
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        }
+      ],
+      "menu": [
+        {
+          "label": "Finishes the task",
+          "checked": "true",
+          "why": "When the pipeline completes and its PR merges, the task moves to Done.",
+          "warn": "1 other pipeline on this task is open; Done waits for it.",
+          "warnColor": "rgb(138, 95, 0)",
+          "whyColor": "rgb(108, 108, 121)",
+          "cut": false,
+          "inside": true
+        },
+        {
+          "label": "Finishes the task",
+          "checked": "false",
+          "why": "When the pipeline completes and its PR merges, the task moves to Done.",
+          "warn": null,
+          "warnColor": null,
+          "whyColor": "rgb(108, 108, 121)",
+          "cut": false,
+          "inside": true
+        }
+      ]
+    },
+    "1440-en-dark": {
+      "cards": [
+        {
+          "task": "t-finish-marked",
+          "column": "assigned",
+          "flags": [
+            {
+              "pipeline": "p-finish-marked",
+              "state": "marked",
+              "text": "finishes the task",
+              "color": "rgb(139, 139, 152)",
+              "inChain": true,
+              "beforeLinks": true
+            }
+          ],
+          "laneWaits": [],
+          "cardWait": null,
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-finish-hold",
+          "column": "assigned",
+          "flags": [],
+          "laneWaits": [
+            "finishes the task once 1 other pipeline ends"
+          ],
+          "cardWait": "Done waits for 1 more pipeline",
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-finish-done",
+          "column": "done",
+          "flags": [
+            {
+              "pipeline": "p-finish-done",
+              "state": "finished",
+              "text": "finished the task",
+              "color": "rgb(79, 195, 111)",
+              "inChain": true,
+              "beforeLinks": true
+            }
+          ],
+          "laneWaits": [],
+          "cardWait": null,
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        }
+      ],
+      "menu": [
+        {
+          "label": "Finishes the task",
+          "checked": "true",
+          "why": "When the pipeline completes and its PR merges, the task moves to Done.",
+          "warn": "1 other pipeline on this task is open; Done waits for it.",
+          "warnColor": "rgb(224, 174, 69)",
+          "whyColor": "rgb(139, 139, 152)",
+          "cut": false,
+          "inside": true
+        },
+        {
+          "label": "Finishes the task",
+          "checked": "false",
+          "why": "When the pipeline completes and its PR merges, the task moves to Done.",
+          "warn": null,
+          "warnColor": null,
+          "whyColor": "rgb(139, 139, 152)",
+          "cut": false,
+          "inside": true
+        }
+      ]
+    },
+    "1440-uk-light-toggle": {
+      "patches": [
+        {
+          "id": "p-finish-marked",
+          "body": {
+            "action": "link-task",
+            "taskId": "t-finish-marked",
+            "finishes": false
+          }
+        }
+      ]
+    },
+    "1440-uk-light": {
+      "cards": [
+        {
+          "task": "t-finish-marked",
+          "column": "assigned",
+          "flags": [
+            {
+              "pipeline": "p-finish-marked",
+              "state": "marked",
+              "text": "завершує задачу",
+              "color": "rgb(108, 108, 121)",
+              "inChain": true,
+              "beforeLinks": true
+            }
+          ],
+          "laneWaits": [],
+          "cardWait": null,
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-finish-hold",
+          "column": "assigned",
+          "flags": [],
+          "laneWaits": [
+            "завершить задачу, коли закінчиться ще 1 пайплайн"
+          ],
+          "cardWait": "«Готово» чекає ще 1 пайплайн",
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-finish-done",
+          "column": "done",
+          "flags": [
+            {
+              "pipeline": "p-finish-done",
+              "state": "finished",
+              "text": "завершив задачу",
+              "color": "rgb(23, 122, 55)",
+              "inChain": true,
+              "beforeLinks": true
+            }
+          ],
+          "laneWaits": [],
+          "cardWait": null,
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        }
+      ],
+      "menu": [
+        {
+          "label": "Завершує задачу",
+          "checked": "true",
+          "why": "Коли пайплайн завершиться і його PR змерджено, задача перейде в «Готово».",
+          "warn": "На задачі відкритий ще 1 пайплайн; «Готово» дочекається його.",
+          "warnColor": "rgb(138, 95, 0)",
+          "whyColor": "rgb(108, 108, 121)",
+          "cut": false,
+          "inside": true
+        },
+        {
+          "label": "Завершує задачу",
+          "checked": "false",
+          "why": "Коли пайплайн завершиться і його PR змерджено, задача перейде в «Готово».",
+          "warn": null,
+          "warnColor": null,
+          "whyColor": "rgb(108, 108, 121)",
+          "cut": false,
+          "inside": true
+        }
+      ]
+    },
+    "1440-uk-dark": {
+      "cards": [
+        {
+          "task": "t-finish-marked",
+          "column": "assigned",
+          "flags": [
+            {
+              "pipeline": "p-finish-marked",
+              "state": "marked",
+              "text": "завершує задачу",
+              "color": "rgb(139, 139, 152)",
+              "inChain": true,
+              "beforeLinks": true
+            }
+          ],
+          "laneWaits": [],
+          "cardWait": null,
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-finish-hold",
+          "column": "assigned",
+          "flags": [],
+          "laneWaits": [
+            "завершить задачу, коли закінчиться ще 1 пайплайн"
+          ],
+          "cardWait": "«Готово» чекає ще 1 пайплайн",
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-finish-done",
+          "column": "done",
+          "flags": [
+            {
+              "pipeline": "p-finish-done",
+              "state": "finished",
+              "text": "завершив задачу",
+              "color": "rgb(79, 195, 111)",
+              "inChain": true,
+              "beforeLinks": true
+            }
+          ],
+          "laneWaits": [],
+          "cardWait": null,
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        }
+      ],
+      "menu": [
+        {
+          "label": "Завершує задачу",
+          "checked": "true",
+          "why": "Коли пайплайн завершиться і його PR змерджено, задача перейде в «Готово».",
+          "warn": "На задачі відкритий ще 1 пайплайн; «Готово» дочекається його.",
+          "warnColor": "rgb(224, 174, 69)",
+          "whyColor": "rgb(139, 139, 152)",
+          "cut": false,
+          "inside": true
+        },
+        {
+          "label": "Завершує задачу",
+          "checked": "false",
+          "why": "Коли пайплайн завершиться і його PR змерджено, задача перейде в «Готово».",
+          "warn": null,
+          "warnColor": null,
+          "whyColor": "rgb(139, 139, 152)",
+          "cut": false,
+          "inside": true
+        }
+      ]
+    }
+  },
+  "failures": []
+}

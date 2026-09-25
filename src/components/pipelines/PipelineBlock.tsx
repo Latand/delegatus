@@ -1,10 +1,11 @@
 "use client";
 
-import { Link2, Settings } from "lucide-react";
+import { Flag, Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
+import { pipelineTaskFinishState } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fmtAge } from "@/components/utils";
@@ -337,6 +338,50 @@ function UnreviewedNote({ pipeline }: { pipeline: Pipeline }) {
   return <p className="pb-unreviewed" data-pipeline-unreviewed={pipeline.id}>{t("pipelineBlock.unreviewedFix", { count: unreviewed.findings })}</p>;
 }
 
+/** The task a lane row speaks about: the one it sits on, else the first it
+    finishes or finished. */
+function finishTaskOf(pipeline: Pipeline, taskId: string | null | undefined): string | null {
+  return taskId ?? pipeline.finishesTaskIds?.[0] ?? pipeline.taskFinishes?.[0]?.taskId ?? null;
+}
+
+/** Whether the chain row carries the flag (marked, or finished). */
+function finishFlagShown(pipeline: Pipeline, taskId: string | null | undefined): boolean {
+  const task = finishTaskOf(pipeline, taskId);
+  const state = task ? pipelineTaskFinishState(pipeline, task) : null;
+  return state !== null && state.kind !== "waits";
+}
+
+/** #2187 §6: a lane marked as finishing its task says so at the end of its
+    chain row, before the PR chip, muted; once it has, in success ink. The
+    lane's head stays free of it: there it cut the lane title at 1440. */
+function FinishFlag({ pipeline, taskId }: { pipeline: Pipeline; taskId: string | null | undefined }) {
+  const { t } = useLocale();
+  const task = finishTaskOf(pipeline, taskId);
+  const state = task ? pipelineTaskFinishState(pipeline, task) : null;
+  if (!state || state.kind === "waits") return null;
+  return (
+    <span className="pb-finish" data-pipeline-finish={state.kind} data-pipeline-finish-for={pipeline.id}>
+      <Flag className="pb-finish-icon" aria-hidden />
+      {t(state.kind === "finished" ? "pipelineBlock.finish.done" : "pipelineBlock.finish.marked")}
+    </span>
+  );
+}
+
+/** #2187 §5.3: a finished marked lane whose task's move to Done waits on
+    other open pipelines says so on a line of its own under the chain. */
+function FinishWaitNote({ pipeline, taskId }: { pipeline: Pipeline; taskId: string | null | undefined }) {
+  const { t } = useLocale();
+  const task = finishTaskOf(pipeline, taskId);
+  const state = task ? pipelineTaskFinishState(pipeline, task) : null;
+  if (state?.kind !== "waits") return null;
+  return (
+    <p className="pb-finish-wait" data-pipeline-finish="waits" data-pipeline-finish-for={pipeline.id} data-pipeline-finish-open={state.open}>
+      <Flag className="pb-finish-icon" aria-hidden />
+      {t("pipelineBlock.finish.waits", { count: state.open })}
+    </p>
+  );
+}
+
 /** What a completed lane's merge adds after "done" (#2187 §6), in its ink:
     waiting for checks with how long, updating from main, merging, merge
     stopped, merged. Null when the lane has no merge to speak of. */
@@ -455,6 +500,8 @@ export interface PipelineBlockProps {
   nowMs: number;
   /** The task the block sits on: a pipeline titled like it draws no title. */
   taskTitle?: string | null;
+  /** That task's id: whether the lane finishes it is said on the row (#2187 §6). */
+  taskId?: string | null;
   /** Stage ids whose conversation or first message is open where the block is. */
   selected?: ReadonlySet<string>;
   /** The pipeline action this page sent and the server has not answered. */
@@ -639,11 +686,13 @@ export function PipelineBlock(props: PipelineBlockProps) {
       {graphOpen ? (
         <>
           <GraphSlot summary={summary} names={names} selected={selected} onOpenStage={props.onOpenStage!} />
+          <FinishFlag pipeline={pipeline} taskId={props.taskId} />
           <WorkLinkRow resolved={links} showNoPr className="pb-links end" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
         </>
       ) : (
-        <div className="pb-chain">
+        <div className={finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
           <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={props.onOpenStage} />
+          <FinishFlag pipeline={pipeline} taskId={props.taskId} />
           <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
           {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
         </div>
@@ -657,6 +706,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
             : <DecisionReport pipeline={pipeline} stage={parkedStage(pipeline)} names={names} nameOf={nameOf} />}
         </div>
       ) : null}
+      <FinishWaitNote pipeline={pipeline} taskId={props.taskId} />
       <UnreviewedNote pipeline={pipeline} />
       <MergeNote pipeline={pipeline} />
       {report ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={report} names={names} /></div> : null}
@@ -880,14 +930,17 @@ function ScreenBlock(props: PipelineBlockProps & {
   /* The links say what the lane produced, under its title; attaching one by
      hand is rare, so it is a row of its own after the stages (#2148). */
   const hasLinks = Boolean(links?.links.length || links?.noPr);
+  const hasFlag = finishFlagShown(pipeline, props.taskId);
   return (
     <section className="pblock" aria-label={t("kanban.pipelineAria", { title: pipelineTitle(t, pipeline), progress: pipelineProgress(t, summary, nameOf) })} {...props.root}>
       {props.embedded ? null : <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>}
-      {hasLinks ? (
+      {hasLinks || hasFlag ? (
         <div className="pb-links-row">
-          <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} />
+          <FinishFlag pipeline={pipeline} taskId={props.taskId} />
+          {hasLinks ? <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} /> : null}
         </div>
       ) : null}
+      <FinishWaitNote pipeline={pipeline} taskId={props.taskId} />
       <UnreviewedNote pipeline={pipeline} />
       <MergeNote pipeline={pipeline} />
       {props.answers?.kind === "merge" ? (

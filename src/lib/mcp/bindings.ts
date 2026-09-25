@@ -1541,10 +1541,12 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
 /** What became of the review-loop stages a create or an add-stage brought in
     (#2187 §3.2): the reviewer and fix stage each was stored as, and the
     refusals of any stored as sent. */
-function newLegacyReviewFields(result: Pick<PipelineMutationResult, "convertedStages" | "legacyReview">) {
+function newLegacyReviewFields(result: Pick<PipelineMutationResult, "convertedStages" | "legacyReview" | "finishesTaskDropped">) {
   return {
     ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}),
     ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}),
+    /* #2187 §5.1: the finishesTask ids a create dropped, clamped rather than refused. */
+    ...(result.finishesTaskDropped?.length ? { finishesTaskDropped: result.finishesTaskDropped, finishesTaskNote: "these ids are not in taskIds, so the pipeline does not finish them" } : {}),
   };
 }
 

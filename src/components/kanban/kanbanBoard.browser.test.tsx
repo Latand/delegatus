@@ -9462,3 +9462,187 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("#2187 a pipeline that finishes its task, and the wait for the task's other lanes", () => {
+  /*
+   * docs/design/merge-policy-and-task-finishing.md §5.3, §6 (mockup D4): on
+   * the desktop board at 1440, en and uk (`?scenario=task-finish`), a running
+   * lane marked "finishes the task", a task whose marked lane merged while a
+   * second lane still runs ("Done waits for 1 more pipeline" on the card,
+   * "finishes the task once 1 other pipeline ends" on the lane row), and a
+   * Done task its marked lane finished ("finished the task"). The card's ⋯
+   * carries "Finishes the task", checked, with the count of the other open
+   * lane in warning ink, and the toggle sends `link-task` with `finishes`. No
+   * word is cut, none meets another text or a control, and nothing paints
+   * outside its card. The phone at 390 is the phone driver's case.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 TASK_FINISH_PNG_DIR=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#2187 a pipeline that finishes"
+   *
+   * PNGs go to `TASK_FINISH_PNG_DIR`, or `.artifacts/task-finish/`, never committed.
+   */
+  const OUT = path.resolve(process.env.TASK_FINISH_PNG_DIR ?? ".artifacts/task-finish");
+  const EVIDENCE = path.resolve("evidence/task-finish");
+  const CARDS = ["t-finish-marked", "t-finish-hold", "t-finish-done"] as const;
+  type FinishReading = {
+    task: string; column: string | null; flags: Array<{ pipeline: string; state: string; text: string; color: string; inChain: boolean; beforeLinks: boolean }>;
+    laneWaits: string[]; cardWait: string | null; clipped: string[]; overlaps: string[]; escapes: string[];
+  };
+  const READ = (tasks: string[]) => tasks.map((task) => {
+    type Box = { top: number; left: number; right: number; bottom: number };
+    const box = (el: Element): Box => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a: Box, b: Box): Box => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = (r: Box) => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const union = (a: Box, b: Box): Box => ({ top: Math.min(a.top, b.top), left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) });
+    const cardElement = document.querySelector(`[data-kanban-board] .card[data-id="task:${task}"]`);
+    const out: FinishReading = { task, column: null, flags: [], laneWaits: [], cardWait: null, clipped: [], overlaps: [], escapes: [] };
+    if (!cardElement) return out;
+    out.column = cardElement.closest(".column[data-status]")?.getAttribute("data-status") ?? null;
+    for (const flag of cardElement.querySelectorAll<HTMLElement>("span[data-pipeline-finish]")) {
+      out.flags.push({
+        pipeline: flag.getAttribute("data-pipeline-finish-for") ?? "", state: flag.getAttribute("data-pipeline-finish") ?? "", text: flag.textContent?.trim() ?? "",
+        color: getComputedStyle(flag).color, inChain: Boolean(flag.closest(".pb-chain")) && !flag.closest(".pb-head"),
+        beforeLinks: Boolean(flag.nextElementSibling?.classList.contains("pb-links")),
+      });
+    }
+    out.laneWaits = [...cardElement.querySelectorAll('p[data-pipeline-finish="waits"]')].map((node) => node.textContent?.trim() ?? "");
+    out.cardWait = cardElement.querySelector("[data-task-finish-wait]")?.textContent?.trim() ?? null;
+    const controls = [...cardElement.querySelectorAll<HTMLElement>("button, a")];
+    const ink: Array<{ el: Element; rect: Box; text: string; own: boolean }> = [];
+    const walker = document.createTreeWalker(cardElement, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.nodeValue?.trim() || !node.parentElement) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter((r) => r.width * r.height > 0.5).map((r) => ({ top: r.top, left: r.left, right: r.right, bottom: r.bottom }));
+      if (!rects.length) continue;
+      let rect = rects.reduce(union);
+      const own = Boolean(node.parentElement.closest("[data-pipeline-finish], [data-task-finish-wait]"));
+      for (let up: Element | null = node.parentElement; up && up !== cardElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+        const visible = intersect(rect, box(up));
+        if (own && area(visible) + 1 < area(rect)) { out.clipped.push(`${node.nodeValue.trim().slice(0, 40)} cut by ${up.tagName.toLowerCase()}.${up.className}`); break; }
+        rect = visible;
+      }
+      if (area(rect) > 0.5) ink.push({ el: node.parentElement, rect, text: node.nodeValue.trim().slice(0, 40), own });
+    }
+    const frame = box(cardElement);
+    for (let i = 0; i < ink.length; i++) {
+      const a = ink[i]!;
+      if (a.own && (a.rect.left < frame.left - 1 || a.rect.right > frame.right + 1 || a.rect.bottom > frame.bottom + 1)) out.escapes.push(a.text);
+      for (let j = i + 1; j < ink.length; j++) {
+        const b = ink[j]!;
+        if ((a.own || b.own) && !a.el.contains(b.el) && !b.el.contains(a.el) && area(intersect(a.rect, b.rect)) > 0.5) out.overlaps.push(`text/text: ${a.text} | ${b.text}`);
+      }
+      if (a.own) for (const control of controls) if (!control.contains(a.el) && area(intersect(a.rect, box(control))) > 0.5) out.overlaps.push(`text/control: ${a.text} | ${control.textContent?.trim().slice(0, 30)}`);
+    }
+    return out;
+  });
+  const READ_MENU = () => {
+    const root = document.querySelector<HTMLElement>(".menu")!;
+    const menu = root.getBoundingClientRect();
+    return [...root.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].map((item) => {
+      const why = item.querySelector<HTMLElement>(".why:not(.warn)");
+      const warn = item.querySelector<HTMLElement>(".why.warn");
+      const box = item.getBoundingClientRect();
+      return {
+        label: item.querySelector(".lbl")?.firstChild?.textContent ?? "", checked: item.getAttribute("aria-checked"),
+        why: why?.textContent ?? null, warn: warn?.textContent ?? null, warnColor: warn ? getComputedStyle(warn).color : null, whyColor: why ? getComputedStyle(why).color : null,
+        cut: [item, why, warn].some((el) => el ? el.scrollWidth > el.clientWidth + 1 : false),
+        inside: box.left >= menu.left - 1 && box.right <= menu.right + 1 && menu.right <= window.innerWidth && menu.bottom <= window.innerHeight + 1,
+      };
+    });
+  };
+
+  browserTest("the flag, finished the task, the wait on the card and the lane row, and the menu's count at 1440, en and uk", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/task-finish-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const label = `1440-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-finish`, { width: 1440, height: 900 }, scheme, lang);
+          try {
+            await page.waitForSelector(`${card("t-finish-hold")} [data-task-finish-wait]`, { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+            for (const task of CARDS) {
+              const element = page.locator(card(task));
+              await element.scrollIntoViewIfNeeded();
+              await element.screenshot({ path: path.join(OUT, `card-${task.replace("t-finish-", "")}-${label}.png`) });
+            }
+            await page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
+            const reading = await page.evaluate(READ, [...CARDS]) as FinishReading[];
+            const of = (task: string) => reading.find((entry) => entry.task === task)!;
+            const fail = (text: string) => failures.push(`${label} ${text}`);
+            const marked = of("t-finish-marked");
+            if (JSON.stringify(marked.flags.map((flag) => [flag.pipeline, flag.state, flag.text])) !== JSON.stringify([["p-finish-marked", "marked", t("pipelineBlock.finish.marked")]])) fail(`marked flags ${JSON.stringify(marked.flags)}`);
+            if (marked.cardWait !== null || marked.laneWaits.length) fail(`marked waits ${JSON.stringify([marked.cardWait, marked.laneWaits])}`);
+            const hold = of("t-finish-hold");
+            if (hold.column !== "assigned") fail(`the waiting task sits in ${hold.column}`);
+            if (hold.flags.length) fail(`the waiting lane draws a chain flag ${JSON.stringify(hold.flags)}`);
+            if (JSON.stringify(hold.laneWaits) !== JSON.stringify([t("pipelineBlock.finish.waits", { count: 1 })])) fail(`lane wait ${JSON.stringify(hold.laneWaits)}`);
+            if (hold.cardWait !== t("pipelineBlock.finish.cardWaits", { count: 1 })) fail(`card wait ${JSON.stringify(hold.cardWait)}`);
+            const done = of("t-finish-done");
+            if (done.column !== "done") fail(`the finished task sits in ${done.column}`);
+            if (JSON.stringify(done.flags.map((flag) => [flag.state, flag.text])) !== JSON.stringify([["finished", t("pipelineBlock.finish.done")]])) fail(`done flags ${JSON.stringify(done.flags)}`);
+            for (const entry of [...marked.flags, ...done.flags]) {
+              if (!entry.inChain) fail(`${entry.pipeline}: the flag is not on the chain row`);
+              if (!entry.beforeLinks) fail(`${entry.pipeline}: the flag is not right before the PR chip`);
+            }
+            /* Success ink once it has, muted before: the two flags differ. */
+            if (marked.flags[0] && done.flags[0] && marked.flags[0].color === done.flags[0].color) fail(`finished flag shares the marked flag's ink ${done.flags[0].color}`);
+            for (const entry of reading) {
+              for (const line of [...entry.clipped, ...entry.overlaps]) fail(`${entry.task}: ${line}`);
+              for (const line of entry.escapes) fail(`${entry.task}: paints outside its card: ${line}`);
+            }
+            /* The card's ⋯: both lanes' toggles, the marked one checked with the count in warning ink. */
+            await page.locator(card("t-finish-hold")).scrollIntoViewIfNeeded();
+            await page.click(`${card("t-finish-hold")} [data-menu]`);
+            await page.waitForSelector('.menu [role="menuitemcheckbox"]', { timeout: 10_000 });
+            await page.waitForTimeout(350);
+            await page.locator(".menu").screenshot({ path: path.join(OUT, `menu-hold-${label}.png`) });
+            await page.screenshot({ path: path.join(OUT, `board-menu-${label}.png`) });
+            const menu = await page.evaluate(READ_MENU);
+            const want = [
+              { label: t("pipelineBlock.finish.menu"), checked: "true", why: t("pipelineBlock.finish.menuWhy"), warn: t("pipelineBlock.finish.menuOpen", { count: 1 }) },
+              { label: t("pipelineBlock.finish.menu"), checked: "false", why: t("pipelineBlock.finish.menuWhy"), warn: null },
+            ];
+            if (JSON.stringify(menu.map(({ label: l, checked, why, warn }) => ({ label: l, checked, why, warn }))) !== JSON.stringify(want)) fail(`menu ${JSON.stringify(menu)}`);
+            for (const entry of menu) {
+              if (entry.cut || !entry.inside) fail(`menu geometry ${JSON.stringify(entry)}`);
+              if (entry.warn && entry.warnColor === entry.whyColor) fail(`the count hint is not in warning ink: ${entry.warnColor}`);
+            }
+            await page.keyboard.press("Escape");
+            /* The toggle: clearing the running lane's flag sends link-task, and the flag leaves the row. */
+            if (scheme === "light") {
+              await page.click(`${card("t-finish-marked")} [data-menu]`);
+              await page.waitForSelector('.menu [role="menuitemcheckbox"]', { timeout: 10_000 });
+              await page.locator('.menu [role="menuitemcheckbox"]').first().click();
+              await page.waitForFunction(() => !document.querySelector('[data-kanban-board] .card[data-id="task:t-finish-marked"] span[data-pipeline-finish]'), undefined, { timeout: 10_000 }).catch(() => fail("the flag stayed on the row after clearing it"));
+              const patches = await page.evaluate(() => (window as unknown as { evidence?: { pipelinePatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence?.pipelinePatches ?? null);
+              if (!patches?.some((entry) => entry.id === "p-finish-marked" && entry.body.action === "link-task" && entry.body.taskId === "t-finish-marked" && entry.body.finishes === false)) fail(`the toggle sent ${JSON.stringify(patches)}`);
+              readings[`${label}-toggle`] = { patches };
+            }
+            readings[label] = { cards: reading, menu };
+            const sideways = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+            if (sideways > 0) fail(`the page scrolls sideways by ${sideways}px`);
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});

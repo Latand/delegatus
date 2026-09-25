@@ -175,3 +175,29 @@ test("run-only and closed pipelines show no conversion controls", () => {
     flushSync(() => root.unmount());
   }
 });
+
+/* #2187 §6: the same editor carries "Finishes the task" for a linked task,
+   with a line naming the project's merge setting, and the box sends
+   link-task with finishes. A pipeline on no task shows none and reads nothing. */
+test("a linked draft's Finishes the task box names the merge setting and sends link-task", async () => {
+  const drafted = legacyDraft({ taskIds: ["t-1"] });
+  const calls = serve((call) => call.method === "GET"
+    ? { json: { ok: true, project: "demo", mergeOnReview: { enabled: true, changedAt: "1970", changedBy: "operator" }, github: "acme/widgets" } }
+    : { json: { ok: true, pipeline: { ...drafted, finishesTaskIds: ["t-1"] } } });
+  const { host } = mount(drafted);
+  await settle();
+  const box = host.querySelector<HTMLInputElement>('[data-finishes-task="t-1"]')!;
+  expect(box.checked).toBe(false);
+  expect(host.querySelector('[data-finishes-task-merge="on"]')?.textContent).toContain("the task moves to Done when the PR merges");
+  flushSync(() => box.click());
+  await settle();
+  expect(calls.filter((call) => call.method === "PATCH").map((call) => call.body)).toEqual([{ action: "link-task", taskId: "t-1", finishes: true }]);
+  expect(host.querySelector<HTMLInputElement>('[data-finishes-task="t-1"]')!.checked).toBe(true);
+
+  document.body.replaceChildren();
+  const quiet = serve(() => ({ json: {} }));
+  const bare = mount(legacyDraft());
+  await settle();
+  expect(bare.host.querySelector("[data-finishes-task-field]")).toBeNull();
+  expect(quiet).toEqual([]);
+});

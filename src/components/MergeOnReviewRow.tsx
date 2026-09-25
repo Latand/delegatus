@@ -11,9 +11,11 @@ import { useLocale } from "@/lib/i18n";
  * 44 px tall.
  */
 
-type SettingRead = { enabled: boolean; github: string | null };
+export type SettingRead = { enabled: boolean; github: string | null };
 
-async function readSetting(project: string): Promise<SettingRead | null> {
+/** Also read by the draft editor, which names the setting beside its
+    finishes-the-task checkbox (#2187 §6). */
+export async function readSetting(project: string): Promise<SettingRead | null> {
   try {
     const response = await fetch(`/api/projects/settings?project=${encodeURIComponent(project)}`, { cache: "no-store" });
     if (!response.ok) return null;

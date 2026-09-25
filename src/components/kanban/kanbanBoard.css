@@ -500,20 +500,26 @@
 
 /* ── Menus ────────────────────────────────────────────────────────────────── */
 .kb .menu {
-  position: fixed; z-index: 70; min-width: 200px; padding: 6px; border-radius: var(--radius-surface);
+  /* A card holding several lanes has a long ⋯: it scrolls inside the
+     viewport rather than hang its last rows below it. */
+  position: fixed; z-index: 70; min-width: 200px; max-height: calc(100vh - 16px); overflow-y: auto; padding: 6px; border-radius: var(--radius-surface);
   background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--shadow-2);
   animation: kb-menu-in var(--motion-base) var(--ease-standard);
 }
 @keyframes kb-menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
 .kb .menu .ico { width: 15px; height: 15px; flex-shrink: 0; }
-.kb .menu [role="menuitem"], .kb .menu [role="menuitemradio"] {
+.kb .menu [role="menuitem"], .kb .menu [role="menuitemradio"], .kb .menu [role="menuitemcheckbox"] {
   display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 0 10px; border-radius: var(--radius-control);
   font-size: var(--text-ui); text-align: left; color: var(--color-primary);
 }
-.kb .menu [role="menuitem"]:hover, .kb .menu [role="menuitem"]:focus-visible, .kb .menu [role="menuitemradio"]:hover, .kb .menu [role="menuitemradio"]:focus-visible { background: var(--surface-well); outline: none; }
-.kb .menu [role="menuitem"][aria-disabled="true"] { color: var(--color-muted); cursor: not-allowed; }
-.kb .menu [role="menuitem"][aria-disabled="true"]:hover { background: none; }
+.kb .menu [role="menuitem"]:hover, .kb .menu [role="menuitem"]:focus-visible, .kb .menu [role="menuitemradio"]:hover, .kb .menu [role="menuitemradio"]:focus-visible, .kb .menu [role="menuitemcheckbox"]:hover, .kb .menu [role="menuitemcheckbox"]:focus-visible { background: var(--surface-well); outline: none; }
+.kb .menu [role="menuitem"][aria-disabled="true"], .kb .menu [role="menuitemcheckbox"][aria-disabled="true"] { color: var(--color-muted); cursor: not-allowed; }
+.kb .menu [role="menuitem"][aria-disabled="true"]:hover, .kb .menu [role="menuitemcheckbox"][aria-disabled="true"]:hover { background: none; }
+/* A toggle with a hint and a count wraps; its tick sits by its first line. */
+.kb .menu [role="menuitemcheckbox"] { align-items: flex-start; padding-top: 6px; padding-bottom: 6px; }
+.kb .menu [role="menuitemcheckbox"] .check { margin-top: 2px; }
 .kb .menu .why { display: block; font-size: var(--text-caption); color: var(--color-muted); font-weight: 400; line-height: 1.3; }
+.kb .menu .why.warn { color: var(--color-warning); }
 .kb .menu .sep { height: 1px; background: var(--border-default); margin: 6px 4px; }
 .kb .menu .head { font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); padding: 4px 10px 2px; }
 .kb .menu .check { width: 14px; height: 14px; flex-shrink: 0; color: var(--color-accent); visibility: hidden; }
@@ -568,7 +574,7 @@
   .kb .tile, .kb .card .add { min-height: 44px; }
   .kb .card button.task-icon { width: 36px; height: 44px; padding: 13px 0; margin: -13px -2px -13px -10px; }
   .kb .receipt .close { width: 44px; height: 44px; flex-shrink: 0; }
-  .kb .menu [role="menuitem"], .kb .menu [role="menuitemradio"] { min-height: 44px; }
+  .kb .menu [role="menuitem"], .kb .menu [role="menuitemradio"], .kb .menu [role="menuitemcheckbox"] { min-height: 44px; }
 }
 
 /* ── Reduced motion: every animation has a still equivalent ──────────────── */
@@ -979,6 +985,9 @@
 .kb .card button.desc { cursor: text; border-radius: 4px; }
 .kb .card button.desc:hover { background: var(--surface-well); }
 .kb .card .desc.placeholder { color: var(--color-muted); font-style: italic; }
+/* #2187 §5.3: the card says once that its move to Done waits. */
+.kb .card .finish-wait { margin: 0; display: flex; align-items: flex-start; gap: 4px; font-size: var(--text-label); line-height: 16px; color: var(--color-muted); overflow-wrap: anywhere; }
+.kb .card .finish-wait-icon { width: 12px; height: 12px; flex: none; margin-top: 2px; }
 /* Agent context, folded away (#1834): the closed row costs one line, and the
    open text scrolls inside itself instead of stretching the card. */
 .kb .card .details { display: flex; flex-direction: column; gap: 4px; min-width: 0; }

@@ -1108,6 +1108,55 @@ test("a deleted task stays linked until unlink-task removes its stale id", async
   expect(loadPipelines()[0]!.taskIds).toEqual([]);
 });
 
+/* #2187 §5.1: a pipeline marked as the one that finishes a linked task. */
+test("finishesTask at creation marks linked tasks, and an id the pipeline does not link is dropped and named", async () => {
+  const h = harness();
+  const [first, second] = [boardTask("task-finish-1"), boardTask("task-finish-2")];
+  saveTasks([first, second]);
+  savePipelines([]);
+  const stages = [{ id: "run", kind: "run" as const, role: { roleId: "builder" as const }, engine: "codex" as const, prompt: "run", next: null }];
+
+  const every = await createPipelineFromRequest({ task: "All", taskIds: [first.id, second.id], finishesTask: true, repoDir: "/repo", autoStart: false, stages }, h.ports);
+  expect(every.pipeline?.finishesTaskIds).toEqual([first.id, second.id]);
+  expect(every.finishesTaskDropped).toBeUndefined();
+
+  const some = await createPipelineFromRequest({ task: "Some", taskIds: [first.id], finishesTask: [first.id, "task-elsewhere"], repoDir: "/repo", autoStart: false, stages }, h.ports);
+  expect(some.pipeline?.finishesTaskIds).toEqual([first.id]);
+  expect(some.finishesTaskDropped).toEqual(["task-elsewhere"]);
+
+  const none = await createPipelineFromRequest({ task: "None", taskIds: [first.id], repoDir: "/repo", autoStart: false, stages }, h.ports);
+  expect(none.pipeline?.finishesTaskIds).toBeUndefined();
+  expect(loadPipelines().map((pipeline) => pipeline.finishesTaskIds)).toEqual([[first.id, second.id], [first.id], undefined]);
+
+  const malformed = await createPipelineFromRequest({ task: "Bad", taskIds: [first.id], finishesTask: "yes" as never, repoDir: "/repo", autoStart: false, stages }, h.ports);
+  expect(malformed.status).toBe(400);
+  expect(malformed.violations?.map((violation) => violation.field)).toContain("finishesTask");
+});
+
+test("link-task with finishes is an upsert of the flag, and unlink-task clears it", async () => {
+  const h = harness();
+  const task = boardTask("task-finish-link");
+  saveTasks([task]);
+  const pipeline = await create(h.ports);
+
+  const marked = await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id, finishes: true }, h.ports);
+  expect(marked.pipeline).toMatchObject({ taskIds: [task.id], finishesTaskIds: [task.id] });
+  /* On a task already linked, the flag alone moves; absent leaves it. */
+  const kept = await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id }, h.ports);
+  expect(kept.pipeline?.finishesTaskIds).toEqual([task.id]);
+  const cleared = await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id, finishes: false }, h.ports);
+  expect(cleared.pipeline?.taskIds).toEqual([task.id]);
+  expect(cleared.pipeline?.finishesTaskIds).toBeUndefined();
+
+  await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id, finishes: true }, h.ports);
+  const refused = await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id, finishes: "yes" as never }, h.ports);
+  expect(refused).toEqual({ error: "finishes must be a boolean", status: 400 });
+  const unlinked = await patchPipeline(pipeline.id, { action: "unlink-task", taskId: task.id }, h.ports);
+  expect(unlinked.pipeline?.taskIds).toEqual([]);
+  expect(unlinked.pipeline?.finishesTaskIds).toBeUndefined();
+  expect(loadPipelines()[0]!.finishesTaskIds).toBeUndefined();
+});
+
 test("pipeline creation validates and persists explicit taskIds atomically", async () => {
   const h = harness();
   const task = boardTask("task-create");

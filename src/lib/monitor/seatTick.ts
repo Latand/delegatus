@@ -664,7 +664,12 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
     : lane.settled === "failed"
       ? "a stage failed"
       : "parked on a decision";
-  return `${lane.title} — lane you launched: ${settled}`;
+  return `${lane.title} — lane you launched: ${settled}${taskWaitNote(lane.taskWaits)}`;
+}
+
+/** #2187 §5.3: a finished marked lane whose task's move to Done waits. */
+function taskWaitNote(open: number | undefined): string {
+  return open ? `; task waits for ${open} open pipeline${open === 1 ? "" : "s"}` : "";
 }
 
 /**
@@ -1482,7 +1487,7 @@ function wakeItems(context: {
     items.push({
       kind: "pull-request",
       id: `#${pullRequest.number}`,
-      label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished${pullRequest.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${pullRequest.mergeBlocked ? `; merge stopped: ${pullRequest.mergeBlocked}` : ""}`,
+      label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished${pullRequest.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${pullRequest.mergeBlocked ? `; merge stopped: ${pullRequest.mergeBlocked}` : ""}${taskWaitNote(pullRequest.taskWaits)}`,
       ...(lane ? { laneAnnouncement: `${lane.id}:${lane.settled}` } : {}),
     });
   }
