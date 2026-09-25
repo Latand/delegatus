@@ -63,7 +63,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "reviewer",
     name: "Reviewer",
-    description: "Reviews a code diff and returns severity-ranked evidence-backed findings.",
+    description: "Reviews a code diff and returns severity-ranked evidence-backed findings. High per lane for risky backend diffs.",
     config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "xhigh" },
     parameters: [
       { key: "diffSource", label: "Diff source", description: "Diff or pull request reference to inspect.", kind: "text", required: true },
@@ -90,7 +90,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "builder",
     name: "Builder",
-    description: "Writes product code for a scoped directive.",
+    description: "Writes product code for a scoped directive. Frontend xhigh only per lane, for the hardest UI; never raise GPT-6 Sol to xhigh by hand. Default Sol high vs Astra medium: decided at 30 Sol first reviews.",
     config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
     parameters: [
       { key: "mode", label: "Mode", description: "Implementation discipline.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
@@ -103,7 +103,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "architect",
     name: "Architect",
-    description: "Produces an evidence-grounded design without product edits.",
+    description: "Produces an evidence-grounded design without product edits. claude/fable/high per lane for the largest cross-cutting designs.",
     config: { engine: "claude", model: "opus", effort: "high" },
     parameters: [
       { key: "mode", label: "Mode", description: "Architecture output mode.", kind: "select", options: ["design", "spec", "architecture-audit"] },
@@ -126,7 +126,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "prod-auditor",
     name: "Prod-auditor",
     description: "Performs a read-only evidence-backed production investigation.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "xhigh" },
+    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "high" },
     parameters: [
       { key: "questions", label: "Questions", description: "Production questions to investigate.", kind: "text", required: true },
     ],
