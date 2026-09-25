@@ -30,7 +30,7 @@
     },
     "grip-1440": true,
     "seat-1440-dragged": {
-      "seatWidth": 1152,
+      "seatWidth": 1160,
       "seatCentreOffset": 0,
       "reportWidth": 700.8,
       "reportInkWidth": 695.8,
@@ -57,7 +57,7 @@
         "headPadRight": 12
       }
     },
-    "stored-1440": "{\"height\":null,\"collapsed\":{},\"placement\":\"top\",\"width\":null,\"topWidths\":{\"atlas\":1112},\"sideWidths\":{},\"heightV\":2}",
+    "stored-1440": "{\"height\":null,\"collapsed\":{},\"placement\":\"top\",\"width\":null,\"topWidths\":{\"atlas\":1120},\"sideWidths\":{},\"heightV\":2}",
     "cards-1440": {
       "cards": [
         {
@@ -146,7 +146,7 @@
       "stripRight": 12
     },
     "seat-1280-default": {
-      "seatWidth": 992,
+      "seatWidth": 1000,
       "seatCentreOffset": 0,
       "reportWidth": 700.8,
       "reportInkWidth": 695.8,
