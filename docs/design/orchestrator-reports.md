@@ -400,7 +400,7 @@ seed the language through storage and will keep working.
 | # | When | Class | Enforced by |
 |---|---|---|---|
 | R1 | Every settled outcome, each once: a deploy the seat started that succeeded or failed, and a lane of the seat's that completed, failed or parked (a merge lands as its lane completing). The outcomes one wake announces go into one report: its key is the first of them, the rest go in `covers`. | `completed`, `failed`, `blocked` | The tick keeps each outcome owed, under its own key, until a report with that key or covering it is in the log (§5.1) |
-| R2 | The moment the seat needs the operator: a decision, an approval, an access it lacks. | `blocked`, `question` | The tick owes an ask for each reply-suggestion set with no question report newer than it (§5.1); `seat_tick_settings` asks for it when the tick is switched off (§5.4); the attention queue then holds it (#1168) |
+| R2 | The moment the seat needs the operator: a decision, an approval, an access it lacks. | `blocked`, `question` | The tick owes an ask for each reply-suggestion set a seat of the project left unanswered, under a key of its own (`ask:<setId>`), until a report under that key lands; it survives a rotation (§5.1); `seat_tick_settings` asks for it when the tick is switched off (§5.4); the attention queue then holds it (#1168) |
 | R3 | A status digest when the wake says one is due: an interval wake, the board moved since the last report, and no manager report for at least one wake interval. | `status` | The tick's digest line (§5.1) |
 | R4 | The outcome that settles the last open lane: the report says nothing is running. | (part of R1) | The tick's owed line says so (§5.1) |
 | R5 | File the report even when the operator is in the chat and got the same news there. The chat is not the log. | – | Mandate (§5.7) |
@@ -520,12 +520,19 @@ report, so it lists exactly the items the bridge copy lists. Its own bound
 - A verdict report the seat files on its own uses
   `verdict:<pipelineId>:<stageId>:<round>`, written by the seat from the lane it
   read. The tick never builds this key, because verdicts are not owed (§3.1).
-- A pure ask uses `ask:<topic>:<YYYY-MM-DD>`, a digest
+- An ask's key is given by the tick too: `ask:<setId>`, the id of the
+  reply-suggestion set that marked it (`rsg_…`, unique per set), printed in
+  full in the `Ask owed` line (§5.1). Two asks on the same subject are two sets,
+  so they get two keys, and neither report is a replay of the other. The id
+  stays in the key and never in the text. A digest uses
   `digest:<YYYY-MM-DDTHH:MM>`. An outcome that is also an ask (a failed deploy
   that needs the operator) files under the outcome's key with class `blocked`.
-- `covers` lists the keys of further outcomes one report speaks for, and
-  `coversOwed: true` covers every key the tick holds as owed when the report
-  is filed (§5.2). The row stores them, and each counts as reported.
+- `covers` lists the keys of further outcomes one report speaks for, and each
+  counts as reported. `coversOwed: true` covers by time: the row records
+  `coversOwedAt` (its own `at`), and every owed outcome whose wake reached the
+  seat at or before that instant counts as reported, including outcomes the
+  tick records only after the report is filed (§5.1). An outcome whose wake
+  reached the seat after the report is never covered by it.
 - The same key files once; the store makes a replay a no-op. Ids are scoped by
   project (§5.2), so two projects' identical keys give two rows.
 - A report refused because nothing was left after scrubbing stores nothing, so
@@ -706,9 +713,9 @@ operator, which is what "the language I selected" means.
 ### 5.1 Seat tick
 
 - **State** (`SeatTickProjectState`, `src/lib/monitor/types.ts:949`):
-  - `reportsOwed: { key: string; label: string; since: string }[]`: each
+  - `reportsOwed: { key: string; label: string; receivedAt: string }[]`: each
     settled outcome a landed wake announced, under the key its report must
-    carry. Kept up to 64 entries, each a key of at most about 60 characters.
+    carry, with the instant that wake reached the seat. Kept up to 64 entries, each a key of at most about 60 characters.
     Beyond that the oldest are dropped, with a count kept in
     `reportsOwedDropped` that the wake states. At the measured volume (§6.7) a
     seat would have to ignore reports for about three days to reach it.
@@ -717,6 +724,9 @@ operator, which is what "the language I selected" means.
     digest compares against.
   - `checkFingerprint: string | null`: the board fingerprint of the previous
     check.
+  - `asksOwed: { key: string; setId: string; conversationId: string; at: string }[]`:
+    each reply-suggestion set a seat of this project left that no report
+    under its key has answered, at most 16.
   - All are project-scoped and survive a rotation: add them to
     `seatTickStateForEpoch` (`src/lib/monitor/seatTickState.ts:315`), so a
     successor inherits what its predecessor left unreported. They also survive
@@ -728,11 +738,14 @@ operator, which is what "the language I selected" means.
     project's manager rows;
   - `bridgeReports`, `operatorLocale` and `openLanes` (the count of the
     project's open lanes after this check);
-  - `openAsk`, the seat conversation's current reply-suggestion set
-    (`readReplySuggestions`, `src/lib/suggestions/store.ts:347`): its `at`, or
-    null when there is none. The operator's next message retires the set
-    (`retireReplySuggestionsOnOperatorMessage`, same file), so a set that is
-    still there is an ask nobody has answered.
+  - `latestCoversOwedAt`, the newest `coversOwedAt` among the project's
+    manager rows, or null;
+  - `suggestionSets`, the current reply-suggestion set (`setId`, `at`) of the
+    seat conversation and of every conversation named in `asksOwed`
+    (`readReplySuggestions`, `src/lib/suggestions/store.ts:347`), so an ask
+    left by a predecessor is still read after a rotation. The operator's next
+    message in that conversation retires its set
+    (`retireReplySuggestionsOnOperatorMessage`, same file).
 - **Deploy snapshots** (§3.8): in the controller pass
   (`src/lib/monitor/seatTickController.ts`), after the sources are read and
   before `seatTickDecision` runs or any wake is committed, the controller reads
@@ -743,18 +756,43 @@ operator, which is what "the language I selected" means.
   operator's deploys, deploys started before a rotation and a deploy announced
   on the same check all get one.
 - **Record** (`seatTickWakeCommit`, `src/lib/monitor/seatTick.ts:1696`): a wake
-  that lands with a settled outcome appends `{ key, label, since }` for it. The
+  that lands with a settled outcome appends `{ key, label, receivedAt }` for
+  it. `receivedAt` is when the wake reached the seat, which can be earlier than
+  the moment the tick records it:
+  - for a wake the send reached at once, the send's own instant;
+  - for a wake that was `held`, `queued`, `delivering` or `pending`
+    (`wakeReached`, `src/lib/monitor/seatTickController.ts:384`) and is
+    credited by a later check (`:1111`), the settle time on its delivery
+    record, which that reconcile already reads;
+  - when the record gives no time, the commit's own instant. That is later
+    than the truth, so it can cost one extra ask and never a missed one. The
   key follows §3.3 from the item itself: the deploy's sha and, for a failure,
   its deployment id (the item carries it, `src/lib/monitor/types.ts:263`); the
   lane's id and state. Lane-event items (stage completions, failures and
   verdicts) are never recorded: they still wake the seat, and they are not
   owed reports (§3.1). So the tick needs no stage or round on its event input.
   Nothing is recorded while bridge reports are off.
-- **Discharge** (`decide`, `src/lib/monitor/seatTick.ts:1049`): an owed entry
-  is removed when `reportedIds` holds `scopedReportId(project, key)`. Reports
-  are matched by key, so a report about one outcome, or an unrelated
-  `question`, clears nothing else. A report refused because nothing was left
-  after scrubbing stored no row (§5.2), so it clears nothing.
+- **Discharge** (`decide`, `src/lib/monitor/seatTick.ts:1049`), on every check
+  and when an entry is appended at commit:
+  - by key, unchanged: an entry is removed when `reportedIds` holds
+    `scopedReportId(project, key)`, so a report about one outcome, or an
+    unrelated `question`, clears nothing else;
+  - by time: an entry is removed when `latestCoversOwedAt` is at or after its
+    `receivedAt`. A `coversOwed` report filed while its wake was still waiting
+    to be credited therefore settles every outcome of that wake the moment the
+    commit appends them, whichever of the two came first. A wake that reached
+    the seat after the report stays owed.
+  A report refused because nothing was left after scrubbing stored no row
+  (§5.2), so it clears nothing.
+- **Asks**: every check reads the seat conversation's current suggestion set.
+  A set not yet in `asksOwed`, older than 10 minutes, and with bridge reports
+  on is appended with key `ask:<setId>`. An entry is removed when a report
+  under its key lands, or when its conversation's current set is gone, meaning
+  the operator answered and the set was retired. A set replaced by a newer
+  one in the same conversation stays owed: the seat asked again, and the first
+  ask was never reported. Carried through `seatTickStateForEpoch`, so a
+  successor inherits its predecessor's unanswered ask and the check keeps
+  reading that conversation's set.
 - **Digest memory**, on every check, whatever `reportsOwed` holds: when
   `lastReportAt > reportSeenAt`, set `reportSeenAt = lastReportAt` and
   `reportFingerprint = checkFingerprint`, the fingerprint of the check *before*
@@ -765,15 +803,13 @@ operator, which is what "the language I selected" means.
   the reserved tail so the length bound never cuts it. `in Ukrainian` stands
   for the operator's language; while `operatorLocale` is null the clause is
   left out (§4.2):
-  - `Report owed, in Ukrainian, before this turn ends: deploy 1c41d361 succeeded, lane 33efe347 completed. File one report with key deploy:1c41d361:succeeded and coversOwed: true.` At most 8 outcomes are named, the rest counted ("and N more"); outcomes still owed from earlier wakes are named the same way. The key is the first owed outcome's.
+  - `Report owed, in Ukrainian, before this turn ends: deploy 1c41d361 succeeded, lane 33efe347 completed. File one report with key deploy:1c41d361:succeeded and coversOwed: true.` At most 8 outcomes are named, the rest counted ("and N more"); outcomes still owed from earlier wakes are named the same way. The key is the first owed outcome's, and `coversOwed` settles the rest by time.
   - When the owed outcomes settled the last open lane (`openLanes` is 0 and
     one of them is a lane): `Nothing is running now: the report says so.`
-  - When `openAsk` is older than 10 minutes and no `question` or `blocked`
-    manager report is newer than it:
-    `Ask owed: you asked the operator at HH:MM and filed no question report. File one (key ask:<topic>:<YYYY-MM-DD>) with the ask in the decision section.`
-    Each suggestion set is judged by its own `at`, so after "suggest, report,
-    suggest" the second ask is owed until a report newer than the second set
-    lands.
+  - For each entry of `asksOwed`:
+    `Ask owed: you asked the operator at HH:MM and filed no question report. File one with key ask:rsg_0123456789abcdef01234567 and the ask in the decision section.`
+    Each set has its own key, so after "suggest, report, suggest" on the same
+    subject the second ask is owed under a new key until its own report lands.
   - When `interval` is among the reasons, bridge reports are on,
     `lastReportAt` is older than the wake interval (or absent) and this
     check's fingerprint differs from `reportFingerprint`:
@@ -797,18 +833,22 @@ In `bridgeReport` (`src/lib/mcp/bindings.ts:2565`) and its schema
 - **Arguments**: `key`, `class` and `clientRequestId` as today; new
   `summary?: string`,
   `sections: { prod?, merged?, inProgress?, queued?, decision?: string[] }`
-  `covers?: string[]` and `coversOwed?: boolean`. `coversOwed: true` stores,
-  as the row's `covers`, every key the project's tick holds as owed at that
-  moment (read from the tick state), so one report settles a whole wake
-  without the seat copying keys. `body` stays for older callers: a report with no
+  `covers?: string[]` and `coversOwed?: boolean`. `coversOwed: true` stores
+  `coversOwedAt` (the row's `at`) on the row, and the tick settles by time
+  every owed outcome whose wake reached the seat by then (§3.3, §5.1). So one
+  report settles a whole wake without the seat copying keys, even when the tick
+  records that wake's outcomes only after the report. `body` stays for older callers: a report with no
   `sections` renders its body as one `inProgress` item per line, under the
   same budget, and the answer warns "Use summary and sections."
 - **Render** (new `src/lib/bridge/reportRender.ts`, pure): scrub every item
   and the summary (§5.5); drop items over 200 characters; add the `tasks`
   section for a deploy report (§3.8, `src/lib/bridge/taskChanges.ts`); apply
   the section limits and the byte budget of §3.2, whole items only; and return
-  the cut report. `renderPlain(cut)` is stored as the row's `body`;
-  `renderTelegram(cut)` (§5.5) is the group's copy. The header name, time zone
+  the cut report. `renderPlain(cut)` is stored as the row's `body`, and
+  `renderTelegram(cut)` (§5.5), the group's copy, is stored on the same row
+  (`telegram.html`, at most 4 096 characters) when the project has a chat.
+  Both are rendered once, at append, from the same cut; nothing re-renders a
+  stored report. The header name, time zone
   and locale come from §5.6 and §4.2; headings and kind words live in the
   renderer's own small en/uk table (`src/lib/bridge/reportWords.ts`), since the
   UI dictionaries are client modules.
@@ -849,9 +889,10 @@ written in the operator's interface language.
 The 19:27 failure (§1.4) is a seat that asked the operator in chat, switched
 its tick off and filed nothing.
 
-- **Asks** are enforced by the tick's `Ask owed` line (§5.1), which judges each
-  reply-suggestion set on its own time, so no order of asks and reports lets
-  one through. `suggest_replies`, the mandate's marker of an ask, adds one line
+- **Asks** are enforced by the tick's `Ask owed` line (§5.1). Each
+  reply-suggestion set gets its own tick-given key, so no order of asks and
+  reports lets one through, and the owed ask lives in the project's tick state,
+  so a rotation does not lose it. `suggest_replies`, the mandate's marker of an ask, adds one line
   to its answer when the caller is a project's designated seat with bridge
   reports on: "If the operator is away, they learn this ask only from a
   question report." Drafts are stored as before.
@@ -919,12 +960,16 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   with the seat's capability headers, so `TelegramBotService.send` checks the
   allowlist, attributes the post to the seat and keeps it idempotent, under
   `clientRequestId: "bridge-report:<reportId>"`. Every report is sent
-  silently. The outcome is recorded on the row with a new store function,
+  silently. The text sent is the row's stored `telegram.html` (§5.2). The
+  outcome is recorded on the row with a new store function,
   `recordBridgeReportTelegram(id, { chat, state, messageIds?, code?, at })`.
 - **Failure and retry**: a retryable code (`rate_limited`, `network_failed`,
   `timed_out`, `telegram_failed`) leaves `state: "failed"`, and calling
   `bridge_report` again with the same key, still a replay for the log, re-sends
-  the copy under `bridge-report:<reportId>:r<n>`. `send_uncertain` is never
+  the row's stored `telegram.html`, byte for byte, under
+  `bridge-report:<reportId>:r<n>`. The replay's own arguments are ignored:
+  nothing is re-rendered, and the task list and deny list are not re-read. So
+  the group gets exactly what was prepared beside the bridge row. `send_uncertain` is never
   re-sent: a second public post is worse than a missing one. A chat removed
   from the allowlist answers `chat_not_allowed` until the operator changes the
   project's setting.
@@ -1001,7 +1046,7 @@ Replace the Bridge reports section of `ORCHESTRATOR_SYSTEM_PROMPT` and bump
 On: the report log is where the operator catches up after being away, and they can leave at any moment, so it has to hold every outcome without your chat. When the project has a Telegram chat (reportTelegram in get_orchestrator), the Viewer posts the same report there too.
 File a report:
 - for the settled outcomes a wake lists (a deploy you started, a lane of yours that completed, failed or parked): one report per wake, under the key the wake gives, with coversOwed: true. Review verdicts inside a lane are not owed: the lane's own outcome and the next digest carry them.
-- the moment you need the operator: question or blocked, with the ask in the decision section.
+- the moment you need the operator: question or blocked, with the ask in the decision section, under the ask key the wake gives when it names one.
 - as a status digest when a wake says one is due, with the whole state.
 - even when you also told the operator in chat. The chat is not the log.
 Shape: pass a summary and sections, never a free body. summary: one line, at most 120 characters, saying what is now true, or the ask on blocked and question. Sections: prod (on production), merged (merged and waiting for the next deploy), inProgress, queued (what comes next), decision (what the operator must answer or do; at most 3). Each item is one or two plain sentences, at most 200 characters, saying what is now true and what it means; name work by its title and #PR, a deploy by its 8-character sha; no URLs. The Viewer adds the header, the time, the emoji and, on a deploy report, the task changes since the previous deploy, and cuts whole items when a report is too long.
@@ -1025,7 +1070,7 @@ mandates.
 | Rule | Mandate | Seat tick | Tool answers | Viewer rendering |
 |---|---|---|---|---|
 | R1 every settled outcome, once | ✓ | owed per key until that key or a `covers` entry is in the log; one report per wake via `coversOwed`; verdicts not owed; survives rotation and tick-off | | |
-| R2 asks | ✓ | ask owed per reply-suggestion set until a question report newer than it lands | `suggest_replies` reminder; `seat_tick_settings` lists owed reports and the open ask | attention queue (existing) |
+| R2 asks | ✓ | ask owed per reply-suggestion set under its own key until a report under that key lands; kept in project state across a rotation | `suggest_replies` reminder; `seat_tick_settings` lists owed reports and the open ask | attention queue (existing) |
 | R3 digest | ✓ | asked on an interval wake when the board moved and nothing was reported for an interval | | |
 | R4 nothing running | ✓ | owed line says so when the last lane settled | | |
 | R6 task changes on deploy reports | ✓ | snapshot per settled deploy in the controller pass; deploy key given in the wake | | `tasks` section from the deploy snapshots |
@@ -1192,7 +1237,8 @@ Two lanes running, nothing needed from you.
 
 ### 6.5 `question`, the next wave (22:27)
 
-Key `ask:next-wave-plan:2026-09-25`.
+Key `ask:<setId>`, the id of the reply-suggestion set the seat left at 22:27
+(given in full by the tick's `Ask owed` line).
 
 ```text
 ❓ Delegatus · питання · 25.09, 22:27 GMT+3
@@ -1336,7 +1382,7 @@ ignoring every ask.
    `#N`; the same items as the plain rendering.
 6. `bridge_report`, with tests for:
    - `summary`, `sections` and the legacy `body`; `covers`, and `coversOwed`
-     storing the tick's owed keys at filing time; project-scoped
+     storing `coversOwedAt`; project-scoped
      ids (two projects, one key, two rows); warnings, and none about language
      while `operatorLocale` is null;
    - the deploy report's `tasks` section;
@@ -1344,10 +1390,13 @@ ignoring every ask.
      `report_empty_after_scrub`, storing and posting nothing**;
    - the Telegram fan-out over the bot service's fake transport
      (`src/lib/telegram/bot/fakeTransport.ts`): a manager report posts once,
-     silently and as HTML; a replay posts nothing; a rate-limited send is
-     re-sent on replay under a new request id; `send_uncertain` is never
-     re-sent; an agent-origin report, a project with no chat and a project
-     with reports off post nothing.
+     silently and as HTML, the row's stored `telegram.html`; a replay posts
+     nothing; a rate-limited send is re-sent on replay under a new request
+     id; `send_uncertain` is never re-sent; an agent-origin report, a project
+     with no chat and a project with reports off post nothing;
+   - **the retry is byte-identical: a first send answers `rate_limited`, the
+     same key is replayed with a different `summary` and different sections,
+     and the re-sent HTML equals the `telegram.html` stored at append**.
 7. `create_task` / `update_task` language warnings (none while the locale is
    null) and the locale sentence in the MCP session instructions.
 8. `suggest_replies` reminder line; `seat_tick_settings` answer when the tick
@@ -1366,9 +1415,20 @@ ignoring every ask.
    - two failures of the same commit owe two keys, and a later failure after
      them owes a third;
    - "Nothing is running now" when the owed lane was the last open one;
-   - **the ask line after "suggest, report, suggest": the second set is owed
-     until a question report newer than it lands**, and an answered ask (set
-     retired by the operator's message) is not;
+   - **two suggestion sets on the same subject get two keys (`ask:<setId>`);
+     after "suggest, report, suggest", the first report clears only the
+     first, and the second stays owed until a report under its own key
+     lands**; an answered ask (set retired by the operator's message) is
+     cleared; a set replaced by a newer one stays owed;
+   - **an ask left by seat A stays owed after the seat rotates to B (read from
+     A's conversation, carried through `seatTickStateForEpoch`) and clears
+     when a report under its key lands**;
+   - in `seatTickController.test.ts`, **a wake carrying deploy D and lane L
+     whose delivery answers `queued`; before the next check credits it, a
+     manager report with key `deploy:D:succeeded` and `coversOwed: true`
+     lands; the reconcile check then commits the wake, and the next wake has
+     no owed line**. A wake that reaches the seat after that report stays
+     owed; an entry with no delivery time uses the commit instant;
    - no digest line on an unchanged board after a digest filed with nothing
      owed, and a digest line when the board moved between the previous check
      and the report;
@@ -1391,10 +1451,11 @@ ignoring every ask.
     30-minute interval. Before: 5 of the 15 outcome wakes on `577257f2` and 0
     of its 5 interval wakes were followed by a report. The test asserts:
     - 21 report asks, one per outcome wake, each settled by a single report
-      with `coversOwed`;
+      with `coversOwed`, including the wakes whose delivery the fixture
+      answers `queued` and credits one check later;
     - no verdict key ever owed;
     - at most 6 digest lines;
-    - 3 ask lines;
+    - 3 ask lines, each under its own set's key;
     - and, when no report is filed, every owed key still asked for in each
       later wake, with the list never passing 64.
     It counts asks; whether seats comply shows in the log afterwards.
