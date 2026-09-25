@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -61,6 +61,7 @@ import { laneFocusId } from "./attention/attentionQueue";
 import { MobileFocusView } from "./mobile/MobileFocusView";
 import { MobileHostSheet } from "./mobile/MobileHostSheet";
 import { MobileSeatCard } from "./mobile/MobileSeatCard";
+import { activityMobileMenuEntry } from "./activity/menuEntry";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
@@ -2036,8 +2037,7 @@ function ProjectDashboardView({
         ),
         onSelect: () => mobileNav.openSheet("host"),
       },
-      /* Your time and your agents' time, per day and per project. */
-      { kind: "row", key: "activity", icon: <Activity className="h-[18px] w-[18px]" aria-hidden />, label: t("activity.menu"), testId: "menu-activity", onSelect: () => { mobileNav.closeSheet(); window.location.assign("/activity"); } },
+      activityMobileMenuEntry(t, mobileNav),
       { kind: "divider", key: "d2" },
     );
     entries.push(

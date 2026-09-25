@@ -427,6 +427,37 @@ test("⋯ lists the hidden tasks of every project, and Show brings one back", as
 });
 
 
+test("⋯ → Activity leads to the activity page, loaded only after the sheet's pop has landed", async () => {
+  const host = await mountOverview();
+  /* The tab's history moves and its document loads, in the order asked: a
+     traversal asked for after the load would cancel it. */
+  const asked: string[] = [];
+  const history = dom.history as unknown as { go: (delta?: number) => void };
+  const location = dom.location as unknown as { assign: (url: string) => void };
+  const go = history.go;
+  const assign = location.assign;
+  history.go = (delta) => { asked.push(`go ${delta}`); };
+  location.assign = (url) => { asked.push(`load ${url}`); };
+  try {
+    await tap(host.querySelector('[data-mobile2-open="menu"]'));
+    const row = dom.document.querySelector('[data-testid="menu-activity"]') as unknown as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.textContent).toContain(en("activity.menu"));
+    await tap(row);
+    await act(async () => { await Bun.sleep(15); });
+    expect(asked).toEqual(["go -1"]);
+    /* The pop lands, as the browser's would. */
+    await act(async () => {
+      window.dispatchEvent(new dom.PopStateEvent("popstate", { state: dom.history.state }) as unknown as Event);
+      await Bun.sleep(15);
+    });
+    expect(asked).toEqual(["go -1", "load /activity"]);
+  } finally {
+    history.go = go;
+    location.assign = assign;
+  }
+});
+
 test("a screen the Overview cannot place sends the stack home, and the next card still opens its task", async () => {
   const host = await mountOverview();
   /* A task that is gone, reached again through the history. */
