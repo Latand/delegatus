@@ -8,6 +8,8 @@ import { translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
 import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 
+import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
+
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 
@@ -10423,6 +10425,135 @@ describe("#2146 the orchestrator's report log beside its chat, and the Bridge re
       server.stop();
     }
     fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+});
+
+describe("the report log opens beside the seat's chat only where the chat keeps its width", () => {
+  /*
+   * The seat's report log (#2146) opened beside the chat from a 720 px seat as
+   * a 300 px column, leaving the chat 420 px. It now opens only where the chat
+   * keeps REPORT_LOG_CHAT_MIN_WIDTH (1.5 times that) beside a column of at
+   * least REPORT_LOG_MIN_WIDTH; narrower, it stays closed until the header
+   * toggle shows it in the transcript's place. At 1280, 1440, 1728 and 1920,
+   * the seat at its default width and widened across the board, en and uk,
+   * over the fixture's reports and a long draft in the composer; and a seat
+   * dragged to 900 px at 1440, where the log used to open and no longer does.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     REPORT_PANEL_STAMP=after REPORT_PANEL_PNG_DIR=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "keeps its width"
+   *
+   * `REPORT_PANEL_STAMP=before` draws the same frames over a checkout without
+   * the change and gates nothing. PNGs go to `REPORT_PANEL_PNG_DIR`, or
+   * `.artifacts/report-panel-width/`, never committed.
+   */
+  const STAMP = process.env.REPORT_PANEL_STAMP === "before" ? "before" : "after";
+  const OUT = path.resolve(process.env.REPORT_PANEL_PNG_DIR ?? ".artifacts/report-panel-width");
+  const EVIDENCE = path.resolve("evidence/orchestrator-report-log");
+  const SEAT = "[data-kanban-seat]";
+  const DRAFTS = {
+    en: "Before the release goes out tonight, take the search lane off review and merge it once the checks are green, then rebuild the candidate and run verify-candidate against it. If the runtime host fails to take the fence again, do not retry more than once: file an issue with the host log attached and leave production on the current build. Also move the favicon lane behind the upload one, and tell me in one line what is still waiting on me when you are done.\n\nOne more thing about the reports: write them more often, especially while I am away, so that when I come back I can read what happened without asking. Keep each one short but say what changed, what it cost and what is waiting on me, in the language the interface is set to. If a lane has been quiet for an hour, say so and say why, even if nothing is wrong.",
+    uk: "Перед сьогоднішнім релізом зніміть лінію пошуку з рев'ю і змерджте її, щойно перевірки стануть зеленими, потім перезберіть кандидата і проженіть verify-candidate. Якщо runtime host знову не візьме fence, повторіть лише один раз: заведіть issue з логом хоста і залиште продакшн на поточній збірці. Також поставте лінію фавікона за лінією завантаження і напишіть одним рядком, що ще чекає на мене, коли закінчите.\n\nІ ще про звіти: пишіть їх частіше, особливо поки мене немає, щоб, повернувшись, я міг прочитати, що сталося, нічого не питаючи. Кожен звіт короткий, але в ньому сказано, що змінилося, чого це коштувало і що чекає на мене, мовою, вибраною в інтерфейсі. Якщо лінія мовчить понад годину, скажіть про це і чому, навіть коли все гаразд.",
+  } as const;
+  const seatRecord = (topWidth: number | null) => `try { localStorage.setItem("llv:kanban-seat:v2", ${JSON.stringify(JSON.stringify({
+    height: null, collapsed: {}, placement: "top", width: null, topWidths: topWidth === null ? {} : { atlas: topWidth }, sideWidths: {}, heightV: 2,
+  }))}); } catch {}`;
+  const READ = () => {
+    const box = (element: Element | null | undefined) => (element ? Math.round(element.getBoundingClientRect().width) : null);
+    const seat = document.querySelector("[data-kanban-seat]");
+    const log = seat?.querySelector("[data-report-log]") ?? null;
+    const layout = seat?.querySelector("[data-report-log-layout]")?.getAttribute("data-report-log-layout") ?? null;
+    return {
+      seat: box(seat),
+      panel: box(seat?.querySelector("[data-orchestrator-panel]")),
+      layout,
+      conversation: box(seat?.querySelector("[data-orchestrator-conversation]")),
+      log: box(log),
+      /* Beside the chat, the log's column, its left border included. */
+      column: layout === "beside" ? box(log?.parentElement) : null,
+      toggle: seat?.querySelector("[data-report-log-toggle]")?.getAttribute("data-report-log-toggle") ?? null,
+      entries: log?.querySelectorAll("[data-report-entry]").length ?? 0,
+      draft: (seat?.querySelector("[data-orchestrator-conversation] textarea") as HTMLTextAreaElement | null)?.value.length ?? 0,
+      sideways: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  };
+
+  browserTest("the log opens beside the chat only where the chat keeps 1.5 times its old minimum, and the toggle shows it narrower", async () => {
+    const dir = path.join(OUT, STAMP);
+    fs.mkdirSync(dir, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/report-panel-width-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const frames: Array<{ width: number; seat: "normal" | "maximised" | "dragged-900"; topWidth: number | null }> = [
+      ...[1280, 1440, 1728, 1920].flatMap((width) => [
+        { width, seat: "normal" as const, topWidth: null },
+        { width, seat: "maximised" as const, topWidth: 4_000 },
+      ]),
+      { width: 1440, seat: "dragged-900", topWidth: 900 },
+    ];
+    try {
+      for (const frame of frames) {
+        for (const lang of ["en", "uk"] as const) {
+          const label = `${frame.width}-${frame.seat}-${lang}`;
+          const fail = (text: string) => failures.push(`${label}: ${text}`);
+          const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width: frame.width, height: 900 }, "light", lang);
+          try {
+            await context.addInitScript(seatRecord(frame.topWidth));
+            await page.goto(server.base);
+            await page.waitForSelector(`${SEAT} [data-orchestrator-conversation] textarea`, { timeout: 30_000 });
+            await page.waitForSelector(`${SEAT} [data-report-log-toggle]`, { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            await page.locator("[data-attention-toast-dismiss]").click().catch(() => {});
+            await page.locator(`${SEAT} [data-orchestrator-conversation] textarea`).fill(DRAFTS[lang]);
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(800);
+            const opened = await page.evaluate(READ);
+            await page.locator(SEAT).screenshot({ path: path.join(dir, `${label}.png`) });
+            const reading: Record<string, unknown> = { opened };
+            if (opened.draft !== DRAFTS[lang].length) fail(`the composer holds ${opened.draft} characters of the draft`);
+            if (opened.sideways > 0) fail(`the page scrolls sideways by ${opened.sideways}px`);
+            const wide = (opened.panel ?? 0) >= REPORT_LOG_SPLIT_WIDTH;
+            if (STAMP === "after") {
+              if (wide) {
+                if (opened.layout !== "beside" || opened.toggle !== "open") fail(`a ${opened.panel}px seat did not open the log beside the chat: ${JSON.stringify(opened)}`);
+                if ((opened.conversation ?? 0) < REPORT_LOG_CHAT_MIN_WIDTH) fail(`the chat beside the log is ${opened.conversation}px`);
+                if ((opened.column ?? 0) < REPORT_LOG_MIN_WIDTH || (opened.column ?? 0) > REPORT_LOG_MAX_WIDTH) fail(`the log column is ${opened.column}px`);
+              } else if (opened.layout !== null || opened.log !== null || opened.toggle !== "closed") {
+                fail(`a ${opened.panel}px seat opened the log by itself: ${JSON.stringify(opened)}`);
+              }
+            }
+            if (!wide || STAMP === "before") {
+              /* The header toggle: beside where it fits, in the transcript's place where it does not. */
+              if (opened.toggle === "closed") {
+                await page.locator(`${SEAT} [data-report-log-toggle]`).click();
+                await page.waitForSelector(`${SEAT} [data-report-log] [data-report-entry]`, { timeout: 10_000 });
+                await page.mouse.move(0, 0);
+                await page.waitForTimeout(400);
+                const toggled = await page.evaluate(READ);
+                reading.toggled = toggled;
+                await page.locator(SEAT).screenshot({ path: path.join(dir, `${label}-toggled.png`) });
+                if (STAMP === "after" && (toggled.layout !== null || toggled.log === null || toggled.toggle !== "open")) fail(`the toggle did not show the log in place: ${JSON.stringify(toggled)}`);
+              }
+            }
+            readings[label] = reading;
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (STAMP === "after") {
+      fs.mkdirSync(EVIDENCE, { recursive: true });
+      fs.writeFileSync(path.join(EVIDENCE, "width.json"), `${JSON.stringify({ rule: { chatMin: REPORT_LOG_CHAT_MIN_WIDTH, logMin: REPORT_LOG_MIN_WIDTH, logMax: REPORT_LOG_MAX_WIDTH, split: REPORT_LOG_SPLIT_WIDTH }, readings, failures }, null, 2)}\n`);
+    } else {
+      fs.writeFileSync(path.join(dir, "readings.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });

@@ -24,7 +24,15 @@ import type { FileEntry } from "@/lib/types";
  */
 
 const dom = new HappyWindow();
-class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
+/* Observers stay silent unless a test hands one a size (`resizePanel`). */
+const resizeObservers = new Set<TestResizeObserver>();
+class TestResizeObserver {
+  targets: unknown[] = [];
+  constructor(readonly callback: (entries: unknown[]) => void) {}
+  observe(target: unknown) { this.targets.push(target); resizeObservers.add(this); }
+  unobserve() {}
+  disconnect() { resizeObservers.delete(this); }
+}
 Object.assign(globalThis, {
   window: dom,
   document: dom.document,
@@ -93,7 +101,7 @@ mock.module("@/hooks/useLogTail", () => ({
   }),
 }));
 
-const { OrchestratorPanel, UNBOUND_STATUS_RETRY_MS } = await import("./OrchestratorPanel");
+const { OrchestratorPanel, REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH, UNBOUND_STATUS_RETRY_MS } = await import("./OrchestratorPanel");
 const { SEAT_CONFIRM_TTL_MS, requestOrchestratorDraft } = await import("./draftPrefill");
 const { SEAT_BIND_TIMEOUT_MS } = await import("./seatState");
 const { resetMessageProvenanceCacheForTests } = await import("../feed/messageProvenance");
@@ -161,6 +169,10 @@ function installFetch(): void {
       return { ok: true, status: 200, json: async () => (target === "atlas" ? seatStatus : { seat: null, pending: null, exists: true }) } as Response;
     }
     if (url === "/api/accounts") return { ok: true, status: 200, json: async () => accounts } as Response;
+    /* The seat's report log (#2146): an empty page. */
+    if (url.startsWith("/api/orchestrator/reports")) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, project: "atlas", bridgeReports: true, github: null, revision: "r0", entries: [], nextBefore: null }) } as Response;
+    }
     /* Delivery evidence for the dock's own feed (#1166): what the server
        projected for this transcript, mandate fact included. */
     if (url.startsWith("/api/log/provenance")) {
@@ -1773,4 +1785,65 @@ test("a panel handed its host's seat read shows that seat and never polls the se
   flushSync(() => undefined);
   expect(incumbentRow(host as unknown as HTMLElement)).not.toBeNull();
   expect(seatReads).toBe(0);
+});
+
+test("the report log sits beside the seat's chat only where the chat keeps 1.5 times its old minimum, and the toggle still shows it narrower", async () => {
+  /* It first opened at a 720 px seat as a 300 px column: a 420 px chat. */
+  expect(REPORT_LOG_CHAT_MIN_WIDTH).toBe(1.5 * (720 - 300));
+  expect(REPORT_LOG_SPLIT_WIDTH).toBe(REPORT_LOG_CHAT_MIN_WIDTH + REPORT_LOG_MIN_WIDTH);
+  incumbentStatus = incumbent();
+  const read = { status: { seat: activeSeat(), pending: null, exists: true, viewerMcpRegistered: true }, failed: false, refresh: async () => undefined } as never;
+  const host = dom.document.createElement("div") as unknown as HTMLElement;
+  dom.document.body.append(host as never);
+  const root = createRoot(host);
+  roots.add(root);
+  flushSync(() => root.render(
+    <OrchestratorPanel project="atlas" projectName="Atlas" projectCwd="/repos/atlas" files={[{ ...orchestratorFile, proc: "running", pid: 4_242 } as FileEntry]} onClose={() => undefined} variant="seat" seatRead={read} />,
+  ));
+  await settle();
+  flushSync(() => undefined);
+  const resizePanel = (width: number) => {
+    const panel = host.querySelector("[data-orchestrator-panel]");
+    for (const observer of resizeObservers) {
+      if (observer.targets.includes(panel)) flushSync(() => observer.callback([{ contentRect: { width } }]));
+    }
+  };
+  const toggle = () => host.querySelector("[data-report-log-toggle]") as HTMLButtonElement;
+  const read_ = () => ({
+    layout: host.querySelector("[data-report-log-layout]")?.getAttribute("data-report-log-layout") ?? null,
+    log: host.querySelector("[data-report-log]") !== null,
+    toggle: toggle().getAttribute("data-report-log-toggle"),
+  });
+  const closed = { layout: null, log: false, toggle: "closed" };
+  const beside = { layout: "beside", log: true, toggle: "open" };
+
+  /* Where it used to open, and one pixel short of the new width: closed. */
+  for (const width of [720, 900, REPORT_LOG_SPLIT_WIDTH - 1]) {
+    resizePanel(width);
+    expect(read_()).toEqual(closed);
+  }
+  resizePanel(REPORT_LOG_SPLIT_WIDTH);
+  expect(read_()).toEqual(beside);
+
+  /* Narrower, the header toggle shows it in the transcript's place, and that
+     is not remembered: the beside state stays the project's default. */
+  resizePanel(REPORT_LOG_SPLIT_WIDTH - 1);
+  flushSync(() => toggle().click());
+  expect(read_()).toEqual({ layout: null, log: true, toggle: "open" });
+  expect(dom.localStorage.getItem("llvReportLogBeside:atlas")).toBeNull();
+  flushSync(() => toggle().click());
+  expect(read_()).toEqual(closed);
+
+  /* Wide enough, hiding it is remembered for the project, as before. */
+  resizePanel(1_400);
+  expect(read_()).toEqual(beside);
+  flushSync(() => toggle().click());
+  expect(read_()).toEqual(closed);
+  expect(dom.localStorage.getItem("llvReportLogBeside:atlas")).toBe("0");
+  resizePanel(REPORT_LOG_SPLIT_WIDTH - 1);
+  resizePanel(1_400);
+  expect(read_()).toEqual(closed);
+  flushSync(() => toggle().click());
+  expect(read_()).toEqual(beside);
+  expect(dom.localStorage.getItem("llvReportLogBeside:atlas")).toBe("1");
 });

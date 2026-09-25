@@ -4,23 +4,23 @@
       "reading": {
         "layout": "beside",
         "beside": true,
-        "width": 352,
+        "width": 359,
         "entries": 30,
         "classes": [
+          "status",
+          "blocked",
           "completed",
           "review_verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "labels": [
+          "status",
+          "blocked",
           "completed",
           "review verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "fresh": [
           "1242",
@@ -28,7 +28,7 @@
           "1239"
         ],
         "github": 14,
-        "cards": 9,
+        "cards": 10,
         "older": true,
         "sideways": 0,
         "cut": [],
@@ -63,7 +63,7 @@
       "offLog": {
         "layout": "beside",
         "beside": true,
-        "width": 352,
+        "width": 359,
         "entries": 0,
         "classes": [],
         "labels": [],
@@ -89,23 +89,23 @@
       "reading": {
         "layout": "beside",
         "beside": true,
-        "width": 352,
+        "width": 359,
         "entries": 30,
         "classes": [
+          "status",
+          "blocked",
           "completed",
           "review_verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "labels": [
+          "status",
+          "blocked",
           "completed",
           "review verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "fresh": [
           "1242",
@@ -113,7 +113,7 @@
           "1239"
         ],
         "github": 14,
-        "cards": 9,
+        "cards": 10,
         "older": true,
         "sideways": 0,
         "cut": [],
@@ -148,7 +148,7 @@
       "offLog": {
         "layout": "beside",
         "beside": true,
-        "width": 352,
+        "width": 359,
         "entries": 0,
         "classes": [],
         "labels": [],
@@ -174,23 +174,23 @@
       "reading": {
         "layout": "beside",
         "beside": true,
-        "width": 352,
+        "width": 359,
         "entries": 30,
         "classes": [
+          "status",
+          "blocked",
           "completed",
           "review_verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "labels": [
+          "статус",
+          "заблоковано",
           "завершено",
           "вердикт ревʼю",
           "питання",
-          "заблоковано",
-          "помилка",
-          "статус"
+          "помилка"
         ],
         "fresh": [
           "1242",
@@ -198,7 +198,7 @@
           "1239"
         ],
         "github": 14,
-        "cards": 9,
+        "cards": 10,
         "older": true,
         "sideways": 0,
         "cut": [],
@@ -233,7 +233,7 @@
       "offLog": {
         "layout": "beside",
         "beside": true,
-        "width": 352,
+        "width": 359,
         "entries": 0,
         "classes": [],
         "labels": [],
@@ -259,23 +259,23 @@
       "reading": {
         "layout": "beside",
         "beside": true,
-        "width": 352,
+        "width": 359,
         "entries": 30,
         "classes": [
+          "status",
+          "blocked",
           "completed",
           "review_verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "labels": [
+          "статус",
+          "заблоковано",
           "завершено",
           "вердикт ревʼю",
           "питання",
-          "заблоковано",
-          "помилка",
-          "статус"
+          "помилка"
         ],
         "fresh": [
           "1242",
@@ -283,7 +283,7 @@
           "1239"
         ],
         "github": 14,
-        "cards": 9,
+        "cards": 10,
         "older": true,
         "sideways": 0,
         "cut": [],
@@ -318,7 +318,7 @@
       "offLog": {
         "layout": "beside",
         "beside": true,
-        "width": 352,
+        "width": 359,
         "entries": 0,
         "classes": [],
         "labels": [],
@@ -343,7 +343,7 @@
     "empty": {
       "layout": "beside",
       "beside": true,
-      "width": 352,
+      "width": 359,
       "entries": 0,
       "classes": [],
       "labels": [],
