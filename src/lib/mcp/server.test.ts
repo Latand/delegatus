@@ -929,8 +929,10 @@ describe("MCP tool service", () => {
 
     expect(settled).toBeTrue();
     expect(processResult.exit).toBe(0);
+    /* The claimant walks its wait on a stepped clock (server.lockChild.ts), so
+       the budget it spent is exact: the whole 5 s, and not one pause past it. */
     expect(processResult.error).toMatch(/^\[mcp slow\] tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
-    expect(Number(processResult.error.match(/claimMs=(\d+)/)?.[1])).toBeGreaterThanOrEqual(4_900);
+    expect(Number(processResult.error.match(/claimMs=(\d+)/)?.[1])).toBe(5_000);
     expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({
       outcome: "failed",
       error: "MCP receipt store is busy",
@@ -942,8 +944,7 @@ describe("MCP tool service", () => {
     };
     expect(probe.scans).toBeLessThan(1_000);
     expect(probe.ticks).toBeGreaterThan(10);
-    expect(probe.elapsedMs).toBeGreaterThanOrEqual(4_900);
-    expect(probe.elapsedMs).toBeLessThan(6_000);
+    expect(probe.elapsedMs).toBe(5_000);
     expect(fs.existsSync(countPath)).toBeFalse();
   }, 8_000);
 
@@ -1296,13 +1297,13 @@ describe("MCP tool service", () => {
     for (const claimant of claimants) {
       expect(claimant.exit).toBe(0);
       expect(claimant.error).toMatch(/^\[mcp slow\] tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
-      expect(Number(claimant.error.match(/claimMs=(\d+)/)?.[1])).toBeGreaterThanOrEqual(4_900);
+      // Exact on the claimant's stepped clock: the whole budget, no pause past it.
+      expect(Number(claimant.error.match(/claimMs=(\d+)/)?.[1])).toBe(5_000);
     }
     for (const result of results) {
       expect(result).toMatchObject({ outcome: "failed", error: "MCP receipt store is busy" });
       expect(result.ticks).toBeGreaterThan(10);
-      expect(result.elapsedMs).toBeGreaterThanOrEqual(4_900);
-      expect(result.elapsedMs).toBeLessThan(6_000);
+      expect(result.elapsedMs).toBe(5_000);
     }
     expect(fs.existsSync(countPath)).toBeFalse();
     reaper.kill(9);
@@ -1519,7 +1520,6 @@ describe("MCP tool service", () => {
     expect(await waitForFile(creatorPausedPath)).toBeTrue();
     creator.kill(9);
     const creatorOutcome = await childResult(creator);
-    const startedAt = Date.now();
     const first = Bun.spawn({
       cmd: [
         process.execPath,
@@ -1552,7 +1552,6 @@ describe("MCP tool service", () => {
     expect(await waitForFile(holderReadyPath)).toBeTrue();
     fs.writeFileSync(takeoverReleasePath, "release");
     const recovered = await waitForRecoveryCleanup(directory);
-    const recoveryElapsedMs = Date.now() - startedAt;
     const replacementSurvived = fs.existsSync(lockPath);
     const mutationRanWhileHeld = fs.existsSync(countPath);
 
@@ -1564,8 +1563,10 @@ describe("MCP tool service", () => {
     ]);
 
     expect(creatorOutcome.exit).not.toBe(0);
+    /* Recovered by takeover, never by a wait running out: a claimant whose
+       5 s budget expired would have answered "MCP receipt store is busy", and
+       both answers below are successes. */
     expect(recovered).toBeTrue();
-    expect(recoveryElapsedMs).toBeLessThan(5_000);
     expect(recoveryArtifacts(directory)).toEqual([]);
     expect(replacementSurvived).toBeTrue();
     expect(mutationRanWhileHeld).toBeFalse();
@@ -1579,6 +1580,7 @@ describe("MCP tool service", () => {
     const results = [firstResultPath, secondResultPath]
       .filter((filename) => fs.existsSync(filename))
       .map((filename) => JSON.parse(fs.readFileSync(filename, "utf8")) as { ok: boolean; replayed: boolean });
+    expect(results.every((result) => result.ok)).toBeTrue();
     expect(results.filter((result) => result.ok && !result.replayed)).toHaveLength(1);
     expect(fs.readFileSync(countPath, "utf8").trim().split("\n")).toHaveLength(1);
   }, 12_000);

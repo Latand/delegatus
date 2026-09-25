@@ -140,7 +140,9 @@ test("Claude usage probes honor a caller-specific timeout", async () => {
     }, { once: true }));
     throw new Error("probe aborted");
   }) as unknown as typeof fetch;
-  const startedAt = performance.now();
+  /* The probe's deadline is the one it asked the platform for, read at the
+     request rather than raced against the runner's clock. */
+  const timeouts = spyOn(AbortSignal, "timeout");
   try {
     const result = await fetchClaudeLimits(
       path.join(process.env.LLV_CLAUDE_HOME!, ".credentials.json"),
@@ -150,8 +152,9 @@ test("Claude usage probes honor a caller-specific timeout", async () => {
     expect(result).toMatchObject({ source: "unavailable" });
     expect(result.reason).toContain("probe aborted");
     expect(observedAbort).toBeTrue();
-    expect(performance.now() - startedAt).toBeLessThan(500);
+    expect(timeouts.mock.calls).toEqual([[20]]);
   } finally {
+    timeouts.mockRestore();
     globalThis.fetch = realFetch;
   }
 });

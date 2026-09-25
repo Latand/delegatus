@@ -590,7 +590,6 @@ test("the wait ends when the turn it joined ends, without burning the whole wind
   const turnId = server.startTurn();
   await Bun.sleep(10);
 
-  const started = Date.now();
   const pending = host.inject({
     operationId: "op-turn-ends",
     threadId: server.threadId,
@@ -601,10 +600,10 @@ test("the wait ends when the turn it joined ends, without burning the whole wind
   server.notify("turn/completed", { threadId: server.threadId, turn: { id: turnId, status: "completed" } });
   server.endTurn(turnId);
 
+  /* The verdict arrives at all: the 120 s window cannot have run out inside
+     this test, so only the turn ending can have ended the wait. */
   const outcome = await pending;
   expect(await outcome.observe()).toBe(false);
-  /* The verdict arrived promptly rather than at the deadline. */
-  expect(Date.now() - started).toBeLessThan(30_000);
   await host.release();
 });
 

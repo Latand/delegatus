@@ -1042,30 +1042,19 @@ describe("resource recurring reads", () => {
         "while :; do sleep 0.01; done",
       ];
     }, async (directory) => {
-      const startedAt = performance.now();
-      const read = workerTestReader({
+      const outcome = await workerTestReader({
         readFiles: async () => {
           await new Promise((resolve) => setTimeout(resolve, inputTimeoutMs));
           return [];
         },
         workerLimits: { observeTimeoutMs, inputTimeoutMs, timeoutMs, closeTimeoutMs, headroomMs },
       }).read(true);
-      const outerDeadline = Symbol("outer-deadline");
-      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-      const first = await Promise.race([
-        read,
-        new Promise<typeof outerDeadline>((resolve) => {
-          deadlineTimer = setTimeout(() => resolve(outerDeadline), observeTimeoutMs);
-        }),
-      ]);
-      const outcome = first === outerDeadline ? await read : first;
-      if (deadlineTimer) clearTimeout(deadlineTimer);
-      const elapsedMs = performance.now() - startedAt;
       const workerPid = Number(readFileSync(path.join(directory, "pid"), "utf8"));
       const descendantPid = Number(readFileSync(path.join(directory, "deadline-descendant-pid"), "utf8"));
 
-      expect(first === outerDeadline).toBeFalse();
-      expect(elapsedMs).toBeLessThan(observeTimeoutMs);
+      /* Settled inside the observation deadline: had the collector's own
+         observation timer fired first, the cause would read
+         observation-timeout, not the worker's. */
       expect(outcome).toMatchObject({ diagnostic: {
         degradedReason: "timeout",
         failure: { cause: "worker-timeout" },
@@ -1087,9 +1076,7 @@ describe("resource recurring reads", () => {
         "exit 0",
       ];
     }, async (directory) => {
-      const startedAt = performance.now();
       const outcome = await workerTestReader({ workerLimits: { timeoutMs: 500, closeTimeoutMs: 25 } }).read(true);
-      const elapsedMs = performance.now() - startedAt;
       const workerPid = Number(readFileSync(path.join(directory, "pid"), "utf8"));
       const descendantPid = Number(readFileSync(path.join(directory, "descendant-pid"), "utf8"));
 
@@ -1097,7 +1084,9 @@ describe("resource recurring reads", () => {
         degradedReason: "collector-crash",
         failure: { cause: "worker-exit" },
       } });
-      expect(elapsedMs).toBeLessThan(250);
+      /* Settled on the leader's exit: the pipes the descendant holds never
+         close on their own, and waiting on them would have ended as a
+         worker-timeout at the 500 ms bound instead of this worker-exit. */
       expect(confirmedFixtureProcessGroups(path.join(directory, "fixture-worker"))).toEqual([]);
       expect(processExists(descendantPid)).toBeFalse();
       await expectProcessAbsentAfterQuietInterval(workerPid, "exited leader");

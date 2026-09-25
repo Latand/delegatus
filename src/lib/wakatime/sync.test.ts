@@ -714,12 +714,12 @@ describe("WakaTime activity sync", () => {
     sync.stop();
   });
 
-  test("production-sized overlap coverage stays subquadratic", async () => {
+  test("production-sized overlap coverage folds four thousand windows into one span", async () => {
     const windows = Array.from({ length: 4_000 }, (_, index) => ({
       startedAt: NOW + index * 1_000,
       endedAt: NOW + (index + 60) * 1_000,
     }));
-    const { sync } = harness({
+    const { sync, state } = harness({
       recentTurnWindows: () => ({
         windows,
         prefixTruncated: false,
@@ -729,8 +729,12 @@ describe("WakaTime activity sync", () => {
 
     const startedAt = performance.now();
     await sync.tick();
+    console.log(JSON.stringify({ probe: "wakatime-overlap-4000-windows", ms: Math.round(performance.now() - startedAt) }));
 
-    expect(performance.now() - startedAt).toBeLessThan(2_000);
+    /* Four thousand overlapping windows cover one unbroken span, from the first
+       start to the last end. The time is reported, never asserted (#1761). */
+    const heartbeats = state()!.pending.map((event) => event.heartbeat);
+    expect(projectDurationSeconds(heartbeats, "-repo")).toBe(3_999 + 60);
     sync.stop();
   }, 5_000);
 

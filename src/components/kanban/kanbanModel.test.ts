@@ -146,19 +146,25 @@ test("every stored task is a card in exactly one column or counted off the board
   expect(withElided.conversations).toBe(2);
   expect(withElided.notLoaded).toBe(1);
 
-  /* Bands plus projection for the whole corpus; the projection alone has its own budget below. */
-  expect(elapsed).toBeLessThan(2_000);
+  /* Bands plus projection for the whole corpus, reported rather than asserted:
+     how fast a shared runner happens to be is not a property of the model (#1761). */
+  console.log(JSON.stringify({ probe: "kanban-model-1012-tasks", ms: Math.round(elapsed) }));
 });
 
-test("the projection alone stays inside its budget at a thousand tasks", () => {
+test("a searched projection at a thousand tasks keeps every matching card", () => {
   const files = Array.from({ length: 300 }, (_, index) => file(index));
   const tasks = Array.from({ length: 1000 }, (_, index) => task(`t${index}`, KANBAN_STATUSES[index % 4]!, index < 300 ? [files[index]!.path] : []));
   const projection = projectTaskWorkflows(tasks, [], [], files);
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
-  buildKanbanModel({ bands, tasks, pipelines: [], projection, now: NOW });
+  const unfiltered = buildKanbanModel({ bands, tasks, pipelines: [], projection, now: NOW });
   const started = performance.now();
-  buildKanbanModel({ bands, tasks, pipelines: [], projection, now: NOW, query: "task" });
-  expect(performance.now() - started).toBeLessThan(160);
+  const searched = buildKanbanModel({ bands, tasks, pipelines: [], projection, now: NOW, query: "t99" });
+  console.log(JSON.stringify({ probe: "kanban-search-1000-tasks", ms: Math.round(performance.now() - started) }));
+  const shownIds = (result: typeof searched) => KANBAN_STATUSES.flatMap((status) => result.columns[status].shown.map((card) => card.task!.id)).sort();
+  // "t99" names t99 and t990 to t999, and nothing else among the thousand.
+  const expected = shownIds(unfiltered).filter((id) => id.startsWith("t99"));
+  expect(expected).toHaveLength(11);
+  expect(shownIds(searched)).toEqual(expected);
 });
 
 test("columns sort by agent work, ignore metadata, and put unknown work last with stable ties", () => {

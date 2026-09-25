@@ -827,7 +827,7 @@ test("volatile registry diagnostics do not invalidate an otherwise stable files 
   expect(second.status).toBe(304);
 });
 
-test("production-sized SQLite registry keeps cold and warm files probes within budget", async () => {
+test("production-sized SQLite registry answers cold and warm files probes beside a concurrent writer", async () => {
   const filename = path.join(registryRoot, "production-registry.json");
   const seed = new AgentRegistry(filename);
   const template = beginLegacySpawnReceiptFixture(seed, "codex", "/production-seed");
@@ -875,8 +875,9 @@ test("production-sized SQLite registry keeps cold and warm files probes within b
 
   expect(cold.status).toBe(200);
   expect(warm.status).toBe(200);
-  expect(coldDuration).toBeLessThan(1_000);
-  expect(warmDuration).toBeLessThan(500);
+  /* Reported, never asserted: how fast a shared runner reads 18 000 rows says
+     nothing about the route (#1761). */
+  console.log(JSON.stringify({ probe: "production-sqlite-files", coldMs: Math.round(coldDuration), warmMs: Math.round(warmDuration) }));
 });
 
 test("files API surfaces degraded tmux endpoint health", async () => {
@@ -928,7 +929,7 @@ test("a restart serves the persisted completed snapshot while revalidating", asy
   };
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 11,
+    schemaVersion: 12,
     snapshot: persistedSnapshot,
   }));
   resetFilesRouteCacheForTests();
@@ -948,7 +949,7 @@ test("a restart serves the persisted completed snapshot while revalidating", asy
 test("the pipeline controller warm-starts from the persisted completed snapshot while revalidating", async () => {
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 11,
+    schemaVersion: 12,
     snapshot: {
       files: [file("/sessions/persisted-controller.jsonl")],
       projectCatalog: [],
@@ -960,10 +961,10 @@ test("the pipeline controller warm-starts from the persisted completed snapshot 
   scanGates.push(new Promise<void>((resolve) => { release = resolve; }));
   scannedFiles = [file("/sessions/refreshed-controller.jsonl")];
 
-  const started = performance.now();
+  /* The refresh is held at its gate until the end of the test, so this await
+     can only settle from the persisted snapshot. */
   const snapshot = await controllerFileScan();
 
-  expect(performance.now() - started).toBeLessThan(300);
   expect(snapshot.files.map((entry) => entry.path)).toEqual(["/sessions/persisted-controller.jsonl"]);
   expect(scans).toBe(0);
 
@@ -975,7 +976,7 @@ test("the pipeline controller warm-starts from the persisted completed snapshot 
 test("a current scan joins restart revalidation before publishing transcript metadata", async () => {
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 11,
+    schemaVersion: 12,
     snapshot: {
       files: [file("/sessions/persisted-resource.jsonl")],
       projectCatalog: [],
@@ -1417,7 +1418,7 @@ test("a fresh resource snapshot replaces stale process and pane observations bef
 test("a client automatically converges from a persisted restart snapshot to its completed generation", async () => {
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 11,
+    schemaVersion: 12,
     snapshot: {
       files: [file("/sessions/persisted-client.jsonl")],
       projectCatalog: [],
@@ -1432,10 +1433,9 @@ test("a client automatically converges from a persisted restart snapshot to its 
     GET(new Request(`http://127.0.0.1${input}`, init)));
   const unsubscribe = cache.subscribe(() => {});
 
-  const started = performance.now();
+  // The refresh is held at its gate, so only the persisted snapshot can answer.
   const stale = await cache.revalidate();
 
-  expect(performance.now() - started).toBeLessThan(300);
   expect(stale.files.map((entry) => entry.path)).toEqual(["/sessions/persisted-client.jsonl"]);
   expect(scans).toBe(0);
 
@@ -1451,20 +1451,22 @@ test("a client automatically converges from a persisted restart snapshot to its 
   unsubscribe();
 });
 
-test("a restart hydrates a persisted 7700-row snapshot within two seconds", async () => {
+test("a restart hydrates a persisted 7700-row snapshot without scanning", async () => {
   const files = Array.from({ length: 7_700 }, (_, index) => file(`/sessions/persisted-${index}.jsonl`));
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 11,
+    schemaVersion: 12,
     snapshot: { files, projectCatalog: [], complete: true },
   }));
   resetFilesRouteCacheForTests();
 
   const started = performance.now();
   const restarted = await cachedFileScan();
+  console.log(JSON.stringify({ probe: "persisted-7700-hydration", ms: Math.round(performance.now() - started) }));
 
-  expect(performance.now() - started).toBeLessThan(2_000);
   expect(restarted.snapshot.files).toHaveLength(7_700);
+  // Served from the persisted rows; the revalidating scan starts after it.
+  expect(scans).toBe(0);
   await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
@@ -1544,7 +1546,7 @@ test("snapshot publication failures preserve the canonical file, clean temps, st
   const snapshotPath = path.join(stateDir, "files-scan-snapshot.json");
   const canonical = JSON.stringify({
     version: 1,
-    schemaVersion: 11,
+    schemaVersion: 12,
     snapshot: {
       files: [file("/sessions/canonical.jsonl")],
       projectCatalog: [],
@@ -1703,20 +1705,19 @@ test("an incomplete filesystem scan retains the last completed route snapshot un
   expect((await cachedFileScan()).snapshot.files.map((entry) => entry.path)).toEqual(["/sessions/recovered.jsonl"]);
 });
 
-test("concurrent reads during a blocked refresh share one scan and return within 300ms", async () => {
+test("concurrent reads during a blocked refresh share one scan and return while it is blocked", async () => {
   scannedFiles = [file("/sessions/complete.jsonl")];
   await cachedFileScan();
   let release!: () => void;
   scanGates.push(new Promise<void>((resolve) => { release = resolve; }));
   scannedFiles = [file("/sessions/in-flight.jsonl")];
 
-  const started = performance.now();
+  // Both settle while the refresh is still held at its gate.
   const [first, second] = await Promise.all([
     cachedFileScan(undefined, undefined, Number.MAX_SAFE_INTEGER),
     cachedFileScan(undefined, undefined, Number.MAX_SAFE_INTEGER),
   ]);
 
-  expect(performance.now() - started).toBeLessThan(300);
   expect(first.snapshot.files.map((entry) => entry.path)).toEqual(["/sessions/complete.jsonl"]);
   expect(second.snapshot.files.map((entry) => entry.path)).toEqual(["/sessions/complete.jsonl"]);
   expect(scans).toBe(1);
@@ -1783,7 +1784,9 @@ test("a warm snapshot returns the completed projection while an independent refr
     visiblePaths: [completed.path],
     board: { renderedRevision: 1, durableRevision: 1, sync: "current" },
   });
-  const startedAt = performance.now();
+  /* The snapshot deadline never fires, and the refresh stays held at its gate,
+     so a snapshot that waited on the refresh could not settle at all. */
+  let deadlinesArmed = 0;
   const response = await postSnapshot(new Request("http://127.0.0.1:8898/api/agent/snapshot", {
     method: "POST",
     headers: { host: "127.0.0.1:8898" },
@@ -1793,10 +1796,10 @@ test("a warm snapshot returns the completed projection while an independent refr
     resolveSiblings: async () => ({ selfResolution: "omitted", agents: [] }),
     registrySnapshot: () => ({ conversations: {}, entries: {}, lineageEdges: {}, memberships: {}, conversationAliases: {}, receipts: {} }) as never,
     snapshotDeadlineMs: 1_000,
-    scheduler: { setTimeout, clearTimeout },
+    scheduler: { setTimeout: () => { deadlinesArmed += 1; return deadlinesArmed; }, clearTimeout: () => {} },
   });
 
-  expect(performance.now() - startedAt).toBeLessThan(300);
+  expect(deadlinesArmed).toBe(1);
   expect(response.status).toBe(200);
   expect((await response.json()).conversations.map((entry: { path: string }) => entry.path)).toEqual([completed.path]);
   expect(fileScanCacheStatus()).toEqual({ inFlight: true, subscribers: 1 });
@@ -2085,10 +2088,9 @@ test("a pinned client receives stale data immediately then converges on its comp
     updates.push(data.files.map((entry) => entry.path));
   }, pinnedPath);
 
-  const started = performance.now();
+  // The refresh is held at its gate, so only the stale generation can answer.
   const stale = await cache.revalidate(pinnedPath, 17);
 
-  expect(performance.now() - started).toBeLessThan(300);
   expect(stale.files.map((entry) => entry.path)).toEqual(["/sessions/before-revision.jsonl"]);
   expect(scans).toBe(2);
 

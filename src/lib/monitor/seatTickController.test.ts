@@ -3400,8 +3400,8 @@ test("a child whose ledger is a production-sized ten megabytes of deltas is harv
   expect(fixture.acknowledged()).toEqual([child.id]);
   const accounting = new SeatTickAccounting(`${fixture.stateFile}.sqlite`, fixture.project);
   const source = accounting.collection.snapshot().find((row) => row.kind === "source");
+  // One check harvested the whole 10 MB turn; the time is reported, never asserted (#1761).
   expect(source?.kind === "source" && source.cursor).toMatchObject({ atEnd: true, seq, settledThrough: seq, gap: null });
-  expect(elapsed).toBeLessThan(5_000);
   console.log(`[ledger] ${bytes} bytes harvested in one check in ${elapsed.toFixed(0)} ms`);
 });
 

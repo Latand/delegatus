@@ -921,6 +921,24 @@ function waitForRetry(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+/** The clock a receipt-lock wait measures its deadline on, and the pause
+    between its attempts. Production keeps the wall clock and a real timer; the
+    lock harness swaps in a stepped clock so a whole 5 s wait is walked through
+    exactly, on a count of pauses rather than a runner's speed (#1761). Lock
+    staleness is always read against the real clock, because it is measured
+    against a file's mtime. */
+export interface ReceiptLockClock {
+  now(): number;
+  pause(milliseconds: number): Promise<void>;
+}
+
+const wallReceiptLockClock: ReceiptLockClock = { now: () => Date.now(), pause: waitForRetry };
+let receiptLockClock: ReceiptLockClock = wallReceiptLockClock;
+
+export function setReceiptLockClockForTests(clock: ReceiptLockClock | null): void {
+  receiptLockClock = clock ?? wallReceiptLockClock;
+}
+
 function recoveryIdentityTag(identity: string | null): string {
   return identity === null
     ? "unknown"
@@ -957,7 +975,7 @@ function recoveryOwners(
   observation: ReceiptLockObservation,
   deadline: number,
 ): ReceiptRecoveryOwnerScan {
-  if (Date.now() >= deadline) return { kind: "retry" };
+  if (receiptLockClock.now() >= deadline) return { kind: "retry" };
   const directory = path.dirname(recoveryPath);
   const prefix = path.basename(recoveryOwnerPrefix(recoveryPath));
   let names: string[];
@@ -1002,10 +1020,10 @@ async function recoveryOwnersUntil(
   observation: ReceiptLockObservation,
   deadline: number,
 ): Promise<ReceiptRecoveryOwnerEntry[] | null> {
-  while (Date.now() < deadline) {
+  while (receiptLockClock.now() < deadline) {
     const scan = recoveryOwners(recoveryPath, observation, deadline);
     if (scan.kind === "owners") return scan.entries;
-    await waitForRetry(Math.min(10, Math.max(1, deadline - Date.now())));
+    await receiptLockClock.pause(Math.min(10, Math.max(1, deadline - receiptLockClock.now())));
   }
   return null;
 }
@@ -1302,14 +1320,14 @@ async function removeObservedLock(
 }
 
 async function waitForLockRetry(deadline: number): Promise<void> {
-  if (Date.now() >= deadline) throw new Error("MCP receipt store is busy");
-  await waitForRetry(Math.min(10, Math.max(1, deadline - Date.now())));
+  if (receiptLockClock.now() >= deadline) throw new Error("MCP receipt store is busy");
+  await receiptLockClock.pause(Math.min(10, Math.max(1, deadline - receiptLockClock.now())));
 }
 
 async function withFileLock<T>(filePath: string, operation: () => T): Promise<T> {
   const lockPath = `${filePath}.lock`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const deadline = Date.now() + LOCK_WAIT_MS;
+  const deadline = receiptLockClock.now() + LOCK_WAIT_MS;
   const owner: ReceiptLockOwner = {
     pid: process.pid,
     startIdentity: procBackend.processIdentity(process.pid),
@@ -1338,7 +1356,7 @@ async function withFileLock<T>(filePath: string, operation: () => T): Promise<T>
       } finally {
         fs.closeSync(fd);
         if (observation) {
-          const retirementDeadline = Date.now() + LOCK_WAIT_MS;
+          const retirementDeadline = receiptLockClock.now() + LOCK_WAIT_MS;
           const retired = await removeObservedLock(lockPath, observation, retirementDeadline);
           if (retired === "retry"
             || (retired !== "removed"

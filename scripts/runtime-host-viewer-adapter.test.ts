@@ -663,7 +663,6 @@ test("promote succeeds when hot-state activation arrives late but inside the bud
    the clamp this promote waits ten minutes and the test times out. */
 test("hand-over budgets configured past the host deadline still expire inside it", async () => {
   const candidate = sqliteCandidate("6".repeat(40), "deploy-1216-clamped");
-  const startedAt = Date.now();
   const result = await runAction({
     action: "promote",
     input: { candidate },
@@ -680,7 +679,11 @@ test("hand-over budgets configured past the host deadline still expire inside it
 
   expect(result.code).not.toBe(0);
   expect(result.stderr).toContain("promoted Viewer never published hot-state activation");
-  expect(Date.now() - startedAt).toBeLessThan(20_000);
+  /* The adapter names the activation budget it enforced. Fitted inside the
+     3 s host deadline it is at most 3 s; unclamped it would read 600 s. */
+  const waited = /waited (\d+)s of (\d+)s/.exec(result.stderr);
+  expect(waited).not.toBeNull();
+  expect(Number(waited![2])).toBeLessThanOrEqual(3);
 }, 30_000);
 
 test("promotion from SQLite to a legacy release checkpoints rollback mirrors first", async () => {

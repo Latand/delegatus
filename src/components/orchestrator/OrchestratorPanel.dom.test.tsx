@@ -837,7 +837,6 @@ test("a restart-time status read that fails is retried, and the dock binds itsel
   /* And the viewer has not finished coming back, so that read FAILS. */
   incumbentReadDown = true;
 
-  const opened = Date.now();
   const host = mount([successor]);
   await settle();
   flushSync(() => undefined);
@@ -852,18 +851,29 @@ test("a restart-time status read that fails is retried, and the dock binds itsel
   const failed = incumbentReads;
   expect(failed).toBeGreaterThan(0);
 
-  /* The endpoint recovers — and no one touches the panel. */
+  /* The endpoint recovers — and no one touches the panel. Waited for by the
+     binding itself, not by a sleep sized to the retry, and every look on the way
+     reads the panel's bound: had «opening…» expired before the retry bound the
+     dock, the panel would have named a reason first. */
   incumbentReadDown = false;
-  await new Promise((resolve) => setTimeout(resolve, UNBOUND_STATUS_RETRY_MS + 500));
-  await settle();
-  flushSync(() => undefined);
+  expect(UNBOUND_STATUS_RETRY_MS).toBeLessThan(SEAT_BIND_TIMEOUT_MS);
+  const bound = () => host.querySelector('[data-orchestrator-conversation="conversation_orch_successor"]') !== null;
+  const reasons: string[] = [];
+  const deadline = Date.now() + SEAT_BIND_TIMEOUT_MS + 5_000;
+  while (!bound() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await settle();
+    flushSync(() => undefined);
+    const reason = bindReason(host);
+    if (reason) reasons.push(reason);
+  }
 
-  /* The panel asked again on its own and bound to the successor, well inside
-     the bound «opening…» is held to. */
+  /* The panel asked again on its own and bound to the successor inside the
+     bound «opening…» is held to. */
+  expect(reasons).toEqual([]);
   expect(incumbentReads).toBeGreaterThan(failed);
-  expect(host.querySelector('[data-orchestrator-conversation="conversation_orch_successor"]')).not.toBeNull();
+  expect(bound()).toBe(true);
   expect(host.textContent).not.toContain("Opening the conversation");
-  expect(Date.now() - opened).toBeLessThan(SEAT_BIND_TIMEOUT_MS);
   /* Resolution is all it was: no rotation, no second designation, no spawn. */
   expect(rotatePosts).toHaveLength(0);
   expect(seatPosts).toHaveLength(0);

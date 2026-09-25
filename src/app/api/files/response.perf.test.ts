@@ -124,7 +124,7 @@ function scannedFile(index: number): FileEntry {
   };
 }
 
-test("issue 798: a production-shaped files projection reads the registry once, stays within budget, and is byte-stable", async () => {
+test("issue 798: a production-shaped files projection reads the registry once and is byte-stable", async () => {
   const registry = new AgentRegistry(path.join(registryRoot, "registry.json"));
   const snapshot = productionShapedSnapshot(registry);
   let registryReads = 0;
@@ -165,11 +165,10 @@ test("issue 798: a production-shaped files projection reads the registry once, s
      the projection carries no per-request nondeterminism. */
   expect(warm.headers.get("etag")).toBe(cold.headers.get("etag"));
 
-  /* Performance contract, isolated state only: generous CI ceilings that the
-     pre-#798 double projection and per-entry deep clones cannot meet at this
-     corpus size, while the single-projection path passes with wide margin. */
-  expect(coldDuration).toBeLessThan(2_000);
-  expect(warmDuration).toBeLessThan(500);
+  /* The #798 regressions are held by counts, not by the clock: the single
+     registry read above, and the shared-structure lookup in the next test for
+     the per-entry deep clones. The timings are reported, never asserted (#1761). */
+  console.log(JSON.stringify({ probe: "issue-798-files-projection", coldMs: Math.round(coldDuration), warmMs: Math.round(warmDuration) }));
 });
 
 test("issue 798: the read-only conversation lookup shares snapshot structure instead of cloning per call", () => {

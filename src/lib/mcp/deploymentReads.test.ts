@@ -802,12 +802,16 @@ test("a control surface that never answers falls back instead of hanging the pro
   const ledgerDeployment = deployment("deployment_deadlock_ledger");
   installLedger([{ id: ledgerDeployment.deploymentId, value: ledgerDeployment }]);
   const runtimeMethods = await serveRuntimeSnapshot([deployment("deployment_socket_bypass")]);
+  let accepted = 0;
   const { origin } = await listenTcp(() => {
     /* Keep the accepted connection open without sending headers. */
+    accepted += 1;
   });
   installViewerControlFixture(origin);
 
-  const started = Date.now();
+  /* The control surface was asked, never answered, and the probe still
+     returned: the answer can only have come from the ledger once the bounded
+     control read gave up on a connection that is still open. */
   expect(await viewerMcpBindings().deployment_status({
     clientRequestId: "deployment-hanging-control",
     limit: 1,
@@ -815,8 +819,7 @@ test("a control surface that never answers falls back instead of hanging the pro
     count: 1,
     deployments: [ledgerDeployment],
   });
-  expect(Date.now() - started).toBeGreaterThanOrEqual(4_500);
-  expect(Date.now() - started).toBeLessThan(8_000);
+  expect(accepted).toBeGreaterThan(0);
   expect(runtimeMethods).toEqual([]);
 }, 9_000);
 

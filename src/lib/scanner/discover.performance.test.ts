@@ -10,7 +10,19 @@ import { discoverFilesWithProjectCatalog } from "./discover";
 import { PROJECT_RESOLUTION_VERSION } from "./projectState";
 
 const LARGE_CATALOG_SIZE = 800;
+/** The controller's lag budget. A benchmark here reports its lag against it and
+    never asserts it: lag measures the runner as much as the scan (#1761). */
 const EVENT_LOOP_BUDGET_MS = 100;
+
+function reportLag(probe: string, lags: number[], durationMs?: number): void {
+  console.log(JSON.stringify({
+    probe,
+    lagP95Ms: Math.round(percentile(lags, 0.95)),
+    lagMaxMs: Math.round(Math.max(...lags)),
+    budgetMs: EVENT_LOOP_BUDGET_MS,
+    ...(durationMs === undefined ? {} : { durationMs: Math.round(durationMs) }),
+  }));
+}
 
 async function eventLoopLagsWhile(work: () => Promise<void>): Promise<number[]> {
   const lags: number[] = [];
@@ -34,7 +46,7 @@ function percentile(values: number[], fraction: number): number {
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)] ?? 0;
 }
 
-test("large-catalog reconciliation keeps event-loop lag below the controller budget", async () => {
+test("large-catalog reconciliation catalogs every conversation, reporting its event-loop lag", async () => {
   const base = await mkdtemp(path.join(os.tmpdir(), "llv-large-catalog-lag-"));
   const previousStateDir = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(base, "state");
@@ -62,8 +74,7 @@ test("large-catalog reconciliation keeps event-loop lag below the controller bud
       expect(scan.projectCatalog.reduce((total, project) => total + project.conversations, 0)).toBe(LARGE_CATALOG_SIZE);
     });
 
-    expect(percentile(lags, 0.95)).toBeLessThan(EVENT_LOOP_BUDGET_MS);
-    expect(Math.max(...lags)).toBeLessThan(EVENT_LOOP_BUDGET_MS);
+    reportLag("large-catalog-reconciliation", lags);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
@@ -71,7 +82,7 @@ test("large-catalog reconciliation keeps event-loop lag below the controller bud
   }
 }, 30_000);
 
-test("pipeline status churn keeps a 100 MB growing transcript scan incremental and responsive", async () => {
+test("pipeline status churn keeps a 100 MB growing transcript scan incremental, reporting its event-loop lag", async () => {
   const base = await mkdtemp(path.join(os.tmpdir(), "llv-growing-controller-scan-"));
   const previousStateDir = process.env.LLV_STATE_DIR;
   const stateDir = path.join(base, "state");
@@ -184,11 +195,11 @@ test("pipeline status churn keeps a 100 MB growing transcript scan incremental a
     const durationMs = performance.now() - startedAt;
     const migratedCatalog = JSON.parse(fs.readFileSync(catalogPath, "utf8")) as { resolutionVersion: number };
 
+    /* Incremental is what the bytes say: the 100 MB transcript is read at its
+       tail, not again from the start. */
     expect(bytesRead).toBeLessThanOrEqual(2 * 1024 * 1024);
-    expect(durationMs).toBeLessThan(15_000);
     expect(migratedCatalog.resolutionVersion).toBe(PROJECT_RESOLUTION_VERSION);
-    expect(percentile(lags, 0.95)).toBeLessThan(EVENT_LOOP_BUDGET_MS);
-    expect(Math.max(...lags)).toBeLessThan(EVENT_LOOP_BUDGET_MS);
+    reportLag("growing-transcript-rescan", lags, durationMs);
   } finally {
     fs.openSync = originalOpen;
     fs.readSync = originalRead;

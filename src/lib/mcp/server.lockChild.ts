@@ -197,30 +197,68 @@ function publishReusedLock(
   }
 }
 
+/** A claim that waits out the whole receipt-lock budget walks it on a stepped
+    clock (#1761): the lock's deadline and the service's own phase timings both
+    read it, and it moves only by the pauses the lock takes between attempts.
+    Each pause still yields one real turn of the event loop, and a heartbeat
+    counts those turns, so a wait that stopped yielding shows as a stalled
+    heartbeat rather than as a slow runner. */
+async function installSteppedLockClock(heartbeatPath: string): Promise<{
+  elapsedMs(): number;
+  ticks(): number;
+  stop(): void;
+}> {
+  const { setReceiptLockClockForTests } = await import("./server");
+  const wallOrigin = Date.now();
+  const monotonicOrigin = performance.now();
+  let elapsed = 0;
+  Object.defineProperty(performance, "now", {
+    value: () => monotonicOrigin + elapsed,
+    configurable: true,
+    writable: true,
+  });
+  setReceiptLockClockForTests({
+    now: () => wallOrigin + elapsed,
+    pause: async (milliseconds) => {
+      elapsed += milliseconds;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    },
+  });
+  let ticks = 0;
+  let beating = true;
+  const beat = () => {
+    if (!beating) return;
+    ticks += 1;
+    fs.writeFileSync(heartbeatPath, String(ticks));
+    setImmediate(beat);
+  };
+  setImmediate(beat);
+  return {
+    elapsedMs: () => elapsed,
+    ticks: () => ticks,
+    stop: () => { beating = false; },
+  };
+}
+
 async function timedClaim(
   receiptPath: string,
   countPath: string,
   resultPath: string,
   heartbeatPath: string,
 ): Promise<void> {
-  let ticks = 0;
-  const heartbeat = setInterval(() => {
-    ticks += 1;
-    fs.writeFileSync(heartbeatPath, String(ticks));
-  }, 20);
-  const startedAt = Date.now();
+  const clock = await installSteppedLockClock(heartbeatPath);
   try {
     await claimReceipt(receiptPath, countPath, path.join(path.dirname(resultPath), `discarded-${path.basename(resultPath)}`));
-    fs.writeFileSync(resultPath, JSON.stringify({ outcome: "completed", ticks, elapsedMs: Date.now() - startedAt }));
+    fs.writeFileSync(resultPath, JSON.stringify({ outcome: "completed", ticks: clock.ticks(), elapsedMs: clock.elapsedMs() }));
   } catch (error) {
     fs.writeFileSync(resultPath, JSON.stringify({
       outcome: "failed",
       error: error instanceof Error ? error.message : String(error),
-      ticks,
-      elapsedMs: Date.now() - startedAt,
+      ticks: clock.ticks(),
+      elapsedMs: clock.elapsedMs(),
     }));
   } finally {
-    clearInterval(heartbeat);
+    clock.stop();
   }
 }
 
@@ -344,26 +382,20 @@ async function claimWithMissingRecoveryDirectory(
     }
     return originalReaddir(target, options as never);
   }) as typeof fs.readdirSync;
-  let ticks = 0;
-  const heartbeat = setInterval(() => {
-    ticks += 1;
-    fs.writeFileSync(heartbeatPath, String(ticks));
-  }, 20);
-  await Bun.sleep(40);
-  const startedAt = Date.now();
+  const clock = await installSteppedLockClock(heartbeatPath);
   try {
     await claimReceipt(receiptPath, countPath, path.join(directory, "discarded-result.json"));
-    fs.writeFileSync(resultPath, JSON.stringify({ outcome: "completed", scans, ticks, elapsedMs: Date.now() - startedAt }));
+    fs.writeFileSync(resultPath, JSON.stringify({ outcome: "completed", scans, ticks: clock.ticks(), elapsedMs: clock.elapsedMs() }));
   } catch (error) {
     fs.writeFileSync(resultPath, JSON.stringify({
       outcome: "failed",
       error: error instanceof Error ? error.message : String(error),
       scans,
-      ticks,
-      elapsedMs: Date.now() - startedAt,
+      ticks: clock.ticks(),
+      elapsedMs: clock.elapsedMs(),
     }));
   } finally {
-    clearInterval(heartbeat);
+    clock.stop();
   }
 }
 

@@ -228,13 +228,18 @@ test("with no view open at all the call fails explicitly and asks nothing durabl
 test("with only a phone open the request is a notice: recorded, directed nowhere, answered at once", async () => {
   upsertPresence(openView({ viewSessionId: "view-phone", deviceId: "device-phone", device: { kind: "mobile", browser: "safari" }, mode: "mobile-focus", viewport: { width: 390, height: 844, dpr: 3 } }));
 
-  const started = Date.now();
-  const result = await service().callTool("request_attention", ask()) as HandoffResult & { delivered?: string };
+  /* "At once" is counted, not timed: the arrival awaiter is never entered. */
+  let arrivalWaits = 0;
+  const countedArrival: typeof awaitAttentionArrival = (id, options) => {
+    arrivalWaits += 1;
+    return fastArrival(id, options);
+  };
+  const result = await service({ awaitAttentionArrival: countedArrival }).callTool("request_attention", ask()) as HandoffResult & { delivered?: string };
 
   expect(result.ok).toBe(true);
   expect(result.delivered).toBe("notice");
   expect(result.handoff).toBeNull();
-  expect(Date.now() - started).toBeLessThan(1_500);
+  expect(arrivalWaits).toBe(0);
   const stored = readAttentionFile().requests;
   expect(stored).toHaveLength(1);
   expect(stored[0]).toMatchObject({ delivery: "notice", state: "pending", offeredTo: [], operationKey: requestAttentionOperationKey("handoff-1") });

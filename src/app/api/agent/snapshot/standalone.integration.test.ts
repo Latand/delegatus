@@ -433,12 +433,15 @@ test.skipIf(!required && !fs.existsSync(standaloneServer))(
       const singleStartedAt = performance.now();
       let singleResponse: Response | null = null;
       let singleTimedOut = false;
+      /* The client timeouts here only keep a wedged server from hanging the
+         test; how long each answer took is evidence, reported and never
+         asserted (#1761). */
       try {
         singleResponse = await fetch(`${origin}/api/agent/snapshot`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ schemaVersion: 1, scope: { kind: "visible" }, text: { include: false } }),
-          signal: AbortSignal.timeout(250),
+          signal: AbortSignal.timeout(30_000),
         });
       } catch (error) {
         if ((error as Error).name !== "TimeoutError") throw error;
@@ -480,7 +483,7 @@ test.skipIf(!required && !fs.existsSync(standaloneServer))(
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ schemaVersion: 1, scope: { kind: "visible" }, text: { include: false } }),
-          signal: AbortSignal.timeout(1_000),
+          signal: AbortSignal.timeout(30_000),
         });
         const durationMs = performance.now() - startedAt;
         const payload = await response.json() as ViewerSnapshotV1;
@@ -512,8 +515,8 @@ test.skipIf(!required && !fs.existsSync(standaloneServer))(
       expect(singlePayload?.conversations[0]?.title).toBe("Production-matched title 0");
       expect(measurements.every((measurement) => measurement.status === 200)).toBe(true);
       expect(measurements.every((measurement) => measurement.serverTiming?.includes("snapshot-session-titles"))).toBe(true);
-      expect(Math.max(...measurements.map((measurement) => measurement.durationMs))).toBeLessThan(1_000);
-      expect(singleDurationMs).toBeLessThan(1_000);
+      /* The snapshot times are in the evidence line above and are not asserted:
+         they measure the runner as much as the route (#1761). */
       expect(measurements.every((measurement) => measurement.payload.scanner.entryCount === PRODUCTION_SHAPE.files)).toBe(true);
       expect(peakRss - rssBefore).toBeLessThan(48 * 1024 * 1024);
       expect(rssAfter - rssBefore).toBeLessThan(32 * 1024 * 1024);

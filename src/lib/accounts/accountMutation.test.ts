@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, jest, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -41,11 +41,14 @@ test("a real registry spawn sees same-process contention before allocating, whil
       });
       await started;
 
-      const syncStartedAt = Date.now();
+      // A refusal that slept for the lock would show here as a counted wait.
+      const atomicsWait = Atomics.wait;
+      let syncWaits = 0;
+      Atomics.wait = (...args) => { syncWaits += 1; return atomicsWait(...args); };
       let syncError = null;
       try { registry.beginSpawnRequest(input); }
       catch (error) { syncError = { name: error?.name ?? "unknown", message: String(error?.message ?? error) }; }
-      const syncElapsedMs = Date.now() - syncStartedAt;
+      Atomics.wait = atomicsWait;
       const receiptsBeforeRelease = Object.keys(registry.snapshot().receipts).length;
 
       const queued = withAccountMutationLockAsync(async () => registry.beginSpawnRequest(input));
@@ -54,7 +57,7 @@ test("a real registry spawn sees same-process contention before allocating, whil
       const receiptsAfterRelease = Object.values(registry.snapshot().receipts);
       fs.writeFileSync(${JSON.stringify(result)}, JSON.stringify({
         syncError,
-        syncElapsedMs,
+        syncWaits,
         receiptsBeforeRelease,
         begunKind: begun.kind,
         receiptsAfterRelease: receiptsAfterRelease.length,
@@ -78,13 +81,12 @@ test("a real registry spawn sees same-process contention before allocating, whil
       name: "AccountMutationBusyError",
       message: expect.stringMatching(/account mutation is busy; held by .+pid/),
     },
-    syncElapsedMs: expect.any(Number),
+    syncWaits: 0,
     receiptsBeforeRelease: 0,
     begunKind: "created",
     receiptsAfterRelease: 1,
     clientAttemptIds: ["registry-contention-attempt"],
   });
-  expect((JSON.parse(fs.readFileSync(result, "utf8")) as { syncElapsedMs: number }).syncElapsedMs).toBeLessThan(100);
 });
 
 test("same-process contenders leave an async transaction holder runnable", async () => {
@@ -105,18 +107,21 @@ test("same-process contenders leave an async transaction holder runnable", async
       });
       await started;
 
-      const syncStartedAt = Date.now();
+      // A refusal that slept for the lock would show here as a counted wait.
+      const atomicsWait = Atomics.wait;
+      let syncWaits = 0;
+      Atomics.wait = (...args) => { syncWaits += 1; return atomicsWait(...args); };
       let syncFailed = false;
       try { withAccountMutationLock(() => undefined); }
       catch { syncFailed = true; }
-      const syncElapsedMs = Date.now() - syncStartedAt;
+      Atomics.wait = atomicsWait;
 
       let timerFired = false;
       setTimeout(() => { timerFired = true; releaseHolder(); }, 25);
       let waiterRan = false;
       const waiter = withAccountMutationLockAsync(async () => { waiterRan = true; });
       await Promise.all([holder, waiter]);
-      fs.writeFileSync(${JSON.stringify(result)}, JSON.stringify({ syncFailed, syncElapsedMs, timerFired, waiterRan }));
+      fs.writeFileSync(${JSON.stringify(result)}, JSON.stringify({ syncFailed, syncWaits, timerFired, waiterRan }));
     `],
     stdout: "ignore",
     stderr: "pipe",
@@ -132,11 +137,10 @@ test("same-process contenders leave an async transaction holder runnable", async
   expect({ completed, error }).toEqual({ completed: true, error: "" });
   expect(JSON.parse(fs.readFileSync(result, "utf8"))).toEqual({
     syncFailed: true,
-    syncElapsedMs: expect.any(Number),
+    syncWaits: 0,
     timerFired: true,
     waiterRan: true,
   });
-  expect((JSON.parse(fs.readFileSync(result, "utf8")) as { syncElapsedMs: number }).syncElapsedMs).toBeLessThan(100);
 });
 
 test("a mutation the store refuses advances neither the revision nor the rows", async () => {
@@ -405,13 +409,29 @@ test("async admission has one deadline, names the holder and removes a timed-out
   const warn = console.warn;
   console.warn = (line) => { lines.push(String(line)); };
   let ran = false;
-  const start = performance.now();
   try {
-    const error = await withAccountMutationLockAsync(() => { ran = true; }, { caller: "resume", waitMs: 40 })
-      .then(() => null, (error: unknown) => error);
+    /* On a fake clock the one deadline is exact: the refusal is still pending
+       a millisecond before the 40 ms the caller asked for, and arrives on it,
+       where the 2 s admission default would still be waiting. */
+    let settled: { error: unknown } | null = null;
+    jest.useFakeTimers();
+    try {
+      void withAccountMutationLockAsync(() => { ran = true; }, { caller: "resume", waitMs: 40 })
+        .then(() => null, (error: unknown) => error)
+        .then((error) => { settled = { error }; });
+      await Promise.resolve();
+      jest.advanceTimersByTime(39);
+      for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+      expect(settled).toBeNull();
+      jest.advanceTimersByTime(1);
+      for (let turn = 0; turn < 10 && settled === null; turn += 1) await Promise.resolve();
+    } finally {
+      jest.useRealTimers();
+    }
+    expect(settled).not.toBeNull();
+    const error = settled!.error;
     expect(error).toBeInstanceOf(AccountMutationBusyError);
     expect((error as Error).message).toContain("quota commit fixture");
-    expect(performance.now() - start).toBeLessThan(250);
     expect(ran).toBeFalse();
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({ event: "account-mutation-refused", caller: "resume", holder: "quota commit fixture", holderPid: process.pid, waitMs: expect.any(Number), lockAgeMs: expect.any(Number) });

@@ -982,11 +982,11 @@ test("a real remote read that hangs is killed at the bound and reads as a networ
     const subject = pipeline();
     subject.worktreeDir = root;
 
-    const started = Date.now();
     const read = currentPipelineRemoteBranchHead(subject, realExec);
 
+    /* Only a read killed at its bound answers this way; the fake transport
+       would otherwise have run its thirty seconds and exited. */
     expect(read).toEqual({ ok: false, transient: true, error: "checking the remote pipeline branch: git remote read timed out after 5s" });
-    expect(Date.now() - started).toBeLessThan(15_000);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
