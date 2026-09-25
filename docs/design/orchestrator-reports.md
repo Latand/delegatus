@@ -49,6 +49,20 @@ Third addition, 2026-09-25 (paraphrased in English):
 > and to the Telegram copy, under the no-private-information rule. Put it in
 > the report rules.
 
+Correction by the operator, 2026-09-26, replacing the full sectioned Telegram
+post (paraphrased in English):
+
+> The group found the long posts spammy. The Telegram copy must be compact:
+> line 1 is a status emoji, a bold "Delegatus · <report kind>" and the local
+> date and time; line 2 is one short summary line; and every section (on
+> prod, task statuses, in progress, next) goes inside one expandable
+> blockquote, so it shows collapsed. No link previews: no link tags and no raw
+> URLs in the Telegram copy, PR numbers as plain text ("PR 2233"). Send
+> silently. The bridge copy is unchanged.
+
+This correction supersedes the second addition's "links only to public PRs":
+the Telegram copy now carries no links at all.
+
 Not in scope: a redesign of the report log UI; voice relay changes beyond
 keeping it working.
 
@@ -67,16 +81,19 @@ storage to one server-side operator setting that the client writes, and that
 `get_orchestrator`, the wake, the MCP session instructions and the tool
 answers all read. Every manager report also has a destination list: the
 bridge log always, plus the Telegram chat the operator picked for the project,
-if any. The seat files a report as sections (on prod, merged, in progress,
-queued, needs a decision) and the Viewer renders it twice from the same
-content: plain text for the bridge log and the voice relay, and Telegram HTML
-with a bold header, the local date and time, and links to PRs of public
-repositories only. A report on a settled deploy also carries the board's task
-status changes since the previous successful deploy, computed by the Viewer
-from a snapshot. Because the chat can be public, reports must never carry
-private information, and the Telegram copy is scrubbed before it is sent. The
-setup guide gains an optional "Reports to Telegram" step built from the
-existing bot panel; skipping it leaves bridge-only reports.
+if any. The seat files a report as a summary line and sections (on prod,
+merged, in progress, next, needs a decision). The Viewer cuts it to a
+1 900-byte budget by whole items and renders the one cut report twice: plain
+text for the bridge log and the voice relay, and a compact Telegram post. The
+post is a header line with emoji, name, kind and local time, then the summary,
+then every section inside one collapsed quote, with no links, sent silently.
+A report on a settled deploy also carries the board's task status changes
+since the previous successful deploy, from snapshots the tick takes when each
+deploy settles. Because the chat can be public, reports must never carry
+private information: items with any are dropped from both copies, and a report
+with nothing left is refused and stays owed. The setup guide gains an optional
+"Reports to Telegram" step built from the existing bot panel; skipping it
+leaves bridge-only reports.
 
 ## 1. Evidence
 
@@ -356,8 +373,9 @@ seed the language through storage and will keep working.
 9. *In the mandate*, as today's manual posts do. Rejected: the format is
    exact (header, time, emoji, links), and prose drifts per seat and per
    rotation.
-10. *In code*: the seat passes sections of short items, and the Viewer renders
-    the header, the time, the emoji, the links and the task list (chosen).
+10. *In code*: the seat passes a summary and sections of short items, and the
+    Viewer renders the header, the time, the emoji and the task list, and
+    applies the size budget (chosen).
 
 **Where the language comes from.** See section 4.
 
@@ -368,7 +386,7 @@ seed the language through storage and will keep working.
 | # | When | Class | Enforced by |
 |---|---|---|---|
 | R1 | Every settled outcome, each once: a deploy that succeeded or failed, a lane that completed, failed or parked (a merge lands as its lane completing), a review verdict. One report may cover several outcomes if it names their keys. | `completed`, `failed`, `review_verdict` | The tick keeps each outcome owed, under its own key, until a report with that key or covering it is in the log (§5.1) |
-| R2 | The moment the seat needs the operator: a decision, an approval, an access it lacks. | `blocked`, `question` | `suggest_replies` and `seat_tick_settings` answers ask for it when none was filed (§5.4); the attention queue then holds it (#1168) |
+| R2 | The moment the seat needs the operator: a decision, an approval, an access it lacks. | `blocked`, `question` | The tick owes an ask for each reply-suggestion set with no question report newer than it (§5.1); `seat_tick_settings` asks for it when the tick is switched off (§5.4); the attention queue then holds it (#1168) |
 | R3 | A status digest when the wake says one is due: an interval wake, the board moved since the last report, and no manager report for at least one wake interval. | `status` | The tick's digest line (§5.1) |
 | R4 | The outcome that settles the last open lane: the report says nothing is running. | (part of R1) | The tick's owed line says so (§5.1) |
 | R5 | File the report even when the operator is in the chat and got the same news there. The chat is not the log. | – | Mandate (§5.7) |
@@ -379,56 +397,110 @@ asked for in the turn of the wake that announced it and in every later wake
 until it is in the log, and anything else that moved reaches the log within
 one wake interval.
 
-### 3.2 Shape: sections
+### 3.2 Shape: summary and sections
 
-A report is the sectioned post the operator approved in the group (§1.11). The
-seat passes short items in fixed sections; the Viewer renders the header, the
-time, the emoji and the links, so the format cannot drift.
+A report is the sectioned report the operator approved in the group (§1.11),
+reduced to what the operator asked for on 26.09: one header line, one summary
+line, then the sections. The seat passes a summary and short items in fixed
+sections; the Viewer renders the header, the date, the emoji and the headings,
+so the format cannot drift.
 
-| Section | Emoji | uk heading | en heading | Holds |
-|---|---|---|---|---|
-| `prod` | ✅ | На проді | On prod | what reached production |
-| `merged` | 🔀 | Змерджено, піде з наступним деплоєм | Merged, goes out with the next deploy | merged and not deployed yet |
-| `inProgress` | 🛠 | В роботі | In progress | what is running, including a failure being retried |
-| `queued` | ⏳ | Черга | Queued | what starts next |
-| `decision` | ❓ | Чекає рішення | Needs a decision | what the operator has to answer or do |
-| `tasks` | 📋 | Задачі з попереднього деплою | Tasks since the previous deploy | written by the Viewer only (§3.8) |
+**One model, two renderings.** The renderer builds one cut report, meaning a
+header, a summary and the sections after every cut of this section, and renders
+it twice: plain text for the bridge log and the voice relay, and compact
+Telegram HTML for the group (§5.5). Both carry the same header, summary and
+items in the same order. They differ only in form: the Telegram copy puts the
+sections in a collapsed quote and writes `#2233` as "PR 2233" with no links.
 
-- Header, rendered by the Viewer: `{name} · звіт оркестратора` /
-  `{name} · orchestrator report`, then the local date and time in the
-  operator's time zone, formatted by `Intl` with the short zone name
-  ("25.09, 22:47 GMT+3"). `{name}` is the name the operator gave the project
-  for reports (§5.6).
+**Header**, rendered by the Viewer: the class emoji, then `{name} · {kind}`,
+then the local date and time in the operator's time zone, formatted by `Intl`
+with the short zone name ("25.09, 21:45 GMT+3").
+
+| Class | Emoji | Kind (uk / en) |
+|---|---|---|
+| `completed` | ✅ | завершено / completed |
+| `failed` | ❌ | помилка / failed |
+| `blocked` | ⛔ | заблоковано / blocked |
+| `question` | ❓ | питання / question |
+| `review_verdict` | 🔍 | вердикт ревʼю / review verdict |
+| `status` | 🕒 | статус / status |
+
+A deploy report (§3.8) uses "деплой" / "deploy" as its kind, with its class's
+emoji. `{name}` is resolved as in §5.6.
+
+**Summary**: one plain line of at most 120 characters, from the new `summary`
+argument. On `blocked` and `question` it names the ask, so the ask is visible
+while the Telegram quote is collapsed. Without a `summary`, the first item of
+the first non-empty section, cut to 120 characters at a word boundary, is used.
+
+**Sections**, always in this order in both copies. Empty sections are left out.
+
+| Section | Emoji | uk heading | en heading | Holds | Items at most |
+|---|---|---|---|---|---|
+| `prod` | ✅ | На проді | On prod | what reached production | 6 |
+| `tasks` | 📋 | Задачі з попереднього деплою | Tasks since the previous deploy | written by the Viewer only (§3.8) | 6 titles per group |
+| `merged` | 🔀 | Змерджено, піде з наступним деплоєм | Merged, goes out with the next deploy | merged, waiting for the next deploy | 6 |
+| `inProgress` | 🛠 | В роботі | In progress | what is running, a failure being retried included | 6 |
+| `queued` | ⏳ | Далі | Next | what starts next | 4 |
+| `decision` | ❓ | Чекає рішення | Needs a decision | what the operator has to answer or do | 3 |
+
 - An item is one or two plain sentences, at most 200 characters, saying what
-  is now true and what it means ("реліз 1.5.0 на проді, npm теж 1.5.0").
-  At most 8 items per section; more are cut to 8 with "і ще N" / "and N more".
-  Empty sections are left out.
+  is now true and what it means ("реліз 1.5.0 на проді, npm теж 1.5.0"). An
+  item over 200 characters is dropped whole, with a warning. Items beyond a
+  section's limit are dropped whole and replaced by one "і ще N" / "and N more"
+  line.
 - An outcome report carries only the sections its outcomes touch, plus what
   follows from them. A `status` digest carries the whole state: everything
-  running, queued and waiting. `blocked` and `question` always have a
-  `decision` item.
-- The three-line shape of the first revision maps onto this: its headline and
-  "what changed" lines become an item in `prod`, `merged` or `inProgress`; its
-  "Next" line becomes `inProgress` or `queued`; its "Needed from you" line
-  becomes `decision`.
+  running, next and waiting. `blocked` and `question` always have a `decision`
+  item.
+- The three-line shape of the first revision maps onto this: its headline
+  becomes the summary; its "what changed" line becomes an item in `prod`,
+  `merged` or `inProgress`; its "Next" line becomes `inProgress` or `queued`;
+  its "Needed from you" line becomes `decision`.
 - Work is named by its title and its `#PR`. No card ids, pipeline ids, full
-  SHAs, deployment ids or report keys; an 8-character sha only for a deploy.
-- The bridge copy and the Telegram copy are the same text: plain text with the
-  emoji headings and "•" bullets in the log and the voice relay, Telegram HTML
-  in the group (§5.5). The rendered text is at most 2 KB, the store's bound.
+  SHAs, deployment ids, report keys or URLs; an 8-character sha only for a
+  deploy.
+
+**Byte budget.** The store cuts any body over `BRIDGE_REPORT_BODY_MAX_BYTES`
+(2 048 bytes, `src/lib/bridge/types.ts:60`) mid-character with "…", and
+Ukrainian text takes about 2 bytes per character. The renderer therefore owns a
+budget of **1 900 bytes of UTF-8 for the plain rendering**, so the store never
+cuts. While the plain rendering is over budget, it gives way in this order,
+one whole item at a time:
+
+1. Task titles, from the largest group of the `tasks` section, down to none;
+   the group then shows only its count ("Нові: 105").
+2. Items from the end of `queued`, then `inProgress`, then `merged`, then
+   `prod`. Each section keeps its first item until every section before
+   `decision` is down to one, and then the rest go in the same order.
+3. `decision` and the summary are never cut. Three decision items of 200
+   characters, the summary and the header come to at most about 1 600 bytes,
+   so they always fit.
+
+Every removal is a whole item, counted in that section's "і ще N" line, so no
+item is ever cut mid-text. The Telegram copy is rendered from the same cut
+report, so it lists exactly the items the bridge copy lists. Its own bound
+(4 096 characters for HTML) is never reached from a 1 900-byte report.
 
 ### 3.3 Keys and dedupe
 
 - Outcome keys are given by the tick in the wake (§5.1):
-  `deploy:<sha8>:<succeeded|failed>`, `lane:<pipelineId>:<completed|failed|parked|provisioning-failed>`,
-  `verdict:<pipelineId>:<stageId>:<round>`. A pure ask uses
-  `ask:<topic>:<YYYY-MM-DD>`, a digest `digest:<YYYY-MM-DDTHH:MM>`. An outcome
-  that is also an ask (a failed deploy that needs the operator) files under the
-  outcome's key with class `blocked`.
+  - `deploy:<sha8>:succeeded`: a successful deploy, one per commit;
+  - `deploy:<sha8>:failed:<attempt8>`: a failed deploy, one per attempt, where
+    `<attempt8>` is the first 8 hex characters of the attempt's deployment id,
+    so a fourth failure of a commit after three earlier ones is owed again. The
+    id stays in the key and never in the text;
+  - `lane:<pipelineId>:<completed|failed|parked|provisioning-failed>`;
+  - `verdict:<pipelineId>:<stageId>:<round>`.
+- A pure ask uses `ask:<topic>:<YYYY-MM-DD>`, a digest
+  `digest:<YYYY-MM-DDTHH:MM>`. An outcome that is also an ask (a failed deploy
+  that needs the operator) files under the outcome's key with class `blocked`.
 - `covers` lists the keys of further outcomes one report speaks for. The row
   stores them, and each counts as reported.
 - The same key files once; the store makes a replay a no-op. Ids are scoped by
   project (§5.2), so two projects' identical keys give two rows.
+- A report refused because nothing was left after scrubbing stores nothing, so
+  its key stays unused and stays owed (§5.2).
 - A digest does not repeat an outcome that already has its own report.
 
 ### 3.4 Quiet periods
@@ -436,7 +508,7 @@ time, the emoji and the links, so the format cannot drift.
 - The tick asks for no digest while the board fingerprint equals the one
   recorded for the last report (§5.1). Silence in the log means nothing
   changed since the last entry.
-- The `inProgress`, `queued` and `decision` sections of the latest report are
+- The `inProgress`, `queued` ("next") and `decision` sections of the latest report are
   what the operator relies on while away, so they have to stay true. When the
   seat stops or pauses its tick, or waits on the operator, the report says so;
   `seat_tick_settings` asks for that report when the tick is switched off
@@ -477,8 +549,7 @@ they are stored; the task-text rule is what puts them in the right language.
 A report may be read by anyone in a public group, and the bridge copy is the
 same text, so no report carries private information of any kind:
 
-- local paths, host names, ports, domains and URLs (the Viewer's own links to
-  public PRs are the only URLs);
+- local paths, host names, ports, domains and URLs of any kind;
 - IP addresses, emails, phone numbers;
 - account names, ids and labels of any engine, GitHub handles, the OS user
   name;
@@ -489,33 +560,49 @@ same text, so no report carries private information of any kind:
 - secrets and anything shaped like a credential;
 - conversation, deployment, card and pipeline ids.
 
-Enforcement is in §5.2 and §5.5: every item and task title passes a scrubber,
-and an item with a hit is dropped from the report, with a warning to the seat
-naming the class and never the value. Quotes, and people's names outside the
-known lists, cannot be detected reliably; the mandate carries that part.
+Enforcement is in §5.2 and §5.5: the summary, every item and every task title
+pass a scrubber, and an item with a hit is dropped from both copies, with a
+warning to the seat naming the class and never the value. A report with
+nothing left is refused and its outcome stays owed. Quotes, and people's names
+outside the known lists, cannot be detected reliably; the mandate carries that
+part.
 
 ### 3.8 Task changes on deploy reports
 
-- A report whose key or `covers` names `deploy:<sha8>:<state>` is a deploy
-  report. The Viewer adds the `tasks` section to it; the seat does not write
-  it.
-- The list is the difference between the project's tasks now and the
-  snapshot taken at the previous successful deploy report:
+- A report whose key or `covers` names a `deploy:` key is a deploy report. The
+  Viewer adds the `tasks` section to it; the seat does not write it.
+- **Snapshots are taken when the deploy settles.** The first tick
+  check that sees a deploy settled (the controller pass, §5.1) records the
+  project's task statuses under that deploy's id, whether or not a report ever
+  follows. The snapshot lands at most one check interval (5 minutes) after the
+  deploy settled. It is stored in a new `task_status_snapshots` collection of
+  `state.sqlite`, one row per deploy (`<project>/<deploymentId>`:
+  `{ sha8, state, settledAt, takenAt, statuses: { <taskId>: <status> } }`),
+  owned by `src/lib/bridge/taskChanges.ts`. The newest 10 per project are kept,
+  about 100 KB each at the size of this project's board.
+- **The list for deploy D** is the difference between the snapshot of the last
+  successful deploy before D and D's own snapshot, whenever D's report is
+  filed:
   - **Готово / Done**: status changed to `done`;
   - **Заблоковано / Blocked**: changed to `blocked`;
   - **В роботі / In progress**: changed to `assigned`;
-  - **Нові / New**: not in the snapshot, whatever their status now.
+  - **Нові / New**: absent from the earlier snapshot, whatever their status in
+    D's.
   Moves back to `inbox`, deleted tasks and tasks hidden from the board are left
   out.
-- Each task is named by the first line of its text, at most 90 characters, and
-  passes the same scrubber; a title with a hit is left out and counted
-  ("1 приховано" / "1 hidden"). At most 8 titles per group, then "і ще N".
-- A succeeded deploy's report moves the snapshot forward. A failed deploy's
-  report shows the list under "(ще не на проді)" / "(not on prod yet)" and
-  leaves the snapshot where it was, so the next successful deploy lists the
-  same changes as shipped.
-- The first deploy report after the build has no snapshot: it records one and
-  shows no `tasks` section.
+- A report filed hours late lists what changed up to the deploy, since the
+  snapshot was taken then. A successful deploy that never got a report still
+  has its snapshot, so the next deploy's list starts from it.
+- For a failed deploy, the list runs from the last successful deploy to the
+  failed one, headed "(ще не на проді)" / "(not on prod yet)". A later
+  successful deploy lists the same changes again, as shipped.
+- Titles are the first line of each task's current text, at most 90
+  characters. Each passes the scrubber; a title with a hit is left out and
+  counted ("1 приховано" / "1 hidden"). A group shows at most 6 titles, then
+  "і ще N", and the byte budget (§3.2) may cut it further.
+- A deploy that settled before the build, or whose snapshot has aged out, has
+  no snapshot to diff from: its report shows no `tasks` section, and the
+  answer says so.
 
 ## 4. Language: one source of truth
 
@@ -561,6 +648,12 @@ known lists, cannot be detected reliably; the mandate carries that part.
     `prefersUkrainian(req)` for the pinned fallback title, falling back to the
     header only while the setting is unset.
 
+- **While unset**: `operatorLocale()` is null from the deploy until a client
+  loads and reports its language, which is today's state (§1.7). Meanwhile the
+  renderer uses English headings, kind words and dates, the host's time zone
+  stands in for the operator's, the wake lines leave out the language clause,
+  and no tool gives a language warning. The first page load ends it.
+
 Consequence: with two devices, the last choice wins on both, and the other
 device adopts it on its next load. There is one interface language per
 operator, which is what "the language I selected" means.
@@ -584,19 +677,34 @@ operator, which is what "the language I selected" means.
     successor inherits what its predecessor left unreported. They also survive
     the tick being switched off, so turning it back on resumes the asks.
 - **Input** (`SeatTickCheckInput`), read once per controller pass in
-  `seatTickSources.ts`: `lastReportAt`, the `at` of the newest manager row for
-  the project; `reportedIds`, the set of project-scoped ids and `covers` ids of
-  the project's manager rows; `bridgeReports`; `operatorLocale`;
-  `openLanes`, the count of the project's open lanes after this check.
+  `seatTickSources.ts`:
+  - `lastReportAt`, the `at` of the newest manager row for the project;
+  - `reportedIds`, the set of project-scoped ids and `covers` ids of the
+    project's manager rows;
+  - `bridgeReports`, `operatorLocale` and `openLanes` (the count of the
+    project's open lanes after this check);
+  - `openAsk`, the seat conversation's current reply-suggestion set
+    (`readReplySuggestions`, `src/lib/suggestions/store.ts:347`): its `at`, or
+    null when there is none. The operator's next message retires the set
+    (`retireReplySuggestionsOnOperatorMessage`, same file), so a set that is
+    still there is an ask nobody has answered.
+- **Deploy snapshots** (§3.8): in the controller pass
+  (`src/lib/monitor/seatTickController.ts`), every settled deploy of the
+  project that has no snapshot yet gets one, through
+  `recordDeploySnapshot(project, deploy, tasks)` in `taskChanges.ts`. The call
+  is idempotent by deployment id and independent of whether a wake is sent or
+  lands, so a deferred wake or a missing report cannot move the boundary.
 - **Record** (`seatTickWakeCommit`, `src/lib/monitor/seatTick.ts:1696`): a wake
   that lands with a settled outcome appends `{ key, label, since }` for it. The
-  key follows §3.3 from the item itself: the deploy's sha, the lane's id and
-  state, the verdict's pipeline, stage and round. Nothing is recorded while
-  bridge reports are off.
+  key follows §3.3 from the item itself: the deploy's sha and, for a failure,
+  its deployment id (the item carries it, `src/lib/monitor/types.ts:263`); the
+  lane's id and state; the verdict's pipeline, stage and round. Nothing is
+  recorded while bridge reports are off.
 - **Discharge** (`decide`, `src/lib/monitor/seatTick.ts:1049`): an owed entry
   is removed when `reportedIds` holds `scopedReportId(project, key)`. Reports
   are matched by key, so a report about one outcome, or an unrelated
-  `question`, clears nothing else.
+  `question`, clears nothing else. A report refused because nothing was left
+  after scrubbing stored no row (§5.2), so it clears nothing.
 - **Digest memory**, on every check, whatever `reportsOwed` holds: when
   `lastReportAt > reportSeenAt`, set `reportSeenAt = lastReportAt` and
   `reportFingerprint = checkFingerprint`, the fingerprint of the check *before*
@@ -604,14 +712,22 @@ operator, which is what "the language I selected" means.
   therefore still counts as unreported, and costs at most one extra digest; no
   change is absorbed. Then set `checkFingerprint` to this check's fingerprint.
 - **Wake text** (`seatTickWakeMessage`, `src/lib/monitor/report.ts:236`), in
-  the reserved tail so the length bound never cuts it:
+  the reserved tail so the length bound never cuts it. `in Ukrainian` stands
+  for the operator's language; while `operatorLocale` is null the clause is
+  left out (§4.2):
   - `Reports owed, in Ukrainian, before this turn ends: deploy 1c41d361 succeeded (key deploy:1c41d361:succeeded); lane 33efe347 completed (key lane:33efe347:completed). One report may cover several: file it under one key and list the others in covers.`
   - When the owed outcomes settled the last open lane (`openLanes` is 0 and
     one of them is a lane): `Nothing is running now: the report says so.`
+  - When `openAsk` is older than 10 minutes and no `question` or `blocked`
+    manager report is newer than it:
+    `Ask owed: you asked the operator at HH:MM and filed no question report. File one (key ask:<topic>:<YYYY-MM-DD>) with the ask in the decision section.`
+    Each suggestion set is judged by its own `at`, so after "suggest, report,
+    suggest" the second ask is owed until a report newer than the second set
+    lands.
   - When `interval` is among the reasons, bridge reports are on,
     `lastReportAt` is older than the wake interval (or absent) and this
     check's fingerprint differs from `reportFingerprint`:
-    `Digest due, in Ukrainian: no report since HH:MM and the board moved. File one status report (key digest:<YYYY-MM-DDTHH:MM>) with the whole state: in progress, queued, needs a decision.`
+    `Digest due, in Ukrainian: no report since HH:MM and the board moved. File one status report (key digest:<YYYY-MM-DDTHH:MM>) with the whole state: in progress, next, needs a decision.`
   - No new wake reason: these lines ride wakes the tick sends anyway (option 4
     in section 2 is deferred).
 - **Stage events** (§1.9): `seatTickSources.ts` runs the lifecycle projection
@@ -619,8 +735,8 @@ operator, which is what "the language I selected" means.
   failures reach `lane-event` again.
 - **Contract clause**: `ORCHESTRATOR_SEAT_TICK_CONTRACT`
   (`src/lib/orchestrator/prompt.ts:139`) gains: "If the wake lists reports
-  owed or says a digest is due, file those bridge reports under the keys it
-  gives before the turn ends." A seat on an older mandate needs no mandate
+  owed, an ask owed or a digest due, file those bridge reports under the keys
+  it gives before the turn ends." A seat on an older mandate needs no mandate
   change, because the wake lines say it themselves.
 
 ### 5.2 `bridge_report`
@@ -629,33 +745,42 @@ In `bridgeReport` (`src/lib/mcp/bindings.ts:2565`) and its schema
 (`src/lib/mcp/server.ts:3677`, description at `:3024`):
 
 - **Arguments**: `key`, `class` and `clientRequestId` as today; new
+  `summary?: string`,
   `sections: { prod?, merged?, inProgress?, queued?, decision?: string[] }`
   and `covers?: string[]`. `body` stays for older callers: a report with no
-  `sections` renders its body as one plain paragraph under the header, and the
-  answer warns "Use sections."
+  `sections` renders its body as one `inProgress` item per line, under the
+  same budget, and the answer warns "Use summary and sections."
 - **Render** (new `src/lib/bridge/reportRender.ts`, pure): scrub every item
-  (§5.5), cut sections to 8 items and items to 200 characters, add the
-  `tasks` section for a deploy report (§3.8, new `src/lib/bridge/taskChanges.ts`),
-  and produce the plain text stored as the row's `body`. The header name, the
-  time zone and the locale come from the project's report settings (§5.6) and
-  the operator settings (§4.2). Section headings live in the renderer's own
-  small en/uk table (`src/lib/bridge/reportWords.ts`), since the UI dictionaries
-  are client modules.
+  and the summary (§5.5); drop items over 200 characters; add the `tasks`
+  section for a deploy report (§3.8, `src/lib/bridge/taskChanges.ts`); apply
+  the section limits and the byte budget of §3.2, whole items only; and return
+  the cut report. `renderPlain(cut)` is stored as the row's `body`;
+  `renderTelegram(cut)` (§5.5) is the group's copy. The header name, time zone
+  and locale come from §5.6 and §4.2; headings and kind words live in the
+  renderer's own small en/uk table (`src/lib/bridge/reportWords.ts`), since the
+  UI dictionaries are client modules.
+- **The one refusal**: when nothing is left after scrubbing, meaning no summary
+  and no item in any seat section, the call is refused with
+  `code: "report_empty_after_scrub"` and "Nothing is left after removing
+  private information; refile without it." No row is stored and nothing is
+  posted, so the key is unused and the tick keeps it owed. This is a refusal
+  because an empty report would clear an owed outcome with nothing in the log;
+  every other problem is a warning.
 - **Id scoping**: the stored id becomes `bridgeReportId(project + "\0" + key)`
   when the project resolves; `covers` is stored as scoped ids. The verbatim
   `key` that decision-class rows keep for the attention queue is unchanged. The
   tick computes the same `scopedReportId`.
-- **Warnings** in the answer, `warnings: string[]`, empty when clean. Nothing
-  is refused, since a report in the log beats one bounced back to a seat that
-  may not retry:
-  - language: `proseLanguage(items)` differs from `operatorLocale()` →
-    "This report reads as Russian; the operator's interface is Ukrainian."
-    (`src/lib/i18n/proseLanguage.ts`, pure, the classification of §1.1; null
-    below 40 letters or on a mixed text, which says nothing);
+- **Warnings** in the answer, `warnings: string[]`, empty when clean:
+  - language: `proseLanguage(summary and items)` differs from
+    `operatorLocale()` → "This report reads as Russian; the operator's
+    interface is Ukrainian." (`src/lib/i18n/proseLanguage.ts`, pure, the
+    classification of §1.1; null below 40 letters or on a mixed text, which
+    says nothing). Skipped while `operatorLocale()` is null;
   - private information: one warning per class the scrubber found, naming the
     class and the number of items dropped, never the value;
-  - shape: an item cut to 200 characters, a section cut to 8, a `blocked` or
-    `question` without a `decision` item, or machine ids in an item.
+  - shape: an item dropped for length, items dropped by a section limit or the
+    byte budget (with counts), a `blocked` or `question` without a `decision`
+    item, or machine ids in an item.
 - **Destinations** in the answer:
   `destinations: { bridge: { seq }, telegram?: { chat, state, messageIds?, code?, retryable? } }`
   (§5.5).
@@ -666,67 +791,83 @@ The same `proseLanguage` check on `text` (and `refine.text`), never on
 `details`, adds a warning to the answer. The descriptions say that `text` is
 written in the operator's interface language.
 
-### 5.4 Asks and stopping: `suggest_replies` and `seat_tick_settings`
+### 5.4 Asks and stopping: the tick, `suggest_replies` and `seat_tick_settings`
 
 The 19:27 failure (§1.4) is a seat that asked the operator in chat, switched
-its tick off and filed nothing. Two calls the seat already makes at exactly
-those moments carry the check:
+its tick off and filed nothing.
 
-- **`suggest_replies`** is the mandate's marker of an ask: the seat calls it
-  after every message that asks the operator something. When the caller is a
-  project's designated seat, bridge reports are on, and no `question` or
-  `blocked` report from that seat is newer than its previous
-  `suggest_replies` call, the answer gains: "You asked the operator. If they
-  are away they learn it only from the report log: file a question report
-  with the ask in the decision section." Drafts are stored as before.
+- **Asks** are enforced by the tick's `Ask owed` line (§5.1), which judges each
+  reply-suggestion set on its own time, so no order of asks and reports lets
+  one through. `suggest_replies`, the mandate's marker of an ask, adds one line
+  to its answer when the caller is a project's designated seat with bridge
+  reports on: "If the operator is away, they learn this ask only from a
+  question report." Drafts are stored as before.
 - **`seat_tick_settings`**: a call that sets `enabled: false`, or raises the
   wake interval, for a project with bridge reports on answers with
-  `reportsOwed` (the tick's owed keys) and: "Nothing will ask you for reports
-  while the tick is off. File a report now: what you are waiting on (a
-  question or blocked report when it is the operator), and the owed outcomes
-  above." The setting is applied as asked; the owed list stays in the tick
-  state and comes back in the first wake after the tick is turned on.
+  `reportsOwed` (the tick's owed keys), the open ask if there is one, and:
+  "Nothing will ask you for reports while the tick is off. File a report now:
+  what you are waiting on (a question or blocked report when it is the
+  operator), and the owed outcomes above." The setting is applied as asked;
+  the owed list stays in the tick state and comes back in the first wake after
+  the tick is turned on.
 
-Both are warnings in answers, the same kind as §5.2, and both are tested at the
-tool.
+Both answers are tested at the tool; the ask line is tested at the tick.
 
 ### 5.5 Telegram destination
 
-- **Scrubber** (new `src/lib/bridge/publicSafe.ts`, pure): finds, in an item
-  or task title, local paths (`/…`, `~/…`, `$HOME…`, drive letters), URLs and
-  domains, host names (the machine's own, tailnet names, `*.local`), ports
-  (`:NNNN` after a host, "port NNNN"), IP addresses, emails, phone numbers,
-  UUIDs and `conversation_` ids, usage-limit phrases (a percentage or amount
-  next to limit, quota, window, usage and their Ukrainian and Russian forms),
-  and names from a deny list read at call time: every account id and label in
-  the account registry, the OS user name, the home directory's name, the names
-  and GitHub repository names of every *other* project in the catalog, and the
-  display names and handles of people the bot has seen in the chat
-  (`telegram_bot_messages` store). List entries under 4 characters and generic
-  words (`main`, `default`, `work`, `pro`, `max`) are skipped; names match whole
-  and case-insensitively. An item with any hit is dropped, as in §3.7. Hiding
-  an item by mistake costs less than posting a private one.
-- **Public PR links** (new `src/lib/forge/repoVisibility.ts`): `#123` and
-  `owner/repo#12` become links only when that repository answers the
-  unauthenticated `GET /repos/<owner>/<repo>` with `private: false`, cached per
-  repository for six hours in the process. Any other answer, or none, leaves
-  the reference as plain text; a failure never produces a link.
+- **Scrubber** (new `src/lib/bridge/publicSafe.ts`, pure): finds, in the
+  summary, an item or a task title:
+  - local paths (`/…`, `~/…`, `$HOME…`, drive letters), URLs and domains,
+    host names (the machine's own, tailnet names, `*.local`), ports (`:NNNN`
+    after a host, "port NNNN"), IP addresses, emails, phone numbers, UUIDs and
+    `conversation_` ids;
+  - usage-limit phrases: a percentage or amount next to limit, quota, window
+    or usage, in English, Ukrainian and Russian;
+  - names from a deny list read at call time:
+    - every account id and label in the account registry, the OS user name,
+      the home directory's name, and the display names and handles of people
+      the bot has seen in the chat (the `telegram_bot_messages` store), each
+      matched as a whole word, case-insensitively, skipping entries under 4
+      characters and a short list of generic words (`main`, `default`, `work`,
+      `personal`, `team`, `pro`, `max`, `plus`);
+    - other projects, matched only in repository form, because a project named
+      with an ordinary word would otherwise drop ordinary prose: their
+      `owner/repo` and GitHub URL, and their repository or folder name only
+      when it contains `-`, `_`, `.` or a digit (`bonavita-odoo-dev`, never
+      `tools`).
+  An item or title with any hit is dropped whole, as in §3.7. A summary with a
+  hit is replaced by the fallback summary of §3.2, drawn from the remaining
+  items. Hiding an item by mistake costs less than posting a private one.
 - **Telegram HTML** (new `src/lib/bridge/telegramReport.ts`, pure), from the
-  rendered sections: HTML-escape every item first, then
-  `<b>{name} · звіт оркестратора</b>`, the date line, and for each non-empty
-  section `{emoji} <b>{heading}</b>` followed by `• item` lines, sections
-  separated by a blank line. Public PR references become `<a>` links to
-  `https://github.com/<owner>/<repo>/pull/<n>` (for `owner/repo#12`, that
-  repository). A copy over 4096 characters is cut at the last section that
-  fits, with "…".
+  same cut report as the bridge copy (§3.2), in the compact form the operator
+  asked for on 26.09:
+  - line 1: the class emoji, then `<b>{name} · {kind}</b>`, then " · " and the
+    date and time;
+  - line 2: the summary, as plain text;
+  - then every non-empty section, in the order of §3.2, inside one
+    `<blockquote expandable>`, which Telegram shows collapsed: each section is
+    `{emoji} <b>{heading}</b>` and its `• item` lines, sections separated by a
+    blank line.
+  - Every item and the summary is HTML-escaped before any tag is added.
+  - No links and no URLs, because GitHub link previews were what made the long
+    posts spammy: no `<a>` tag is ever emitted, the scrubber has already
+    removed URLs and domains, and a number the forge cache knows as one of
+    this project's pull requests (`ForgeCacheView`,
+    `src/lib/forge/workLinks.ts:92`) is written as "PR 2233" in place of
+    `#2233`. Any other `#N` (an issue, or a PR the cache has not seen) stays
+    `#N` as plain text; Telegram gives it no preview either. With no link or
+    URL in the text, Telegram shows no preview.
+  - `<blockquote expandable>` is in the Bot API's HTML formatting list, and
+    `TelegramBotService.send` passes HTML through to Telegram with no local tag
+    list, so the existing service carries it unchanged.
 - **Send**: after the row is appended, when the origin is `manager` and the
   project has a chat, the binding posts through the existing agent route
-  (`/api/telegram/bot/agent`, `op: "send"`, `format: "html"`) with the seat's
-  capability headers, so `TelegramBotService.send` checks the allowlist,
-  attributes the post to the seat and keeps it idempotent, under
-  `clientRequestId: "bridge-report:<reportId>"`. `status` digests go with
-  `silent: true`. The outcome is recorded on the row with a new store
-  function, `recordBridgeReportTelegram(id, { chat, state, messageIds?, code?, at })`.
+  (`/api/telegram/bot/agent`, `op: "send"`, `format: "html"`, `silent: true`)
+  with the seat's capability headers, so `TelegramBotService.send` checks the
+  allowlist, attributes the post to the seat and keeps it idempotent, under
+  `clientRequestId: "bridge-report:<reportId>"`. Every report is sent
+  silently. The outcome is recorded on the row with a new store function,
+  `recordBridgeReportTelegram(id, { chat, state, messageIds?, code?, at })`.
 - **Failure and retry**: a retryable code (`rate_limited`, `network_failed`,
   `timed_out`, `telegram_failed`) leaves `state: "failed"`, and calling
   `bridge_report` again with the same key, still a replay for the log, re-sends
@@ -751,6 +892,15 @@ tool.
   `TelegramBotService` does not list with `postAllowed`. There is no MCP write,
   so no agent chooses where a public post goes. `get_orchestrator` carries
   `reportTelegram` (alias and name, or null).
+- **Header name**, used by both copies and resolved by
+  `reportHeaderName(project)` in `src/lib/projects/settings.ts`:
+  `reportTelegram.name` when the operator set one; else the project's GitHub
+  repository name capitalised, when it has a GitHub remote; else the project's
+  display name from the catalog. A project that skipped the step, like
+  projects B–E today, therefore gets its repository or display name in its
+  bridge-only reports. The display name can be a local folder name, which is
+  acceptable only because such a report never leaves the bridge: choosing a
+  Telegram chat requires a name (below).
 - **Where**: the guide becomes Engines, Project, **Reports to Telegram
   (optional)**, Orchestrator. The step sits before Orchestrator because Create
   ends the guide on the new seat, and the seat's first report should already
@@ -772,11 +922,10 @@ tool.
     as in the panel; "Log only, no Telegram" is always a choice;
   - "Name in reports", prefilled with the project's GitHub repository name
     capitalised ("Delegatus") when it has a GitHub remote, else empty and
-    required once a chat is chosen, since the folder name is local;
-  - one line on links: "PR links: on, the repository is public" or "off, the
-    repository is private";
+    required once a chat is chosen, since the folder name is local; it becomes
+    `reportTelegram.name`;
   - the rule in one sentence: the group may be public, so reports carry no
-    private information;
+    private information, and they are posted silently, with no links;
   - Skip, as prominent as Continue. Skip writes nothing and leaves the step
     `skipped`; reports stay bridge-only.
 - **Later changes**: the same step, reopened from the setup guide's menu entry
@@ -802,10 +951,10 @@ File a report:
 - the moment you need the operator: question or blocked, with the ask in the decision section.
 - as a status digest when a wake says one is due, with the whole state.
 - even when you also told the operator in chat. The chat is not the log.
-Shape: pass sections, never a free body. prod (on production), merged (merged and waiting for the next deploy), inProgress, queued, decision (what the operator must answer or do). Each item is one or two plain sentences, at most 200 characters, saying what is now true and what it means; name work by its title and #PR, a deploy by its 8-character sha. The Viewer adds the header, the time, the emoji, the links and, on a deploy report, the task changes since the previous deploy.
+Shape: pass a summary and sections, never a free body. summary: one line, at most 120 characters, saying what is now true, or the ask on blocked and question. Sections: prod (on production), merged (merged and waiting for the next deploy), inProgress, queued (what comes next), decision (what the operator must answer or do; at most 3). Each item is one or two plain sentences, at most 200 characters, saying what is now true and what it means; name work by its title and #PR, a deploy by its 8-character sha; no URLs. The Viewer adds the header, the time, the emoji and, on a deploy report, the task changes since the previous deploy, and cuts whole items when a report is too long.
 Quiet: say nothing when nothing changed. Your latest report's inProgress, queued and decision items are what the operator relies on, so keep them true; when you stop the tick, pause or wait on the operator, say so, and when the last lane settles, say that nothing is running.
 Language: reports and board task text use the operator's interface language (operatorLocale in get_orchestrator, named in each wake). Chat replies stay in the language the operator writes to you in; GitHub stays English.
-Private: a report may be read in a public group. Never write local paths, hosts, ports, domains, IPs, emails, account names or ids, usage limits or plans, people's names, other projects or clients, quotes of the operator or anyone else, secrets, or card, conversation and deployment ids. The Viewer drops an item that carries one.
+Private: a report may be read in a public group. Never write local paths, hosts, ports, domains, URLs, IPs, emails, account names or ids, usage limits or plans, people's names, other projects or clients, quotes of the operator or anyone else, secrets, or card, conversation and deployment ids. The Viewer drops an item that carries one, and refuses a report with nothing left, which stays owed.
 Classes, and nothing outside this list:
 - status — the digest a wake asks for.
 - completed / failed — a deploy, lane or verdict settled.
@@ -823,17 +972,17 @@ mandates.
 | Rule | Mandate | Seat tick | Tool answers | Viewer rendering |
 |---|---|---|---|---|
 | R1 every settled outcome, once | ✓ | owed per key until that key or a `covers` entry is in the log; survives rotation and tick-off | | |
-| R2 asks | ✓ | | `suggest_replies` and `seat_tick_settings` ask for the report | attention queue (existing) |
+| R2 asks | ✓ | ask owed per reply-suggestion set until a question report newer than it lands | `suggest_replies` reminder; `seat_tick_settings` lists owed reports and the open ask | attention queue (existing) |
 | R3 digest | ✓ | asked on an interval wake when the board moved and nothing was reported for an interval | | |
 | R4 nothing running | ✓ | owed line says so when the last lane settled | | |
-| R6 task changes on deploy reports | ✓ | deploy key given in the wake | | `tasks` section from the snapshot |
-| Shape | ✓ | | warnings on cuts and missing `decision` | sections, header, time and emoji rendered by code |
+| R6 task changes on deploy reports | ✓ | snapshot per settled deploy in the controller pass; deploy key given in the wake | | `tasks` section from the deploy snapshots |
+| Shape and size | ✓ | | warnings on cuts and missing `decision` | summary, sections, header, time and emoji rendered by code; 1 900-byte budget, whole-item cuts, identical items in both copies |
 | Keys and dedupe | ✓ | keys printed per outcome | project-scoped ids; replay is a no-op | |
 | Language | ✓ | named in the wake lines | warning on mismatch (reports and task text) | headings in the interface language |
-| No private information | ✓ | | warning per class | items with a hit dropped from both copies |
-| Telegram destination | ✓ | | destinations in the answer | posted by the Viewer to the operator's chosen chat, idempotently |
-| Public PR links only | | | | visibility check, fail closed |
-| Skipped step | | | | bridge-only, unchanged |
+| No private information | ✓ | a refused empty report leaves its key owed | warning per class; refusal when nothing is left | items with a hit dropped from both copies |
+| Telegram destination | ✓ | | destinations in the answer | posted by the Viewer to the operator's chosen chat, idempotently and silently, in the compact form |
+| No link previews | ✓ | | | no `<a>`, no URLs; known PRs as "PR N" |
+| Skipped step | | | | bridge-only, header name from the fallback |
 
 ### 5.9 Files, one owner
 
@@ -844,94 +993,95 @@ two owners sharing a file.
 | Concern | Files |
 |---|---|
 | Operator language and time zone | new `src/lib/operator/settings.ts`, new `src/app/api/operator/settings/route.ts` (+ test), `src/lib/i18n/index.ts`, new `src/lib/i18n/proseLanguage.ts` (+ test), `src/lib/agent/spawnCommand.ts` |
-| Report model and rendering | `src/lib/bridge/types.ts`, `src/lib/bridge/store.ts` (+ tests), new `src/lib/bridge/reportRender.ts`, new `src/lib/bridge/reportWords.ts`, new `src/lib/bridge/taskChanges.ts`, new `src/lib/bridge/publicSafe.ts`, new `src/lib/bridge/telegramReport.ts`, new `src/lib/forge/repoVisibility.ts` (each + test) |
+| Report model and rendering | `src/lib/bridge/types.ts`, `src/lib/bridge/store.ts` (+ tests), new `src/lib/bridge/reportRender.ts`, new `src/lib/bridge/reportWords.ts`, new `src/lib/bridge/taskChanges.ts`, new `src/lib/bridge/publicSafe.ts`, new `src/lib/bridge/telegramReport.ts` (each + test); the new `task_status_snapshots` collection, written only through `taskChanges.ts` |
 | Tools | `src/lib/mcp/bindings.ts` (`bridge_report`, `create_task`, `update_task`, `suggest_replies`, `seat_tick_settings`, `get_orchestrator`), `src/lib/mcp/server.ts` (schemas, descriptions, session instructions), `src/lib/mcp/bridgeReportOrigin.test.ts`, `src/lib/mcp/orchestratorTools.test.ts` |
 | Project report settings | `src/lib/projects/settings.ts`, `src/app/api/projects/settings/route.ts` (+ test) |
-| Seat tick and mandate | `src/lib/monitor/types.ts`, `src/lib/monitor/seatTick.ts`, `src/lib/monitor/seatTickState.ts`, `src/lib/monitor/seatTickSources.ts`, `src/lib/monitor/report.ts`, `src/lib/orchestrator/prompt.ts` (each + test) |
+| Seat tick and mandate | `src/lib/monitor/types.ts`, `src/lib/monitor/seatTick.ts`, `src/lib/monitor/seatTickState.ts`, `src/lib/monitor/seatTickSources.ts`, `src/lib/monitor/seatTickController.ts`, `src/lib/monitor/report.ts`, `src/lib/orchestrator/prompt.ts` (each + test) |
 | Setup guide step | `src/lib/onboarding/steps.ts`, `src/lib/onboarding/marker.ts`, `src/components/onboarding/OnboardingDialog.tsx` (+ dom test), new `src/components/onboarding/TelegramReportsStep.tsx` (+ dom test), `src/components/onboarding/menuEntries.tsx`, `src/components/TelegramBot.tsx` (exports only), `src/lib/i18n/en.ts`, `src/lib/i18n/uk.ts`, the two browser drivers named in §5.6 and their fixtures |
 
 `src/hooks/useTelegramBot.ts`, `src/app/api/telegram/bot/route.ts`,
-`src/app/api/telegram/bot/agent` and `src/lib/telegram/bot/service.ts` are
-reused unchanged.
+`src/app/api/telegram/bot/agent`, `src/lib/telegram/bot/service.ts`,
+`src/lib/suggestions/store.ts` and `src/lib/forge/workLinks.ts` are reused
+unchanged.
 
 ## 6. Example reports from 2026-09-25
 
-Real events of the day, in the target shape, as the Viewer would render them
-for the bridge. Times are Kyiv. The header name is "Delegatus" as set in the
-setup step. Task titles in 6.1 are shown in Ukrainian, as the task-text rule
-would have written them; the stored titles were Russian (§1.6).
+Real events of the day, in the target shape. The plain text is the bridge copy
+exactly as the Viewer would store it; §6.6 shows the Telegram copy of two of
+them. Times are Kyiv. The header name is "Delegatus" as set in the setup step.
+Task titles in 6.1 are shown in Ukrainian, as the task-text rule would have
+written them; the stored titles were Russian (§1.6). Every example is within
+the 1 900-byte budget; the largest, 6.1 in Ukrainian, is under 1 200 bytes.
 
 ### 6.1 `completed`, deploy of release 1.5.0 (21:45)
 
 Key `deploy:1c41d361:succeeded`.
 
 ```text
-Delegatus · звіт оркестратора
-25.09, 21:45 GMT+3
+✅ Delegatus · деплой · 25.09, 21:45 GMT+3
+Реліз 1.5.0 на проді; npm ще оновлює версію.
 
 ✅ На проді
 • реліз 1.5.0: тег v1.5.0 і реліз на GitHub, у CHANGELOG 34 PR після 1.4.0 (#2221); прод відповідає 200
 
-🛠 В роботі
-• npm ще показує 1.4.0: публікація пройшла, реєстр не оновився; перевірю на наступному пробудженні
-• документ RRSI (#2222): змерджу, коли пройдуть перевірки
-• «Активність» на телефоні і розбір беклогу
-
 📋 Задачі з попереднього деплою
 • Готово: Прокрутка великої дошки гальмує: знайти причину на справжній дошці; Перший запуск на десктопі веде до оркестратора
 • Нові: «Активність» відкривається й працює на телефоні; Обслуговування: issue з GitHub на дошку, розбір старих задач, план пріоритетів
+
+🛠 В роботі
+• npm ще показує 1.4.0: публікація пройшла, реєстр не оновився; перевірю на наступному пробудженні
+• документ RRSI (#2222): змерджу, коли пройдуть перевірки
 ```
 
 ```text
-Delegatus · orchestrator report
-25/09, 21:45 EEST
+✅ Delegatus · deploy · 25/09, 21:45 EEST
+Release 1.5.0 is on prod; npm is still catching up.
 
 ✅ On prod
 • release 1.5.0: the v1.5.0 tag and the GitHub release; the CHANGELOG covers the 34 PRs since 1.4.0 (#2221); prod answers 200
 
-🛠 In progress
-• npm still shows 1.4.0: the publish went through and the registry has not caught up; I check again on the next wake
-• the RRSI document (#2222): I merge it once its checks pass
-• "Activity" on the phone, and the backlog triage
-
 📋 Tasks since the previous deploy
 • Done: The large board scrolls slowly: find the cause on the real board; Desktop first run leads with the orchestrator
 • New: "Activity" opens and works on the phone; Maintenance: GitHub issues onto the board, old tasks sorted, a priority plan
+
+🛠 In progress
+• npm still shows 1.4.0: the publish went through and the registry has not caught up; I check again on the next wake
+• the RRSI document (#2222): I merge it once its checks pass
 ```
 
 The task list is reconstructed from the tasks' timestamps and the seat's own
-words (it closed the scroll and first-run tasks after the 19:20 deploy, and
-launched the phone and backlog work at 21:38 and 21:44). The build takes it
-from the snapshot of §3.8.
+words: it closed the scroll and first-run tasks after the 19:20 deploy, and
+launched the phone and backlog work at 21:38 and 21:44. The build takes it
+from the deploy snapshots of §3.8.
 
 ### 6.2 `blocked`, the failed deploy (18:46)
 
-Key `deploy:17d92894:failed`: the failed deploy is the outcome and the ask at
-once. The Viewer's task list for it would appear under "(ще не на проді)" and
-is left out here, since no snapshot existed to take it from.
+Key `deploy:17d92894:failed:<attempt8>`: the failed deploy is the outcome and
+the ask at once. Its task list, headed "(ще не на проді)", is left out here,
+since no snapshot existed on 09-25 to take it from.
 
 ```text
-Delegatus · звіт оркестратора
-25.09, 18:46 GMT+3
-
-❓ Чекає рішення
-• деплой «Спершу оркестратор» (17d92894) зупинено: DNS на машині не знаходить GitHub і Docker Hub приблизно в половині запитів, три спроби впали (#2220)
-• потрібно перезапустити tailscale на машині (sudo), потім я повторю деплой
+⛔ Delegatus · деплой · 25.09, 18:46 GMT+3
+Деплой «Спершу оркестратор» зупинився на DNS: потрібен перезапуск tailscale.
 
 ✅ На проді
 • попередня версія 5064e5ec, лише без «Спершу оркестратор»
+
+❓ Чекає рішення
+• DNS на машині не знаходить GitHub і Docker Hub приблизно в половині запитів, три спроби деплою 17d92894 впали (#2220)
+• потрібно перезапустити tailscale на машині (sudo), потім я повторю деплой
 ```
 
 ```text
-Delegatus · orchestrator report
-25/09, 18:46 EEST
-
-❓ Needs a decision
-• the "orchestrator first" deploy (17d92894) is stopped: DNS on the machine fails to resolve GitHub and Docker Hub on about half the lookups, and three attempts failed (#2220)
-• restart tailscale on the machine (needs sudo), then I retry the deploy
+⛔ Delegatus · deploy · 25/09, 18:46 EEST
+The "orchestrator first" deploy stopped on DNS: tailscale needs a restart.
 
 ✅ On prod
 • the previous version 5064e5ec, just without "orchestrator first"
+
+❓ Needs a decision
+• DNS on the machine fails to resolve GitHub and Docker Hub on about half the lookups, and three attempts to deploy 17d92894 failed (#2220)
+• restart tailscale on the machine (needs sudo), then I retry the deploy
 ```
 
 ### 6.3 `review_verdict`, round 1 of part 3 of "orchestrator first" (17:20)
@@ -939,48 +1089,48 @@ Delegatus · orchestrator report
 Key `verdict:33efe347:slice3-review:1`.
 
 ```text
-Delegatus · звіт оркестратора
-25.09, 17:20 GMT+3
+🔍 Delegatus · вердикт ревʼю · 25.09, 17:20 GMT+3
+Третя частина «Спершу оркестратор» (#2166) повернулася на доопрацювання.
 
 🛠 В роботі
-• «Спершу оркестратор» (#2166), третя частина: ревʼю повернуло на доопрацювання, раунд 1
-• дві знахідки: дошка за замовчуванням ламає пʼять тестів панелі оркестратора, а PR конфліктує з main після #2146; збирач виправляє, далі раунд 2
+• «Спершу оркестратор» (#2166), третя частина: ревʼю, раунд 1, знайшло дві проблеми
+• дошка за замовчуванням ламає пʼять тестів панелі оркестратора, а PR конфліктує з main після #2146; збирач виправляє, далі раунд 2
 ```
 
 ```text
-Delegatus · orchestrator report
-25/09, 17:20 EEST
+🔍 Delegatus · review verdict · 25/09, 17:20 EEST
+Part 3 of "orchestrator first" (#2166) went back for changes.
 
 🛠 In progress
-• "orchestrator first" (#2166), part 3: review sent it back, round 1
-• two findings: opening on the board by default breaks five orchestrator dock tests, and the PR conflicts with main after #2146; the builder is fixing both, then round 2
+• "orchestrator first" (#2166), part 3: review round 1 found two problems
+• opening on the board by default breaks five orchestrator dock tests, and the PR conflicts with main after #2146; the builder is fixing both, then round 2
 ```
 
 ### 6.4 `status` digest (15:30, interval wake; last report 14:20)
 
-Key `digest:2026-09-25T15:30`. Posted silently.
+Key `digest:2026-09-25T15:30`.
 
 ```text
-Delegatus · звіт оркестратора
-25.09, 15:30 GMT+3
+🕒 Delegatus · статус · 25.09, 15:30 GMT+3
+Працюють два лейни, від тебе нічого не потрібно.
 
 🛠 В роботі
 • швидкість прокрутки великої дошки: заміри на даних проду, потім виправлення
 • «Спершу оркестратор» (#2166), друга частина з трьох: збирач годину стояв із позначкою «ліміт провайдера», хоча ліміт ні до чого; розморозив, збірка йде
 
-⏳ Черга
+⏳ Далі
 • з'ясувати, чому ходи агентів так зависають: сьогодні це вже другий випадок
 ```
 
 ```text
-Delegatus · orchestrator report
-25/09, 15:30 EEST
+🕒 Delegatus · status · 25/09, 15:30 EEST
+Two lanes running, nothing needed from you.
 
 🛠 In progress
 • the large board's scroll speed: measuring on prod data, then the fix
 • "orchestrator first" (#2166), part 2 of 3: its builder sat for an hour marked "provider limit", and the limit had nothing to do with it; unstuck, the build is running
 
-⏳ Queued
+⏳ Next
 • find out why agent turns hang like this: the second case today
 ```
 
@@ -989,8 +1139,8 @@ Delegatus · orchestrator report
 Key `ask:next-wave-plan:2026-09-25`.
 
 ```text
-Delegatus · звіт оркестратора
-25.09, 22:27 GMT+3
+❓ Delegatus · питання · 25.09, 22:27 GMT+3
+Потрібна відповідь на план наступної хвилі; до того нові роботи не стартують.
 
 ❓ Чекає рішення
 • план наступної хвилі: надійність конвеєра, безпека проду, пам'ять. Без відповіді нові хвилі не стартують, тик зупинено
@@ -998,8 +1148,8 @@ Delegatus · звіт оркестратора
 ```
 
 ```text
-Delegatus · orchestrator report
-25/09, 22:27 EEST
+❓ Delegatus · question · 25/09, 22:27 EEST
+Your answer on the next-wave plan is needed; no new work starts before it.
 
 ❓ Needs a decision
 • the plan for the next wave: pipeline reliability, prod safety, memory. No new wave starts without your answer, and the tick is stopped
@@ -1008,33 +1158,51 @@ Delegatus · orchestrator report
 
 ### 6.6 The Telegram copy
 
-6.1 as `telegram_bot_send` receives it (`<owner>/<repo>` stands for the
-public repository; a private one would leave `#2221` as text):
+6.1 as `telegram_bot_send` receives it: the same header, summary and items,
+with the sections collapsed, no links, the known PRs written as "PR 2221" and
+"PR 2222", sent silently.
 
 ```html
-<b>Delegatus · звіт оркестратора</b>
-25.09, 21:45 GMT+3
-
-✅ <b>На проді</b>
-• реліз 1.5.0: тег v1.5.0 і реліз на GitHub, у CHANGELOG 34 PR після 1.4.0 (<a href="https://github.com/<owner>/<repo>/pull/2221">#2221</a>); прод відповідає 200
-
-🛠 <b>В роботі</b>
-• npm ще показує 1.4.0: публікація пройшла, реєстр не оновився; перевірю на наступному пробудженні
-• документ RRSI (<a href="https://github.com/<owner>/<repo>/pull/2222">#2222</a>): змерджу, коли пройдуть перевірки
-• «Активність» на телефоні і розбір беклогу
+✅ <b>Delegatus · деплой</b> · 25.09, 21:45 GMT+3
+Реліз 1.5.0 на проді; npm ще оновлює версію.
+<blockquote expandable>✅ <b>На проді</b>
+• реліз 1.5.0: тег v1.5.0 і реліз на GitHub, у CHANGELOG 34 PR після 1.4.0 (PR 2221); прод відповідає 200
 
 📋 <b>Задачі з попереднього деплою</b>
 • Готово: Прокрутка великої дошки гальмує: знайти причину на справжній дошці; Перший запуск на десктопі веде до оркестратора
 • Нові: «Активність» відкривається й працює на телефоні; Обслуговування: issue з GitHub на дошку, розбір старих задач, план пріоритетів
+
+🛠 <b>В роботі</b>
+• npm ще показує 1.4.0: публікація пройшла, реєстр не оновився; перевірю на наступному пробудженні
+• документ RRSI (PR 2222): змерджу, коли пройдуть перевірки</blockquote>
 ```
 
-What the scrubber does, on an invented item a seat might have written that day
+Collapsed in the group, it reads as two lines: the header and "Реліз 1.5.0 на
+проді; npm ще оновлює версію."
+
+6.2 in the group; #2220 is an issue, so it stays `#2220`:
+
+```html
+⛔ <b>Delegatus · деплой</b> · 25.09, 18:46 GMT+3
+Деплой «Спершу оркестратор» зупинився на DNS: потрібен перезапуск tailscale.
+<blockquote expandable>✅ <b>На проді</b>
+• попередня версія 5064e5ec, лише без «Спершу оркестратор»
+
+❓ <b>Чекає рішення</b>
+• DNS на машині не знаходить GitHub і Docker Hub приблизно в половині запитів, три спроби деплою 17d92894 впали (#2220)
+• потрібно перезапустити tailscale на машині (sudo), потім я повторю деплой</blockquote>
+```
+
+What the scrubber does, on invented items a seat might have written that day
 (the account is a placeholder):
 
 ```text
 Item:    деплой упав, бо акаунт account-b вичерпав 100% тижневого ліміту
-Result:  the item is dropped from both copies
+Result:  the item is dropped from both copies; the rest of the report is filed
 Answer:  warnings ["1 item dropped: it named an account and a usage limit. Reports can be public; leave them out."]
+
+A report whose only item was that one:
+Answer:  refused, code report_empty_after_scrub; nothing stored, nothing posted, the key stays owed
 ```
 
 ### 6.7 Volume
@@ -1043,56 +1211,97 @@ Between 10:00 and 22:30 on 09-25 the seat filed 6 reports. Under these rules
 the same span asks for one report per owed outcome key (15 outcome wakes,
 some carrying two outcomes, which a report may cover together), up to 5
 digests on the interval wakes, and the two asks that stayed in chat (the 1.5.0
-tag and the next-wave plan).
+tag and the next-wave plan). In the group each of them is two visible lines.
 
 ## 7. Build
 
 1. Operator settings: `locale` and `timeZone` in the store and route, the
    client write and adoption, `operatorLocale` on `get_orchestrator`;
    `proseLanguage` with a table test drawn from shapes seen in the log.
-2. Report rendering: sections, cuts, the plain render, `reportWords`, with a
-   table test per section and language.
-3. `publicSafe`: each class of §5.5, deny-list sources from fixture registries
-   (invented names), skipped short and generic entries, ordinary prose left
-   alone, and an item dropped whole.
-4. `taskChanges`: snapshot and difference; Done, Blocked, In progress and New;
-   hidden and deleted tasks left out; a scrubbed title counted; the 8-title
-   cut; a failed deploy that leaves the snapshot; a first deploy with none.
-5. `repoVisibility` and `telegramReport`: public, private, unreachable (no
-   link); escaping before tags; the 4096 cut.
-6. `bridge_report`: sections and legacy body, `covers`, project-scoped ids
-   (two projects, one key, two rows), warnings, the deploy report's `tasks`
-   section, and the Telegram fan-out over the bot service's fake transport
-   (`src/lib/telegram/bot/fakeTransport.ts`): a manager report posts once; a
-   replay posts nothing; a rate-limited send is re-sent on replay under a new
-   request id; `send_uncertain` is never re-sent; an agent-origin report, a
-   project with no chat and a project with reports off post nothing; `status`
-   goes silent.
-7. `create_task` / `update_task` language warnings and the locale sentence in
-   the MCP session instructions.
-8. `suggest_replies` warning after an ask with no question report since the
-   previous call; `seat_tick_settings` answer when the tick is switched off or
-   slowed, with the owed keys.
-9. Seat tick, in `seatTick.test.ts`, `seatTickState.test.ts` and
-   `seatTickSources.test.ts`:
+2. **Report rendering** (`reportRender`, `reportWords`), with tests for:
+   - the section order, the kind words, the class emoji and the summary
+     fallback, in both languages;
+   - a report for a project with no report settings, whose header takes the
+     repository name, and one with no GitHub remote, which takes the display
+     name;
+   - `operatorLocale` null: English headings and kind words, the host's time
+     zone when none is known;
+   - **a Ukrainian deploy report with 3 `inProgress` items and 8 Done plus 8
+     New task titles of about 60 characters: the plain rendering is at most
+     1 900 bytes, the store keeps it without "…", no item is cut mid-text, the
+     task groups shrink first, and the Telegram rendering lists exactly the
+     same items**;
+   - `decision` and the summary surviving the tightest cut.
+3. `publicSafe`: each class of §5.5; deny-list sources from fixture
+   registries (invented names); skipped short and generic entries; another
+   project called `tools` leaving the word "tools" alone while
+   `owner/tools-repo` and `tools-repo` are caught; ordinary prose left alone;
+   an item dropped whole; a summary replaced by the fallback.
+4. `taskChanges`, with tests for:
+   - a snapshot per settled deploy, idempotent by deployment id, and the
+     newest 10 kept;
+   - Done, Blocked, In progress and New; hidden and deleted tasks left out; a
+     scrubbed title counted; the 6-title cut;
+   - **late filing: snapshot at deploy D1; D2 succeeds at 10:00; a task moves
+     to Done at 11:00; D2's report is filed at 12:00 and does not list it, and
+     D3's does**;
+   - a successful deploy with no report, whose snapshot is still the next
+     list's starting point;
+   - a failed deploy listed from the last successful one and marked "not on
+     prod yet";
+   - a deploy with no snapshot, which shows no `tasks` section.
+5. `telegramReport`: the compact layout (header line, summary line, one
+   `<blockquote expandable>` holding every section); escaping before tags; no
+   `<a>` and no URL in any output; a known PR as "PR N" and an issue kept as
+   `#N`; the same items as the plain rendering.
+6. `bridge_report`, with tests for:
+   - `summary`, `sections` and the legacy `body`; `covers`; project-scoped
+     ids (two projects, one key, two rows); warnings, and none about language
+     while `operatorLocale` is null;
+   - the deploy report's `tasks` section;
+   - **a report with nothing left after scrubbing, refused with
+     `report_empty_after_scrub`, storing and posting nothing**;
+   - the Telegram fan-out over the bot service's fake transport
+     (`src/lib/telegram/bot/fakeTransport.ts`): a manager report posts once,
+     silently and as HTML; a replay posts nothing; a rate-limited send is
+     re-sent on replay under a new request id; `send_uncertain` is never
+     re-sent; an agent-origin report, a project with no chat and a project
+     with reports off post nothing.
+7. `create_task` / `update_task` language warnings (none while the locale is
+   null) and the locale sentence in the MCP session instructions.
+8. `suggest_replies` reminder line; `seat_tick_settings` answer when the tick
+   is switched off or slowed, with the owed keys and the open ask.
+9. Seat tick, in `seatTick.test.ts`, `seatTickState.test.ts`,
+   `seatTickSources.test.ts` and `seatTickController.test.ts`:
    - owed entries recorded per key at wake commit, and kept across a rotation
      and a tick switched off;
-   - **a report for `deploy:aaaaaaaa:succeeded` after a wake that announced
-     that deploy and lane `L` completing clears the deploy only, and the next
-     wake still asks for `lane:L:completed`**; a report listing it in
-     `covers` clears it;
+   - a report for `deploy:aaaaaaaa:succeeded` after a wake that announced that
+     deploy and lane `L` completing clears the deploy only, and the next wake
+     still asks for `lane:L:completed`; a report listing it in `covers` clears
+     it;
+   - **a report for that deploy key whose only item named `/home/x` is refused,
+     and the next wake still lists the key**;
+   - two failures of the same commit owe two keys, and a later failure after
+     them owes a third;
    - "Nothing is running now" when the owed lane was the last open one;
-   - **no digest line on an unchanged board after a digest filed with nothing
-     owed**, and a digest line when the board moved between the previous
-     check and the report;
-   - the lifecycle projection runs before the journal read;
+   - **the ask line after "suggest, report, suggest": the second set is owed
+     until a question report newer than it lands**, and an answered ask (set
+     retired by the operator's message) is not;
+   - no digest line on an unchanged board after a digest filed with nothing
+     owed, and a digest line when the board moved between the previous check
+     and the report;
+   - a deploy snapshot recorded in the controller pass when a deploy settles,
+     whether or not a wake is sent;
+   - no language clause while `operatorLocale` is null;
+   - the lifecycle projection running before the journal read;
    - no report lines while bridge reports are off.
 10. Mandate v29 and the contract clause, with `prompt.test.ts` fingerprints.
 11. `spawnCommand.ts` fallback title from `operatorLocale()`.
-12. Project report settings and the setup guide step (§5.6), with the DOM
-    tests for connect, choose, allow in place, name required, skip, and a
-    skipped step that leaves reports bridge-only and never reopens the guide;
-    rendered evidence in the two existing drivers.
+12. Project report settings (`reportTelegram`, `reportHeaderName`) and the
+    setup guide step (§5.6), with DOM tests for connect, choose, allow in
+    place, name required with a chat, skip, and a skipped step that leaves
+    reports bridge-only and never reopens the guide. Rendered evidence goes
+    in the two existing drivers.
 13. **Before/after replay** in `seatTick.test.ts`: a fixture day shaped after
     09-25 (15 outcome wakes, 5 interval wakes, the 6 real report times of that
     span, a 30-minute interval, invented titles). Before: 5 of 15 outcome
@@ -1110,22 +1319,23 @@ isolated `LLV_STATE_DIR`; the privacy gate from the merge base.
 | Operator asked | Design |
 |---|---|
 | More often | R1 makes every settled outcome a report, asked per key until it lands; R3 adds a digest per interval while the board moves. |
-| Clear rules: when, what, what shape | §3.1 triggers, §3.2 sections, §3.3 keys, §3.4 quiet periods. |
-| Short but substantive | Items of at most 200 characters saying what is now true and what it means; at most 8 per section. |
-| Regular, catch up after AFK at any moment | Every outcome asked for until reported; digest within one interval when anything moved; silence means nothing changed; asks and a stopped tick produce a report (§5.4). Survives rotations. |
+| Clear rules: when, what, what shape | §3.1 triggers, §3.2 summary and sections, §3.3 keys, §3.4 quiet periods. |
+| Short but substantive | A summary line of at most 120 characters; items of at most 200 characters saying what is now true and what it means; per-section limits and a byte budget. |
+| Regular, catch up after AFK at any moment | Every outcome asked for until reported; digest within one interval when anything moved; silence means nothing changed; asks and a stopped tick produce a report (§5.1, §5.4). Survives rotations. |
 | Maybe tie to seat ticks | The tick is the main enforcement point (§5.1). |
-| Reports and task text in the interface language | One server-side operator setting; named in wakes, `get_orchestrator` and session instructions; warnings on mismatch; headings rendered in it. |
+| Reports and task text in the interface language | One server-side operator setting; named in wakes, `get_orchestrator` and session instructions; warnings on mismatch; headings rendered in it; English until a client has reported it. |
 | Analyse first | Section 1. |
-| Also to a Telegram group, same content | Bridge always, plus the project's chosen chat; one rendered text for both; posted by the Viewer, idempotently (§3.6, §5.5). |
+| Also to a Telegram group, same content | Bridge always, plus the project's chosen chat; both rendered from one cut report, so the items are identical; posted by the Viewer, idempotently (§3.2, §3.6, §5.5). |
 | Operator picks the chat per project | The optional setup-guide step, operator-only, allowlisted chats only (§5.6). |
 | Optional step in the setup guide, reusing the bot UI and services | "Reports to Telegram (optional)" before Orchestrator, built from `TokenForm`, `ChatRow` and `useTelegramBot` over the existing routes (§5.6). |
-| Skipping it keeps bridge-only reports working | Skip writes nothing; with no chat nothing is posted and everything else is unchanged (§3.6, §5.6). |
-| Header "Delegatus · report" with local date and time, emoji sections | Rendered by the Viewer from sections, in the interface language and the operator's time zone (§3.2, §5.5, §6). |
-| Links only to public PRs | Visibility check per repository, failing closed (§5.5). |
-| No private information, the group may be public | §3.7 for every report; items with a hit dropped from both copies; warnings; mandate for what cannot be detected. |
-| Deploy reports list task status changes since the previous deploy | `tasks` section from a snapshot, Done, Blocked, In progress and New, by title, scrubbed (§3.8). |
+| Skipping it keeps bridge-only reports working | Skip writes nothing; with no chat nothing is posted; the header name falls back to the repository or display name (§3.6, §5.6). |
+| Compact Telegram post (26.09): emoji, bold "Delegatus · kind", date and time, one summary line, sections in one expandable quote | `telegramReport` (§5.5), shown in §6.6. |
+| No link previews: no links or URLs, PR numbers as text | No `<a>` is emitted, URLs and domains are scrubbed, known PRs read "PR N" (§5.5). |
+| Sent silently | `silent: true` on every post (§5.5). |
+| No private information, the group may be public | §3.7 for every report; items with a hit dropped from both copies; a report left empty is refused and stays owed; warnings; mandate for what cannot be detected. |
+| Deploy reports list task status changes since the previous deploy | `tasks` section from snapshots taken when each deploy settles; Done, Blocked, In progress and New, by title, scrubbed (§3.8). |
 | Name the files so one owner holds them | §5.9. |
-| Not in scope: log UI, voice relay | No report log change; the relay reads the same rows, whose text is now sectioned. More reports mean more relay batches, within the existing drain caps (5 per batch, one batch per 30 s). |
+| Not in scope: log UI, voice relay | No report log change; the relay reads the same rows, whose text is now the sectioned plain rendering. More reports mean more relay batches, within the existing drain caps (5 per batch, one batch per 30 s). |
 
 ## Deferred — not currently justified
 
@@ -1141,6 +1351,11 @@ isolated `LLV_STATE_DIR`; the privacy gate from the merge base.
   They are Viewer UI copy, and the i18n dictionaries own them.
 - **Reading replies from the Telegram group** as answers to a question. The
   ask still goes through the operator's chat and the attention queue.
+- **An explicit `link_preview_options` in the bot service.** The Telegram copy
+  carries no link or URL, so Telegram has nothing to preview.
+- **Raising `BRIDGE_REPORT_BODY_MAX_BYTES`.** The 1 900-byte budget holds a
+  full report; a larger cap would only allow longer reports than the operator
+  asked for.
 - **More than one chat per project, forum topics, per-class filters, a test
   post from the step, or a "posted to Telegram" mark in the report log.**
 - **A time zone picker.** The client reports its zone; nobody has asked to
