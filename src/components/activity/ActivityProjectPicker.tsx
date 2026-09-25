@@ -222,7 +222,7 @@ export function ActivityScopeChip({ name, onClear, t }: { name: string; onClear(
         onClick={onClear}
         aria-label={t("activity.filter.clear")}
         title={t("activity.filter.clear")}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted hover:bg-sunken hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-8 max-sm:w-8"
+        className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted hover:bg-sunken hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-8 max-sm:w-8 max-sm:before:absolute max-sm:before:-inset-1.5 max-sm:before:content-['']"
         data-activity-scope-clear=""
       >
         <X className="h-3 w-3" aria-hidden />
