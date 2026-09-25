@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "06630f4a4c45c4cdf0e4c013c7759161627a225640fc8e5919085fcedc25415c",
+  "generatorSha256": "bf75bb97ad0938fd039b283431c28bea5797d6d39c74e7c8b0659e8674a235f1",
   "seed": "scripts/readme-demo-state.ts",
-  "seedSha256": "f9893d4dd60bd734ad91fb73455cd8c190790d75656d1149903ced7b9ebd01df",
+  "seedSha256": "e85bd6d5891534fbd3362f7cd242c95840d6b200dd0f1a8256eaae9e2f379aa0",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
   "assets": [
     {
@@ -15,14 +15,31 @@
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 14,
+      "rasterTiles": 13,
       "renderBack": {
-        "worstTileMean": 3.08,
+        "worstTileMean": 3.173,
         "changedTileShare": 0,
-        "meanDifference": 0.203,
+        "meanDifference": 0.209,
+        "ringsClipped": 0
+      },
+      "sha256": "27e9fdad2356cbd6f40be770ef2364e39d219b8a1a8466279190179c93bf4c9a"
+    },
+    {
+      "path": "orchestrator.svg",
+      "description": "A project's orchestrator on top of its board: its chat with the operator, and beside it the log of the reports it filed.",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "colorScheme": "dark",
+      "rasterTiles": 12,
+      "renderBack": {
+        "worstTileMean": 3.714,
+        "changedTileShare": 0,
+        "meanDifference": 0.321,
         "ringsClipped": 1
       },
-      "sha256": "cc017f6dad96cbd61b655f9213f010cbf3af3f968922a961347228d558eb3c25"
+      "sha256": "03d362a704848c51a13e435bf5e68c1687b88f6cb06db816b0d64fc5700ac2fa"
     },
     {
       "path": "conversation.svg",
@@ -32,14 +49,14 @@
         "height": 960
       },
       "colorScheme": "dark",
-      "rasterTiles": 22,
+      "rasterTiles": 17,
       "renderBack": {
-        "worstTileMean": 3.301,
+        "worstTileMean": 3.591,
         "changedTileShare": 0,
-        "meanDifference": 0.323,
+        "meanDifference": 0.325,
         "ringsClipped": 2
       },
-      "sha256": "74112ca1cb7f5d20990094cb22e7d6675421e55c424bb683292611e7af9aa483"
+      "sha256": "bea023f39b0bd19e05b40e76dd46365f8ad026e4cb6bc1b68a1e728ea2e32e63"
     },
     {
       "path": "pipeline.svg",
@@ -49,14 +66,14 @@
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 26,
+      "rasterTiles": 23,
       "renderBack": {
-        "worstTileMean": 6.827,
-        "changedTileShare": 0.001,
-        "meanDifference": 0.322,
-        "ringsClipped": 3
+        "worstTileMean": 4.015,
+        "changedTileShare": 0,
+        "meanDifference": 0.287,
+        "ringsClipped": 0
       },
-      "sha256": "cd6185a097cc808758330e8de8c74ce25896936f679642f112a5748b93ec1c0d"
+      "sha256": "084576fccc276c2ea50c49842681aef20bdcfcc7b428531223f6d0657e6b6739"
     },
     {
       "path": "accounts.svg",
@@ -66,14 +83,14 @@
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 16,
+      "rasterTiles": 15,
       "renderBack": {
-        "worstTileMean": 3.103,
+        "worstTileMean": 3.005,
         "changedTileShare": 0,
-        "meanDifference": 0.231,
-        "ringsClipped": 1
+        "meanDifference": 0.241,
+        "ringsClipped": 0
       },
-      "sha256": "84577d7337e5817d2982d7581b5a1520458c0acc46e9e66808489d441bfc2f58"
+      "sha256": "6dc43244090481e9414e60ce8305d2c48caf880fe6b681ee09370ae562460a7b"
     },
     {
       "path": "phone-conversation.svg",
@@ -83,14 +100,14 @@
         "height": 848
       },
       "colorScheme": "dark",
-      "rasterTiles": 5,
+      "rasterTiles": 2,
       "renderBack": {
-        "worstTileMean": 2.999,
+        "worstTileMean": 4.005,
         "changedTileShare": 0,
-        "meanDifference": 0.427,
+        "meanDifference": 0.453,
         "ringsClipped": 0
       },
-      "sha256": "84031be238c615971a99eda80a4a90b614b8178094a967b80ceb5b14fb3a0d68"
+      "sha256": "e02443bb797a661a03a909ff145be4a9790371ba20f995b048ab27c4394ced0e"
     },
     {
       "path": "phone-board.svg",
@@ -104,10 +121,10 @@
       "renderBack": {
         "worstTileMean": 3.064,
         "changedTileShare": 0,
-        "meanDifference": 0.178,
+        "meanDifference": 0.163,
         "ringsClipped": 0
       },
-      "sha256": "4aa63e0c80646e3d990a6c34dd9611709d03df910d6ff7fd1cdc37b9077c0205"
+      "sha256": "14ef07c85db632f0a2937d3278982e4a4428a69a4e496b51b869863845d37cf0"
     }
   ]
 }

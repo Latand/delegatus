@@ -41,7 +41,7 @@ import type { Browser, Page } from "playwright-core";
 
 import { createCaptureDirectory } from "./capture-directory";
 import { inspectPaths, sensitiveClasses } from "./privacy-publication-gate";
-import { seedDemoAccounts, seedDemoHome, WORKING_CONVERSATIONS, type DemoProject } from "./readme-demo-state";
+import { ORCHESTRATOR_CONVERSATION, seedDemoAccounts, seedDemoHome, seedDemoOrchestrator, WORKING_CONVERSATIONS, type DemoProject } from "./readme-demo-state";
 
 export const README_MEDIA_DIR = "docs/media/readme";
 /** Runs are allocated under this root; LLV_README_CAPTURE_ROOT may name an
@@ -88,6 +88,15 @@ export const SHOTS: ReadmeShot[] = [
     absentText: ["tmux", "Untitled task"],
     prepare: foldOrchestrator,
     description: "A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, and a card that names why it needs you; account limits in the sidebar.",
+  },
+  {
+    id: "orchestrator",
+    target: { kind: "project", project: "harbor-api" },
+    viewport: DESKTOP,
+    requiredText: ["Orchestrator", "Reports", "Take the open harbor-api work", "Paginate GET /charges is done", "review verdict"],
+    /* A seat nothing hosts reads as finished, with the resume banner. */
+    absentText: ["tmux", "Untitled task", "has not reported anything yet", "finished", "has finished its run"],
+    description: "A project's orchestrator on top of its board: its chat with the operator, and beside it the log of the reports it filed.",
   },
   {
     id: "conversation",
@@ -205,6 +214,7 @@ async function materialize(env: NodeJS.ProcessEnv, now: number) {
      environment, so point it at the demo home before loading them. */
   for (const key of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "TMPDIR"] as const) process.env[key] = env[key];
   await seedDemoAccounts(env.HOME!, now);
+  await seedDemoOrchestrator(layout);
   return layout;
 }
 
@@ -557,6 +567,12 @@ async function main(): Promise<void> {
   const env = buildCaptureEnvironment(captureRoot);
   const now = Date.now();
   const layout = await materialize(env, now);
+  /* With no runtime plane in the capture, the scanner decides whether the
+     seat's conversation is hosted, and it calls a transcript running only
+     while a process holds it open for writing. This process holds the
+     orchestrator's for the run, so the seat reads attached and waiting, the
+     way a seat reads between turns, and not finished. */
+  const seatHold = fs.openSync(layout.files[ORCHESTRATOR_CONVERSATION]!.path, "a");
 
   const port = await freePort();
   const server = spawn(
@@ -586,6 +602,7 @@ async function main(): Promise<void> {
     }
     await captureShots(repoRoot, baseUrl, layout, captureRoot);
   } finally {
+    fs.closeSync(seatHold);
     stop();
     await new Promise((resolve) => setTimeout(resolve, 800));
     if (serverPid !== undefined && server.exitCode === null) process.kill(serverPid, "SIGKILL");
