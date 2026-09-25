@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { Pipeline, PipelineEdgeActivation, PipelineStage } from "./types";
 
-import { edgeRoundsUsed, failEdgeBudgetSpent, failEdgeMaxRounds, failEdgeRoundsUsed, pipelineReviewSummary } from "./failEdgeBudget";
+import { edgeRoundsUsed, failEdgeBudgetSpent, failEdgeMaxRounds, failEdgeRoundsUsed, pipelineCompletedUnreviewed, pipelineReviewSummary } from "./failEdgeBudget";
 
 /* `critique -> review` with `critique.onFail = { to: fix, maxRounds: 2 }` and
    `fix.next = critique` — the shape of the pipeline in #1754. */
@@ -109,4 +109,33 @@ test("the review summary exists only while the lane waits in needs_review (#1938
   expect(pipelineReviewSummary({ state: "paused", pausedState: "needs_review", reviewPending })).not.toBeNull();
   expect(pipelineReviewSummary({ state: "closed", pausedState: null, reviewPending })).toBeNull();
   expect(pipelineReviewSummary({ state: "needs_review", pausedState: null })).toBeNull();
+});
+
+/* #2187 §3.5: a completed lane names an unreviewed last fix from its own
+   record, and nothing else does. The controller path that writes this record
+   is driven in engine.test.ts; these are the cases it does not reach. */
+test("only a completed lane whose latest review handed its findings to a fix that passed reads as unreviewed (#2187)", () => {
+  const handedOn = (over: Record<string, unknown> = {}) => ({
+    ...pipeline([
+      { stageId: "critique", attempts: [attempt(1, { state: "failed", budgetSpent: true, reviewedHead: "a".repeat(40), verdict: { status: "fail", findings: ["P2 one", "P2 two"] } })] },
+      { stageId: "fix", attempts: [attempt(1, { state: "passed", activatedBy: { ...failedBy(1), budgetSpent: true }, completedAt: "2026-09-25T01:00:00.000Z" })] },
+    ]),
+    state: "completed",
+    lastPassedCommit: "b".repeat(40),
+    ...over,
+  }) as Pipeline;
+  expect(pipelineCompletedUnreviewed(handedOn())).toEqual({ stageId: "critique", reviewedHead: "a".repeat(40), currentHead: "b".repeat(40), findings: 2 });
+  /* Not completed: needs_review has its own summary, and a running lane has not ended. */
+  expect(pipelineCompletedUnreviewed(handedOn({ state: "needs_review" }))).toBeNull();
+  expect(pipelineCompletedUnreviewed(handedOn({ state: "running" }))).toBeNull();
+  /* The fix that took the findings did not pass. */
+  const failedFix = handedOn();
+  (failedFix.runs[1]!.attempts[0] as { state: string }).state = "failed";
+  expect(pipelineCompletedUnreviewed(failedFix)).toBeNull();
+  /* A later review of the same stage (a continue-review grant) judged the newer head itself. */
+  const reviewedAgain = handedOn();
+  reviewedAgain.runs[0]!.attempts.push(attempt(2, { state: "passed", activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } }));
+  expect(pipelineCompletedUnreviewed(reviewedAgain)).toBeNull();
+  /* A lane that passed every review never handed anything on. */
+  expect(pipelineCompletedUnreviewed({ ...pipeline([{ stageId: "critique", attempts: [attempt(1)] }]), state: "completed", lastPassedCommit: "b".repeat(40) } as Pipeline)).toBeNull();
 });

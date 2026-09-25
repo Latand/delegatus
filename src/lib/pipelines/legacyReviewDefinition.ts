@@ -66,11 +66,13 @@ export function legacyReviewLoopReachable(
 }
 
 /** How many times a reviewer with this fail edge runs when every review
-    fails, under the #1938 semantics: `advance` reads `maxRounds` as the number
-    of reviews (the last one's findings go to one fix, and a new head then
-    waits in needs_review for a fresh review); `park` reviews once more. */
+    fails: `advance` reads `maxRounds` as the number of reviews, the last one's
+    findings go to one more fix, and the lane then moves on or completes with
+    those findings recorded as unreviewed (#2187). `stop-after-fix` counts the
+    same and waits in needs_review after that fix when it wrote a new head
+    (#1938). `park` reviews once more and stops before any fix. */
 export function reviewerActivationsForLimit(maxRounds: number, onExhausted: PipelineFailEdgeExhaustion = "advance"): number {
-  return onExhausted === "advance" ? maxRounds : maxRounds + 1;
+  return onExhausted === "park" ? maxRounds + 1 : maxRounds;
 }
 
 export type LegacyReviewConversionOptions = {
@@ -381,4 +383,42 @@ export function revertLegacyReviewConversion(
   const reverted: PipelineLegacyReviewConversion = { ...conversion, reverted: { clientRequestId: receipt.clientRequestId, actor: structuredClone(receipt.actor), at: receipt.at } };
   pipeline.legacyReviewConversions = conversions.map((item, position) => position === index ? reverted : item);
   return { conversion: reverted };
+}
+
+/** What `normalizeStages` did with the review-loop stages a request added
+    (#2187 §3.2): the reviewer and fixer ids of each one it converted, and the
+    preview's refusals for each one it stored as sent. */
+export type NewLegacyReviewOutcome = {
+  convertedStages: Array<{ reviewer: string; fixer: string }>;
+  legacyReview: Array<{ stageId: string; refusals: LegacyReviewRefusal[] }>;
+};
+
+/**
+ * Converts every review-loop stage a creation or a graph edit brings in,
+ * through the same preview the explicit `convert-legacy-review` action uses,
+ * so a new review is a read-only run reviewer with a fix stage and an
+ * `advance` fail edge and never an embedded flow that stops at its round
+ * limit without a last fix. Stages already in the plan (`preserved`) are left
+ * alone: a stored legacy lane keeps its flow through every other edit. A
+ * preview that would need a guess refuses, and that stage is stored as sent
+ * with the refusals reported, never rejected.
+ */
+export function convertNewLegacyReviewStages(
+  stages: PipelineStage[],
+  preserved: ReadonlyMap<string, PipelineStage> | undefined,
+  graphError: (stages: PipelineStage[]) => string | null,
+): { stages: PipelineStage[] } & NewLegacyReviewOutcome {
+  let current = stages;
+  const outcome: NewLegacyReviewOutcome = { convertedStages: [], legacyReview: [] };
+  const added = stages.filter((stage) => isLegacyReviewLoopStage(stage) && !preserved?.has(stage.id)).map((stage) => stage.id);
+  for (const stageId of added) {
+    const preview = previewLegacyReviewConversion({ stages: current, runs: [] }, { stageId }, { graphError });
+    if (preview.ok) {
+      current = preview.stages;
+      outcome.convertedStages.push({ reviewer: stageId, fixer: preview.fixerStageId });
+    } else {
+      outcome.legacyReview.push({ stageId, refusals: preview.refusals });
+    }
+  }
+  return { stages: current, ...outcome };
 }

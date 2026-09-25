@@ -589,6 +589,9 @@ export interface SeatTickPullRequestInput {
   pipelineId: string;
   pipelineTitle: string;
   updatedAt: string | null;
+  /** The lane completed on a spent review budget and its last fix was never
+      re-reviewed (#2187 §3.5), so the seat reads that before it merges. */
+  lastFixUnreviewed?: true;
 }
 
 /**

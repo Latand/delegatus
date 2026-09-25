@@ -66,14 +66,18 @@ export type PipelineStageKind = "run" | "review-loop";
 export type PipelineEdgeKind = "pass" | "fail";
 
 /** What a fail edge does once its `maxRounds` reviewed rounds are spent
-    (#1868). `advance` (the default, and every edge without the field) reads
-    `maxRounds` as the number of reviews: the last review's findings go to the
-    target once more and, when that fix passes, the lane follows the source's
-    own pass edge without re-running the source. `park` keeps the older count,
-    one more review after `maxRounds` traversals, then stops for the operator. */
-export type PipelineFailEdgeExhaustion = "advance" | "park";
+    (#1868, #2187). `advance` (the default, and every edge without the field)
+    reads `maxRounds` as the number of reviews: the last review's findings go to
+    the target once more and, when that fix passes, the lane follows the
+    source's own pass edge without re-running the source, or completes when
+    that edge is null, whether or not the fix wrote a new head.
+    `stop-after-fix` counts and hands off the same way, and after that fix the
+    lane waits in `needs_review` for the operator (#1938). `park` keeps the
+    older count, one more review after `maxRounds` traversals, then stops for
+    the operator before any fix. */
+export type PipelineFailEdgeExhaustion = "advance" | "stop-after-fix" | "park";
 
-export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion[] = ["advance", "park"];
+export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion[] = ["advance", "stop-after-fix", "park"];
 
 /** Verdict-keyed fail successor (#353): where a `fail` verdict routes next, how
     many rounds of it the source reviews, and what happens once those are spent.

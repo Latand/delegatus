@@ -788,6 +788,32 @@ test("a finished lane whose branch still has an open pull request is carried, na
   expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
 });
 
+/* #2187 §3.5: a lane can complete on a spent review budget with a head no
+   reviewer saw; the seat that merges its pull request reads that first. */
+test("a finished lane whose last fix was never re-reviewed says so on its open pull request", async () => {
+  const unreviewed = finishedLane({
+    lastPassedCommit: "b".repeat(40),
+    stages: [
+      { id: "build", kind: "run", prompt: "Build", next: "critique", onFail: null },
+      { id: "critique", kind: "run", prompt: "Critique", next: null, onFail: { to: "build", maxRounds: 1 } },
+    ],
+    runs: [
+      { stageId: "build", attempts: [
+        { n: 1, state: "passed", activatedBy: null, completedAt: "2026-08-27T10:00:00.000Z" },
+        { n: 2, state: "passed", activatedBy: { stageId: "critique", attempt: 1, edge: "fail", budgetSpent: true }, completedAt: "2026-08-27T11:00:00.000Z" },
+      ] },
+      { stageId: "critique", attempts: [
+        { n: 1, state: "failed", budgetSpent: true, reviewedHead: "a".repeat(40), verdict: { status: "fail", findings: ["P2 gap"] } },
+      ] },
+    ],
+  });
+  const input = await gather({ pipelines: [unreviewed], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, pipelineId: "pipeline_z9", lastFixUnreviewed: true })]);
+  const verdict = seatTickDecision(input).verdict;
+  expect(verdict.kind === "wake" && verdict.reasons[0]!.detail)
+    .toBe("pull request #1289 left open by a lane that finished; last fix not re-reviewed");
+});
+
 test("a pull request no finished lane produced is not this seat's obligation", async () => {
   const input = await gather(
     { pipelines: [finishedLane()], openPullRequests: [openPullRequest({ headRefName: "someone-elses-branch" })] },
