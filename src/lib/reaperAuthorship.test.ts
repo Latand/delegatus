@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { isOperatorOwnedDirectory } from "@/lib/stateOwnership";
 import { readAuthorshipEvidence, readUserAuthoredPaths } from "@/lib/reaperAuthorship";
 
 const stateFile = () => statePath("reaper-state.json");
@@ -73,6 +73,10 @@ test("missing or shapeless scannedAt yields an empty freshness map (fail closed)
 
 test("does not touch the caller's temp dir isolation", () => {
   /* The suite pins LLV_STATE_DIR to a throwaway temp dir; confirm the reader
-     resolves under it and never falls back to the real config dir. */
-  expect(stateFile().startsWith(os.tmpdir())).toBe(true);
+     resolves under it and never falls back to the real config dir. The dir is
+     the preload's own, under this run's temp root, unless the caller set one
+     (a lane's agent runs with its spawn sandbox's), so the check is against
+     the variable rather than os.tmpdir(). */
+  expect(stateFile().startsWith(process.env.LLV_STATE_DIR! + path.sep)).toBe(true);
+  expect(isOperatorOwnedDirectory(stateFile())).toBe(false);
 });

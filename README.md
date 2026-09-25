@@ -334,6 +334,7 @@ accepted under its earlier `LLV_` spelling; when both are set, the
 | `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` | faster-whisper model size (default `small`) and device (`cpu` or `cuda`). |
 | `DELEGATUS_TTS_BACKEND` | `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider. |
 | `DELEGATUS_HOST_RETIREMENT_IDLE_HOURS` | Hours a hosted agent's transcript must be quiet before Delegatus may stop its host (default `6`, `0` turns this off). Hosts in the middle of a turn, with a pending question or holding an orchestrator seat are never stopped. |
+| `DELEGATUS_TEMP_SWEEP_MAX_AGE_HOURS` | Hours before Delegatus's hourly sweep removes one of its own temp directories (`llv-*`) that nothing is using (default `24`, `0` turns the sweep off). It covers `/tmp`, `/var/tmp` and the state's `scratch` directory, never a pipeline worktree. The last sweep is in `state/temp-sweep-report.json`. |
 | `DELEGATUS_REAPER_ENABLED` | `1` lets the agent reaper stop leaked agent processes it has verified; unset, it only reports them at `GET /api/lifecycle/reaper`. |
 | `VIEWER_PROC_BACKEND` | `linux`, `portable` or `windows`: force the process-discovery backend. |
 
