@@ -1,4 +1,5 @@
 import { BRIDGE_ASK_TTL_SECONDS } from "@/lib/bridge/types";
+import { permissionHeadline } from "@/lib/runtime/permissionRequests";
 import type { AttentionDismissalMark, ConversationReasonKind } from "@/lib/attention/dismissalTypes";
 import type { BridgeAsk, FileEntry } from "@/lib/types";
 import { DELIVERY_UNCERTAIN_MS, DELIVERY_WAIT_HELD_MS } from "@/components/runtime/deliveryWait";
@@ -201,8 +202,9 @@ export function dismissalCovers(reason: Pick<ConversationReason, "id" | "raisedA
 
 /**
  * The one reason a conversation needs the operator, by signal precedence: an
- * orchestrator's open bridge ask, then a structured question or plan, the
- * screen-scrape permission fallback, an owed message delivery, and a launch
+ * orchestrator's open bridge ask, then a structured question or plan, a
+ * structured host's tool permission request, the screen-scrape permission
+ * fallback, an owed message delivery, and a launch
  * that failed before it ran (#2170). Null when none of them holds. A
  * dismissed reason is still returned, with its
  * `dismissal`, so a card can say who cleared it; `attentionId` is what counts.
@@ -239,6 +241,23 @@ function undismissedReason(file: FileEntry, now: number): ConversationReason | n
       raisedAt: since,
       clocked: asked !== null,
       header: pending.kind === "plan" ? null : pending.questions?.[0]?.header?.trim() || null,
+      dismissal: null,
+    };
+  }
+  /* A structured host's tool permission request (#2215): named by the tool,
+     what it would run and why the engine asked, so the row says what is being
+     approved before anyone opens the conversation. */
+  const permission = file.pendingPermission;
+  if (permission) {
+    const asked = isoSeconds(permission.since);
+    const since = asked ?? file.mtime;
+    return {
+      kind: "permission",
+      id: `${file.path}:permission:${permission.id}`,
+      since,
+      raisedAt: since,
+      clocked: asked !== null,
+      header: permissionHeadline(permission),
       dismissal: null,
     };
   }

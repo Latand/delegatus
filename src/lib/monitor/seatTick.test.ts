@@ -253,6 +253,22 @@ test("a stall wakes only once it has persisted across two consecutive checks", (
   expect(reasonsOf(second.verdict)).toEqual(["stalled"]);
 });
 
+test("a stage or child held on a permission request is listed as a permission item, never as a stall (#2215)", () => {
+  const permission = { tool: "Bash", command: "rm -rf $R/*.json", reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json" };
+  const held = lane({ stageId: "build", stageActivity: { lifecycle: "waiting", reason: "permission_request", turnState: "busy", permission } });
+  const worker = child({ activity: { lifecycle: "waiting", reason: "permission_request", turnState: "busy", permission } });
+  const overdue = { lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() };
+  const decision = seatTickDecision(input({ pipelines: [held], children: [worker], state: stateWith(overdue) }));
+  expect(reasonsOf(decision.verdict)).toEqual(["permission-request"]);
+  expect(decision.state.stalledSeen).toEqual([]);
+  if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
+  const items = decision.verdict.items.filter((item) => item.kind === "permission");
+  expect(items.map((item) => item.id)).toEqual(["pipeline_a1", worker.conversationId]);
+  expect(items[0]!.label).toContain("stage build waits on a Bash permission request `rm -rf $R/*.json`");
+  expect(items[0]!.label).toContain("(Dangerous rm operation on possibly-empty variable path: $R/*.json)");
+  expect(items[0]!.label).toContain("conversation_action permission");
+});
+
 /* The stall reading the whole verdict rests on. Movement instants belong to the
    fingerprint, never to the stall rule: a stage running for hours with a host
    writing to its transcript is moving, and subtracting its newest attempt

@@ -845,7 +845,13 @@ function activityOf(record: AgentLivenessRecord | undefined): SeatTickActivity |
      without it is how a settled turn that had simply gone quiet was reported as
      the seat's stall (#1262): the threshold measures silence, not an open
      turn. */
-  return record ? { lifecycle: record.lifecycle, reason: record.reason, turnState: record.turnState } : null;
+  if (!record) return null;
+  return {
+    lifecycle: record.lifecycle,
+    reason: record.reason,
+    turnState: record.turnState,
+    ...(record.permission ? { permission: { tool: record.permission.tool, command: record.permission.command, reason: record.permission.reason } } : {}),
+  };
 }
 
 /**

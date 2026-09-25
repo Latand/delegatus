@@ -2,6 +2,7 @@ import type { NativeQueueHost } from "./nativeQueueExecutor";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import type { MessageOrigin } from "./messageOrigin";
+import type { PendingPermissionRequest } from "./permissionRequests";
 import type { RuntimeSendSettings, RuntimeHostDiagnostics } from "./contracts";
 import type { RuntimeVoiceDelivery, RuntimeVoiceResponse } from "./voiceDelivery";
 import {
@@ -110,10 +111,27 @@ export interface HostState {
   activeTurnRef: string | null;
   /** Includes every answerable request; only validated blocking requests affect status. */
   pendingAttention: string[];
+  /** The pending attentions that are tool permission requests (#2215), with
+      what the tool would do and why the engine asked. A subset of
+      `pendingAttention`; absent from hosts that raise none. */
+  pendingPermissions?: PendingPermissionRequest[];
+  /** The provider retry the engine announced for the running turn (#2215): the
+      only evidence that a quiet turn is waiting on the provider. Cleared once
+      the provider produces output again or the turn ends. */
+  providerRetry?: ProviderRetryEvidence | null;
   nativeQueueRevision?: number;
   diagnostics?: RuntimeHostDiagnostics;
   activeFlags: string[];
   account: { type: string | null; planType: string | null } | null;
+}
+
+/** One provider retry the engine reported on its own stream (Claude's
+    `system`/`api_retry`): when, until when, and what the provider answered. */
+export interface ProviderRetryEvidence {
+  at: string;
+  retryAt: string;
+  status: number | null;
+  error: string | null;
 }
 
 export class RuntimeReplayGapError extends Error {

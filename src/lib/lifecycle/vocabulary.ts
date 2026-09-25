@@ -59,6 +59,10 @@ export const LIFECYCLE_EVENT_TYPES = [
   /** A pipeline marked as finishing its task moved that task to Done
       (#2187 §5.3), attributed to the pipeline. */
   "task_finished",
+  /** A tool permission request was denied because no one could answer it
+      (#2215): an unattended stage or spawn at once, an attended conversation
+      after its wait ran out. The turn carries on with the denial. */
+  "permission_denied",
 ] as const;
 
 export type LifecycleEventType = typeof LIFECYCLE_EVENT_TYPES[number];
@@ -86,6 +90,7 @@ export const LIFECYCLE_STATE_FOR_EVENT: Record<LifecycleEventType, LifecycleStat
   project_moved: "completed",
   pipeline_merged: "completed",
   task_finished: "completed",
+  permission_denied: "running",
 };
 
 /**

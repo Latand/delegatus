@@ -62,6 +62,7 @@ const REASONS: Record<SeatTickWakeReasonKind, MessageKey> = {
   "child-terminal": "seatTick.reason.childTerminal",
   "own-lane-settled": "seatTick.reason.ownLaneSettled",
   "deploy-settled": "seatTick.reason.deploySettled",
+  "permission-request": "seatTick.reason.permissionRequest",
 };
 
 /** Every reason key, so the parity test can hold all of them in both locales. */

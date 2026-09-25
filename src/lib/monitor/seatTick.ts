@@ -7,6 +7,7 @@ import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
+  type SeatTickActivity,
   type SeatTickCard,
   type SeatTickCheckInput,
   type SeatTickChildInput,
@@ -402,6 +403,35 @@ function stalledChildren(input: SeatTickCheckInput): { child: SeatTickChildInput
     }
   }
   return found;
+}
+
+/**
+ * The lanes and children whose turn waits on a tool permission request nobody
+ * answered (#2215), each with the line that names it: the tool, what it would
+ * run and why the engine asked. Read from the same activity verdict as a stall,
+ * so a request the host already answered is never listed.
+ */
+function pendingPermissionItems(input: SeatTickCheckInput): SeatTickItem[] {
+  const items: SeatTickItem[] = [];
+  const describe = (activity: SeatTickActivity): string => {
+    const request = activity.permission;
+    if (!request) return "waits on a tool permission request";
+    const command = request.command ? ` \`${request.command.replace(/\s+/g, " ").slice(0, 160)}\`` : "";
+    const reason = request.reason ? ` (${request.reason.replace(/\s+/g, " ").slice(0, 200)})` : "";
+    return `waits on a ${request.tool} permission request${command}${reason}; answer it with conversation_action permission`;
+  };
+  for (const pipeline of input.pipelines) {
+    const activity = pipeline.stageActivity;
+    if (!isOpenLane(pipeline) || activity?.reason !== "permission_request") continue;
+    const stage = pipeline.stageId ? ` stage ${pipeline.stageId}` : "";
+    items.push({ kind: "permission", id: pipeline.id, label: `${pipeline.title} —${stage} ${describe(activity)}` });
+  }
+  for (const child of input.children) {
+    const activity = child.activity;
+    if (!isRunningChild(child) || activity?.reason !== "permission_request") continue;
+    items.push({ kind: "permission", id: child.conversationId, label: `${child.title} — spawned child ${describe(activity)}` });
+  }
+  return items;
 }
 
 /** The registry's verdict that no live host is behind this turn. */
@@ -1254,6 +1284,11 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     if (persistedStalls.length > 0 || persistedChildStalls.length > 0) {
       candidates.push({ kind: "stalled", detail: (persistedStalls[0] ?? persistedChildStalls[0])!.reason });
     }
+    const permissions = pendingPermissionItems(input);
+    if (permissions.length > 0) {
+      const more = permissions.length > 1 ? ` and ${permissions.length - 1} more` : "";
+      candidates.push({ kind: "permission-request", detail: `a turn waits on an unanswered tool permission request${more}` });
+    }
     if (unstarted.length > 0) {
       /* The excluded count travels with the reason so a seat reading "2" beside
          a board showing twenty-nine assigned cards can see why, rather than
@@ -1545,6 +1580,9 @@ function wakeItems(context: {
   /* A lane parked on a decision is open, so it can be BOTH the seat's own
      settled work and a persisted stall. It is one lane and one obligation, and
      the item at the head already says what stopped it. */
+  /* A request only an answer ends (#2215), ahead of the stalls: it is not a
+     stall, and the line says what is being asked. */
+  items.push(...pendingPermissionItems(input));
   const owned = new Set(context.ownLanes.map((lane) => lane.id));
   for (const entry of context.stalled) {
     if (owned.has(entry.pipeline.id)) continue;

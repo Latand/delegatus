@@ -16,6 +16,7 @@ import { humanizeDuration } from "../turnDuration";
 import { cleanTitle, fileModelLabel } from "../utils";
 import { nextMobileAttention, type MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine } from "./decision";
+import { PermissionActions } from "./PermissionActions";
 
 /*
  * The Needs-you sheet (issue #1439, lane 8; docs/design/mobile-v2/README.md
@@ -192,7 +193,7 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
   const { t } = useLocale();
   const title = cleanTitle(item.file.title, 90);
   const decision = decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
-  return (
+  const row = (
     <button
       type="button"
       data-attention-row={item.id}
@@ -222,6 +223,14 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
       </span>
       <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
     </button>
+  );
+  /* A structured permission request is answered right here (#2215). */
+  if (item.reason.kind !== "permission" || !item.file.pendingPermission) return row;
+  return (
+    <div className="min-w-0">
+      {row}
+      <PermissionActions file={item.file} size="touch" />
+    </div>
   );
 }
 
