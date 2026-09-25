@@ -2,7 +2,7 @@ import { identityAlive, livenessProbe, type LivenessProbe } from "@/lib/agent/ac
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry } from "@/lib/agent/registry";
 import { isAbortError } from "@/lib/deadline";
-import { PROVIDER_THROTTLE_GRACE_MS } from "@/lib/limitsThrottle";
+import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { getPipelines } from "@/lib/pipelines/engine";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { loadFlows } from "@/lib/flows/store";
@@ -425,10 +425,10 @@ function hostProviderRetry(
   now: number,
 ): { retryAt: string | null; throttledAt: number | null } {
   const retry = entry?.structuredHost?.providerRetry;
-  const retryAt = retry ? Date.parse(retry.retryAt) : Number.NaN;
-  const at = retry ? Date.parse(retry.at) : Number.NaN;
-  if (!Number.isFinite(retryAt) || now > retryAt + PROVIDER_THROTTLE_GRACE_MS) return { retryAt: null, throttledAt: null };
-  return { retryAt: new Date(retryAt).toISOString(), throttledAt: Number.isFinite(at) ? at : null };
+  const retryAt = hostProviderRetryAt(retry, now);
+  if (!retry || retryAt === null) return { retryAt: null, throttledAt: null };
+  const at = Date.parse(retry.at);
+  return { retryAt, throttledAt: Number.isFinite(at) ? at : null };
 }
 
 /**

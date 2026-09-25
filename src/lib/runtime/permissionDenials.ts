@@ -3,8 +3,9 @@ import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import type { AgentRegistry } from "@/lib/agent/registry";
 import { appendLifecycleEvents, type LifecycleEventInput } from "@/lib/lifecycle/journal";
 import { allSeatConversations } from "@/lib/orchestrator/seats";
-import { withPipelineMutation } from "@/lib/pipelines/store";
-import type { Pipeline, PipelinePermissionDenial } from "@/lib/pipelines/types";
+import { loadPipelinesForList, withPipelineMutation } from "@/lib/pipelines/store";
+import type { Pipeline, PipelinePermissionDenial, PipelineStageAttempt } from "@/lib/pipelines/types";
+import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 
 import { permissionAttendance, type PermissionAttendance, type PermissionDenialRecord } from "./permissionGuard";
 
@@ -17,6 +18,10 @@ import { permissionAttendance, type PermissionAttendance, type PermissionDenialR
 
 /** Denials kept on one attempt; the journal keeps every one. */
 const ATTEMPT_DENIAL_CAPACITY = 20;
+/** Tries at the attempt write when the pipeline lease refuses it before
+    admission, and the base pause between them. */
+const ATTEMPT_WRITE_TRIES = 3;
+const BUSY_RETRY_DELAY_MS = 250;
 
 export function resolvePermissionAttendance(
   registry: AgentRegistry,
@@ -45,30 +50,22 @@ interface StageLineage {
   role: string | null;
 }
 
-/** Appends the denial to the newest live attempt the conversation runs, and
-    returns that attempt's lineage; null when no stage runs it. */
-function recordOnAttempt(pipelines: Pipeline[], denial: PermissionDenialRecord, canonical: (id: string) => string): { pipeline: Pipeline; lineage: StageLineage } | null {
-  const target = canonical(denial.conversationId);
+/** The newest live attempt the conversation runs, with its lineage; null when
+    no stage runs it. Reads only. */
+function locateAttempt(
+  pipelines: readonly Pipeline[],
+  conversationId: string,
+  canonical: (id: string) => string,
+): { pipeline: Pipeline; attempt: PipelineStageAttempt; lineage: StageLineage } | null {
+  const target = canonical(conversationId);
   for (const pipeline of pipelines) {
     for (const run of pipeline.runs) {
       for (let index = run.attempts.length - 1; index >= 0; index -= 1) {
         const attempt = run.attempts[index]!;
         if (attempt.historical || !attempt.conversationId || canonical(attempt.conversationId) !== target) continue;
-        const entry: PipelinePermissionDenial = {
-          requestId: denial.requestId,
-          tool: denial.tool,
-          command: denial.command,
-          reason: denial.reason,
-          reasonType: denial.reasonType,
-          mode: denial.mode,
-          deniedAt: denial.deniedAt,
-        };
-        const denials = attempt.permissionDenials ?? [];
-        if (!denials.some((existing) => existing.requestId === denial.requestId)) {
-          attempt.permissionDenials = [...denials, entry].slice(-ATTEMPT_DENIAL_CAPACITY);
-        }
         return {
           pipeline,
+          attempt,
           lineage: {
             project: pipeline.project,
             pipelineId: pipeline.id,
@@ -81,6 +78,21 @@ function recordOnAttempt(pipelines: Pipeline[], denial: PermissionDenialRecord, 
     }
   }
   return null;
+}
+
+function appendDenial(attempt: PipelineStageAttempt, denial: PermissionDenialRecord): void {
+  const denials = attempt.permissionDenials ?? [];
+  if (denials.some((existing) => existing.requestId === denial.requestId)) return;
+  const entry: PipelinePermissionDenial = {
+    requestId: denial.requestId,
+    tool: denial.tool,
+    command: denial.command,
+    reason: denial.reason,
+    reasonType: denial.reasonType,
+    mode: denial.mode,
+    deniedAt: denial.deniedAt,
+  };
+  attempt.permissionDenials = [...denials, entry].slice(-ATTEMPT_DENIAL_CAPACITY);
 }
 
 function conversationProject(registry: AgentRegistry, conversationId: string): string | null {
@@ -98,7 +110,10 @@ function conversationProject(registry: AgentRegistry, conversationId: string): s
 export interface PermissionDenialRecorderDependencies {
   registry: AgentRegistry;
   mutatePipelines?: typeof withPipelineMutation;
+  readPipelines?: () => readonly Pipeline[];
   appendLifecycle?: typeof appendLifecycleEvents;
+  /** Pause before repeating an attempt write the lease refused. */
+  busyRetryDelayMs?: number;
 }
 
 /** One line for the journal: which tool, why it was denied, the engine's reason. */
@@ -109,22 +124,43 @@ export function permissionDenialSummary(denial: Pick<PermissionDenialRecord, "to
 
 export function permissionDenialRecorder(dependencies: PermissionDenialRecorderDependencies) {
   const mutate = dependencies.mutatePipelines ?? withPipelineMutation;
+  const read = dependencies.readPipelines ?? loadPipelinesForList;
   const append = dependencies.appendLifecycle ?? appendLifecycleEvents;
+  const retryDelayMs = dependencies.busyRetryDelayMs ?? BUSY_RETRY_DELAY_MS;
   const canonical = (id: string): string => id.startsWith("conversation_")
     ? dependencies.registry.canonicalConversationId(id as ViewerConversationId)
     : id;
   return async (denial: PermissionDenialRecord): Promise<void> => {
+    /* The lineage comes from a read, which takes no lease, so the journal line
+       names the stage even when the attempt write below cannot get in. The
+       write still runs when the read found nothing: the cached read can trail
+       an attempt that was just created. */
     let lineage: StageLineage | null = null;
     try {
-      lineage = await mutate((pipelines, persist) => {
-        const recorded = recordOnAttempt(pipelines, denial, canonical);
-        if (!recorded) return null;
-        persist([recorded.pipeline]);
-        return recorded.lineage;
-      });
+      lineage = locateAttempt(read(), denial.conversationId, canonical)?.lineage ?? null;
     } catch (error) {
-      /* The journal line below is still worth writing without the lineage. */
-      console.error("[permission guard] stage attempt could not record the denial", error);
+      console.error("[permission guard] pipelines could not be read for the denial's stage", error);
+    }
+    /* A lease held across a long controller pass refuses before admission;
+       nothing ran, so the same write is safe to repeat. */
+    for (let attempt = 1; attempt <= ATTEMPT_WRITE_TRIES; attempt += 1) {
+      try {
+        lineage = await mutate((pipelines, persist) => {
+          const located = locateAttempt(pipelines, denial.conversationId, canonical);
+          if (!located) return null;
+          appendDenial(located.attempt, denial);
+          persist([located.pipeline]);
+          return located.lineage;
+        }) ?? lineage;
+        break;
+      } catch (error) {
+        if (error instanceof StoreBusyBeforeAdmissionError && attempt < ATTEMPT_WRITE_TRIES) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+          continue;
+        }
+        console.error("[permission guard] stage attempt could not record the denial", error);
+        break;
+      }
     }
     const event: LifecycleEventInput = {
       key: `permission-denied:${denial.conversationId}:${denial.requestId}`,

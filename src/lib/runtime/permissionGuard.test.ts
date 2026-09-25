@@ -7,10 +7,11 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 
 import type { AgentRegistry, AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { attentionReason, buildAttentionQueue } from "@/components/attention";
-import { readLifecycleJournal } from "@/lib/lifecycle/journal";
+import { readLifecycleJournal, type LifecycleEventInput } from "@/lib/lifecycle/journal";
 import { agentLivenessSnapshot, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { buildPipeline, findPipelineRecord, withPipelineMutation } from "@/lib/pipelines/store";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
+import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import type { FileEntry } from "@/lib/types";
 
 import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "./claudeStreamBrokerHost";
@@ -343,4 +344,54 @@ test("a request the host already holds when the guard attaches is answered from 
   const unattended = new PermissionRequestGuard({ attendance: () => "unattended", record: () => {}, now: () => now });
   unattended.adopt("claude:b", host, "conversation_b", { pendingPermissions: [request] });
   expect(answered).toEqual([["held", { behavior: "deny", message: `flagged\n${NO_APPROVER_LINE}` }]]);
+});
+
+test("a denial the pipeline lease refuses is retried onto the attempt, and the journal names the stage regardless", async () => {
+  const conversationId = "conversation_busy";
+  const denial: PermissionDenialRecord = {
+    conversationId,
+    requestId: "request-busy",
+    tool: "Bash",
+    command: FAKE_SAFETY_COMMAND,
+    reason: FAKE_SAFETY_REASON,
+    reasonType: "safetyCheck",
+    mode: "unattended",
+    deniedAt: new Date(NOW).toISOString(),
+  };
+  const busy = () => new StoreBusyBeforeAdmissionError("pipeline store busy before admission");
+  const recorderFor = (pipelines: Pipeline[], refusals: number) => {
+    const events: LifecycleEventInput[] = [];
+    let calls = 0;
+    const record = permissionDenialRecorder({
+      registry: identityRegistry,
+      readPipelines: () => structuredClone(pipelines),
+      mutatePipelines: (async (mutate) => {
+        calls += 1;
+        if (calls <= refusals) throw busy();
+        return mutate(pipelines, () => {});
+      }) as typeof withPipelineMutation,
+      appendLifecycle: (input) => { events.push(...input); return { appended: [], skipped: 0 }; },
+      busyRetryDelayMs: 1,
+    });
+    return { record, events, calls: () => calls };
+  };
+  const lineage = { project: "viewer", pipelineId: "pipeline_permission", stageId: "build", attempt: 1, role: "builder" };
+
+  /* The first write is refused before admission; the retry lands it. */
+  const contended = [stagePipeline(conversationId)];
+  const once = recorderFor(contended, 1);
+  await once.record(denial);
+  expect(once.calls()).toBe(2);
+  expect(contended[0]!.runs[0]!.attempts[0]!.permissionDenials).toEqual([
+    expect.objectContaining({ requestId: "request-busy", tool: "Bash", reason: FAKE_SAFETY_REASON, mode: "unattended" }),
+  ]);
+  expect(once.events).toEqual([expect.objectContaining({ type: "permission_denied", conversationId, ...lineage })]);
+
+  /* Refused every time: the attempt cannot hold it, the journal still names the stage. */
+  const blocked = [stagePipeline(conversationId)];
+  const always = recorderFor(blocked, Number.POSITIVE_INFINITY);
+  await always.record(denial);
+  expect(always.calls()).toBe(3);
+  expect(blocked[0]!.runs[0]!.attempts[0]!.permissionDenials).toBeUndefined();
+  expect(always.events).toEqual([expect.objectContaining({ type: "permission_denied", conversationId, ...lineage })]);
 });

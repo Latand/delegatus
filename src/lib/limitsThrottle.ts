@@ -36,6 +36,19 @@ export function providerThrottleRetryAt(
   return new Date(retryAt).toISOString();
 }
 
+/** The retry deadline a conversation's own host reported (#2215), while it
+    still explains the turn's silence: the engine running the turn is the only
+    source that can say it is retrying the provider. Expires one grace past the
+    deadline it named, like `providerThrottleRetryAt`. */
+export function hostProviderRetryAt(
+  retry: { retryAt: string } | null | undefined,
+  now: number = Date.now(),
+): string | null {
+  const retryAt = retry ? Date.parse(retry.retryAt) : Number.NaN;
+  if (!Number.isFinite(retryAt) || now > retryAt + PROVIDER_THROTTLE_GRACE_MS) return null;
+  return new Date(retryAt).toISOString();
+}
+
 export function providerThrottleState(
   provenance: LimitsProvenance | null | undefined,
   now: number = Date.now(),

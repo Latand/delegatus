@@ -34,7 +34,6 @@ import { workLinksForBoard } from "@/lib/forge/resolve";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { projectSupersededTaskHandoffs } from "@/lib/tasks/supersedence";
 import { reportRunIdFromAttemptId, TELEGRAM_REPORT_PROJECT } from "@/lib/telegram/reportLineage";
-import { cachedLimitsProvenance } from "@/lib/limits";
 import { projectRateLimitReadModel } from "@/lib/rateLimit";
 import { readAuthorshipEvidence } from "@/lib/reaperAuthorship";
 import { projectStructuredFileLiveness } from "@/lib/runtime/livenessProjection";
@@ -759,7 +758,6 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     flows,
     registrySnapshot,
     Date.now(),
-    cachedLimitsProvenance,
     (entry) => {
       const fullEntry = entry as AgentRegistryEntry;
       return identityAlive(fullEntry.host?.agent, hostProbe)
