@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { runFocusTransaction } from "@/components/attention/navigate";
+import { reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
@@ -50,7 +51,13 @@ const EDITING = SCENARIO === "editing";
 const CODENAME_TIERS = SCENARIO === "tier-codename";
 const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
 const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
-const STAGES = SCENARIO === "stages" || ACCOUNTS;
+/* The orchestrator's long report (#2179): a status answer with a heading,
+   lists, a code block and a table, the shape of reply the seat wrapped into a
+   narrow ribbon, so its measure can be read beside the operator's bubble. It
+   builds on the stages board, which carries the «Not on a task» divider and a
+   conversation with no task, for the insets of #2185. */
+const AGENT_REPORT = SCENARIO === "agent-report";
+const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 /* The pipeline block in variant B (#2072 slice 3, docs/design/desktop-flat-cards.md §9):
    the variant renders' cards, with Ukrainian content when the page is uk. */
 const FLAT = SCENARIO === "pipeline-block";
@@ -74,7 +81,7 @@ const BALANCE = SCENARIO === "balance";
    a merged fix, so the card aggregates seven links behind "+N"; the longest
    Inbox title carries an attached draft, so chips are read under the longest
    titles in the narrowest column. */
-const WORK_LINKS = SCENARIO === "work-links" || FLAT;
+const WORK_LINKS = SCENARIO === "work-links" || FLAT || SCENARIO === "task-finish";
 const MANY = SCENARIO === "issue1765" || BALANCE || WORK_LINKS;
 /* #1743: one task whose pipelines exercise the whole identity/edge vocabulary —
    a fail edge fired twice of three, one whose budget is spent, mixed engines,
@@ -93,7 +100,21 @@ const LABELS = SCENARIO === "issue1865";
 /* `issue1820-quiet` is the same installation with nobody working in it: the
    Overview's most common state, where the board is narrowed to nothing by its
    own permanent filter and no search was ever typed. */
-const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet";
+/* #2166: the install before any orchestrator exists. `orchestrator-first` is a
+   project created a moment ago (nothing stored, no task, no view chosen), whose
+   Board carries the create draft above empty columns; `orchestrator-first-
+   overview` is the quiet Overview, which leads with its band. No project has a
+   seat in either. */
+const ORCH_FIRST = SCENARIO === "orchestrator-first";
+const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
+const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW;
+/* #2166 §3.8: the same project a moment after its seat was created, the seat
+   live and idle over empty columns, on an install whose onboarding marker has
+   never run the interface walk (`&install=existing` marks it an upgrade
+   instead). What the walk writes is kept in sessionStorage, so a reload reads
+   it back as the server would. */
+const ORCH_WALK = SCENARIO === "orchestrator-first-walk";
+const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet" || ORCH_FIRST_OVERVIEW;
 const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
 const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
 const LEDGER = "acme-ledger";
@@ -107,11 +128,43 @@ const ARCS = SCENARIO === "issue1798";
 /* #1938: a lane whose review budget ran out and whose last fix wrote a head
    nobody reviewed — parked in needs_review, never completed. */
 const REVIEW_SPENT = SCENARIO === "issue1938" || FLAT;
+/* #2187 §3.4: one lane parked on a review for each row of the table — stopped
+   after the last fix as the pipeline asked, a spent budget that stops before
+   fixing, a reviewer that failed again after its last fix round, and an older
+   review loop at its round limit — with the words at their longest. */
+const REVIEW_STOPS = SCENARIO === "review-stops";
+/* #2187 §4.6, §6: a completed lane in each state of its automatic merge —
+   waiting for checks, updating from main, merge stopped with its two answers,
+   merged by Delegatus — and the project's merge setting in the board's ⋯,
+   on by default and off with `&merge=off`. */
+const MERGE_STATES = SCENARIO === "merge-states";
+/* #2187 §5.3, §6 (mockup D4): a lane marked as finishing its task, running;
+   a task whose marked lane merged while a second lane still runs, so its move
+   to Done waits; and a Done task its marked lane finished. */
+const TASK_FINISH = SCENARIO === "task-finish";
+const MERGE_SETTING = { enabled: new URLSearchParams(location.search).get("merge") !== "off" };
+/* #2146: the project's Bridge reports switch, off with `?bridge=off`, and the
+   report log beside the seat's chat, empty with `?reports=empty`. */
+const BRIDGE_SETTING = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
+const REPORTS_EMPTY = new URLSearchParams(location.search).get("reports") === "empty";
 /* The seat's header at its fullest: a mandate a version behind the default,
    so the stale chip draws, a designated incumbent with its effort, account and
    a context past the rotation line, twenty previous seats and a running host
    with its Stop host control — every element the row has to keep readable. */
 const SEAT_HEAD = SCENARIO === "seat-head";
+/* Ghost cards: placeholder tasks no agent will name. A conversation the
+   backfill adopted months after it ended, a launch that never produced a
+   transcript (the leaked fixture's), a young task whose agent is still at
+   work, and a named task whose conversation this board did not load. */
+const GHOSTS = SCENARIO === "ghost-tasks";
+/* Old cards whose lanes ran for days: an assignment per stage attempt, review
+   round and handshake retry, each with the conversation it minted and no path,
+   none of them loaded on this board, two of their lanes still the task's own.
+   Beside them, a card with launches of its own that did not start: three rows
+   from before launches reserved a conversation, and one whose receipt failed. */
+const UNSTARTED = SCENARIO === "unstarted-regression";
+/* Board order: working cards first, then recently worked, then idle. */
+const BOARD_ORDER = SCENARIO === "board-order";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -358,6 +411,140 @@ const reviewSpentPipelines: Pipeline[] = REVIEW_SPENT ? (() => {
     })];
 })() : [];
 
+const reviewStopPipelines: Pipeline[] = REVIEW_STOPS ? (() => {
+  const readOnly = { ...role("reviewer", "codex"), access: "read-only" };
+  const reviewer = (next: string | null, onFail: Record<string, unknown> | null, over: Record<string, unknown> = {}) =>
+    stage("review", "reviewer", next, { kind: "run", onFail, effectiveRole: readOnly, ...over });
+  const conv = (id: string, title: string, ago: number, over: Record<string, unknown> = {}) => add(conversation(id, title, { mtime: now - ago, ...over }));
+  const fail = (text: string) => ({ status: "fail", findings: [text] });
+  const pass = { status: "pass", findings: [] };
+  const builds = (key: string, count: number, activations: Array<Record<string, unknown> | null>, from: number) => Array.from({ length: count }, (_, index) => {
+    const at = from - index * 30 * MIN;
+    return attempt(index + 1, "passed", conv(`stop-${key}-build-${index + 1}`, `Build pass ${index + 1}`, at - 10 * MIN), { startedAt: iso(at), completedAt: iso(at - 10 * MIN), verdict: pass, activatedBy: activations[index] ?? null });
+  });
+  const reviews = (key: string, texts: string[], from: number, over: Record<string, unknown> = {}) => texts.map((text, index) => {
+    const at = from - index * 30 * MIN;
+    return attempt(index + 1, "failed", conv(`stop-${key}-review-${index + 1}`, `Review pass ${index + 1}`, at - 10 * MIN, { engine: "codex", model: "gpt-6-astra" }), {
+      effectiveRole: readOnly, startedAt: iso(at), completedAt: iso(at - 10 * MIN), verdict: fail(text), activatedBy: { stageId: "build", attempt: index + 1, edge: "pass" }, ...over,
+    });
+  });
+  const pillFinding = L("P2 — The Model pill cuts its name at 360 px when two accounts are on.", "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти.");
+  const captureFinding = L("P2 — capture --stage does not take the stage address from the project config.", "P2 — capture --stage не бере адресу стейджу з конфігу проєкту.");
+  const parkDetail = `fail-edge budget exhausted after 2 round(s) (onExhausted: park): ${captureFinding}`;
+  const onceDetail = `fail-edge budget exhausted after 1 round(s) (onExhausted: advance): ${pillFinding}`;
+  return [
+    /* Row 1: stop-after-fix. The last fix landed and the pipeline asked to wait. */
+    pipeline("p-stop-fix", L("Composer model pills: one width at 390", "Кнопки моделі в композері: одна ширина на 390"), "t-stop-fix", "needs_review",
+      [stage("build", "builder", "review"), reviewer(null, { to: "build", maxRounds: 2, onExhausted: "stop-after-fix" })],
+      [
+        { stageId: "build", attempts: builds("fix", 3, [null, { stageId: "review", attempt: 1, edge: "fail" }, { stageId: "review", attempt: 2, edge: "fail", budgetSpent: true }], 110 * MIN) },
+        { stageId: "review", attempts: reviews("fix", [pillFinding, pillFinding], 95 * MIN, { reviewedHead: REVIEWED_HEAD }).map((entry, index) => (index === 1 ? { ...entry, budgetSpent: true } : entry)) },
+      ], null, {
+        lastPassedCommit: UNREVIEWED_HEAD,
+        stateDetail: "review budget spent (onExhausted: stop-after-fix): last review failed (fail, 1 finding), head 9b2e7d4c1a0f unreviewed; reviewed 4f1c2a9d3b7e. continue-review adds rounds",
+        reviewPending: { stageId: "review", attempt: 2, fixStageId: "build", fixAttempt: 3, reviewedHead: REVIEWED_HEAD, currentHead: UNREVIEWED_HEAD, verdict: "fail", findings: 1, at: iso(12 * MIN) },
+      }),
+    /* Row 2: park. The last of three review rounds failed; the edge stops before fixing. */
+    pipeline("p-stop-park", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "t-stop-park", "needs_decision",
+      [stage("build", "builder", "review"), reviewer(null, { to: "build", maxRounds: 2, onExhausted: "park" })],
+      [
+        { stageId: "build", attempts: builds("park", 3, [null, { stageId: "review", attempt: 1, edge: "fail" }, { stageId: "review", attempt: 2, edge: "fail" }], 130 * MIN) },
+        { stageId: "review", attempts: reviews("park", [captureFinding, captureFinding, captureFinding], 115 * MIN).map((entry, index) => (index === 2 ? { ...entry, error: parkDetail } : entry)) },
+      ], { stageId: "review", state: "running", input: null, activatedBy: { stageId: "build", attempt: 3, edge: "pass" } }, { stateDetail: parkDetail }),
+    /* Row 3: the once-per-stage rule. Verify sent the work back through the
+       review, which had already handed its last findings on, and it failed again. */
+    pipeline("p-stop-once", L("Deploy failure notifies the seat and the phone", "Невдалий деплой сповіщає сесію і телефон"), "t-stop-once", "needs_decision",
+      [stage("build", "builder", "review"), reviewer("verify", { to: "build", maxRounds: 1 }), stage("verify", "verifier", null, { onFail: { to: "build", maxRounds: 1 } })],
+      [
+        { stageId: "build", attempts: builds("once", 3, [null, { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true }, { stageId: "verify", attempt: 1, edge: "fail" }], 160 * MIN) },
+        { stageId: "review", attempts: reviews("once", [pillFinding, pillFinding], 145 * MIN).map((entry, index) => (index === 0
+          ? { ...entry, budgetSpent: true }
+          : { ...entry, error: onceDetail, startedAt: iso(40 * MIN), completedAt: iso(30 * MIN), activatedBy: { stageId: "build", attempt: 3, edge: "pass" } })) },
+        { stageId: "verify", attempts: [attempt(1, "failed", conv("stop-once-verify-1", "Verify pass 1", 80 * MIN), { startedAt: iso(90 * MIN), completedAt: iso(80 * MIN), verdict: fail(pillFinding), activatedBy: { stageId: "build", attempt: 2, edge: "pass" } })] },
+      ], { stageId: "review", state: "running", input: null, activatedBy: { stageId: "build", attempt: 3, edge: "pass" } }, { stateDetail: onceDetail }),
+    /* §3.5: a lane that completed under the default after its last fix,
+       which no reviewer saw. */
+    pipeline("p-stop-done", L("Conversation: wider agent replies", "Розмова: ширші відповіді агентів"), "t-stop-done", "completed",
+      [stage("build", "builder", "review"), reviewer(null, { to: "build", maxRounds: 2 })],
+      [
+        { stageId: "build", attempts: builds("done", 3, [null, { stageId: "review", attempt: 1, edge: "fail" }, { stageId: "review", attempt: 2, edge: "fail", budgetSpent: true }], 240 * MIN) },
+        { stageId: "review", attempts: reviews("done", [pillFinding, pillFinding], 225 * MIN, { reviewedHead: REVIEWED_HEAD }).map((entry, index) => (index === 1 ? { ...entry, budgetSpent: true } : entry)) },
+      ], null, { lastPassedCommit: UNREVIEWED_HEAD, closedAt: iso(170 * MIN), stateDetail: "budget spent: last findings handed to the fix stage, not re-reviewed" }),
+    /* Row 4: an older review loop at its round limit, whose flow stored its
+       own detail as the first finding. */
+    pipeline("p-stop-legacy", L("Screenshot catalog: one capture command for every feature", "Каталог скриншотів: одна команда зйомки для кожної фічі"), "t-stop-legacy", "needs_decision",
+      [stage("build", "builder", "review"), stage("review", "reviewer", null, { effectiveRole: readOnly })],
+      [
+        { stageId: "build", attempts: builds("legacy", 1, [null], 200 * MIN) },
+        { stageId: "review", attempts: [attempt(1, "failed", conv("stop-legacy-review-1", "Review loop", 20 * MIN, { engine: "codex", model: "gpt-6-astra" }), {
+          effectiveRole: readOnly, startedAt: iso(180 * MIN), completedAt: iso(20 * MIN), activatedBy: { stageId: "build", attempt: 1, edge: "pass" },
+          verdict: { status: "fail", findings: ["round limit reached", captureFinding] }, error: "review loop ended in needs_decision: round limit reached",
+        })] },
+      ], { stageId: "review", state: "reviewing", input: null, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } }, { stateDetail: "review loop ended in needs_decision: round limit reached" }),
+  ];
+})() : [];
+
+const mergeStatePipelines: Pipeline[] = MERGE_STATES ? (() => {
+  const readOnly = { ...role("reviewer", "codex"), access: "read-only" };
+  const pass = { status: "pass", findings: [] };
+  const conv = (id: string, title: string, ago: number) => add(conversation(id, title, { mtime: now - ago }));
+  const HEAD = "7c1e4b2a9d3f6e5c8b0a1d2e3f4a5b6c7d8e9f0a";
+  const merge = (state: string, requestedAgo: number, over: Record<string, unknown> = {}) => ({
+    state, by: null, repository: "acme/atlas", prNumber: 2240, policyChangedAt: iso(24 * 60 * MIN), reviewedHead: HEAD, chain: [HEAD], updates: [],
+    seenChecks: ["privacy-publication", "privacy-tracker-audit", "bun-runtime"], head: HEAD, headSeenAt: iso(requestedAgo), lastChecks: [],
+    readAt: iso(MIN), nextReadAt: null, readFailures: 0, requestedAt: iso(requestedAgo), mergedHead: null, mergeCommit: null, method: null,
+    mergedAt: null, attempts: 0, reason: null, blockedAt: null, updatedAt: iso(MIN), ...over,
+  });
+  const lane = (key: string, title: string, taskId: string, from: number, mergeRecord: Record<string, unknown>) => pipeline(`p-merge-${key}`, title, taskId, "completed",
+    [stage("build", "builder", "review"), stage("review", "reviewer", null, { kind: "run", onFail: { to: "build", maxRounds: 2 }, effectiveRole: readOnly })],
+    [
+      { stageId: "build", attempts: [attempt(1, "passed", conv(`merge-${key}-build`, "Build pass 1", from + 20 * MIN), { startedAt: iso(from + 40 * MIN), completedAt: iso(from + 20 * MIN), verdict: pass })] },
+      { stageId: "review", attempts: [attempt(1, "passed", conv(`merge-${key}-review`, "Review pass 1", from), { effectiveRole: readOnly, startedAt: iso(from + 18 * MIN), completedAt: iso(from), verdict: pass, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } })] },
+    ], null, { lastPassedCommit: HEAD, closedAt: iso(from), stateDetail: "completed", merge: mergeRecord });
+  return [
+    lane("wait", L("Deploy failure notifies the seat and the phone", "Невдалий деплой сповіщає сесію і телефон"), "t-merge-wait", 12 * MIN, merge("waiting-checks", 12 * MIN)),
+    lane("update", L("Composer model pills: one width at 390", "Кнопки моделі в композері: одна ширина на 390"), "t-merge-update", 20 * MIN,
+      merge("updating", 20 * MIN, { updates: [{ requestedAt: iso(2 * MIN), head: null }] })),
+    lane("stop", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "t-merge-stop", 45 * MIN,
+      merge("blocked", 45 * MIN, { reason: 'check "privacy-publication" failed', blockedAt: iso(30 * MIN) })),
+    lane("done", L("Conversation: wider agent replies", "Розмова: ширші відповіді агентів"), "t-merge-done", 90 * MIN,
+      merge("merged", 90 * MIN, { by: "auto-merge", mergedHead: HEAD, mergeCommit: "e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a6f7e8d9", method: "squash", mergedAt: iso(70 * MIN) })),
+  ];
+})() : [];
+
+const taskFinishPipelines: Pipeline[] = TASK_FINISH ? (() => {
+  const readOnly = { ...role("reviewer", "codex"), access: "read-only" };
+  const pass = { status: "pass", findings: [] };
+  const conv = (id: string, title: string, ago: number) => add(conversation(id, title, { mtime: now - ago }));
+  const HEAD = "5b2c9e1d7a3f4b6c8d0e2f4a6b8c0d2e4f6a8b0c";
+  const stages = () => [stage("build", "builder", "review"), stage("review", "reviewer", null, { kind: "run", onFail: { to: "build", maxRounds: 2 }, effectiveRole: readOnly })];
+  const finished = (key: string, from: number) => [
+    { stageId: "build", attempts: [attempt(1, "passed", conv(`finish-${key}-build`, "Build pass 1", from + 20 * MIN), { startedAt: iso(from + 40 * MIN), completedAt: iso(from + 20 * MIN), verdict: pass })] },
+    { stageId: "review", attempts: [attempt(1, "passed", conv(`finish-${key}-review`, "Review pass 1", from), { effectiveRole: readOnly, startedAt: iso(from + 18 * MIN), completedAt: iso(from), verdict: pass, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } })] },
+  ];
+  const merged = (from: number) => ({
+    state: "merged", by: "auto-merge", repository: "acme/atlas", prNumber: 2240, policyChangedAt: iso(24 * 60 * MIN), reviewedHead: HEAD, chain: [HEAD], updates: [],
+    seenChecks: ["privacy-publication"], head: HEAD, headSeenAt: iso(from), lastChecks: [], readAt: iso(MIN), nextReadAt: null, readFailures: 0, requestedAt: iso(from),
+    mergedHead: HEAD, mergeCommit: "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567", method: "squash", mergedAt: iso(from - 10 * MIN), attempts: 0, reason: null, blockedAt: null, updatedAt: iso(MIN),
+  });
+  const running = (key: string, from: number) => [
+    { stageId: "build", attempts: [attempt(1, "running", conv(`finish-${key}-build`, "Build pass 1", from), { startedAt: iso(from) })] },
+    { stageId: "review", attempts: [] },
+  ];
+  const cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+  return [
+    pipeline("p-finish-marked", L("Slice 4: the pipeline that finishes its task", "Зріз 4: пайплайн, що завершує задачу"), "t-finish-marked", "running", stages(), running("marked", 25 * MIN), cursor,
+      { finishesTaskIds: ["t-finish-marked"] }),
+    pipeline("p-finish-hold", L("Slice 3: merge runner and the setting", "Зріз 3: мердж і налаштування"), "t-finish-hold", "completed", stages(), finished("hold", 60 * MIN), null,
+      { lastPassedCommit: HEAD, closedAt: iso(60 * MIN), stateDetail: "completed", merge: merged(60 * MIN), finishesTaskIds: ["t-finish-hold"],
+        taskFinishWaits: [{ taskId: "t-finish-hold", since: iso(50 * MIN), open: ["p-finish-other"] }] }),
+    pipeline("p-finish-other", L("Docs for the merge setting", "Документація налаштування мерджу"), "t-finish-hold", "running", stages(), running("other", 15 * MIN), cursor),
+    pipeline("p-finish-done", L("Conversation: wider agent replies", "Розмова: ширші відповіді агентів"), "t-finish-done", "completed", stages(), finished("done", 90 * MIN), null,
+      { lastPassedCommit: HEAD, closedAt: iso(90 * MIN), stateDetail: "completed", merge: { ...merged(90 * MIN), prNumber: 2236 }, finishesTaskIds: ["t-finish-done"],
+        taskFinishes: [{ taskId: "t-finish-done", at: iso(75 * MIN), outcome: "moved" }] }),
+  ];
+})() : [];
+
 const arcPipelines: Pipeline[] = ARCS ? (() => {
   const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
   const restFix = conv("arc-rest-fix", "Draft the empty-state copy", { mtime: now - 70 * MIN });
@@ -577,9 +764,66 @@ const UPLOAD_UI = FLAT ? "verify-backward-compatibility-and-migrations" : "build
    for a 390 px card's line even alone, so its name wraps inside the pill. */
 const ATTACH_VERIFY = FLAT ? "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge" : "verify";
 
+/* The assignments a task's lanes leave behind: one per stage attempt, three
+   handshake retries after a lane's first review, and one per review round. */
+function laneAssignments(prefix: string, daysAgo: number, lanes: ReadonlyArray<readonly [string, readonly string[]]>, rounds: number) {
+  const rows: Array<Record<string, unknown>> = [];
+  const add = (clientAttemptId: string) => {
+    const n = rows.length + 1;
+    rows.push({ launchId: `launch-${prefix}-${n}`, clientAttemptId, path: null, conversationId: `conversation_${prefix}-${n}`, panePid: null, state: "linked", error: null, at: iso(daysAgo * 24 * 60 * MIN - n * 25 * MIN), engine: n % 3 ? "claude" : "codex" });
+  };
+  lanes.forEach(([lane, stages], laneIndex) => stages.forEach((stageId, index) => {
+    add(`pipeline_${lane}_${stageId}_${index + 1}`);
+    if (laneIndex === 1 && index === 1) for (let retry = 1; retry <= 3; retry += 1) add(`handshake_retry_${retry}_pipeline_${lane}_${stageId}_${index + 1}`);
+  }));
+  for (let round = 1; round <= rounds; round += 1) add(`flow_${prefix}${round}_round${round}`);
+  return rows;
+}
+const sqliteRows = UNSTARTED ? laneAssignments("sqlite", 5, [
+  ["a1", ["design", "build", "review", "build", "review", "build", "review", "build", "review", "review"]],
+  ["a2", ["build", "review", "build", "review"]],
+  ["a3", ["build", "review", "build", "review"]],
+  ["a4", ["fix", "review"]],
+  ["a5", ["build", "review", "build"]],
+  ["a6", ["build"]],
+  ["a7", ["fix", "review", "fix", "review", "fix", "review", "fix", "review"]],
+  ["a8", ["review"]],
+  ["slice4", ["build"]],
+  ["slice5", ["build"]],
+], 5) : [];
+const flowsRows = UNSTARTED ? laneAssignments("flows", 4, [
+  ["b1", ["design"]],
+  ["b2", ["build", "review"]],
+  ["b4", ["build", "review", "build", "review", "build"]],
+  ["b5", ["build", "review", "build", "build"]],
+  ["b6", ["build", "review", "build", "review", "build"]],
+  ["b7", ["review", "build"]],
+  ["s4", ["build"]],
+  ["s5", ["build"]],
+], 3) : [];
+const mixedRows = UNSTARTED ? laneAssignments("mixed", 3, [["c1", ["build", "review", "build", "review"]]], 0) : [];
+/* A lane of the task's own: its one build attempt ran the assignment's conversation. */
+function ownLane(id: string, title: string, taskId: string, state: string, rows: ReadonlyArray<Record<string, unknown>>, daysAgo: number): Pipeline {
+  const row = rows.find((entry) => String(entry.clientAttemptId).startsWith(`pipeline_${id}_`))!;
+  const at = daysAgo * 24 * 60 * MIN;
+  return pipeline(`p-${id}`, title, taskId, state, [stage("build", "builder", null)],
+    [{ stageId: "build", attempts: [attempt(1, "passed", null, { launchId: row.launchId, conversationId: row.conversationId, startedAt: iso(at), completedAt: iso(at - 40 * MIN), verdict: { status: "pass", findings: [] } })] }],
+    null, { createdAt: iso(at + 10 * MIN), closedAt: iso(at - 45 * MIN) });
+}
+const unstartedPipelines: Pipeline[] = UNSTARTED ? [
+  ownLane("slice4", L("State in SQLite, slice 4: the bridge stores", "Стан у SQLite, зріз 4: сховища мосту"), "t-lanes-sqlite", "completed", sqliteRows, 2),
+  ownLane("slice5", L("State in SQLite, slice 5: the operator's small stores", "Стан у SQLite, зріз 5: дрібні сховища оператора"), "t-lanes-sqlite", "closed", sqliteRows, 2),
+  ownLane("s4", L("Retire flows, slice 4: decode old definitions", "Прибрати флоу, зріз 4: декодувати старі визначення"), "t-lanes-flows", "completed", flowsRows, 2),
+  ownLane("s5", L("Retire flows, slice 5: freeze flows", "Прибрати флоу, зріз 5: заморозити флоу"), "t-lanes-flows", "closed", flowsRows, 2),
+] : [];
+
 const pipelines: Pipeline[] = [
+  ...unstartedPipelines,
   ...flatPipelines,
   ...reviewSpentPipelines,
+  ...reviewStopPipelines,
+  ...mergeStatePipelines,
+  ...taskFinishPipelines,
   ...balancePipelines,
   ...arcPipelines,
   ...labelPipelines,
@@ -736,7 +980,22 @@ const flows = PIPELINES ? [
   reviewFlow("flow-upload-review-api", uploadApi, uploadRevApi, ["REQUEST_CHANGES", "APPROVE"], 5 * 60 * MIN),
   reviewFlow("flow-compact-review", compactBuild, compactRev, ["APPROVE"], 2 * 24 * 60 * MIN),
   reviewFlow("flow-rounds-review", roundsBuild!, roundsReview!, ["REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "APPROVE"], 3 * 60 * MIN),
-] : LOOSE ? [reviewFlow("flow-export-review", exportImpl, exportReview!, ["APPROVE"], 30 * MIN)] : [];
+] : LOOSE ? [reviewFlow("flow-export-review", exportImpl, exportReview!, ["APPROVE"], 30 * MIN)] : [];/* Ghost cards: the conversations behind them. */
+const ghostOld = GHOSTS ? add(conversation("ghost-backfill", L("Migrate the invoice CSV importer to the new parser", "Перенести імпорт рахунків CSV на новий парсер"), { mtime: now - 3 * 24 * 60 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
+const ghostYoung = GHOSTS ? add(conversation("ghost-young", L("Starting on the settings audit", "Починаю аудит налаштувань"), working({ plan: { current: L("Reading the settings screen", "Читаю екран налаштувань") } }))) : null;
+/* A launch whose receipt failed two minutes ago: no transcript, only its placeholder. */
+const ghostFailed = GHOSTS ? add(conversation("ghost-failed", L("Rotate the webhook signing secret", "Замінити секрет підпису вебхуків"), {
+  path: "spawn:launch-ghost-failed", size: 0, mtime: now - 2 * MIN, activityReason: "structured_spawn_failed",
+  spawn: { launchId: "launch-ghost-failed", clientAttemptId: null, accountId: null, conversationId: "conversation_ghost-failed",
+    state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached: the weekly window resets in 3 days" },
+})) : null;
+
+/* The mixed card's launch whose receipt failed an hour ago: only its placeholder. */
+const mixedFailed = UNSTARTED ? add(conversation("mixed-failed", L("Replay the missed webhook deliveries", "Повторити пропущені доставки вебхуків"), {
+  path: "spawn:launch-mixed-failed", size: 0, mtime: now - 60 * MIN, activityReason: "structured_spawn_failed",
+  spawn: { launchId: "launch-mixed-failed", clientAttemptId: null, accountId: null, conversationId: "conversation_mixed-failed",
+    state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached: the weekly window resets in 3 days" },
+})) : null;
 
 let revision = 1;
 function task(id: string, status: TaskStatus, title: string, description: string, updatedAgo: number, members: FileEntry[] = [], over: Partial<BoardTask> = {}): BoardTask {
@@ -789,6 +1048,62 @@ const tasks: BoardTask[] = [
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
+  ...(GHOSTS ? [
+    task("t-ghost-backfill", "assigned", L("Migrate the invoice CSV importer to the new parser", "Перенести імпорт рахунків CSV на новий парсер"), "", 3 * 24 * 60 * MIN, [ghostOld!], {
+      origin: { kind: "conversation", key: "conversation_ghost-backfill", refinement: "pending" },
+      assignments: [{ path: ghostOld!.path, conversationId: ghostOld!.conversationId, panePid: null, state: "linked", error: null, at: iso(3 * 24 * 60 * MIN) }],
+    } as Partial<BoardTask>),
+    task("t-ghost-fixture", "assigned", "Exercise legacy spawn fixture", "", 20 * 60 * MIN, [], {
+      origin: { kind: "launch", key: "launch-ghost-fixture", refinement: "pending" },
+      /* A row from before launches reserved a conversation: it never minted one. */
+      assignments: [{ launchId: "launch-ghost-fixture", path: null, panePid: null, state: "linked", error: null, at: iso(20 * 60 * MIN), engine: "codex" }],
+    } as Partial<BoardTask>),
+    task("t-ghost-young", "assigned", L("Audit the settings screen", "Аудит екрана налаштувань"), "", 3 * MIN, [ghostYoung!], {
+      origin: { kind: "launch", key: "launch-ghost-young", refinement: "pending" },
+      createdAt: iso(3 * MIN),
+    } as Partial<BoardTask>),
+    task("t-ghost-failed", "assigned", L("Rotate the webhook signing secret", "Замінити секрет підпису вебхуків"), "", 2 * MIN, [], {
+      origin: { kind: "launch", key: "launch-ghost-failed", refinement: "pending" },
+      createdAt: iso(2 * MIN),
+      assignments: [{ launchId: "launch-ghost-failed", conversationId: ghostFailed!.conversationId, path: ghostFailed!.path, panePid: null, state: "spawning", error: null, at: iso(2 * MIN), engine: "claude" }],
+    } as Partial<BoardTask>),
+    task("t-ghost-elsewhere", "assigned", L("Tune the upload retries", "Налаштувати повтори завантаження"), "", 26 * 60 * MIN, [], {
+      assignments: [{ path: "/elsewhere/upload-retries.jsonl", conversationId: "conversation_upload-retries", panePid: null, state: "linked", error: null, at: iso(26 * 60 * MIN) }],
+    } as Partial<BoardTask>),
+  ] : []),
+  ...(UNSTARTED ? [
+    task("t-lanes-sqlite", "inbox", L("Viewer state in SQLite: the remaining slices and dropping legacy JSON", "Стан Viewer у SQLite: решта зрізів і видалення legacy JSON"), L("Tasks, the agent registry, the board and accounts moved. Left: the remaining collections, one slice per lane.", "Переїхали задачі, реєстр агентів, дошка й акаунти. Лишилось: решта колекцій, по зрізу на лейн."), 2 * 24 * 60 * MIN, [], {
+      assignments: sqliteRows as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+    task("t-lanes-flows", "inbox", L("Retire flows: one mechanism, pipelines (continued)", "Прибрати флоу: один механізм — пайплайни (продовжити)"), L("The design is ready in nine slices. Next: freeze flows, then replace their UI with pipeline attempts.", "Дизайн готовий, девʼять зрізів. Далі: заморозити флоу, потім замінити їхній UI спробами пайплайна."), 2 * 24 * 60 * MIN, [], {
+      assignments: flowsRows as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+    task("t-lanes-mixed", "inbox", L("Replay the missed webhook deliveries", "Повторити пропущені доставки вебхуків"), "", 60 * MIN, [], {
+      assignments: [
+        ...mixedRows,
+        ...["a", "b", "c"].map((id, index) => ({ launchId: `launch-mixed-legacy-${id}`, path: null, panePid: null, state: "linked", error: null, at: iso((2 * 24 + index) * 60 * MIN), engine: "codex" })),
+        { launchId: "launch-mixed-failed", conversationId: mixedFailed!.conversationId, path: mixedFailed!.path, panePid: null, state: "spawning", error: null, at: iso(60 * MIN), engine: "claude" },
+      ] as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+  ] : []),
+  ...(REVIEW_STOPS ? [
+    task("t-stop-fix", "assigned", L("Composer model pills: one width at 390", "Кнопки моделі в композері однієї ширини"), L("At 390 px the model and effort pills drift apart. The operator wants to look before the merge.", "На 390 px кнопки моделі й зусилля розʼїжджаються. Оператор хоче подивитися перед мерджем."), 12 * MIN),
+    task("t-stop-park", "assigned", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "", 6 * MIN),
+    task("t-stop-once", "assigned", L("Deploy failure notifies the seat and the phone", "Сповіщення, коли деплой падає"), "", 4 * MIN),
+    task("t-stop-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 170 * MIN),
+    task("t-stop-legacy", "assigned", L("Screenshot catalog: one capture command for every feature", "Каталог скриншотів: одна команда зйомки для кожної фічі"), "", 2 * MIN),
+  ] : []),
+  ...(MERGE_STATES ? [
+    task("t-merge-wait", "assigned", L("Deploy failure notifies the seat and the phone", "Сповіщення, коли деплой падає"), "", 12 * MIN),
+    task("t-merge-update", "assigned", L("Composer model pills: one width at 390", "Кнопки моделі в композері однієї ширини"), "", 20 * MIN),
+    task("t-merge-stop", "assigned", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "", 30 * MIN),
+    task("t-merge-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 70 * MIN),
+  ] : []),
+  ...(TASK_FINISH ? [
+    task("t-finish-marked", "assigned", L("Pipelines that finish their task", "Пайплайни, що завершують задачу"), "", 25 * MIN),
+    task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
+    task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
+  ] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
@@ -843,6 +1158,48 @@ if (SCENARIO === "stopped-launches") {
   files.splice(0, files.length, ...launches.map((entry) => entry.file));
   pipelines.splice(0, pipelines.length, ...launches.map((entry) => entry.pipeline));
   tasks.splice(0, tasks.length, task("t-stopped", "done", "Recover stopped launches", "", 0, files));
+}
+/* Board order: an Assigned column as the operator reported it on 2026-09-24.
+   `t-order-tint`'s build stage is running and its conversation is live on the
+   host's turn evidence, with neither a turn boundary nor an agent-work stamp
+   on its row yet, which is how the live row read. Beside it, a direct worker
+   and a research lane at work, a card whose agent finished minutes ago, one
+   that finished yesterday, and a task nobody has worked on that was edited a
+   minute ago. */
+if (BOARD_ORDER) {
+  const agent = (id: string, title: string, over: Record<string, unknown>) => conversation(id, title, over);
+  const live = (turnAgo: number | null, workAgo: number | null, over: Record<string, unknown> = {}) => ({
+    ...working({ mtime: now - (workAgo ?? 114) }),
+    activityReason: "turn_evidence_working",
+    lastTurn: turnAgo === null ? undefined : { startedAt: (now - turnAgo) * 1_000, endedAt: null },
+    ...(workAgo === null ? {} : { lastAgentWorkAt: (now - workAgo) * 1_000 }),
+    ...over,
+  });
+  const ended = (workAgo: number) => ({
+    activity: workAgo < 15 * MIN ? "recent" : "idle", mtime: now - workAgo, lastAgentWorkAt: (now - workAgo) * 1_000,
+    authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(workAgo) },
+    lastTurn: { startedAt: (now - workAgo - 20 * MIN) * 1_000, endedAt: (now - workAgo) * 1_000 },
+  });
+  const tint = agent("order-tint-build", L("Builder: one icon and colour rule for every new task", "Білдер: одне правило іконки й кольору для кожної нової задачі"),
+    live(null, null, { authoritativeTurn: { state: "unknown", source: "empty", terminalAt: null }, lastTurn: undefined }));
+  const maint = agent("order-maint", L("Keeping the board's tasks current", "Тримаю задачі дошки актуальними"), live(7 * MIN, 119, { plan: { current: L("Closing tasks whose PRs merged", "Закриваю задачі зі злитими PR") } }));
+  const research = agent("order-research", L("Architect: interface improvements from the design skills", "Архітектор: покращення інтерфейсу за дизайн-скілами"), live(35 * MIN, 189));
+  const review = agent("order-review", L("Image viewer: arrows and click-outside close", "Перегляд зображень: стрілки й закриття кліком поза ним"), ended(408));
+  const yesterday = agent("order-yesterday", L("Rate-limit banner copy", "Текст банера про ліміт"), ended(26 * 60 * MIN));
+  const lane = (id: string, stageId: string, file: FileEntry, startedAgo: number) => pipeline(id, `Lane ${id}`, id.replace(/^p-/, "t-"), "running",
+    [stage(stageId, "builder", "review"), stage("review", "builder", null)],
+    [{ stageId, attempts: [attempt(1, "running", file, { startedAt: iso(startedAgo) })] }],
+    { stageId, state: "running", input: null, activatedBy: null });
+  files.splice(0, files.length, orchestrator, tint, maint, research, review, yesterday);
+  pipelines.splice(0, pipelines.length, lane("p-order-tint", "build", tint, 2 * MIN), lane("p-order-research", "research", research, 35 * MIN));
+  tasks.splice(0, tasks.length,
+    task("t-order-tint", "assigned", L("Every new task gets an icon and a colour by one rule", "Кожна нова задача отримує іконку й колір за одним правилом"), "", 2 * MIN),
+    task("t-order-maint", "assigned", L("Board upkeep: an agent that keeps tasks current", "Обслуговування дошки: агент, який тримає задачі актуальними"), "", 7 * MIN, [maint]),
+    task("t-order-research", "assigned", L("Research: improving the interface with the design skills", "Дослідження: як покращити інтерфейс за дизайн-скілами"), "", 35 * MIN),
+    task("t-order-review", "assigned", L("Agent image viewer: arrows and click-outside close", "Перегляд зображень агента: стрілки й закриття кліком поза ним"), "", 30 * MIN, [review]),
+    task("t-order-yesterday", "assigned", L("Rate-limit banner copy", "Текст банера про ліміт"), "", 26 * 60 * MIN, [yesterday]),
+    task("t-order-notes", "assigned", L("Write the upgrade notes", "Написати нотатки до оновлення"), L("Nobody has worked on it yet.", "Над нею ще ніхто не працював."), 1 * MIN),
+  );
 }
 if (BALANCE) {
   for (const column of BALANCE_COLUMNS) {
@@ -904,6 +1261,41 @@ function transcriptOf(pathname: string): string {
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
     return `${long.join("\n")}\n`;
   }
+  if (AGENT_REPORT && file === orchestrator) {
+    return `${[
+      asked(12 * MIN, "Where are we on the release? Give me the whole picture before I decide what to cut."),
+      said(11 * MIN, [
+        "Here is where the release stands. Two lanes are done, one is in review and one is waiting on you; nothing is blocked on infrastructure.",
+        "",
+        "**Done**",
+        "- Search: the verifier failed once (results were empty for 40 s after the alias swap), the fail edge sent it back to Implement, and attempt 2 passed review. Verify is green on the live index.",
+        "- Export presets: the eleven toggles are three presets and one advanced sheet; the old keys still read, and a saved export from last month opens unchanged.",
+        "",
+        "**Waiting on you**",
+        "1. Release notes: two anchors match the same heading, and the implementer needs to know which one wins before it rewrites the links.",
+        "2. Passkeys: the fallback pipeline needs the domain settled; I have not started it.",
+        "",
+        "The check the verifier ran, for the record:",
+        "",
+        "```",
+        "bun scripts/verify-search.ts --index live --swap-window 60s",
+        "  swap window      41.8 s   (limit 60 s)",
+        "  empty results     0 of 1 200 queries",
+        "```",
+        "",
+        "| Lane | Stage | State | Since |",
+        "| --- | --- | --- | --- |",
+        "| Search fix | Verify | passed | 09:40 |",
+        "| Export presets | Review | round 2 | 10:05 |",
+        "| Release notes | Implement | waiting on you | 10:12 |",
+        "| Passkey fallback | not started | needs the domain | - |",
+        "",
+        "If you pick the first anchor, I can have the release notes merged within the hour and cut the release after Verify reruns on the merged head.",
+      ].join("\n")),
+      asked(4 * MIN, "First anchor. Go."),
+      said(3 * MIN, "Told the implementer: the first anchor wins. I will report back when the release notes are merged and Verify has rerun on the merged head."),
+    ].join("\n")}\n`;
+  }
   const lines = file === orchestrator
     ? [
       asked(8 * MIN, "Keep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback."),
@@ -932,6 +1324,8 @@ let board = {
 
 const evidence = {
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
+  /* #2187: what the board's merge-setting row wrote. */
+  settingWrites: [] as Array<Record<string, unknown>>,
   presence: [] as Array<{ mode: string; visiblePaths: string[]; focusedPath: string | null }>,
   assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
   /* The focus handoff this page's Viewer runs, for driving an attention
@@ -1148,6 +1542,10 @@ function fixtureWorkLinks(): FilesWorkLinks {
     pr(2204, "pipeline/p-many-drawers", "draft"),
     pr(2207, "pipeline/p-upload", "open", [2061]),
     pr(2212, "pipeline/p-many-loop", "open"),
+    pr(2231, "pipeline/p-finish-marked", "open"),
+    pr(2240, "pipeline/p-finish-hold", "merged"),
+    pr(2242, "pipeline/p-finish-other", "open"),
+    pr(2236, "pipeline/p-finish-done", "merged"),
   ];
   const view: ForgeRepositoryView = {
     canonical: repository,
@@ -1201,8 +1599,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         lastTurn: { startedAt: (now - 5 * 60 * MIN) * 1_000, endedAt: (now - 4 * 60 * MIN) * 1_000 },
       } as unknown as FileEntry))
       : files;
+    const seatOnly = ORCH_WALK ? files.filter((file) => file.path === orchestrator.path).map((file) => ({
+      ...file, activity: "idle", proc: null, pid: null, waitingInput: null, pendingQuestion: null, plan: null,
+      authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: iso(MIN) },
+      lastTurn: { startedAt: (now - 2 * MIN) * 1_000, endedAt: (now - MIN) * 1_000 },
+    } as unknown as FileEntry)) : [];
     const scoped = OVERVIEW_EMPTY
       ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
+      : ORCH_WALK
+      ? { files: seatOnly, projectCatalog: [{ project: PROJECT, conversations: 1, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      : ORCH_FIRST
+      ? { files: [], projectCatalog: [{ project: PROJECT, conversations: 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].map((project) => {
@@ -1250,7 +1657,47 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths, focusedPath: body.focusedPath ?? null });
     return json({ ok: true });
   }
-  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY ? [] : tasks });
+  /* #2187 §6: the project's merge setting, as the settings route answers it. */
+  if (url.pathname === "/api/projects/settings") {
+    if (method === "PUT") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown; bridgeReports?: unknown };
+      evidence.settingWrites.push(body);
+      if (typeof body.mergeOnReview === "boolean") MERGE_SETTING.enabled = body.mergeOnReview;
+      if (typeof body.bridgeReports === "boolean") BRIDGE_SETTING.enabled = body.bridgeReports;
+    }
+    return json({
+      ok: true,
+      project: PROJECT,
+      mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
+      bridgeReports: { enabled: BRIDGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
+      github: "acme/atlas",
+    });
+  }
+  if (url.pathname === "/api/orchestrator/reports") {
+    const known = new Map<string, "task" | "pipeline">([
+      ...tasks.map((task) => [task.id, "task"] as const),
+      ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
+    ]);
+    /* A seat created a moment ago (the walk's scene) has filed nothing yet. */
+    return json(reportLogFixturePage(url, { project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY || ORCH_WALK }));
+  }
+  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST || ORCH_WALK ? [] : tasks });
+  if (ORCH_WALK && url.pathname === "/api/onboarding") {
+    const existing = params.get("install") === "existing";
+    const stored = sessionStorage.getItem("evidence-walk");
+    const marker = {
+      schemaVersion: 1, completedAt: existing ? null : iso(2 * MIN), dismissedAt: existing ? iso(2 * MIN) : null, reason: existing ? "existing-install" : null,
+      steps: {}, lastHealth: null, walk: stored === "done" || stored === "skipped" ? stored : null,
+    };
+    if (method === "PUT") {
+      const patch = JSON.parse(String(init?.body ?? "{}")) as { walk?: string };
+      if (patch.walk) sessionStorage.setItem("evidence-walk", patch.walk);
+      const writes = JSON.parse(sessionStorage.getItem("evidence-walk-writes") ?? "[]") as unknown[];
+      sessionStorage.setItem("evidence-walk-writes", JSON.stringify([...writes, patch]));
+      return json({ marker: { ...marker, walk: patch.walk ?? marker.walk } });
+    }
+    return json({ marker, seatTickCheckMinutes: 10 });
+  }
   if (url.pathname === "/api/tasks" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     evidence.taskCreates.push(body);
@@ -1261,7 +1708,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* A draft pane's directory suggestions (K9a): the fixture's one checkout. */
   if (url.pathname === "/api/spawn" && method === "GET") return json({ dirs: ["/repo"], cwd: null });
-  if (url.pathname.startsWith("/api/tasks/") && method === "PATCH") {
+  if (url.pathname.startsWith("/api/tasks/") && !url.pathname.endsWith("/assignment") && method === "PATCH") {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     evidence.taskPatches.push({ id, body });
@@ -1324,6 +1771,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const current = tasks[index]!;
     if (method === "POST") {
       const next = { ...current, assignments: [...current.assignments, { path: String(body.path), panePid: null, state: "handoff", error: null, at: new Date().toISOString() }], revision: REV(revision++) } as BoardTask;
+      tasks[index] = next;
+      return json({ ok: true, task: next });
+    }
+    /* «Launch did not start» dismissed: the row is kept as failed, and an
+       unnamed launch placeholder with nothing else on it is done. */
+    if (method === "PATCH") {
+      const assignments = current.assignments.map((assignment) => (assignment.launchId === body.launchId
+        ? { ...assignment, state: "failed" as const, error: "launch did not start (dismissed)", at: new Date().toISOString() }
+        : assignment));
+      const settled = current.origin?.refinement === "pending" && assignments.every((assignment) => assignment.state === "failed");
+      const next = { ...current, assignments, ...(settled ? { status: "done" as const } : {}), revision: REV(revision++) } as BoardTask;
       tasks[index] = next;
       return json({ ok: true, task: next });
     }
@@ -1412,6 +1870,20 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       } else if (body.action === "retry-stage" || body.action === "skip-stage") {
         if (record.state !== "needs_decision") return json({ error: "pipeline does not have a stage awaiting a decision" }, 409);
         record.state = "running";
+      } else if (body.action === "retry-merge") {
+        if (record.state !== "completed" || record.merge?.state !== "blocked") return json({ error: "only a stopped merge can be tried again" }, 409);
+        record.merge = { ...record.merge, state: "queued", attempts: record.merge.attempts + 1, reason: null, blockedAt: null };
+      } else if (body.action === "link-task") {
+        /* #2187 §5.1: an upsert; `finishes` sets or clears the flag. */
+        const taskId = String(body.taskId ?? "");
+        if (!record.taskIds.includes(taskId)) record.taskIds = [...record.taskIds, taskId];
+        if (body.finishes !== undefined) {
+          const others = (record.finishesTaskIds ?? []).filter((entry) => entry !== taskId);
+          record.finishesTaskIds = body.finishes === true ? [...others, taskId] : others;
+        }
+      } else if (body.action === "dismiss") {
+        record.dismissedAt = new Date().toISOString();
+        record.dismissedBy = { kind: "operator" };
       } else if (body.action === "close") {
         record.state = "closed";
       } else {
@@ -1486,6 +1958,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
+  if (url.pathname === "/api/orchestrator/seat" && NO_SEAT) {
+    evidence.seatReads += 1;
+    const all = { conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } };
+    if (url.searchParams.get("scope") === "all") return json({ all });
+    return json({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTask: null, all });
+  }
   if (url.pathname === "/api/orchestrator/seat") {
     evidence.seatReads += 1;
     return json({

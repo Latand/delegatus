@@ -9,11 +9,17 @@ import type { Pipeline, PipelineFailEdgeExhaustion, PipelineStage } from "@/lib/
 
 import { setPipelineEdge, stageAttempts, stageChipLabel, stageFailEdgeFrozen } from "./pipelineModel";
 
+/** What a spent budget does, as the board offers it (#2187 §3.3): the fix
+    stage always takes the last findings, and the choice is whether the lane
+    then goes on or waits for the operator. `park` stays readable, not offered. */
+const EXHAUSTION_CHOICES = ["advance", "stop-after-fix"] as const satisfies readonly PipelineFailEdgeExhaustion[];
+
 /**
  * Keyboard/mobile-safe edge editing (#353): the stage config card's "Connect"
  * pickers rewire the stage's pass edge (direct links, merges — the server
  * validates acyclicity) and fail edge (cycles, with a bounded round budget and
- * what a spent budget does: hand on and advance, or park, #1868).
+ * what a spent budget does: fix once more and go on, or fix and wait for the
+ * operator, #1868, #2187).
  * Frozen edges — a pass edge on a stage that already ran, a fail edge already
  * traversed — render as disabled with an explanation, mirroring the API's
  * evidence-freeze guards so the control never fires a PATCH the server rejects.
@@ -46,6 +52,7 @@ export function StageEdgeControls({
     setError(await setPipelineEdge(pipeline, stage.id, edge, to, maxRounds, onExhausted));
     setBusy(false);
   };
+  const exhaustion: PipelineFailEdgeExhaustion = stage.onFail?.onExhausted ?? "advance";
   const fieldLabel = "text-caption font-semibold text-muted";
   const selectClass = "w-full";
 
@@ -108,17 +115,23 @@ export function StageEdgeControls({
           </label>
         ) : null}
         {stage.onFail ? (
-          <label className="flex min-w-[140px] flex-1 flex-col gap-1">
+          /* Its own row at 210 px or more (#2187 §3.3): beside the other edge
+             fields the Ukrainian option wrapped inside a 170 px select. */
+          <label className="flex min-w-[210px] basis-full flex-col gap-1" data-edge-exhausted>
             <span className={fieldLabel}>{t("pipelineSlot.failEdgeExhausted")}</span>
             <Select
               className={selectClass}
-              value={stage.onFail.onExhausted ?? "advance"}
+              value={exhaustion}
               disabled={disabled || busy || terminal || failFrozen}
               onChange={(event) => void apply("fail", stage.onFail!.to, stage.onFail!.maxRounds, event.target.value as PipelineFailEdgeExhaustion)}
             >
-              <option value="advance">{t("pipelineSlot.failEdgeExhaustedAdvance")}</option>
-              <option value="park">{t("pipelineSlot.failEdgeExhaustedPark")}</option>
+              {EXHAUSTION_CHOICES.map((choice) => (
+                <option key={choice} value={choice} title={t(`pipelineSlot.failEdgeExhaustedHint.${choice}`)}>{t(`pipelineSlot.failEdgeExhaustedOption.${choice}`)}</option>
+              ))}
+              {/* A stored `park` edge reads as what it is; the board no longer offers it. */}
+              {exhaustion === "park" ? <option value="park" disabled>{t("pipelineSlot.failEdgeExhaustedOption.park")}</option> : null}
             </Select>
+            <span className="text-caption font-medium text-muted" data-edge-exhausted-hint={exhaustion}>{t(`pipelineSlot.failEdgeExhaustedHint.${exhaustion}`)}</span>
           </label>
         ) : null}
       </div>

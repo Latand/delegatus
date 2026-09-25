@@ -94,6 +94,7 @@ mock.module("@/hooks/useLogTail", () => ({
 }));
 
 const { OrchestratorPanel, UNBOUND_STATUS_RETRY_MS } = await import("./OrchestratorPanel");
+const { SEAT_CONFIRM_TTL_MS, requestOrchestratorDraft } = await import("./draftPrefill");
 const { SEAT_BIND_TIMEOUT_MS } = await import("./seatState");
 const { resetMessageProvenanceCacheForTests } = await import("../feed/messageProvenance");
 const { SEAT_POLL_MS, resetOrchestratorSeatCacheForTests } = await import("./useOrchestratorSeat");
@@ -422,6 +423,20 @@ function rulesSummary(host: HTMLElement): string {
   return mandateRules(host).querySelector("summary")?.textContent ?? "";
 }
 
+/** The create draft keeps its pickers behind the Runs on row's Change (#2166). */
+function openRunsOn(host: HTMLElement): void {
+  const change = host.querySelector("[data-orchestrator-runs-on-change]") as HTMLButtonElement;
+  if (change.getAttribute("aria-expanded") !== "true") flushSync(() => change.click());
+}
+
+/** What the draft SAYS, without the mandate's own text: the draft carries
+    it folded, and the seat is its reader. */
+function draftWords(host: HTMLElement): string {
+  const form = host.querySelector("[data-orchestrator-draft]")!.cloneNode(true) as HTMLElement;
+  form.querySelectorAll("textarea").forEach((field) => field.remove());
+  return form.textContent ?? "";
+}
+
 /** Typing, the way this repo's DOM tests type: happy-dom does not carry React's
     value tracker, so the field's own onChange is invoked with the new value. */
 function type(field: HTMLTextAreaElement, value: string): void {
@@ -436,8 +451,6 @@ test("with no orchestrator the panel is a draft prefilled with the default manda
   flushSync(() => undefined);
 
   expect(panelState(host)).toBe("draft");
-  expect(host.querySelector("[data-viewer-mcp-status]")?.textContent).toContain("scripts/install-mcp.sh");
-  expect(host.querySelector("[data-viewer-mcp-status]")?.textContent).toContain("claude mcp add viewer");
   const mandate = host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
   expect(mandate.value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
   /* Cwd is the project's own root, stated and never typed. */
@@ -464,13 +477,100 @@ test("with no orchestrator the panel is a draft prefilled with the default manda
   expect(seatPosts[0]!.promptVersion).toBeUndefined();
 });
 
-test("the orchestrator draft confirms a resolved Viewer MCP registration", async () => {
-  seatStatus = { seat: null, pending: null, exists: true, viewerMcpRegistered: true };
+test("a draft on a signed-out account says so and its primary opens that account's sign-in instead of designating (#2170)", async () => {
+  const saved = accounts.claude;
+  accounts.claude = { active: "default", accounts: [{ id: "default", label: "Main", authPresent: false }] };
+  const requests: unknown[] = [];
+  const listen = (event: Event) => requests.push((event as CustomEvent).detail);
+  window.addEventListener("llv:open-accounts", listen);
+  try {
+    const host = mount();
+    await settle();
+    flushSync(() => undefined);
+
+    expect(panelState(host)).toBe("draft");
+    expect(host.querySelector("[data-orchestrator-sign-in-first]")?.textContent).toBe("Main is signed out of Claude.");
+    expect(confirmButton(host).textContent).toBe("Sign in to Claude first");
+    flushSync(() => confirmButton(host).click());
+    await settle();
+    expect(seatPosts).toEqual([]);
+    expect(spawnPosts).toBe(0);
+    expect(requests).toEqual([{ engine: "claude", accountId: "default" }]);
+  } finally {
+    window.removeEventListener("llv:open-accounts", listen);
+    accounts.claude = saved;
+  }
+});
+
+/* #2166 §2.2: the setup guide's Create is one press. The guide closes over the
+   Overview and asks for a confirm before this draft exists; the draft mounts
+   afterwards, waits for its seat read and its account options, and presses
+   its own Confirm exactly once, on the account the guide chose. */
+test("a confirm the guide asked for before the draft mounted designates once, on the requested account", async () => {
+  requestOrchestratorDraft({ project: "atlas", launch: { engine: "claude", model: "opus", effort: "high", account: "spare" }, confirm: true });
   const host = mount();
+  expect(seatPosts).toEqual([]);
+  await settle();
+  flushSync(() => undefined);
   await settle();
 
-  expect(host.querySelector("[data-viewer-mcp-status]")?.textContent).toContain("viewer MCP: registered ✓");
+  expect(seatPosts).toHaveLength(1);
+  expect(seatPosts[0]).toMatchObject({ project: "atlas", engine: "claude", model: "opus", effort: "high", accountId: "spare", mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
+  /* Taken once: a remount, a later render or the same project's next visit sends nothing more. */
+  remount();
+  await settle();
+  flushSync(() => undefined);
+  await settle();
+  expect(seatPosts).toHaveLength(1);
+  void host;
 });
+
+test("a requested account that turns out signed out sends no designation and shows its sign-in", async () => {
+  const saved = accounts.claude;
+  accounts.claude = { active: "primary", accounts: [{ id: "primary", label: "primary", authPresent: true }, { id: "spare", label: "Spare", authPresent: false }] };
+  try {
+    requestOrchestratorDraft({ project: "atlas", launch: { engine: "claude", model: "opus", effort: "high", account: "spare" }, confirm: true });
+    const host = mount();
+    await settle();
+    flushSync(() => undefined);
+    await settle();
+    expect(seatPosts).toEqual([]);
+    expect(confirmButton(host).textContent).toBe("Sign in to Claude first");
+  } finally {
+    accounts.claude = saved;
+  }
+});
+
+test("a confirm older than its window sends nothing", async () => {
+  const realNow = Date.now;
+  requestOrchestratorDraft({ project: "atlas", launch: { engine: "claude", model: "opus", effort: "high", account: "primary" }, confirm: true });
+  Date.now = () => realNow() + SEAT_CONFIRM_TTL_MS + 1_000;
+  try {
+    const host = mount();
+    await settle();
+    flushSync(() => undefined);
+    await settle();
+    expect(panelState(host)).toBe("draft");
+    expect(seatPosts).toEqual([]);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+/* #2166 §2.5: both engines inject the `viewer` server into every spawn, so
+   the draft asks nobody to register it, whatever the registration says. */
+for (const registered of [false, true]) {
+  test(`the draft carries no MCP line (registration ${registered ? "found" : "missing"})`, async () => {
+    seatStatus = { seat: null, pending: null, exists: true, viewerMcpRegistered: registered };
+    const host = mount();
+    await settle();
+    flushSync(() => undefined);
+
+    expect(panelState(host)).toBe("draft");
+    expect(host.querySelector("[data-viewer-mcp-status]")).toBeNull();
+    expect(draftWords(host)).not.toContain("MCP");
+  });
+}
 
 test("an unedited mandate records the approved prompt version", async () => {
   const host = mount();
@@ -487,19 +587,30 @@ test("the draft opens on the plain intro with the built-in rules COLLAPSED — a
   await settle();
   flushSync(() => undefined);
 
-  /* What an operator meets first: what they say to it, what it does with that,
-     and that it acts on its own — never 58 lines of rules (#1163). */
-  const intro = host.querySelector("[data-orchestrator-intro]")?.textContent ?? "";
-  expect(intro).toContain("You talk to it like a colleague");
-  expect(intro).toContain("merges on APPROVE");
-  expect(intro).toContain("it deploys on its own");
-  /* Copy, not a gate: it says when one agent is the better answer, above a
-     button that stays exactly as pressable as it was. */
-  expect(host.querySelector("[data-orchestrator-one-task]")?.textContent).toContain("One task?");
+  /* What an operator meets first: what it is in one sentence and what they
+     would write to it — never 58 lines of rules (#1163), and no jargon (#2166). */
+  expect(host.querySelector("h2")?.textContent).toBe("Create the orchestrator for Atlas");
+  expect(host.querySelector("[data-orchestrator-intro]")?.textContent).toBe("The orchestrator takes your requests, opens the tasks, runs the agents and reviews, and reports back. You watch and give it work.");
+  expect(host.querySelector("[data-orchestrator-example]")?.textContent).toContain("add a delete command to todo.py");
+  /* One Runs on row, the pickers behind its Change, the directory at its end. */
+  expect(host.querySelector("[data-orchestrator-runs-on-value]")?.textContent).toBe("Claude · Opus 5.5 · high effort · account primary");
+  expect(host.querySelector('[role="radio"]')).toBeNull();
+  expect(host.querySelector("[data-orchestrator-cwd]")?.textContent).toBe("Works in /repos/atlas");
+  openRunsOn(host);
+  expect(host.querySelector('[role="radio"]')).not.toBeNull();
+  /* The manual way, said in words under a button that stays exactly as
+     pressable as it was. */
+  expect(host.querySelector("[data-orchestrator-by-hand]")?.textContent).toBe("Rather do one thing by hand? + in the top bar adds a task or starts a single agent.");
+  expect(confirmButton(host).textContent).toBe("Create the orchestrator");
   expect(confirmButton(host).disabled).toBe(false);
 
+  /* #2166 acceptance: none of the operator's-runbook words. */
+  const words = draftWords(host);
+  expect(words).not.toMatch(/#\d/);
+  for (const jargon of ["MCP", "deploy", "APPROVE", "lanes"]) expect(words).not.toContain(jargon);
+
   expect(mandateRules(host).hasAttribute("open")).toBe(false);
-  expect(rulesSummary(host)).toBe(`Built-in default mandate v${ORCHESTRATOR_PROMPT_VERSION} (edit)`);
+  expect(rulesSummary(host)).toBe(`Its instructions (v${ORCHESTRATOR_PROMPT_VERSION}) (edit)`);
 
   /* Folded away and delivered verbatim: the disclosure hides the text, it never
      edits it (PRD #976 decision 3). */
@@ -557,7 +668,7 @@ test("an edited mandate expands the rules, drops the version claim, and comes ba
   expect(mandateRules(next).hasAttribute("open")).toBe(true);
 });
 
-test("a designation that fails expands the rules over the error — the text to fix is never behind a click", async () => {
+test("a designation that fails leaves the rules folded under the error (#2166)", async () => {
   seatResponses = [{ status: 400, body: { error: "orchestrator cwd could not be resolved", code: "cwd_unresolved" } }];
   const host = mount();
   await settle();
@@ -568,40 +679,13 @@ test("a designation that fails expands the rules over the error — the text to 
   flushSync(() => undefined);
 
   expect(panelState(host)).toBe("intent-error");
-  expect(mandateRules(host).hasAttribute("open")).toBe(true);
+  expect(host.querySelector("[data-orchestrator-intent-error]")?.textContent).toContain("orchestrator cwd could not be resolved");
+  /* The error says what went wrong; sixty lines of rules nobody wrote do not
+     open over the button that retries. */
+  expect(mandateRules(host).hasAttribute("open")).toBe(false);
+  expect(confirmButton(host).textContent).toBe("Try again");
   expect((host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
 });
-
-test("a disclosure folded back by hand re-opens when a durable error reaches the mounted draft", async () => {
-  const host = mount();
-  await settle();
-
-  /* Two separate reasons to be open, in the order that used to lose the second
-     one. The edit opens it... */
-  type(host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement, "You run Atlas. Talk to me here.");
-  await settle();
-  flushSync(() => undefined);
-  expect(mandateRules(host).hasAttribute("open")).toBe(true);
-
-  /* ...the operator folds it back, which is theirs to do... */
-  (mandateRules(host) as HTMLDetailsElement).open = false;
-  expect(mandateRules(host).hasAttribute("open")).toBe(false);
-
-  /* ...and a designation recorded as terminally failed arrives on the POLL, so
-     this draft becomes the error surface without a reload or a remount to
-     reset the disclosure — the one path where the second reason has to speak
-     for itself. */
-  seatStatus = { seat: null, pending: pendingSeat("spawn was rejected with HTTP status 500"), exists: true };
-  await settle();
-  await new Promise((resolve) => setTimeout(resolve, SEAT_POLL_MS + 5));
-  await settle();
-  flushSync(() => undefined);
-
-  expect(panelState(host)).toBe("intent-error");
-  /* The text the error is about is in view, not behind a click. */
-  expect(mandateRules(host).hasAttribute("open")).toBe(true);
-  expect((host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe("You run Atlas. Talk to me here.");
-}, SEAT_POLL_MS + 4_000);
 
 test("a double-click designates ONCE and a retry after a lost reply replays the same key", async () => {
   seatResponses = [{ status: 0, body: null, throws: true }];
@@ -693,6 +777,7 @@ test("switching to Codex offers the codex account catalog and launches on it", a
   await settle();
   flushSync(() => undefined);
 
+  openRunsOn(host);
   const codex = [...host.querySelectorAll('[role="radio"]')].find((node) => node.textContent === "Codex") as HTMLButtonElement;
   expect(codex).toBeDefined();
   flushSync(() => codex.click());
@@ -1108,7 +1193,7 @@ test("Rotate over a STALE seat opens the SAME draft on the CURRENT default manda
      default by default. The heading names what the text IS. */
   const mandate = host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
   expect(mandate.value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
-  expect(rulesSummary(host)).toBe(`Built-in default mandate v${ORCHESTRATOR_PROMPT_VERSION} (edit)`);
+  expect(rulesSummary(host)).toBe(`Its instructions (v${ORCHESTRATOR_PROMPT_VERSION}) (edit)`);
   const stale = host.querySelector("[data-orchestrator-mandate-stale]") as HTMLElement;
   expect(stale.getAttribute("data-orchestrator-mandate-stale")).toBe("3");
   expect(stale.textContent).toContain(`based on v3; the current default is v${ORCHESTRATOR_PROMPT_VERSION}`);
@@ -1602,6 +1687,7 @@ test.each([
 ] as const)("%s/%s to %s submits the displayed effort", async (from, effort, to) => {
   const host = mount();
   await settle();
+  openRunsOn(host);
   const codex = [...host.querySelectorAll('[role="radio"]')].find((node) => node.textContent === "Codex") as HTMLButtonElement;
   flushSync(() => codex.click());
   const modelSelect = host.querySelector('select[aria-label="Agent model"]') as HTMLSelectElement;

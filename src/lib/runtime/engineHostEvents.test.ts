@@ -31,6 +31,35 @@ describe("projectEngineHostEvent", () => {
     });
   });
 
+  test("projects a Claude safety-check permission with its command and the engine's reason (#2215)", () => {
+    const projected = projectEngineHostEvent("conversation_one", "claude:session-one", {
+      kind: "attention",
+      id: "request-1",
+      method: "can_use_tool",
+      attention: {
+        subtype: "can_use_tool",
+        tool_name: "Bash",
+        input: { command: "rm -rf $R/*.json", description: "Clear the scratch tree" },
+        decision_reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json",
+        decision_reason_type: "safetyCheck",
+        classifier_approvable: false,
+      },
+      seq: 3,
+    });
+    expect(projected).toMatchObject({
+      kind: "attention",
+      payload: {
+        kind: "permission",
+        request: {
+          tool: "Bash",
+          command: "rm -rf $R/*.json",
+          detail: "Dangerous rm operation on possibly-empty variable path: $R/*.json",
+          protocol: { engine: "claude", method: "can_use_tool" },
+        },
+      },
+    });
+  });
+
   test("projects Claude AskUserQuestion into a question card", () => {
     const projected = projectEngineHostEvent("conversation_two", "claude:session-one", {
       kind: "attention",

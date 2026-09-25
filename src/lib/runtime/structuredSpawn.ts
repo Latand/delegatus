@@ -131,7 +131,16 @@ function githubConfigDirectory(sourceEnv: NodeJS.ProcessEnv): string {
 /** Materialize the tool/network boundary. An explicit restricted pipeline
     profile uses workspace-write for either repository policy; settlement owns
     the read-only declared-output fence. A legacy boolean preserves the old
-    read-only host profile for non-pipeline callers and stored sessions. */
+    read-only host profile for non-pipeline callers and stored sessions.
+
+    Every pipeline stage (an explicit profile, either sandbox) runs with
+    `TMPDIR` in its own scratch directory under `statePath("scratch")`, on the
+    disk the state lives on, and the directory goes with the host (#1957). A
+    reviewer's export of the head it reviews, about a gigabyte with its
+    dependencies, used to land in the shared temp filesystem and stay there
+    until the quota ran out. A full-access Claude stage keeps its
+    `CLAUDE_CODE_TMPDIR` on the temp root it had, because that is where the
+    Viewer finds the stage's background tasks. */
 export function materializeStructuredHostAccess(
   policy: StructuredHostAccessPolicy,
   sourceEnv: NodeJS.ProcessEnv,
@@ -144,7 +153,7 @@ export function materializeStructuredHostAccess(
   };
   const explicitAxes = typeof policy !== "boolean";
   const restricted = explicitAxes ? policy.sandbox === "restricted" : policy;
-  if (!restricted) {
+  if (!restricted && !explicitAxes) {
     return {
       env: baseEnv,
       codex: { sandbox: "danger-full-access" },
@@ -156,18 +165,34 @@ export function materializeStructuredHostAccess(
 
   const resolvedScratchParent = scratchParent ?? statePath("scratch");
   fs.mkdirSync(resolvedScratchParent, { recursive: true, mode: 0o700 });
-  const scratchDirectory = fs.mkdtempSync(path.join(resolvedScratchParent, "llv-read-only-stage-"));
+  const scratchDirectory = fs.mkdtempSync(path.join(resolvedScratchParent, restricted ? "llv-read-only-stage-" : "llv-stage-"));
   try {
     fs.chmodSync(scratchDirectory, 0o700);
     const temporaryDirectory = path.join(scratchDirectory, "tmp");
     fs.mkdirSync(temporaryDirectory, { mode: 0o700 });
+    const cleanup = () => fs.rmSync(scratchDirectory, { recursive: true, force: true });
+    if (!restricted) {
+      return {
+        env: {
+          ...baseEnv,
+          TMPDIR: temporaryDirectory,
+          CLAUDE_CODE_TMPDIR: sourceEnv.CLAUDE_CODE_TMPDIR || sourceEnv.TMPDIR || os.tmpdir(),
+        },
+        codex: { sandbox: "danger-full-access" },
+        host: {
+          forwardGitHubConfig: true,
+          releaseCleanup: cleanup,
+        },
+        scratchDirectory,
+        cleanup,
+      };
+    }
     const codex = explicitAxes
       ? { sandbox: "workspace-write" }
       : {
           permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
           permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write"}}`,
         };
-    const cleanup = () => fs.rmSync(scratchDirectory, { recursive: true, force: true });
     return {
       env: {
         ...baseEnv,

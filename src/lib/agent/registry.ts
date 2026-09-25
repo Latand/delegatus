@@ -4,7 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
-import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import {
   captureProcessIdentity,
@@ -41,7 +41,7 @@ import {
   type ViewerConversationId,
 } from "@/lib/accounts/migration/contracts";
 import {
-  COMMITTED_MIGRATION_DELIVERY_REASON,
+  NOT_CARRIED_DELIVERY_REASONS,
   MIGRATION_DELIVERY_CANCELLATION_PREFIX,
   migrationIntentCanEnroll,
   ROLLED_BACK_MIGRATION_DELIVERY_REASON,
@@ -92,8 +92,10 @@ import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
 import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
+import { normalizePendingPermissions, type PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
+import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
-import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
+import { admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
 
@@ -119,6 +121,10 @@ export interface StructuredHostColumns {
   writerClaimEpoch: number;
   activeTurnRef: string | null;
   pendingAttention: string[];
+  /** The pending attentions that are tool permission requests (#2215). */
+  pendingPermissions?: PendingPermissionRequest[];
+  /** The provider retry the engine reported for the open turn (#2215). */
+  providerRetry?: ProviderRetryEvidence | null;
   activeFlags: string[];
   /** Writer epoch that announced a release hand-off. Incumbent state writes at
       this epoch retain the marker; only a later claimant can complete it. */
@@ -1302,6 +1308,122 @@ function queueAbandonedMigrationCleanup(
   };
 }
 
+/**
+ * The order in which a conversation's deliveries were admitted (#1709). Rows
+ * that carry `admissionSeq` order by it, which the reservation transaction
+ * assigns, so two admissions in the same millisecond keep their order. A row
+ * without one was written before the sequence existed: it orders before every
+ * sequenced row, and among such rows by `createdAt`, then id, as before.
+ */
+export function compareDeliveryAdmission(
+  left: Pick<HeldDelivery, "admissionSeq" | "createdAt" | "id">,
+  right: Pick<HeldDelivery, "admissionSeq" | "createdAt" | "id">,
+): number {
+  const leftSeq = left.admissionSeq;
+  const rightSeq = right.admissionSeq;
+  if ((leftSeq === undefined) !== (rightSeq === undefined)) return leftSeq === undefined ? -1 : 1;
+  if (leftSeq !== undefined && rightSeq !== undefined && leftSeq !== rightSeq) return leftSeq - rightSeq;
+  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+}
+
+/** The next admission sequence of a canonical conversation, inside the reservation's own transaction. */
+function nextAdmissionSeq(file: RegistryFile, canonicalId: ViewerConversationId): number {
+  let highest = 0;
+  for (const delivery of Object.values(file.heldDeliveries)) {
+    if (typeof delivery.admissionSeq !== "number" || delivery.admissionSeq <= highest) continue;
+    if (resolveConversationAlias(file, delivery.conversationId) === canonicalId) highest = delivery.admissionSeq;
+  }
+  return highest + 1;
+}
+
+type CommitDeliveryDecision = "carry" | "leave" | keyof typeof NOT_CARRIED_DELIVERY_REASONS;
+
+/**
+ * What a committing switch does with one pending delivery of its conversation (#1709).
+ *
+ * - `carry`: provably unsent and provably this switch's to carry. Unattempted
+ *   (no attempt, no materialized artifact, no retry attempt), exactly this
+ *   conversation, held by the committing migration or assigned to the
+ *   predecessor generation, with an owner row that has no outcome, and none of
+ *   the exclusions below.
+ * - an exclusion (its reason key): provably this switch's, but not delivered
+ *   automatically. `attempted` may have reached the previous account;
+ *   `turn` answers the previous account's turn (a string `turnId` fence under
+ *   a policy other than interrupt-active, which the queue delivers only into
+ *   that turn); `inject` is injected context, which is never held across a
+ *   switch (#1560); `requestLocal` has attachment bytes only its client holds.
+ * - `leave`: nothing proves this switch owns it (another conversation's
+ *   identity, a foreign or unproven fence, an older generation, an owner row
+ *   missing or already settled). It stays exactly as it is.
+ */
+function commitDeliveryDecision(
+  file: RegistryFile,
+  conversation: RegistryConversation,
+  migration: ConversationMigration,
+  predecessor: NativeGeneration,
+  delivery: HeldDelivery,
+): CommitDeliveryDecision {
+  if (delivery.conversationId !== conversation.id || delivery.runtimeConversationId !== conversation.id) return "leave";
+  const owned = delivery.state === "held"
+    ? migrationHeldDelivery(file, conversation, delivery, migration)
+    : (delivery.state === "assigned" || delivery.state === "delivery-uncertain") && delivery.generationId === predecessor.id;
+  if (!owned) return "leave";
+  const owners = Object.entries(file.deliveryOperationOwners).filter(([, owner]) => owner.deliveryId === delivery.id);
+  const own = file.deliveryOperationOwners[delivery.command.operationId];
+  if (!own || own.deliveryId !== delivery.id) return "leave";
+  if (owners.some(([, owner]) => owner.terminalState !== null || owner.terminalDisposition !== null)) return "leave";
+  if (delivery.state === "delivery-uncertain"
+    || delivery.attempts > 0
+    || delivery.artifactPaths.length > 0
+    || owners.some(([operationId, owner]) => operationId !== delivery.command.operationId || owner.retryOfOperationId !== null)) {
+    return "attempted";
+  }
+  if (delivery.payloadKind !== "text" && delivery.payloadKind !== "runtime-images") return "requestLocal";
+  if (delivery.command.kind === "inject") return "inject";
+  if (typeof delivery.command.turnId === "string" && delivery.command.policy !== "interrupt-active") return "turn";
+  return "carry";
+}
+
+/**
+ * Settles a committing switch's pending deliveries in its own transaction (#1709):
+ * carried ones move to the successor with everything they carried and their
+ * admission order; excluded ones end failed with their payload kept, `lost`
+ * when never attempted (safe to send again) and `unverified` otherwise; the
+ * rest stay as they are.
+ */
+function settleDeliveriesAtCommit(
+  file: RegistryFile,
+  conversation: RegistryConversation,
+  migration: ConversationMigration,
+  predecessor: NativeGeneration,
+  successor: NativeGeneration,
+  committedAt: string,
+): void {
+  for (const delivery of Object.values(file.heldDeliveries)) {
+    if (delivery.state === "delivered" || delivery.state === "failed") continue;
+    const decision = commitDeliveryDecision(file, conversation, migration, predecessor, delivery);
+    if (decision === "leave") continue;
+    if (decision === "carry") {
+      delivery.state = "assigned";
+      delivery.fencedBy = null;
+      delivery.generationId = successor.id;
+      delivery.assignedAt = committedAt;
+      delivery.deliveredAt = null;
+      delivery.error = null;
+      syncDeliveryOperationOwnerState(file, delivery);
+      continue;
+    }
+    delivery.state = "failed";
+    delivery.fencedBy = null;
+    delivery.generationId = null;
+    delivery.assignedAt = null;
+    delivery.deliveredAt = null;
+    delivery.error = NOT_CARRIED_DELIVERY_REASONS[decision].slice(0, 240);
+    failInitialSpawnReceiptForDelivery(file, delivery);
+    syncDeliveryOperationOwnerState(file, delivery, decision === "attempted" ? "unverified" : "lost");
+  }
+}
+
 function terminalizeCancelledMigrationDeliveries(
   file: RegistryFile,
   conversation: RegistryConversation,
@@ -1800,6 +1922,18 @@ function normalizeGeneration(value: NativeGeneration, policy?: McpGrantPolicy): 
   };
 }
 
+function normalizeProviderRetry(value: unknown): ProviderRetryEvidence | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const retry = value as Partial<ProviderRetryEvidence>;
+  if (typeof retry.at !== "string" || typeof retry.retryAt !== "string") return null;
+  return {
+    at: retry.at,
+    retryAt: retry.retryAt,
+    status: typeof retry.status === "number" ? retry.status : null,
+    error: typeof retry.error === "string" ? retry.error : null,
+  };
+}
+
 function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   if (!value || typeof value !== "object") return null;
   const host = value as Partial<StructuredHostColumns>;
@@ -1830,6 +1964,10 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     activeFlags: Array.isArray(host.activeFlags)
       ? host.activeFlags.filter((item): item is string => typeof item === "string")
       : [],
+    ...(Array.isArray(host.pendingPermissions) && host.pendingPermissions.length > 0
+      ? { pendingPermissions: normalizePendingPermissions(host.pendingPermissions) }
+      : {}),
+    ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),
     ...(Number.isSafeInteger(host.releaseHandoffClaimEpoch) && (host.releaseHandoffClaimEpoch ?? -1) >= 0
       ? { releaseHandoffClaimEpoch: host.releaseHandoffClaimEpoch }
       : {}),
@@ -2204,6 +2342,7 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
     recoveryIntent: value.recoveryIntent === "reclaimed-host" ? value.recoveryIntent : null,
     state,
     fencedBy: state === "held" && typeof value.fencedBy === "string" ? value.fencedBy : null,
+    admissionSeq: Number.isSafeInteger(value.admissionSeq) && value.admissionSeq! > 0 ? value.admissionSeq : undefined,
     generationId: imagesCorrupt ? null : value.generationId ?? null,
     attempts: Number.isInteger(value.attempts) ? value.attempts : 0,
     assignedAt: imagesCorrupt ? null : value.assignedAt ?? null,
@@ -3999,6 +4138,9 @@ export class AgentRegistry {
     private readonly lockTiming: RegistryLockTiming = SYSTEM_LOCK_TIMING,
     storage: AgentRegistryStorageOptions = {},
   ) {
+    /* A registry a test run opens at the operator's own path — its JSON mirror
+       included, which never passes through the state database — is refused. */
+    assertNotOperatorStateUnderTest(path.dirname(path.resolve(filename)), "agent registry");
     /* Which store the PROCESS-WIDE registry opens is never guessed. A writer
        states its mode in the environment and publishes it; every other process
        — the MCP server above all, which Claude launches with an empty env —
@@ -6057,7 +6199,10 @@ export class AgentRegistry {
   }
 
   failSpawn(launchId: string, error: string): boolean {
-    return this.mutate((file) => {
+    /* A fresh launch that failed here leaves its task where it was (#2170). */
+    const failed: { receipt: SpawnReceipt | null } = { receipt: null };
+    const result = this.mutate((file) => {
+      failed.receipt = null;
       const receipt = file.receipts[launchId];
       if (!receipt || receipt.state === "completed" || receipt.state === "conflicted") return false;
       if (receipt.state === "failed") return true;
@@ -6079,8 +6224,11 @@ export class AgentRegistry {
          held or assigned attempts-zero initial delivery. Converge it in the
          same transaction instead of waiting for the reaper. */
       terminalizeFailedSpawnDeliveriesInFile(file);
+      if (receipt.state === "failed") failed.receipt = clone(receipt);
       return receipt.state === "failed";
     });
+    if (failed.receipt) settleFailedLaunch(failed.receipt);
+    return result;
   }
 
   /** Durably reconcile terminal launches and attempts-zero initial deliveries
@@ -6113,6 +6261,16 @@ export class AgentRegistry {
     launchId: string,
     error: string,
     options: { retainRegisteredHost?: boolean } = {},
+  ): StructuredSpawnFailureClaim {
+    const claim = this.failStructuredSpawnInFile(launchId, error, options);
+    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
+    return claim;
+  }
+
+  private failStructuredSpawnInFile(
+    launchId: string,
+    error: string,
+    options: { retainRegisteredHost?: boolean },
   ): StructuredSpawnFailureClaim {
     return this.mutate((file) => {
       const receipt = file.receipts[launchId];
@@ -8023,7 +8181,7 @@ export class AgentRegistry {
       );
       conversation.migration = { ...migration, phase: "committed", updatedAt: now() };
       conversation.updatedAt = now();
-      terminalizeCancelledMigrationDeliveries(file, conversation, COMMITTED_MIGRATION_DELIVERY_REASON);
+      settleDeliveriesAtCommit(file, conversation, migration, predecessor, generation, committedAt);
       file.conversationRevision[conversation.engine] += 1;
       file.engineRouting[conversation.engine].revision += 1;
       return clone(conversation);
@@ -8266,6 +8424,7 @@ export class AgentRegistry {
         command: canonicalHeldDeliveryCommand(commandInput, deliveryId),
         requestDigest,
         recoveryIntent,
+        admissionSeq: nextAdmissionSeq(file, canonicalId),
         state: "held",
         generationId: null,
         attempts: 0,
@@ -8421,7 +8580,7 @@ export class AgentRegistry {
     const canonicalId = resolveConversationAlias(snapshot, conversationId);
     return clone(Object.values(snapshot.heldDeliveries)
       .filter((item) => item.conversationId === canonicalId && item.state !== "delivered")
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)));
+      .sort(compareDeliveryAdmission));
   }
 
   terminalizeHeldDelivery(id: string, reason: string): HeldDelivery {
@@ -8493,6 +8652,15 @@ export class AgentRegistry {
       const migrationBlocksDelivery = conversation?.migration
         && ["waiting-turn", "requested", "preparing", "successor-starting", "verifying"].includes(conversation.migration.phase);
       if (migrationBlocksDelivery || conversation?.generations.at(-1)?.id !== generationId) return null;
+      /* #1709: never ahead of an earlier admission still waiting for this generation, so a send made after a
+         switch commits cannot overtake what the switch carried. Every actuator claims here, and its claim and
+         journal admission run inside `withConversationActuation`, so an earlier claim is admitted first. */
+      const canonicalId = resolveConversationAlias(file, delivery.conversationId);
+      if (Object.values(file.heldDeliveries).some((other) => other.id !== delivery.id
+        && other.state === "assigned"
+        && other.generationId === generationId
+        && resolveConversationAlias(file, other.conversationId) === canonicalId
+        && compareDeliveryAdmission(other, delivery) < 0)) return null;
       delivery.state = "delivery-uncertain";
       delivery.attempts += 1;
       delivery.error = "delivery started; recovery requires an explicit outcome";

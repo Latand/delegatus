@@ -2,6 +2,7 @@ import { isNonblockingCodexQuestion } from "./codexAttention";
 import { runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
 import type { RuntimeEvent } from "./engineHost";
 import { boundedToolArgs } from "./liveTurn";
+import { isPermissionRequest, permissionCommandExcerpt } from "./permissionRequests";
 import { terminalVoiceResponse } from "./voiceDelivery";
 
 type JsonObject = Record<string, unknown>;
@@ -231,7 +232,11 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
       ? "question"
       : "permission";
   const request: RuntimeAttentionRequest = {};
-  const command = text(source.command, record(source.item).command);
+  /* A Claude permission request names its command inside the tool input, and
+     says why it asked in `decision_reason` (#2215). */
+  const claudePermission = engine === "claude" && isPermissionRequest(source);
+  const command = text(source.command, record(source.item).command)
+    ?? (claudePermission ? permissionCommandExcerpt(input) : null);
   if (command) request.command = clipped(command, 4 * 1024);
   if (tool) request.tool = clipped(tool, 256);
   const projectedQuestions = questions
@@ -242,7 +247,7 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
   if (projectedQuestions.length > 0) request.questions = projectedQuestions;
   const title = text(source.title);
   if (title) request.title = clipped(title, 256);
-  const detail = text(source.detail, source.message);
+  const detail = text(source.detail, source.message, claudePermission ? source.decision_reason : null);
   if (detail) request.detail = clipped(detail, 2 * 1024);
   const firstQuestion = record(questions[0]);
   const questionIds = questions.map((candidate) => text(record(candidate).id)).filter((id): id is string => id !== null);

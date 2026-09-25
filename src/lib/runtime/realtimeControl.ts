@@ -1,3 +1,4 @@
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { redactCodexHostDiagnostic } from "./codexAppServerHost";
@@ -64,10 +65,13 @@ export type RealtimeControlResult = {
 
 interface RealtimeControlDependencies {
   recordOperatorActivity: typeof recordDirectOperatorWakatimeActivity;
+  /** The activity dashboard's request ledger; never throws. */
+  recordOperatorRequest?: typeof recordOperatorRequest;
 }
 
 const REALTIME_CONTROL_DEPENDENCIES: RealtimeControlDependencies = {
   recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+  recordOperatorRequest,
 };
 
 function realtimeHost(value: unknown): RealtimeHost | null {
@@ -193,6 +197,9 @@ export async function executeRealtimeControl(
     operator: boolean;
     /** Which persona a `start` bootstraps (#1615). Omitted is `modality`. */
     personaVariant?: VoicePersonaVariant;
+    /** The request's User-Agent: the surface a spoken request is recorded
+        under in the activity ledger. */
+    userAgent?: string | null;
   },
   dependencies: RealtimeControlDependencies = REALTIME_CONTROL_DEPENDENCIES,
 ): Promise<RealtimeControlResult> {
@@ -416,6 +423,11 @@ export async function executeRealtimeControl(
       } catch {
         return { status: 503, body: { error: "direct operator activity could not be recorded" } };
       }
+      const userAgent = authority.userAgent ?? null;
+      dependencies.recordOperatorRequest?.(
+        { headers: new Headers(userAgent ? { "user-agent": userAgent } : {}) },
+        { kind: "voice", idempotencyKey: `realtime:${operatorEventId}`, conversationId },
+      );
       return { status: 200, body: { ok: true, operatorEventId } };
     }
     if (request.action === "appendSpeech") {

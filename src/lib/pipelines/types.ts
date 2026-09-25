@@ -66,14 +66,18 @@ export type PipelineStageKind = "run" | "review-loop";
 export type PipelineEdgeKind = "pass" | "fail";
 
 /** What a fail edge does once its `maxRounds` reviewed rounds are spent
-    (#1868). `advance` (the default, and every edge without the field) reads
-    `maxRounds` as the number of reviews: the last review's findings go to the
-    target once more and, when that fix passes, the lane follows the source's
-    own pass edge without re-running the source. `park` keeps the older count,
-    one more review after `maxRounds` traversals, then stops for the operator. */
-export type PipelineFailEdgeExhaustion = "advance" | "park";
+    (#1868, #2187). `advance` (the default, and every edge without the field)
+    reads `maxRounds` as the number of reviews: the last review's findings go to
+    the target once more and, when that fix passes, the lane follows the
+    source's own pass edge without re-running the source, or completes when
+    that edge is null, whether or not the fix wrote a new head.
+    `stop-after-fix` counts and hands off the same way, and after that fix the
+    lane waits in `needs_review` for the operator (#1938). `park` keeps the
+    older count, one more review after `maxRounds` traversals, then stops for
+    the operator before any fix. */
+export type PipelineFailEdgeExhaustion = "advance" | "stop-after-fix" | "park";
 
-export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion[] = ["advance", "park"];
+export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion[] = ["advance", "stop-after-fix", "park"];
 
 /** Verdict-keyed fail successor (#353): where a `fail` verdict routes next, how
     many rounds of it the source reviews, and what happens once those are spent.
@@ -479,6 +483,23 @@ export type PipelineStageAttempt = {
       close may terminalize this attempt, however dead the registry row looks;
       the record is cleared once every one is proven gone. */
   unresolvedTermination?: PipelineUnresolvedTermination;
+  /** Tool permission requests this attempt's agent raised and nobody could
+      answer, each denied so the turn went on (#2215). Bounded, oldest first. */
+  permissionDenials?: PipelinePermissionDenial[];
+};
+
+export type PipelinePermissionDenial = {
+  /** The engine's control request id. */
+  requestId: string;
+  tool: string | null;
+  command: string | null;
+  /** The engine's `decision_reason`, which the deny message carried verbatim. */
+  reason: string | null;
+  reasonType: string | null;
+  /** `unattended`: denied at once, a stage has no one to ask. `timeout`: an
+      attended request nobody answered in time. */
+  mode: "unattended" | "timeout";
+  deniedAt: string;
 };
 
 export type PipelineUnresolvedTermination = {
@@ -527,6 +548,25 @@ export type PipelineReviewGrant = {
   stageId: string;
   rounds: number;
   reviewedHead: string | null;
+  currentHead: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor;
+  at: string;
+};
+
+/** One accepted `accept-head` (#2187 §3.4), append-only: the operator or the
+    creator took a head the last fix wrote and nobody reviewed, and the lane
+    went on along the review stage's pass edge as `advance` would have. */
+export type PipelineReviewAcceptance = {
+  clientRequestId: string;
+  expectedRevision: string;
+  /** The review stage whose spent budget stopped the lane, and its last attempt. */
+  stageId: string;
+  attempt: number;
+  /** The fix that took the last findings, and its passed attempt. */
+  fixStageId: string;
+  fixAttempt: number;
+  reviewedHead: string | null;
+  /** The head accepted without a review. */
   currentHead: string;
   actor: import("@/lib/pauseResumeActor").PauseResumeActor;
   at: string;
@@ -691,6 +731,19 @@ export type PipelineCloseTeardown = {
   flow: { id: string; stageId: string; attempt: number } | null;
 };
 
+/** Nothing of the pipeline is still running: its close teardown settled with
+    every host confirmed gone, no close waits on a spawn, and no delivery is in
+    flight. A completed or closed pipeline that fails this still owns its
+    checkout. */
+export function pipelineActivitySettled(
+  pipeline: Pick<Pipeline, "closeTeardown" | "closeReport" | "activationCloseRequested" | "delivery">,
+): boolean {
+  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return false;
+  if (pipeline.activationCloseRequested) return false;
+  if (pipeline.delivery?.active || pipeline.delivery?.operation?.state === "running") return false;
+  return true;
+}
+
 export type Pipeline = {
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
@@ -749,6 +802,10 @@ export type Pipeline = {
       transcripts are untouched, and `undismiss` clears it. `hiddenAt` cannot
       carry this, because every reader takes it to mean closed or discarded. */
   dismissedAt?: string | null;
+  /** Who cleared the lane off the queue at `dismissedAt`, attributed on the
+      server (docs/design/needs-attention.md §5). Absent on a dismissal written
+      before attribution existed. */
+  dismissedBy?: import("@/lib/attention/dismissalTypes").DismissedBy | null;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */
@@ -771,17 +828,105 @@ export type Pipeline = {
   reviewPending?: PipelineReviewPending;
   /** Accepted continue-review grants, oldest first (#1938). */
   reviewGrants?: PipelineReviewGrant[];
+  /** Accepted accept-head answers, oldest first (#2187 §3.4). */
+  reviewAcceptances?: PipelineReviewAcceptance[];
   /** Explicit legacy review-loop conversions, oldest first. */
   legacyReviewConversions?: PipelineLegacyReviewConversion[];
   /** Accepted stage completion calls, oldest first, at most
       MAX_PIPELINE_STAGE_REPORTS (graph slice 2). */
   stageReports?: PipelineStageReportEntry[];
+  /** The merge runner's record (#2187 §4.4), present once a completed lane
+      was queued to merge under its project's "merge when the review passes"
+      setting, or once its PR was seen merged by anyone. */
+  merge?: PipelineMerge;
+  /** The linked tasks this pipeline finishes (#2187 §5.1), a subset of
+      `taskIds`. When the lane is finished (§5.2) each moves to Done, once no
+      other started pipeline on it is still open. Absent reads as none. */
+  finishesTaskIds?: string[];
+  /** Each task this pipeline moved to Done, or found there already, once
+      (§5.3): a task the operator reopens afterwards is left open. */
+  taskFinishes?: PipelineTaskFinish[];
+  /** A finished marked pipeline's tasks whose move waits on other open
+      pipelines on the same task, with their ids. Cleared by the move. */
+  taskFinishWaits?: PipelineTaskFinishWait[];
+};
+
+export type PipelineTaskFinish = {
+  taskId: string;
+  at: string;
+  /** `moved`: this pipeline moved the task to Done; `already-done`: the task
+      was there when the pipeline finished, and only the finish is recorded. */
+  outcome: "moved" | "already-done";
+};
+
+export type PipelineTaskFinishWait = {
+  taskId: string;
+  since: string;
+  /** The other open pipelines the move waits on. */
+  open: string[];
+};
+
+/** Where an automatic merge stands (#2187 §4.4). `queued`, `checking`,
+    `waiting-checks`, `updating` and `merging` belong to the runner; `merged`
+    is final; `blocked` waits for `retry-merge`; `cancelled` means the setting
+    was turned off while the merge only waited. */
+export type PipelineMergeState = "queued" | "checking" | "waiting-checks" | "updating" | "merging" | "merged" | "blocked" | "cancelled";
+
+export const PIPELINE_MERGE_LIVE_STATES: ReadonlySet<PipelineMergeState> = new Set(["queued", "checking", "waiting-checks", "updating", "merging"]);
+
+export type PipelineMergeMethod = "squash" | "merge" | "rebase";
+
+export type PipelineMerge = {
+  state: PipelineMergeState;
+  /** Who merged it: the runner, or anyone else (the PR was seen merged). */
+  by: "auto-merge" | "outside" | null;
+  /** `<owner>/<repo>`, lower-cased, and the pull request's number. */
+  repository: string;
+  prNumber: number;
+  /** The setting's `changedAt` the lane was queued under. */
+  policyChangedAt: string;
+  /** The head the lane finished on (its `lastPassedCommit`). */
+  reviewedHead: string;
+  /** `reviewedHead`, then each head the runner's own updates produced. The PR
+      head must be in it. */
+  chain: string[];
+  /** One entry per `update-branch`; `head` stays null until the update's
+      commit is seen on the PR and admitted to the chain. */
+  updates: Array<{ requestedAt: string; head: string | null }>;
+  /** Every check name seen on any head of this PR, a union. */
+  seenChecks: string[];
+  /** The head the check clock runs for, when it was first seen, and the check
+      names of the previous read of that head. */
+  head: string | null;
+  headSeenAt: string | null;
+  lastChecks: string[] | null;
+  /** When the runner last read the PR, and the earliest it reads again. */
+  readAt: string | null;
+  nextReadAt: string | null;
+  /** Reads in a row that `gh` could not answer. */
+  readFailures?: number;
+  /** When the lane entered the queue: its completion. Orders the queue. */
+  requestedAt: string;
+  mergedHead: string | null;
+  mergeCommit: string | null;
+  method: PipelineMergeMethod | null;
+  mergedAt: string | null;
+  /** Accepted `retry-merge` answers. */
+  attempts: number;
+  /** Plain sentence while `blocked` or `cancelled`, or what the runner waits on. */
+  reason: string | null;
+  blockedAt: string | null;
+  updatedAt: string;
 };
 
 export type CreatePipelineRequest = {
   delivery?: { branch: string; remote?: string; pr?: number; rejectedHead?: string; comparison?: boolean };
   task: string;
   taskIds?: string[];
+  /** #2187 §5.1: `true` marks every linked task as one this pipeline
+      finishes, a list marks those ids; an id outside `taskIds` is dropped
+      and named in the answer. */
+  finishesTask?: boolean | string[];
   spec?: string;
   repoDir: string;
   /** Merge target branch; defaults to main when the pipeline starts. */
@@ -814,6 +959,7 @@ export const PIPELINE_ACTIONS = [
   "retry-stage",
   "resolve-decision",
   "continue-review",
+  "accept-head",
   "preview-legacy-review",
   "convert-legacy-review",
   "revert-legacy-review",
@@ -828,12 +974,13 @@ export const PIPELINE_ACTIONS = [
   "undismiss",
   "attach-link",
   "detach-link",
+  "retry-merge",
 ] as const;
 
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 
 export type PatchPipelineRequest = {
-  /** Required for resolve-decision and continue-review, preserved as its durable receipt key. */
+  /** Required for resolve-decision, continue-review and accept-head, preserved as its durable receipt key. */
   clientRequestId?: string;
   /** Opaque revision returned by get_pipeline or the pipeline detail route. */
   expectedRevision?: string;
@@ -854,6 +1001,10 @@ export type PatchPipelineRequest = {
   action: PipelineAction;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
+  /** for link-task (#2187 §5.1): whether this pipeline finishes the task.
+      On a task already linked it only sets or clears the flag; absent leaves
+      the flag as it is. */
+  finishes?: boolean;
   /** for attach-link and detach-link (#2059): a PR or issue as `#123`, `123`,
       `PR 123`, `owner/repo#123` or a github.com URL, or a list of them. */
   link?: string | number | Array<string | number>;

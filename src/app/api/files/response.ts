@@ -6,6 +6,7 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 
 import { listFilesWithProjectCatalog, pinnedPathsFor } from "@/lib/scanner";
+import { overlayAttentionDismissals } from "@/lib/attention/dismissals";
 import { overlayBridgeAsks } from "@/lib/bridge/asks";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { bridgeAsksForSeats } from "@/lib/bridge/service";
@@ -33,7 +34,6 @@ import { workLinksForBoard } from "@/lib/forge/resolve";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { projectSupersededTaskHandoffs } from "@/lib/tasks/supersedence";
 import { reportRunIdFromAttemptId, TELEGRAM_REPORT_PROJECT } from "@/lib/telegram/reportLineage";
-import { cachedLimitsProvenance } from "@/lib/limits";
 import { projectRateLimitReadModel } from "@/lib/rateLimit";
 import { readAuthorshipEvidence } from "@/lib/reaperAuthorship";
 import { projectStructuredFileLiveness } from "@/lib/runtime/livenessProjection";
@@ -428,6 +428,12 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       const registryEntry = generation
         ? registrySnapshot.entries[`${file.engine}:${generation.id}`]
         : undefined;
+      /* #2215: a structured host's unanswered tool permission request, which
+         no screen scrape can see, is what the Needs-you item is built from. */
+      const permission = registryEntry?.status !== "dead" && !conversation.supersededBy
+        ? registryEntry?.structuredHost?.pendingPermissions?.[0] ?? null
+        : null;
+      if (permission) file.pendingPermission = permission;
       if (registryEntry?.status === "dead" && file.pid === null) {
         file.activity = Date.now() / 1000 - file.mtime < 900 ? "recent" : "idle";
         file.activityReason = "registry_terminal";
@@ -752,7 +758,6 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     flows,
     registrySnapshot,
     Date.now(),
-    cachedLimitsProvenance,
     (entry) => {
       const fullEntry = entry as AgentRegistryEntry;
       return identityAlive(fullEntry.host?.agent, hostProbe)
@@ -818,6 +823,11 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     }),
   );
   markTiming("files-bridge-asks");
+  /* Needs-you dismissals (docs/design/needs-attention.md §5): each
+     conversation's record on its own entries, which the reason model compares
+     with the reason it would otherwise flag. */
+  overlayAttentionDismissals(projected.files);
+  markTiming("files-attention-dismissals");
   const visibleProjects = [
     ...projected.files.map((file) => file.project),
     ...effectiveProjectCatalog.map((entry) => entry.project),

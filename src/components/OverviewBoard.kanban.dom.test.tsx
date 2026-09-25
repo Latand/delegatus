@@ -51,7 +51,7 @@ const OVERRIDES: Record<string, unknown> = {
     const url = String(input);
     if (url.startsWith("/api/orchestrator/seat?")) {
       seatReads += 1;
-      return { ok: true, status: 200, json: async () => ({ all: SEAT_ANSWER }), text: async () => "" };
+      return { ok: true, status: 200, json: async () => ({ all: seatAnswer ?? SEAT_ANSWER }), text: async () => "" };
     }
     return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
   }) as unknown as typeof fetch,
@@ -80,7 +80,9 @@ afterAll(async () => {
 
 let roots: Root[] = [];
 let seatReads = 0;
-beforeEach(() => { dom.document.body.replaceChildren(); roots = []; seatReads = 0; resetOrchestratorSeatCacheForTests(); });
+/* The seat record's answer for one test; null answers SEAT_ANSWER. */
+let seatAnswer: unknown = null;
+beforeEach(() => { dom.document.body.replaceChildren(); roots = []; seatReads = 0; seatAnswer = null; resetOrchestratorSeatCacheForTests(); });
 afterEach(async () => { for (const root of roots) flushSync(() => root.unmount()); roots = []; await settle(); });
 
 /* Three invented projects. Canonical keys on the left, what the operator
@@ -307,10 +309,13 @@ test("what needs one project to write into is absent, never faked", () => {
   expect(host.querySelector(".card [data-add-agent]")).toBeNull();
 
   /* The board that is there is the whole board: search, the hidden tray and
-     the status pill a move writes with the card's own project. */
+     the card's ⋯, whose "Move to" writes with the card's own project. The
+     column names the status, so the card draws no pill of its own (#2148). */
   expect(host.querySelector("[data-kanban-search]")).toBeTruthy();
   expect(host.querySelector("[data-hidden-pill]")).toBeTruthy();
-  expect(cardOf(host, "t-ledger")?.querySelector(".foot .pill")).toBeTruthy();
+  expect(cardOf(host, "t-ledger")?.querySelector(".foot .pill")).toBeNull();
+  flushSync(() => cardOf(host, "t-ledger")!.querySelector<HTMLElement>("[data-menu]")!.click());
+  expect([...host.querySelectorAll('.menu [role="menuitemradio"]')].slice(0, 4).map((item) => item.textContent)).toEqual(["Inbox", "Assigned", "Blocked", "Done"]);
 });
 
 test("the Overview's bar keeps its three facts; the project board's bar, put in order (#1801), says each once", () => {
@@ -419,4 +424,55 @@ test("the Overview draws no seat card and counts no seat task as hidden (#1841)"
   expect(tray).not.toContain("Orchestrator seat, launch week");
   /* The project's own work is untouched by the same answer. */
   expect(cardIds(host)).toContain("task:t-ledger");
+});
+
+/* #2166 §3.5: before any orchestrator exists on this install, the Overview
+   leads with one band that opens the guide on its orchestrator step. It
+   reads the same cross-project seat record the board reads, in one poll, and
+   shows nothing until that record has answered. */
+test("with no seat on the install the Overview leads with the orchestrator band, and with one it does not", async () => {
+  seatAnswer = { conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } };
+  const { host } = mount(FILES, TASKS);
+  /* Nothing on a guess: the record has not answered yet. */
+  expect(host.querySelector("[data-overview-orchestrator-band]")).toBeNull();
+
+  await settle();
+  await settle();
+  flushSync(() => undefined);
+
+  const band = host.querySelector("[data-overview-orchestrator-band]") as HTMLElement;
+  expect(band).not.toBeNull();
+  expect(band.textContent).toContain("Start with an orchestrator");
+  expect(band.textContent).toContain(en["orchPanel.intro"]);
+  /* The band and the board read the record through one poll. */
+  expect(seatReads).toBe(1);
+  const opened: unknown[] = [];
+  const listen = (event: Event) => opened.push((event as CustomEvent).detail);
+  dom.addEventListener("llv:open-onboarding", listen as never);
+  /* The guide opens on a window event: this window's own CustomEvent. */
+  const savedCustomEvent = G.CustomEvent;
+  G.CustomEvent = dom.CustomEvent;
+  try {
+    const create = band.querySelector("[data-overview-orchestrator-create]") as HTMLButtonElement;
+    expect(create.textContent).toContain("Create an orchestrator");
+    flushSync(() => create.click());
+  } finally {
+    G.CustomEvent = savedCustomEvent;
+    dom.removeEventListener("llv:open-onboarding", listen as never);
+  }
+  expect(opened).toEqual([{ mode: "guide", step: null }]);
+});
+
+test("a seat anywhere on the install, even a retired one, keeps the band away", async () => {
+  for (const answer of [SEAT_ANSWER, { conversationIds: [], paths: [], previous: { conversationIds: ["c-retired"], paths: [] } }]) {
+    dom.document.body.replaceChildren();
+    resetOrchestratorSeatCacheForTests();
+    seatAnswer = answer;
+    const { host } = mount(FILES, TASKS);
+    await settle();
+    await settle();
+    flushSync(() => undefined);
+    expect(seatReads).toBeGreaterThan(0);
+    expect(host.querySelector("[data-overview-orchestrator-band]")).toBeNull();
+  }
 });

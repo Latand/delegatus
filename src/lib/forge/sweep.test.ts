@@ -28,11 +28,12 @@ afterEach(() => {
   resetForgeCacheForTests();
 });
 
-type Row = { number: number; headRefName?: string; state?: string; isDraft?: boolean; createdAt?: string; updatedAt?: string; closes?: number[] };
+type Row = { number: number; headRefName?: string; headRefOid?: string; state?: string; isDraft?: boolean; createdAt?: string; updatedAt?: string; closes?: number[] };
 const row = (entry: Row) => ({
   number: entry.number,
   url: `https://github.com/acme/widgets/pull/${entry.number}`,
   headRefName: entry.headRefName ?? `feature/${entry.number}`,
+  headRefOid: entry.headRefOid ?? String(entry.number % 10).repeat(40),
   state: entry.state ?? "OPEN",
   isDraft: entry.isDraft ?? false,
   createdAt: entry.createdAt ?? "2026-09-22T00:00:00Z",
@@ -95,6 +96,28 @@ describe("the sweep", () => {
     expect(entry().prs["7"]).toMatchObject({ state: "draft", closes: [3] });
     expect(entry().prs["6"]).toMatchObject({ state: "merged", headRefName: "pipeline/lane-a" });
     expect(entry().canonical).toBe(REPO);
+  });
+
+  test("head commits: kept for the worktree sweep, and an entry cached without them is read in full once", async () => {
+    const h = harness((args) => (isSearch(args)
+      ? [row({ number: 6, state: "MERGED", updatedAt: "2026-09-23T09:59:00Z" })]
+      : [row({ number: 6, state: "MERGED", headRefOid: "c".repeat(40) }), row({ number: 5, state: "MERGED", headRefOid: "d".repeat(40) })]));
+    /* A cache written before head commits were read: complete, and without them. */
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, repositories: { [REPO]: {
+      canonical: REPO, completeSince: "2026-09-20T00:00:00Z", lastSweepAt: "2026-09-23T09:00:00Z", lastAttemptAt: null, lastError: null, issues: {},
+      prs: { "5": { url: "https://github.com/acme/widgets/pull/5", headRefName: "feature/5", createdAt: "", state: "merged", closes: [], checkedAt: "" } },
+    } } }));
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(isSearch(h.calls[0]!)).toBe(false);
+    expect(h.calls[0]!.join(" ")).toContain("headRefOid");
+    expect(entry().headRefOids).toBe(true);
+    expect(entry().prs["5"]?.headRefOid).toBe("d".repeat(40));
+    expect(entry().prs["6"]?.headRefOid).toBe("c".repeat(40));
+    /* Afterwards the page is enough again. */
+    h.advance(FORGE_IDLE_INTERVAL_MS);
+    await h.sweep();
+    expect(isSearch(h.calls.at(-1)!)).toBe(true);
+    expect(entry().prs["5"]?.headRefOid).toBe("d".repeat(40));
   });
 
   test("intervals: a live repository every 3 minutes, an idle one every 30, a nudge after 30 seconds", async () => {

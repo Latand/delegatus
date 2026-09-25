@@ -94,6 +94,7 @@ jobs:
           src/lib/platformHome.test.ts
           src/lib/runtime/localEndpoint.test.ts
           src/lib/scanner/describe.test.ts
+          src/lib/state/durableJson.test.ts
           src/runtime-host/socket.test.ts
           src/runtime-host/runtimeHostFence.test.ts
           bin/server-runtime.test.ts
@@ -163,6 +164,7 @@ jobs:
           src/lib/platformHome.test.ts
           src/lib/runtime/localEndpoint.test.ts
           src/lib/scanner/describe.test.ts
+          src/lib/state/durableJson.test.ts
           src/runtime-host/socket.test.ts
           src/runtime-host/runtimeHostFence.test.ts
           bin/server-runtime.test.ts

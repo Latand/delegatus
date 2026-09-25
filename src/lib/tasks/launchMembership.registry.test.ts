@@ -168,3 +168,37 @@ test("an unavailable task store keeps a recovered queued launch from executing: 
     corrupt("DELETE FROM state_rows WHERE collection = 'tasks' AND row_key = 't:broken'");
   }
 });
+
+test("a fresh launch that fails before it runs leaves its task in Inbox with the failed launch on it; a failed resume keeps its conversation's row", () => {
+  saveTasks([task("inbox-task", "Task the launch was for")]);
+  const registry = registryAt("failed-fresh");
+  const begun = registry.beginSpawnRequest({ engine: "claude", cwd: stateDir, transport: "structured", accountId: "default", accountPin: true, clientAttemptId: "failed_fresh_attempt", requestDigest: "d".repeat(64), origin: { kind: "operator" }, launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Task the launch was for" }), taskIds: ["inbox-task"] });
+  if (begun.kind !== "created") throw new Error("expected a fresh reservation");
+  /* Admission links the launch before anything runs, which moves the task. */
+  expect(loadTasks()[0]).toMatchObject({ status: "assigned" });
+
+  registry.failStructuredSpawn(begun.receipt.launchId, "No healthy Claude account is available. Re-login Main in Accounts and retry.");
+  const [settled] = loadTasks();
+  expect(settled!.status).toBe("inbox");
+  expect(settled!.assignments).toEqual([expect.objectContaining({
+    launchId: begun.receipt.launchId,
+    conversationId: begun.receipt.conversationId,
+    state: "failed",
+    error: "No healthy Claude account is available. Re-login Main in Accounts and retry.",
+  })]);
+
+  /* The tmux path settles the same way. */
+  saveTasks([task("tmux-task", "Tmux launch target")]);
+  const tmux = registry.beginSpawnRequest({ engine: "claude", cwd: stateDir, transport: "tmux", clientAttemptId: "failed_tmux_attempt", requestDigest: "e".repeat(64), origin: { kind: "operator" }, launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Tmux launch target" }), taskIds: ["tmux-task"] });
+  if (tmux.kind !== "created") throw new Error("expected a fresh reservation");
+  registry.failSpawn(tmux.receipt.launchId, "spawn failed before pane binding");
+  expect(loadTasks()[0]).toMatchObject({ status: "inbox", assignments: [expect.objectContaining({ state: "failed", error: "spawn failed before pane binding" })] });
+
+  /* A resume successor continues a conversation whose row predates it. */
+  const live = registry.ensureConversation("claude", path.join(stateDir, "resumed.jsonl"), null);
+  saveTasks([{ ...task("resumed-task", "Resumed work", [{ path: path.join(stateDir, "resumed.jsonl"), conversationId: live.id, panePid: null, state: "linked", error: null, at: now }]), status: "assigned" }]);
+  const resumed = registry.beginSpawnRequest({ engine: "claude", cwd: stateDir, transport: "structured", conversationId: live.id, purpose: "resume-successor", origin: { kind: "successor" }, launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Resumed work" }) });
+  if (resumed.kind !== "created") throw new Error("expected the resume reservation");
+  registry.failStructuredSpawn(resumed.receipt.launchId, "resume failed");
+  expect(loadTasks()[0]).toMatchObject({ status: "assigned", assignments: [expect.objectContaining({ conversationId: live.id, state: "linked" })] });
+});

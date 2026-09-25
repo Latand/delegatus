@@ -37,6 +37,7 @@ export function pipelineAcknowledgement(pipeline: Pipeline) {
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
     taskIds: [...(pipeline.taskIds ?? [])],
+    ...finishesTaskFields(pipeline),
     branch: pipeline.branch,
     stages: (pipeline.stages ?? []).map((stage) => ({
       id: stage.id,
@@ -60,8 +61,18 @@ export function pipelineActionAcknowledgement(pipeline: Pipeline) {
     state: pipeline.state,
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
+    ...finishesTaskFields(pipeline),
     stageDigests: stageDigests(pipeline.stages ?? []),
     graphDigest: graphDigest(pipeline.stages ?? []),
+  };
+}
+
+/** The tasks the lane finishes, and those whose move to Done waits (#2187
+    §5), only when there are any. */
+function finishesTaskFields(pipeline: Pipeline) {
+  return {
+    ...(pipeline.finishesTaskIds?.length ? { finishesTaskIds: [...pipeline.finishesTaskIds] } : {}),
+    ...(pipeline.taskFinishWaits?.length ? { taskFinishWaits: pipeline.taskFinishWaits.map((wait) => ({ taskId: wait.taskId, open: wait.open.length })) } : {}),
   };
 }
 
@@ -156,6 +167,8 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
          re-reviewed (#1868). */
       budgetSpent: selected.budgetSpent === true,
       conversationId: selected.conversationId ?? null,
+      /* The launch pipeline_action retry-stage names beside the stage. */
+      launchId: selected.launchId ?? null,
       flowId: selected.flowId ?? null,
       startedAt: selected.startedAt ?? null,
       completedAt: selected.completedAt ?? null,
@@ -200,6 +213,15 @@ function compactLivenessRow(row: AgentLivenessRecord) {
     title: clampLine(row.title, TITLE_CHARS) ?? "",
     turnState: row.turnState,
     lifecycle: row.lifecycle,
+    /* The one waiting that asks something of the reader (#2215): the reason
+       and the request ride the compact row, so a caller learns a turn is held
+       on a permission without a second, full read. */
+    ...(row.reason === "permission_request" && row.permission
+      ? {
+          reason: row.reason,
+          permission: { tool: row.permission.tool, command: row.permission.command, reason: row.permission.reason, since: row.permission.since },
+        }
+      : {}),
     silentForMs: row.silentForMs,
     stalledForMs: row.stalledForMs,
     pipeline: row.pipeline

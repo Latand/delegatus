@@ -15,6 +15,8 @@ const { createPipelineFromRequest, patchPipeline, tickPipelines } = await import
 const { registerPipelineTick } = await import("./controllerSignal");
 const { archiveSettledPipelines, findPipelineRecord, loadPipelines, pipelineRevision, savePipelines } = await import("./store");
 const legacy = await import("./legacyReviewDefinition");
+const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
+const { pipelineCompletedUnreviewed } = await import("./failEdgeBudget");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
 type PipelinePorts = import("./engine").PipelinePorts;
@@ -125,7 +127,10 @@ async function legacyDraft(ports: PipelinePorts, stages: unknown[] = LEGACY_STAG
   savePipelines([]);
   const created = await createPipelineFromRequest({ task: "Legacy review", spec: "AC", repoDir: "/repo", baseBranch: "main", baseRef: BASE, stages: stages as never, autoStart: false, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
-  return created.pipeline;
+  /* A draft stored before #2187, whose review-loop creation did not convert. */
+  const draft = asStoredLegacyReviewLane(created.pipeline, created.convertedStages);
+  savePipelines([draft]);
+  return draft;
 }
 
 const current = () => loadPipelines()[0]!;
@@ -252,10 +257,16 @@ test.each([1, 2, 3])("a flow limit of %i runs the converted reviewer exactly tha
   expect(fixes.every((spawn) => spawn.prompt.includes("gap"))).toBe(true);
   /* The architect and builder ran once: no predecessor was reused as the fixer. */
   expect(h.spawned.filter((spawn) => spawn.stageId === "architect" || spawn.stageId === "builder")).toHaveLength(2);
-  /* The last fix wrote a head nobody reviewed: needs_review, and ship never ran (#1938). */
-  expect(current().state).toBe("needs_review");
-  expect(current().reviewPending).toMatchObject({ stageId: "reviewer", fixStageId: "reviewer-fix" });
-  expect(h.spawned.some((spawn) => spawn.stageId === "ship")).toBe(false);
+  /* The last fix wrote a head nobody reviewed. Under the converted edge's
+     `advance` the lane moves on to ship with those findings named as
+     unreviewed and completes (#2187), and the record says so. */
+  expect(current().state).toBe("completed");
+  expect(current().reviewPending).toBeUndefined();
+  const ships = h.spawned.filter((spawn) => spawn.stageId === "ship");
+  expect(ships).toHaveLength(1);
+  expect(ships[0]!.prompt).toContain(`gap ${2 * limit}`);
+  expect(ships[0]!.prompt).toContain("not re-reviewed");
+  expect(pipelineCompletedUnreviewed(current())).toMatchObject({ stageId: "reviewer", findings: 1 });
 });
 
 test("settled legacy attempts stay history; the converted stage runs fresh after an explicit retry and an old approval passes nothing", async () => {

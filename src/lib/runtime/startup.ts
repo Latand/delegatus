@@ -37,14 +37,17 @@ import {
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
 import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
+import { startupDiagnostic } from "../startupDiagnostics";
 import {
   interruptionContinuationText,
   interruptionObligationDirectory,
   interruptionObligationStore,
   interruptionObligationUnresolved,
+  submittedContinuationOutcome,
   type InterruptionObligation,
   type InterruptionObligationStore,
 } from "./interruptionObligations";
@@ -165,7 +168,6 @@ interface StructuredStartupSignals {
 
 const TRANSCRIPT_REFRESH_CONCURRENCY = 16;
 const INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX = "recovery-continuation";
-const INTERRUPTED_CODEX_CONTINUATION_TEXT = "Continue the interrupted turn from the transcript.";
 /** Owed continuations older than this are retired unsent: a turn cut that
     long ago has been looked at by someone, and a paid turn resuming it now
     would act on a stale picture. */
@@ -436,26 +438,14 @@ function settleSubmittedInterruptionObligations(
   const snapshot = registry.readOnlySnapshot();
   const unresolved: InterruptionObligation[] = [];
   for (const obligation of obligations) {
-    if (obligation.state !== "submitted") {
+    const outcome = obligation.state === "submitted"
+      ? submittedContinuationOutcome(obligation, snapshot, (id) => registry.canonicalConversationId(id))
+      : null;
+    if (!outcome) {
       unresolved.push(obligation);
       continue;
     }
-    const reservation = Object.values(snapshot.heldDeliveries).find((delivery) =>
-      delivery.clientMessageId === obligation.id
-        && registry.canonicalConversationId(delivery.conversationId)
-          === registry.canonicalConversationId(obligation.conversationId));
-    const owner = obligation.operationId ? snapshot.deliveryOperationOwners[obligation.operationId] : undefined;
-    const settled = reservation
-      ? reservation.state === "delivered" || reservation.state === "failed" ? reservation.state : null
-      : owner?.terminalState ?? "delivered";
-    if (settled === null) {
-      unresolved.push(obligation);
-      continue;
-    }
-    const resolution = settled === "failed"
-      ? reservation?.error || owner?.terminalReason || "the continuation delivery failed"
-      : reservation || owner ? "delivered" : "delivered; its settled reservation was compacted";
-    store.update(obligation.id, { state: settled, resolvedAt: new Date().toISOString(), resolution });
+    store.update(obligation.id, { state: outcome.state, resolvedAt: outcome.at ?? new Date().toISOString(), resolution: outcome.resolution });
   }
   return unresolved;
 }
@@ -520,6 +510,7 @@ async function deliverInterruptionContinuations(
       clientMessageId: obligation.id,
       text: interruptionContinuationText(obligation),
       images: [],
+      origin: RECOVERY_NOTICE_ORIGIN,
     }, {
       enabled: () => true,
       client: () => client,
@@ -698,6 +689,7 @@ async function enqueueInterruptedCodexContinuations(
       text: INTERRUPTED_CODEX_CONTINUATION_TEXT,
       policy: "queue",
       turnId: null,
+      origin: RECOVERY_NOTICE_ORIGIN,
     });
   }
 }
@@ -1216,7 +1208,7 @@ function startStructuredHostPass(
     const generation = await client?.startupGeneration?.() ?? null;
     const replaced = Boolean(current.ready && generation && current.generation && generation !== current.generation);
     if (current.ready && !resumeDeferred && !replaced) return current.ready;
-    console.error("[structured hosts] startup pass admitted", {
+    startupDiagnostic("error", "[structured hosts] startup pass admitted", {
       trigger: replaced ? "runtime-host-replaced" : resumeDeferred ? "deferred-evidence-changed" : "startup-retry",
       completed: Boolean(current.ready), generationChanged: replaced,
     });

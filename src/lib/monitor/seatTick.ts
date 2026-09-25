@@ -7,6 +7,7 @@ import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
+  type SeatTickActivity,
   type SeatTickCard,
   type SeatTickCheckInput,
   type SeatTickChildInput,
@@ -404,6 +405,35 @@ function stalledChildren(input: SeatTickCheckInput): { child: SeatTickChildInput
   return found;
 }
 
+/**
+ * The lanes and children whose turn waits on a tool permission request nobody
+ * answered (#2215), each with the line that names it: the tool, what it would
+ * run and why the engine asked. Read from the same activity verdict as a stall,
+ * so a request the host already answered is never listed.
+ */
+function pendingPermissionItems(input: SeatTickCheckInput): SeatTickItem[] {
+  const items: SeatTickItem[] = [];
+  const describe = (activity: SeatTickActivity): string => {
+    const request = activity.permission;
+    if (!request) return "waits on a tool permission request";
+    const command = request.command ? ` \`${request.command.replace(/\s+/g, " ").slice(0, 160)}\`` : "";
+    const reason = request.reason ? ` (${request.reason.replace(/\s+/g, " ").slice(0, 200)})` : "";
+    return `waits on a ${request.tool} permission request${command}${reason}; answer it with conversation_action permission`;
+  };
+  for (const pipeline of input.pipelines) {
+    const activity = pipeline.stageActivity;
+    if (!isOpenLane(pipeline) || activity?.reason !== "permission_request") continue;
+    const stage = pipeline.stageId ? ` stage ${pipeline.stageId}` : "";
+    items.push({ kind: "permission", id: pipeline.id, label: `${pipeline.title} —${stage} ${describe(activity)}` });
+  }
+  for (const child of input.children) {
+    const activity = child.activity;
+    if (!isRunningChild(child) || activity?.reason !== "permission_request") continue;
+    items.push({ kind: "permission", id: child.conversationId, label: `${child.title} — spawned child ${describe(activity)}` });
+  }
+  return items;
+}
+
 /** The registry's verdict that no live host is behind this turn. */
 function isStalledActivity(activity: SeatTickChildInput["activity"]): boolean {
   return activity !== null && (activity.lifecycle === "stalled" || activity.lifecycle === "gone");
@@ -664,7 +694,12 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
     : lane.settled === "failed"
       ? "a stage failed"
       : "parked on a decision";
-  return `${lane.title} — lane you launched: ${settled}`;
+  return `${lane.title} — lane you launched: ${settled}${taskWaitNote(lane.taskWaits)}`;
+}
+
+/** #2187 §5.3: a finished marked lane whose task's move to Done waits. */
+function taskWaitNote(open: number | undefined): string {
+  return open ? `; task waits for ${open} open pipeline${open === 1 ? "" : "s"}` : "";
 }
 
 /**
@@ -1016,6 +1051,16 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const unchanged = { ...input.state, lastCheckAt: at };
 
   if (!input.seat) {
+    /* A project nobody ever designated an orchestrator for (#2170) is not
+       missing one: the operator never asked for a seat, so an alert card about
+       it in their Inbox reports an internal condition they cannot act on. */
+    if (input.seatEverHeld === false) {
+      return {
+        verdict: { kind: "no-seat", detail: "the project has open work and has never had an orchestrator seat" },
+        state: { ...unchanged, seatEpoch: null },
+        cards: [],
+      };
+    }
     return {
       verdict: { kind: "no-seat", detail: "the project has open work and no active orchestrator seat" },
       state: { ...unchanged, seatEpoch: null },
@@ -1229,13 +1274,20 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     if (input.pullRequests.length > 0) {
       const first = input.pullRequests[0]!;
       const more = input.pullRequests.length > 1 ? ` and ${input.pullRequests.length - 1} more` : "";
+      /* #2187 §3.5: a lane can now complete on a spent review budget with a
+         head no reviewer saw, and the seat that merges it reads that here. */
       candidates.push({
         kind: "unmerged-pr",
-        detail: `pull request #${first.number}${more} left open by a lane that finished`,
+        detail: `pull request #${first.number}${more} left open by a lane that finished${first.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${first.mergeBlocked ? `; merge stopped: ${first.mergeBlocked}` : ""}`,
       });
     }
     if (persistedStalls.length > 0 || persistedChildStalls.length > 0) {
       candidates.push({ kind: "stalled", detail: (persistedStalls[0] ?? persistedChildStalls[0])!.reason });
+    }
+    const permissions = pendingPermissionItems(input);
+    if (permissions.length > 0) {
+      const more = permissions.length > 1 ? ` and ${permissions.length - 1} more` : "";
+      candidates.push({ kind: "permission-request", detail: `a turn waits on an unanswered tool permission request${more}` });
     }
     if (unstarted.length > 0) {
       /* The excluded count travels with the reason so a seat reading "2" beside
@@ -1480,7 +1532,7 @@ function wakeItems(context: {
     items.push({
       kind: "pull-request",
       id: `#${pullRequest.number}`,
-      label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished`,
+      label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished${pullRequest.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${pullRequest.mergeBlocked ? `; merge stopped: ${pullRequest.mergeBlocked}` : ""}${taskWaitNote(pullRequest.taskWaits)}`,
       ...(lane ? { laneAnnouncement: `${lane.id}:${lane.settled}` } : {}),
     });
   }
@@ -1528,6 +1580,9 @@ function wakeItems(context: {
   /* A lane parked on a decision is open, so it can be BOTH the seat's own
      settled work and a persisted stall. It is one lane and one obligation, and
      the item at the head already says what stopped it. */
+  /* A request only an answer ends (#2215), ahead of the stalls: it is not a
+     stall, and the line says what is being asked. */
+  items.push(...pendingPermissionItems(input));
   const owned = new Set(context.ownLanes.map((lane) => lane.id));
   for (const entry of context.stalled) {
     if (owned.has(entry.pipeline.id)) continue;

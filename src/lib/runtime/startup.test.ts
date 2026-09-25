@@ -864,11 +864,13 @@ test("scheduled startup retry continues through the retained Codex host", async 
   });
   const baseClient = runtimeJournalClient(journal);
   let continuationAdmissions = 0;
+  const continuationOrigins: unknown[] = [];
   const client = {
     ...baseClient,
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
       if (command.kind === "send" && command.text === "Continue the interrupted turn from the transcript.") {
         continuationAdmissions += 1;
+        continuationOrigins.push(command.origin);
         if (continuationAdmissions === 1) {
           throw new RuntimeHostUnavailableError("runtime socket failed before continuation admission");
         }
@@ -926,6 +928,8 @@ test("scheduled startup retry continues through the retained Codex host", async 
     expect(structuredStartupHosts()).toMatchObject([{ key, host }]);
     expect(adoptedProcesses).toBe(1);
     expect(continuationAdmissions).toBe(2);
+    /* The Viewer wrote it, so it never carries the operator's marker. */
+    expect(continuationOrigins).toEqual([{ kind: "agent", role: "startup-recovery" }, { kind: "agent", role: "startup-recovery" }]);
     expect(registry.snapshot().entries[`codex:${sessionId}`]!.claimEpoch).toBe(retainedEpoch);
     expect(ledger.writes.map(({ id, text }) => ({ id, text }))).toEqual([
       { id: "queued-draft-before-retained-retry", text: "keep this draft ahead of continuation" },

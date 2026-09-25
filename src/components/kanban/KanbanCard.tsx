@@ -1,9 +1,11 @@
 "use client";
 
+import { Flag } from "lucide-react";
 import { memo, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
 import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
@@ -13,7 +15,9 @@ import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
-import { pipelineNeedsYou, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
+import { laneMergeUnsettled, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
+import { clearedLine, needLabel } from "@/components/attention/decision";
+import type { NeedReason } from "@/components/attention/needReason";
 
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
@@ -22,8 +26,8 @@ import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLi
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
-import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
-import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
+import { CheckGlyph, ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
+import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline, KanbanUnstartedLaunch } from "./kanbanModel";
 import { PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
@@ -38,14 +42,23 @@ import type { PipelineActionKind } from "./stagesModel";
    tools, the links no lane row draws, description, the collapsed Details row
    carrying the agent's context (#1834), one lane row per pipeline
    (`PipelineBlock` at task density), the conversations as rows, and the
-   footer: the status pill that is the one place status changes, the age, who
-   is working and how many conversations the card holds.
+   footer: the age, who is working and how many conversations the card holds.
 
-   The card is the only frame. A lane has a hairline above it, a stage pill
+   The column the card stands in names its status, so the card does not
+   repeat it (#2148): status changes from the card's ⋯ ("Move to"), the S key
+   or a drag. That ⋯ is the card's one menu: each lane's actions are a group
+   in it, and a lane's stage chain is its head row.
+
+   The card is the only frame. A lane is set apart by space, a stage pill
    is an outline with no fill, and a conversation is a row. What the old
    activity line said moved to where it belongs: "needs you" to the amber edge
    and the lane's own state word, the working and conversation counts to the
-   footer, and the stages still waiting to their dashed pills. */
+   footer, and the stages still waiting to their dashed pills.
+
+   Why the card needs the operator is named at its foot (docs/design/
+   needs-attention.md §4): the oldest reason, "+N" for the rest, and a Dismiss
+   control that clears them all until something new asks. A cleared card says
+   who cleared it, and that line is its Undo. */
 
 /** Pipelines that have ended: the rows a card folds away once it holds many. */
 const ENDED_PIPELINE_STATES: ReadonlySet<string> = new Set(["completed", "closed"]);
@@ -122,6 +135,8 @@ function memberRole(t: TFunction, member: KanbanMember): string {
 const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { member: KanbanMember; workspace: boolean; onOpen: (file: FileEntry) => void }) {
   const { t } = useLocale();
   const role = memberRole(t, member);
+  /* A tile that needs the operator names why in its title. */
+  const reason = member.needsYou && member.need ? needLabel(t, member.need) : undefined;
   /* A stage's tile sets its attempt apart as a muted suffix that survives the
      name's truncation, and names the role preset only in its tooltip (#1865). */
   const place = member.stage ? stageAttemptPlace(member.stage.pipeline, member.stage.stage.id, member.file) : null;
@@ -136,6 +151,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
       role="listitem"
       className={`tile${workspace ? "" : " fill"}${member.working ? " working" : ""}${member.needsYou ? " needs" : ""}`}
       data-member={member.file.path}
+      title={reason}
       aria-label={t("kanban.openMember", { role, state })}
       onClick={() => onOpen(member.file)}
     >
@@ -158,7 +174,6 @@ export interface KanbanCardProps {
   collapsed: boolean;
   nowMs: number;
   onToggleCollapsed: (id: string) => void;
-  onStatusMenu: (card: KanbanCardModel, anchor: HTMLElement) => void;
   onCardMenu: (card: KanbanCardModel, anchor: HTMLElement) => void;
   onKey: (card: KanbanCardModel, event: React.KeyboardEvent<HTMLElement>) => void;
   onPointerDown: (card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => void;
@@ -189,6 +204,9 @@ export interface KanbanCardProps {
   onToggleGraph: (cardId: string, pipelineId: string, open: boolean) => void;
   /** Open the conversation an earlier attempt or review round kept. */
   onOpenAttempt: (conversation: PastAttempt["conversation"]) => void;
+  /** Dismiss launches of this task that did not start: one row's, or all of
+      them. Absent, the rows still say so and offer nothing. */
+  onDismissLaunch?: (card: KanbanCardModel, launches: readonly KanbanUnstartedLaunch[]) => void;
   /** Open readers this card shows, by conversation identity, one per line —
       a string so an unchanged set never re-renders the card. */
   readerKeys: string;
@@ -219,7 +237,21 @@ export interface KanbanCardProps {
   /** A lane row's answer in place: skip or retry the stage it stopped on,
       close it, or give its review one more round (#2072). */
   onAnswer?: (cardId: string, title: string, pipeline: Pipeline, answer: PipelineAnswer) => void;
+  /** Dismiss: stop flagging every reason the card draws until something new
+      asks (docs/design/needs-attention.md §5). Absent, the foot only names
+      the reasons. */
+  onDismiss?: (card: KanbanCardModel) => void;
+  /** Bring back what was dismissed on this card. */
+  onUndoDismiss?: (card: KanbanCardModel) => void;
 }
+
+/** The foot's reason: the oldest one's label, and how many more there are. */
+function reasonsText(t: TFunction, reasons: readonly NeedReason[]): string {
+  const first = needLabel(t, reasons[0]!);
+  return reasons.length > 1 ? `${first} ${t("needs.more", { count: reasons.length - 1 })}` : first;
+}
+
+
 
 /** Links a lane row on the card already draws, taken off the task's own row,
     so every link appears once on screen (variant B). What stays is what no
@@ -234,6 +266,90 @@ function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
   if (!updatedAtMs) return "";
   if (nowMs - updatedAtMs < 60_000) return t("kanban.justNow");
   return fmtAge(updatedAtMs / 1000);
+}
+
+/** The launches of a task that did not start. One is its own row; more fold
+    behind one summary row that opens on click, with Dismiss all beside it. */
+function UnstartedLaunches({ card, title, nowMs, onOpen, onDismiss }: {
+  card: KanbanCardModel;
+  title: string;
+  nowMs: number;
+  onOpen: (file: FileEntry) => void;
+  onDismiss?: (card: KanbanCardModel, launches: readonly KanbanUnstartedLaunch[]) => void;
+}) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  const launches = card.unstarted;
+  const row = (launch: KanbanUnstartedLaunch) => (
+    <div
+      key={launch.key}
+      role="listitem"
+      className={`unstarted-row${launch.failed ? " failed" : ""}`}
+      data-launch-not-started={launch.key}
+      data-launch-failed={launch.failed ? launch.key : undefined}
+      title={t(launch.failed ? "kanban.launchFailedHint" : "kanban.launchNotStartedHint")}
+    >
+      <span className="what">{t(launch.failed ? "kanban.launchFailed" : "kanban.launchNotStarted")}</span>
+      <span className="age num">{ageLabel(t, launch.atMs, nowMs)}</span>
+      {/* A failed launch opens its launch view: the error in full and Retry. */}
+      {launch.failed ? (
+        <button
+          type="button"
+          className="open"
+          data-launch-open={launch.key}
+          aria-label={t("kanban.openFailedLaunchAria", { title })}
+          onClick={() => onOpen(launch.failed!.file)}
+        >
+          {t("kanban.openFailedLaunch")}
+        </button>
+      ) : null}
+      {onDismiss && launch.dismissable ? (
+        <button
+          type="button"
+          className="dismiss"
+          data-launch-dismiss={launch.key}
+          aria-label={t("kanban.dismissLaunchAria", { title })}
+          onClick={() => onDismiss(card, [launch])}
+        >
+          {t("kanban.dismissLaunch")}
+        </button>
+      ) : null}
+      {launch.failed?.error ? <span className="error" data-launch-error={launch.key}>{launch.failed.error}</span> : null}
+    </div>
+  );
+  if (launches.length === 1) {
+    return <div className="unstarted" role="list" aria-label={t("kanban.launchNotStarted")}>{row(launches[0]!)}</div>;
+  }
+  const dismissable = launches.filter((launch) => launch.dismissable);
+  return (
+    <div className="unstarted" data-launches-not-started={launches.length}>
+      <div className={`unstarted-row summary${launches.some((launch) => launch.failed) ? " failed" : ""}`}>
+        <button
+          type="button"
+          className="fold"
+          aria-expanded={open}
+          aria-label={t(open ? "kanban.launchesNotStartedHide" : "kanban.launchesNotStartedShow", { count: launches.length })}
+          data-launches-toggle={card.id}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? <ChevronDown /> : <ChevronRight />}
+          <span className="what">{t("kanban.launchesNotStarted", { count: launches.length })}</span>
+        </button>
+        {onDismiss && dismissable.length ? (
+          <button
+            type="button"
+            className="dismiss"
+            data-launches-dismiss-all={card.id}
+            aria-label={t("kanban.dismissAllLaunchesAria", { count: dismissable.length, title })}
+            onClick={() => onDismiss(card, dismissable)}
+          >
+            {t("kanban.dismissAllLaunches")}
+          </button>
+        ) : null}
+      </div>
+      {open ? <div className="unstarted-list" role="list" aria-label={t("kanban.launchNotStarted")}>{launches.map(row)}</div> : null}
+    </div>
+  );
 }
 
 export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
@@ -261,21 +377,47 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      the tile's place. */
   const stageReaders = readerKeys.filter((key) => !tileKeys.has(key));
   const openTiles = new Set(readerKeys.filter((key) => tileKeys.has(key)));
-  const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", card.needsYou ? t("kanban.activityNeeds") : "", collapsed ? t("kanban.collapsed") : ""]
+  const reasons = card.needsYou ? reasonsText(t, card.reasons) : "";
+  const cleared = !card.needsYou ? card.cleared[0] ?? null : null;
+  const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : ""]
     .filter(Boolean)
     .join(", ");
-  /* The card's one status hue is its edge (§3.4): red while a member is
-     stalled, amber while it owes the operator an answer, the lane's own amber
-     state word saying which. */
-  const laneNeedsYou = card.pipelines.some((summary) => pipelineNeedsYou(summary.pipeline));
-  const stalled = card.members.some((member) => member.state === "stalled");
-  const attention = stalled ? "stalled" : laneNeedsYou || card.needsYou ? "needs" : undefined;
-  /* What is happening now, never a status, at the foot of the card: who is
-     working, how many conversations it holds or that nothing is on it, and
-     "needs you" only when no lane row already says it. */
+  /* The card's one status hue is its edge (§3.4): amber while it owes the
+     operator an answer, which the foot names. A stalled member keeps its red
+     state word on its tile and no longer colours the card. */
+  const attention = card.needsYou ? "needs" : undefined;
+  const onDismiss = props.onDismiss;
+  const onUndoDismiss = props.onUndoDismiss;
+  /* What is happening now, never a status, at the foot of the card: why it
+     needs the operator (or who cleared it), who is working, and how many
+     conversations it holds or that nothing is on it. */
   const footMeta = (
     <>
-      {card.needsYou && !laneNeedsYou ? <span className="foot-meta needs" data-foot-needs="">{t("kanban.activityNeeds")}</span> : null}
+      {card.needsYou ? (
+        <span className="foot-meta needs" data-foot-needs={card.reasons.length} title={card.reasons.map((need) => needLabel(t, need)).join("\n")}>
+          <span className="clamp">{reasons}</span>
+        </span>
+      ) : null}
+      {card.needsYou && onDismiss ? (
+        <button
+          type="button"
+          className="icon-btn dismiss"
+          data-dismiss={card.id}
+          aria-label={t("needs.dismissAria", { title })}
+          title={t("needs.dismissHint")}
+          onClick={() => onDismiss(card)}
+        >
+          <CheckGlyph />
+        </button>
+      ) : null}
+      {cleared ? (
+        <span className="foot-meta cleared" data-foot-cleared={cleared.by.kind}>{clearedLine(t, cleared, nowMs / 1000)}</span>
+      ) : null}
+      {cleared && onUndoDismiss ? (
+        <button type="button" className="undo" data-undo-dismiss={card.id} aria-label={t("needs.undoAria", { title })} onClick={() => onUndoDismiss(card)}>
+          {t("needs.undo")}
+        </button>
+      ) : null}
       {card.working ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
       {card.conversations
         ? <span className="foot-meta num" data-foot-conversations={card.conversations}>{t("kanban.activityConversations", { count: card.conversations })}</span>
@@ -292,9 +434,12 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const editingDetails = editing?.field === "details";
   const detailsShown = detailsOpen || editingDetails;
-  const livePipelines = card.pipelines.filter((summary) => !ENDED_PIPELINE_STATES.has(summary.pipeline.state));
+  /* A completed lane whose merge still moves or stopped on the operator is
+     not folded with the finished ones (#2187 §6). */
+  const folds = (summary: KanbanPipeline) => ENDED_PIPELINE_STATES.has(summary.pipeline.state) && !laneMergeUnsettled(summary.pipeline);
+  const livePipelines = card.pipelines.filter((summary) => !folds(summary));
   const endedPipelines = card.pipelines
-    .filter((summary) => ENDED_PIPELINE_STATES.has(summary.pipeline.state))
+    .filter(folds)
     .sort((a, b) => pipelineEndedAtMs(b.pipeline) - pipelineEndedAtMs(a.pipeline));
   const foldCompleted = card.pipelines.length > PIPELINE_ROWS_BEFORE_FOLD && endedPipelines.length > 0;
   const shownPipelines = foldCompleted ? livePipelines : [...livePipelines, ...endedPipelines];
@@ -311,13 +456,16 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       density="task"
       nowMs={nowMs}
       taskTitle={card.titlePending ? null : card.title}
+      taskId={card.task?.id ?? null}
       graphOpen={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? false}
       selected={selectedStages(summary.pipeline, readerKeys, panels)}
       acting={acting.get(summary.pipeline.id) ?? null}
       onToggleGraph={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
       onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
       onOpenStages={(pipeline) => props.onOpenSheet(card.id, pipeline)}
-      onMenu={(pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
+      /* A task's card has one ⋯, and the lane's actions are a group in it. A
+         pipeline on no task has no card menu, so its lane keeps its own. */
+      onMenu={card.task ? undefined : (pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
       onWorkLinks={onWorkLinks}
       onAnswer={onAnswer ? (pipeline, answer) => onAnswer(card.id, title, pipeline, answer) : undefined}
     />
@@ -478,6 +626,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
       ) : null}
+      {collapsed ? null : <FinishWaitLine taskId={card.task?.id ?? null} pipelines={card.pipelines} />}
 
       {/* The agent's context, folded away: one row while closed, the whole text
           scrolling inside itself while open, and nothing at all when the task
@@ -631,18 +780,24 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         />
       ) : null}
 
-      {!collapsed && (card.mirrors.length || card.notLoaded || card.otherSurfaces) ? (
+      {!collapsed && card.unstarted.length ? (
+        <UnstartedLaunches card={card} title={title} nowMs={nowMs} onOpen={props.onOpenMember} onDismiss={props.onDismissLaunch} />
+      ) : null}
+
+      {!collapsed && (card.mirrors.length || card.notLoadedRefs.length || card.otherSurfaces) ? (
         <div className="refs">
           {card.mirrors.map((mirror) => (
             <button key={mirror.key} type="button" className="ref" onClick={() => props.onFocusCard(mirror.primaryCardId)}>
               {t("kanban.alsoOn", { title: cleanTitle(mirror.file.title ?? "", 48) || t("kanban.untitledConversation"), card: mirror.primaryTitle })}
             </button>
           ))}
-          {card.notLoaded ? (
-            <button type="button" className="ref quiet" onClick={props.onOpenConversations}>
-              {t("kanban.notLoaded", { count: card.notLoaded })}
+          {/* Each conversation the card lists opens on its own, loaded here or
+              not; a stage's opens from its pipeline's chips and Past attempts. */}
+          {card.notLoadedRefs.map((ref) => (
+            <button key={ref.key} type="button" className="ref quiet" data-not-loaded={ref.key} onClick={() => props.onOpenAttempt({ path: ref.path, conversationId: ref.conversationId })}>
+              {t("kanban.notLoadedOpen")}
             </button>
-          ) : null}
+          ))}
           {card.otherSurfaces ? (
             <button type="button" className="ref quiet" onClick={props.onOpenConversations}>
               {t("kanban.otherSurfaces", { count: card.otherSurfaces })}
@@ -653,16 +808,6 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
 
       {card.task ? (
         <div className="foot">
-          <button
-            type="button"
-            className="pill"
-            data-status={status}
-            aria-haspopup="menu"
-            aria-label={t("kanban.statusAria", { status: statusText })}
-            onClick={(event) => props.onStatusMenu(card, event.currentTarget)}
-          >
-            {statusText} <ChevronDown />
-          </button>
           <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
           {footMeta}
           <span className="spacer" />
@@ -682,3 +827,17 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
     </article>
   );
 });
+
+/** #2187 §5.3: the task's move to Done waits on other open pipelines, said
+    once, muted, under the description. */
+function FinishWaitLine({ taskId, pipelines }: { taskId: string | null; pipelines: readonly KanbanPipeline[] }) {
+  const { t } = useLocale();
+  const open = taskId ? taskFinishWaitCount(pipelines.map((summary) => summary.pipeline), taskId) : 0;
+  if (!open) return null;
+  return (
+    <p className="finish-wait" data-task-finish-wait={open}>
+      <Flag className="finish-wait-icon" aria-hidden />
+      {t("pipelineBlock.finish.cardWaits", { count: open })}
+    </p>
+  );
+}

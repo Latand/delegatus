@@ -53,6 +53,16 @@ export const LIFECYCLE_EVENT_TYPES = [
   /** A project's identity moved to a new key (#1874): a folder gained a
       repository or an origin after it was first used. */
   "project_moved",
+  /** A completed lane's pull request merged (#2187 §4.5): by the merge
+      runner, or by anyone while the runner held the lane. */
+  "pipeline_merged",
+  /** A pipeline marked as finishing its task moved that task to Done
+      (#2187 §5.3), attributed to the pipeline. */
+  "task_finished",
+  /** A tool permission request was denied because no one could answer it
+      (#2215): an unattended stage or spawn at once, an attended conversation
+      after its wait ran out. The turn carries on with the denial. */
+  "permission_denied",
 ] as const;
 
 export type LifecycleEventType = typeof LIFECYCLE_EVENT_TYPES[number];
@@ -78,6 +88,9 @@ export const LIFECYCLE_STATE_FOR_EVENT: Record<LifecycleEventType, LifecycleStat
   agent_gone: "gone",
   agent_resumed: "running",
   project_moved: "completed",
+  pipeline_merged: "completed",
+  task_finished: "completed",
+  permission_denied: "running",
 };
 
 /**
@@ -95,6 +108,8 @@ export const TERMINAL_HIGH_SIGNAL_EVENT_TYPES: ReadonlySet<LifecycleEventType> =
   "deploy_failed",
   "delivery_held",
   "delivery_expired",
+  "pipeline_merged",
+  "task_finished",
 ]);
 
 export function isTerminalHighSignalEvent(type: LifecycleEventType): boolean {

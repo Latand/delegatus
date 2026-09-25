@@ -2,22 +2,28 @@
 
 import { ChevronRight, Filter } from "lucide-react";
 
-import { projectDisplayName } from "@/lib/displayNames";
+import { projectDisplayName, projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
+import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardModel";
 
 import type { AttentionItem } from "../attention";
 import { cleanTitle, fmtAge } from "../utils";
-import { decisionLine } from "./decision";
+import { decisionLine, needLabel } from "./decision";
+import { laneNeed } from "./needReason";
+import { PermissionActions } from "./PermissionActions";
 
 interface Props {
-  /** buildAttentionQueue's length, passed in so every surface shows one number. */
+  /** `buildNeedsYouQueue`'s length (conversations and parked lanes), passed in
+      so every surface shows one number. */
   count: number;
   queueOpen: boolean;
   filterActive: boolean;
   onToggleQueue: () => void;
   /** Advance the shared cycle; −1 (Shift-click) mirrors Shift-N. */
   onNext: (dir: 1 | -1) => void;
-  onToggleFilter: () => void;
+  /** Absent while no conversation waits: the filter keeps conversations lit,
+      so a queue of parked lanes alone offers no filter (#2129). */
+  onToggleFilter?: () => void;
 }
 
 /**
@@ -46,6 +52,7 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
       <div
         data-attention-island
         data-attention-zero
+        data-walk-anchor="needs"
         role="status"
         aria-label={t("attention.badge", { count: 0 })}
         className="flex items-center rounded-full border border-border bg-card/95 px-3 py-1 text-[12px] font-bold text-muted shadow-1"
@@ -58,7 +65,7 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
   }
 
   return (
-    <div data-attention-island className="flex items-center overflow-hidden rounded-full border border-warning/45 bg-warning-soft shadow-1">
+    <div data-attention-island data-walk-anchor="needs" className="flex items-center overflow-hidden rounded-full border border-warning/45 bg-warning-soft shadow-1">
       <button
         type="button"
         data-attention-count
@@ -76,7 +83,7 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
       <button
         type="button"
         data-attention-next
-        className="inline-flex items-center gap-0.5 py-1 pl-2 pr-1.5 text-[12px] font-bold text-warning hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+        className={`inline-flex items-center gap-0.5 py-1 pl-2 ${onToggleFilter ? "pr-1.5" : "pr-2.5"} text-[12px] font-bold text-warning hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40`}
         aria-label={t("attention.nextHint")}
         aria-keyshortcuts="n shift+n"
         title={t("attention.nextHint")}
@@ -85,20 +92,24 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
         {t("attention.next")}
         <ChevronRight className="h-3.5 w-3.5" aria-hidden />
       </button>
-      <div className="h-4 w-px shrink-0 bg-warning/45" aria-hidden />
-      <button
-        type="button"
-        data-attention-filter
-        className={`px-2 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
-          filterActive ? "bg-warning/30 text-warning" : "text-warning/70 hover:bg-warning/15 hover:text-warning"
-        }`}
-        aria-pressed={filterActive}
-        title={filterActive ? t("attention.filterOff") : t("attention.filterOn")}
-        aria-label={filterActive ? t("attention.filterOff") : t("attention.filterOn")}
-        onClick={onToggleFilter}
-      >
-        <Filter className="h-3.5 w-3.5" aria-hidden />
-      </button>
+      {onToggleFilter ? (
+        <>
+          <div className="h-4 w-px shrink-0 bg-warning/45" aria-hidden />
+          <button
+            type="button"
+            data-attention-filter
+            className={`px-2 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+              filterActive ? "bg-warning/30 text-warning" : "text-warning/70 hover:bg-warning/15 hover:text-warning"
+            }`}
+            aria-pressed={filterActive}
+            title={filterActive ? t("attention.filterOff") : t("attention.filterOn")}
+            aria-label={filterActive ? t("attention.filterOff") : t("attention.filterOn")}
+            onClick={onToggleFilter}
+          >
+            <Filter className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -113,8 +124,8 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
  * learn what it wants, which is the work the queue exists to remove.
  */
 export function AttentionQueueRow({ item, onOpen }: { item: AttentionItem; onOpen: () => void }) {
-  const { t, locale } = useLocale();
-  return (
+  const { t } = useLocale();
+  const row = (
     <button
       type="button"
       data-attention-row={item.id}
@@ -128,13 +139,54 @@ export function AttentionQueueRow({ item, onOpen }: { item: AttentionItem; onOpe
         <span className="shrink-0 rounded-full border border-border bg-canvas px-1.5 text-[10px] font-semibold text-muted" title={item.project}>
           {projectDisplayName(item.project, item.file.projectName)}
         </span>
-        <span className="shrink-0 text-[10.5px] text-muted">{fmtAge(item.since)}</span>
+        <span data-attention-age className="shrink-0 text-[10.5px] text-muted">{fmtAge(item.since)}</span>
       </span>
       <span
         data-attention-decision
-        className={`w-full truncate text-[11px] ${item.tier === "stalled" ? "text-warning" : "text-muted"}`}
+        className="w-full truncate text-[11px] text-muted"
       >
-        {decisionLine(t, locale, item.file) ?? t("status.stalled")}
+        {decisionLine(t, item.file) ?? t("attention.decisionQuestion")}
+      </span>
+    </button>
+  );
+  /* A structured permission request is answered right here (#2215). */
+  if (item.reason.kind !== "permission" || !item.file.pendingPermission) return row;
+  return (
+    <div className="min-w-0">
+      {row}
+      <PermissionActions file={item.file} />
+    </div>
+  );
+}
+
+/**
+ * A lane parked on the operator, as a row of the same popover (#2129): the
+ * lane's task, its project, how long it has waited, and the reason in the
+ * words its card uses (`needLabel`), so the row and the card cannot name one
+ * decision two ways. Opening it lands on the card that holds the lane.
+ */
+export function AttentionLaneRow({ row, projectName, onOpen }: { row: MobileBoardPipelineRow; projectName?: string; onOpen: () => void }) {
+  const { t } = useLocale();
+  const need = laneNeed(row.pipeline)?.need ?? null;
+  const project = projectTitle(row.pipeline.project, projectName);
+  return (
+    <button
+      type="button"
+      data-attention-lane={row.id}
+      className="flex w-full min-w-0 flex-col gap-0.5 rounded-[8px] px-2.5 py-2 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      onClick={onOpen}
+    >
+      <span className="flex w-full min-w-0 items-center gap-1.5">
+        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{row.task}</span>
+        {project ? (
+          <span className="shrink-0 rounded-full border border-border bg-canvas px-1.5 text-[10px] font-semibold text-muted" title={row.pipeline.project}>
+            {project}
+          </span>
+        ) : null}
+        {need ? <span className="shrink-0 text-[10.5px] text-muted">{fmtAge(need.since)}</span> : null}
+      </span>
+      <span data-attention-decision className="w-full truncate text-[11px] text-muted">
+        {need ? needLabel(t, need) : t("needs.laneDecision")}
       </span>
     </button>
   );

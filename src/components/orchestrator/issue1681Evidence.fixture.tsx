@@ -319,7 +319,6 @@ function Phone() {
         file={file}
         incumbent={null}
         pendingMandate=""
-        viewerMcpRegistered
         submitting={false}
         rotate={{ open: false, seat: null, vacated: false, opening: false, submitting: false, failure: null, onOpen() {}, onCancel() {}, onConfirm() {} }}
         tick={{ onOpen: () => setSheet("tick"), onClose: () => setSheet("seat") }}

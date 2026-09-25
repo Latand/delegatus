@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
+import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 /*
  * The dock's place in the shell (issue #977 acceptance): it is PUSHED INTO the
@@ -69,14 +71,30 @@ mock.module("@/hooks/runtimeBus", () => ({
 
 const { Viewer } = await import("./Viewer");
 const { resetFilesClientCacheForTests } = await import("@/hooks/useFiles");
+const { resetPendingOpensForTest } = await import("@/hooks/useBoardState");
 const { OPEN_KEY } = await import("./orchestrator/OrchestratorDock");
 
 const PROJECT = "atlas";
 const OTHER = "borealis";
 const originalFetch = globalThis.fetch;
 
+/* The dock is what a project shows off its Board: the Board seats the
+   orchestrator above its columns instead (#1695 K3). A desktop project nobody
+   chose a view for opens on its Board (#2166 §3.4), so these cases serve a
+   board whose saved view is the conversation list, the way an operator who
+   picked it has one. */
+let savedView: "list" | null = "list";
+let boards: Record<string, BoardProjectStateV1> = {};
+const savedBoard = (viewMode: "list" | null): BoardProjectStateV1 => ({
+  schemaVersion: 1,
+  revision: 0,
+  updatedAt: new Date(0).toISOString(),
+  pathAliases: {},
+  prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode, taskPanelOpen: false },
+});
+
 function stubFetch(): void {
-  globalThis.fetch = (async (input: string | URL | Request) => {
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url.startsWith("/api/files")) {
       return new Response(JSON.stringify({
@@ -87,6 +105,19 @@ function stubFetch(): void {
     if (url.startsWith("/api/orchestrator/seat")) {
       return new Response(JSON.stringify({ seat: null, pending: null, exists: true }));
     }
+    if (url.startsWith("/api/board")) {
+      /* A real in-memory board: the Viewer writes to it as it opens a project,
+         and a write answered with anything but its result is retried forever. */
+      if ((init?.method ?? "GET").toUpperCase() === "GET") {
+        const project = new URL(url, "http://localhost").searchParams.get("project") ?? "";
+        return Response.json({ ok: true, board: boards[project] ??= savedBoard(savedView) });
+      }
+      const body = JSON.parse(String(init?.body)) as { project: string; mutations?: BoardMutationV1[] };
+      const current = boards[body.project] ??= savedBoard(savedView);
+      const next = { ...applyBoardMutations(current, body.mutations ?? []), revision: current.revision + 1 };
+      boards[body.project] = next;
+      return Response.json({ ok: true, applied: true, board: next });
+    }
     return new Response("not found", { status: 404 });
   }) as unknown as typeof fetch;
 }
@@ -95,6 +126,9 @@ let mounted: { unmount: () => void } | null = null;
 
 beforeEach(() => {
   resetFilesClientCacheForTests();
+  resetPendingOpensForTest();
+  boards = {};
+  savedView = "list";
   dom.localStorage.clear();
   dom.sessionStorage.clear();
   dom.location.hash = "";
@@ -191,4 +225,25 @@ test("the dock follows the selected project", async () => {
   await act(async () => { await Bun.sleep(20); });
 
   expect(dock(host)!.querySelector("[data-orchestrator-panel]")?.getAttribute("data-orchestrator-panel")).toBe(OTHER);
+});
+
+test("a project with no saved view opens on its Board: no dock, and the toggle folds the seat", async () => {
+  savedView = null;
+  dom.localStorage.setItem(OPEN_KEY, "1");
+  /* Selected the way the rail selects: the previous case leaves another
+     project behind in the history state, which a bare `llvProject` loses to. */
+  dom.location.hash = `#p=${encodeURIComponent(PROJECT)}`;
+
+  const host = await mountViewer();
+  const seat = () => host.querySelector(`[data-kanban-seat="${PROJECT}"]`);
+  expect(seat() !== null).toBe(true);
+  /* Remembered open, and still no dock: the Board's seat is the one composer. */
+  expect(dock(host) === null).toBe(true);
+  const toggle = () => host.querySelector("[data-orchestrator-toggle]") as HTMLButtonElement;
+  const folded = seat()!.getAttribute("data-collapsed");
+
+  await act(async () => { toggle().click(); });
+  expect(seat()!.getAttribute("data-collapsed")).toBe(folded === "1" ? "0" : "1");
+  expect(toggle().getAttribute("aria-pressed")).toBe(folded === "1" ? "true" : "false");
+  expect(dock(host) === null).toBe(true);
 });

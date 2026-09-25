@@ -1,23 +1,27 @@
 "use client";
 
-import { ArrowRight, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Inbox, Link2, Palette, Pause, Pencil, Play, Plus, ScrollText, UserRoundCheck } from "lucide-react";
+import { ArrowRight, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Palette, Pause, Pencil, Play, Plus, ScrollText, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
 import { TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
-import { KANBAN_STATUSES, summarizePipeline, type KanbanPipeline } from "@/components/kanban/kanbanModel";
+import { dismissUnstartedLaunch, dismissUnstartedLaunches } from "@/components/kanban/kanbanAssignments";
+import { KANBAN_STATUSES, summarizePipeline, type KanbanPipeline, type KanbanUnstartedLaunch } from "@/components/kanban/kanbanModel";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pipelinePorts";
 import { textField, withField } from "@/components/kanban/taskText";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
-import { blockAgeSeconds, pipelineEnded, pipelineNeedsYou, screenCurrentStageId } from "@/components/pipelines/pipelineBlockModel";
+import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
+import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
+import { blockAgeSeconds, laneMergeUnsettled, pipelineEnded, pipelineNeedsYou, screenCurrentStageId } from "@/components/pipelines/pipelineBlockModel";
 import { attemptNavTarget, latestAttempt, resolveStageNavFile, stageNames } from "@/components/pipelines/pipelineModel";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
 import { WorkLinkRow, WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
+import { formatConversationHash } from "@/lib/accounts/identity";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
@@ -27,13 +31,14 @@ import type { FileEntry } from "@/lib/types";
 
 import { BADGE_LABEL, ConversationRow } from "./MobileBoard";
 import { launchedAt, mobileRowState, nowFragment, type MobileBoardConversation } from "./mobileBoardModel";
+import { attentionReason } from "../attention";
 import { mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useScrolledAway, type PendingPipelineActs } from "./MobilePipelineScreen";
 import { showReceipt } from "./MobileReceipt";
 import type { MobileRowActionTarget } from "./MobileRowActions";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { MobileSwipeRow, type MobileRowAction } from "./MobileSwipeRow";
-import { useMobileNav, useMobileNavStore } from "./mobileNav";
+import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory, useSheetSelection } from "./mobileNav";
 import { cardOfTask, usePhoneBoardModel, type PhoneBoardInput, type TaskMutations } from "./usePhoneBoard";
 
 /*
@@ -275,7 +280,8 @@ function AskCard({ file, now, onOpen }: { file: FileEntry; now: number; onOpen: 
 
 /** Earlier attempts and review rounds of the task's lanes, newest first,
     folded to one row (§3.5, 7). A row whose transcript is in the scan opens it. */
-function EarlierAttempts({ lanes, past, files, nowMs, onOpen }: {
+function EarlierAttempts({ taskId, lanes, past, files, nowMs, onOpen }: {
+  taskId: string;
   lanes: readonly KanbanPipeline[];
   past: NonNullable<ReturnType<typeof cardOfTask>>["past"];
   files: readonly FileEntry[];
@@ -283,7 +289,8 @@ function EarlierAttempts({ lanes, past, files, nowMs, onOpen }: {
   onOpen: (file: FileEntry) => void;
 }) {
   const { t } = useLocale();
-  const [open, setOpen] = useState(false);
+  /* Open or folded as the operator left it when Back returns here (#2105). */
+  const [open, setOpen] = useMobileScreenState({ kind: "task", id: taskId }, "earlier", false);
   const names = useMemo(() => new Map(lanes.map((lane) => [lane.pipeline.id, stageNames(t, lane.pipeline)] as const)), [lanes, t]);
   if (!past.length) return null;
   const age = (atMs: number) => (atMs ? humanizeDuration(blockAgeSeconds((nowMs - atMs) / 1000)) : "");
@@ -337,6 +344,91 @@ function EarlierAttempts({ lanes, past, files, nowMs, onOpen }: {
 
 /* ── The screen ─────────────────────────────────────────────────────────── */
 
+/** The task's launches that did not start. One is its own row; more fold
+    behind one summary row that opens on tap, with Dismiss all beside it. */
+function UnstartedLaunches({ taskId, title, launches, onOpen }: {
+  taskId: string;
+  title: string;
+  launches: readonly KanbanUnstartedLaunch[];
+  onOpen: (file: FileEntry) => void;
+}) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  const action = "min-h-11 shrink-0 rounded-[8px] px-3 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  const frame = (failed: boolean) => `flex min-h-14 w-full flex-wrap items-center gap-x-2 rounded-[12px] border px-3 py-2 ${failed ? "border-danger/40" : "border-dashed border-border"}`;
+  const words = (failed: boolean) => `min-w-0 flex-1 truncate text-body ${failed ? "font-semibold text-danger" : "text-muted"}`;
+  const row = (launch: KanbanUnstartedLaunch) => (
+    <div
+      key={launch.key}
+      data-phone-task-unstarted={launch.key}
+      data-phone-task-launch-failed={launch.failed ? launch.key : undefined}
+      title={t(launch.failed ? "kanban.launchFailedHint" : "kanban.launchNotStartedHint")}
+      className={frame(Boolean(launch.failed))}
+    >
+      <span className={words(Boolean(launch.failed))}>
+        {t(launch.failed ? "kanban.launchFailed" : "kanban.launchNotStarted")}
+      </span>
+      {launch.failed ? (
+        <button
+          type="button"
+          data-phone-launch-open={launch.key}
+          aria-label={t("kanban.openFailedLaunchAria", { title })}
+          className={action}
+          onClick={() => onOpen(launch.failed!.file)}
+        >
+          {t("kanban.openFailedLaunch")}
+        </button>
+      ) : null}
+      {launch.dismissable ? (
+        <button
+          type="button"
+          data-phone-launch-dismiss={launch.key}
+          aria-label={t("kanban.dismissLaunchAria", { title })}
+          className={action}
+          onClick={() => { void dismissUnstartedLaunch(taskId, launch); }}
+        >
+          {t("kanban.dismissLaunch")}
+        </button>
+      ) : null}
+      {launch.failed?.error ? (
+        <p data-phone-launch-error={launch.key} className="m-0 line-clamp-2 basis-full break-words pb-1 text-ui text-secondary">{launch.failed.error}</p>
+      ) : null}
+    </div>
+  );
+  if (launches.length === 1) return row(launches[0]!);
+  const dismissable = launches.filter((launch) => launch.dismissable);
+  const failed = launches.some((launch) => launch.failed);
+  return (
+    <>
+      <div data-phone-task-unstarted-summary={launches.length} className={frame(failed)}>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={t(open ? "kanban.launchesNotStartedHide" : "kanban.launchesNotStartedShow", { count: launches.length })}
+          data-phone-launches-toggle=""
+          className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          onClick={() => setOpen((value) => !value)}
+        >
+          <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} aria-hidden />
+          <span className={words(failed)}>{t("kanban.launchesNotStarted", { count: launches.length })}</span>
+        </button>
+        {dismissable.length ? (
+          <button
+            type="button"
+            data-phone-launches-dismiss-all=""
+            aria-label={t("kanban.dismissAllLaunchesAria", { count: dismissable.length, title })}
+            className={action}
+            onClick={() => { void dismissUnstartedLaunches(taskId, dismissable); }}
+          >
+            {t("kanban.dismissAllLaunches")}
+          </button>
+        ) : null}
+      </div>
+      {open ? launches.map(row) : null}
+    </>
+  );
+}
+
 export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const { t } = useLocale();
   const { taskId, files, flows, now } = props;
@@ -369,9 +461,14 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     .map((summary, index) => ({ summary, index }))
     .sort((a, b) => LANE_RANK[a.summary.pipeline.state] - LANE_RANK[b.summary.pipeline.state] || a.index - b.index)
     .map((entry) => entry.summary), [lanes]);
-  const live = ordered.filter((summary) => !pipelineEnded(summary.pipeline));
-  const ended = ordered.filter((summary) => pipelineEnded(summary.pipeline));
-  const [endedOpen, setEndedOpen] = useState(false);
+  /* A completed lane whose merge still moves or stopped on the operator stays
+     out of the fold (#2187 §6). */
+  const folds = (summary: KanbanPipeline) => pipelineEnded(summary.pipeline) && !laneMergeUnsettled(summary.pipeline);
+  const live = ordered.filter((summary) => !folds(summary));
+  const ended = ordered.filter(folds);
+  /* The finished lanes stay open or folded as the operator left them when
+     Back returns here (#2105). */
+  const [endedOpen, setEndedOpen] = useMobileScreenState({ kind: "task", id: taskId }, "ended", false);
 
   /* The task's conversations: its members and the ones it shares with
      another card, working first, then those that ask, then by recency. */
@@ -395,6 +492,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     }
     return list.sort((a, b) => agentRank(a.file, now) - agentRank(b.file, now) || agentAt(b.file) - agentAt(a.file));
   }, [card, task, files, now]);
+  const notLoadedRefs = card?.notLoadedRefs ?? [];
+  const unstarted = card?.unstarted ?? [];
   const asks = agents.filter(({ file }) => {
     const badge = mobileRowState(file, now).badge;
     return badge === "question" || badge === "plan";
@@ -405,8 +504,10 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     onShown?.(shownKey ? shownKey.split("\n") : []);
   }, [shownKey, onShown]);
 
-  const title = task ? (card?.titlePending ? t("kanban.untitled") : textField(task.text, "title") || t("kanban.untitled")) : "";
-  const pendingTitle = Boolean(card?.titlePending || (task && !textField(task.text, "title")));
+  /* The card decides the name, borrowed title included: a placeholder no
+     agent will name reads the same here as on the board. */
+  const title = task ? (card?.titlePending ? t("kanban.untitled") : (card?.title || textField(task.text, "title")) || t("kanban.untitled")) : "";
+  const pendingTitle = card ? card.titlePending : Boolean(task && !textField(task.text, "title"));
   const description = task ? textField(task.text, "description") : "";
   const details = task?.details ?? "";
   const receiptTitle = cleanTitle(title, 48);
@@ -417,11 +518,11 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
      blur can all ask for the same edit, and only the first one writes. */
   const activeEdit = useRef<Editing | null>(null);
   activeEdit.current = editing;
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useMobileScreenState({ kind: "task", id: taskId }, "details", false);
   const startEdit = (field: EditField) => {
     if (!task) return;
     const base = field === "details" ? details : textField(task.text, field);
-    setEditing({ field, draft: field === "title" && pendingTitle ? "" : base, base, note: null });
+    setEditing({ field, draft: field === "title" ? (pendingTitle ? "" : title) : base, base, note: null });
     if (field === "details") setDetailsOpen(true);
   };
   const save = async (entry: Editing): Promise<void> => {
@@ -536,6 +637,31 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const laneBlock = (summary: KanbanPipeline) => {
     const { pipeline } = summary;
     const needs = pipelineNeedsYou(pipeline);
+    /* A live lane shows its stages as the pipeline screen draws them (#2148):
+       numbered rows with who runs each, and the current stage's report and
+       "Open conversation", so the usual next tap is on this screen. A
+       finished lane keeps the one-row chain. */
+    if (!pipelineEnded(pipeline)) {
+      return (
+        <div key={pipeline.id} data-phone-task-lane={pipeline.id} data-needs={needs ? "1" : undefined} className="shrink-0">
+          <PipelineBlock
+            summary={summary}
+            density="screen"
+            embedded
+            nowMs={nowMs}
+            taskId={taskId}
+            acting={lane.acting(pipeline)}
+            onOpenStage={openStage}
+            onOpenStages={props.onOpenPipeline}
+            onMenu={(entry) => {
+              setLaneFor(entry.id);
+              nav.openSheet("lane");
+            }}
+            onAnswer={lane.answer}
+          />
+        </div>
+      );
+    }
     return (
       <div
         key={pipeline.id}
@@ -548,6 +674,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
           density="task"
           nowMs={nowMs}
           taskTitle={pendingTitle ? null : title}
+          taskId={taskId}
           acting={lane.acting(pipeline)}
           largeAnswers
           onOpenStage={openStage}
@@ -570,8 +697,14 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     return pr ? [`#${pr.number}`] : [];
   });
 
+  const finishWaits = taskFinishWaitCount(lanes.map((summary) => summary.pipeline), taskId);
+
   /* ── Sheets ───────────────────────────────────────────────────────────── */
   const laneSummary = laneFor ? lanes.find((summary) => summary.pipeline.id === laneFor) ?? null : null;
+  /* The lane's menu and the links sheet show what this screen chose to open
+     them on; an entry that came back without it closes (#2105). */
+  useSheetSelection("lane", laneSummary !== null);
+  useSheetSelection("links", linksFor !== null);
   const sheets: SheetRenderer = (name, close) => {
     if (name === "status") {
       return (
@@ -612,6 +745,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
       const acting = lane.acting(pipeline);
       const icons = { pause: Pause, resume: Play, archive: CircleX } as const;
       const laneTitle = cleanTitle(pipelineTitle(t, pipeline), 90);
+      const finish = finishesTaskOffer(pipeline, taskId, lanes.map((summary) => summary.pipeline));
       return (
         <MobileSheet name="lane" title={laneTitle} onClose={close}>
           <div role="menu" aria-label={laneTitle} className="flex flex-col py-1" data-phone-task-lane-sheet={pipeline.id}>
@@ -636,6 +770,31 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 }}
                 attrs={{ "data-phone-task-lane-action": "open-conversation" }}
               />
+            ) : null}
+            {finish ? (
+              /* #2187 §6: one toggle, its hint, and the count of other open
+                 lanes Done would wait for, in warning ink. The hints wrap,
+                 which the one-line sheet row cannot. */
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={finish.checked}
+                disabled={Boolean(acting)}
+                data-phone-task-lane-action="finishes-task"
+                onClick={() => {
+                  close();
+                  void toggleFinishesTask(props.ports ?? browserPipelinePorts, pipeline, taskId, laneTitle, t, (text, error) => showReceipt(text, null, error ? { error: true } : undefined));
+                }}
+                className={`flex min-h-11 w-full items-start gap-3 px-4 py-2.5 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 ${finish.checked ? "text-accent" : "text-primary"}`}
+              >
+                <span className="flex h-[22px] w-[18px] shrink-0 items-center justify-center text-secondary"><Flag className="h-[18px] w-[18px]" aria-hidden /></span>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="text-body font-semibold">{t("pipelineBlock.finish.menu")}</span>
+                  <span className="text-label font-normal text-muted">{t("pipelineBlock.finish.menuWhy")}</span>
+                  {finish.open ? <span className="text-label font-normal text-warning" data-finish-open={finish.open}>{t("pipelineBlock.finish.menuOpen", { count: finish.open })}</span> : null}
+                </span>
+                <span className="flex h-[22px] w-5 shrink-0 items-center justify-center">{finish.checked ? <Check className="h-[18px] w-[18px] text-accent" aria-hidden /> : null}</span>
+              </button>
             ) : null}
             {mobilePipelineActions(pipeline).length ? <MobileSheetDivider /> : null}
             {mobilePipelineActions(pipeline).map((spec) => {
@@ -720,6 +879,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const body = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLDivElement>(null);
   const titleAway = useScrolledAway(heading, body);
+  /* Back to this task lands where the operator left it (#2105). */
+  useMobileScrollMemory(body, { kind: "task", id: taskId }, Boolean(task));
   const context = contextLine(t, status, agents.length, lanes.length);
   const barTitle = (
     <span className="flex min-w-0 flex-1 flex-col">
@@ -784,137 +945,171 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   {title}
                 </button></h1>
               )}
+              {finishWaits ? (
+                /* #2187 §5.3: the move to Done waits on other open pipelines. */
+                <p data-task-finish-wait={finishWaits} className="m-0 flex items-start gap-1 px-1 text-label text-muted [overflow-wrap:anywhere]">
+                  <Flag className="mt-[2px] h-3 w-3 shrink-0" aria-hidden />
+                  {t("pipelineBlock.finish.cardWaits", { count: finishWaits })}
+                </p>
+              ) : null}
             </div>
 
-            {/* 2. The pipelines: what needs the operator first; finished ones folded. */}
-            {live.length || ended.length ? (
-              <section data-phone-task-lanes={lanes.length} className="flex shrink-0 flex-col gap-2">
-                {live.map(laneBlock)}
-                {ended.length ? (
-                  <>
-                    <button
-                      type="button"
-                      data-phone-task-ended={ended.length}
-                      aria-expanded={endedOpen}
-                      aria-label={t(endedOpen ? "kanban.pipelines.completedHide" : "kanban.pipelines.completedShow", { count: ended.length })}
-                      className="flex min-h-11 w-full items-center gap-2 rounded-[12px] border border-dashed border-border px-3 text-left text-ui tabular-nums text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-                      onClick={() => setEndedOpen((open) => !open)}
-                    >
-                      <Check className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-                      <span className="min-w-0 flex-1 truncate">
-                        {[t("mobile2.pipelines.completed", { count: ended.length }), ...endedPrs].join(" · ")}
-                      </span>
-                      <ChevronDown className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${endedOpen ? "rotate-180" : ""}`} aria-hidden />
-                    </button>
-                    {endedOpen ? ended.map(laneBlock) : null}
-                  </>
-                ) : null}
-              </section>
-            ) : null}
-
-            {/* 3. What an agent asks that no block carries. */}
-            {asks.length ? (
-              <section data-phone-task-needs={asks.length} className="flex shrink-0 flex-col gap-1.5">
-                <h2 className={`${SECTION} m-0`}>{t("mobile2.attention.title")}</h2>
-                {asks.map(({ file }) => <AskCard key={file.path} file={file} now={now} onOpen={() => props.onOpenConversation(file)} />)}
-              </section>
-            ) : null}
-
-            {/* 4. Links attached to the task by hand. */}
-            <WorkLinkRow resolved={taskLinks} showNoPr={false} className="phone-task-links" testId={taskId} onMore={() => openLinks({ kind: "task", id: taskId })} />
-
-            {/* 5. The description: one line, whole and editable on a tap. */}
-            {editorFor("description") ?? (
-              <button
-                type="button"
-                data-phone-task-description=""
-                aria-label={description ? t("kanban.editDescription") : t("kanban.addDescription")}
-                className={`${ROW} shrink-0 min-h-12`}
-                onClick={() => startEdit("description")}
-              >
-                <span className="flex min-w-0 flex-1 items-baseline gap-[5px] text-body">
-                  <span className="shrink-0 font-semibold text-primary">{t("mobile2.task.description")}</span>
-                  <Sep />
-                  <span className={`min-w-0 truncate ${description ? "text-secondary" : "italic text-muted"}`}>{description ? description.split(/\r?\n/, 1)[0] : t("kanban.addDescription")}</span>
-                </span>
-                <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
-              </button>
-            )}
-
-            {/* 6. The agents, working first. */}
-            <section data-phone-task-agents={agents.length} className="flex shrink-0 flex-col gap-1.5">
-              <h2 className={`${SECTION} m-0`}>
-                {t("mobile2.task.agents")}
-                <Sep />
-                <span className="text-label font-semibold tabular-nums text-muted">{agents.length}</span>
-              </h2>
-              {agents.map((agent) => {
-                const rowTitle = agentTitle(agent);
-                const row: MobileBoardConversation = {
-                  file: agent.file,
-                  path: agent.file.path,
-                  title: rowTitle,
-                  state: mobileRowState(agent.file, now),
-                  now: nowFragment(agent.file),
-                  launchedAt: launchedAt(agent.file),
-                  crowned: false,
-                };
-                const actions = props.rowActions?.({ kind: "conversation", row: { path: agent.file.path, title: rowTitle } }) ?? [];
-                const view = <ConversationRow row={row} now={now} onOpen={props.onOpenConversation} />;
-                return (
-                  <div key={agent.file.path} data-phone-task-agent={agent.file.path} data-phone-task-agent-stage={agent.stage?.stage.id}>
-                    {actions.length ? <MobileSwipeRow id={`task:${taskId}:${agent.file.path}`} title={rowTitle} actions={actions}>{view}</MobileSwipeRow> : view}
-                  </div>
-                );
-              })}
-              {(card?.drafts ?? []).map((draftId) => (
-                <button
-                  key={draftId}
-                  type="button"
-                  data-phone-task-draft={draftId}
-                  className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
-                  disabled={!props.onOpenDraft}
-                  onClick={() => props.onOpenDraft?.(draftId)}
-                >
-                  <Plus className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("mobile2.task.draft")}</span>
-                  <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
-                </button>
-              ))}
-              {!agents.length && !card?.drafts.length ? (
-                <p className="m-0 px-1 text-ui text-muted">{t("mobile2.kanban.noAgents")}</p>
+            {/* Groups under the title, 24 px apart and 8 px inside (#2148):
+                the stages, what agents ask, the task with its agents, and
+                its history. */}
+            <div data-phone-task-groups="" className="flex shrink-0 flex-col gap-6">
+              {/* 2. The pipelines: what needs the operator first; finished ones folded. */}
+              {live.length || ended.length ? (
+                <section data-phone-task-lanes={lanes.length} className="flex shrink-0 flex-col gap-2">
+                  {live.map(laneBlock)}
+                  {ended.length ? (
+                    <>
+                      <button
+                        type="button"
+                        data-phone-task-ended={ended.length}
+                        aria-expanded={endedOpen}
+                        aria-label={t(endedOpen ? "kanban.pipelines.completedHide" : "kanban.pipelines.completedShow", { count: ended.length })}
+                        className="flex min-h-11 w-full items-center gap-2 rounded-[12px] border border-dashed border-border px-3 text-left text-ui tabular-nums text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                        onClick={() => setEndedOpen((open) => !open)}
+                      >
+                        <Check className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                        <span className="min-w-0 flex-1 truncate">
+                          {[t("mobile2.pipelines.completed", { count: ended.length }), ...endedPrs].join(" · ")}
+                        </span>
+                        <ChevronDown className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${endedOpen ? "rotate-180" : ""}`} aria-hidden />
+                      </button>
+                      {endedOpen ? ended.map(laneBlock) : null}
+                    </>
+                  ) : null}
+                </section>
               ) : null}
-            </section>
+              {/* 3. What an agent asks that no block carries. */}
+              {asks.length ? (
+                <section data-phone-task-needs={asks.length} className="flex shrink-0 flex-col gap-2">
+                  <h2 className={`${SECTION} m-0`}>{t("mobile2.attention.title")}</h2>
+                  {asks.map(({ file }) => <AskCard key={file.path} file={file} now={now} onOpen={() => props.onOpenConversation(file)} />)}
+                </section>
+              ) : null}
+              <div data-phone-task-group="task" className="flex shrink-0 flex-col gap-2">
+                {/* 4. Links attached to the task by hand. */}
+                <WorkLinkRow resolved={taskLinks} showNoPr={false} className="phone-task-links" testId={taskId} onMore={() => openLinks({ kind: "task", id: taskId })} />
 
-            {/* 7. The agent's context and the earlier attempts, folded. */}
-            {editorFor("details") ?? (details ? (
-              <section data-phone-task-details="" className="shrink-0 overflow-hidden rounded-[12px] bg-card shadow-1">
-                <button
-                  type="button"
-                  aria-expanded={detailsOpen}
-                  data-phone-task-details-toggle=""
-                  aria-label={t(detailsOpen ? "kanban.detailsHide" : "kanban.detailsShow", { title: receiptTitle })}
-                  className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-body font-semibold text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-                  onClick={() => setDetailsOpen((open) => !open)}
-                >
-                  <ScrollText className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">{t("kanban.details")}</span>
-                  <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${detailsOpen ? "rotate-90" : ""}`} aria-hidden />
-                </button>
-                {detailsOpen ? (
+                {/* 5. The description: one line, whole and editable on a tap. */}
+                {editorFor("description") ?? (
                   <button
                     type="button"
-                    data-phone-task-details-text=""
-                    aria-label={t("kanban.editDetails")}
-                    className="block max-h-[320px] w-full overflow-y-auto whitespace-pre-wrap border-t border-border px-3 py-2 text-left font-mono text-ui leading-[1.45] text-secondary [overflow-wrap:anywhere] active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-                    onClick={() => startEdit("details")}
+                    data-phone-task-description=""
+                    aria-label={description ? t("kanban.editDescription") : t("kanban.addDescription")}
+                    className={`${ROW} shrink-0 min-h-12`}
+                    onClick={() => startEdit("description")}
                   >
-                    {details}
+                    <span className="flex min-w-0 flex-1 items-baseline gap-[5px] text-body">
+                      <span className="shrink-0 font-semibold text-primary">{t("mobile2.task.description")}</span>
+                      <Sep />
+                      <span className={`min-w-0 truncate ${description ? "text-secondary" : "italic text-muted"}`}>{description ? description.split(/\r?\n/, 1)[0] : t("kanban.addDescription")}</span>
+                    </span>
+                    <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                   </button>
-                ) : null}
-              </section>
-            ) : null)}
-            <EarlierAttempts lanes={lanes} past={card?.past ?? []} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
+                )}
+
+                {/* 6. The agents, working first. */}
+                <section data-phone-task-agents={agents.length} className="flex shrink-0 flex-col gap-2">
+                  <h2 className={`${SECTION} m-0`}>
+                    {t("mobile2.task.agents")}
+                    <Sep />
+                    <span className="text-label font-semibold tabular-nums text-muted">{agents.length + notLoadedRefs.length}</span>
+                  </h2>
+                  {agents.map((agent) => {
+                    const rowTitle = agentTitle(agent);
+                    const row: MobileBoardConversation = {
+                      file: agent.file,
+                      path: agent.file.path,
+                      title: rowTitle,
+                      state: mobileRowState(agent.file, now),
+                      now: nowFragment(agent.file),
+                      launchedAt: launchedAt(agent.file),
+                      crowned: false,
+                    };
+                    const reason = row.state.key === "waiting" ? attentionReason(agent.file, now) : null;
+                    const actions = props.rowActions?.({ kind: "conversation", row: { path: agent.file.path, title: rowTitle, conversationId: agent.file.conversationId ?? null, reasonId: reason?.id ?? null } }) ?? [];
+                    const view = <ConversationRow row={row} now={now} onOpen={props.onOpenConversation} />;
+                    return (
+                      <div key={agent.file.path} data-phone-task-agent={agent.file.path} data-phone-task-agent-stage={agent.stage?.stage.id}>
+                        {actions.length ? <MobileSwipeRow id={`task:${taskId}:${agent.file.path}`} title={rowTitle} actions={actions}>{view}</MobileSwipeRow> : view}
+                      </div>
+                    );
+                  })}
+                  {(card?.drafts ?? []).map((draftId) => (
+                    <button
+                      key={draftId}
+                      type="button"
+                      data-phone-task-draft={draftId}
+                      className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
+                      disabled={!props.onOpenDraft}
+                      onClick={() => props.onOpenDraft?.(draftId)}
+                    >
+                      <Plus className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("mobile2.task.draft")}</span>
+                      <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
+                    </button>
+                  ))}
+                  {/* A conversation the board did not load still opens, through its
+                      conversation id or its transcript. A stage's is left to its
+                      pipeline's Earlier attempts. */}
+                  {notLoadedRefs.map((ref) => (
+                    <button
+                      key={ref.key}
+                      type="button"
+                      data-phone-task-not-loaded={ref.key}
+                      className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
+                      onClick={() => { window.location.hash = formatConversationHash({ conversationId: ref.conversationId ?? undefined, path: ref.path ?? "" }); }}
+                    >
+                      <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("kanban.notLoadedOpen")}</span>
+                      <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
+                    </button>
+                  ))}
+                  {/* A launch that did not start opens nothing: it says so, and
+                      can be dismissed. A failed one says so at once, with its
+                      error, and opens its launch view, where Retry lives. Two or
+                      more fold behind one summary row. */}
+                  {unstarted.length ? <UnstartedLaunches taskId={taskId} title={title} launches={unstarted} onOpen={props.onOpenConversation} /> : null}
+                  {!agents.length && !notLoadedRefs.length && !unstarted.length && !card?.drafts.length ? (
+                    <p className="m-0 px-1 text-ui text-muted">{t("mobile2.kanban.noAgents")}</p>
+                  ) : null}
+                </section>
+              </div>
+              <div data-phone-task-group="history" className="flex shrink-0 flex-col gap-2 empty:hidden">
+                {/* 7. The agent's context and the earlier attempts, folded. */}
+                {editorFor("details") ?? (details ? (
+                  <section data-phone-task-details="" className="shrink-0 overflow-hidden rounded-[12px] bg-card shadow-1">
+                    <button
+                      type="button"
+                      aria-expanded={detailsOpen}
+                      data-phone-task-details-toggle=""
+                      aria-label={t(detailsOpen ? "kanban.detailsHide" : "kanban.detailsShow", { title: receiptTitle })}
+                      className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-body font-semibold text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                      onClick={() => setDetailsOpen((open) => !open)}
+                    >
+                      <ScrollText className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate">{t("kanban.details")}</span>
+                      <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${detailsOpen ? "rotate-90" : ""}`} aria-hidden />
+                    </button>
+                    {detailsOpen ? (
+                      <button
+                        type="button"
+                        data-phone-task-details-text=""
+                        aria-label={t("kanban.editDetails")}
+                        className="block max-h-[320px] w-full overflow-y-auto whitespace-pre-wrap border-t border-border px-3 py-2 text-left font-mono text-ui leading-[1.45] text-secondary [overflow-wrap:anywhere] active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                        onClick={() => startEdit("details")}
+                      >
+                        {details}
+                      </button>
+                    ) : null}
+                  </section>
+                ) : null)}
+                <EarlierAttempts taskId={taskId} lanes={lanes} past={card?.past ?? []} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
+              </div>
+            </div>
           </>
         )}
       </div>

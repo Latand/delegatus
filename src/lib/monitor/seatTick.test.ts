@@ -160,6 +160,17 @@ test("a project with open work and no active seat reports no-seat and asks for o
   expect(decision.state.lastCheckAt).toBe(new Date(NOW).toISOString());
 });
 
+test("a project that never had a seat reports no-seat and asks for no card (#2170)", () => {
+  const decision = seatTickDecision(input({ seat: null, seatEverHeld: false, pipelines: [lane()] }));
+  expect(decision.verdict).toEqual({
+    kind: "no-seat",
+    detail: "the project has open work and has never had an orchestrator seat",
+  });
+  expect(decision.cards.filter((card) => card.kind === "no-seat")).toEqual([]);
+  /* A project whose seat was revoked is missing one, and still says so. */
+  expect(seatTickDecision(input({ seat: null, seatEverHeld: true, pipelines: [lane()] })).cards.map((card) => card.kind)).toContain("no-seat");
+});
+
 test("a seat whose turn is genuinely moving is skipped, not queued", () => {
   const decision = seatTickDecision(input({
     seat: seat({ turn: "busy", activity: { lifecycle: "running", reason: "host_alive_turn_active" } }),
@@ -240,6 +251,22 @@ test("a stall wakes only once it has persisted across two consecutive checks", (
 
   const second = seatTickDecision(input({ pipelines: [stuck], state: stateWith({ ...overdue, stalledSeen: ["pipeline_a1"] }) }));
   expect(reasonsOf(second.verdict)).toEqual(["stalled"]);
+});
+
+test("a stage or child held on a permission request is listed as a permission item, never as a stall (#2215)", () => {
+  const permission = { tool: "Bash", command: "rm -rf $R/*.json", reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json" };
+  const held = lane({ stageId: "build", stageActivity: { lifecycle: "waiting", reason: "permission_request", turnState: "busy", permission } });
+  const worker = child({ activity: { lifecycle: "waiting", reason: "permission_request", turnState: "busy", permission } });
+  const overdue = { lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() };
+  const decision = seatTickDecision(input({ pipelines: [held], children: [worker], state: stateWith(overdue) }));
+  expect(reasonsOf(decision.verdict)).toEqual(["permission-request"]);
+  expect(decision.state.stalledSeen).toEqual([]);
+  if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
+  const items = decision.verdict.items.filter((item) => item.kind === "permission");
+  expect(items.map((item) => item.id)).toEqual(["pipeline_a1", worker.conversationId]);
+  expect(items[0]!.label).toContain("stage build waits on a Bash permission request `rm -rf $R/*.json`");
+  expect(items[0]!.label).toContain("(Dangerous rm operation on possibly-empty variable path: $R/*.json)");
+  expect(items[0]!.label).toContain("conversation_action permission");
 });
 
 /* The stall reading the whole verdict rests on. Movement instants belong to the

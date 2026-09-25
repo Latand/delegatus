@@ -32,7 +32,7 @@ mock.module("@/hooks/useRuntime", () => ({
 
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
 const { MobileSheet } = await import("@/components/mobile/MobileSheet");
-const { getMobileNav, topScreen } = await import("@/components/mobile/mobileNav");
+const { getMobileNav, resetMobileNavForTests, topScreen } = await import("@/components/mobile/mobileNav");
 const { receipts } = await import("@/components/mobile/MobileReceipt");
 const { resetOrchestratorIncumbentCacheForTests } = await import("@/components/orchestrator/useOrchestratorIncumbent");
 const { resetOrchestratorSeatCacheForTests } = await import("@/components/orchestrator/useOrchestratorSeat");
@@ -227,7 +227,7 @@ beforeEach(() => {
   dom.sessionStorage.clear();
   dom.localStorage.clear();
   dom.location.hash = "#p=" + encodeURIComponent(PROJECT);
-  getMobileNav().home();
+  resetMobileNavForTests();
   receipts.dismiss();
   seatAnswer = null;
   seatReads = 0;

@@ -1,6 +1,8 @@
 import { BRIDGE_ASK_TTL_SECONDS } from "@/lib/bridge/types";
+import { permissionHeadline } from "@/lib/runtime/permissionRequests";
+import type { AttentionDismissalMark, ConversationReasonKind } from "@/lib/attention/dismissalTypes";
 import type { BridgeAsk, FileEntry } from "@/lib/types";
-import { DELIVERY_WAIT_ATTENTION_MS } from "@/components/runtime/deliveryWait";
+import { DELIVERY_UNCERTAIN_MS, DELIVERY_WAIT_HELD_MS } from "@/components/runtime/deliveryWait";
 
 import { projectKey } from "./projectModel";
 
@@ -9,22 +11,32 @@ import { projectKey } from "./projectModel";
  * signal first. Pure derived state over the polled file list — every surface
  * (badge, popover, title, N-cycle, push/toast seen-sets) derives identity from
  * the one `attentionId` helper here so counts and dedupe keys cannot drift.
+ *
+ * Why a conversation needs the operator is `attentionReason`
+ * (docs/design/needs-attention.md §4): one named reason, or none. Only waits
+ * that the operator can actually end raise it: an orchestrator's ask, a
+ * question, a plan, a permission prompt, and a message that has not arrived
+ * for half an hour. A rate-limit wall lifts on its own clock and a quiet turn
+ * is usually a long tool call, so both keep their row words and stop raising
+ * the state.
  */
 
 /**
  * Attention severity tiers, highest first:
  * - «unowned» — a hosted approval with no attached owner (a first-class alarm,
  *   issue #25 R10-5); always sorts to the queue head.
- * - «blocked» — a hard question, prompt, or rate-limit wall.
+ * - «blocked» — an ask, a question, a prompt, or an owed message.
  * - «heuristic» — a low-confidence "possibly waiting" signal (turn-ended +
  *   idle + nothing pending); visually distinct, ranks below hard blocks.
- * - «stalled» — an interrupted agent (FIFO tail segment).
+ * - «stalled» — kept for the runtime bus's own tiers. The FileEntry-derived
+ *   queue no longer emits it: a stalled conversation does not need the
+ *   operator (docs/design/needs-attention.md §3, reason 7).
  *
- * The FileEntry-derived queue below only ever emits «blocked»/«stalled» (its
- * historical behavior is byte-identical); «unowned»/«heuristic» come from the
- * runtime bus's structured attentions. An orchestrator's open bridge ask
- * (issue #1168) joins the «blocked» tier: a manager that filed
- * `blocked`/`question` is a hard block by its own declaration.
+ * The FileEntry-derived queue below only ever emits «blocked»;
+ * «unowned»/«heuristic» come from the runtime bus's structured attentions. An
+ * orchestrator's open bridge ask (issue #1168) joins the «blocked» tier: a
+ * manager that filed `blocked`/`question` is a hard block by its own
+ * declaration.
  */
 export type AttentionTier = "unowned" | "blocked" | "heuristic" | "stalled";
 
@@ -42,13 +54,16 @@ export interface AttentionItem {
   file: FileEntry;
   project: string;
   tier: AttentionTier;
-  /** Epoch seconds the wait started: bridgeAsk.at | askedAt | waitingInput.since | mtime. */
+  /** Epoch seconds the wait started: bridgeAsk.at | askedAt | waitingInput.since | admission. */
   since: number;
+  /** Why it needs the operator. */
+  reason: ConversationReason;
 }
 
 /* An interrupted session stops being "yours to answer" after a while: a
    permission prompt from two days ago is dead context. Shared with the
-   switchboard's isAwaitingUser so the queue and the «waiting» bucket agree. */
+   switchboard's isAwaitingUser so the stalled row and the «waiting» bucket
+   agree. */
 export const STALLED_ATTENTION_TTL = 2 * 3600;
 
 /** Epoch seconds an ISO timestamp names, or null when it does not parse. */
@@ -57,14 +72,35 @@ function isoSeconds(iso: string): number | null {
   return Number.isFinite(ms) ? ms / 1000 : null;
 }
 
+/**
+ * When the oldest owed message was admitted, once it needs the operator: half
+ * an hour unconfirmed (`DELIVERY_UNCERTAIN_MS`, when the composer offers Retry
+ * and Discard), or sooner when the record itself says `delivery-uncertain`.
+ * Under that it is ordinary long-turn latency (#1213's longest successful wait
+ * was 21 minutes), and nothing is asked of anyone.
+ */
 export function blockingStuckDelivery(file: FileEntry, now: number): number | null {
   const delivery = file.stuckDelivery;
   if (!delivery) return null;
   const since = isoSeconds(delivery.since);
   if (since === null) return null;
-  return now - since >= DELIVERY_WAIT_ATTENTION_MS / 1000 ? since : null;
+  if (delivery.state === "delivery-uncertain") return since;
+  return now - since >= DELIVERY_UNCERTAIN_MS / 1000 ? since : null;
 }
 
+/** When the oldest owed message was admitted, once it has waited past the
+    queue's own wait: the conversation header's «held» (five minutes). */
+export function heldStuckDelivery(file: FileEntry, now: number): number | null {
+  const delivery = file.stuckDelivery;
+  if (!delivery) return null;
+  const since = isoSeconds(delivery.since);
+  if (since === null) return null;
+  return now - since >= DELIVERY_WAIT_HELD_MS / 1000 ? since : null;
+}
+
+/** A turn left open with no transcript write for a while, a process behind
+    it, and young enough to still matter. The row says «Stalled»; it no longer
+    raises needs-you (docs/design/needs-attention.md §3, reason 7). */
 export function stalledAttention(file: FileEntry, now: number): boolean {
   return file.activity === "stalled"
     && file.proc === "running"
@@ -80,8 +116,7 @@ export function stalledAttention(file: FileEntry, now: number): boolean {
  * served verbatim; nothing in the log moves when a report merely gets old. The
  * queue is the surface that owns "right now", and it is the only place holding
  * a live clock. An expired ask falls THROUGH to the file's own signals rather
- * than dropping the row, so a seat that is also stalled keeps its stalled
- * entry.
+ * than dropping the row.
  */
 export function openBridgeAsk(file: FileEntry, now: number): BridgeAsk | null {
   const ask = file.bridgeAsk;
@@ -92,62 +127,192 @@ export function openBridgeAsk(file: FileEntry, now: number): BridgeAsk | null {
 }
 
 /**
+ * When a launch the operator started failed before anything ran (#2170), in
+ * epoch seconds, or null. The failure is final — its receipt says so — and
+ * the only way forward is the operator's: sign in, pick another account, or
+ * retry. A launch placeholder carries it; a delegated launch (an agent's
+ * child, a pipeline stage, a review round) is its container's to answer and
+ * never raises it here.
+ */
+export function failedOperatorLaunch(file: FileEntry): number | null {
+  if (!file.path.startsWith("spawn:") || file.spawn?.state !== "failed") return null;
+  const lineage = file.durableLineage;
+  if (lineage && ((lineage.depth ?? 0) > 0 || lineage.memberships.length > 0)) return null;
+  const admitted = file.spawn.admittedAt;
+  return typeof admitted === "number" && Number.isFinite(admitted) ? admitted / 1000 : file.mtime;
+}
+
+/**
  * Epoch seconds at which the queue changes on its own, with nothing polled
- * moving: a stalled entry crossing its TTL, an orchestrator ask crossing its
- * own. `/api/files` keeps the array identity while its body is unchanged, so a
- * surface that wants an expiry to actually take effect has to schedule a tick,
- * and both kinds of expiry are the same kind of event.
+ * moving: an orchestrator ask crossing its TTL, an owed message crossing the
+ * half hour. `/api/files` keeps the array identity while its body is
+ * unchanged, so a surface that wants an expiry to actually take effect has to
+ * schedule a tick, and both kinds of expiry are the same kind of event.
  */
 export function attentionExpiries(files: readonly FileEntry[]): number[] {
   const expiries: number[] = [];
   for (const file of files) {
-    if (file.activity === "stalled") expiries.push(file.mtime + STALLED_ATTENTION_TTL);
     const at = file.bridgeAsk ? isoSeconds(file.bridgeAsk.at) : null;
     if (at !== null) expiries.push(at + BRIDGE_ASK_TTL_SECONDS);
     const deliverySince = file.stuckDelivery ? isoSeconds(file.stuckDelivery.since) : null;
-    if (deliverySince !== null) expiries.push(deliverySince + DELIVERY_WAIT_ATTENTION_MS / 1000);
+    if (deliverySince !== null) expiries.push(deliverySince + DELIVERY_UNCERTAIN_MS / 1000);
   }
   return expiries;
 }
 
 /**
- * The shared attention identity of a file, by signal precedence:
- * an orchestrator's open bridge ask wins, then a structured question, a
- * rate-limit wall, the screen-scrape fallback, an owed message delivery, and
- * the stalled state. The id doubles as the dedupe key of the toast and push
- * pipelines, so the older formats here stay byte-identical to the historical
- * inline derivations (`push-sent.json` entries survive the refactor).
+ * Why one conversation needs the operator (docs/design/needs-attention.md §4).
+ *
+ * `since` is when the wait began, the instant the queue sorts by and the row
+ * counts from. `raisedAt` is when it began to need the operator, which is what
+ * a dismissal that names no reason is compared with; the two differ only for
+ * an owed message, which waits for half an hour before it asks anything.
  */
-export function attentionId(file: FileEntry, now: number = Date.now() / 1000): string | null {
+export interface ConversationReason {
+  kind: ConversationReasonKind;
+  /** The shared attention identity: the push dedupe key and the cycle anchor. */
+  id: string;
+  since: number;
+  raisedAt: number;
+  /** Whether `since` came from the signal's own clock. An undated reason is
+      covered only by a dismissal that names its id. */
+  clocked: boolean;
+  /** The agent's own short header for a question, when it wrote one. */
+  header: string | null;
+  /** The dismissal that covers this reason, or null while it is flagged. */
+  dismissal: AttentionDismissalMark | null;
+}
+
+/**
+ * Whether a recorded dismissal covers this reason (§5, «What brings an item
+ * back»). A dismissal that names the reason on screen covers that reason and
+ * nothing else: the card may have been drawn before a newer question arrived
+ * or before an owed message turned uncertain, and the tap only saw what it
+ * drew. One that names none (an agent's call) covers what started at or
+ * before it, and never an undated reason. A dismissal whose own time does not
+ * parse covers nothing.
+ */
+export function dismissalCovers(reason: Pick<ConversationReason, "id" | "raisedAt" | "clocked">, dismissal: AttentionDismissalMark | null | undefined): boolean {
+  if (!dismissal) return false;
+  const at = isoSeconds(dismissal.at);
+  if (at === null) return false;
+  if (dismissal.reasonId) return dismissal.reasonId === reason.id;
+  return reason.clocked && reason.raisedAt <= at;
+}
+
+/**
+ * The one reason a conversation needs the operator, by signal precedence: an
+ * orchestrator's open bridge ask, then a structured question or plan, a
+ * structured host's tool permission request, the screen-scrape permission
+ * fallback, an owed message delivery, and a launch
+ * that failed before it ran (#2170). Null when none of them holds. A
+ * dismissed reason is still returned, with its
+ * `dismissal`, so a card can say who cleared it; `attentionId` is what counts.
+ *
+ * The ids stay byte-identical to the historical inline derivations, so the
+ * toast and push dedupe (`push-sent.json`) and the cycle pointer survive.
+ */
+export function attentionReason(file: FileEntry, now: number = Date.now() / 1000): ConversationReason | null {
+  const reason = undismissedReason(file, now);
+  if (!reason) return null;
+  return { ...reason, dismissal: dismissalCovers(reason, file.attentionDismissal) ? file.attentionDismissal! : null };
+}
+
+function undismissedReason(file: FileEntry, now: number): ConversationReason | null {
   /* First, and above the file's own signals (issue #1168). A bridge ask is the
      manager saying, in as many words, that it cannot go on without the
      operator — the one signal on this board that was ESCALATED rather than
      inferred. The report's own key carries through as the queue identity, so
-     re-reading the log cannot enqueue the same decision twice. Nothing
-     historical is shadowed: no entry carried this field before. */
+     re-reading the log cannot enqueue the same decision twice. */
   const ask = openBridgeAsk(file, now);
-  if (ask) return ask.id;
-  if (file.pendingQuestion) return file.pendingQuestion.toolUseId;
-  if (file.rateLimit) {
-    return `${file.path}:rate-limited:${file.rateLimit.resetAt ?? "unknown"}`;
+  if (ask) {
+    /* `openBridgeAsk` already refused an unparseable time. */
+    const at = isoSeconds(ask.at)!;
+    return { kind: "decision", id: ask.id, since: at, raisedAt: at, clocked: true, header: null, dismissal: null };
   }
-  if (file.waitingInput) return `${file.path}:waiting:${Math.floor(file.waitingInput.since)}`;
-  /* The stalled tier needs a live process behind the transcript: an open turn
-     whose agent already exited is an abandoned session, not a pending
-     permission prompt — only someone still at the terminal can wait on you. */
+  const pending = file.pendingQuestion;
+  if (pending) {
+    const asked = isoSeconds(pending.askedAt);
+    const since = asked ?? file.mtime;
+    return {
+      kind: pending.kind === "plan" ? "plan" : "question",
+      id: pending.toolUseId,
+      since,
+      raisedAt: since,
+      clocked: asked !== null,
+      header: pending.kind === "plan" ? null : pending.questions?.[0]?.header?.trim() || null,
+      dismissal: null,
+    };
+  }
+  /* A structured host's tool permission request (#2215): named by the tool,
+     what it would run and why the engine asked, so the row says what is being
+     approved before anyone opens the conversation. */
+  const permission = file.pendingPermission;
+  if (permission) {
+    const asked = isoSeconds(permission.since);
+    const since = asked ?? file.mtime;
+    return {
+      kind: "permission",
+      id: `${file.path}:permission:${permission.id}`,
+      since,
+      raisedAt: since,
+      clocked: asked !== null,
+      header: permissionHeadline(permission),
+      dismissal: null,
+    };
+  }
+  if (file.waitingInput) {
+    const since = file.waitingInput.since;
+    return { kind: "permission", id: `${file.path}:waiting:${Math.floor(since)}`, since, raisedAt: since, clocked: true, header: null, dismissal: null };
+  }
   const deliverySince = blockingStuckDelivery(file, now);
-  if (deliverySince !== null) return `${file.path}:delivery:${Math.floor(deliverySince)}`;
-  if (stalledAttention(file, now)) {
-    return `${file.path}:stalled:${Math.floor(file.mtime)}`;
+  if (deliverySince !== null) {
+    /* It asks from the moment it crossed the half hour, or from admission when
+       the record already calls it uncertain. A card's dismissal names this id,
+       which the next message's later admission changes. */
+    const raisedAt = file.stuckDelivery?.state === "delivery-uncertain"
+      ? deliverySince
+      : deliverySince + DELIVERY_UNCERTAIN_MS / 1000;
+    return {
+      kind: "delivery",
+      id: `${file.path}:delivery:${Math.floor(deliverySince)}`,
+      since: deliverySince,
+      raisedAt,
+      clocked: true,
+      header: null,
+      dismissal: null,
+    };
+  }
+  const launchFailedAt = failedOperatorLaunch(file);
+  if (launchFailedAt !== null) {
+    return {
+      kind: "launch",
+      id: `${file.path}:launch-failed`,
+      since: launchFailedAt,
+      raisedAt: launchFailedAt,
+      clocked: true,
+      /* The receipt's own error: what failed, and on which account. */
+      header: file.spawn?.error?.trim().split("\n", 1)[0] || null,
+      dismissal: null,
+    };
   }
   return null;
 }
 
 /**
- * Ordered queue of every agent needing operator attention: hard-blocked segment
- * first, stalled tail after, oldest signal first inside each segment, id as the
- * tie-breaker. The sort keys are frozen at enqueue (`since` never moves while
- * the id is unchanged), so polls cannot reshuffle the order.
+ * The shared attention identity of a file: its reason's id while that reason
+ * is flagged, or null when there is none or it was dismissed. The id doubles
+ * as the dedupe key of the toast and push pipelines.
+ */
+export function attentionId(file: FileEntry, now: number = Date.now() / 1000): string | null {
+  const reason = attentionReason(file, now);
+  return reason && !reason.dismissal ? reason.id : null;
+}
+
+/**
+ * Ordered queue of every agent needing operator attention, oldest signal
+ * first, id as the tie-breaker. The sort keys are frozen at enqueue (`since`
+ * never moves while the id is unchanged), so polls cannot reshuffle the order.
  */
 export function buildAttentionQueue(
   files: FileEntry[],
@@ -157,27 +322,9 @@ export function buildAttentionQueue(
   const items: AttentionItem[] = [];
   for (const file of files) {
     if (project !== undefined && projectKey(file) !== project) continue;
-    const id = attentionId(file, now);
-    if (id === null) continue;
-    const ask = openBridgeAsk(file, now);
-    const stuckDelivery = blockingStuckDelivery(file, now);
-    const tier: AttentionTier = ask || file.pendingQuestion || file.rateLimit || file.waitingInput
-      || stuckDelivery !== null
-      ? "blocked"
-      : "stalled";
-    /* `openBridgeAsk` already refused an unparseable time, so an ask always
-       dates the item it enqueued. */
-    const askSince = ask ? isoSeconds(ask.at) : null;
-    const since = askSince !== null
-      ? askSince
-      : file.pendingQuestion
-        ? (isoSeconds(file.pendingQuestion.askedAt) ?? file.mtime)
-        : file.rateLimit
-          ? file.mtime
-          : file.waitingInput
-            ? file.waitingInput.since
-            : stuckDelivery ?? file.mtime;
-    items.push({ id, file, project: projectKey(file), tier, since });
+    const reason = attentionReason(file, now);
+    if (!reason || reason.dismissal) continue;
+    items.push({ id: reason.id, file, project: projectKey(file), tier: "blocked", since: reason.since, reason });
   }
   return items.sort(
     (a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier] || a.since - b.since || a.id.localeCompare(b.id),
@@ -189,11 +336,11 @@ export function buildAttentionQueue(
  * an item answered elsewhere silently drops out and the next press serves the
  * next-oldest remaining item (queue head forward, tail backward). Wraps.
  */
-export function nextAttention(
-  queue: AttentionItem[],
+export function nextAttention<T extends { id: string }>(
+  queue: readonly T[],
   currentId: string | null,
   dir: 1 | -1,
-): AttentionItem | null {
+): T | null {
   if (!queue.length) return null;
   const index = currentId === null ? -1 : queue.findIndex((item) => item.id === currentId);
   if (index === -1) return dir === 1 ? queue[0]! : queue[queue.length - 1]!;
@@ -215,11 +362,11 @@ export interface AttentionCyclePointer {
  * `nextAttention` (the sole authority); an empty queue leaves the pointer
  * untouched.
  */
-export function advanceAttentionCycle(
+export function advanceAttentionCycle<T extends { id: string }>(
   pointer: AttentionCyclePointer,
-  queue: AttentionItem[],
+  queue: readonly T[],
   dir: 1 | -1,
-): AttentionItem | null {
+): T | null {
   const next = nextAttention(queue, pointer.current, dir);
   if (next) pointer.current = next.id;
   return next;

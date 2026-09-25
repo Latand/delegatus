@@ -1,0 +1,135 @@
+{
+  "readings": {
+    "phone-board-seatless-empty-inbox-390": {
+      "inboxText": "No tasks yet\nThe orchestrator adds a task here for each thing you ask.\nNew task\nDone\n·\n1 task",
+      "newTask": {
+        "text": "New task",
+        "fill": "rgb(255, 253, 250)",
+        "border": "1px",
+        "icons": 1
+      },
+      "seat": "draft"
+    },
+    "phone-board-seat-just-created-390": {
+      "inboxText": "No tasks yet\nThe orchestrator adds a task here for each thing you ask.\nNew task",
+      "newTask": {
+        "text": "New task",
+        "fill": "rgb(255, 253, 250)",
+        "border": "1px",
+        "icons": 1
+      },
+      "seat": "resumable"
+    },
+    "board-draft-390": {
+      "words": "Create the orchestrator for atlasatlasnone yetThe orchestrator takes your requests, opens the tasks, runs the agents and reviews, and reports back. You watch and give it work.Once it runs, write to it here: “add a delete command to todo.py”, “make the tests pass”.Runs onClaude · Opus 5.5 · high effort · account spareChangeIts instructions (v27) (edit)Rather do one thing by hand? + on the board adds a task or starts a single agent.CancelCreate the orchestrator",
+      "padding": [
+        "12px",
+        "12px",
+        "12px",
+        "12px"
+      ],
+      "childLefts": [
+        12,
+        12,
+        12,
+        12,
+        12
+      ],
+      "footerPadding": [
+        "12px",
+        "12px",
+        "12px",
+        "12px"
+      ],
+      "folded": true,
+      "mandateShown": false,
+      "radios": 0,
+      "runsOn": "Claude · Opus 5.5 · high effort · account spare",
+      "clipped": []
+    },
+    "overview-band-390": {
+      "left": 12,
+      "right": 12,
+      "top": 60,
+      "padding": [
+        "12px",
+        "12px",
+        "12px",
+        "12px"
+      ],
+      "button": {
+        "left": 13,
+        "right": 13,
+        "height": 44,
+        "bottomGap": 13
+      },
+      "aboveTabs": true
+    },
+    "phone-board-seatless-empty-inbox-390-uk": {
+      "inboxText": "Задач ще немає\nОркестратор додає сюди задачу на кожне ваше прохання.\nНова задача\nГотові\n·\n1 задача",
+      "newTask": {
+        "text": "Нова задача",
+        "fill": "rgb(255, 253, 250)",
+        "border": "1px",
+        "icons": 1
+      },
+      "seat": "draft"
+    },
+    "phone-board-seat-just-created-390-uk": {
+      "inboxText": "Задач ще немає\nОркестратор додає сюди задачу на кожне ваше прохання.\nНова задача",
+      "newTask": {
+        "text": "Нова задача",
+        "fill": "rgb(255, 253, 250)",
+        "border": "1px",
+        "icons": 1
+      },
+      "seat": "resumable"
+    },
+    "board-draft-390-uk": {
+      "words": "Створіть оркестратора для atlasatlasще немаєОркестратор приймає ваші запити, заводить задачі, запускає агентів і рев'ю та звітує вам. Ви спостерігаєте й даєте йому роботу.Коли він запуститься, пишіть йому тут: «додай команду видалення в todo.py», «полагодь тести».Працює наClaude · Opus 5.5 · зусилля high · акаунт spareЗмінитиЙого інструкції (v27) (редагувати)Хочете зробити щось вручну? + на дошці додає задачу або запускає одного агента.СкасуватиСтворити оркестратора",
+      "padding": [
+        "12px",
+        "12px",
+        "12px",
+        "12px"
+      ],
+      "childLefts": [
+        12,
+        12,
+        12,
+        12,
+        12
+      ],
+      "footerPadding": [
+        "12px",
+        "12px",
+        "12px",
+        "12px"
+      ],
+      "folded": true,
+      "mandateShown": false,
+      "radios": 0,
+      "runsOn": "Claude · Opus 5.5 · зусилля high · акаунт spare",
+      "clipped": []
+    },
+    "overview-band-390-uk": {
+      "left": 12,
+      "right": 12,
+      "top": 60,
+      "padding": [
+        "12px",
+        "12px",
+        "12px",
+        "12px"
+      ],
+      "button": {
+        "left": 13,
+        "right": 13,
+        "height": 44,
+        "bottomGap": 13
+      },
+      "aboveTabs": true
+    }
+  },
+  "failures": []
+}

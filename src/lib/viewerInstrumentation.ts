@@ -27,6 +27,7 @@ import {
   withoutWakatimeCredential,
 } from "@/lib/wakatime/credential";
 import { wakatimeIntegrationEnabled } from "@/lib/wakatime/activation";
+import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 
 /*
  * The Viewer's node-side startup runtime. This module (and everything it pulls
@@ -92,11 +93,17 @@ interface CurrentReleaseControllerLoaders {
       nothing else. Production always passes it. */
   loadTelegramReportScheduler?: () => Promise<{ ensureTelegramReportScheduler: () => void }>;
   /** Optional for the same reason. */
+  loadTelegramBotPoller?: () => Promise<{ ensureTelegramBotPoller: () => void }>;
+  /** Optional for the same reason. */
   loadTelegramConnectorBoot?: () => Promise<{ provisionTelegramConnectorAtStartup: () => Promise<unknown> }>;
   /** Optional for the same reason. */
   loadStructuredHostRetirement?: () => Promise<{ startStructuredHostRetirement: () => void }>;
   /** Optional for the same reason. */
   loadSeatTick?: () => Promise<{ startSeatTick: () => boolean }>;
+  /** Optional for the same reason. */
+  loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
+  /** Optional for the same reason. */
+  loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -379,9 +386,12 @@ export async function startCurrentReleaseControllers(
     loadFlowPipelineController: () => import("@/lib/pipelines/controller"),
     loadAccountMigrationController: () => import("@/lib/accounts/migration/controller"),
     loadTelegramReportScheduler: () => import("@/lib/telegram/reportRunner"),
+    loadTelegramBotPoller: () => import("@/lib/telegram/bot/service"),
     loadTelegramConnectorBoot: () => import("@/lib/telegram/connectorBoot"),
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
+    loadTempSweep: () => import("@/lib/tempSweep"),
+    loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
   },
 ): Promise<void> {
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
@@ -411,6 +421,15 @@ export async function startCurrentReleaseControllers(
     telegram?.ensureTelegramReportScheduler();
   } catch (error) {
     console.error("[telegram report] scheduler start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* The Telegram bot's update poller (docs/design/telegram-bot-account.md)
+     reads for a connected bot in the release that owns traffic. It does
+     nothing without a stored token, and its failure stays its own. */
+  try {
+    const bot = await loaders.loadTelegramBotPoller?.();
+    bot?.ensureTelegramBotPoller();
+  } catch (error) {
+    console.error("[telegram bot] poller start failed", error instanceof Error ? error.name : "unknown");
   }
   /* Automatic structured host retirement (#747). It belongs to the release
      that owns traffic for a stronger reason than the others: ownership of a
@@ -442,6 +461,25 @@ export async function startCurrentReleaseControllers(
   } catch (error) {
     console.error("[seat tick] start failed", error instanceof Error ? error.name : "unknown");
   }
+  /* The stale temp directory sweep (#1957): a killed test run, capture or
+     stage host leaves its directory behind, and those filled the disk once.
+     One clock is enough, so it runs here with the others; a second release
+     sweeping the same roots would only find nothing left to remove.
+     `LLV_TEMP_SWEEP_MAX_AGE_HOURS=0` turns it off. */
+  try {
+    const tempSweep = await loaders.loadTempSweep?.();
+    tempSweep?.startTempSweep();
+  } catch (error) {
+    console.error("[temp sweep] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* Merged lanes' worktrees (#2202), on the same clock for the same reason.
+     `LLV_WORKTREE_SWEEP=0` turns it off, `dry-run` only reports. */
+  try {
+    const worktreeSweep = await loaders.loadWorktreeSweep?.();
+    worktreeSweep?.startWorktreeSweep();
+  } catch (error) {
+    console.error("[worktree sweep] start failed", error instanceof Error ? error.name : "unknown");
+  }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();
   scheduleAccountMigrationController(startAccountMigrationController, accountControllerDelayMs(env));
@@ -464,6 +502,9 @@ export async function initializeOperatorSpawnCapabilityAtStartup(
 
      What remains is the AGENT capability on disk, ensured above: it identifies
      workers, and identifying a worker is the one distinction still made. */
+  /* Under the CLI launcher its own banner names the URL, with the key when
+     one gates this start. */
+  if (startupDiagnosticsQuiet(env)) return;
   const port = env.PORT?.trim() || "8898";
   log(`[viewer] Open http://127.0.0.1:${port}.`);
 }

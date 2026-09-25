@@ -76,9 +76,11 @@ export type DeliveryWaitCause = "turn" | "host" | "unknown";
  * explicit same-identity Retry and terminal Discard controls.
  */
 export const DELIVERY_UNCERTAIN_MS = 30 * 60_000;
-/** Ordinary long-turn latency stays on the card. Past five minutes the durable
-    owed-message record also enters the operator attention queue. */
-export const DELIVERY_WAIT_ATTENTION_MS = 5 * 60_000;
+/** Ordinary long-turn latency stays on the card. Past five minutes the
+    conversation's header says the message is held; it needs the operator only
+    at {@link DELIVERY_UNCERTAIN_MS}, when Retry and Discard are offered
+    (docs/design/needs-attention.md §3, reason 6). */
+export const DELIVERY_WAIT_HELD_MS = 5 * 60_000;
 
 export interface DeliveryWait {
   phase: DeliveryWaitPhase;

@@ -218,7 +218,10 @@ test("the task row says its state once, drops a title the task already has, and 
   const links = { "p-search": { links: [], noPr: true } } as Record<string, ResolvedWorkLinks>;
   const same = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ state: "paused", pausedState: "running" } as Partial<Pipeline>))} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} />, links);
   expect(same.querySelector(".pb-title")).toBeNull();
-  expect(texts(same, ".pb-head .pstate-word")).toEqual(["paused"]);
+  /* With the task's own title and no ⋯ of its own, the chain is the head
+     (#2148): the state, the age and the way into the stages end its row. */
+  expect(same.querySelector(".pb-head")).toBeNull();
+  expect(texts(same, ".pb-chain > .pb-tail .pstate-word")).toEqual(["paused"]);
   expect(same.querySelector(".pb-chain > .pb-links [data-work-links-nopr]")?.textContent).toBe("no PR");
   /* Who runs a stage is in the pill's tooltip, not on the pill (#1743). */
   expect(same.querySelector(".pb-pill .pident, .pb-pill [data-effort-pills]")).toBeNull();
@@ -230,6 +233,34 @@ test("the task row says its state once, drops a title the task already has, and 
   expect(running.querySelector(".pstate-word")).toBeNull();
   /* No graph toggle, ⋯ or answer where the host passes nothing to do. */
   expect(running.querySelector("[data-graph-toggle], [data-pipeline-menu], [data-answer-action]")).toBeNull();
+});
+
+test("the stage chain is the lane's head where the card's ⋯ holds its actions; a lane with a ⋯ or a title of its own keeps its head row (#2148)", () => {
+  const opened: string[] = [];
+  const menus: string[] = [];
+  const summary = summarizePipeline(searchPipeline());
+  const chain = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} onToggleGraph={() => {}} onOpenStages={(pipeline) => opened.push(pipeline.id)} />);
+  expect(chain.querySelector(".pb-head")).toBeNull();
+  const row = chain.querySelector(".pb-chain")!;
+  /* One row: the pills, then the graph toggle and the age with its chevron,
+     which ends the row. */
+  expect([...row.children].map((child) => child.className)).toEqual(["pb-pills", "pb-tail"]);
+  expect([...row.querySelector(".pb-tail")!.children].map((child) => child.getAttribute("data-graph-toggle") !== null ? "graph" : child.getAttribute("data-open-stages") !== null ? "open" : child.className)).toEqual(["graph", "open"]);
+  expect(row.querySelector("[data-pipeline-menu]")).toBeNull();
+  click(row.querySelector("[data-open-stages]"));
+  expect(opened).toEqual(["p-search"]);
+
+  /* A pipeline on no task (no card ⋯) keeps its own ⋯, so it keeps the head row. */
+  const own = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} onMenu={(pipeline) => menus.push(pipeline.id)} />);
+  expect(own.querySelector(".pb-head [data-open-stages]")).toBeTruthy();
+  expect(own.querySelector(".pb-tail")).toBeNull();
+  click(own.querySelector(".pb-head [data-pipeline-menu]"));
+  expect(menus).toEqual(["p-search"]);
+
+  /* A lane titled apart from its task says the title in its own head row. */
+  const titled = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ task: "Keep the old index serving" }))} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} />);
+  expect(titled.querySelector(".pb-head .pb-title")?.textContent).toBe("Keep the old index serving");
+  expect(titled.querySelector(".pb-tail")).toBeNull();
 });
 
 test("the answer in place names the stage and attempt it saw, and waits while an action is on its way", () => {
@@ -285,4 +316,34 @@ test("the screen density numbers the stages, folds the passed ones before the cu
   expect(texts(current, "[data-answer-action]")).toEqual([translate("en", "mobile2.pipeline.skip"), translate("en", "mobile2.pipeline.retry")]);
   click(current.querySelector('[data-answer-action="retry-stage"]'));
   expect(answers).toEqual(["retry-stage"]);
+});
+
+/* #2187 §6: the lane that finishes its task says so on the lane row, before
+   the PR chip, in both the task row and the phone's screen block; a finished
+   lane whose task's move waits says so on a line of its own. */
+test("the flag on the lane row: finishes the task, finished it, and finishes it once other lanes end", () => {
+  const TASK = "task-big";
+  const done = (over: Partial<Pipeline>) => summarizePipeline(searchPipeline({ taskIds: [TASK], state: "completed", cursor: null, closedAt: iso(60), ...over }));
+  const marked = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ taskIds: [TASK], finishesTaskIds: [TASK] }))} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />, { "p-search": { links: [link(41)], noPr: false } as ResolvedWorkLinks });
+  const flag = marked.querySelector<HTMLElement>('.pb-chain [data-pipeline-finish="marked"]')!;
+  expect(flag.textContent).toBe("finishes the task");
+  /* Before the PR chip, never in the lane's head. */
+  expect(flag.nextElementSibling?.classList.contains("pb-links")).toBe(true);
+  expect(marked.querySelector(".pb-head [data-pipeline-finish]")).toBeNull();
+
+  const finished = mount(<PipelineBlock summary={done({ finishesTaskIds: [TASK], taskFinishes: [{ taskId: TASK, at: iso(30), outcome: "moved" }] })} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(finished.querySelector('[data-pipeline-finish="finished"]')?.textContent).toBe("finished the task");
+
+  const waits = mount(<PipelineBlock summary={done({ finishesTaskIds: [TASK], taskFinishWaits: [{ taskId: TASK, since: iso(30), open: ["p-other"] }] })} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(waits.querySelector('.pb-chain [data-pipeline-finish]')).toBeNull();
+  expect(waits.querySelector('p[data-pipeline-finish="waits"]')?.textContent).toBe("finishes the task once 1 other pipeline ends");
+
+  const plain = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ taskIds: [TASK] }))} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(plain.querySelector("[data-pipeline-finish]")).toBeNull();
+
+  setLocale("uk");
+  const screen = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ taskIds: [TASK], finishesTaskIds: [TASK] }))} density="screen" embedded taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(screen.querySelector('.pb-links-row [data-pipeline-finish="marked"]')?.textContent).toBe("завершує задачу");
+  const screenWaits = mount(<PipelineBlock summary={done({ finishesTaskIds: [TASK], taskFinishWaits: [{ taskId: TASK, since: iso(30), open: ["p-a", "p-b"] }] })} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(screenWaits.querySelector('p[data-pipeline-finish="waits"]')?.textContent).toBe("завершить задачу, коли закінчаться ще 2 пайплайни");
 });

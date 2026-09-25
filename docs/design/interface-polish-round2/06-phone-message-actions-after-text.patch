@@ -1,0 +1,93 @@
+diff --git a/src/components/feed/CopyButton.tsx b/src/components/feed/CopyButton.tsx
+index ee179b4..3c87651 100644
+--- a/src/components/feed/CopyButton.tsx
++++ b/src/components/feed/CopyButton.tsx
+@@ -71,7 +71,7 @@ export function CopyButton({ text, label, className = "" }: { text: string; labe
+           timer.current = window.setTimeout(() => setCopied(false), 1_400);
+         });
+       }}
+-      className={`inline-flex shrink-0 items-center justify-center rounded-[6px] border border-border bg-card text-muted shadow-1 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${coarse ? "h-11 w-11" : "p-1"} ${className}`}
++      className={`inline-flex shrink-0 items-center justify-center rounded-[6px] text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${coarse ? "h-11 w-11" : "p-1"} ${className}`}
+     >
+       {copied ? <Check className={coarse ? "h-4 w-4 text-success" : "h-3 w-3 text-success"} aria-hidden /> : <Copy className={coarse ? "h-4 w-4" : "h-3 w-3"} aria-hidden />}
+     </button>
+diff --git a/src/components/feed/FeedItem.tsx b/src/components/feed/FeedItem.tsx
+index 261f13e..3f29463 100644
+--- a/src/components/feed/FeedItem.tsx
++++ b/src/components/feed/FeedItem.tsx
+@@ -141,26 +141,28 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }:
+     const fillStyle = { "--engine-mark-cut": `var(--color-${item.engine === "codex" ? "codex" : item.engine === "openclaw" ? "openclaw" : "claude"})` } as CSSProperties;
+     if (isMobile) {
+       /* Mobile v2 (#1439, lane 4; README §2.6, §4.2): content gets the width.
+-         No avatar column; the header is one 44 px row — engine glyph, engine
+-         name, time, then the read-aloud and copy targets — and the prose
+-         starts under it at 15 px. The wrapper carries no vertical margin and
+-         nothing negative: the header's own height is the gap above the
+-         message, so it can never overlap the text. */
++         No avatar column. The message reads content first: a one-line caption
++         (engine glyph, engine name, time), the prose at 15 px, and then the
++         read-aloud and copy targets in one quiet row where the text ends.
++         The targets keep 44 px; the row's negative margins give 12 px of that
++         back to the gaps around it, where there is nothing else to hit.
++         The read-aloud anchor (`data-tts-message`) wraps the whole message, so
++         the control finds its text with `closest()` as on the desktop. */
+       const time = mobileClock(item.ts);
+       return (
+-        <div className="group/msg" data-mobile-message="agent">
+-          <div data-mobile-message-header className="flex h-11 w-full items-center gap-1.5 text-label text-muted">
++        <div className="group/msg pt-2" data-mobile-message="agent" data-tts-message={`${item.engine}:${item.ts}`}>
++          <div data-mobile-message-header className="mb-1 flex h-5 w-full items-center gap-1.5 text-label text-muted">
+             <AvatarIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden />
+             <span className="font-semibold text-secondary">{ENGINE_LABEL[item.engine]}</span>
+-            <span className="ml-auto flex shrink-0 items-center gap-1">
+-              {time ? <span className="tabular-nums">{time}</span> : null}
+-              {speakText ? <SpeakButton text={speakText} /> : null}
+-              <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
+-            </span>
++            {time ? <span className="tabular-nums">· {time}</span> : null}
+           </div>
+-          <div className="w-full whitespace-pre-wrap break-words text-title leading-[1.45]" data-tts-message={`${item.engine}:${item.ts}`}>
++          <div className="w-full whitespace-pre-wrap break-words text-title leading-[1.45]">
+             <div className="contents" data-tts-body>{mdBlocks(item.text)}</div>
+           </div>
++          <div data-mobile-message-actions className="-mx-3 -my-1.5 flex h-11 items-center">
++            {speakText ? <SpeakButton text={speakText} /> : null}
++            <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
++          </div>
+         </div>
+       );
+     }
+diff --git a/src/components/feed/UserMessageRow.tsx b/src/components/feed/UserMessageRow.tsx
+index cc852af..bb046be 100644
+--- a/src/components/feed/UserMessageRow.tsx
++++ b/src/components/feed/UserMessageRow.tsx
+@@ -57,15 +57,18 @@ export function UserMessageRow({
+ }) {
+   const isMobile = useIsMobile();
+   const long = text.length > LONG_MESSAGE;
++  const gutter = action ?? (
++    <CopyButton text={copyText ?? text} label={tr("feed.copyMd")} className={`${isMobile ? "" : "mt-2 "}${MESSAGE_ACTION}`} />
++  );
+   return (
+     <div className="my-3 flex flex-col items-end" {...rowAttributes}>
+       <div
+         className="group/msg flex w-full items-start justify-end gap-1.5"
+         data-mobile-message={isMobile ? "user" : undefined}
+       >
+-        {action ?? (
+-          <CopyButton text={copyText ?? text} label={tr("feed.copyMd")} className={`mt-2 ${MESSAGE_ACTION}`} />
+-        )}
++        {/* On the phone the control goes under the bubble, at its trailing
++            edge, so the bubble keeps the width and nothing floats beside it. */}
++        {isMobile ? null : gutter}
+         {/* Mobile v2 (#1439, lane 4): the user keeps the bubble, at 86% and
+             15 px on the phone (README §2.6). */}
+         <div
+@@ -96,6 +99,7 @@ export function UserMessageRow({
+           {bubbleFooter}
+         </div>
+       </div>
++      {isMobile ? <div data-mobile-message-actions className="-mr-3 -my-1.5 flex h-11 items-center">{gutter}</div> : null}
+       {below}
+     </div>
+   );

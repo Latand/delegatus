@@ -98,8 +98,15 @@ test("pipeline actions carry the engine's own refusals", () => {
     close: { action: "close", refusal: null, stageId: null, attempt: null },
     /* One more review round (#1938, #2072) is only for a spent review budget. */
     "continue-review": { action: "continue-review", refusal: "no-review", stageId: null, attempt: null },
+    /* Accept as is (#2187) too: the engine refuses it outside needs_review. */
+    "accept-head": { action: "accept-head", refusal: "no-review", stageId: null, attempt: null },
+    /* Try the merge again (#2187) only for a completed lane whose merge stopped;
+       Leave the PR open is a dismissal, which any lane on the board takes. */
+    "retry-merge": { action: "retry-merge", refusal: "no-merge", stageId: null, attempt: null },
+    dismiss: { action: "dismiss", refusal: null, stageId: null, attempt: null },
   });
   expect(byAction({ ...retrying, state: "needs_review" } as Pipeline)["continue-review"]).toEqual({ action: "continue-review", refusal: null, stageId: null, attempt: null });
+  expect(byAction({ ...retrying, state: "needs_review" } as Pipeline)["accept-head"]).toEqual({ action: "accept-head", refusal: null, stageId: null, attempt: null });
   const parked = byAction({ ...retrying, state: "needs_decision", cursor: { stageId: "verify", state: "running" } } as unknown as Pipeline);
   /* The attempt retry and skip expect is the waiting stage's latest own attempt. */
   expect(parked["retry-stage"]).toEqual({ action: "retry-stage", refusal: null, stageId: "verify", attempt: 2 });
@@ -110,7 +117,12 @@ test("pipeline actions carry the engine's own refusals", () => {
   expect(byAction({ ...retrying, state: "needs_decision", cursor: { stageId: "merge", state: "pending" } } as unknown as Pipeline)["skip-stage"]).toEqual({ action: "skip-stage", refusal: null, stageId: "merge", attempt: 0 });
   expect(byAction({ ...retrying, state: "paused" } as Pipeline).resume).toEqual({ action: "resume", refusal: null, stageId: null, attempt: null });
   const ended = byAction({ ...retrying, state: "completed" } as Pipeline);
-  expect([ended.pause!.refusal, ended["retry-stage"]!.refusal, ended.close!.refusal, ended["continue-review"]!.refusal]).toEqual(["ended", "ended", "ended", "ended"]);
+  expect([ended.pause!.refusal, ended["retry-stage"]!.refusal, ended.close!.refusal, ended["continue-review"]!.refusal, ended["accept-head"]!.refusal]).toEqual(["ended", "ended", "ended", "ended", "ended"]);
+  expect(ended["retry-merge"]!.refusal).toBe("no-merge");
+  for (const state of ["blocked", "cancelled"]) {
+    expect(byAction({ ...retrying, state: "completed", merge: { state } } as unknown as Pipeline)["retry-merge"]!.refusal).toBeNull();
+  }
+  expect(byAction({ ...retrying, state: "completed", merge: { state: "waiting-checks" } } as unknown as Pipeline)["retry-merge"]!.refusal).toBe("no-merge");
   const draft = byAction({ ...retrying, state: "draft" } as Pipeline);
   expect([draft.pause!.refusal, draft.close!.refusal]).toEqual(["draft", "draft"]);
 });

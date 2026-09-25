@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { requestFilesRefresh } from "@/lib/filesEvents";
 import type { ProjectCatalogEntry } from "@/lib/types";
 
 export type CreateProjectOutcome =
-  | { ok: true; project: string }
+  | { ok: true; project: string; root?: string }
   | { ok: false; code: string; message?: string };
 
 export interface CreateProjectRequestOptions {
@@ -129,7 +130,11 @@ export function useProjectCuration(
       ...previous.filter((existing) => existing.project !== entry.project),
       entry,
     ]);
-    return { ok: true, project: entry.project };
+    /* The overlay gives the rail its row; the rest of the shell reads the new
+       project's folder from the files feed, which would otherwise learn of it
+       only on its next poll (#2167). */
+    requestFilesRefresh();
+    return { ok: true, project: entry.project, ...(entry.projectRoot ? { root: entry.projectRoot } : {}) };
   }, []);
 
   return { crownedProjects, toggleCrown, createProject, createdCatalog };

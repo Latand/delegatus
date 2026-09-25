@@ -1,9 +1,11 @@
 "use client";
 
-import { Settings } from "lucide-react";
+import { Flag, Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
+import { pipelineTaskFinishState } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fmtAge } from "@/components/utils";
@@ -14,7 +16,7 @@ import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanban
 import { ChevronDown, ChevronRight, MoreGlyph, svgProps } from "@/components/kanban/kanbanGlyphs";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 import {
-  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, StageReportLine,
+  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine,
   type LoopArc,
 } from "@/components/kanban/PipelineSection";
 import { stageIdentity } from "@/components/kanban/stageIdentity";
@@ -25,8 +27,8 @@ import {
   type StageChipState,
 } from "./pipelineModel";
 import {
-  blockAgeSeconds, cardChain, cardChainLevels, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
-  type ChainItem, type PipelineAnswer, type PipelineAnswers, type PipelineBlockDensity,
+  answerLabel, blockAgeSeconds, cardChain, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
+  type ChainItem, type PipelineAnswer, type PipelineAnswers, type PipelineBlockDensity, type ReviewStop,
 } from "./pipelineBlockModel";
 
 /*
@@ -292,8 +294,26 @@ function DecisionReport({ pipeline, stage, names, nameOf }: {
   );
 }
 
-/** What the lane stopped on: the review heads of a spent review budget, or
-    the parked stage's report. */
+/** A lane stopped on a review (#2187 §3.4): one line on why, in warning ink,
+    then the review's findings as the stage reported them. A stop after the
+    last fix keeps the two heads in the line's tooltip. */
+function ReviewStopReport({ pipeline, stop, nameOf }: {
+  pipeline: Pipeline;
+  stop: ReviewStop;
+  nameOf: (stage: PipelineStage) => string;
+}) {
+  const { t } = useLocale();
+  const heads = stop.kind === "stop-after-fix" ? pipelineReviewHeads(t, pipeline) : null;
+  return (
+    <>
+      <p className="stage-report" data-review-stop={stop.kind} title={heads ?? undefined}>{reviewStopReason(t, stop, nameOf)}</p>
+      <FindingList findings={reviewStopFindings(pipeline, stop)} shown={ANSWER_FINDINGS} />
+    </>
+  );
+}
+
+/** What the lane stopped on: why it stopped on a review, the review heads of
+    a spent review budget, or the parked stage's report. */
 function AnswerReport({ pipeline, answers, names, nameOf }: {
   pipeline: Pipeline;
   answers: PipelineAnswers;
@@ -301,9 +321,103 @@ function AnswerReport({ pipeline, answers, names, nameOf }: {
   nameOf: (stage: PipelineStage) => string;
 }) {
   const { t } = useLocale();
+  if (answers.kind === "merge") return <p className="stage-report" data-merge-stop={pipeline.id}>{t("pipelineBlock.merge.reason", { reason: mergeReasonText(t, pipeline.merge?.reason ?? null) })}</p>;
+  if (answers.stop) return <ReviewStopReport pipeline={pipeline} stop={answers.stop} nameOf={nameOf} />;
   return answers.kind === "review"
     ? <p className="review-heads" data-review-heads={pipeline.id}>{pipelineReviewHeads(t, pipeline)}</p>
     : <DecisionReport pipeline={pipeline} stage={answers.stage} names={names} nameOf={nameOf} />;
+}
+
+/** A completed lane whose last fix no reviewer saw says so, muted, on a line
+    of its own under the chain (#1938 kept, #2187 §3.5): in the head the words
+    cut the lane's title. */
+function UnreviewedNote({ pipeline }: { pipeline: Pipeline }) {
+  const { t } = useLocale();
+  const unreviewed = pipelineCompletedUnreviewed(pipeline);
+  if (!unreviewed) return null;
+  return <p className="pb-unreviewed" data-pipeline-unreviewed={pipeline.id}>{t("pipelineBlock.unreviewedFix", { count: unreviewed.findings })}</p>;
+}
+
+/** The task a lane row speaks about: the one it sits on, else the first it
+    finishes or finished. */
+function finishTaskOf(pipeline: Pipeline, taskId: string | null | undefined): string | null {
+  return taskId ?? pipeline.finishesTaskIds?.[0] ?? pipeline.taskFinishes?.[0]?.taskId ?? null;
+}
+
+/** Whether the chain row carries the flag (marked, or finished). */
+function finishFlagShown(pipeline: Pipeline, taskId: string | null | undefined): boolean {
+  const task = finishTaskOf(pipeline, taskId);
+  const state = task ? pipelineTaskFinishState(pipeline, task) : null;
+  return state !== null && state.kind !== "waits";
+}
+
+/** #2187 §6: a lane marked as finishing its task says so at the end of its
+    chain row, before the PR chip, muted; once it has, in success ink. The
+    lane's head stays free of it: there it cut the lane title at 1440. */
+function FinishFlag({ pipeline, taskId }: { pipeline: Pipeline; taskId: string | null | undefined }) {
+  const { t } = useLocale();
+  const task = finishTaskOf(pipeline, taskId);
+  const state = task ? pipelineTaskFinishState(pipeline, task) : null;
+  if (!state || state.kind === "waits") return null;
+  return (
+    <span className="pb-finish" data-pipeline-finish={state.kind} data-pipeline-finish-for={pipeline.id}>
+      <Flag className="pb-finish-icon" aria-hidden />
+      {t(state.kind === "finished" ? "pipelineBlock.finish.done" : "pipelineBlock.finish.marked")}
+    </span>
+  );
+}
+
+/** #2187 §5.3: a finished marked lane whose task's move to Done waits on
+    other open pipelines says so on a line of its own under the chain. */
+function FinishWaitNote({ pipeline, taskId }: { pipeline: Pipeline; taskId: string | null | undefined }) {
+  const { t } = useLocale();
+  const task = finishTaskOf(pipeline, taskId);
+  const state = task ? pipelineTaskFinishState(pipeline, task) : null;
+  if (state?.kind !== "waits") return null;
+  return (
+    <p className="pb-finish-wait" data-pipeline-finish="waits" data-pipeline-finish-for={pipeline.id} data-pipeline-finish-open={state.open}>
+      <Flag className="pb-finish-icon" aria-hidden />
+      {t("pipelineBlock.finish.waits", { count: state.open })}
+    </p>
+  );
+}
+
+/** What a completed lane's merge adds after "done" (#2187 §6), in its ink:
+    waiting for checks with how long, updating from main, merging, merge
+    stopped, merged. Null when the lane has no merge to speak of. */
+export function laneMergeText(t: TFunction, pipeline: Pipeline, nowMs: number): string | null {
+  const word = laneMergeWord(pipeline);
+  if (!word) return null;
+  if (word !== "waiting") return t(`pipelineBlock.merge.${word}`);
+  const since = Date.parse(pipeline.merge?.requestedAt ?? "");
+  const age = Number.isFinite(since) ? humanizeDuration(blockAgeSeconds((nowMs - since) / 1000)) : "";
+  return t("pipelineBlock.merge.waiting", { age }).replace(/ · $/, "");
+}
+
+function MergeWord({ pipeline, nowMs }: { pipeline: Pipeline; nowMs: number }) {
+  const { t } = useLocale();
+  const text = laneMergeText(t, pipeline, nowMs);
+  if (!text) return null;
+  return (
+    <>
+      <span className="pb-sep" aria-hidden="true">·</span>
+      <span className="pb-merge" data-merge-state={laneMergeWord(pipeline)!}>{text}</span>
+    </>
+  );
+}
+
+/** The line under a completed lane's chain about its merge (#2187 §6): the
+    waiting hint, who merged it, or a stopped merge someone already answered
+    with "Leave the PR open", in muted ink. A stop still asking is the answer
+    panel's. */
+function MergeNote({ pipeline }: { pipeline: Pipeline }) {
+  const { t } = useLocale();
+  const word = laneMergeWord(pipeline);
+  if (!word || mergeNeedsYou(pipeline)) return null;
+  if (word === "waiting" || word === "updating") return <p className="pb-merge-note" data-merge-note="waiting">{t("pipelineBlock.merge.waitingHint")}</p>;
+  if (word === "merged" && pipeline.merge?.by === "auto-merge") return <p className="pb-merge-note" data-merge-note="merged">{t("pipelineBlock.merge.byDelegatus")}</p>;
+  if (word === "stopped") return <p className="pb-merge-note" data-merge-note="stopped">{t("pipelineBlock.merge.reason", { reason: mergeReasonText(t, pipeline.merge?.reason ?? null) })}</p>;
+  return null;
 }
 
 /** The two ways on, the quiet one first. */
@@ -316,11 +430,7 @@ function AnswerButtons({ pipeline, answers, acting, large, onAnswer }: {
   onAnswer: (pipeline: Pipeline, answer: PipelineAnswer) => void;
 }) {
   const { t } = useLocale();
-  const label = (answer: PipelineAnswer): string => {
-    if (answer.action === "continue-review") return t("pipelineBlock.oneMoreRound");
-    if (large) return t(answer.action === "skip-stage" ? "mobile2.pipeline.skip" : answer.action === "retry-stage" ? "mobile2.pipeline.retry" : "mobile2.pipeline.archive");
-    return t(`kanban.pipelineAct.label.${answer.action}`, { stage: answer.stageName ?? "" });
-  };
+  const label = (answer: PipelineAnswer): string => answerLabel(t, answers, answer, large);
   return (
     <div className={`pb-actions${large ? " large" : ""}`}>
       {answers.choices.map((answer, index) => (
@@ -390,6 +500,8 @@ export interface PipelineBlockProps {
   nowMs: number;
   /** The task the block sits on: a pipeline titled like it draws no title. */
   taskTitle?: string | null;
+  /** That task's id: whether the lane finishes it is said on the row (#2187 §6). */
+  taskId?: string | null;
   /** Stage ids whose conversation or first message is open where the block is. */
   selected?: ReadonlySet<string>;
   /** The pipeline action this page sent and the server has not answered. */
@@ -419,6 +531,11 @@ export interface PipelineBlockProps {
   /** Screen density: the heading, which the screen's bar watches to take the
       title once it scrolls away. */
   headingRef?: React.Ref<HTMLHeadingElement>;
+  /** Screen density inside another screen (the phone task screen, #2148): no
+      heading, since the screen above names the task, and no Attach, which is
+      on the pipeline screen one tap away. The "Stages" line is that tap, with
+      the lane's age and its ⋯ at the end. */
+  embedded?: boolean;
   /** Card density: what the card adds about its other pipelines ("+1
       paused"), at the right end of the block's last line. */
   aside?: React.ReactNode;
@@ -461,7 +578,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
           <span className="pb-line ended">
             <span className="pb-ended">
               <StageToneMark state="passed" />
-              {[pipelineStateLabel(t, pipeline.state), age].filter(Boolean).join(" · ")}
+              {[pipelineStateLabel(t, pipeline.state), laneMergeText(t, pipeline, nowMs), age].filter(Boolean).join(" · ")}
             </span>
             <span className="pb-grow" />
             {text}
@@ -494,66 +611,90 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const showTitle = !sameTitle(title, props.taskTitle);
   /* Running is implied by the live pill; every other state is a word in its tone. */
   const word = pipeline.state === "running" ? null : pipelineStateLabel(t, pipeline.state);
-  const age = moved === null ? null : fmtAge(moved / 1000);
+  /* A completed lane's merge word stands in for its age (#2187 §6): the two
+     side by side cut the lane's title at 1440 in uk. */
+  const age = moved === null || laneMergeWord(pipeline) ? null : fmtAge(moved / 1000);
   const graphOpen = Boolean(props.graphOpen && props.onToggleGraph && props.onOpenStage);
   const report = !needs && pipeline.stageReports?.length ? pipeline.stageReports.at(-1)! : null;
-  return (
-    <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root}>
-      <div className="pb-head">
+  const opener = (
+    <button
+      type="button"
+      className="pb-open"
+      data-open-stages={pipeline.id}
+      aria-label={`${t("kanban.pipelineAria", { title, progress })}. ${t("kanban.stages.expandTitle")}`}
+      title={pipeline.task || title}
+      disabled={!props.onOpenStages}
+      onClick={() => props.onOpenStages?.(pipeline)}
+    >
+      {showTitle ? <span className="pb-title" data-pipeline-title={pipeline.id}>{title}</span> : null}
+      <span className="pb-meta">
+        {word ? <span className="pstate-word" data-pstate={pipeline.state}>{word}</span> : null}
+        <MergeWord pipeline={pipeline} nowMs={nowMs} />
+        {word && age ? <span className="pb-sep" aria-hidden="true">·</span> : null}
+        {age ? <span className="pb-when">{age}</span> : null}
+      </span>
+      <ChevronRight />
+    </button>
+  );
+  const acting = props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null;
+  const controls = (
+    <>
+      {props.onToggleGraph && props.onOpenStage ? (
         <button
           type="button"
-          className="pb-open"
-          data-open-stages={pipeline.id}
-          aria-label={`${t("kanban.pipelineAria", { title, progress })}. ${t("kanban.stages.expandTitle")}`}
-          title={pipeline.task || title}
-          disabled={!props.onOpenStages}
-          onClick={() => props.onOpenStages?.(pipeline)}
+          className="pb-icon pb-graph-toggle"
+          aria-pressed={graphOpen}
+          aria-label={graphOpen ? t("kanban.graph.showSummary") : t("kanban.graph.showGraph")}
+          title={graphOpen ? t("kanban.graph.summary") : t("kanban.graph.graph")}
+          data-graph-toggle={pipeline.id}
+          onClick={() => props.onToggleGraph!(!graphOpen)}
         >
-          {showTitle ? <span className="pb-title" data-pipeline-title={pipeline.id}>{title}</span> : null}
-          <span className="pb-meta">
-            {word ? <span className="pstate-word" data-pstate={pipeline.state}>{word}</span> : null}
-            {word && age ? <span className="pb-sep" aria-hidden="true">·</span> : null}
-            {age ? <span className="pb-when">{age}</span> : null}
-          </span>
-          <ChevronRight />
+          {graphOpen ? <ListGlyph /> : <GraphGlyph />}
         </button>
-        {props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null}
-        <span className="pb-grow" />
-        {props.onToggleGraph && props.onOpenStage ? (
-          <button
-            type="button"
-            className="pb-icon pb-graph-toggle"
-            aria-pressed={graphOpen}
-            aria-label={graphOpen ? t("kanban.graph.showSummary") : t("kanban.graph.showGraph")}
-            title={graphOpen ? t("kanban.graph.summary") : t("kanban.graph.graph")}
-            data-graph-toggle={pipeline.id}
-            onClick={() => props.onToggleGraph!(!graphOpen)}
-          >
-            {graphOpen ? <ListGlyph /> : <GraphGlyph />}
-          </button>
-        ) : null}
-        {props.onMenu ? (
-          <button
-            type="button"
-            className="pb-icon"
-            aria-label={t("kanban.pipelineAct.menu")}
-            aria-haspopup="menu"
-            data-pipeline-menu={pipeline.id}
-            onClick={(event) => props.onMenu!(pipeline, event.currentTarget)}
-          >
-            <MoreGlyph />
-          </button>
-        ) : null}
-      </div>
+      ) : null}
+      {props.onMenu ? (
+        <button
+          type="button"
+          className="pb-icon"
+          aria-label={t("kanban.pipelineAct.menu")}
+          aria-haspopup="menu"
+          data-pipeline-menu={pipeline.id}
+          onClick={(event) => props.onMenu!(pipeline, event.currentTarget)}
+        >
+          <MoreGlyph />
+        </button>
+      ) : null}
+    </>
+  );
+  /* One head (#2148). When the lane carries the task's own title and
+     its actions live in the card's ⋯ (no `onMenu` of its own), the stage
+     chain IS the head: the age and the way into the stages trail it on the
+     same row, and nothing above it repeats the card. A lane with a title or a
+     menu of its own keeps its head row; at 390 px the chain, the age and a
+     44 px ⋯ do not fit one line. */
+  const chainHead = !showTitle && !graphOpen && !props.onMenu;
+  return (
+    <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root}>
+      {chainHead ? null : (
+        <div className="pb-head">
+          {opener}
+          {acting}
+          <span className="pb-grow" />
+          {controls}
+        </div>
+      )}
       {graphOpen ? (
         <>
           <GraphSlot summary={summary} names={names} selected={selected} onOpenStage={props.onOpenStage!} />
+          <FinishFlag pipeline={pipeline} taskId={props.taskId} />
           <WorkLinkRow resolved={links} showNoPr className="pb-links end" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
         </>
       ) : (
-        <div className="pb-chain">
+        <div className={finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
           <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={props.onOpenStage} />
+          <FinishFlag pipeline={pipeline} taskId={props.taskId} />
           <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
+          {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
         </div>
       )}
       {answers ? (
@@ -565,6 +706,9 @@ export function PipelineBlock(props: PipelineBlockProps) {
             : <DecisionReport pipeline={pipeline} stage={parkedStage(pipeline)} names={names} nameOf={nameOf} />}
         </div>
       ) : null}
+      <FinishWaitNote pipeline={pipeline} taskId={props.taskId} />
+      <UnreviewedNote pipeline={pipeline} />
+      <MergeNote pipeline={pipeline} />
       {report ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={report} names={names} /></div> : null}
       {pipeline.graphEdits?.length ? <GraphEditLine edit={pipeline.graphEdits.at(-1)!} /> : null}
     </div>
@@ -590,6 +734,7 @@ export function PipelineStateLine({ summary, nowMs }: { summary: KanbanPipeline;
   return (
     <span className="pb-stateline" data-pipeline-stateline={pipeline.id}>
       <span className="pstate-word" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
+      <MergeWord pipeline={pipeline} nowMs={nowMs} />
       {parts.map((part, index) => (
         <span key={index} className="pb-statepart">
           <span className="pb-sep" aria-hidden="true">·</span>
@@ -651,7 +796,7 @@ function ScreenBlock(props: PipelineBlockProps & {
     if (arc.parked) return [{ id: arc.id, text: t("kanban.loopParkedHere", { from }) }];
     return [{
       id: arc.id,
-      text: [t("kanban.loopNames", { from, to }), t("kanban.loopUsed", { fired: arc.loop.fired, max: arc.loop.max }), arc.state === "exhausted" ? t("kanban.graph.noneLeft") : null].filter(Boolean).join(" · "),
+      text: [t("kanban.loopNames", { from, to }), t("kanban.loopUsed", { fired: arc.loop.fired, max: arc.loop.max }), arc.state === "exhausted" ? spentEdgeSentence(t, arc, from, to) : null].filter(Boolean).join(" · "),
     }];
   });
 
@@ -698,9 +843,11 @@ function ScreenBlock(props: PipelineBlockProps & {
     const identity = stage.effectiveRole ? stageIdentity(pipeline, stage) : null;
     const who = whoRuns(t, pipeline, stage);
     const place = stageLatestAttemptPlace(pipeline, stage.id);
+    const aside = stageRoleAside(t, stage);
     const words = [
-      stageRoleAside(t, stage),
-      stage.kind === "review-loop" ? t("mobile2.pipeline.review") : null,
+      aside,
+      /* A role-less review loop's aside already names it: say it once. */
+      stage.kind === "review-loop" && aside !== t("pipelineStrip.reviewStage") ? t("mobile2.pipeline.review") : null,
       place.attempt !== null && (place.attempts > 1 || isCurrent) ? t("pipelineBlock.attempt", { n: place.attempt }) : null,
     ].filter(Boolean).join(" · ");
     const aria = [t("kanban.stageAria", { stage: name, state }), who, suffix?.title].filter(Boolean).join(". ");
@@ -756,7 +903,7 @@ function ScreenBlock(props: PipelineBlockProps & {
               <div className="pb-answer" data-answer={answers.kind}>
                 <AnswerReport pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} />
                 {edges.map((edge) => <p key={edge.id} className="pb-edge" data-stage-edge={edge.id}>{`↺ ${edge.text}`}</p>)}
-                {answers.kind === "review" && answers.stage ? <FindingList findings={stageFindings(pipeline, answers.stage.id)} shown={ANSWER_FINDINGS} /> : null}
+                {answers.kind === "review" && answers.stage && !answers.stop ? <FindingList findings={stageFindings(pipeline, answers.stage.id)} shown={ANSWER_FINDINGS} /> : null}
                 {props.onAnswer ? <AnswerButtons pipeline={pipeline} answers={answers} acting={props.acting ?? null} large onAnswer={props.onAnswer} /> : null}
               </div>
             ) : (
@@ -779,22 +926,47 @@ function ScreenBlock(props: PipelineBlockProps & {
   };
   /* A finished lane has no current stage: what closed it is the last report. */
   const lastReport = ended ? (pipeline.stageReports ?? []).at(-1) ?? null : null;
+  const moved = pipelineMovedAtMs(pipeline);
+  /* The links say what the lane produced, under its title; attaching one by
+     hand is rare, so it is a row of its own after the stages (#2148). */
+  const hasLinks = Boolean(links?.links.length || links?.noPr);
+  const hasFlag = finishFlagShown(pipeline, props.taskId);
   return (
     <section className="pblock" aria-label={t("kanban.pipelineAria", { title: pipelineTitle(t, pipeline), progress: pipelineProgress(t, summary, nameOf) })} {...props.root}>
-      <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>
-      <div className="pb-links-row">
-        <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} />
-        {props.onWorkLinks ? (
-          <button type="button" className="pb-attach" data-work-links-open={pipeline.id} onClick={(event) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, event.currentTarget)}>
-            {t("workLinks.attach")}
-          </button>
-        ) : null}
-      </div>
+      {props.embedded ? null : <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>}
+      {hasLinks || hasFlag ? (
+        <div className="pb-links-row">
+          <FinishFlag pipeline={pipeline} taskId={props.taskId} />
+          {hasLinks ? <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} /> : null}
+        </div>
+      ) : null}
+      <FinishWaitNote pipeline={pipeline} taskId={props.taskId} />
+      <UnreviewedNote pipeline={pipeline} />
+      <MergeNote pipeline={pipeline} />
+      {props.answers?.kind === "merge" ? (
+        <AnswerPanel pipeline={pipeline} answers={props.answers} names={names} nameOf={nameOf} acting={props.acting ?? null} large onAnswer={props.onAnswer} />
+      ) : null}
       {lastReport ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={lastReport} names={names} shown={ANSWER_FINDINGS} /></div> : null}
-      <p className="pb-section" data-stages-count={pipeline.stages.length}>
-        {t("mobile2.pipeline.stages")}
-        <span className="pb-count">{pipeline.stages.length}</span>
-      </p>
+      {props.embedded ? (
+        <div className="pb-section-row">
+          <button type="button" className="pb-section pb-section-open" data-open-stages={pipeline.id} data-stages-count={pipeline.stages.length} disabled={!props.onOpenStages} onClick={() => props.onOpenStages?.(pipeline)}>
+            {t("mobile2.pipeline.stages")}
+            <span className="pb-count">{pipeline.stages.length}</span>
+            {moved === null ? null : <span className="pb-count">· {humanizeDuration(blockAgeSeconds((nowMs - moved) / 1000))}</span>}
+            <ChevronRight />
+          </button>
+          {props.onMenu ? (
+            <button type="button" className="pb-icon" aria-label={t("kanban.pipelineAct.menu")} aria-haspopup="menu" data-pipeline-menu={pipeline.id} onClick={(event) => props.onMenu!(pipeline, event.currentTarget)}>
+              <MoreGlyph />
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <p className="pb-section" data-stages-count={pipeline.stages.length}>
+          {t("mobile2.pipeline.stages")}
+          <span className="pb-count">{pipeline.stages.length}</span>
+        </p>
+      )}
       <ol className="pb-stages" data-chain={pipeline.id}>
         {foldPassed ? (
           <li className="pb-stage passed-fold tone-ok">
@@ -826,6 +998,13 @@ function ScreenBlock(props: PipelineBlockProps & {
             <li key={`${loop.from.id}:${loop.to.id}`}>{`↺ ${t("kanban.loopRest", { from: nameOf(loop.from), to: nameOf(loop.to), max: loop.max })}`}</li>
           ))}
         </ul>
+      ) : null}
+      {props.onWorkLinks && !props.embedded ? (
+        <button type="button" className="pb-attach" data-work-links-open={pipeline.id} onClick={(event) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, event.currentTarget)}>
+          <Link2 className="pb-attach-icon" aria-hidden />
+          <span className="pb-attach-label">{t("workLinks.attach")}</span>
+          <ChevronRight />
+        </button>
       ) : null}
     </section>
   );

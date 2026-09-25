@@ -20,6 +20,7 @@ import type {
   EngineHost,
   HostState,
   NormalizedQueueEntry,
+  ProviderRetryEvidence,
   QueueEntry,
   RuntimeCompactOutcome,
   RuntimeCompactRequest,
@@ -39,6 +40,7 @@ import {
   type RuntimeEventStore,
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+import { pendingPermissionFrom, type PendingPermissionRequest } from "./permissionRequests";
 import { NATIVE_MULTI_AGENT_DENY_FLAG } from "./hostActivityFlags";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { withTelegramConnectorGrant } from "./telegramConnectorEnv";
@@ -248,6 +250,10 @@ const CHILD_ENV_ALLOWLIST = [
   "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
   "DBUS_SESSION_BUS_ADDRESS", "SSL_CERT_FILE", "SSL_CERT_DIR",
   "LLV_SPAWN_CAPABILITY",
+  /* Where Claude Code writes background-task output. A pipeline stage runs
+     with TMPDIR in its scratch directory and this pinned to the temp root the
+     Viewer scans for those tasks (#1957). */
+  "CLAUDE_CODE_TMPDIR",
   /* The re-hosted Viewer MCP launcher resolves the current release and the
      runtime host's stable listener from these non-secret inputs. */
   "LLV_STATE_DIR", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT",
@@ -576,6 +582,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private readonly deliveries: ClaudeDeliveryState[] = [];
   private readonly turnQueue: string[] = [];
   private readonly attentions = new Map<string, JsonObject>();
+  /** When each open attention arrived, for the permission requests the state
+      reports (#2215). Pruned against `attentions` on every state read. */
+  private readonly attentionSince = new Map<string, string>();
+  /** The provider retry the CLI announced for the running turn (#2215). */
+  private providerRetry: ProviderRetryEvidence | null = null;
   private readonly pendingControls = new Map<string, PendingControl>();
   private readonly pendingAnswers = new Map<string, PendingAnswer>();
   /** Compactions this host issued, keyed by durable operation and kept after
@@ -1077,9 +1088,21 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
       pendingAttention: [...this.attentions.keys()],
+      pendingPermissions: this.pendingPermissions(),
+      providerRetry: this.activeTurnId ? this.providerRetry : null,
       activeFlags: [...this.launchFlags],
       account: this.account,
     };
+  }
+
+  private pendingPermissions(): PendingPermissionRequest[] {
+    for (const id of this.attentionSince.keys()) if (!this.attentions.has(id)) this.attentionSince.delete(id);
+    const requests: PendingPermissionRequest[] = [];
+    for (const [id, attention] of this.attentions) {
+      const request = pendingPermissionFrom(id, attention, this.attentionSince.get(id) ?? new Date().toISOString());
+      if (request) requests.push(request);
+    }
+    return requests;
   }
 
   private restore(): void {
@@ -1202,6 +1225,25 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.settlePendingCompactions({ compactionId: stringField(message, "uuid") });
       return;
     }
+    /* The CLI retrying a provider error inside the running turn (#2215): the
+       one piece of evidence that a quiet turn waits on the provider. */
+    if (type === "system" && message.subtype === "api_retry") {
+      const now = Date.now();
+      const delay = typeof message.retry_delay_ms === "number" && Number.isFinite(message.retry_delay_ms)
+        ? Math.max(0, message.retry_delay_ms)
+        : 0;
+      this.providerRetry = {
+        at: new Date(now).toISOString(),
+        retryAt: new Date(now + delay).toISOString(),
+        status: typeof message.error_status === "number" ? message.error_status : null,
+        error: stringField(message, "error"),
+      };
+      this.notifyStateListeners();
+      return;
+    }
+    if (this.providerRetry && (type === "stream_event" || type === "assistant" || type === "result" || type === "control_request")) {
+      this.providerRetry = null;
+    }
     if (type === "user") {
       const content = messageContent(message);
       const directUserEcho = stringField(message.message, "role") === "user" && content !== null;
@@ -1253,6 +1295,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (!requestId) return this.fail(new Error("Claude control request had no request id"));
       const request = record(message.request) ?? {};
       this.attentions.set(requestId, request);
+      this.attentionSince.set(requestId, new Date().toISOString());
       this.emit({ kind: "attention", id: requestId, method: stringField(request, "subtype") ?? "control_request", attention: request });
       return;
     }

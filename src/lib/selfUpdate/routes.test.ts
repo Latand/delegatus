@@ -461,9 +461,9 @@ describe("managed install: an update is one Viewer deployment", () => {
 });
 
 describe("checkout install: a staged build and restarts by the launcher", () => {
-  interface Harness { service: SelfUpdateService; recordFile: string; spawned: string[][]; releaseBuild: (() => void) | null }
+  interface Harness { service: SelfUpdateService; deps: ServiceDeps; recordFile: string; spawned: string[][]; releaseBuild: (() => void) | null }
 
-  function harness(options: { holdBuild?: boolean } = {}): Harness {
+  function harness(options: { holdBuild?: boolean; remote?: string } = {}): Harness {
     const dir = mkdtempSync(join(root, "checkout-"));
     const state = join(dir, "state");
     mkdirSync(state, { recursive: true });
@@ -485,7 +485,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       updatedAt: new Date().toISOString(),
     }));
     const spawned: string[][] = [];
-    const h: Harness = { service: null as unknown as SelfUpdateService, recordFile, spawned, releaseBuild: null };
+    const h: Harness = { service: null as unknown as SelfUpdateService, deps: null as unknown as ServiceDeps, recordFile, spawned, releaseBuild: null };
     /* The stubbed spawn: git runs for real against the fixture; install and
        build only say so, and the build leaves the BUILD_ID a real one would. */
     const run: StepPorts["run"] = async (command, { cwd, onLine }) => {
@@ -503,7 +503,8 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       onLine(`${command.slice(1).join(" ")} ok`);
       return 0;
     };
-    h.service = new SelfUpdateService(baseDeps(join(dir, "self-update"), {
+    h.deps = baseDeps(join(dir, "self-update"), {
+      remote: options.remote ?? remote,
       env: { LLV_SELF_UPDATE_RECORD: recordFile },
       mode: () => detectMode({ env: { LLV_SELF_UPDATE_RECORD: recordFile }, readRecord: readLauncherRecord, alive: () => true, deploymentsEnabled: async () => false }),
       createRunner: (config, publish, onChange) => new UpdateRunner(config, {
@@ -517,7 +518,8 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       }, onChange),
       hostHealth: async () => ({ pid, startIdentity, hostEpoch: 1 }),
       processAlive: (candidate, identity) => sameProcess({ pid: candidate, startIdentity: identity }),
-    }));
+    });
+    h.service = new SelfUpdateService(h.deps);
     return h;
   }
 
@@ -586,6 +588,40 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const log = await getStepLog("build").text();
     expect(log).toContain("run build ok");
     expect(getStepLog("everything").status).toBe(404);
+  });
+
+  test("a moved remote can be checked again and built after the failed state is restored", async () => {
+    const movingRemote = mkdtempSync(join(root, "moving-remote-"));
+    const movingWork = mkdtempSync(join(root, "moving-work-"));
+    await git(root, "clone", "--bare", remote, movingRemote);
+    await git(root, "clone", movingRemote, movingWork);
+    const h = harness({ remote: movingRemote });
+    setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check"));
+    expect((await until((s) => s.check.state === "update-available")).available?.sha).toBe(tipSha);
+
+    writeFileSync(join(movingWork, "package.json"), `${JSON.stringify({ version: "1.0.2" })}\n`);
+    writeFileSync(join(movingWork, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- Remote recovery (#8)\n\n## [1.0.0] — 2026-09-01\n\n### Added\n\n- First release (#1)\n");
+    await git(movingWork, "add", ".");
+    await git(movingWork, "commit", "-m", "Remote recovery");
+    await git(movingWork, "push", "origin", "main");
+    const movedSha = await git(movingWork, "rev-parse", "HEAD");
+
+    expect((await postUpdate(post("/update", { key: "press-stale" }))).status).toBe(202);
+    const failed = await until((s) => s.update.state === "failed");
+    expect(failed.update.target).toBe(tipSha);
+    expect(failed.update.steps[0]?.failure).toEqual({ kind: "remote-moved", expected: tipSha.slice(0, 7), fetched: movedSha.slice(0, 7) });
+    h.service.saveNow();
+    setSelfUpdateServiceForTests(new SelfUpdateService(h.deps));
+    expect((await snapshot()).update).toMatchObject({ state: "failed", target: tipSha });
+
+    expect((await postCheck(post("/check"))).status).toBe(202);
+    const checked = await until((s) => s.check.state === "update-available" && s.available?.sha === movedSha);
+    expect(checked.check.delta?.summary.groups.some((group) => group.items.some((item) => item.includes("Remote recovery")))).toBe(true);
+    expect((await postUpdate(post("/update", { key: "press-new" }))).status).toBe(202);
+    const built = await until((s) => s.update.state === "done");
+    expect(built.update.target).toBe(movedSha);
+    expect(built.installed.sha).toBe(movedSha);
   });
 
   test("a host whose launch failed blocks nothing, and a restart asked of it settles on the failure", async () => {

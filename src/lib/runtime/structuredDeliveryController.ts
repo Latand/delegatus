@@ -18,6 +18,8 @@ import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { projectEngineHostEvent } from "./engineHostEvents";
+import { PermissionRequestGuard } from "./permissionGuard";
+import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
 import { conversationTurnLiveness, readTranscriptEvidence, type TurnLivenessDependencies } from "./liveness";
 import {
   interruptionObligationDirectory,
@@ -31,7 +33,7 @@ import { deliveryRouteOf, journalVerdict, sendIsSettled } from "./sendSettlement
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
-import { NATIVE_INJECT_CAPABILITY } from "./codexAppServerHost";
+import { NATIVE_INJECT_CAPABILITY, NATIVE_QUEUE_CAPABILITY, NATIVE_TURN_PROFILE_CAPABILITY } from "./codexCapabilityFlags";
 import {
   markStructuredDeliveryControllerReady,
   markStructuredDeliveryControllerUnavailable,
@@ -588,7 +590,7 @@ async function publishHostState(
       artifactPath: entry.artifactPath,
       capabilities: {
         ...runtimeSteerCapability(adopted.key.engine),
-        nativeQueue: adopted.key.engine === "codex" && state.activeFlags.includes("native-queue"),
+        nativeQueue: adopted.key.engine === "codex" && state.activeFlags.includes(NATIVE_QUEUE_CAPABILITY),
         /* #1560: OBSERVED, never inferred. The flag comes from the running
            executable's negotiated protocol, and a host that has not resolved it
            advertises nothing — so the composer offers no injection action and
@@ -600,12 +602,28 @@ async function publishHostState(
           adopted.key.engine,
           state.activeFlags.includes(STRUCTURED_IMAGE_CAPABILITY),
         ),
-        runtimeSettings: runtimeSettingsCapability(adopted.key.engine, state.activeFlags.includes("native-turn-profile")),
+        runtimeSettings: runtimeSettingsCapability(adopted.key.engine, state.activeFlags.includes(NATIVE_TURN_PROFILE_CAPABILITY)),
       },
       activeTurnId: state.activeTurnRef,
       diagnostics: state.diagnostics,
     },
   });
+}
+
+/* One guard per registry for the life of the process, so a controller swap
+   carries its timers and never answers the same request twice (#2215). */
+const permissionGuards = new WeakMap<AgentRegistry, PermissionRequestGuard>();
+
+function productionPermissionGuard(registry: AgentRegistry): PermissionRequestGuard {
+  let guard = permissionGuards.get(registry);
+  if (!guard) {
+    guard = new PermissionRequestGuard({
+      attendance: (conversationId) => resolvePermissionAttendance(registry, conversationId),
+      record: permissionDenialRecorder({ registry }),
+    });
+    permissionGuards.set(registry, guard);
+  }
+  return guard;
 }
 
 export async function bindStructuredDeliveryQueue(
@@ -620,6 +638,8 @@ export async function bindStructuredDeliveryQueue(
         test can drive this seam against a real process and a real transcript
         on a clock it controls. */
     liveness?: TurnLivenessDependencies;
+    /** Answers the Claude tool requests nobody can (#2215); tests pass their own. */
+    permissionGuard?: PermissionRequestGuard;
   } = {},
 ): Promise<void> {
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
@@ -633,6 +653,7 @@ export async function bindStructuredDeliveryQueue(
   }
   const retirePredecessor = state.stopActive;
   const registry = dependencies.registry ?? agentRegistry();
+  const permissionGuard = dependencies.permissionGuard ?? productionPermissionGuard(registry);
   const hosts = new Map<string, EngineHost>();
   // Registration events can request a drain while startup is still seating
   // the remaining hosts. Their original queued operations must wait for those
@@ -1037,7 +1058,10 @@ export async function bindStructuredDeliveryQueue(
   };
   const unregisterHost = async (key: string, host: EngineHost): Promise<void> => {
     const registered = takeRegistration(key, host);
-    if (registered) await detachRegistration(key, registered);
+    if (registered) {
+      permissionGuard.forget(key);
+      await detachRegistration(key, registered);
+    }
   };
   /* This generation no longer owns the publication: a swap installed a
      successor and retired it, or it was retired outright. */
@@ -1146,6 +1170,7 @@ export async function bindStructuredDeliveryQueue(
     });
     const entry = entryForHost(registry, item);
     const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
+    if (conversationId) permissionGuard.adopt(key, item.host, conversationId, initialState);
     const events = item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator]();
     let eventsStopped = false;
     void (async () => {
@@ -1153,6 +1178,9 @@ export async function bindStructuredDeliveryQueue(
       while (!eventsStopped) {
         const next = await events.next();
         if (next.done) return;
+        /* Before the journal append, which retries for as long as the runtime
+           host is away: a request nobody can answer is answered now. */
+        permissionGuard.observe(key, item.host, conversationId, next.value);
         const projected = projectEngineHostEvent(conversationId, key, next.value);
         if (!projected) continue;
         while (!eventsStopped) {

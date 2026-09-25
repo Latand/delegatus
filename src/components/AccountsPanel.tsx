@@ -5,7 +5,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 
 import {
   accountNoticeText,
-  claudeLoginErrKey,
+  claudeLoginErrorText,
   NONTERMINAL_CLAUDE_LOGIN_PHASES,
   useEngineAccounts,
   type AccountOperation,
@@ -650,7 +650,7 @@ function ClaudeLoginRow({ account, state, loginBusy }: { account: AccountOption;
   if (login && login.result?.status === "failure") {
     return (
       <div ref={rowRef} tabIndex={-1} role="alert" className="flex items-center gap-2 px-3 pb-2 pl-[26px] focus-visible:outline-none">
-        <span className="min-w-0 flex-1 text-[10.5px] font-semibold text-danger">{t(claudeLoginErrKey(login.result.code))}</span>
+        <span className="min-w-0 flex-1 text-[10.5px] font-semibold text-danger">{claudeLoginErrorText(t, login.result.code)}</span>
         <button
           type="button"
           onClick={() => activate(() => void state.retryLogin(account.id))}
@@ -1021,10 +1021,10 @@ export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { lef
 }
 
 /** The sign-in a row can start: Claude restarts its login in place for any
-    account; Codex re-runs the device login for a managed account. A legacy
-    Codex home signs in from the terminal, so its row carries no action. */
+    account, and Codex runs its device login for any account, Main included
+    (#2166): signing in the account you have never asks for a second one. */
 function mobileSignInAvailable(engine: "claude" | "codex", account: AccountOption): boolean {
-  return engine === "claude" || account.kind === "managed";
+  return engine === "claude" || account.kind === "managed" || account.kind === "legacy";
 }
 
 /** Codex keeps its device-login contract on the accounts route (`action:
@@ -1050,6 +1050,23 @@ async function startCodexDeviceSignIn(state: EngineAccountsState, accountId: str
   }
   await state.refresh();
   return { ok: true, deviceAuth };
+}
+
+/** Stops a Codex device sign-in that is waiting for its code (#2166, newcomer
+    audit F20): Claude and Copilot always had a Cancel. */
+async function cancelCodexDeviceSignIn(state: EngineAccountsState, accountId: string): Promise<boolean> {
+  try {
+    const response = await fetch("/api/accounts/codex", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "cancel", id: accountId }),
+    });
+    if (!response.ok) return false;
+  } catch {
+    return false;
+  }
+  await state.refresh();
+  return true;
 }
 
 function planLabel(plan: string | null | undefined, t: TFunction): string | null {
@@ -1144,7 +1161,7 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
     verification link and its code — from the list when it carries one, else
     from the answer this screen's own tap was handed; Claude's login row
     carries its own link, code entry and Cancel. Both are 44 px targets. */
-function MobilePendingSignIn({ account, engine, state, loginBusy, deviceAuth }: { account: AccountOption; engine: "claude" | "codex"; state: EngineAccountsState; loginBusy: boolean; deviceAuth: DeviceAuth | null }) {
+function MobilePendingSignIn({ account, engine, state, loginBusy, deviceAuth, onCancel }: { account: AccountOption; engine: "claude" | "codex"; state: EngineAccountsState; loginBusy: boolean; deviceAuth: DeviceAuth | null; onCancel: () => void }) {
   const { t } = useLocale();
   if (engine === "claude") return account.login ? <ClaudeLoginRow key={account.login.operationId} account={account} state={state} loginBusy={loginBusy} /> : null;
   const challenge = account.deviceAuth ?? deviceAuth;
@@ -1155,11 +1172,14 @@ function MobilePendingSignIn({ account, engine, state, loginBusy, deviceAuth }: 
         {t("mobile2.accounts.openSignIn")}
       </a>
       <code className="select-all font-mono text-ui font-semibold text-primary">{challenge.code}</code>
+      <button type="button" data-mobile2-account-signin-cancel={account.id} className="ml-auto inline-flex min-h-11 shrink-0 items-center px-1.5 font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={onCancel}>
+        {t("mobile2.accounts.cancelSignIn")}
+      </button>
     </div>
   );
 }
 
-function MobileAccountCard({ account, engine, state, quota, now, engineState, receipts, focused, loginBusy, deviceAuth, onSwitch, onSignIn }: {
+function MobileAccountCard({ account, engine, state, quota, now, engineState, receipts, focused, loginBusy, deviceAuth, onSwitch, onSignIn, onCancelSignIn }: {
   account: AccountOption;
   engine: "claude" | "codex";
   state: MobileAccountState;
@@ -1174,6 +1194,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
   deviceAuth: DeviceAuth | null;
   onSwitch: () => void;
   onSignIn: () => void;
+  onCancelSignIn: () => void;
 }) {
   const { t } = useLocale();
   const busy = engineState.mutation !== null;
@@ -1206,7 +1227,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
         ) : (
           <div className={rowClass}>{head}</div>
         )}
-        {state === "pending" || deviceAuth ? <MobilePendingSignIn account={account} engine={engine} state={engineState} loginBusy={loginBusy} deviceAuth={deviceAuth} /> : null}
+        {state === "pending" || deviceAuth ? <MobilePendingSignIn account={account} engine={engine} state={engineState} loginBusy={loginBusy} deviceAuth={deviceAuth} onCancel={onCancelSignIn} /> : null}
         {engine === "claude" && state === "needsSignIn" && account.login?.result?.status === "failure"
           ? <ClaudeLoginRow key={account.login.operationId} account={account} state={engineState} loginBusy={loginBusy} />
           : null}
@@ -1380,6 +1401,10 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
       receipts.show(t(ok ? "mobile2.accounts.signInStarted" : "mobile2.accounts.signInFailed", { label: account.label }));
     });
   };
+  const cancelSignIn = (account: AccountOption) => {
+    setChallenge((current) => (current?.accountId === account.id ? null : current));
+    void cancelCodexDeviceSignIn(state, account.id);
+  };
 
   return (
     <section data-mobile2-accounts-engine={engine} aria-label={t("accounts.titleFor", { engine: engineName })}>
@@ -1406,6 +1431,7 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
           deviceAuth={challenge?.accountId === account.id ? challenge.deviceAuth : null}
           onSwitch={() => switchTo(account)}
           onSignIn={() => signIn(account)}
+          onCancelSignIn={() => cancelSignIn(account)}
         />
       ))}
       {notice?.kind === "error" ? (

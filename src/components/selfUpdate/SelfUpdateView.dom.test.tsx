@@ -1,8 +1,10 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
 import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { changelogDelta, summarizeDelta } from "@/lib/selfUpdate/changelog";
 import type { ProcessView, Revision, Snapshot, Step } from "@/lib/selfUpdate/types";
 import { CHECKOUT_STEPS, MANAGED_STEPS, idleCheck, idleUpdate, pendingSteps, stoppedProcess } from "@/lib/selfUpdate/types";
 
@@ -212,6 +214,112 @@ describe("update available and what changes", () => {
   });
 });
 
+describe("changelog items as formatted text", () => {
+  const RELEASE = fs.readFileSync(new URL("../../lib/selfUpdate/__fixtures__/changelog-1.4.0.md", import.meta.url), "utf8");
+  const BEFORE = RELEASE.replace(/## \[1\.4\.0\][\s\S]*?(?=## \[1\.3\.0\])/, "");
+  const withChangelog = (oldText: string, newText: string): Partial<Snapshot> => {
+    const base = available();
+    return { ...base, check: { ...base.check!, delta: { commits: base.check!.delta!.commits, summary: summarizeDelta(changelogDelta(oldText, newText), 41) } } };
+  };
+  const entries = (el: HTMLElement) => [...section(el, "changes")!.querySelectorAll<HTMLElement>("li[data-entry]")];
+  const toggle = (item: Element) => flushSync(() => click(item.querySelector('[data-action="toggle-entry"]')));
+  /** Text outside code spans, where a leftover mark would show. */
+  const prose = (element: Element): string[] => {
+    const walker = document.createTreeWalker(element, 4);
+    const out: string[] = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) if (!node.parentElement?.closest("code")) out.push(node.textContent ?? "");
+    return out;
+  };
+
+  test("the 1.4.0 section: bold leads, code and PR links are elements, and no mark is left", () => {
+    const el = render(snapshot(withChangelog(BEFORE, RELEASE)));
+    const changes = section(el, "changes")!;
+    expect(text(changes.querySelector("[data-summary]"))).toBe("41 commits · 32 changelog entries (15 Added, 5 Changed, 10 Fixed, 2 Removed)");
+    const MARKS = /\*\*|\[#?\w|\]\(|`|<\w/;
+    expect(prose(changes).join("")).not.toMatch(MARKS);
+    /* Eight per type, and the rest counted. */
+    expect(entries(el)).toHaveLength(8 + 5 + 8 + 2);
+    expect([...changes.querySelectorAll("h3 + ul + p")].map(text)).toEqual(["+7 more", "+2 more"]);
+
+    const board = entries(el)[0]!;
+    expect(board.getAttribute("data-entry")).toBe("collapsed");
+    expect(text(board.querySelector("strong"))).toBe("The phone board is the desktop's kanban.");
+    expect(text(board)).toBe("The phone board is the desktop's kanban. More ▸");
+    toggle(board);
+    expect(board.getAttribute("data-entry")).toBe("open");
+    expect(board.querySelector("[aria-expanded]")?.getAttribute("aria-expanded")).toBe("true");
+    expect(text(board)).toEndWith("Done opens twenty cards at a time (#2096, #2083). Less ▾");
+    expect([...board.querySelectorAll("a")].map((a) => [text(a), a.getAttribute("href"), a.getAttribute("target"), a.getAttribute("rel")])).toEqual([
+      ["#2096", "https://github.com/example/delegatus/pull/2096", "_blank", "noopener noreferrer"],
+      ["#2083", "https://github.com/example/delegatus/pull/2083", "_blank", "noopener noreferrer"],
+    ]);
+    toggle(board);
+    expect(text(board)).toBe("The phone board is the desktop's kanban. More ▸");
+
+    /* An entry that fits shows whole, its PR link with it. */
+    const mandate = entries(el).find((item) => text(item).startsWith("The orchestrator mandate"))!;
+    expect(mandate.getAttribute("data-entry")).toBe("whole");
+    expect(mandate.querySelector("button")).toBeNull();
+    expect(mandate.querySelector("a")?.getAttribute("href")).toBe("https://github.com/example/delegatus/pull/2101");
+
+    for (const item of entries(el)) if (item.getAttribute("data-entry") === "collapsed") toggle(item);
+    expect(entries(el).every((item) => item.getAttribute("data-entry") !== "collapsed")).toBe(true);
+    expect(prose(changes).join("")).not.toMatch(MARKS);
+    /* Every bold lead among the shown entries: 8 Added, 2 Changed, 6 Fixed. */
+    expect(changes.querySelectorAll("li > strong:first-child")).toHaveLength(16);
+    expect([...changes.querySelectorAll("code")].map(text).slice(0, 6)).toEqual(["I", "create_task", "update_task", "icon", "pipeline_action", "attach-link"]);
+    expect(changes.querySelector('a[href="https://lucide.dev"]')?.textContent).toBe("lucide");
+  });
+
+  test("a collapsed entry with no bold lead ends on a word, outside every span", () => {
+    const item = [
+      "- Attention requests, reply suggestions and per-project seat tick settings are",
+      "  stored in SQLite (`state.sqlite`, collections `attention`,",
+      "  `reply_suggestions` and `seat_tick_settings`) instead of `attention.json`,",
+      "  `reply-suggestions.json` and `seat-tick-settings.json`. A write commits only",
+      "  the rows it changed ([#1905]).",
+      "",
+      "[#1905]: https://x.dev/pull/1905",
+    ].join("\n");
+    const el = render(snapshot(withChangelog("", `## [Unreleased]\n\n### Changed\n\n${item}\n`)));
+    expect(text(section(el, "changes"))).toContain("reply_suggestions and… More ▸");
+    const entry = entries(el)[0]!;
+    expect(text(entry)).toBe("Attention requests, reply suggestions and per-project seat tick settings are stored in SQLite (state.sqlite, collections attention, reply_suggestions and… More ▸");
+    expect([...entry.querySelectorAll("code")].map(text)).toEqual(["state.sqlite", "attention", "reply_suggestions"]);
+    toggle(entry);
+    expect([...entry.querySelectorAll("code")].map(text)).toEqual(["state.sqlite", "attention", "reply_suggestions", "seat_tick_settings", "attention.json", "reply-suggestions.json", "seat-tick-settings.json"]);
+    expect(entry.querySelector("a")?.getAttribute("href")).toBe("https://x.dev/pull/1905");
+  });
+
+  test("markup the page does not support reads as text, and no HTML from the changelog renders", () => {
+    const hostile = [
+      "## [Unreleased]", "", "### Added", "",
+      "- <img src=x onerror=\"window.pwned=1\"><script>alert(2)</script> Tags drop, <b>text</b> stays",
+      "- ~~Struck~~, ![a shot](shot.png), a note[^1], [an unknown ref] and [a script](javascript:alert(1))",
+      "- A [link](https://x.dev/a \"title\") and <https://x.dev/b>",
+    ].join("\n");
+    const el = render(snapshot(withChangelog("", hostile)));
+    const changes = section(el, "changes")!;
+    expect(text(changes)).not.toMatch(/<\w|~~|!\[|\[\^|\]\(/);
+    expect(changes.querySelector("img, script, iframe, b, [onerror]")).toBeNull();
+    expect(entries(el).map(text)).toEqual([
+      "alert(2) Tags drop, text stays",
+      "Struck, a shot, a note, an unknown ref and a script",
+      "A link and https://x.dev/b",
+    ]);
+    expect([...changes.querySelectorAll("ul a")].map((a) => a.getAttribute("href"))).toEqual(["https://x.dev/a", "https://x.dev/b"]);
+  });
+
+  test("the expand speaks the operator's language", () => {
+    setLocale("uk");
+    const el = render(snapshot(withChangelog(BEFORE, RELEASE)));
+    const board = entries(el)[0]!;
+    expect(text(board.querySelector("button"))).toBe("Докладніше ▸");
+    toggle(board);
+    expect(text(board.querySelector("button"))).toBe("Згорнути ▾");
+  });
+});
+
 describe("a running update", () => {
   test("says which step of five and ticks the running one; nothing else can start", () => {
     const el = render(snapshot({
@@ -234,6 +342,47 @@ describe("a running update", () => {
 });
 
 describe("a failed update", () => {
+  test("a moved remote offers a new check, then the checked commit beside its changelog", () => {
+    const moved = steps(["failed"], { 0: { failure: { kind: "remote-moved", expected: "a1b2c3d", fetched: "f7e6ce4" } } });
+    const failed = { ...idleUpdate(CHECKOUT_STEPS), state: "failed" as const, target: NEW, targetShort: NEW.slice(0, 7), steps: moved };
+    let el = render(snapshot({ ...available(), update: failed }));
+    expect(section(el, "update")?.getAttribute("data-update")).toBe("failed");
+    expect(button(el, "retry")).toBeNull();
+    expect(text(button(el, "check-failed"))).toBe("Check again");
+    click(button(el, "check-failed"));
+    expect(calls).toEqual(["check"]);
+
+    flushSync(() => root!.unmount());
+    el = render(snapshot({ ...available(), check: { ...available().check!, state: "checking" }, update: failed }));
+    expect(button(el, "check-failed")?.disabled).toBe(true);
+
+    flushSync(() => root!.unmount());
+    const newer = rev("f7e6ce4".padEnd(40, "1"), "1.2.4");
+    el = render(snapshot({ ...available(), available: newer, update: failed }));
+    expect(section(el, "update")?.getAttribute("data-update")).toBe("failed");
+    expect(text(button(el, "update-checked"))).toBe("Update to checked f7e6ce4");
+    expect(text(section(el, "changes"))).toContain("Board placements are stored");
+    click(button(el, "update-checked"));
+    expect(calls).toEqual(["check", "update"]);
+
+    flushSync(() => root!.unmount());
+    setLocale("uk");
+    el = render(snapshot({ ...available(), available: newer, update: failed }));
+    expect(text(button(el, "update-checked"))).toBe("Оновити до перевіреної версії f7e6ce4");
+  });
+
+  test("a failed build can retry its target or update to a newer checked commit", () => {
+    const failed = steps(["done", "done", "done", "failed"], { 3: { failure: { kind: "exit", code: 1 } } });
+    const newer = rev("f7e6ce4".padEnd(40, "1"), "1.2.4");
+    const el = render(snapshot({ ...available(), available: newer, update: { ...idleUpdate(CHECKOUT_STEPS), state: "failed", target: NEW, targetShort: NEW.slice(0, 7), steps: failed } }));
+    expect(section(el, "update")?.getAttribute("data-update")).toBe("failed");
+    expect(text(button(el, "retry"))).toBe("Retry from build");
+    expect(text(button(el, "update-checked"))).toBe("Update to checked f7e6ce4");
+    click(button(el, "retry"));
+    click(button(el, "update-checked"));
+    expect(calls).toEqual(["retry", "update"]);
+  });
+
   test("names the step, keeps the processes untouched, shows the error line and wraps the log", () => {
     const failedSteps = steps(["done", "done", "done", "failed"], { 3: { exitCode: 1, tail: ["Creating an optimized production build", "error: Type error: nope"] } });
     const el = render(snapshot({

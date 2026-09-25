@@ -135,6 +135,7 @@ async function recordAuthorizedOperatorActivity(
   req: NextRequest,
   target: { pid: number; hasPid: boolean; filePath: string; conversationId: string },
   identity: { idempotencyKey?: string },
+  kind: "message" | "dialog",
 ): Promise<AuthorizedOperatorAction> {
   if (!directOperatorActivityAuthority(req).ok) return { byOperator: false, conversationId: target.conversationId };
   const fallbackEntry = operatorFallbackEntry((await dependencies.completedFileScan()).snapshot.files, target);
@@ -143,6 +144,15 @@ async function recordAuthorizedOperatorActivity(
     ...(target.filePath ? { path: target.filePath } : {}),
     ...identity,
     ...(fallbackEntry ? { fallbackEntry } : {}),
+  });
+  /* Beside the WakaTime point, never inside it: the dashboard's ledger is
+     written only once the gesture is admitted, and it cannot refuse it. */
+  dependencies.recordOperatorRequest(req, {
+    kind,
+    idempotencyKey: identity.idempotencyKey ?? null,
+    conversationId: target.conversationId || null,
+    path: target.filePath || null,
+    fallbackEntry: fallbackEntry ?? null,
   });
   return { byOperator: true, conversationId: target.conversationId || fallbackEntry?.conversationId || "" };
 }
@@ -209,7 +219,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  let body: { pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; image?: unknown; images?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
+  let body: { pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; image?: unknown; images?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
   try {
     body = (await req.json()) as {
       pid?: unknown;
@@ -224,6 +234,8 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
       key?: unknown;
       label?: unknown;
       question?: unknown;
+      decision?: unknown;
+      requestId?: unknown;
       target?: unknown;
       model?: unknown;
       effort?: unknown;
@@ -284,7 +296,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
 
   const explicitAction = typeof body.action === "string" ? body.action : "";
   if (dependencies.conversationActions.includes(explicitAction)) {
-    if (explicitAction === "dialog-key") {
+    if (explicitAction === "dialog-key" || explicitAction === "permission") {
       const clientMessageId = typeof body.clientMessageId === "string" ? body.clientMessageId.trim().slice(0, 128) : "";
       const target = { pid, hasPid, filePath, conversationId };
       try {
@@ -293,6 +305,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
           req,
           target,
           clientMessageId ? { idempotencyKey: clientMessageId } : {},
+          "dialog",
         );
       } catch (error) {
         if (error instanceof OperatorActivityTargetConflictError) {
@@ -314,6 +327,8 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
       key: typeof body.key === "string" ? body.key : "",
       label: body.label,
       question: body.question,
+      ...(typeof body.decision === "string" ? { decision: body.decision } : {}),
+      ...(typeof body.requestId === "string" && body.requestId.trim() ? { requestId: body.requestId.trim() } : {}),
     });
     return NextResponse.json(result.body, { status: result.status });
   }
@@ -389,6 +404,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
       req,
       operatorTarget,
       clientMessageId ? { idempotencyKey: clientMessageId } : {},
+      "message",
     );
   } catch (error) {
     if (error instanceof OperatorActivityTargetConflictError) {

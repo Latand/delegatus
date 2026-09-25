@@ -2,14 +2,14 @@ import { identityAlive, livenessProbe, type LivenessProbe } from "@/lib/agent/ac
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry } from "@/lib/agent/registry";
 import { isAbortError } from "@/lib/deadline";
-import { cachedLimitsProvenance } from "@/lib/limits";
-import { providerThrottleRetryAt, PROVIDER_THROTTLE_GRACE_MS } from "@/lib/limitsThrottle";
+import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { getPipelines } from "@/lib/pipelines/engine";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { loadFlows } from "@/lib/flows/store";
 import type { Flow } from "@/lib/flows/types";
 import { completedFileScan } from "@/lib/scanner/scanCache";
-import type { Engine, FileEntry, LimitsProvenance } from "@/lib/types";
+import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
+import type { Engine, FileEntry } from "@/lib/types";
 
 import {
   completedGenerationSelection,
@@ -58,8 +58,12 @@ export type AgentLivenessReason =
   | "host_alive_turn_idle"
   /** A live host whose transcript has been silent past the stall threshold. */
   | "host_alive_transcript_silent"
-  /** A live host is waiting for its account's provider retry deadline. */
+  /** A live host reported that its engine is retrying a provider error inside
+      this turn, and nothing the provider produced has superseded it (#2215). */
   | "provider_throttled"
+  /** A live host holds a tool permission request nobody has answered (#2215):
+      the turn waits on an answer, never on the provider. */
+  | "permission_request"
   /** The zombie: an open turn whose host is gone. Nothing will ever finish it. */
   | "host_gone_turn_open"
   /** The host exited after its turn settled — a finished or killed stage. */
@@ -103,6 +107,9 @@ export interface AgentLivenessRecord {
   reason: AgentLivenessReason;
   /** Provider retry deadline when `reason` is `provider_throttled`. */
   retryAt?: string | null;
+  /** The pending request when `reason` is `permission_request`: the tool,
+      what it would do, and the engine's reason for asking. */
+  permission?: PendingPermissionRequest | null;
   /** Milliseconds since `lastRecordAt`; always reported so a caller can apply
       its own threshold without a second read. */
   silentForMs: number | null;
@@ -283,8 +290,6 @@ export interface AgentLivenessSources {
     transcriptPath: string,
     options?: { signal?: AbortSignal | null },
   ): Promise<LivenessTranscriptEvidence | null>;
-  /** Current limits provenance for the account that owns a hosted row. */
-  limitsProvenance?(engine: "claude" | "codex", accountId: string): LimitsProvenance | null;
   probe: LivenessProbe;
 }
 
@@ -305,7 +310,6 @@ export function productionLivenessSources(
     pipelines: () => getPipelines().pipelines,
     flows: () => loadFlows(),
     transcriptEvidence: readLivenessTranscriptEvidence,
-    limitsProvenance: cachedLimitsProvenance,
     probe: livenessProbe(),
   };
 }
@@ -406,6 +410,28 @@ function turnStateFromEvidence(evidence: LivenessTranscriptEvidence | null, entr
 }
 
 /**
+ * The provider wait a conversation's own host reported (#2215), as the retry
+ * deadline and the instant it was observed — or nothing.
+ *
+ * This used to be read off the ACCOUNT: the limits poller's own 429 from the
+ * usage endpoint, applied to every busy turn on that account. A turn blocked on
+ * anything at all then read as `provider_throttled`, with a `retryAt` that moved
+ * each time the poller backed off again. Only the engine running the turn can
+ * say it is retrying the provider, so only its report counts, and it expires one
+ * refresh cadence past the deadline it named.
+ */
+function hostProviderRetry(
+  entry: AgentRegistryEntry | null,
+  now: number,
+): { retryAt: string | null; throttledAt: number | null } {
+  const retry = entry?.structuredHost?.providerRetry;
+  const retryAt = hostProviderRetryAt(retry, now);
+  if (!retry || retryAt === null) return { retryAt: null, throttledAt: null };
+  const at = Date.parse(retry.at);
+  return { retryAt, throttledAt: Number.isFinite(at) ? at : null };
+}
+
+/**
  * The whole decision table, pure and injectable so the zombie can be replayed
  * as a test instead of described in a comment.
  *
@@ -428,7 +454,9 @@ export function evaluateLiveness(input: {
   providerRetryAt?: string | null;
   providerThrottleAt?: number | null;
   providerProgressAt?: number | null;
-}): { lifecycle: LifecycleState; reason: AgentLivenessReason; retryAt?: string } {
+  /** The oldest permission request the live host holds open, if any. */
+  pendingPermission?: PendingPermissionRequest | null;
+}): { lifecycle: LifecycleState; reason: AgentLivenessReason; retryAt?: string; permission?: PendingPermissionRequest } {
   const silent = input.silentForMs !== null && input.silentForMs >= input.stallAfterMs;
   if (input.host.state === "gone") {
     return input.turnState === "busy"
@@ -445,6 +473,12 @@ export function evaluateLiveness(input: {
     return input.turnState === "busy"
       ? { lifecycle: "stalled", reason: "launch_unproven_expired" }
       : { lifecycle: "gone", reason: "launch_unproven_expired" };
+  }
+  /* An unanswered permission request is the turn's whole explanation: the
+     engine waits for an answer, so the silence is neither a stall nor the
+     provider (#2215). */
+  if (input.pendingPermission) {
+    return { lifecycle: "waiting", reason: "permission_request", permission: input.pendingPermission };
   }
   const progressSupersedesThrottle = input.providerProgressAt !== null
     && input.providerProgressAt !== undefined
@@ -789,22 +823,6 @@ export async function agentLivenessSnapshot(
      per-row registry and lineage lookups across both. */
   const rowProjectionStartedAt = performance.now();
   let unreadable = 0;
-  const providerThrottleByAccount = {
-    claude: new Map<string, { retryAt: string | null; throttledAt: number | null }>(),
-    codex: new Map<string, { retryAt: string | null; throttledAt: number | null }>(),
-  };
-  const providerThrottleFor = (engine: "claude" | "codex", accountId: string): { retryAt: string | null; throttledAt: number | null } => {
-    const engineAccounts = providerThrottleByAccount[engine];
-    if (!engineAccounts.has(accountId)) {
-      const provenance = sources.limitsProvenance?.(engine, accountId);
-      const throttledAt = Date.parse(provenance?.throttleAt ?? "");
-      engineAccounts.set(accountId, {
-        retryAt: providerThrottleRetryAt(provenance, now, PROVIDER_THROTTLE_GRACE_MS),
-        throttledAt: Number.isFinite(throttledAt) ? throttledAt : null,
-      });
-    }
-    return engineAccounts.get(accountId)!;
-  };
   const projected = hydratable.map((entry, index) => {
     /* Three outcomes, kept apart: a read that produced evidence, a read that
        produced none, and a row the budget never reached. The counters below are
@@ -823,9 +841,12 @@ export async function agentLivenessSnapshot(
     const conversationId = entry.conversationId ?? conversationIdForPath(registry, entry.path);
     const host = headlessHostEvidence(flows, entry.path, conversationId, sources.probe)
       ?? hostEvidence(registryEntry, sources.probe);
-    const providerThrottle = turnState === "busy" && host.state === "alive" && registryEntry?.accountId
-      ? providerThrottleFor(entry.engine as "claude" | "codex", registryEntry.accountId)
+    const providerThrottle = turnState === "busy" && host.state === "alive"
+      ? hostProviderRetry(registryEntry, now)
       : { retryAt: null, throttledAt: null };
+    const pendingPermission = host.state === "alive" && host.kind === "structured"
+      ? registryEntry?.structuredHost?.pendingPermissions?.[0] ?? null
+      : null;
     return {
       entry,
       conversationId,
@@ -841,6 +862,7 @@ export async function agentLivenessSnapshot(
         providerRetryAt: providerThrottle.retryAt,
         providerThrottleAt: providerThrottle.throttledAt,
         providerProgressAt: evidence?.providerProgressAt ?? null,
+        pendingPermission,
       }),
       pipeline: (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
         ?? pipelines.byPath.get(entry.path)
@@ -863,6 +885,7 @@ export async function agentLivenessSnapshot(
     lifecycle: row.lifecycle,
     reason: row.reason,
     retryAt: row.retryAt ?? null,
+    ...(row.permission ? { permission: row.permission } : {}),
     silentForMs: row.silentForMs,
     stalledForMs: row.lifecycle === "stalled" || row.lifecycle === "gone" ? row.silentForMs : null,
     pipeline: row.pipeline,

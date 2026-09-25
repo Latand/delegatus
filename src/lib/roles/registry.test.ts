@@ -24,7 +24,7 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
     builder: { engine: "codex", model: "gpt-6-astra", effort: "medium" },
     architect: { engine: "claude", model: "opus", effort: "high" },
     cleaner: { engine: "codex", model: "gpt-5.6-terra", effort: "low" },
-    "prod-auditor": { engine: "codex", model: "gpt-6-astra", effort: "xhigh" },
+    "prod-auditor": { engine: "codex", model: "gpt-6-astra", effort: "high" },
     deployer: { engine: "codex", model: "gpt-5.6-terra", effort: "medium" },
   });
 

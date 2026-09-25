@@ -1,7 +1,9 @@
 /**
  * The seeded home the README screenshots render: four invented projects, the
- * agent conversations working in them, the tasks on their board, two
- * pipelines and two accounts per engine.
+ * agent conversations working in them, the tasks on their board (with their
+ * icons and colours), three pipelines (one running, one parked on a decision,
+ * one landed), an orchestrator seated on one project with the reports it
+ * filed, and two accounts per engine.
  *
  * Everything is written fresh under a capture root, with timestamps relative
  * to the moment of capture, so the board reads "working" and "3 min ago" the
@@ -24,6 +26,9 @@ import { directoryProjectId } from "@/lib/projects/identity";
 export const WORKING_CONVERSATIONS = ["product-grid", "offline-drafts", "refunds-review", "key-rotation"] as const;
 
 export const DEMO_PROJECTS = ["harbor-api", "lumen-web", "fieldnotes", "quarry"] as const;
+
+/** The conversation that holds harbor-api's orchestrator seat. */
+export const ORCHESTRATOR_CONVERSATION = "harbor-orchestrator";
 export type DemoProject = (typeof DEMO_PROJECTS)[number];
 
 export type DemoLayout = {
@@ -71,10 +76,22 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
   const field = dirs.fieldnotes;
   return [
     {
+      key: ORCHESTRATOR_CONVERSATION,
+      title: "Orchestrator · harbor-api",
+      project: "harbor-api",
+      model: "claude-opus-5-5",
+      startedMinutesAgo: 50,
+      pace: 70,
+      steps: [
+        { user: "Take the open harbor-api work: idempotent refunds first, then the webhook retries and the key rotation. The ledger move waits for finance." },
+        { say: "On it. I opened a pipeline for **Idempotent refunds** (Build, Review, Verify) and started the webhook retries and the key rotation beside it. The ledger task stays in Blocked until finance answers.\n\nI'll report each stage as it lands, and bring you any decision the spec leaves open." },
+      ],
+    },
+    {
       key: "refunds-builder",
       title: "Idempotent refunds",
       project: "harbor-api",
-      model: "claude-opus-5",
+      model: "claude-opus-5-5",
       startedMinutesAgo: 34,
       pace: 21,
       steps: [
@@ -120,7 +137,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
       key: "key-rotation",
       title: "Signing key rotation",
       project: "harbor-api",
-      model: "claude-opus-5",
+      model: "claude-opus-5-5",
       startedMinutesAgo: 9,
       pace: 28,
       steps: [
@@ -133,6 +150,23 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
         },
       ],
       midTurn: { tool: "Edit", input: { file_path: `src/webhooks/verify.ts`, old_string: "  const expected = hmac(currentKey(), payload);", new_string: "  const accepted = keyRing.verifying(now).map((key) => hmac(key, payload));" } },
+    },
+    {
+      key: "webhook-retries",
+      title: "Webhook retry backoff",
+      project: "harbor-api",
+      model: "claude-opus-5-5",
+      startedMinutesAgo: 20,
+      pace: 24,
+      steps: [
+        { user: "Back off webhook retries: exponential with jitter, and stop at some point instead of retrying forever." },
+        {
+          tool: "Grep",
+          input: { pattern: "scheduleRetry", path: "src/webhooks" },
+          result: "src/webhooks/deliver.ts:31:  await scheduleRetry(delivery, 60);\nsrc/webhooks/deliver.ts:48:export async function scheduleRetry(delivery: Delivery, seconds: number) {",
+        },
+        { say: "Every failed delivery retries after a flat 60 s today, with no limit. The backoff itself is straightforward, but where to stop is a product choice, so I'm reporting this stage as a decision: stop after 24 hours (about 12 attempts) or after 72 hours (about 18, which covers an endpoint that is down over a weekend)?" },
+      ],
     },
     {
       key: "charges-pagination",
@@ -204,7 +238,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
       key: "offline-drafts",
       title: "Offline edit queue",
       project: "fieldnotes",
-      model: "claude-opus-5",
+      model: "claude-opus-5-5",
       startedMinutesAgo: 12,
       pace: 30,
       steps: [
@@ -222,7 +256,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
       key: "import-profile",
       title: "Import profiling",
       project: "quarry",
-      model: "claude-opus-5",
+      model: "claude-opus-5-5",
       startedMinutesAgo: 140,
       pace: 40,
       steps: [
@@ -284,7 +318,7 @@ function codexReviewRollout(cwd: string, sessionId: string, now: number): { line
   };
   const lines = [
     { type: "session_meta", timestamp: iso(at), payload: { id: sessionId, cwd, originator: "codex_cli_rs", cli_version: "0.151.0", source: "cli", model_provider: "openai" } },
-    { type: "turn_context", timestamp: step(1), payload: { cwd, model: "gpt-5.6-sol", effort: "xhigh", approval_policy: "never", sandbox_policy: { type: "read-only" } } },
+    { type: "turn_context", timestamp: step(1), payload: { cwd, model: "gpt-6-sol", effort: "xhigh", approval_policy: "never", sandbox_policy: { type: "read-only" } } },
     { type: "event_msg", timestamp: step(2), payload: { type: "user_message", message: "Review the idempotent refunds change against the acceptance criteria: a repeated key never reaches the provider, a reused key with a different body answers 409, and requests without a key are unchanged." } },
     { type: "event_msg", timestamp: step(9), payload: { type: "agent_message", message: "Reading the diff against main first, then the tests that claim each criterion.", phase: "commentary" } },
     { type: "response_item", timestamp: step(4), payload: { type: "function_call", name: "shell", call_id: "call-review-1", arguments: JSON.stringify({ command: "git diff --stat main...HEAD" }) } },
@@ -306,29 +340,29 @@ function assignment(file: Written, engine: "claude" | "codex") {
 function buildTasks(layout: DemoLayout, files: Record<string, Written>) {
   const { ids, now } = layout;
   const ago = (minutes: number) => iso(now - minutes * 60_000);
-  const task = (id: string, project: DemoProject, status: string, text: string, assignments: unknown[], createdMinutesAgo: number, color?: string) => ({
-    id, project: ids[project], status, text, placement: "unplaced", board: "shown", ...(color ? { color } : {}), assignments, createdAt: ago(createdMinutesAgo), updatedAt: ago(Math.max(1, createdMinutesAgo - 5)),
+  const task = (id: string, project: DemoProject, status: string, text: string, assignments: unknown[], createdMinutesAgo: number, color?: string, icon?: string) => ({
+    id, project: ids[project], status, text, placement: "unplaced", board: "shown", ...(color ? { color } : {}), ...(icon ? { icon } : {}), assignments, createdAt: ago(createdMinutesAgo), updatedAt: ago(Math.max(1, createdMinutesAgo - 5)),
   });
   return {
     tasks: [
-      task("task-refunds", "harbor-api", "assigned", "Idempotent refunds\nA retried POST /refunds must never refund twice.", [assignment(files["refunds-builder"]!, "claude")], 36, "sky"),
-      task("task-key-rotation", "harbor-api", "assigned", "Rotate webhook signing keys\nSign with the new key, accept both for a day, then drop the old one.", [assignment(files["key-rotation"]!, "claude")], 10),
-      task("task-webhook-retries", "harbor-api", "inbox", "Back off webhook retries\nExponential backoff with jitter; stop after 24 hours and surface the failure.", [], 50),
-      task("task-refund-errors", "harbor-api", "inbox", "Document refund error codes\nOne table in the API reference: code, meaning, whether a retry is safe.", [], 55),
-      task("task-ledger", "harbor-api", "blocked", "Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", [], 300, "amber"),
-      task("task-charges-pagination", "harbor-api", "done", "Paginate GET /charges\nCursor pagination, 50 per page, capped at 200.", [assignment(files["charges-pagination"]!, "claude")], 215),
-      task("task-cart-rounding", "lumen-web", "done", "Fix cart rounding\nKeep money in integer cents and format once.", [assignment(files["cart-rounding"]!, "claude")], 100),
-      task("task-product-grid", "lumen-web", "assigned", "Lazy-load the product grid\nImages below the fold load on scroll; measure LCP before and after.", [assignment(files["product-grid"]!, "claude")], 8),
-      task("task-offline-drafts", "fieldnotes", "assigned", "Offline drafts\nQueue edits without signal and sync them in order.", [assignment(files["offline-drafts"]!, "claude")], 14),
-      task("task-editor-dark", "fieldnotes", "inbox", "Dark mode for the note editor\nFollow the system setting; keep the highlight colours readable.", [], 70),
-      task("task-import-speed", "quarry", "blocked", "Speed up the nightly import\nGeocoding is 34 of 38 minutes. Waiting on a choice: cache by address or geocode changed rows only.", [assignment(files["import-profile"]!, "claude")], 145),
+      task("task-refunds", "harbor-api", "assigned", "Idempotent refunds\nA retried POST /refunds must never refund twice.", [assignment(files["refunds-builder"]!, "claude")], 36, "sky", "receipt-text"),
+      task("task-key-rotation", "harbor-api", "assigned", "Rotate webhook signing keys\nSign with the new key, accept both for a day, then drop the old one.", [assignment(files["key-rotation"]!, "claude")], 10, "amber", "key-round"),
+      task("task-webhook-retries", "harbor-api", "assigned", "Back off webhook retries\nExponential backoff with jitter, and a limit on how long a delivery retries.", [assignment(files["webhook-retries"]!, "claude")], 22, "teal", "repeat"),
+      task("task-refund-errors", "harbor-api", "inbox", "Document refund error codes\nOne table in the API reference: code, meaning, whether a retry is safe.", [], 55, "pink", "file-text"),
+      task("task-ledger", "harbor-api", "blocked", "Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", [], 300, "amber", "book-open"),
+      task("task-charges-pagination", "harbor-api", "done", "Paginate GET /charges\nCursor pagination, 50 per page, capped at 200.", [assignment(files["charges-pagination"]!, "claude")], 215, "lime", "list-ordered"),
+      task("task-cart-rounding", "lumen-web", "done", "Fix cart rounding\nKeep money in integer cents and format once.", [assignment(files["cart-rounding"]!, "claude")], 100, "coral", "calculator"),
+      task("task-product-grid", "lumen-web", "assigned", "Lazy-load the product grid\nImages below the fold load on scroll; measure LCP before and after.", [assignment(files["product-grid"]!, "claude")], 8, "teal", "layout-grid"),
+      task("task-offline-drafts", "fieldnotes", "assigned", "Offline drafts\nQueue edits without signal and sync them in order.", [assignment(files["offline-drafts"]!, "claude")], 14, "lime", "wifi-off"),
+      task("task-editor-dark", "fieldnotes", "inbox", "Dark mode for the note editor\nFollow the system setting; keep the highlight colours readable.", [], 70, "sky", "moon"),
+      task("task-import-speed", "quarry", "blocked", "Speed up the nightly import\nGeocoding is 34 of 38 minutes. Waiting on a choice: cache by address or geocode changed rows only.", [assignment(files["import-profile"]!, "claude")], 145, "teal", "gauge"),
     ],
   };
 }
 
 const STAGE_ROLES = {
   builder: { engine: "claude", model: "opus", effort: "high", access: "read-write" },
-  reviewer: { engine: "codex", model: "gpt-5.6-sol", effort: "xhigh", access: "read-only" },
+  reviewer: { engine: "codex", model: "gpt-6-sol", effort: "xhigh", access: "read-only" },
   verifier: { engine: "claude", model: "sonnet", effort: "medium", access: "read-only" },
 } as const;
 
@@ -353,8 +387,18 @@ function stage(id: string, roleId: RoleId, prompt: string, next: string | null, 
 }
 
 type Activation = { stageId: string; attempt: number; edge: "pass" | "fail" } | null;
+type Verdict = { status: "pass" | "fail" | "needs_decision"; findings: string[] } | null;
 
-function attempt(roleId: RoleId, state: string, startedAt: string, completedAt: string | null, output: string | null, agentPath: string | null, activatedBy: Activation) {
+function attempt(
+  roleId: RoleId,
+  state: string,
+  startedAt: string,
+  completedAt: string | null,
+  output: string | null,
+  agentPath: string | null,
+  activatedBy: Activation,
+  verdict: Verdict = state === "passed" ? { status: "pass", findings: [] } : null,
+) {
   return {
     n: 1,
     state,
@@ -371,7 +415,7 @@ function attempt(roleId: RoleId, state: string, startedAt: string, completedAt: 
     input: null,
     activatedBy,
     output,
-    verdict: state === "passed" ? { status: "pass", findings: [] } : null,
+    verdict,
     error: null,
   };
 }
@@ -434,7 +478,34 @@ function buildPipelines(layout: DemoLayout, files: Record<string, Written>) {
     closedAt: ago(74),
   };
 
-  return { schemaVersion: 5, pipelines: [running, landed] };
+  /* Parked on the operator: the builder reported needs_decision with no fail
+     edge to route it along, so the lane stops on its build stage, the way
+     park() in the engine leaves it. */
+  const retriesTask = "Back off webhook retries";
+  const decision = "Retry window: stop retrying a failed delivery after 24 hours or after 72 hours? The spec leaves it open, and it sets how many attempts a delivery gets.";
+  const parkedBuild = attempt("builder", "needs_decision", ago(19), ago(3), "Backoff with jitter is ready; the retry window is a product choice.", files["webhook-retries"]!.path, null, { status: "needs_decision", findings: [decision] });
+  const parked = {
+    ...common,
+    id: "b17e5a90",
+    task: retriesTask,
+    taskIds: ["task-webhook-retries"],
+    project: ids["harbor-api"],
+    repoDir: dirs["harbor-api"],
+    ...identity("b17e5a90", retriesTask, dirs["harbor-api"]),
+    spec: "Failed webhook deliveries retry with exponential backoff and jitter, and stop after a fixed window with the failure surfaced.",
+    runs: [
+      { stageId: "build", attempts: [parkedBuild] },
+      { stageId: "review", attempts: [] },
+      { stageId: "verify", attempts: [] },
+    ],
+    cursor: { stageId: "build", state: "running", input: null, activatedBy: null },
+    state: "needs_decision",
+    stateDetail: decision,
+    createdAt: ago(21),
+    closedAt: null,
+  };
+
+  return { schemaVersion: 5, pipelines: [running, parked, landed] };
 }
 
 /* ── the home ───────────────────────────────────────────────────────────── */
@@ -543,6 +614,53 @@ export async function seedDemoAccounts(home: string, now: number): Promise<void>
     ],
     signature: null, bootId: "readme", now: at, minimumGapMs: 60_000,
   });
+}
+
+/**
+ * harbor-api's orchestrator: the seat record naming its conversation, and the
+ * reports it filed, written through the bridge's own store. Only report kinds
+ * that ask nothing of the operator, so «Needs you» keeps counting the parked
+ * lane alone. The caller must already have pointed LLV_STATE_DIR at the demo
+ * home.
+ */
+export async function seedDemoOrchestrator(layout: DemoLayout & { files: Record<string, Written> }): Promise<void> {
+  const { ids, now, stateDir, files } = layout;
+  const project = ids["harbor-api"];
+  const file = files[ORCHESTRATOR_CONVERSATION]!;
+  const conversationId = `conversation_${demoSessionId("orchestrator-seat")}`;
+  const designatedAt = iso(now - 51 * 60_000);
+  const seat = {
+    project,
+    seatEpoch: 1,
+    conversationId,
+    path: file.path,
+    engine: "claude",
+    model: "claude-opus-5-5",
+    runtimeIdentityFrozen: true,
+    mandate: "You are this project's orchestrator in Delegatus.",
+    promptVersion: null,
+    predecessorConversationId: null,
+    triggeredBy: { kind: "operator", conversationId: null, seatEpoch: null },
+    state: "active",
+    intent: { clientRequestId: "readme-demo-seat", mode: "spawn", launchId: null, error: null },
+    designatedAt,
+    activatedAt: designatedAt,
+  };
+  fs.writeFileSync(path.join(stateDir, "orchestrator-seats.json"), `${JSON.stringify({
+    schemaVersion: 1, nextSeatEpoch: 2, seats: { [project]: seat }, pending: {}, revocations: [], history: [], rollbacks: {},
+  }, null, 2)}\n`, "utf8");
+
+  const { appendBridgeReports } = await import("@/lib/bridge/store");
+  const report = (key: string, minutesAgo: number, kind: "status" | "completed" | "review_verdict", body: string) => ({
+    key: `readme-demo:${key}`, class: kind, at: iso(now - minutesAgo * 60_000), project, targetSeatConversationId: conversationId, body,
+  });
+  appendBridgeReports([
+    report("charges-review", 193, "review_verdict", "Paginate GET /charges passed review with no findings: pages of 50, the cap of 200 holds, and next_cursor stops on the last page."),
+    report("charges", 190, "completed", "Paginate GET /charges is done: cursor pages of 50, capped at 200, 7 tests pass. The PR is merged and the task moved to Done."),
+    report("build", 6, "completed", "Idempotent refunds: Build passed. A repeated Idempotency-Key now answers from the stored response, and 4 tests pass."),
+    report("retries", 3, "status", "Back off webhook retries stopped on a decision the spec leaves open: stop retrying after 24 or 72 hours. It waits on the card."),
+    report("review", 1, "status", "Idempotent refunds is in Review: the reviewer is checking two requests with the same key arriving together."),
+  ]);
 }
 
 /** The projects are plain folders on purpose: a repository identity would

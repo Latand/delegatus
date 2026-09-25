@@ -4,8 +4,8 @@ import { needsDecisionPipelineRows } from "@/components/mobile/mobileBoardModel"
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
-import { buildAttentionQueue } from "../attention";
-import { buildMobileAttentionQueue, isCurrentAttentionEntry, nextMobileAttention } from "./attentionQueue";
+import { advanceAttentionCycle, buildAttentionQueue } from "../attention";
+import { attentionEntryProject, buildMobileAttentionQueue, buildNeedsYouQueue, isCurrentAttentionEntry, laneFocusId, laneFocusPath, nextMobileAttention } from "./attentionQueue";
 
 /*
  * One list for the phone (README §4.1, §4.6): conversations waiting on the
@@ -87,4 +87,55 @@ test("the current entry is keyed the way the screens are: the conversation by it
   expect(isCurrentAttentionEntry(entries[2]!, { kind: "pipeline", id: "p-decide" })).toBe(true);
   expect(isCurrentAttentionEntry(entries[2]!, { kind: "chat", id: "p-decide" })).toBe(false);
   expect(isCurrentAttentionEntry(entries[2]!, null)).toBe(false);
+});
+
+/* The desktop island and the phone badge read one list (#2129). */
+
+const iso = (seconds: number) => new Date(seconds * 1_000).toISOString();
+const parked = pipeline("p-decide", "needs_decision", NOW - 3_600);
+/** The same lane, dismissed on its card after it parked on this decision. */
+const dismissed = { ...parked, dismissedAt: iso(NOW - 60), dismissedBy: { kind: "operator", surface: "desktop" } } as Pipeline;
+const elsewhere = { ...pipeline("p-atlas", "needs_review", NOW - 1_800), project: "harbor" } as Pipeline;
+
+test("a lane parked on a decision is on the list with no conversation waiting, and counts 1", () => {
+  const entries = buildNeedsYouQueue([], [parked, pipeline("p-run", "running", NOW - 60)], NOW, []);
+  expect(entries.map((entry) => `${entry.kind}:${entry.id}`)).toEqual(["pipeline:p-decide"]);
+});
+
+test("a lane dismissed for the decision it waits on, or closing, is off the list", () => {
+  expect(buildNeedsYouQueue([], [dismissed], NOW, [])).toEqual([]);
+  expect(buildNeedsYouQueue([], [parked], NOW, ["p-decide"])).toEqual([]);
+  /* A dismissal made before the lane last moved covers an older decision. */
+  const stale = { ...parked, dismissedAt: iso(NOW - 7_000) } as Pipeline;
+  expect(buildNeedsYouQueue([], [stale], NOW, []).map((entry) => entry.id)).toEqual(["p-decide"]);
+});
+
+test("the list spans every project, conversations first; a project's slice is exactly what the phone badge counts there", () => {
+  const files = [waiting("/p/new.jsonl", NOW - 100), waiting("/p/old.jsonl", NOW - 900)];
+  const entries = buildNeedsYouQueue(files, [parked, elsewhere], NOW, []);
+  expect(entries.map((entry) => `${attentionEntryProject(entry)}:${entry.id.startsWith("p-") ? entry.id : entry.kind}`)).toEqual([
+    `${PROJECT}:conversation`,
+    `${PROJECT}:conversation`,
+    `${PROJECT}:p-decide`,
+    "harbor:p-atlas",
+  ]);
+  const slice = entries.filter((entry) => attentionEntryProject(entry) === PROJECT);
+  expect(slice).toEqual(buildMobileAttentionQueue(buildAttentionQueue(files, NOW, PROJECT), needsDecisionPipelineRows([parked, elsewhere], PROJECT, NOW)));
+});
+
+test("Next walks conversations and lanes on one pointer, and reaches the lane", () => {
+  const entries = buildNeedsYouQueue([waiting("/p/old.jsonl", NOW - 900)], [parked], NOW, []);
+  const pointer = { current: null as string | null };
+  expect(advanceAttentionCycle(pointer, entries, 1)?.kind).toBe("conversation");
+  const lane = advanceAttentionCycle(pointer, entries, 1);
+  expect(lane?.kind === "pipeline" ? lane.row.pipeline.id : null).toBe("p-decide");
+  expect(pointer.current).toBe("p-decide");
+  expect(advanceAttentionCycle(pointer, entries, 1)?.kind).toBe("conversation");
+});
+
+test("a lane is focused by the key its card answers to", () => {
+  expect(laneFocusPath("p-decide")).toBe("group::pipeline::p-decide");
+  expect(laneFocusId(laneFocusPath("p-decide"))).toBe("p-decide");
+  expect(laneFocusId("/p/old.jsonl")).toBeNull();
+  expect(laneFocusId("group::pipeline::")).toBeNull();
 });

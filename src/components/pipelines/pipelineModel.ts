@@ -1,3 +1,4 @@
+import { MAX_PIPELINE_STAGES } from "@/lib/pipelines/limits";
 import { roleNameById } from "@/components/builderCopy";
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { currentConversationFile, currentMemberPath, isArchivedPredecessor } from "@/lib/accounts/identity";
@@ -140,7 +141,10 @@ export function pipelineStateLabel(t: TFunction, state: PipelineState): string {
 }
 
 export const PIPELINE_BUSY_STATES: ReadonlySet<PipelineState> = new Set(["provisioning", "running"]);
-export const PIPELINE_ATTENTION_STATES: ReadonlySet<PipelineState> = new Set(["needs_decision", "needs_review", "paused"]);
+/** A lane that asks the operator for something. A paused lane is not one:
+    someone paused it on purpose, and nothing is asked
+    (docs/design/needs-attention.md §3, reason 10). */
+export const PIPELINE_ATTENTION_STATES: ReadonlySet<PipelineState> = new Set(["needs_decision", "needs_review"]);
 
 /** The line a needs_review lane carries on every card (#1938): the last
     verdict, the head it judged, and the current head nobody reviewed. */
@@ -165,11 +169,6 @@ export function pipelineReviewHeads(t: TFunction, source: Pick<Pipeline, "review
 export function pipelineCursorActive(pipeline: Pipeline): boolean {
   if (PIPELINE_BUSY_STATES.has(pipeline.state)) return true;
   return pipeline.state === "paused" && pipeline.pausedState !== null && PIPELINE_BUSY_STATES.has(pipeline.pausedState);
-}
-
-/** Does this pipeline still need the operator's eyes? Drives rail/project badges. */
-export function pipelineNeedsAttention(pipeline: Pipeline): boolean {
-  return pipeline.state !== "closed" && PIPELINE_ATTENTION_STATES.has(pipeline.state);
 }
 
 /* ── Stage chip state matrix (§3 of the #93 design) ─────────────────────── */
@@ -560,6 +559,9 @@ export function pipelineStripByPath(pipelines: Pipeline[]): Map<string, Pipeline
  * pending.
  */
 export function stageChipState(pipeline: Pipeline, stage: PipelineStage): StageChipState {
+  /* A lane stopped after its last fix (#1938, #2187 §3.4) waits on its review
+     stage: that stage takes the mark and the ink a decision's stage takes. */
+  if ((pipeline.state === "needs_review" || pipeline.pausedState === "needs_review") && pipeline.reviewPending?.stageId === stage.id) return "needs_decision";
   const attempt = latestAttempt(pipeline, stage.id);
   if (attempt) {
     if (attempt.state === "passed") return "passed";
@@ -1614,6 +1616,62 @@ export function optimisticAddStage(pipeline: Pipeline, input: PipelineStageInput
   if (predecessor) stages[at - 1] = { ...predecessor, next: stage.id };
   stages.splice(at, 0, stage);
   return { ...pipeline, stages: pruneStageEdges(stages) };
+}
+
+/** Whether the board's Add review may insert after the stage at `index`
+    (#2187 §3.2): a review-loop there keeps the chain startable, and the plan
+    has room for the two stages the engine stores it as. */
+export function canAddReviewAfter(pipeline: Pick<Pipeline, "stages">, index: number): boolean {
+  if (pipeline.stages.length + 2 > MAX_PIPELINE_STAGES) return false;
+  const kinds: PipelineStageKind[] = pipeline.stages.map((stage) => stage.kind);
+  kinds.splice(index + 1, 0, "review-loop");
+  return reviewLoopChainValid(kinds);
+}
+
+/** The round limit a converted review's fail edge takes, the one every review
+    flow carried (`LEGACY_REVIEW_FLOW_ROUND_LIMIT`, which lives beside a Node-only
+    digest and so cannot load in the browser). The echo carries the stored value. */
+const ADDED_REVIEW_ROUNDS = 5;
+
+/**
+ * The pipeline as it will look once the board's Add review persists (#2187
+ * §3.2): the engine stores a `review-loop` it is sent as a read-only reviewer
+ * run stage whose `advance` fail edge goes to a fix stage copied from the
+ * implementer, the run whose pass edge the seam points at the reviewer, and
+ * the fix passes back to the review. Both stages appear in one frame, so the
+ * canvas does not redraw twice. A predecessor that cannot fix (not a
+ * read-write run) makes the engine store the stage as sent, and so does this.
+ */
+export function optimisticAddReview(pipeline: Pipeline, input: PipelineStageInput, index: number): Pipeline {
+  const single = optimisticAddStage(pipeline, input, index);
+  const at = Math.max(0, Math.min(index, pipeline.stages.length));
+  const implementer = at > 0 ? pipeline.stages[at - 1]! : null;
+  if (!implementer || implementer.kind !== "run" || implementer.effectiveRole.access !== "read-write"
+    || pipeline.stages.length + 2 > MAX_PIPELINE_STAGES) return single;
+  const taken = new Set(single.stages.map((stage) => stage.id));
+  const base = `${input.id}-fix`;
+  let fixerId = base;
+  for (let n = 2; taken.has(fixerId); n += 1) fixerId = `${base}-${n}`;
+  const stages = single.stages.flatMap((stage): PipelineStage[] => {
+    if (stage.id !== input.id) return [stage];
+    const reviewer: PipelineStage = {
+      ...stage,
+      kind: "run",
+      onFail: { to: fixerId, maxRounds: ADDED_REVIEW_ROUNDS, onExhausted: "advance" },
+      effectiveRole: { ...stage.effectiveRole, access: "read-only" },
+    };
+    const fixer: PipelineStage = {
+      id: fixerId, kind: "run", prompt: "{{prev.output}}",
+      ...(implementer.role ? { role: implementer.role } : {}),
+      ...(implementer.engine !== undefined ? { engine: implementer.engine } : {}),
+      ...(implementer.access !== undefined ? { access: implementer.access } : {}),
+      next: input.id,
+      onFail: null,
+      effectiveRole: implementer.effectiveRole,
+    };
+    return [reviewer, fixer];
+  });
+  return { ...single, stages };
 }
 
 /** The pipeline as it will look once `remove-stage` persists. Predecessors that

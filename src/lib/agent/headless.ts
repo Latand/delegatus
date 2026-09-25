@@ -8,6 +8,7 @@ import { claudeManagedEnvironment, claudeSettingsPath } from "@/lib/accounts/cla
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt } from "@/lib/agent/spawnPolicy";
 import { procBackend } from "@/lib/proc";
+import { STATE_OWNER_ENV } from "@/lib/stateOwnership";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import type { RuntimeRoleConfig as RoleConfig } from "./runtimeConfig";
@@ -57,6 +58,12 @@ export const headlessRuns = new Map<string, LiveRun>();
 function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: string): NodeJS.ProcessEnv {
   const env = withoutWakatimeCredential(base);
   delete env.LLV_TOKEN;
+  /* A headless reviewer is no owner of the operator's state. The Viewer's own
+     claim (the image sets it for the whole container) used to ride along, so a
+     reviewer's `NODE_ENV=test bun -e` fixture resolved the live task store and
+     minted two placeholder tasks there. The Viewer MCP server claims its own
+     owner at its entry point, so nothing the reviewer needs is lost. */
+  delete env[STATE_OWNER_ENV];
   if (spawnCapability) env.LLV_SPAWN_CAPABILITY = spawnCapability;
   return env;
 }

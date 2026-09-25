@@ -144,7 +144,19 @@ function unevaluableProbeModule(address: string): string {
   ].join("\n");
 }
 
-async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
+/* What a real start writes before it answers: Next's own banner on stdout, a
+   startup diagnostic and a real error on stderr, and which quiet choice the
+   launcher handed down. */
+const STARTUP_CHATTER = `
+console.log("\\u001b[1m▲ Next.js 16.3.3\\u001b[22m");
+console.log("- Local:         http://127.0.0.1:" + process.env.PORT);
+console.log("- Network:       http://127.0.0.1:" + process.env.PORT);
+console.log("✓ Ready in 0ms");
+console.error("child quiet diagnostics: " + (process.env.LLV_QUIET_DIAGNOSTICS ?? "unset"));
+console.error("Error: fixture failure that must reach the terminal");
+`;
+
+async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
   const fixture = await mkdtemp(path.join(tmpdir(), "llv-cli-exposure-"));
   fixtures.add(fixture);
   const bin = path.join(fixture, "bin");
@@ -168,8 +180,9 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/appDir.mjs"), path.join(bin, "appDir.mjs")),
     copyFile(path.resolve("bin/envAlias.mjs"), path.join(bin, "envAlias.mjs")),
     copyFile(path.resolve("bin/self-update-supervisor.mjs"), path.join(bin, "self-update-supervisor.mjs")),
+    copyFile(path.resolve("bin/legacySystemd.mjs"), path.join(bin, "legacySystemd.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),
-    writeFile(path.join(nextBin, "next"), `
+    writeFile(path.join(nextBin, "next"), `${options.startupChatter ? STARTUP_CHATTER : ""}
 const hostnameIndex = process.argv.indexOf("--hostname");
 const hostname = ${options.ignoreHostname ? JSON.stringify("0.0.0.0") : "hostnameIndex === -1 ? \"0.0.0.0\" : process.argv[hostnameIndex + 1]"};
 const server = Bun.serve({
@@ -245,6 +258,31 @@ test("the checkout next start path keeps the default listener on loopback", asyn
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
+});
+
+test("a machine that still has the retired systemd unit is told how to move to Docker, and the Viewer still starts", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const unitDir = path.join(fixture.env.XDG_CONFIG_HOME!, "systemd", "user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(path.join(unitDir, "agent-log-viewer.service"), "[Service]\n");
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("The systemd install of Delegatus is retired: Docker is the only install.", 10_000);
+  await output.waitFor("Delegatus v", 10_000);
+  await waitForStatus("127.0.0.1", port, 200);
+  expect(output.text()).toContain("systemctl --user disable --now agent-log-viewer.service\n");
+  expect(output.text()).toContain(`rm ${path.join(unitDir, "agent-log-viewer.service")}\n`);
+  expect(output.text()).toContain("https://github.com/Latand/delegatus/blob/main/docs/docker.md");
+  expect(output.text().split("systemd install of Delegatus is retired").length).toBe(2);
+  expect(child.exitCode).toBeNull();
 });
 
 test("a pre-existing non-loopback listener does not impersonate a widened Viewer bind", async () => {
@@ -408,3 +446,49 @@ test("a remembered choice whose Tailscale went away starts locally and says why"
   expect((await readFile(path.join(configDir, "token"), "utf8")).trim()).toMatch(/^[0-9a-f]{32}$/);
   expect(stub.calls().some((call) => call.startsWith("serve"))).toBe(false);
 }, 30_000);
+
+test("a start prints the banner first, hides Next's startup lines and still prints a real error", async () => {
+  const fixture = await checkoutFixture({ startupChatter: true });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("fixture failure that must reach the terminal", 10_000);
+  const text = output.text();
+  expect(text.indexOf("Delegatus v")).toBeGreaterThanOrEqual(0);
+  expect(text.indexOf("Delegatus v")).toBeLessThan(text.indexOf("Error: fixture failure"));
+  expect(text).toContain(`  Open http://127.0.0.1:${port}/ in your browser.`);
+  expect(text).not.toContain("Opened:");
+  expect(text).toContain("DELEGATUS_DEBUG=1");
+  expect(text).toContain("child quiet diagnostics: 1");
+  expect(text).not.toContain("Next.js");
+  expect(text).not.toContain("- Local:");
+  expect(text).not.toContain("Ready in");
+});
+
+test("DELEGATUS_DEBUG=1 keeps Next's startup lines and lets the children print their diagnostics", async () => {
+  const fixture = await checkoutFixture({ startupChatter: true });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, LLV_LANG: "en", DELEGATUS_DEBUG: "1", LLV_QUIET_DIAGNOSTICS: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("Delegatus v", 10_000);
+  await output.waitFor("fixture failure that must reach the terminal", 10_000);
+  const text = output.text();
+  expect(text).toContain("▲ Next.js 16.3.3");
+  expect(text).toContain(`- Local:         http://127.0.0.1:${port}`);
+  expect(text).toContain("child quiet diagnostics: unset");
+  expect(text).not.toContain("DELEGATUS_DEBUG=1 —");
+});

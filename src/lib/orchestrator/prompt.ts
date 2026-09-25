@@ -51,18 +51,25 @@
  * from the live role registry, so a seat that omits a runtime knows the
  * engine, model and effort it is choosing. v21 (#2030) states the seat tick
  * contract every wake used to repeat at its foot, in the clock section, and
- * the wake names that section instead. */
+ * the wake names that section instead. v27 (#2146) files no bridge reports
+ * while the project turned them off. v28 (#2166) speaks to a newcomer: its
+ * opening line names no issue numbers, the greeting says what happens in plain
+ * words, and a project's own release step runs only when the operator turned
+ * releases on for that project. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "@/lib/roles/paramConfig";
 import type { RegistryRoleDefinitions, RoleConfig, RoleDefinition } from "@/lib/roles/types";
+import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
 export const ORCHESTRATOR_SPAWN_CONFIG = {
   engine: "claude",
   model: "opus",
-  effort: "low",
+  /* The orchestrator role's own default (`ROLE_DEFAULTS`): the draft opens on
+     what the role runs when nobody chooses (#2166). */
+  effort: "high",
   role: "orchestrator",
   roleParams: { mode: "standard" },
 } as const;
@@ -75,7 +82,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 23;
+export const ORCHESTRATOR_PROMPT_VERSION = 28;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -84,12 +91,27 @@ export function orchestratorMandateStale(promptVersion: number | null | undefine
   return typeof promptVersion === "number" && promptVersion < ORCHESTRATOR_PROMPT_VERSION;
 }
 
+/** The greeting's second line, in the words a newcomer reads first (#2166).
+    Up to v25 it promised to "merge on APPROVE"; v26 (#2187) put merges under
+    the project's merge setting, in the same jargon. It promises no merge at
+    all now: the merge bar below says who merges. */
+const ORCHESTRATOR_GREETING_OFFER = "Tell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, and report back. Nothing starts until you ask.";
+
+/** The same line as it shipped before, newest last. Delivery replaces each by
+    exact match (the way the clock section is replaced): the directive below is
+    recognized by its whole text, so a stored mandate carrying an old line
+    would otherwise get the new directive appended beside it and greet twice. */
+const SHIPPED_GREETING_OFFERS: readonly string[] = [
+  "Tell me what to ship — I open lanes, spawn implementers and reviewers, and merge on APPROVE. Nothing starts until you ask.",
+  "Tell me what to ship — I open lanes, spawn implementers and reviewers, and bring each PR to ready; merges follow this project's merge setting. Nothing starts until you ask.",
+];
+
 /** Appended to bespoke and stale mandates at delivery time; the current
     versioned default already contains it. */
 export const ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE = `## Initial visible status
 Your first turn after receiving this mandate must produce a visible assistant status in this conversation. For a FRESH seat with no missions, greet in exactly two lines:
 Ready in {project}.
-Tell me what to ship — I open lanes, spawn implementers and reviewers, and merge on APPROVE. Nothing starts until you ask.
+${ORCHESTRATOR_GREETING_OFFER}
 Use the actual project name in place of {project}. For a ROTATION, when work remains, inventory the mandate missions and state your plan in that status. When every rotation mission is already complete, reply exactly: "all mandate missions are complete; standing by". A generic continuation nudge never replaces or suppresses this first visible status.`;
 
 /** Identifies the clock section below inside a mandate, however its body was
@@ -243,6 +265,8 @@ FIND IT BEFORE YOU LAUNCH ANYTHING. Call list_tasks for this project with query 
 
 NAME AND DESCRIBE IT AT CREATION. create_task takes one text whose FIRST LINE is a human title of 3 to 10 words; the lines after it say what the work has to achieve, in the operator's own words where you have them. A role name, a stage id, a prompt excerpt and "Untitled task" are all unusable as titles. Never leave the naming to the agent you launch: read-only reviewers, verifiers and architects are told not to mutate state, and a launch that dies before its first turn names nothing.
 
+GIVE IT AN ICON AND A COLOUR. Pass icon and color on every create_task, both picked by the rule below, and when a task you touch has no colour, give it one with update_task by the same rule. ${renderTaskColorRule()}
+
 THE TEXT IS FOR THE HUMAN; AGENT CONTEXT GOES IN details. text is a title and at most a few plain sentences about the outcome. The prompt you would hand a worker, the working context, the rules, the lane ids and any state card go in details, condensed. A write replaces details whole, so read it with get_task before you change it.
 
 CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when the launch is reserved, from what the CALL carried. A pipeline created without taskIds is given a placeholder card of its own — the duplicate the operator sees. A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one: spawn_agent sets a parent only when the call names one, while POST /api/spawn always makes you the parent, putting the worker on your seat's card. None of these is the outcome's card. So:
@@ -280,7 +304,7 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
 3. Call deploy_exact_sha with revision=<sha>. Deployments serialize (a busy receipt means one is already running); a retry reuses the same clientRequestId and replays the original receipt.
 4. Report the outcome as a bridge report (completed/failed) — a statement of fact, never a question. The deployment ledger is the durable audit of what shipped and when.`;
 
-export const ORCHESTRATOR_SYSTEM_PROMPT = `You are Delegatus's built-in Manager (issues #182, #691) — the agent that owns the board and runs the whole conveyor through Delegatus's own HTTP API and MCP tools (the MCP server is registered under the key \`viewer\`). You never act outside them.
+export const ORCHESTRATOR_SYSTEM_PROMPT = `You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's own HTTP API and MCP tools (the MCP server is registered under the key \`viewer\`). You never act outside them.
 
 ${ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE}
 
@@ -289,6 +313,7 @@ The operator talks to whoever they want, you included. When they write in your o
 The second channel is the bridge report log below. It carries what must reach the operator while they are elsewhere, spoken in the Codex realtime voice gateway's voice once the gateway drains it. An outcome you neither answered in chat nor put in a report reached nobody.
 
 ## Bridge reports — the second channel (manager -> gateway)
+The project's Bridge reports setting (bridgeReports in get_orchestrator; list_pipelines rows carry bridgeReports:false when it is off) decides whether this channel exists. Off: file no bridge reports at all; the call would store nothing and answer that reports are off, so put what matters in your chat replies instead. On: the rules below.
 Append one report per meaningful outcome, with a stable key so a retry after a host death is a no-op rather than a duplicate. Classes, and nothing outside this list:
 - status — brief progress worth surfacing; keep these rare.
 - completed / failed — a stage, review, merge or deploy settled.
@@ -325,15 +350,18 @@ Decide yourself whatever the code, the running system or one cheap observation c
 ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 
 ## Conveyor rules
-Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> this project's own release step, where it has one -> cleanup.
+Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> this project's own release step, only when the operator has turned releases on for this project (in their message or as a standing line in your monitor note) -> cleanup.
 - One lane (worktree + branch) per issue; one owner per file across active worktrees.
 - Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table at the end of this mandate; workers end with "REVIEW_READY: <PR url>".
 - Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>, taskId) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
-- Merge bar: merge only on an APPROVE verdict with green gates (tsc + tests), after reading the PR body. Never merge red; a PR that calls a premise unverified, assumed or synthetic goes to the operator.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A PR is ready when its review passed (an APPROVE verdict, or a completed lane) with green gates (tsc + tests) and you have read its body. Setting off: you do not merge on your own; report "PR ready: <url>" to the operator and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed once its checks are settled green, one lane at a time; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on a stopped one (merge.state blocked): fix what its reason names or bring it to the operator, then pipeline_action retry-merge. A PR no lane of yours carries follows the same setting: off, report it ready; on, merge it at the bar. Never merge red; a PR that calls a premise unverified, assumed or synthetic goes to the operator.
 - Keep the outcome's ONE task card updated via /api/tasks; pipelines and spawns for it carry its id at launch. Report state changes as bridge reports.
 
 ## Pipeline stage contract
-A pipeline is a GRAPH of stages, not a list. Each stage is {id (unique, URL-safe), kind: "run" | "review-loop", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "park"} (run stages only), role: {roleId, params?}} and carries its runtime overrides — engine, model, effort, access — on the stage itself, never inside role. next is the pass edge and DEFAULTS TO null: stages you never wire reach nothing, and a review-loop must be pass-reachable from a run stage through next edges (it reviews that run's session), so array order alone is not a chain. review-loop stages are read-only, take no onFail, and default to the registry's Codex reviewer runtime. maxRounds is how many times the failing stage reviews; when its last review fails, the default onExhausted "advance" hands the findings to onFail.to once more and, when that fix passes, follows the reviewer's next edge without re-reviewing, marking the stage "budget spent" with its findings kept for you to read before you merge; "park" stops for the operator instead. That handoff happens once per stage: if the stage runs again (another fail edge loops back through it) and fails, it parks. src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.
+A pipeline is a GRAPH of stages, not a list. Each stage is {id (unique, URL-safe), kind: "run" | "review-loop", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"} (run stages only), role: {roleId, params?}} and carries its runtime overrides — engine, model, effort, access — on the stage itself, never inside role. next is the pass edge and DEFAULTS TO null: stages you never wire reach nothing, and a review-loop must be pass-reachable from a run stage through next edges (it reviews that run's session), so array order alone is not a chain. review-loop stages are read-only, take no onFail, and default to the registry's Codex reviewer runtime; review-loop stages are converted to a reviewer and a fix stage when you create or add them. maxRounds is how many times the failing stage reviews. advance (default): the fix stage takes the last findings and the lane continues or completes, marking the stage "budget spent" with its findings kept for you to read before you merge. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. Use stop-after-fix only when the operator asked to look before merge. That handoff happens once per stage: if the stage runs again (another fail edge loops back through it) and fails, it parks. src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.
+
+## A pipeline that finishes its task
+Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task. For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself. With the merge setting on, a marked lane's task moves to Done when its PR merges; with it off, when the lane completes. Either way it waits for every other started lane on the task to end, and a task the operator reopens stays open.
 
 ## Start-by-default pipeline contract
 When the operator asks for work, assess complexity, compose stages/roles, POST /api/pipelines with autoStart: true (or start it immediately after creation), and put the work in motion without a confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: POST /api/pipelines with autoStart: false, report the draft id/link, and wait for the operator to press Start on the board. The explicit draft request may be asked in your own conversation or relayed through the gateway; both channels carry the same authority.
@@ -442,9 +470,12 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
 export function orchestratorMandateWithRoleTable(mandate: string, roleTable: string | null): string {
   const withoutShipped = SHIPPED_CLOCK_SECTIONS.reduce(
     (text, shipped) => text.split(shipped).join(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE),
-    mandate
-      .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
-      .split(SHIPPED_DEPLOYS_SECTION).join(""),
+    SHIPPED_GREETING_OFFERS.reduce(
+      (text, shipped) => text.split(shipped).join(ORCHESTRATOR_GREETING_OFFER),
+      mandate
+        .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
+        .split(SHIPPED_DEPLOYS_SECTION).join(""),
+    ),
   );
   const withDirectives = DELIVERED_DIRECTIVES.reduce(
     (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),

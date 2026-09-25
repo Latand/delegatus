@@ -130,6 +130,9 @@ export interface ComposerBarProps {
       action beside the inline reason (e.g. force a runtime snapshot refresh
       while the host is unresolved/offline). */
   onSendBlockedRecover?: () => void;
+  /** The recovery action's words, when it is not Re-check — the launch
+      preflight's «Sign in to Claude first» (#2170). */
+  sendBlockedRecoverLabel?: string;
   /** A caller-owned immutable generation can supply the payload while the
       editable textarea and image tray are empty. */
   sendPayloadAvailable?: boolean;
@@ -282,6 +285,7 @@ export function ComposerBar({
   imageDisabledReason,
   sendDisabledReason,
   onSendBlockedRecover,
+  sendBlockedRecoverLabel,
   sendPayloadAvailable = false,
   receipts,
   deliveries,
@@ -396,7 +400,9 @@ export function ComposerBar({
   const sendControl = (
     <span
       ref={sendAnchorRef}
-      className="relative inline-flex shrink-0"
+      /* On the phone this span is the tools row's flex item, so the free
+         space is its to take (#2148): Send ends the row at the thumb's edge. */
+      className={`relative inline-flex shrink-0${isMobile ? " ml-auto" : ""}`}
       onContextMenu={(event) => {
         if (!hasSendMenu || dictationRecording || slotActs) return;
         event.preventDefault();
@@ -430,10 +436,13 @@ export function ComposerBar({
              control is the 32 px visual inside the 44 px target, so the tint
              goes on that span and never on the whole block. */
           style={isMobile || dictationRecording || slotKind !== "send" ? undefined : sendIdleStyle}
+          /* Send answers a press (#2148, make-interfaces-feel-better #12)
+             where motion is welcome; on the phone the 32 px visual inside the
+             44 px target is what scales. */
           className={
             isMobile
-              ? `ml-auto flex h-11 shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 aria-disabled:opacity-40 ${slotWide ? "min-w-11 px-0.5" : "w-11"}`
-              : `inline-flex shrink-0 items-center justify-center rounded-control border text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 aria-disabled:opacity-40 ${iconBtn} ${
+              ? `group/send flex h-11 shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 aria-disabled:opacity-40 ${slotWide ? "min-w-11 px-0.5" : "w-11"}`
+              : `press-scale inline-flex shrink-0 items-center justify-center rounded-control border text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 aria-disabled:opacity-40 ${iconBtn} ${
                   dictationRecording ? "border-danger bg-danger hover:opacity-90" : sendIdleClassName
                 }`
           }
@@ -441,7 +450,7 @@ export function ComposerBar({
           {isMobile ? (
             <span
               style={slotSubmits && !dictationRecording && effectiveCanSend ? sendIdleStyle : undefined}
-              className={`inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-control border text-ui font-semibold ${slotWide ? "px-2.5" : ""} ${
+              className={`inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-control border text-ui font-semibold transition-[scale] duration-[120ms] ease-out motion-safe:group-enabled/send:group-active/send:scale-[0.96] ${slotWide ? "px-2.5" : ""} ${
                 dictationRecording ? "border-danger bg-danger text-white" : slotFill
               }`}
             >
@@ -771,9 +780,9 @@ export function ComposerBar({
             >
               {isMobile ? (
                 <span className="inline-flex h-8 items-center rounded-control border border-border bg-card px-2 group-hover:border-accent/45">
-                  {t("deadHost.recheck")}
+                  {sendBlockedRecoverLabel ?? t("deadHost.recheck")}
                 </span>
-              ) : t("deadHost.recheck")}
+              ) : sendBlockedRecoverLabel ?? t("deadHost.recheck")}
             </button>
           ) : null}
         </span>

@@ -252,6 +252,8 @@ const type = (field: HTMLTextAreaElement, value: string) => {
     field.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
   });
 };
+/* The lane's actions are a group in the card's ⋯ (#2148). */
+const laneMenu = (host: HTMLElement) => card(host).querySelector<HTMLElement>("[data-menu]");
 const menuItem = (host: HTMLElement, label: string) => [...host.querySelectorAll<HTMLElement>('.menu [role^="menuitem"]')].find((item) => item.querySelector(".lbl")?.firstChild?.textContent === label) ?? null;
 const menuLabels = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.menu [role^="menuitem"]')].map((item) => [item.querySelector(".lbl")?.firstChild?.textContent, item.getAttribute("aria-disabled") === "true", item.querySelector(".why")?.textContent ?? null]);
 const receiptTexts = (host: HTMLElement) => [...host.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent);
@@ -261,35 +263,43 @@ const pane = (host: HTMLElement, stageId: string) => sheet(host)?.querySelector<
 const same = (actual: unknown, expected: unknown) => expect(actual === expected && expected !== null && expected !== undefined).toBe(true);
 const readerIn = (element: Element | null): string | null => element?.querySelector<HTMLElement>("[data-kanban-reader]")?.getAttribute("data-kanban-reader") ?? null;
 
-test("the lane row's head opens Stages and carries the pipeline actions, each with the engine's own refusal", async () => {
+test("the lane row's head opens Stages; the pipeline actions are a group in the card's one ⋯, each with the engine's own refusal (#2148)", async () => {
   const { host } = mount(searchPipeline());
   await tick();
   const head = card(host).querySelector(".pblock .pb-head")!;
   /* The whole head is the way into Stages (#2072, variant B): no separate button. */
   expect(head.querySelector("[data-open-stages] .pb-title")?.textContent).toBe("Restore search results");
   expect(head.querySelector("[data-open-stages]")?.getAttribute("aria-label")).toMatch(/^Restore search results: .+\. Expand stages$/);
-  click(head.querySelector("[data-pipeline-menu]"));
-  expect(menuLabels(host)).toEqual([
+  /* One ⋯ per card: the lane draws none of its own. */
+  expect(card(host).querySelector("[data-pipeline-menu]")).toBeNull();
+  click(laneMenu(host));
+  expect([...host.querySelectorAll(".menu .head")].map((node) => node.textContent)).toEqual(["Move to", "Colour", "Pipeline actions"]);
+  const labels = menuLabels(host);
+  const start = labels.findIndex(([label]) => label === "Expand stages");
+  expect(labels.slice(start, start + 6)).toEqual([
     ["Expand stages", false, null],
-    ["Attach PR or issue…", false, null],
+    ["Attach PR or issue to the pipeline…", false, null],
     ["Pause", false, "The pipeline does not advance until you resume it."],
     ["Retry a stage", true, "Only while the pipeline waits on a stage for a decision"],
     ["Skip a stage", true, "Only while the pipeline waits on a stage for a decision"],
     ["Close the pipeline", false, "Stops its agents. Uncommitted work stays in the worktree."],
   ]);
+  /* The card's own items stay around the group: its links before, Hide after. */
+  expect(labels[start - 1]?.[0]).toBe("Attach PR or issue…");
+  expect(labels.at(-1)?.[0]).toBe("Hide from board");
 });
 
 test("Pause goes to the pipeline route, the header says it is on its way, and the receipt says what the server did", async () => {
   const { host, route } = mount(searchPipeline());
   await tick();
   route.state.hold = true;
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   click(menuItem(host, "Pause"));
   await tick();
   expect(route.patches).toEqual([{ id: "p-search", body: { action: "pause" } }]);
   expect(card(host).querySelector("[data-pipeline-acting]")?.textContent).toBe("Pausing…");
   /* One action at a time: the menu names the one on its way. */
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   expect(menuItem(host, "Pause")?.getAttribute("aria-disabled")).toBe("true");
   expect(menuItem(host, "Pause")?.querySelector(".why")?.textContent).toBe("Waiting for the server: Pausing…");
   key(host.querySelector(".menu"), "Escape");
@@ -303,7 +313,7 @@ test("a refused action keeps the server's words beside a Retry that sends it aga
   const { host, route } = mount(searchPipeline({ state: "paused" } as Partial<Pipeline>));
   await tick();
   route.state.answers.push({ ok: false, status: 409, error: "pipeline is not paused" });
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   click(menuItem(host, "Resume"));
   await tick();
   const receipt = host.querySelector("[data-kanban-receipt].error");
@@ -318,7 +328,7 @@ test("retry and skip name the stage the pipeline waits on and send the action al
   const parked = searchPipeline({ state: "needs_decision", cursor: { stageId: "verify", state: "running", input: null, activatedBy: null } } as Partial<Pipeline>);
   const { host, route } = mount(parked);
   await tick();
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   expect(menuItem(host, "Retry Verify")?.getAttribute("aria-disabled")).toBeNull();
   click(menuItem(host, "Skip Verify"));
   await tick();
@@ -328,15 +338,37 @@ test("retry and skip name the stage the pipeline waits on and send the action al
   expect(receiptTexts(host)).toEqual(["Skipped Verify in «Restore search results after the index rebuild»"]);
 });
 
-test("Stages opens the sheet on the live stage: navigator, loop, graph, and a pane per stage in graph order", async () => {
+test("Stages opens the sheet on the live stage: graph or navigator, loop, and a pane per stage in graph order, each stage drawn once (#2148)", async () => {
   const { host } = mount(searchPipeline());
   await tick();
   click(card(host).querySelector("[data-open-stages]"));
   await tick();
   const view = sheet(host)!;
   expect(view.getAttribute("role")).toBe("dialog");
+  same(document.activeElement, pane(host, "verify"));
   expect(view.querySelector("header h2")?.textContent).toBe("Restore search results after the index rebuild");
   expect(view.querySelector("header .progress")?.textContent).toBe("4 stages · Verify running · attempt 2");
+  /* The lane's controls sit in the head, and no bar of their own counts the
+     stages in view. */
+  expect(view.querySelector("header .lane-bar [data-collapse-finished]")).toBeTruthy();
+  expect(view.querySelector("header .lane-bar [data-expand-all]")).toBeTruthy();
+  expect(view.querySelector("header .lane-bar [data-lane-prev]")).toBeTruthy();
+  expect(view.querySelector("header .lane-bar [data-lane-next]")).toBeTruthy();
+  expect(view.querySelectorAll(".lane-bar")).toHaveLength(1);
+  expect(view.querySelector(".lane-bar .pos, .lane-bar .lane-count")).toBeNull();
+  /* Wide enough, the graph is shown, and it is the navigation: it draws each
+     stage once, marks the one in focus and carries the loop on its fail edge,
+     so the chip strip is not drawn beside it. */
+  expect(view.querySelector("[data-sheet-graph]")?.getAttribute("aria-pressed")).toBe("true");
+  expect(view.querySelectorAll(".gs-graph .pnode")).toHaveLength(4);
+  expect(view.querySelector(".gs-graph .pnode.selected")?.getAttribute("data-stage")).toBe("verify");
+  expect(view.querySelector(".gs-graph .pelabel.fail")).toBeTruthy();
+  expect(view.querySelector(".gs-nav")).toBeNull();
+  expect(view.querySelectorAll("[data-nav-stage]")).toHaveLength(0);
+  /* Hidden, the graph gives way to its collapsed form: the numbered chips and
+     the loop chip. */
+  click(view.querySelector("[data-sheet-graph]"));
+  expect(view.querySelector(".gs-graph")).toBeNull();
   const chips = [...view.querySelectorAll<HTMLElement>("[data-nav-stage]")];
   expect(chips.map((chip) => `${chip.querySelector(".nidx")?.textContent}${chip.querySelector(".nlbl")?.textContent}`)).toEqual(["1Implement", "2Review", "3Verify", "4Merge"]);
   /* Who runs each stage, on the minimized chip itself (#1743): the engine mark
@@ -348,12 +380,19 @@ test("Stages opens the sheet on the live stage: navigator, loop, graph, and a pa
   expect(chips.map((chip) => chip.getAttribute("aria-current"))).toEqual(["false", "false", "true", "false"]);
   expect(view.querySelector(".gs-nav .ploop .ccircle")?.getAttribute("data-count")).toBe("1");
   expect(view.querySelector(".gs-nav .ploop .lnames")?.textContent).toContain("Verify");
+  click(view.querySelector("[data-sheet-graph]"));
   expect(view.querySelectorAll(".gs-graph .pnode")).toHaveLength(4);
+  expect(view.querySelector(".gs-nav")).toBeNull();
   expect([...view.querySelectorAll<HTMLElement>(".pane")].map((element) => element.dataset.stage)).toEqual(["implement", "review", "verify", "merge"]);
-  same(document.activeElement, pane(host, "verify"));
 
   const implement = pane(host, "implement")!;
   expect(implement.querySelector(".pname")?.textContent).toBe("1. Implement");
+  /* A column head says which stage and its role; who runs it is said by the
+     conversation under it, so the head draws no engine mark or ladder, and
+     the words stay in its title. */
+  expect(implement.querySelector(".prole-role")?.textContent).toBe("Builder");
+  expect(implement.querySelector(".prole [data-engine-mark], .prole [data-effort-pills]")).toBeNull();
+  expect(implement.querySelector(".prole")?.getAttribute("title")).toContain("Claude");
   expect(implement.querySelector(".pane-sub")?.textContent).toBe("started by Verify · fail");
   expect([...implement.querySelectorAll(".attempts button")].map((button) => [button.textContent, button.getAttribute("aria-pressed")])).toEqual([["#1 · passed", "false"], ["#2 · passed", "true"]]);
   expect([...pane(host, "review")!.querySelectorAll(".rounds .rchip")].map((chip) => chip.textContent)).toEqual(["Round 1 · changes requested", "Round 2 · approved"]);
@@ -361,13 +400,16 @@ test("Stages opens the sheet on the live stage: navigator, loop, graph, and a pa
   /* Each started pane holds its shown attempt's conversation as a reader. */
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify2));
   expect(pane(host, "verify")!.querySelector("[data-kanban-reader]")?.getAttribute("data-in-sheet")).toBe("1");
-  /* The waiting stage holds its first message, marked as waiting for delivery. */
+  /* The waiting stage holds its first message and says once when it starts
+     (#2148): in the draft's own line, with no sub-line over it, no composer
+     under it and no note repeating it. Its mark is quiet, not amber. */
   const merge = pane(host, "merge")!;
-  expect(merge.querySelector(".pane-sub")?.textContent).toBe("runs when Verify passes");
+  expect(merge.querySelector(".pane-sub")).toBeNull();
   expect(merge.querySelector(".msg.event")?.textContent).toBe("Starts when Verify passes · last stage");
   expect(merge.querySelector("[data-draft-message] .btext")?.textContent).toBe("Merge once the alias swap is verified.");
-  expect(merge.querySelector(".bstatus")?.textContent).toBe("Waiting for stage start · not delivered");
-  expect(merge.querySelector<HTMLTextAreaElement>(".composer2 textarea")?.disabled).toBe(true);
+  expect(merge.querySelector(".bstatus")?.textContent).toBe("First message · not sent yet");
+  expect(merge.querySelector(".bstatus")?.classList.contains("waiting")).toBe(true);
+  expect(merge.querySelector(".composer2, textarea[disabled], .draft-note")).toBeNull();
 });
 
 test("a reader open on the card moves into its pane and back, the same mounted conversation throughout", async () => {
@@ -404,7 +446,7 @@ test("a shelf column widens for a reader on its card, and narrows again while th
   expect(column().classList.contains("reading")).toBe(true);
 });
 
-test("Collapse finished folds passed stages and lets their readers go; a navigator chip opens a folded pane; attempt tabs switch the reader", async () => {
+test("Collapse finished folds passed stages and lets their readers go; a graph node, or a chip with the graph hidden, opens a folded pane; attempt tabs switch the reader", async () => {
   const { host } = mount(searchPipeline());
   await tick();
   click(card(host).querySelector("[data-open-stages]"));
@@ -414,10 +456,20 @@ test("Collapse finished folds passed stages and lets their readers go; a navigat
   expect([...sheet(host)!.querySelectorAll<HTMLElement>(".pane")].map((element) => element.dataset.collapsed)).toEqual(["1", "1", "0", "0"]);
   expect(readerIn(pane(host, "implement"))).toBeNull();
   expect(pane(host, "implement")!.querySelector(".vlabel")?.textContent).toBe("1 Implement · passed");
+  /* The graph is the navigation while it is shown: its node reaches the pane. */
+  click(sheet(host)!.querySelector('.gs-graph .pnode[data-stage="review"]'));
+  await tick();
+  expect(pane(host, "review")!.dataset.collapsed).toBe("0");
+  expect(sheet(host)!.querySelector(".gs-graph .pnode.selected")?.getAttribute("data-stage")).toBe("review");
+  /* Hidden, its chips do the same. */
+  click(sheet(host)!.querySelector("[data-collapse-finished]"));
+  await tick();
+  click(sheet(host)!.querySelector("[data-sheet-graph]"));
   click(sheet(host)!.querySelector('[data-nav-stage="review"]'));
   await tick();
   expect(pane(host, "review")!.dataset.collapsed).toBe("0");
   expect(sheet(host)!.querySelector('[data-nav-stage="review"]')?.getAttribute("aria-current")).toBe("true");
+  click(sheet(host)!.querySelector("[data-sheet-graph]"));
   click(pane(host, "verify")!.querySelector('[data-attempt="1"]'));
   await tick();
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
@@ -479,7 +531,7 @@ test("a waiting node opens its first message on the card; Save re-reads the stag
   expect(route.reads).toEqual(["p-search"]);
   expect(route.patches).toEqual([{ id: "p-search", body: { action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the alias swap and one warm query.", expectedStageDigest: stageDigest(searchPipeline().stages.find((entry) => entry.id === "merge")!) } }]);
   expect(panel.querySelector("textarea.draft-edit")).toBeNull();
-  expect(panel.querySelector(".bstatus")?.textContent).toMatch(/^Waiting for stage start · not delivered · edited \d/);
+  expect(panel.querySelector(".bstatus")?.textContent).toMatch(/^First message · not sent yet · edited \d/);
   same(document.activeElement, panel.querySelector("[data-draft-edit]"));
 });
 
@@ -571,7 +623,7 @@ test("a refused skip's Retry sends the same guarded expectations; with the curso
   const { host, route } = mount(parkedOn("verify"));
   await tick();
   route.state.answers.push({ ok: false, status: 409, error: "the stage worktree has uncommitted changes" });
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   click(menuItem(host, "Skip Verify"));
   await tick();
   expect(route.reads).toEqual([]);
@@ -592,7 +644,7 @@ test("a retry chosen on a stale menu is refused by the engine when another stage
   const { host, route } = mount(parkedOn("verify"));
   await tick();
   route.state.record = parkedOn("implement");
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   click(menuItem(host, "Retry Verify"));
   await tick();
   expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 }]);
@@ -601,13 +653,13 @@ test("a retry chosen on a stale menu is refused by the engine when another stage
   const newer = parkedOn("verify");
   newer.runs.find((run) => run.stageId === "verify")!.attempts.push(attempt(3, "failed", verify2, 60) as never);
   route.state.record = newer;
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   click(menuItem(host, "Retry Verify"));
   await tick();
   expect(receiptTexts(host).at(-1)).toBe("Retry Verify was not sent: a newer attempt of Verify waits now.");
 
   route.state.record = null;
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   click(menuItem(host, "Retry Verify"));
   await tick();
   expect(route.patches.at(-1)?.body).toEqual({ action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 });
@@ -674,7 +726,7 @@ test("an action with no answer is not confirmed, never refused; Check again only
   const { host, route } = mount(searchPipeline());
   await tick();
   route.state.answers.push({ ok: false, status: 0, error: "Failed to fetch", unknown: true });
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   click(menuItem(host, "Pause"));
   await tick();
   const receipt = () => host.querySelector("[data-kanban-receipt].error");
@@ -814,7 +866,7 @@ test("while the Stages sheet is open the board's keys stay behind it, and a shee
 test("a stage waiting before any attempt of its own is expected as attempt 0, and that menu is refused once attempt 1 has started and parked", async () => {
   const { host, route } = mount(parkedOn("merge"));
   await tick();
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   const started = parkedOn("merge");
   started.runs.push({ stageId: "merge", attempts: [attempt(1, "needs_decision", merge1, 30)] } as never);
   route.state.record = started;
@@ -824,7 +876,7 @@ test("a stage waiting before any attempt of its own is expected as attempt 0, an
   expect(receiptTexts(host)).toEqual(["Skip Merge was not sent: a newer attempt of Merge waits now."]);
 
   route.state.record = null;
-  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(host));
   click(menuItem(host, "Retry Merge"));
   await tick();
   expect(route.patches.at(-1)?.body).toEqual({ action: "retry-stage", expectedStageId: "merge", expectedAttempt: 0 });
@@ -897,7 +949,7 @@ test("a lane that waits on a decision is answered on the card, and Retry sends e
 
   const fromMenu = mount(parkedOnVerify());
   await tick();
-  click(card(fromMenu.host).querySelector("[data-pipeline-menu]"));
+  click(laneMenu(fromMenu.host));
   click(menuItem(fromMenu.host, "Retry Verify"));
   await tick();
 
@@ -929,7 +981,7 @@ test("Skip on the card waits out its receipt before anything is sent, and its Un
   expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
 });
 
-test("a spent review budget offers Close and One more round; One more round reads the revision and grants exactly one round", async () => {
+test("a lane stopped after its last fix offers Accept as is and Review again; each reads the revision and sends one request (#1938, #2187)", async () => {
   const spent = searchPipeline({
     state: "needs_review",
     cursor: null,
@@ -937,9 +989,13 @@ test("a spent review budget offers Close and One more round; One more round read
   } as Partial<Pipeline>);
   const { host, route } = mount(spent);
   await tick();
-  expect(card(host).querySelector(".pb-answer [data-review-heads]")?.textContent).toBe("last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed");
-  expect(answer(host, "close")?.textContent).toBe("Close the pipeline");
-  expect(answer(host, "continue-review")?.textContent).toBe("One more round");
+  /* One line on why (§3.4); the two heads stay in its tooltip. */
+  const reason = card(host).querySelector(".pb-answer [data-review-stop]");
+  expect(reason?.textContent).toBe("Stopped after the last fix, as this pipeline asked: the fix is not reviewed.");
+  expect(reason?.getAttribute("title")).toBe("last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed");
+  expect(answer(host, "close")).toBeNull();
+  expect(answer(host, "accept-head")?.textContent).toBe("Accept as is");
+  expect(answer(host, "continue-review")?.textContent).toBe("Review again");
   /* The lane's state word is the warning one, not the grey of an idle lane (#2080). */
   expect(card(host).querySelector('.pb-head .pstate-word[data-pstate="needs_review"]')?.textContent).toBe("needs review");
   click(answer(host, "continue-review"));
@@ -950,10 +1006,12 @@ test("a spent review budget offers Close and One more round; One more round read
   expect({ ...body, clientRequestId: body.clientRequestId.startsWith("board-") }).toEqual({ action: "continue-review", addRounds: 1, expectedRevision: REVISION, clientRequestId: true });
   expect(receiptTexts(host).at(-1)).toBe("One more review round for «Restore search results after the index rebuild»");
 
-  /* Close is one of the two acts the engine cannot take back: it waits too. */
-  click(answer(host, "close"));
-  await tick();
-  expect(route.patches).toHaveLength(1);
-  expect(receiptTexts(host).at(-1)).toBe("Closing «Restore search results after the index rebuild»");
+  click(answer(host, "accept-head"));
+  await tick(20);
+  expect(route.reads).toEqual(["p-search", "p-search"]);
+  expect(route.patches).toHaveLength(2);
+  const accept = route.patches[1]!.body as PatchPipelineRequest & { clientRequestId: string };
+  expect({ ...accept, clientRequestId: accept.clientRequestId.startsWith("board-") }).toEqual({ action: "accept-head", expectedRevision: REVISION, clientRequestId: true });
+  expect(receiptTexts(host).at(-1)).toBe("Accepted «Restore search results after the index rebuild» as is");
 });
 

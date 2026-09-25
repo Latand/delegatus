@@ -1,11 +1,15 @@
+import fs from "node:fs";
+
 import { NextRequest, NextResponse } from "next/server";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { dismissAttention } from "@/lib/attention/dismissals";
 import { headCwd } from "@/lib/agent/transcript";
 import { ensureTaskPipelineForAssignment } from "@/lib/pipelines/engine";
+import { loadPipelinesForProjection } from "@/lib/pipelines/store";
 import type { TaskPipelineSpawnParams } from "@/lib/pipelines/taskBinding";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { applyAssignmentPatches, assignmentRefFromBody, removeAssignment, type AssignmentPatch } from "@/lib/tasks/commands";
+import { applyAssignmentPatches, assignmentRefFromBody, dismissUnstartedLaunch, removeAssignment, type AssignmentPatch } from "@/lib/tasks/commands";
 import { isoNow } from "@/lib/tasks/helpers";
 import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -125,3 +129,97 @@ export async function DELETE(req: NextRequest, ctx: TaskRouteContext): Promise<N
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json({ ok: true, task: result.task });
 }
+
+interface DismissRouteDependencies {
+  mutateTasks: typeof mutateTasks;
+  /** Whether the launch's conversation has a transcript on disk after all. */
+  transcriptExists(ref: { launchId?: string | null; conversationId?: string | null }): boolean;
+  linkedPipeline(taskId: string): boolean;
+  /** Clears the Needs-you item a failed launch raised (#2170): dismissing the
+      launch on its card answers it there too. */
+  clearAttention?(ref: { launchId?: string | null; conversationId?: string | null }): Promise<void>;
+}
+
+async function clearLaunchAttention(ref: { launchId?: string | null; conversationId?: string | null }): Promise<void> {
+  try {
+    await dismissAttention({
+      kind: "conversation",
+      ...(ref.conversationId ? { conversationId: ref.conversationId } : {}),
+      /* The launch's placeholder path, for a conversation the registry never
+         recorded: the overlay reads a record by that path too. */
+      ...(ref.launchId ? { path: `spawn:${ref.launchId}` } : {}),
+    }, { kind: "operator" });
+  } catch {
+    /* The launch is dismissed on its task either way; a Needs-you record this
+       write could not reach is cleared from the queue by hand. */
+  }
+}
+
+function launchTranscriptExists(ref: { launchId?: string | null; conversationId?: string | null }): boolean {
+  try {
+    /* Every launch row records the conversation it reserved; a row with a
+       launch id alone predates that and proves nothing here. */
+    const conversationId = ref.conversationId ?? null;
+    if (!conversationId) return false;
+    const conversation = agentRegistry().conversation(conversationId as `conversation_${string}`);
+    return Boolean(conversation?.generations.some((generation) => generation.path && fs.existsSync(generation.path)));
+  } catch {
+    /* An unreadable registry proves nothing either way; the card offered the
+       dismiss because the board found no transcript. */
+    return false;
+  }
+}
+
+const dismissDependencies: DismissRouteDependencies = {
+  mutateTasks,
+  transcriptExists: launchTranscriptExists,
+  clearAttention: clearLaunchAttention,
+  linkedPipeline: (taskId) => {
+    try {
+      return loadPipelinesForProjection().some((pipeline) => pipeline.taskIds.includes(taskId));
+    } catch {
+      return true;
+    }
+  },
+};
+
+/**
+ * Dismisses a launch that never produced a transcript (`{ launchId,
+ * conversationId, dismiss: "launch-did-not-start" }`). The assignment is kept
+ * and marked failed; a launch whose conversation turns out to have a
+ * transcript is refused, since that one opens.
+ */
+async function patchAssignment(
+  req: NextRequest,
+  ctx: TaskRouteContext,
+  dependencies: DismissRouteDependencies = dismissDependencies,
+): Promise<NextResponse<{ ok: true; task: BoardTask } | ApiError>> {
+  const rejection = rejectCrossOrigin(req);
+  if (rejection) return rejection;
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+  }
+  if (!body || typeof body !== "object" || (body as { dismiss?: unknown }).dismiss !== "launch-did-not-start") {
+    return NextResponse.json({ error: "dismiss must be \"launch-did-not-start\"" }, { status: 400 });
+  }
+  const ref = assignmentRefFromBody(body);
+  if (!ref || (ref.launchId == null && ref.conversationId == null)) return NextResponse.json({ error: "launchId or conversationId is required" }, { status: 400 });
+  if (dependencies.transcriptExists(ref)) return NextResponse.json({ error: "this launch has a transcript; open it instead" }, { status: 409 });
+  const { id } = await ctx.params;
+  const linkedPipeline = dependencies.linkedPipeline(id);
+  const result = dependencies.mutateTasks((tasks) => {
+    const outcome = dismissUnstartedLaunch(tasks, id, ref, isoNow(), { linkedPipeline });
+    return { tasks: outcome.ok && outcome.tasks !== tasks ? outcome.tasks : undefined, result: outcome };
+  });
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+  await dependencies.clearAttention?.(ref);
+  return NextResponse.json({ ok: true, task: result.task });
+}
+
+export const PATCH = Object.assign(
+  async (req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true; task: BoardTask } | ApiError>> => await patchAssignment(req, ctx),
+  { withDependencies: patchAssignment },
+);

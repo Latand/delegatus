@@ -659,7 +659,9 @@ export function RuntimePill({
         {isMobile ? (
           <span
             className={`inline-flex h-7 min-w-0 items-center gap-1 rounded-full px-2.5 text-label font-semibold ${
-              applyState === "error" ? "bg-danger-soft text-danger" : limitedAccount ? "bg-warning-soft text-warning" : "bg-accent-soft text-accent"
+              /* A tool like attach and dictate, not the view's primary
+                 action: the accent fill belongs to Send. */
+              applyState === "error" ? "bg-danger-soft text-danger" : limitedAccount ? "bg-warning-soft text-warning" : "bg-card text-secondary"
             }`}
           >
             <span className="min-w-0 truncate">{chipText}</span>

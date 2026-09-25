@@ -43,7 +43,11 @@ export async function copyText(text: string): Promise<boolean> {
     so a fine pointer under 768px (a desktop window dragged narrow, a
     split-screen pane, responsive-design mode without touch emulation) put a
     44px control against a 28px gutter and covered 22px of the message body.
-    Size and gutter now read one axis and cannot disagree. */
+    Size and gutter now read one axis and cannot disagree.
+
+    It is a ghost at rest (#2148): no fill, frame or shadow competing with the
+    text it copies, and a sunken ground on hover. The border stays, transparent,
+    because the 22 px fine-pointer size `ACTION_SIZE_FINE_PX` counts it. */
 export function CopyButton({ text, label, className = "" }: { text: string; label?: string; className?: string }) {
   const coarse = useCoarsePointer();
   const [copied, setCopied] = useState(false);
@@ -71,7 +75,7 @@ export function CopyButton({ text, label, className = "" }: { text: string; labe
           timer.current = window.setTimeout(() => setCopied(false), 1_400);
         });
       }}
-      className={`inline-flex shrink-0 items-center justify-center rounded-[6px] border border-border bg-card text-muted shadow-1 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${coarse ? "h-11 w-11" : "p-1"} ${className}`}
+      className={`inline-flex shrink-0 items-center justify-center rounded-[6px] border border-transparent text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${coarse ? "h-11 w-11" : "p-1"} ${className}`}
     >
       {copied ? <Check className={coarse ? "h-4 w-4 text-success" : "h-3 w-3 text-success"} aria-hidden /> : <Copy className={coarse ? "h-4 w-4" : "h-3 w-3"} aria-hidden />}
     </button>

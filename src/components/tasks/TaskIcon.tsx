@@ -28,6 +28,11 @@ export interface TaskIconProps {
   title: string;
   size?: number;
   className?: string;
+  /** The colour to draw the icon in (the task's colour), in place of the
+      muted tones. */
+  tint?: string | null;
+  /** Draw nothing, rather than the dashed circle, for a task that has no icon. */
+  omitDefault?: boolean;
 }
 
 /**
@@ -43,7 +48,7 @@ export interface TaskIconProps {
  * hidden from assistive technology; a control that changes it carries its own
  * label. `data-task-icon` and `data-icon-source` name what is drawn.
  */
-export const TaskIcon = memo(function TaskIcon({ icon, title, size = 16, className }: TaskIconProps) {
+export const TaskIcon = memo(function TaskIcon({ icon, title, size = 16, className, tint, omitDefault }: TaskIconProps) {
   const primary = displayTaskIcon(icon, title);
   const storedNode = useTaskIconNode(primary.source === "stored" ? primary.icon : null);
   const unstored: { icon: string; source: TaskIconSource } = primary.source === "stored" && storedNode === null ? displayTaskIcon(null, title) : primary;
@@ -51,11 +56,12 @@ export const TaskIcon = memo(function TaskIcon({ icon, title, size = 16, classNa
   const shown: { icon: string; source: TaskIconSource } = unstored.source === "suggested" && suggestedNode === null
     ? { icon: DEFAULT_TASK_ICON, source: "default" }
     : unstored;
-  const tone = shown.source === "stored" ? "text-secondary" : "text-muted";
+  if (omitDefault && shown.source === "default") return null;
+  const tone = tint ? "" : shown.source === "stored" ? " text-secondary" : " text-muted";
   return (
     <span
-      className={`inline-flex shrink-0 items-center justify-center ${tone}${className ? ` ${className}` : ""}`}
-      style={{ width: size, height: size }}
+      className={`inline-flex shrink-0 items-center justify-center${tone}${className ? ` ${className}` : ""}`}
+      style={tint ? { width: size, height: size, color: tint } : { width: size, height: size }}
       data-task-icon={shown.icon}
       data-icon-source={shown.source}
       aria-hidden

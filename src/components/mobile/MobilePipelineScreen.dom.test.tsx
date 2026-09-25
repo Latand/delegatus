@@ -50,6 +50,7 @@ mock.module("@/hooks/useRuntime", () => ({
 
 const { MobilePipelineScreen, mobilePipelineActions } = await import("./MobilePipelineScreen");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
+const { fakeHistory } = await import("./mobileNavTestHistory");
 const { receipts } = await import("./MobileReceipt");
 const { setLocale } = await import("@/lib/i18n");
 
@@ -76,18 +77,7 @@ beforeEach(() => { dom.document.body.replaceChildren(); roots = []; receipts.dis
 afterEach(() => { for (const root of roots) flushSync(() => root.unmount()); roots = []; receipts.dismiss(); setLocale("en"); });
 
 function nav() {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=atlas" }];
-  let index = 0;
-  return createMobileNav({
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index > 0) index -= 1; },
-    },
-    href: () => entries[index]!.url,
-    onPopstate: () => () => {},
-  });
+  return createMobileNav(fakeHistory("http://localhost/#p=atlas").host);
 }
 
 function mount(node: React.ReactNode, store = nav()): HTMLElement {
@@ -203,6 +193,25 @@ test("the bar says where the lane stands, and the body owns the title once", () 
   expect(body.textContent).not.toContain("lane/p2");
   expect(body.textContent).not.toContain("/repo-w");
   expect(q(body, "[data-stages-count]")!.textContent).toBe(`${translate("en", "mobile2.pipeline.stages")}5`);
+});
+
+test("Attach is a list row after the stages, a link at its leading edge, and it opens the links sheet (#2148)", () => {
+  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
+  const body = q(host, "[data-mobile2-pipeline-body]")!;
+  const attach = q(body, '[data-work-links-open="p2"]')!;
+  expect(attach.textContent).toBe(translate("en", "workLinks.attach"));
+  /* A row of its own, after the stage list and its loop words, never beside
+     the heading as bare text. */
+  expect(attach.className).toBe("pb-attach");
+  expect(attach.firstElementChild?.getAttribute("class")).toContain("pb-attach-icon");
+  const block = attach.parentElement!;
+  const order = Array.from(block.children).map((child) => child.tagName === "OL" ? "stages" : child === attach ? "attach" : child.className);
+  expect(order.indexOf("stages")).toBeLessThan(order.indexOf("attach"));
+  expect(order.at(-1)).toBe("attach");
+  /* With no link the heading has no empty row under it. */
+  expect(q(body, ".pb-links-row")).toBeNull();
+  click(attach);
+  expect(q(host, '[data-mobile2-links-sheet="p2"]')).not.toBeNull();
 });
 
 test("the passed stages before the current one fold into one row, which opens and closes in place", () => {
@@ -439,13 +448,17 @@ test("a spent review budget is answered inside the review stage: its heads, Clos
   const host = mount(<MobilePipelineScreen pipeline={review} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
   const answers = qa(host, "[data-answer-action]");
   expect(answers.map((el) => [el.getAttribute("data-answer-action"), el.textContent])).toEqual([
-    ["close", translate("en", "mobile2.pipeline.archive")],
-    ["continue-review", translate("en", "pipelineBlock.oneMoreRound")],
+    ["accept-head", translate("en", "pipelineBlock.answer.acceptAsIs")],
+    ["continue-review", translate("en", "pipelineBlock.answer.reviewAgain")],
   ]);
   const stage = answers[0]!.closest(".pb-stage") as unknown as HTMLElement;
   expect(stage.getAttribute("data-stage")).toBe("review");
   expect(stage.getAttribute("data-stage-current")).toBe("1");
-  expect(q(stage, "[data-review-heads]")!.textContent).toContain("9b2e7d4c");
+  /* One line on why it stopped (#2187 §3.4); the two heads ride its tooltip. */
+  const reason = q(stage, "[data-review-stop]")!;
+  expect(reason.getAttribute("data-review-stop")).toBe("stop-after-fix");
+  expect(reason.textContent).toBe(translate("en", "pipelineBlock.stop.afterFix"));
+  expect(reason.getAttribute("title")).toContain("9b2e7d4c");
   /* The lane has no cursor; the bar counts the stage the screen expands, the
      number its row carries. */
   expect(q(host, "[data-mobile2-meta] .pstate-word")!.textContent).toBe(translate("en", "pipelineState.needs_review"));

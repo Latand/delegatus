@@ -1,5 +1,6 @@
 "use client";
 
+import { ScrollText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { taskRelationsByPath } from "@/components/tasks/taskRelations";
@@ -690,6 +691,19 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         back={canLeave}
         host={host}
         onOpenSearch={activeEntry ? undefined : onOpenSearch}
+        barAction={activeEntry && holdsSeat ? (
+          /* The seat's own conversation opens its report log (#2146). */
+          <button
+            type="button"
+            data-mobile2-open="reports"
+            aria-label={t("reportLog.show")}
+            title={t("reportLog.show")}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] text-secondary active:bg-sunken active:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => nav.push({ kind: "reports" })}
+          >
+            <ScrollText className="h-5 w-5" aria-hidden />
+          </button>
+        ) : undefined}
         searchTestId="dash-search"
         renderSheet={renderSheet}
       >
@@ -735,7 +749,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           file={seatPanel.file}
           incumbent={seatPanel.incumbent}
           pendingMandate={seatPanel.pendingMandate}
-          viewerMcpRegistered={seatPanel.viewerMcpRegistered}
           submitting={false}
           rotate={{ ...seatPanel.rotate, onConfirm: (input) => { setSeatHandoff(true); seatPanel.rotate.onConfirm(input); } }}
           tick={{ onOpen: () => setTickSheetOpen(true), onClose: () => setTickSheetOpen(false) }}

@@ -1,7 +1,7 @@
 import { loadPipelinesForProjection } from "@/lib/pipelines/store";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 
-import { commitTaskMembership, type MembershipIdentity, type MembershipInput, type MembershipResult } from "./membership";
+import { commitFailedLaunchMembership, commitTaskMembership, type FailedLaunchIdentity, type MembershipIdentity, type MembershipInput, type MembershipResult } from "./membership";
 
 /**
  * Task membership at the shared launch boundary (#1586).
@@ -36,6 +36,10 @@ export interface ReservedLaunch {
   launchDisplay?: { prompt: string } | null;
   origin?: { kind: string; container?: string; containerId?: string } | null;
   purpose?: string | null;
+  /** The launch's role. An orchestrator seat never names its own task, so its
+      task is created under the launch title (#1841 keeps the seat's notes
+      there, off the board). */
+  role?: string | null;
   /** Explicit task targets of a task-local launch (a band's «+ Agent», the
       dedicated task spawn route). All must exist; none is created. */
   taskIds?: readonly string[] | null;
@@ -96,7 +100,8 @@ export function launchMembershipInput(
     }
     return { project, origin: { kind: "flow", key: containerId }, title, identity, inherit: reviewed };
   }
-  return { project, origin: launchOrigin, title, identity, ...(reviewed.length ? { inherit: reviewed } : {}) };
+  const titled = launch.role === "orchestrator" ? { titled: true } : {};
+  return { project, origin: launchOrigin, title, identity, ...(reviewed.length ? { inherit: reviewed } : {}), ...titled };
 }
 
 export interface LaunchMembershipPorts {
@@ -183,4 +188,43 @@ export function admitRecoveredLaunch(receipt: RecoverableReceipt, ports: LaunchM
     launchDisplay: receipt.launchDisplay,
   };
   return admitReservedLaunch(launch, receipt, () => undefined, ports);
+}
+
+/** The receipt fields a failed launch's settlement reads. */
+export interface FailedLaunchReceipt {
+  launchId: string;
+  conversationId: string;
+  clientAttemptId: string | null;
+  purpose: string;
+  artifactLifecycle: string;
+  error: string | null;
+}
+
+/**
+ * The task side of a launch that failed (#2170): the membership admission
+ * committed before anything ran is settled, so the task does not sit in
+ * Assigned with nobody on it. Only a fresh launch that never wrote a
+ * transcript qualifies — a resume or migration successor continues a
+ * conversation whose membership predates it and stays exactly as it was.
+ *
+ * The receipt has already failed when this runs, and that is the fact the
+ * launching caller reports; a task store that cannot take this write costs the
+ * board a stale column, never the failure its caller is answering with.
+ */
+export function settleFailedLaunch(
+  receipt: FailedLaunchReceipt,
+  commit: (launch: FailedLaunchIdentity) => boolean = commitFailedLaunchMembership,
+): boolean {
+  if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending") return false;
+  try {
+    return commit({
+      launchId: receipt.launchId,
+      conversationId: receipt.conversationId,
+      clientAttemptId: receipt.clientAttemptId,
+      error: receipt.error,
+    });
+  } catch (error) {
+    console.warn(`[tasks] failed launch ${receipt.launchId} left its task unsettled: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
 }

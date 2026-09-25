@@ -191,9 +191,11 @@ export function transcriptIndexFeed(
   catalog: readonly ConversationCatalogEntry[],
   complete: boolean,
   projectByPath?: ReadonlyMap<string, string>,
+  listedAt?: number,
 ): TranscriptIndexFeed {
   return {
     complete,
+    ...(listedAt === undefined ? {} : { listedAt }),
     /* The full-text transcript index parses per-engine record shapes. OpenClaw
        is excluded because its body parser is not implemented; Copilot user and
        assistant message records are indexed by the Copilot parser. */

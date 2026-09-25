@@ -36,6 +36,7 @@ const { ATTENTION_PX, bannerKind, MobileBarTitle, MobileShell, TITLE_MIN_PX, tit
 const { MobileSheet } = await import("./MobileSheet");
 const { receipts } = await import("./MobileReceipt");
 const { createMobileNav, MobileNavContext, topScreen, useMobileNav } = await import("./mobileNav");
+const { fakeHistory } = await import("./mobileNavTestHistory");
 type MobileNav = ReturnType<typeof createMobileNav>;
 type MobileNavHost = Parameters<typeof createMobileNav>[0];
 type MobileShellHost = NonNullable<Parameters<typeof MobileShell>[0]["host"]>;
@@ -71,20 +72,7 @@ afterEach(() => { for (const root of roots) flushSync(() => root.unmount()); roo
 
 /** A model of the browser's same-document history. */
 function browser() {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=atlas" }];
-  let index = 0;
-  let listener: ((state: unknown) => void) | null = null;
-  const host: MobileNavHost = {
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index === 0) return; index -= 1; listener?.(entries[index]!.state); },
-    },
-    href: () => entries[index]!.url,
-    onPopstate(next) { listener = next; return () => { listener = null; }; },
-  };
-  return { host, length: () => entries.length, back: () => host.history.back(), forward() { if (index >= entries.length - 1) return; index += 1; listener?.(entries[index]!.state); } };
+  return fakeHistory("http://localhost/#p=atlas");
 }
 
 function shellHost(over: Partial<MobileShellHost> = {}): MobileShellHost {
@@ -244,23 +232,26 @@ test("the banner slot: offline outranks an arrival; a reconnect is no banner; th
   expect(q(root, '[data-testid="arrival"]')).toBeNull();
 });
 
-test("⋯ opens the board menu over the current screen with no history entry; × closes back onto it with its scroll kept", () => {
+test("⋯ opens the board menu over the current screen as one history entry; × closes back onto it with its scroll kept and takes the entry", async () => {
   const { root, nav, b } = mount();
   const body = q(root, '[data-testid="body"]')!;
   body.scrollTop = 40;
-  const before = b.length();
+  const before = b.index();
+  const hash = b.hash();
   click(q(root, '[data-mobile2-open="menu"]'));
   expect(nav.getState().sheet).toBe("menu");
   expect(q(root, '[data-mobile2-sheet="menu"]')).not.toBeNull();
   expect(q(root, '[data-mobile2-screen="board"]')).not.toBeNull();
-  expect(b.length()).toBe(before);
+  expect(b.index()).toBe(before + 1);
+  expect(b.hash()).toBe(hash);
   expect(q(root, '[data-mobile2-open="menu"]')!.getAttribute("aria-expanded")).toBe("true");
   click(q(root, "[data-mobile2-close]"));
   expect(q(root, "[data-mobile2-sheet]")).toBeNull();
   expect(q(root, '[data-mobile2-screen="board"]')).not.toBeNull();
   expect(q(root, '[data-testid="body"]')).toBe(body);
   expect(body.scrollTop).toBe(40);
-  expect(b.length()).toBe(before);
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  expect(b.index()).toBe(before);
 });
 
 test("⚠ opens the queue over the current screen; a navigation from it lands on the board with no sheet", () => {
@@ -269,8 +260,8 @@ test("⚠ opens the queue over the current screen; a navigation from it lands on
   click(q(root, '[data-mobile2-open="attention"]'));
   expect(q(root, '[data-mobile2-sheet="attention"]')).not.toBeNull();
   expect(q(root, '[data-testid="attention-sheet-body"]')).not.toBeNull();
-  expect(b.length()).toBe(before);
-  /* The row's open goes through the Viewer's focus route, which lands home. */
+  expect(b.length()).toBe(before + 1);
+  /* A project change from it lands on that project's board. */
   flushSync(() => nav.home());
   expect(q(root, "[data-mobile2-sheet]")).toBeNull();
   expect(q(root, '[data-mobile2-screen="board"]')).not.toBeNull();
@@ -307,18 +298,23 @@ test("a menu row pushes a screen; the bar's ‹ and the browser's back are the s
   expect(q(root, '[data-mobile2-screen="board"]')).not.toBeNull();
 });
 
-test("a back gesture with a sheet open pops the screen underneath and takes the sheet with it; forward never lands on a sheet", () => {
+test("a back gesture with a sheet open closes the sheet and stays; the next leaves the screen; forward walks them again", () => {
   const { root, b } = mount();
   click(q(root, '[data-mobile2-open="menu"]'));
   click(q(root, '[data-mobile2-go="accounts"]'));
   click(q(root, '[data-mobile2-open="menu"]'));
   expect(q(root, '[data-mobile2-sheet="menu"]')).not.toBeNull();
   flushSync(() => b.back());
+  expect(q(root, '[data-mobile2-screen="accounts"]')).not.toBeNull();
+  expect(q(root, "[data-mobile2-sheet]")).toBeNull();
+  flushSync(() => b.back());
   expect(q(root, '[data-mobile2-screen="board"]')).not.toBeNull();
   expect(q(root, "[data-mobile2-sheet]")).toBeNull();
   flushSync(() => b.forward());
   expect(q(root, '[data-mobile2-screen="accounts"]')).not.toBeNull();
   expect(q(root, "[data-mobile2-sheet]")).toBeNull();
+  flushSync(() => b.forward());
+  expect(q(root, '[data-mobile2-sheet="menu"]')).not.toBeNull();
 });
 
 test("the receipt sits in flow between the body and the dock; a sheet takes it inside itself", () => {

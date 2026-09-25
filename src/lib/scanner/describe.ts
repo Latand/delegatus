@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { stateDir } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { writeJsonDurably } from "@/lib/state/durableJson";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { readStateCollectionsRows } from "@/lib/state/sqliteStateStore";
 import {
   directoryProjectId,
@@ -387,18 +389,24 @@ function aliasedProjectInfo(
    dead worktree's sessions grouped under the parent repo instead of
    fragmenting into a phantom `-…-<branch>` project. */
 const WORKTREE_MAP_FILE = "worktree-map.json";
-let worktreeMemory: { dir: string; map: Map<string, { repo: string; worktree: string }> } | null = null;
-let worktreeMemoryDirty = false;
+type WorktreeInfo = { repo: string; worktree: string };
+/** `map` is what this process knows; `learned` holds what it resolved itself
+    and has not written yet; `stamp` identifies the file `map` was read from. */
+let worktreeMemory: { dir: string; map: Map<string, WorktreeInfo>; learned: Map<string, WorktreeInfo>; stamp: string | null } | null = null;
 
-function worktreeMap(): Map<string, { repo: string; worktree: string }> {
-  const dir = stateDir();
-  if (worktreeMemory && worktreeMemory.dir === dir) return worktreeMemory.map;
-  const map = new Map<string, { repo: string; worktree: string }>();
+function worktreeMapStamp(file: string): string | null {
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(dir, WORKTREE_MAP_FILE), "utf8")) as Record<
-      string,
-      { repo?: unknown; worktree?: unknown }
-    >;
+    const stat = fs.statSync(file);
+    return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
+function readWorktreeMapFile(file: string): Map<string, WorktreeInfo> {
+  const map = new Map<string, WorktreeInfo>();
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, { repo?: unknown; worktree?: unknown }>;
     for (const [cwd, info] of Object.entries(raw)) {
       if (typeof info?.repo === "string" && typeof info?.worktree === "string") {
         map.set(cwd, { repo: info.repo, worktree: info.worktree });
@@ -407,39 +415,113 @@ function worktreeMap(): Map<string, { repo: string; worktree: string }> {
   } catch {
     /* no map yet or unreadable — start empty */
   }
-  worktreeMemory = { dir, map };
-  worktreeMemoryDirty = false;
   return map;
 }
 
-function rememberWorktree(cwd: string, info: { repo: string; worktree: string }): void {
+function worktreeMap(): Map<string, WorktreeInfo> {
+  const dir = stateDir();
+  if (worktreeMemory && worktreeMemory.dir === dir) return worktreeMemory.map;
+  const file = path.join(dir, WORKTREE_MAP_FILE);
+  const stamp = worktreeMapStamp(file);
+  worktreeMemory = { dir, map: readWorktreeMapFile(file), learned: new Map(), stamp };
+  return worktreeMemory.map;
+}
+
+/** Another process (an overlapping release generation, a dev Viewer on the
+    same state) may have written the map since this one read it: re-read it
+    when it changed, keeping what this process learned and has not written. */
+function refreshWorktreeMap(): Map<string, WorktreeInfo> {
+  const map = worktreeMap();
+  const memory = worktreeMemory!;
+  const file = path.join(memory.dir, WORKTREE_MAP_FILE);
+  const stamp = worktreeMapStamp(file);
+  if (stamp === memory.stamp) return map;
+  const fresh = readWorktreeMapFile(file);
+  for (const [cwd, info] of memory.learned) fresh.set(cwd, info);
+  memory.map = fresh;
+  memory.stamp = stamp;
+  return fresh;
+}
+
+function rememberWorktree(cwd: string, info: WorktreeInfo): void {
   const map = worktreeMap();
   const prev = map.get(cwd);
   if (prev && prev.repo === info.repo && prev.worktree === info.worktree) return;
   map.set(cwd, info);
-  worktreeMemoryDirty = true;
+  worktreeMemory!.learned.set(cwd, info);
 }
 
 /** Remembered resolution of a now-deleted `git worktree add` checkout — the
-    fallback that survives the checkout being removed from disk. */
-function worktreeFromMemory(cwd: string): { repo: string; worktree: string } | null {
-  return worktreeMap().get(cwd) ?? null;
+    fallback that survives the checkout being removed from disk. A session
+    that ran in a subdirectory of the checkout resolves through the checkout's
+    own record: the worktree sweep records the checkout root before it removes
+    it (#2202), not every directory a session happened to start in. */
+function worktreeFromMemory(cwd: string): WorktreeInfo | null {
+  const lookup = (map: Map<string, WorktreeInfo>) => {
+    for (let current = cwd, parent = path.dirname(cwd); ; current = parent, parent = path.dirname(parent)) {
+      const found = map.get(current);
+      if (found) return found;
+      if (parent === current) return null;
+    }
+  };
+  return lookup(worktreeMap()) ?? lookup(refreshWorktreeMap());
+}
+
+/** Writes what this process learned into the map on disk. The file is read
+    again under the state lock every writer of it takes and the learned entries
+    are added to it, so a write only ever adds: a process that read the map
+    before another one wrote does not drop the other's records (#2202 — after
+    the worktree sweep removes a checkout, its record cannot be learned again). */
+function writeWorktreeMap(): void {
+  const memory = worktreeMemory;
+  if (!memory) return;
+  fs.mkdirSync(memory.dir, { recursive: true });
+  const file = path.join(memory.dir, WORKTREE_MAP_FILE);
+  withFileTransactionSync(file, "worktree-map.json is busy", () => {
+    const merged = readWorktreeMapFile(file);
+    for (const [cwd, info] of memory.learned) merged.set(cwd, info);
+    writeJsonDurably(file, Object.fromEntries(merged), { space: 0 });
+    memory.map = merged;
+    memory.learned.clear();
+    memory.stamp = worktreeMapStamp(file);
+  });
 }
 
 /** Flush freshly-learned worktree resolutions to disk. Called once per scan
-    from `linkEntries`; a no-op when nothing new was seen. */
+    from `linkEntries`; a no-op when nothing new was seen. A failed write keeps
+    them for the next scan. */
 export function persistWorktreeMap(): void {
-  if (!worktreeMemoryDirty || !worktreeMemory) return;
-  worktreeMemoryDirty = false;
+  if (!worktreeMemory || worktreeMemory.learned.size === 0) return;
   try {
-    fs.mkdirSync(worktreeMemory.dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(worktreeMemory.dir, WORKTREE_MAP_FILE),
-      JSON.stringify(Object.fromEntries(worktreeMemory.map)),
-    );
+    writeWorktreeMap();
   } catch {
     /* best-effort: a lost map only re-fragments deleted worktrees */
   }
+}
+
+/** Reads a live linked checkout's `.git` pointer and writes its resolution to
+    the worktree map before the checkout is removed (#2202), so every session
+    that ran there keeps grouping under the parent repo afterwards. Returns the
+    resolution on disk, or null when the checkout is not a linked worktree or
+    the map could not be written: the caller must not remove it then. */
+export function recordWorktreeResolution(cwd: string): { repo: string; worktree: string } | null {
+  let info: { repo: string; worktree: string } | null = null;
+  try {
+    const gitPath = path.join(cwd, ".git");
+    if (fs.lstatSync(gitPath).isFile()) info = parseWorktreeGitdir(cwd, fs.readFileSync(gitPath, "utf8"));
+  } catch {
+    return null;
+  }
+  if (!info) return null;
+  rememberWorktree(cwd, info);
+  /* Written even when this process already knew it: the file is what outlives the checkout. */
+  worktreeMemory!.learned.set(cwd, info);
+  try {
+    writeWorktreeMap();
+  } catch {
+    return null;
+  }
+  return info;
 }
 
 /** Linked git worktrees created anywhere (`git worktree add ../foo`), not
@@ -589,6 +671,33 @@ function projectInfoFromOpenclawWorkspace(cwd: string): ProjectInfo | null {
   return { project: directoryProjectId(resolved), displayName: "OpenClaw" };
 }
 
+/** The segments a seat rotation's handoff digest runs under:
+    `<state>/orchestrator/handoff-digests/<request>/cwd` (`orchestrator/handoffDigest.ts`). */
+const HANDOFF_DIGEST_CONTAINER = ["orchestrator", "handoff-digests"] as const;
+
+/**
+ * Every handoff digest as one project. Each digest runs in a fresh directory
+ * of its own, which is removed when it finishes, so the directory rule gave
+ * every rotation a project named `cwd` and the activity page listed dozens of
+ * lookalike rows. The digest's container directory is the project, recognized
+ * by path alone, so a digest groups the same way before and after its
+ * directory is deleted.
+ */
+function projectInfoFromHandoffDigest(cwd: string): ProjectInfo | null {
+  const parts = path.resolve(cwd).split(path.sep);
+  for (let i = 0; i + HANDOFF_DIGEST_CONTAINER.length < parts.length; i += 1) {
+    if (!HANDOFF_DIGEST_CONTAINER.every((segment, offset) => parts[i + offset] === segment)) continue;
+    if (!parts[i + HANDOFF_DIGEST_CONTAINER.length]) return null;
+    const container = joinPathSegments(parts.slice(0, i + HANDOFF_DIGEST_CONTAINER.length));
+    /* The container outlives every digest; its real path keeps a state
+       directory reached through a link on the same id. */
+    let resolved = container;
+    try { resolved = fs.realpathSync.native(container); } catch { /* Gone: the recorded path. */ }
+    return { project: directoryProjectId(resolved), displayName: "Handoff digests" };
+  }
+  return null;
+}
+
 /** Project identity for a real cwd, shared by every engine: resolve a
     worktree checkout to its main repository, then derive the stable key and
     human label from that repository's canonical remote. */
@@ -597,7 +706,7 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
   const resolutionState = requestedState ?? projectResolutionStateKey();
   const cached = projectInfoCwdCache.get(cwd);
   if (cached && cached[0] > Date.now() && cached[1] === resolutionState) return cached[2];
-  const scratchpad = projectInfoFromClaudeTaskCwd(cwd);
+  const scratchpad = projectInfoFromClaudeTaskCwd(cwd) ?? projectInfoFromHandoffDigest(cwd);
   if (scratchpad) {
     projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, scratchpad]);
     return scratchpad;

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { readBridgeReportLog } from "@/lib/bridge/store";
+import { setBridgeReports } from "@/lib/projects/settings";
 
 import { viewerMcpBindings, type CallerAttribution } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, type McpToolResult } from "./server";
@@ -118,4 +119,19 @@ test("a caller-supplied project cannot override server-derived report routing", 
   const row = readBridgeReportLog().reports[0]!;
   expect(row.project).toBe(PROJECT);
   expect(row.targetSeatConversationId).toBe(MANAGER.conversationId);
+});
+
+/* #2146: the operator switched this project's bridge reports off. The call is
+   answered, not failed, says why, and stores nothing; back on, it records. */
+test("a report for a project whose bridge reports are off is refused with an answer and stores nothing", async () => {
+  setBridgeReports(PROJECT, false, "operator");
+  const refused = await serviceAs(MANAGER).callTool("bridge_report", report()) as McpToolResult & Record<string, unknown>;
+  expect(refused.ok).toBe(true);
+  expect(refused).toMatchObject({ recorded: false, bridgeReports: false, message: "bridge reports are off for this project" });
+  expect(readBridgeReportLog().reports).toEqual([]);
+
+  setBridgeReports(PROJECT, true, "operator");
+  const recorded = await serviceAs(MANAGER).callTool("bridge_report", report({ clientRequestId: "rep-2", key: "k-2" })) as McpToolResult & { recorded?: boolean };
+  expect(recorded.recorded).toBe(true);
+  expect(readBridgeReportLog().reports).toHaveLength(1);
 });

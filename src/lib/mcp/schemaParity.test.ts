@@ -88,6 +88,7 @@ function boundedArgs(
     });
   }
   if (toolName === "search_transcripts") args.query = "fixture";
+  if (toolName === "telegram_bot_messages") args.chat = "team-reports";
   return args;
 }
 
@@ -693,9 +694,15 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     type EdgeSchema = { properties?: Record<string, { enum?: string[]; description?: string }>; anyOf?: EdgeSchema[] };
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
-    expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "park"]);
+    expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
     expect(onFail?.properties?.onExhausted?.description).toContain("without asking this stage again");
+    /* #2187: the default completes after the last fix; stopping there is asked for. */
+    expect(onFail?.properties?.onExhausted?.description).toContain("the fix stage takes the last findings and the lane continues or completes");
+    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after that fix the lane waits for the operator in needs_review");
+    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the fix");
     expect(tool?.description).toContain("onExhausted");
+    expect(tool?.description).toContain("stored as a read-only reviewer and a fix stage");
+    expect(stage?.kind?.description).toContain("convertedStages");
     for (const [field, expected] of [
       ["id", "unique within the pipeline"],
       ["prompt", "role scaffold"],
@@ -743,6 +750,7 @@ test("create_pipeline admits the stage shapes the engine accepts", () => {
     /* #1868: what a spent budget does survives the boundary in both values. */
     { id: "critique", kind: "run", "prompt": "Critique.", next: null, onFail: { to: "build", maxRounds: 3, onExhausted: "park" } },
     { id: "critique", kind: "run", "prompt": "Critique.", next: null, onFail: { to: "build", maxRounds: 3, onExhausted: "advance" } },
+    { id: "critique", kind: "run", "prompt": "Critique.", next: null, onFail: { to: "build", maxRounds: 3, onExhausted: "stop-after-fix" } },
     /* The engine trims before it checks, so padding it accepts must not be
        refused at the protocol boundary. */
     { id: " build ", kind: "run", "prompt": " Implement. " },

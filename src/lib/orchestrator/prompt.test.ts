@@ -9,6 +9,7 @@ import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import type { RegistryRoleDefinitions, RoleDefinition } from "@/lib/roles/types";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
 
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
@@ -30,7 +31,7 @@ import {
 
 test("the manager draft defaults to the Claude Opus alias on low effort through the role preset", () => {
   /* OrchestratorPanel seeds its shared launch controls from this live preset. */
-  expect(ORCHESTRATOR_SPAWN_CONFIG).toMatchObject({ engine: "claude", model: "opus", effort: "low", role: "orchestrator" });
+  expect(ORCHESTRATOR_SPAWN_CONFIG).toMatchObject({ engine: "claude", model: "opus", effort: "high", role: "orchestrator" });
 });
 
 /* The instruction that #976 decision 7 retired: work starts by default, so a
@@ -71,8 +72,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 23, and a v22 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(23);
+test("the default mandate is at version 28, and a v27 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(28);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -81,10 +82,23 @@ test("the default mandate is at version 23, and a v22 seat reads as stale", () =
      section. v20 (#1880) points "role per the role table" at the table
      delivery renders. v21 (#2030) carries the seat tick contract. v22 names the
      product Delegatus and says its MCP key stays `viewer`. v23 keeps work
-     moving and removes tool-schema duplication from the delivered text. */
-  expect(orchestratorMandateStale(22)).toBe(true);
-  expect(orchestratorMandateStale(23)).toBe(false);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("You are Delegatus's built-in Manager");
+     moving and removes tool-schema duplication from the delivered text. v24
+     gives every new task an icon and a colour by one rule. v25 (#2187) says
+     a spent review budget ends in one more fix and the lane completes, that
+     stop-after-fix is the explicit stop, and that new review-loop stages are
+     stored as a reviewer and a fix stage. v26 (#2187, D1 = A) puts every
+     automatic merge, the seat's too, under the project's merge setting and
+     says when to mark the lane that finishes a task. v27 (#2146) says to file
+     no bridge reports while the project's Bridge reports setting is off. v28
+     (#2166) opens without issue numbers, greets in plain words and runs a
+     project's own release step only when the operator turned releases on. */
+  expect(orchestratorMandateStale(27)).toBe(true);
+  expect(orchestratorMandateStale(28)).toBe(false);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Off: file no bridge reports at all");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('onExhausted?: "advance" | "stop-after-fix" | "park"');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Use stop-after-fix only when the operator asked to look before merge");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("review-loop stages are converted to a reviewer and a fix stage when you create or add them");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("You are this project's orchestrator in Delegatus");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("registered under the key `viewer`");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("the viewer's built-in Manager");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("act on the items it lists and nothing else");
@@ -105,7 +119,59 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   21: "99305652476c390cccbe283e49771f6abe408cb6ff8bdd14ed6fb4394dd7704c",
   22: "6e5ca84fd3997ce92d85d2ae1602d909b1786fa3340312539021e31d91dec74a",
   23: "4853170b7f7a47ad6e219e25276b2d2bc3a9baad55964b7b078f20735ea02cae",
+  24: "3053cebbd39a69790a168102612399f4bb971b95893b1c001cf41197c9452109",
+  25: "36b7de5003aead298b5bd6294aec840139503042f01260c3e797e89c512ed4d2",
+  26: "4da3e6ed8d2f92540fc4fb1bcab2373a7173ca673736250ee235d8219b19b547",
+  27: "1135c1274c1dc36fcc1f595035837e13f0913a818ed7d59ce1db79791de01a37",
+  28: "90819032b795f74b3ac4f5bf0699f5443cf31353e95c1ad19ef87b16e8e1ab60",
 };
+
+/* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
+   the seat reports the PR ready and merges only when the operator asks; on,
+   the runner merges and the seat leaves the lanes it holds alone and acts on
+   a stopped one. §5.4: when to mark the lane that finishes a task. */
+test("the merge bar follows the project's merge setting, and the mandate says when a lane finishes its task", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("merge on APPROVE");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("Merge bar: merge only on an APPROVE verdict");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("governs every automatic merge, yours included");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; report "PR ready: <url>" to the operator and merge only when they ask.');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never merge red");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("it waits for every other started lane on the task to end");
+});
+
+/* #2166 §3.7: the mandate a newcomer's seat reads opens and greets in plain
+   words, names no issue, and leaves a project's own release step off until the
+   operator turns releases on for that project. */
+test("the mandate opens without issue numbers, greets in plain words and runs releases only when turned on", () => {
+  const opening = ORCHESTRATOR_SYSTEM_PROMPT.split("\n")[0]!;
+  expect(opening).toBe("You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's own HTTP API and MCP tools (the MCP server is registered under the key `viewer`). You never act outside them.");
+  expect(opening).not.toMatch(/#\d/);
+  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain("Ready in {project}.\nTell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, and report back. Nothing starts until you ask.");
+  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).not.toContain("lanes");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("-> merge bar -> this project's own release step, only when the operator has turned releases on for this project (in their message or as a standing line in your monitor note) -> cleanup.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("release step, where it has one");
+});
+
+for (const [version, offer] of [
+  ["v25", "Tell me what to ship — I open lanes, spawn implementers and reviewers, and merge on APPROVE. Nothing starts until you ask."],
+  ["v26", "Tell me what to ship — I open lanes, spawn implementers and reviewers, and bring each PR to ready; merges follow this project's merge setting. Nothing starts until you ask."],
+] as const) {
+  test(`a mandate delivered with the greeting as it shipped up to ${version} greets once, in the current words`, () => {
+    const shipped = ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE.replace(
+      "Tell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, and report back. Nothing starts until you ask.",
+      offer,
+    );
+    expect(shipped).toContain(offer);
+    const delivered = orchestratorMandateForDelivery(`Run the widgets project.\n\n${shipped}`);
+    expect(delivered).not.toContain(offer);
+    expect(delivered.split("## Initial visible status").length - 1).toBe(1);
+    expect(delivered).toContain(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE);
+  });
+}
 
 test("any edit to the default mandate text moves its version (#2030)", () => {
   const fingerprint = createHash("sha256").update(ORCHESTRATOR_SYSTEM_PROMPT).digest("hex");
@@ -370,6 +436,19 @@ test("no retired task-binding claim survives in the ownership directive", () => 
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("get_task and confirm the launch is recorded on it");
 });
 
+/* The task-creation section carries the colour and icon rule as the rule
+   module renders it, so the mandate cannot teach a rule create_task does not. */
+test("the task-creation section tells the manager to pass icon and color by the one rule", () => {
+  const section = ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.slice(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.indexOf("NAME AND DESCRIBE IT AT CREATION."));
+  expect(section).toContain("Pass icon and color on every create_task");
+  expect(section).toContain("when a task you touch has no colour, give it one with update_task");
+  expect(section).toContain(renderTaskColorRule());
+  for (const { color, icons } of TASK_COLOR_RULE) {
+    expect(section).toContain(`${color} = `);
+    for (const icon of icons) expect(section).toContain(icon);
+  }
+});
+
 /* Delivery, on exactly the terms the clock handover established: the seats that
    launch work without a task are the ones carrying a bespoke or older mandate,
    and a rotation hands the successor the INCUMBENT's mandate. */
@@ -458,7 +537,7 @@ test("the delivered mandate renders the role table from the registry it is hande
   expect(rows).toHaveLength(ROLE_DEFAULTS.length);
   expect(rows.find((row) => row.startsWith("| prod-auditor |"))).toStartWith("| prod-auditor | claude | sonnet | low | read-only |");
   expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6-astra | medium | read-write |");
-  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6-astra | xhigh | read-only |");
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6-astra | high | read-only |");
 });
 
 test("the role table carries the runtime guidance beside it", () => {
@@ -469,6 +548,12 @@ test("the role table carries the runtime guidance beside it", () => {
   expect(section).toMatch(/low or medium/);
   expect(section).toContain("NEXT attempt");
   expect(section).toContain("create_pipeline");
+  /* The standing model rules (model landscape 2026-09) ride in the role rows. */
+  expect(section).toContain("Frontend xhigh only per lane, for the hardest UI");
+  expect(section).toContain("never raise GPT-6 Sol to xhigh by hand");
+  expect(section).toContain("Default Sol high vs Astra medium: decided at 30 Sol first reviews");
+  expect(section).toContain("High per lane for risky backend diffs.");
+  expect(section).toContain("claude/fable/high per lane for the largest cross-cutting designs");
 });
 
 test("the manager table uses resolved saved builder variants and keeps registry provenance", () => {

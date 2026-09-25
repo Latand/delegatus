@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Activity, Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -26,6 +26,7 @@ import type { Workflow } from "@/lib/workflows/types";
 
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
+import { onOrchestratorDraftRequest, takePendingBoardView } from "./orchestrator/draftPrefill";
 import { deriveOrchestratorPanelState, resolveSeatFile, retiredSeatPaths, seatRefsOf } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
 import { DesktopConversations } from "./DesktopConversations";
@@ -56,6 +57,7 @@ import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
 import { MobileKanban } from "./mobile/MobileKanban";
 import { useMobileBoardRowActions } from "./mobile/MobileRowActions";
 import { attentionKey } from "./mobile/phoneKanbanModel";
+import { laneFocusId } from "./attention/attentionQueue";
 import { MobileFocusView } from "./mobile/MobileFocusView";
 import { MobileHostSheet } from "./mobile/MobileHostSheet";
 import { MobileSeatCard } from "./mobile/MobileSeatCard";
@@ -63,14 +65,15 @@ import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
-import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
+import { MobileAccountsScreen, MobileBarTitle, MobileReportsScreen, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
 import { MobileTaskScreen } from "./mobile/MobileTaskScreen";
 import { useTaskMutations } from "./kanban/useTaskMutations";
-import { sameScreen, topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
+import { topScreen, useMobileNav, useMobileNavStore, type MobileScreen, type MobileSheetName } from "./mobile/mobileNav";
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
+import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
@@ -98,6 +101,8 @@ import { boundFlowExpansions } from "./scheme/placementHorizon";
 import { ArchiveRestore } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
+import { BridgeReportsRow } from "./BridgeReportsRow";
+import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { SoundToggle } from "./SoundToggle";
 import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
@@ -185,6 +190,10 @@ interface Props {
   onOpenCatalogFile?: (file: FileEntry) => void;
   /** Releases any retained list/search pin when its displayed node closes. */
   onCloseFile?: (path: string) => void;
+  /** The phone: a screen of ANOTHER project (a task or a lane a link names).
+      The Viewer draws it over the place the operator is, with no history
+      entry of its own for the project (#2105). */
+  onOpenElsewhere?: (screen: MobileScreen, project: string) => void;
 }
 
 /** Manual additions and removals of scheme nodes, persisted per project. */
@@ -249,7 +258,7 @@ export function boardFirstPaintReady(scanLoaded: boolean, boardLoaded: boolean):
 /* Kept outside the component: the React Compiler's immutability check flags
    direct global mutation (location.hash = ...) inside a component body. */
 function gotoProject(project: string) {
-  location.hash = "#p=" + encodeURIComponent(project);
+  navigateToFragment("#p=" + encodeURIComponent(project));
 }
 
 /** A desktop view: the Board (the kanban, #1695) or Conversations (the list). The phone keeps its own views. */
@@ -405,6 +414,7 @@ function ProjectDashboardView({
   onUserNavigate,
   onOpenCatalogFile,
   onCloseFile,
+  onOpenElsewhere,
 }: Props) {
   const { t, locale } = useLocale();
   const isMobile = useIsMobile();
@@ -557,7 +567,7 @@ function ProjectDashboardView({
   const [pendingRestoredHandoffs, setPendingRestoredHandoffs] = useState<Set<string>>(() => new Set());
   /* The phone's task sheet, opened from the board menu: «New task» in its
      create view, «Tasks» as the list (mobile v2 lane 1). */
-  const [mobileTaskSheet, setMobileTaskSheet] = useState<{ view: TaskSheetView; depth: number } | null>(null);
+  const [mobileTaskSheetView, setMobileTaskSheetView] = useState<TaskSheetView>("list");
   /* Template-first pipeline entry (#196, #388): `+ Пайплайн` opens repository
      admission; a successful choice lands in the owning shelf or group. */
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
@@ -1088,48 +1098,17 @@ function ProjectDashboardView({
   );
   const treeGroups = groups.length;
 
-  /* The conversation a back gesture just dismissed.
-
-     Every deliberate focus also writes the Viewer's own typed history entry
-     (#866), so a conversation opened on the phone owns TWO entries: that focus
-     entry and the screen pushed over it. ‹ pops the screen and lands on the
-     focus entry, and landing on it REPLAYS the focus — which, taken as a fresh
-     open, pushed the operator straight back into the conversation they had
-     just left, with no way out of it. A pop is the operator leaving: the
-     replay of the entry that same open wrote is not a new gesture. Every other
-     transition — a sheet, a switch, a push, a tap on a row — clears this, so
-     deliberately re-opening that same conversation still works. */
-  const dismissedChatRef = useRef<string | null>(null);
-  useEffect(() => {
-    let previous = topScreen(mobileNav.getState());
-    /* Store subscription, not an effect on the rendered state: it runs inside
-       the traversal itself, before the replayed focus reaches this component. */
-    return mobileNav.subscribe(() => {
-      const state = mobileNav.getState();
-      const top = topScreen(state);
-      if (state.motion !== "pop") dismissedChatRef.current = null;
-      else if (previous.kind === "chat" && !sameScreen(previous, top)) dismissedChatRef.current = previous.id;
-      previous = top;
-    });
-  }, [mobileNav]);
-
   /* On the phone a conversation is a SCREEN (mobile v2 §3.3): every deliberate
      focus — a board row, an attention jump, a deep link, a spawned draft —
-     pushes it over the board, which stays where it was underneath, so ‹ and the
-     platform back land on the list the operator came from. A repeat focus of
-     the conversation already on top is not a second entry, and neither is the
-     replay of a conversation the operator has just backed out of. */
+     pushes it over the screen the operator is on, which stays where it was
+     underneath, so ‹ and the platform back land on the place they came from.
+     The screen is the conversation's ONE history entry: the focus the Viewer
+     records for it types that entry and adds none of its own (#2105), so a
+     Back never lands on a replay of the conversation just left. A repeat focus
+     of the conversation already on top is not a second entry. */
   const showMobileConversation = (key: string) => {
     const top = topScreen(mobileNav.getState());
     if (top.kind === "chat" && top.id === key) return;
-    /* The pop's own replay, and only it: the entry is CONSUMED here, so the
-       one focus the traversal replays is swallowed and a later deliberate open
-       of that same conversation — an arrival banner, an attention jump — still
-       lands. */
-    if (dismissedChatRef.current === key) {
-      dismissedChatRef.current = null;
-      return;
-    }
     mobileNav.push({ kind: "chat", id: key });
   };
 
@@ -1196,6 +1175,14 @@ function ProjectDashboardView({
      coupled — an armed-but-unconsumed edge is the sticky path back. */
   useEffect(() => {
     if (!focusRequest) return;
+    /* A lane the needs-you queue names (#2129): the card that holds it, the
+       way a pipeline link reveals it, once this project's pipelines carry it. */
+    const lane = laneFocusId(focusRequest.path);
+    if (lane) {
+      if (!pipelines.some((pipeline) => pipeline.id === lane && pipeline.project === project) || !focusEdge.current.consume(focusRequest)) return;
+      revealPipeline(lane);
+      return;
+    }
     const placeable = pendingFocusTarget(focusRequest.path, files) !== null
       || compactPipelinePaths.has(focusRequest.path);
     if (!placeable || !focusEdge.current.consume(focusRequest)) return;
@@ -1209,7 +1196,7 @@ function ProjectDashboardView({
     setEphemeral((prev) => compactPipelinePaths.has(path)
       ? replaceCompactPipelineEphemeral(prev, path, pipelines, deckFlows, files)
       : prev.includes(path) ? prev : [...prev, path]);
-  }, [focusRequest, compactPipelinePaths, pipelines, deckFlows, files]);
+  }, [focusRequest, compactPipelinePaths, pipelines, deckFlows, files, project]);
 
   /* Placement with no navigation: the same materialization as above, minus the
      line that arms `pendingFocusRef`. That ref is what the next effect turns
@@ -1251,6 +1238,13 @@ function ProjectDashboardView({
 
   const openTask = (task: BoardTask) => {
     if (task.project !== project) {
+      /* On the phone the task's screen goes over the place the operator is,
+         one entry, and Back returns there (#2105). */
+      if (isMobile && onOpenElsewhere) {
+        onUserNavigate?.();
+        onOpenElsewhere({ kind: "task", id: task.id }, task.project);
+        return;
+      }
       sessionStorage.setItem("llvTaskFocus", task.id);
       gotoProject(task.project);
       return;
@@ -1259,7 +1253,8 @@ function ProjectDashboardView({
   };
 
   /* A pipeline link (an MCP call card's chip, #1695): the desktop Board reveals and focuses the card that holds
-     the pipeline, through the same anchor a focus handoff uses. The phone has no card to reveal. */
+     the pipeline, through the same anchor a focus handoff uses. The phone has no card to reveal; it opens the
+     pipeline's screen, over the place the operator is (#2105). */
   const revealPipeline = (id: string) => {
     if (isMobile) return;
     onUserNavigate?.();
@@ -1279,6 +1274,13 @@ function ProjectDashboardView({
       if (detail.kind !== "pipeline") return;
       const pipeline = pipelines.find((candidate) => candidate.id === id);
       if (!pipeline) return;
+      if (isMobile && onOpenElsewhere) {
+        onUserNavigate?.();
+        const top = topScreen(mobileNav.getState());
+        if (pipeline.project !== project) onOpenElsewhere({ kind: "pipeline", id: pipeline.id }, pipeline.project);
+        else if (top.kind !== "pipeline" || top.id !== pipeline.id) mobileNav.push({ kind: "pipeline", id: pipeline.id });
+        return;
+      }
       if (pipeline.project !== project) {
         sessionStorage.setItem("llvPipelineFocus", id);
         gotoProject(pipeline.project);
@@ -1299,23 +1301,15 @@ function ProjectDashboardView({
   }, [pipelines, project]);
 
   /* The phone's task sheet: «New task» opens the create view, «Tasks» the list.
-     It stands over the screen it was opened on: a task opened from the list is
-     pushed above that screen, and ‹ from the task finds the list again. */
+     It is a sheet like any other, one history entry over the screen it was
+     opened on (#2105), and the one sheet a row keeps under what it opens: a
+     task opened from the list is pushed above it, and ‹ from the task finds
+     the list again. */
   const openMobileTasks = (view: TaskSheetView) => {
     onUserNavigate?.();
-    mobileNav.closeSheet();
-    setMobileTaskSheet({ view, depth: mobileNav.getState().stack.length });
+    setMobileTaskSheetView(view);
+    mobileNav.openSheet("tasks");
   };
-  const mobileTaskSheetShown = mobileTaskSheet !== null && mobileNavState.stack.length === mobileTaskSheet.depth;
-  /* Stepping below the screen the list stood over takes the list with it, and
-     so does any navigation that sends the stack home (a search result, a deep
-     link, a project switch): the list belonged to where the operator was. A
-     store subscription sees the reset itself, even when the conversation it
-     opens is pushed in the same tick. */
-  useEffect(() => mobileNav.subscribe(() => {
-    const state = mobileNav.getState();
-    setMobileTaskSheet((current) => (current && (state.motion === "act" || state.stack.length < current.depth) ? null : current));
-  }), [mobileNav]);
   const persistDrafts = (next: string[]) => {
     setDrafts(next);
     sessionStorage.setItem(draftsKey(project), JSON.stringify(next));
@@ -1341,6 +1335,18 @@ function ProjectDashboardView({
     setTransientView(null);
     board.setDesktopBoard("kanban", "scheme");
   };
+
+  /* The setup guide opens this project on its Board (#2166 §3.3), whatever
+     view was saved for it: the orchestrator's draft sits above the columns. */
+  const chooseDesktopViewRef = useRef(chooseDesktopView);
+  chooseDesktopViewRef.current = chooseDesktopView;
+  useEffect(() => {
+    if (isMobile) return;
+    if (takePendingBoardView(project)) chooseDesktopViewRef.current("kanban");
+    return onOrchestratorDraftRequest((request) => {
+      if (request.project === project && takePendingBoardView(project)) chooseDesktopViewRef.current("kanban");
+    });
+  }, [isMobile, project]);
 
   /* A card's link to Conversations (#1695): the list for one look, written nowhere. It ends a standing landing,
      which would otherwise keep the Board it opened in front of the list the operator just asked for. */
@@ -1508,7 +1514,10 @@ function ProjectDashboardView({
      the server arrangement. */
   useEffect(() => {
     if (!board.loaded || board.sync === "unavailable") return;
-    if (focusRequest && !pendingFocusTarget(focusRequest.path, files)) return;
+    /* A conversation request holds convergence until its file is scanned. A
+       lane request (#2129) names a card, never a scanned path, and nothing
+       clears it once revealed, so it must not hold anything. */
+    if (focusRequest && !laneFocusId(focusRequest.path) && !pendingFocusTarget(focusRequest.path, files)) return;
     board.mutate(
       planBoardConvergence({
         files,
@@ -1562,7 +1571,7 @@ function ProjectDashboardView({
          the shell's resolver switches the project and focuses the card, and the
          entry this assignment pushes gets typed in place by that resolver — one
          deliberate gesture, one Back/Forward entry (issue #866). */
-      location.hash = formatConversationHash(file);
+      navigateToFragment(formatConversationHash(file));
       return;
     }
     /* Every same-project branch below is a deliberate card focus: record the
@@ -1644,47 +1653,18 @@ function ProjectDashboardView({
      the row's node the way every switchboard open does, so the conversation
      screen has something to show, and pushes that screen.
      It is the BOARD's own open, not the catalog resolver's: a row on this list
-     is a file the scan already carries, never a beyond-cap pin, and the
-     resolver's landing resets the shell to the board (`nav.home()`, which
-     predates the conversation screen) — so routing a row through it collapsed
-     the screen this gesture had just pushed and re-pushed it from an effect,
-     mounting the conversation twice with a frame of board between them. */
+     is a file the scan already carries, never a beyond-cap pin, so it needs no
+     pinned round trip. The focus it records types the screen's own entry
+     (#2105): one gesture, one history entry. */
   const openBoardRow = (file: FileEntry) => {
-    /* A tap on a row is a new gesture whatever came before it, including a
-       back out of this very conversation. */
-    dismissedChatRef.current = null;
     openSwitchboardFile(file);
     showMobileConversation(file.path);
   };
 
-  /* A stage row on the pipeline screen is the same open gesture as a board row,
-     with one difference that decides where ‹ goes (README §3.3, §4.7: «‹ from a
-     stage conversation returns to the pipeline»).
-
-     `openBoardRow` records the focus entry FIRST and pushes the screen second,
-     so the gesture leaves two history entries: the focus record, which carries
-     no shell stamp and therefore reads to the shell as the board, and the
-     conversation screen above it. From the board that is invisible — the entry
-     underneath IS the board. From a pipeline it is not: ‹ landed on the focus
-     entry, read depth 1, and dropped the operator on the board with the
-     pipeline gone.
-
-     So this gesture pushes the screen first and then re-types the entry it is
-     standing on instead of adding one: `restore` can only ever replaceState,
-     and `openBoardRow`'s own record then coalesces onto the same target
-     (`decideFocusAction`). One gesture, one entry, and the entry underneath is
-     still the pipeline's. */
-  const openPipelineStageConversation = (file: FileEntry) => {
-    if (isMobile) {
-      showMobileConversation(file.path);
-      recordFocusNavigation(file, projectKey(file), { restore: true });
-    }
-    openBoardRow(file);
-    /* The focus records above re-typed the conversation's own entry whole;
-       it keeps its place on the shell's stack, so a screen pushed over the
-       conversation (a task from its task strip) pops back onto it. */
-    if (isMobile) mobileNav.stamp();
-  };
+  /* A stage row on the pipeline screen, and an agent on a task screen, open
+     the conversation the way a board row does: one entry, over the screen the
+     row is on, so ‹ from it returns there (README §3.3, §4.7). */
+  const openPipelineStageConversation = openBoardRow;
 
   const statusBits: string[] = [];
   /* Narrow, the bar keeps only the live count: «· N trees» and the quiet line are what the
@@ -1784,9 +1764,13 @@ function ProjectDashboardView({
   /* The desktop Board is a view even before the project has a card (#1695 K9a): chosen over Conversations,
      it draws its empty columns with + Task and + Agent, so a project whose catalog is known and whose board is
      empty still reaches creation. The phone keeps its own resolution. */
-  const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable && board.prefs.viewMode === "scheme";
+  /* A desktop project nobody chose a view for opens on its Board (#2166 §3.4),
+     where its orchestrator's draft sits above the columns: a project created a
+     moment ago used to land on an empty conversation list instead. */
+  const preferredView = isMobile ? board.prefs.viewMode : board.prefs.viewMode ?? "scheme";
+  const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable && preferredView === "scheme";
   const projectView = landedOnConversation ? "scheme" : transientFace ?? (desktopEmptyBoard ? "scheme" : resolveProjectView({
-    preferredView: board.prefs.viewMode,
+    preferredView,
     hasNodes,
     hasArchiveNodes,
     hasHistoryRows: listAvailable,
@@ -2052,6 +2036,8 @@ function ProjectDashboardView({
         ),
         onSelect: () => mobileNav.openSheet("host"),
       },
+      /* Your time and your agents' time, per day and per project. */
+      { kind: "row", key: "activity", icon: <Activity className="h-[18px] w-[18px]" aria-hidden />, label: t("activity.menu"), testId: "menu-activity", onSelect: () => { mobileNav.closeSheet(); window.location.assign("/activity"); } },
       { kind: "divider", key: "d2" },
     );
     entries.push(
@@ -2071,6 +2057,11 @@ function ProjectDashboardView({
       { kind: "divider", key: "d-setup" },
       ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
       selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
+      /* The project's merge and bridge report settings (#2187 §6, #2146), the
+         same rows as the desktop ⋯. */
+      { kind: "divider", key: "d-merge" },
+      { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
+      { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
     );
     if (archived) {
       entries.push({ kind: "divider", key: "d4" }, {
@@ -2096,7 +2087,7 @@ function ProjectDashboardView({
           mobileNav.closeSheet();
           onArchive(project);
           showReceipt(t("mobile2.menu.archived"), { kind: "restore", run: () => onUnarchive(project) });
-          window.location.hash = "#p=" + encodeURIComponent(OVERVIEW);
+          navigateToFragment("#p=" + encodeURIComponent(OVERVIEW));
         },
       });
     }
@@ -2145,6 +2136,8 @@ function ProjectDashboardView({
               <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
             </BarMenuGroup>
             <BarMenuGroup name="project">
+              <MergeOnReviewRow project={project} variant="menu" />
+              <BridgeReportsRow project={project} variant="menu" />
               {archived ? (
                 <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
                   <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
@@ -2266,6 +2259,9 @@ function ProjectDashboardView({
            focus view stays until lane 3 folds it into the bar's title cell. */
         mobileTop.kind === "accounts" ? (
           <MobileAccountsScreen host={mobileShell} renderSheet={renderMobileSheet} />
+        ) : mobileTop.kind === "reports" ? (
+          /* The orchestrator's report log (#2146), over its conversation. */
+          <MobileReportsScreen project={project} host={mobileShell} renderSheet={renderMobileSheet} />
         ) : mobileTop.kind === "task" ? (
           /* One task (#2072 slice 5, phone-kanban §3.5): its pipelines, its
              agents and its status, on the same stack as the board. A stage or
@@ -2556,17 +2552,17 @@ function ProjectDashboardView({
           lines to REAL flows itself. */}
       {!isMobile && boardReady ? <Switchboard files={files} flows={deckFlows} project={project} loaded={loaded} catalogFailures={catalogFailures} onOpenFile={openSwitchboardFile} onOpenCatalogFile={openFullCatalogFile} /> : null}
 
-      {isMobile && mobileTaskSheet && mobileTaskSheetShown ? (
+      {isMobile && mobileNavState.sheet === "tasks" ? (
         <TaskSheet
           project={project}
           projectName={projectName}
           tasks={faceTasks}
           files={files}
-          initialView={mobileTaskSheet.view}
-          onClose={() => setMobileTaskSheet(null)}
+          initialView={mobileTaskSheetView}
+          onClose={() => mobileNav.closeSheet()}
           onOpenTask={(task, from) => {
             /* A task just created has no list to come back to. */
-            if (from === "new") setMobileTaskSheet(null);
+            if (from === "new") mobileNav.closeSheet();
             openMobileTask(task.id);
           }}
         />

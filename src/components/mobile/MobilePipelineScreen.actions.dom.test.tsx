@@ -56,6 +56,7 @@ const { browserPipelinePorts } = await import("@/components/kanban/pipelinePorts
 const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
 const { stageNames } = await import("@/components/pipelines/pipelineModel");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
+const { fakeHistory } = await import("./mobileNavTestHistory");
 const { receipts } = await import("./MobileReceipt");
 const { useLocale } = await import("@/lib/i18n");
 
@@ -107,18 +108,7 @@ afterEach(() => { for (const root of roots) flushSync(() => root.unmount()); roo
 const settle = async () => { await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0)); };
 
 function nav() {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=atlas" }];
-  let index = 0;
-  return createMobileNav({
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index > 0) index -= 1; },
-    },
-    href: () => entries[index]!.url,
-    onPopstate: () => () => {},
-  });
+  return createMobileNav(fakeHistory("http://localhost/#p=atlas").host);
 }
 
 function mount(node: React.ReactNode, store = nav()): HTMLElement {
@@ -268,6 +258,22 @@ test("One more round reads the revision the operator saw and grants exactly one 
   expect(request(0)).toEqual(request(1));
 });
 
+test("Accept as is reads the revision the operator saw and sends accept-head once, as the desktop does (#2187)", async () => {
+  const screen = phone("needs_review");
+  screen.answer("accept-head");
+  await settle();
+  expect(reads).toEqual(["/api/pipelines/p2"]);
+  expect(patches.length).toBe(1);
+  expect(request(0).body).toEqual({ action: "accept-head", expectedRevision: "rev-7" });
+  expect(typeof (patches[0]!.body as { clientRequestId?: unknown }).clientRequestId).toBe("string");
+  expect(q(body(), "[data-mobile2-receipt]")!.textContent).toContain(translate("en", "kanban.pipelineAct.done.accept-head", { title: "Fast conversation switching" }));
+
+  desktop("needs_review").choose("accept-head");
+  await settle();
+  expect(patches.length).toBe(2);
+  expect(request(0)).toEqual(request(1));
+});
+
 test("Pause and Resume from the bar's ⋯ send the desktop menu's request", async () => {
   for (const [state, key] of [["running", "pause"], ["paused", "resume"]] as const) {
     patches = [];
@@ -319,14 +325,13 @@ test("Skip stage is held for the receipt's window: Retry stage cancels it, and t
   expect(request(0)).toEqual(request(1));
 });
 
-test("Close lane — in the review stage or the ⋯ — is held, leaves the screen, and its Restore cancels it", async () => {
-  for (const [state, how] of [["needs_review", "answer"], ["completed", "menu"]] as const) {
+test("Close lane from the ⋯ is held, leaves the screen, and its Restore cancels it", async () => {
+  for (const state of ["needs_decision", "completed"] as const) {
     patches = [];
     receipts.dismiss();
     const screen = phone(state);
     expect(screen.store.getState().stack.at(-1)).toEqual({ kind: "pipeline", id: "p2" });
-    if (how === "answer") screen.answer("close");
-    else await screen.menu("archive");
+    await screen.menu("archive");
     await settle();
 
     expect(patches).toEqual([]);
@@ -341,8 +346,7 @@ test("Close lane — in the review stage or the ⋯ — is held, leaves the scre
     expect(patches).toEqual([]);
     expect(screen.acts.getClosing()).toEqual([]);
 
-    if (how === "answer") screen.answer("close");
-    else await screen.menu("archive");
+    await screen.menu("archive");
     screen.closeWindow();
     await settle();
     expect(patches.length).toBe(1);

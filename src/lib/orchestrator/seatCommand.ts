@@ -2,6 +2,14 @@ import type { NextRequest } from "next/server";
 import fs from "node:fs";
 
 import { AccountMutationBusyError, withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import {
+  ENGINE_NOT_CONNECTED,
+  engineNotConnectedDetails,
+  engineNotConnectedMessage,
+  engineReadiness,
+  type EngineName,
+  type EngineReadiness,
+} from "@/lib/accounts/engineConnection";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, identityMaterializationFence } from "@/lib/agent/registry";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
@@ -10,8 +18,11 @@ import { internalServiceHeaders, rotationActor, type ViewerActor } from "@/lib/a
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
 import { projectForCwd } from "@/lib/scanner/describe";
+import { projectDirectoryFallbacks } from "@/lib/scanner/projectDirectories";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { resolveSpawnRole } from "@/lib/roles/registry";
@@ -131,6 +142,13 @@ export interface SeatCommandDependencies {
       bounded scan that stops at the first turn rather than parsing a transcript
       that may be the longest-lived on the machine. */
   resolvedConversation(conversationId: string): ResolvedConversation | null;
+  /** Whether the seat's engine can launch here (#1876): its command resolves
+      and an account is signed in. Absent answers "connected", which leaves the
+      launch's own refusal as the only check. */
+  engineReadiness?(engine: EngineName, project: string): EngineReadiness;
+  /** The folder this project was recorded at — the root "Create project"
+      stored, else one the local state knows — when it exists on disk. */
+  projectRoot?(project: string): string | null;
   now(): string;
 }
 
@@ -175,21 +193,35 @@ export type ExistingConversationTarget =
     }
   | { kind: "ineligible"; code: "conversation_ineligible" | "invalid_cwd" | "missing_transcript" | "missing_project"; error: string };
 
+function usableDirectory(candidate: string | undefined | null): candidate is string {
+  if (!candidate) return false;
+  try { return fs.statSync(candidate).isDirectory(); } catch { return false; }
+}
+
+/** The root a project was recorded at, found the way the files feed finds a
+    project's folder: the root "Create project" stored for it, then the
+    project directories the local state knows (#2167). A project created
+    seconds ago has no conversation yet, so this is the only place its folder
+    is written down. */
+export function recordedProjectRoot(project: string): string | null {
+  const created = projectCurationSnapshot().manualProjects
+    .find((entry) => entry.project === project || canonicalProject(entry.project) === project);
+  if (usableDirectory(created?.root)) return created.root;
+  const known = projectDirectoryFallbacks([project])[project];
+  return usableDirectory(known) ? known : null;
+}
+
 /** Issue #903: the spawn fallback must never be this server process's own
     working directory — in the deployed container that is `/app`, a path
     outside every scanner root, so the successor's transcript lands where the
     Viewer cannot see it and the seat holds its authority while permanently
     inert. With no explicit cwd and no operator override, the project's own
-    newest existing checkout is the only honest default; failing the call
-    beats minting a dead seat. */
-function resolveOrchestratorCwd(project: string, requested: unknown): string | null {
+    newest existing checkout, then the folder the project was recorded at, are
+    the only honest defaults; failing the call beats minting a dead seat. */
+function resolveOrchestratorCwd(project: string, requested: unknown, dependencies: SeatCommandDependencies): string | null {
   if (typeof requested === "string" && requested.trim()) return requested.trim();
   const override = process.env.LLV_ORCHESTRATOR_CWD?.trim();
   if (override) return override;
-  const usable = (candidate: string | undefined | null): candidate is string => {
-    if (!candidate) return false;
-    try { return fs.statSync(candidate).isDirectory(); } catch { return false; }
-  };
   const conversations = Object.values(agentRegistry().readOnlySnapshot().conversations)
     .filter((conversation) => conversation.projectOwnership?.project === project
       || conversation.generations.some((generation) => generation.launchProfile?.project === project))
@@ -197,10 +229,10 @@ function resolveOrchestratorCwd(project: string, requested: unknown): string | n
   for (const conversation of conversations) {
     for (let index = conversation.generations.length - 1; index >= 0; index -= 1) {
       const candidate = conversation.generations[index]?.launchProfile?.cwd;
-      if (usable(candidate)) return candidate;
+      if (usableDirectory(candidate)) return candidate;
     }
   }
-  return null;
+  return dependencies.projectRoot?.(project) ?? null;
 }
 
 async function postSpawnInProcess(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -346,6 +378,8 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
   stampRegistryIdentity: (seat) => {
     agentRegistry().stampOrchestratorSeatIdentity(seat);
   },
+  engineReadiness: (engine, project) => engineReadiness(engine, project),
+  projectRoot: recordedProjectRoot,
   now: () => new Date().toISOString(),
 };
 
@@ -960,13 +994,29 @@ async function runOrchestratorSeatRequest(
         engine: resolvedRuntime.value.config.engine,
         model: resolvedRuntime.value.config.model,
       };
-  const cwd = resolveOrchestratorCwd(project, rawBody.cwd);
+  /* An engine nobody is signed in to is the refusal the launch would give
+     anyway, and the one the operator can act on, so it is answered before any
+     question about folders (#2167). */
+  const launchEngine: string = spawnRuntime.engine ?? resolvedRuntime.value.config.engine;
+  const checkedEngine: EngineName | null = launchEngine === "claude" || launchEngine === "codex" ? launchEngine : null;
+  const readiness = checkedEngine ? dependencies.engineReadiness?.(checkedEngine, project) ?? "connected" : "connected";
+  if (checkedEngine && readiness !== "connected") {
+    const refusal = { role: "orchestrator", engine: checkedEngine, reason: readiness };
+    const error = engineNotConnectedMessage(refusal);
+    const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
+    return {
+      status: 409,
+      body: { error, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(refusal), seat: terminalized?.seat ?? null },
+    };
+  }
+  const cwd = resolveOrchestratorCwd(project, rawBody.cwd, dependencies);
   if (!cwd) {
-    const terminalized = failOrchestratorSeatIntent(project, clientRequestId, "orchestrator cwd could not be resolved", dependencies.now());
+    const reason = "the project's folder could not be found on disk";
+    const terminalized = failOrchestratorSeatIntent(project, clientRequestId, reason, dependencies.now());
     return {
       status: 400,
       body: {
-        error: "orchestrator cwd could not be resolved — pass cwd explicitly or set LLV_ORCHESTRATOR_CWD",
+        error: `${reason}: nothing recorded for this project points at a folder that still exists — check the project's folder, or pass cwd`,
         code: "cwd_unresolved",
         seat: terminalized?.seat ?? null,
       },

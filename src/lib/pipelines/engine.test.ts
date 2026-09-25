@@ -10,13 +10,14 @@ import { Database } from "bun:sqlite";
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
-const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, terminalFlowStageVerdict, tickPipelines } = engineModule;
+const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
@@ -29,6 +30,8 @@ const { loadPipelines, savePipelines, pipelineIdentity, pipelineRevision } = awa
 const { durableStageTurnEvidence } = await import("./durableEvidence");
 const { edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed } = await import("./failEdgeBudget");
 const { saveTasks } = await import("@/lib/tasks/store");
+const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
+const { interruptionObligationDirectory, interruptionObligationStore } = await import("@/lib/runtime/interruptionObligations");
 type PipelinePorts = import("./engine").PipelinePorts;
 type Pipeline = import("./types").Pipeline;
 type PipelineStageStopResult = import("./engine").PipelineStageStopResult;
@@ -625,11 +628,18 @@ test("a terminal failing verdict releases ownership and explicit takeover acknow
   expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).pipeline?.delivery?.active).toBe(true);
 });
 
+/** A review-loop stage in these fixtures stands for a lane stored before
+    #2187 converted new ones at creation: that lane still reviews through its
+    embedded flow, which is what those tests exercise, so it is stored as the
+    older engine stored it. */
 async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch" } = {}) {
   savePipelines([]);
   const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages, src: "/codex/creator.jsonl", ...request }, ports);
   if (!result.pipeline) throw new Error(result.error);
-  return result.pipeline;
+  if (!result.convertedStages?.length) return result.pipeline;
+  const lane = asStoredLegacyReviewLane(result.pipeline, result.convertedStages);
+  savePipelines([lane]);
+  return lane;
 }
 
 test.each([
@@ -1096,6 +1106,55 @@ test("a deleted task stays linked until unlink-task removes its stale id", async
 
   expect(result.pipeline?.taskIds).toEqual([]);
   expect(loadPipelines()[0]!.taskIds).toEqual([]);
+});
+
+/* #2187 §5.1: a pipeline marked as the one that finishes a linked task. */
+test("finishesTask at creation marks linked tasks, and an id the pipeline does not link is dropped and named", async () => {
+  const h = harness();
+  const [first, second] = [boardTask("task-finish-1"), boardTask("task-finish-2")];
+  saveTasks([first, second]);
+  savePipelines([]);
+  const stages = [{ id: "run", kind: "run" as const, role: { roleId: "builder" as const }, engine: "codex" as const, prompt: "run", next: null }];
+
+  const every = await createPipelineFromRequest({ task: "All", taskIds: [first.id, second.id], finishesTask: true, repoDir: "/repo", autoStart: false, stages }, h.ports);
+  expect(every.pipeline?.finishesTaskIds).toEqual([first.id, second.id]);
+  expect(every.finishesTaskDropped).toBeUndefined();
+
+  const some = await createPipelineFromRequest({ task: "Some", taskIds: [first.id], finishesTask: [first.id, "task-elsewhere"], repoDir: "/repo", autoStart: false, stages }, h.ports);
+  expect(some.pipeline?.finishesTaskIds).toEqual([first.id]);
+  expect(some.finishesTaskDropped).toEqual(["task-elsewhere"]);
+
+  const none = await createPipelineFromRequest({ task: "None", taskIds: [first.id], repoDir: "/repo", autoStart: false, stages }, h.ports);
+  expect(none.pipeline?.finishesTaskIds).toBeUndefined();
+  expect(loadPipelines().map((pipeline) => pipeline.finishesTaskIds)).toEqual([[first.id, second.id], [first.id], undefined]);
+
+  const malformed = await createPipelineFromRequest({ task: "Bad", taskIds: [first.id], finishesTask: "yes" as never, repoDir: "/repo", autoStart: false, stages }, h.ports);
+  expect(malformed.status).toBe(400);
+  expect(malformed.violations?.map((violation) => violation.field)).toContain("finishesTask");
+});
+
+test("link-task with finishes is an upsert of the flag, and unlink-task clears it", async () => {
+  const h = harness();
+  const task = boardTask("task-finish-link");
+  saveTasks([task]);
+  const pipeline = await create(h.ports);
+
+  const marked = await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id, finishes: true }, h.ports);
+  expect(marked.pipeline).toMatchObject({ taskIds: [task.id], finishesTaskIds: [task.id] });
+  /* On a task already linked, the flag alone moves; absent leaves it. */
+  const kept = await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id }, h.ports);
+  expect(kept.pipeline?.finishesTaskIds).toEqual([task.id]);
+  const cleared = await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id, finishes: false }, h.ports);
+  expect(cleared.pipeline?.taskIds).toEqual([task.id]);
+  expect(cleared.pipeline?.finishesTaskIds).toBeUndefined();
+
+  await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id, finishes: true }, h.ports);
+  const refused = await patchPipeline(pipeline.id, { action: "link-task", taskId: task.id, finishes: "yes" as never }, h.ports);
+  expect(refused).toEqual({ error: "finishes must be a boolean", status: 400 });
+  const unlinked = await patchPipeline(pipeline.id, { action: "unlink-task", taskId: task.id }, h.ports);
+  expect(unlinked.pipeline?.taskIds).toEqual([]);
+  expect(unlinked.pipeline?.finishesTaskIds).toBeUndefined();
+  expect(loadPipelines()[0]!.finishesTaskIds).toBeUndefined();
 });
 
 test("pipeline creation validates and persists explicit taskIds atomically", async () => {
@@ -1644,6 +1703,9 @@ test("review-loop onFail edges are rejected during creation and graph editing", 
     ],
   }, h.ports);
   if (!valid.pipeline) throw new Error(valid.error);
+  /* A new review-loop is converted at creation (#2187); the edit is refused
+     on a stored legacy draft, which still carries one. */
+  savePipelines([asStoredLegacyReviewLane(valid.pipeline, valid.convertedStages)]);
 
   const edited = await patchPipeline(valid.pipeline.id, {
     action: "set-edge",
@@ -2176,11 +2238,41 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   expect(stored.runs).toEqual(before.runs);
   expect(h.calls.length).toBe(callsBefore);
 
-  /* A second hide keeps the first instant. */
-  expect((await patchPipeline(created.id, { action: "dismiss" }, h.ports)).pipeline!.dismissedAt).toBe(hiddenAt);
+  expect(stored.dismissedBy).toEqual({ kind: "operator" });
+
+  /* A second dismissal stamps its own instant (docs/design/needs-attention.md
+     §5): a lane that parked again after an earlier one is cleared for the
+     decision it waits on now, so the phone no longer clears it first. */
+  const again = (await patchPipeline(created.id, { action: "dismiss" }, h.ports, { kind: "agent", role: "orchestrator", conversationId: "conversation_seat" })).pipeline!;
+  expect(Date.parse(again.dismissedAt!)).toBeGreaterThan(Date.parse(hiddenAt!));
+  expect(again.dismissedBy).toEqual({ kind: "agent", conversationId: "conversation_seat", role: "orchestrator" });
+
+  /* The dismissal service's own write carries the attribution it derived. */
+  const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports);
+  expect(serviced.pipeline!.dismissedBy).toEqual({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" });
+
+  /* A card drawn before the lane's last movement clears nothing: that
+     decision is one the operator has not seen. The one it drew, it clears. */
+  const ran = loadPipelines()[0]!;
+  ran.runs[0]!.attempts.push({
+    n: 1, state: "failed", effectiveRole: structuredClone(ran.stages[0]!.effectiveRole),
+    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-09-24T09:00:00.000Z", completedAt: "2026-09-24T09:30:00.000Z",
+    input: null, activatedBy: null, output: null, verdict: null, error: null,
+  });
+  savePipelines([ran]);
+  const lastMove = laneMovedAt(ran);
+  expect(lastMove).toBe(Date.parse("2026-09-24T09:30:00.000Z"));
+  const stale = await setPipelineDismissal(created.id, true, { kind: "operator", surface: "desktop" }, h.ports, lastMove - 1);
+  expect(stale.moved).toBe(true);
+  expect(loadPipelines()[0]!).toMatchObject({ dismissedAt: serviced.pipeline!.dismissedAt, dismissedBy: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" } });
+  const current = await setPipelineDismissal(created.id, true, { kind: "operator", surface: "desktop" }, h.ports, lastMove);
+  expect(current.moved).toBeUndefined();
+  expect(current.pipeline!.dismissedBy).toEqual({ kind: "operator", surface: "desktop" });
 
   const shown = await patchPipeline(created.id, { action: "undismiss" }, h.ports);
   expect(shown.pipeline!.dismissedAt).toBeNull();
+  expect(shown.pipeline!.dismissedBy).toBeUndefined();
   expect(loadPipelines()[0]!).toMatchObject({ state: before.state, dismissedAt: null });
 
   const closed = await closeAndDrain(created.id, { action: "close" }, h.ports);
@@ -2188,6 +2280,7 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   for (const action of ["dismiss", "undismiss"] as const) {
     expect((await patchPipeline(created.id, { action }, h.ports)).status).toBe(409);
   }
+  expect((await setPipelineDismissal(created.id, true, { kind: "operator" }, h.ports)).status).toBe(409);
 
   savePipelines([]);
   const draft = await createPipelineFromRequest({ task: "A draft", repoDir: "/repo", stages: RUN_STAGES as never, autoStart: false }, h.ports);
@@ -3680,6 +3773,315 @@ test("a dead structured host past grace fails through the stage fail edge (#973)
     input: "historical attempt completed without a valid final JSON verdict",
     activatedBy: { stageId: "build", attempt: 1, edge: "fail" },
   });
+});
+
+const HISTORICAL_VERDICT_MISS = "historical attempt completed without a valid final JSON verdict";
+const DEPLOY_CUT_HOLD = "a Viewer deployment cut this stage's turn; the stage stays open for the continuation the successor owes it";
+const READ_ONLY_RERUN = "the stage host was lost before it reported a verdict; the read-only stage runs again on the same head";
+
+/**
+ * The interruption obligations a Viewer release records (#1835), read by the
+ * engine through its production port: an isolated registry is seated, the
+ * obligation goes into that registry's own store, and every read builds the
+ * default ports afresh so a later update is what the next tick sees. The
+ * harness clock is moved to the present first, because the store retires
+ * resolved records by their real age.
+ */
+function deployCutObligations(h: ReturnType<typeof harness>, name: string) {
+  h.advanceWallClock(Date.now());
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `${name}-agent-registry.json`));
+  setAgentRegistryForTests(registry);
+  h.ports.conversationInterruption = (conversationId) => defaultPipelinePorts().conversationInterruption!(conversationId);
+  const store = interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  const record = (conversationId: string, recordedAt: string) => store.record({
+    conversationId: conversationId as `conversation_${string}`,
+    engine: "codex",
+    hostKey: `codex:${name}`,
+    path: "/codex/stage-1.jsonl",
+    owner: { pid: 4242, startIdentity: `${name}-owner` },
+    claimEpoch: 1,
+    turnRef: `${name}-turn`,
+    boundary: `viewer-release:${name}`,
+    reason: "viewer-release",
+    recordedAt,
+    checkpoint: { lastEventKind: "tool_call", lastEventAt: null },
+    seat: null,
+  }).obligation;
+  return { registry, store, record, restore: () => setAgentRegistryForTests(null) };
+}
+
+test("a stage turn a deploy cut stays open past the host grace while its continuation is owed (#1835)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "owed-cut");
+  try {
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const cutAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => cutAt;
+    const obligation = cut.record("conversation_stage_1", cutAt);
+    /* The incident's order: the controller looks at 11:20, four minutes after
+       the 11:16 cut, while the successor has not yet delivered anything. */
+    h.advanceWallClock(4 * 60_000);
+
+    await tickPipelines([], h.ports);
+
+    const held = loadPipelines()[0]!;
+    expect(held).toMatchObject({ state: "running", stateDetail: DEPLOY_CUT_HOLD });
+    expect(held.runs[0]!.attempts[0]).toMatchObject({ state: "running", completedAt: null, error: null });
+    expect(held.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
+    expect(h.calls.some((call) => call.startsWith("stop-host:"))).toBe(false);
+
+    /* The successor delivered the continuation: the host is judged from that
+       moment, so a minute later it is still inside its grace. */
+    cut.store.update(obligation.id, { state: "delivered", resolvedAt: h.ports.now(), resolution: "delivered" });
+    h.advanceWallClock(60_000);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    expect(loadPipelines()[0]!.stateDetail).not.toBe(DEPLOY_CUT_HOLD);
+
+    /* A host that stays gone after its continuation is judged as before. */
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: HISTORICAL_VERDICT_MISS });
+  } finally {
+    cut.restore();
+  }
+});
+
+test("a continuation that arrived while its obligation still reads submitted starts the host grace from its arrival (#1835 review)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "submitted-cut");
+  try {
+    /* The registry stamps an arrival with the real time, so the stage runs
+       on a harness clock three minutes behind it: the cut is recorded at the
+       harness's now and the continuation arrives about three minutes later. */
+    h.advanceWallClock(Date.now() - 3 * 60_000 - Date.parse(h.ports.now()));
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const cutAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => cutAt;
+    const obligation = cut.record("conversation_stage_1", cutAt);
+
+    /* The successor's startup admits the continuation under the obligation's
+       id and records `submitted`, which is all the queue told it; the delivery
+       arrives in the registry and the obligation is left as it was. */
+    const registry = cut.registry;
+    const reservation = registry.holdDelivery(obligation.conversationId, "A Viewer deployment interrupted your turn", obligation.id);
+    cut.store.update(obligation.id, { state: "submitted", operationId: reservation.command.operationId, attempts: 1 });
+    const arrived = registry.recordDeliveryOutcome(reservation.id, "delivered");
+    const arrivedAt = Date.parse(arrived.deliveredAt!);
+    expect(cut.store.list()[0]).toMatchObject({ state: "submitted", resolvedAt: null });
+
+    /* A minute after the arrival the host is inside its grace, and the stage
+       no longer says it waits for a continuation. */
+    h.advanceWallClock(arrivedAt + 60_000 - Date.parse(h.ports.now()));
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    expect(loadPipelines()[0]!.stateDetail).not.toBe(DEPLOY_CUT_HOLD);
+
+    /* The resumed host is lost again: it is judged once its grace from the
+       arrival has passed, by whichever of the ordinary verdicts its paced
+       recovery checks reach first, well before the thirty-minute hold ends. */
+    for (let tick = 0; tick < 4 && loadPipelines()[0]!.runs[0]!.attempts[0]!.state === "running"; tick += 1) {
+      h.advanceWallClock(tick === 0 ? 3 * 60_000 : 30_000);
+      await tickPipelines([], h.ports);
+    }
+    const judged = loadPipelines()[0]!;
+    expect(["failed", "needs_decision"]).toContain(judged.runs[0]!.attempts[0]!.state);
+    expect(judged.stateDetail).not.toBe(DEPLOY_CUT_HOLD);
+    expect(Date.parse(h.ports.now()) - arrivedAt).toBeLessThanOrEqual(5 * 60_000);
+  } finally {
+    cut.restore();
+  }
+});
+
+test("a re-hosted stage whose deploy cut is still owed gets no verdict request ahead of its continuation (#1835 review)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "rehosted-cut");
+  try {
+    await runningStructuredStage(h);
+    /* The successor adopted the host: it reports hosted and idle, and the
+       durable turn ends in the no-response record written after the cut. */
+    h.setConversationActive(false);
+    h.ports.conversationHostUnavailableSince = async () => null;
+    const asked: string[] = [];
+    h.ports.resumeSeveredTurn = async (input) => {
+      asked.push(input.clientMessageId);
+      return true;
+    };
+    const cutAt = h.ports.now();
+    cut.record("conversation_stage_1", cutAt);
+    h.advanceWallClock(60_000);
+    h.durableTurns.set("/codex/stage-1.jsonl", {
+      turn: "terminal",
+      message: { text: "turn aborted", ts: Date.parse(h.ports.now()) },
+    });
+    h.advanceWallClock(60_000);
+
+    await tickPipelines([], h.ports);
+
+    const held = loadPipelines()[0]!;
+    expect(asked).toEqual([]);
+    expect(held).toMatchObject({ state: "running", stateDetail: DEPLOY_CUT_HOLD });
+    expect(held.runs[0]!.attempts[0]).toMatchObject({ state: "running", completedAt: null, error: null });
+    expect(held.runs[0]!.attempts[0]!.verdictRequest).toBeUndefined();
+    expect(held.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
+  } finally {
+    cut.restore();
+  }
+});
+
+test("a held deploy cut still settles on the stage's own verdict, and an owed cut stops holding past its bound (#1835)", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "bounded-cut");
+  try {
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const cutAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => cutAt;
+    cut.record("conversation_stage_1", cutAt);
+    h.advanceWallClock(31 * 60_000);
+
+    await tickPipelines([], h.ports);
+
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: HISTORICAL_VERDICT_MISS });
+  } finally {
+    cut.restore();
+  }
+
+  const reported = harness();
+  const reportedCut = deployCutObligations(reported, "reported-cut");
+  try {
+    await runningStructuredStage(reported);
+    reported.setConversationActive(false);
+    const cutAt = reported.ports.now();
+    reported.ports.conversationHostUnavailableSince = async () => cutAt;
+    reportedCut.record("conversation_stage_1", cutAt);
+    reported.advanceWallClock(4 * 60_000);
+    reported.durableTurns.set("/codex/stage-1.jsonl", {
+      turn: "terminal",
+      message: { text: PASS_TEXT, ts: Date.parse(reported.ports.now()) },
+    });
+
+    await tickPipelines([], reported.ports);
+
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: { status: "pass" } });
+  } finally {
+    reportedCut.restore();
+  }
+});
+
+/** Strips the pane from a stage's latest attempt, so it is a structured host. */
+function structuredLatest(stageIndex: number): void {
+  const pipeline = loadPipelines()[0]!;
+  pipeline.runs[stageIndex]!.attempts.at(-1)!.paneId = null;
+  savePipelines([pipeline]);
+}
+
+test("a read-only stage whose host was lost re-runs on the same head instead of firing its fail edge (#1835)", async () => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "codex", access: "read-only", prompt: "Review {{task}}", next: null, onFail: { to: "fix", maxRounds: 1 } },
+    { id: "fix", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Fix {{prev.output}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const loseHost = async () => {
+    structuredLatest(0);
+    h.setConversationActive(false);
+    const lostAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => lostAt;
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+  };
+
+  await loseHost();
+
+  const rerun = loadPipelines()[0]!;
+  expect(rerun.state).toBe("running");
+  expect(rerun.cursor).toMatchObject({ stageId: "review", state: "pending" });
+  expect(rerun.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: null, error: READ_ONLY_RERUN });
+  expect(rerun.runs[1]!.attempts).toHaveLength(0);
+
+  await tickPipelines([], h.ports);
+  const second = loadPipelines()[0]!;
+  expect(second.runs[0]!.attempts).toHaveLength(2);
+  expect(second.runs[0]!.attempts[1]).toMatchObject({ n: 2, state: "running", input: second.runs[0]!.attempts[0]!.input });
+  expect(second.runs[1]!.attempts).toHaveLength(0);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(2);
+
+  /* Bounded: a host that keeps dying is not a deploy. After two re-runs the
+     ordinary routing applies again. */
+  await loseHost();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(3);
+  await loseHost();
+  const routed = loadPipelines()[0]!;
+  expect(routed.runs[0]!.attempts[2]).toMatchObject({ state: "failed", error: HISTORICAL_VERDICT_MISS });
+  expect(routed.cursor).toMatchObject({ stageId: "fix", activatedBy: { stageId: "review", attempt: 3, edge: "fail" } });
+});
+
+test("skip-stage over a lost host's pushed head adopts it instead of resetting behind the remote (#1871)", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  const lostAt = h.ports.now();
+  h.ports.conversationHostUnavailableSince = async () => lostAt;
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  const base = parked.lastPassedCommit;
+  expect(base).not.toBe(STAGE_HEAD);
+
+  const skipped = await patchPipeline(parked.id, { action: "skip-stage" }, h.ports);
+
+  expect(skipped.error).toBeUndefined();
+  expect(loadPipelines()[0]!.lastPassedCommit).toBe(STAGE_HEAD);
+  expect(h.calls).not.toContain(`git reset --hard ${base}`);
+  expect(h.calls).toContain(`git reset --hard ${STAGE_HEAD}`);
+});
+
+/** A read-only review parked exactly as lane 4a6cd090's was after a restart. */
+async function reviewParkedAfterRestart(h: ReturnType<typeof harness>) {
+  const pipeline = await create(h.ports, [
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "codex", access: "read-only", prompt: "Review {{task}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  makeStructuredAttempt();
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  const parkedAt = h.ports.now();
+  const reason = "canonical stage transcript is not yet readable after structured stage termination";
+  attempt.state = "needs_decision";
+  attempt.completedAt = parkedAt;
+  attempt.error = `stage verdict recovery exhausted after 3 checks: ${reason}`;
+  attempt.verdictRecovery = { state: "exhausted", checks: 3, maxChecks: 3, startedAt: parkedAt, lastCheckedAt: parkedAt, nextCheckAt: null, reason, messageTs: null };
+  stored.state = "needs_decision";
+  stored.stateDetail = attempt.error;
+  savePipelines([stored]);
+  h.ports.spawnReceipt = (launchId) => launchId === attempt.launchId ? {
+    state: "completed",
+    launchId,
+    conversationId: attempt.conversationId!,
+    sessionId: attempt.sessionId,
+    "transcript": attempt.agentPath,
+    paneId: null,
+  } : null;
+  return { pipeline, launchId: attempt.launchId! };
+}
+
+test("a review cut by a restart retries from the completed launch the card names (#1871)", async () => {
+  const h = harness();
+  const { pipeline, launchId } = await reviewParkedAfterRestart(h);
+
+  const retried = await patchPipeline(pipeline.id, { action: "retry-stage", stageId: "review", launchId }, h.ports);
+
+  expect(retried.error).toBeUndefined();
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", cursor: { stageId: "review", state: "pending" } });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
 });
 
 test("a dead structured host with an invalid terminal verdict still takes the fail edge (#973)", async () => {
@@ -6970,6 +7372,35 @@ test("an adopted stage child is stopped and counted, never silently left running
   expect(loadPipelines()[0]!.stateDetail).toBe("closed; stopped 1 stage host; stopped 1 adopted agent");
 });
 
+test("a completed two-stage pipeline reaps its final stage host too (#1728)", async () => {
+  const h = harness();
+  await create(h.ports);
+  h.setHostsResident(true);
+  h.setStageHost("conversation_stage_1", { outcome: "stopped" });
+  h.setStageHost("conversation_stage_2", { outcome: "stopped" });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  /* The plan host is reaped while build runs, and that clean round settles
+     the reap before the final stage has produced anything. */
+  await tickPipelines([], h.ports);
+  expect(h.calls).toContain("stop-host:plan:1:conversation_stage_1");
+  expect(loadPipelines()[0]!.terminalReap?.settledAt).toEqual(expect.any(String));
+
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("completed");
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(h.calls.filter((call) => call.startsWith("stop-host:"))).toEqual([
+    "stop-host:plan:1:conversation_stage_1",
+    "stop-host:build:1:conversation_stage_2",
+  ]);
+  const completed = loadPipelines()[0]!;
+  expect(completed.terminalReap).toMatchObject({ stopped: 2, settledAttempts: ["plan:1", "build:1"] });
+  expect(completed.terminalReap!.settledAt).toEqual(expect.any(String));
+});
+
 test("an adopted child that cannot be stopped keeps the lane visible (#670)", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
@@ -8183,6 +8614,8 @@ test("draft edits that would orphan a review-loop are rejected (#136)", async ()
     autoStart: false,
   }, ports);
   const id = created.pipeline!.id;
+  /* A stored legacy draft: a new review-loop is converted at creation (#2187). */
+  savePipelines([asStoredLegacyReviewLane(created.pipeline!, created.convertedStages)]);
   /* Moving the review loop ahead of its only run stage — the API must refuse. */
   const reordered = await patchPipeline(id, { action: "reorder-stage", stageIds: ["review", "build"] }, ports);
   expect(reordered.pipeline).toBeUndefined();
@@ -8705,10 +9138,13 @@ test("onExhausted is validated and edited with the fail edge, and freezes with i
   expect(loadPipelines()[0]!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 1, onExhausted: "advance" });
 });
 
-/* A spent review budget whose last fix wrote a NEW head (#1938): the lane ends
-   in needs_review, never completed, and never takes the reviewer's pass edge
-   for a head nobody reviewed. continue-review grants explicit extra rounds and
-   reviews the current head in the same pipeline. */
+/* A spent review budget whose last fix wrote a NEW head, on an edge that asked
+   for `stop-after-fix` (#1938, #2187): the lane ends in needs_review, never
+   completed, and never takes the reviewer's pass edge for a head nobody
+   reviewed. continue-review grants explicit extra rounds and reviews the
+   current head in the same pipeline. Under the default the lane completes
+   instead (below). */
+const STOP_AFTER_FIX = { onExhausted: "stop-after-fix" } as const;
 const REVIEW_HEADS = ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40), "5".repeat(40), "6".repeat(40)];
 
 /** The harness with a worktree HEAD the test moves: each build round `n`
@@ -8751,10 +9187,10 @@ function continueReview(pipeline: Pipeline, clientRequestId: string, addRounds: 
 }
 let movingHeadPorts: PipelinePorts | null = null;
 
-test("maxRounds 1: a final fix that writes a new head ends in needs_review with both heads and the last verdict, never completed (#1938)", async () => {
+test("stop-after-fix, maxRounds 1: a final fix that writes a new head ends in needs_review with both heads and the last verdict, never completed (#1938)", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }, null) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 1, h.beforeBuildPass);
 
@@ -8792,26 +9228,28 @@ test("maxRounds 1: a final fix that writes a new head ends in needs_review with 
   expect(resumed.pipeline?.stateDetail).toBe(current.stateDetail);
 });
 
-test("a spent budget whose final fix wrote no new head keeps the #1868 behaviour (#1938)", async () => {
-  /* Round 1 writes H1 and the handoff fix leaves the tree at H1. */
-  const h = movingHeadHarness(() => REVIEW_HEADS[0]!);
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  await tickPipelines([], h.ports);
-  await failEveryCritique(h, 1, h.beforeBuildPass);
+test("a spent budget whose final fix wrote no new head completes under the default and under stop-after-fix alike (#1938, #2187)", async () => {
+  for (const edge of [{}, STOP_AFTER_FIX]) {
+    /* Round 1 writes H1 and the handoff fix leaves the tree at H1. */
+    const h = movingHeadHarness(() => REVIEW_HEADS[0]!);
+    await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...edge }, null) as never);
+    await tickPipelines([], h.ports);
+    await failEveryCritique(h, 1, h.beforeBuildPass);
 
-  const current = loadPipelines()[0]!;
-  expect(current.state).toBe("completed");
-  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
-  expect(current.reviewPending).toBeUndefined();
+    const current = loadPipelines()[0]!;
+    expect({ edge, state: current.state }).toEqual({ edge, state: "completed" });
+    expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+    expect(current.reviewPending).toBeUndefined();
+  }
 });
 
-test("a budget handoff recorded before reviewed heads existed is judged against the head its fix started from (#1938)", async () => {
+test("stop-after-fix: a budget handoff recorded before reviewed heads existed is judged against the head its fix started from (#1938)", async () => {
   for (const [label, heads, expected] of [
     ["unchanged", () => REVIEW_HEADS[0]!, "completed"],
     ["moved", (round: number) => REVIEW_HEADS[round - 1]!, "needs_review"],
   ] as const) {
     const h = movingHeadHarness(heads);
-    await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+    await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }, null) as never);
     await tickPipelines([], h.ports);
     await buildRound(h, "built v1");
     await critiqueRound(h, "fail", "round 1");
@@ -8831,7 +9269,7 @@ test("a budget handoff recorded before reviewed heads existed is judged against 
 test("continue-review resumes review of the current head with an explicit added budget, replays by clientRequestId and refuses a competing continuation (#1938)", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }, null) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 1, h.beforeBuildPass);
   const parked = loadPipelines()[0]!;
@@ -8892,10 +9330,91 @@ test("continue-review resumes review of the current head with an explicit added 
   expect(current.lastPassedCommit).toBe(REVIEW_HEADS[1]);
 });
 
-test("maxRounds 2: added rounds run bounded fix loops, park again in needs_review on a new unreviewed head, and the review activation count stays exact across a retry (#1938)", async () => {
+function acceptHead(pipeline: Pipeline, clientRequestId: string, expectedRevision = pipelineRevision(pipeline)) {
+  return patchPipeline(pipeline.id, { action: "accept-head", clientRequestId, expectedRevision }, movingHeadPorts!);
+}
+
+test("accept-head completes a stop-after-fix lane along the review stage's null pass edge, records who accepted, replays and is refused outside needs_review (#2187)", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2 }) as never);
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }, null) as never);
+  await tickPipelines([], h.ports);
+  /* Refused while the lane still runs. */
+  const running = loadPipelines()[0]!;
+  const early = await acceptHead(running, "accept-early");
+  expect(early.status).toBe(409);
+  expect(early.error).toContain("requires a pipeline in needs_review");
+  await failEveryCritique(h, 1, h.beforeBuildPass);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_review");
+  const revision = pipelineRevision(parked);
+
+  expect((await patchPipeline(parked.id, { action: "accept-head", expectedRevision: revision }, h.ports)).status).toBe(400);
+  expect((await acceptHead(parked, "accept-stale", "0".repeat(64))).code).toBe("STAGE_CHANGED");
+  /* Another conversation is not the creator. */
+  const stranger = await patchPipeline(parked.id, { action: "accept-head", clientRequestId: "accept-x", expectedRevision: revision }, h.ports, { kind: "agent", conversationId: "not-the-creator" } as never);
+  expect(stranger.status).toBe(403);
+  expect(loadPipelines()[0]!.state).toBe("needs_review");
+
+  const accepted = await acceptHead(parked, "accept-1", revision);
+  expect(accepted.error).toBeUndefined();
+  expect(accepted.replayed).toBe(false);
+  expect(accepted.reviewAcceptance).toMatchObject({
+    clientRequestId: "accept-1",
+    stageId: "critique",
+    attempt: 1,
+    fixStageId: "build",
+    fixAttempt: 2,
+    reviewedHead: REVIEW_HEADS[0],
+    currentHead: REVIEW_HEADS[1],
+    actor: { kind: "operator" },
+  });
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("completed");
+  expect(current.cursor).toBeNull();
+  expect(current.closedAt).not.toBeNull();
+  expect(current.reviewPending).toBeUndefined();
+  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(current.lastPassedCommit).toBe(REVIEW_HEADS[1]);
+  expect(current.reviewAcceptances).toHaveLength(1);
+  /* No reviewer pass was invented for the accepted head. */
+  expect(current.runs.find((run) => run.stageId === "critique")!.attempts.map((attempt) => attempt.state)).toEqual(["failed"]);
+
+  const replay = await acceptHead(parked, "accept-1", revision);
+  expect(replay.replayed).toBe(true);
+  expect(replay.reviewAcceptance?.clientRequestId).toBe("accept-1");
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(pipelineRevision(current));
+  const late = await acceptHead(current, "accept-2");
+  expect(late.status).toBe(409);
+  expect(late.error).toContain("this one is completed");
+  expect(loadPipelines()[0]!.reviewAcceptances).toHaveLength(1);
+});
+
+test("accept-head follows the review stage's pass edge to the next stage with the unreviewed findings in its input (#2187)", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }) as never);
+  await tickPipelines([], h.ports);
+  await failEveryCritique(h, 1, h.beforeBuildPass);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_review");
+  const accepted = await acceptHead(parked, "accept-ship");
+  expect(accepted.error).toBeUndefined();
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("running");
+  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(current.cursor).toMatchObject({ stageId: "ship", state: "pending", activatedBy: { stageId: "build", attempt: 2, edge: "pass" } });
+  expect(current.cursor!.input).toContain("built v2");
+  expect(current.cursor!.input).toContain("Unreviewed findings:");
+  /* The controller runs the next stage like any other activation. */
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "ship")?.attempts).toHaveLength(1);
+});
+
+test("stop-after-fix, maxRounds 2: added rounds run bounded fix loops, park again in needs_review on a new unreviewed head, and the review activation count stays exact across a retry (#1938)", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2, ...STOP_AFTER_FIX }) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 2, h.beforeBuildPass);
 
@@ -8961,6 +9480,268 @@ test("maxRounds 2: added rounds run bounded fix loops, park again in needs_revie
   expect(current.cursor).toMatchObject({ stageId: "ship", activatedBy: { stageId: "critique", attempt: 6, edge: "pass" } });
   expect(current.reviewGrants?.map((grant) => grant.rounds)).toEqual([2, 1]);
   expect(reviewActivations()).toBe(5);
+});
+
+/* #2187 S1: after the last review the builder fixes, and the lane completes.
+   These run the production controller (`FlowPipelineController`, the loop the
+   Viewer runs) over the production engine tick. The test only plays the
+   stage agents: it answers each attempt the controller launched, and every
+   routing, handoff and completion decision is the engine's own. */
+const { FlowPipelineController } = await import("./controller");
+const { pipelineCompletedUnreviewed } = await import("./failEdgeBudget");
+
+/** Runs the controller until the lane leaves running, answering each launched
+    attempt: a stage in `failing` fails with one numbered finding, every other
+    stage passes, and a read-write pass moves the worktree head first. */
+async function driveWithController(
+  h: ReturnType<typeof movingHeadHarness>,
+  failing: ReadonlySet<string> = new Set(["critique"]),
+): Promise<{ pipeline: Pipeline; reviews: number }> {
+  const answered: FileEntry[] = [];
+  const controller = new FlowPipelineController({
+    scan: async () => ({ files: [...answered], complete: true }),
+    tickPipelines: (entries) => tickPipelines(entries, h.ports),
+    tickFlows: async () => ({ changed: false }),
+    /* A clock at zero keeps the hourly archive sweep from moving the lane. */
+    now: () => 0,
+    publishHeartbeat: () => {},
+    sweepForgeLinks: () => {},
+    log: () => {},
+  });
+  const seen = new Set<string>();
+  let reviews = 0;
+  for (let cycle = 0; cycle < 120; cycle += 1) {
+    await controller.tick("test");
+    const pipeline = loadPipelines()[0]!;
+    if (pipeline.state !== "running" && pipeline.state !== "provisioning") return { pipeline, reviews };
+    const stageId = pipeline.cursor?.stageId;
+    const attempt = stageId ? pipeline.runs.find((run) => run.stageId === stageId)?.attempts.at(-1) : undefined;
+    if (!stageId || !attempt?.agentPath || seen.has(attempt.agentPath)) continue;
+    seen.add(attempt.agentPath);
+    if (failing.has(stageId)) {
+      reviews += 1;
+      h.messages.set(attempt.agentPath, {
+        text: `round ${reviews} findings\n\n\`\`\`json\n{"status":"fail","findings":["P2 evidence gap ${reviews}"]}\n\`\`\``,
+        ts: Date.now() + 100_000_000,
+      });
+    } else {
+      if (attempt.effectiveRole.access === "read-write") h.beforeBuildPass();
+      h.messages.set(attempt.agentPath, { text: `${stageId} done ${seen.size}\n\n\`\`\`json\n{"status":"pass"}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    }
+    answered.push(entry(attempt.agentPath));
+  }
+  throw new Error(`the controller left the lane ${loadPipelines()[0]!.state}`);
+}
+
+test.each([
+  { reviews: 1, newHead: true },
+  { reviews: 3, newHead: true },
+  { reviews: 3, newHead: false },
+])("under the default the controller drives $reviews failed review(s): the fixer runs one more time and the lane completes with the unreviewed findings recorded (new head: $newHead) (#2187)", async ({ reviews, newHead }) => {
+  const h = movingHeadHarness(newHead ? undefined : () => REVIEW_HEADS[0]!);
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: reviews }, null) as never);
+  const { pipeline } = await driveWithController(h);
+
+  const builds = pipeline.runs.find((run) => run.stageId === "build")!.attempts;
+  const critiques = pipeline.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(builds).toHaveLength(reviews + 1);
+  expect(critiques).toHaveLength(reviews);
+  expect(builds.every((attempt) => attempt.state === "passed")).toBe(true);
+  expect(critiques.every((attempt) => attempt.state === "failed")).toBe(true);
+  /* The last fix took the last review's findings. */
+  expect(builds[reviews]!.activatedBy).toEqual({ stageId: "critique", attempt: reviews, edge: "fail", budgetSpent: true });
+  expect(builds[reviews]!.input).toContain(`P2 evidence gap ${reviews}`);
+  /* The lane completed; nothing parked and nothing waits for review. */
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.cursor).toBeNull();
+  expect(pipeline.reviewPending).toBeUndefined();
+  expect(pipeline.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  /* The unreviewed findings stay on the record, and the record names the heads. */
+  expect(critiques[reviews - 1]).toMatchObject({ budgetSpent: true, reviewedHead: newHead ? REVIEW_HEADS[reviews - 1] : REVIEW_HEADS[0], verdict: { status: "fail", findings: [`P2 evidence gap ${reviews}`] } });
+  const currentHead = newHead ? REVIEW_HEADS[reviews]! : REVIEW_HEADS[0]!;
+  expect(pipeline.lastPassedCommit).toBe(currentHead);
+  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({
+    stageId: "critique",
+    reviewedHead: newHead ? REVIEW_HEADS[reviews - 1]! : REVIEW_HEADS[0]!,
+    currentHead,
+    findings: 1,
+  });
+});
+
+test("under the default a last fix with a new head takes the reviewer's pass edge, and the next stage reads the unreviewed findings (#2187)", async () => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2 }) as never);
+  const { pipeline } = await driveWithController(h);
+
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(3);
+  const ship = pipeline.runs.find((run) => run.stageId === "ship")!.attempts;
+  expect(ship).toHaveLength(1);
+  expect(ship[0]!.activatedBy).toEqual({ stageId: "build", attempt: 3, edge: "pass" });
+  expect(ship[0]!.input).toContain(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(ship[0]!.input).toContain("P2 evidence gap 2");
+  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({ stageId: "critique", reviewedHead: REVIEW_HEADS[1], currentHead: REVIEW_HEADS[3], findings: 1 });
+});
+
+test("the controller stops stop-after-fix in needs_review after the last fix, and parks park before it (#2187)", async () => {
+  const stop = movingHeadHarness();
+  await create(stop.ports, BUDGET_STAGES({ to: "build", maxRounds: 2, onExhausted: "stop-after-fix" }, null) as never);
+  const stopped = (await driveWithController(stop)).pipeline;
+  expect(stopped.state).toBe("needs_review");
+  expect(stopped.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(3);
+  expect(stopped.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(2);
+  expect(stopped.reviewPending).toMatchObject({ stageId: "critique", attempt: 2, fixStageId: "build", fixAttempt: 3, reviewedHead: REVIEW_HEADS[1], currentHead: REVIEW_HEADS[2] });
+  expect(pipelineCompletedUnreviewed(stopped)).toBeNull();
+
+  const park = movingHeadHarness();
+  await create(park.ports, BUDGET_STAGES({ to: "build", maxRounds: 2, onExhausted: "park" }, null) as never);
+  const parked = (await driveWithController(park)).pipeline;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain("fail-edge budget exhausted after 2 round(s)");
+  expect(parked.cursor?.stageId).toBe("critique");
+  expect(parked.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(3);
+  expect(parked.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
+});
+
+test("stop-after-fix is accepted wherever a fail edge takes its option (#2187)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({
+    task: "Stop after the fix",
+    repoDir: "/repo",
+    stages: BUDGET_STAGES({ to: "build", maxRounds: 2, onExhausted: "stop-after-fix" }) as never,
+    autoStart: false,
+  }, h.ports);
+  expect(created.pipeline?.stages[1]?.onFail).toEqual({ to: "build", maxRounds: 2, onExhausted: "stop-after-fix" });
+  const id = created.pipeline!.id;
+  const edited = await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds: 3, onExhausted: "stop-after-fix" }, h.ports);
+  expect(edited.pipeline?.stages[1]?.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "stop-after-fix" });
+  expect(edited.graphEdit?.summary).toContain("then stop after the last fix");
+  /* The store reads it back. */
+  expect(loadPipelines()[0]!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "stop-after-fix" });
+});
+
+/* #2187 §3.2: every new review-loop stage is converted where it enters the
+   plan, so none of them reaches the embedded flow that parks at its round
+   limit without a last fix. */
+const CONVERTED_REVIEWER_EDGE = { to: "review-fix", maxRounds: 5, onExhausted: "advance" };
+
+function expectConvertedReview(pipeline: Pipeline, implementer: string, reviewNext: string | null) {
+  const review = pipeline.stages.find((stage) => stage.id === "review")!;
+  const fix = pipeline.stages.find((stage) => stage.id === "review-fix")!;
+  const source = pipeline.stages.find((stage) => stage.id === implementer)!;
+  expect(review).toMatchObject({ kind: "run", next: reviewNext, onFail: CONVERTED_REVIEWER_EDGE, effectiveRole: { access: "read-only" } });
+  expect(fix).toMatchObject({ kind: "run", next: "review", onFail: null, effectiveRole: source.effectiveRole });
+  expect(pipeline.stages.some((stage) => stage.kind === "review-loop")).toBe(false);
+  expect(pipeline.runs.some((run) => run.stageId === "review-fix")).toBe(true);
+}
+
+const REVIEW_LOOP_STAGE = { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}" };
+const BUILD_ONLY = [{ id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null }];
+
+test("create_pipeline stores a review-loop as a read-only reviewer, a fix stage and an advance fail edge (#2187)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({
+    task: "Reviewed build",
+    repoDir: "/repo",
+    stages: [{ ...BUILD_ONLY[0], next: "review" }, { ...REVIEW_LOOP_STAGE, next: null }] as never,
+    autoStart: false,
+  }, h.ports);
+  expect(created.error).toBeUndefined();
+  expect(created.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
+  expect(created.legacyReview).toBeUndefined();
+  expectConvertedReview(loadPipelines()[0]!, "build", null);
+  expect(loadPipelines()[0]!.stages.map((stage) => stage.id)).toEqual(["build", "review", "review-fix"]);
+});
+
+test("add-stage on a draft converts a review-loop, and that draft started and failed on every round completes after a last fix (#2187)", async () => {
+  const h = movingHeadHarness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({ task: "Draft with review", repoDir: "/repo", stages: BUILD_ONLY as never, autoStart: false }, h.ports);
+  const id = created.pipeline!.id;
+  const added = await patchPipeline(id, { action: "add-stage", stage: REVIEW_LOOP_STAGE as never }, h.ports);
+  expect(added.error).toBeUndefined();
+  expect(added.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
+  expect(added.graphEdit?.summary).toContain("as a reviewer with fix stage review-fix");
+  expectConvertedReview(loadPipelines()[0]!, "build", null);
+
+  expect((await patchPipeline(id, { action: "start" }, h.ports)).error).toBeUndefined();
+  const { pipeline, reviews } = await driveWithController(h, new Set(["review"]));
+  expect(reviews).toBe(5);
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  const fixes = pipeline.runs.find((run) => run.stageId === "review-fix")!.attempts;
+  expect(fixes).toHaveLength(5);
+  expect(fixes.at(-1)!.activatedBy).toEqual({ stageId: "review", attempt: 5, edge: "fail", budgetSpent: true });
+  expect(fixes.at(-1)!.input).toContain("P2 evidence gap 5");
+  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({ stageId: "review", reviewedHead: REVIEW_HEADS[4], currentHead: REVIEW_HEADS[5], findings: 1 });
+  expect(h.calls.some((call) => call.startsWith("flow:"))).toBe(false);
+});
+
+test("add-stage on a started lane converts a review-loop and keeps every run's history (#2187)", async () => {
+  const h = harness();
+  await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1] }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const started = loadPipelines()[0]!;
+  expect(started.state).toBe("running");
+  expect(started.cursor?.stageId).toBe("plan");
+  const planAttempts = structuredClone(started.runs.find((run) => run.stageId === "plan")!.attempts);
+  expect(planAttempts).toHaveLength(1);
+
+  const added = await patchPipeline(started.id, { action: "add-stage", index: 2, stage: REVIEW_LOOP_STAGE as never }, h.ports);
+  expect(added.error).toBeUndefined();
+  expect(added.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
+  const lane = loadPipelines()[0]!;
+  expectConvertedReview(lane, "build", null);
+  expect(lane.stages.find((stage) => stage.id === "build")!.next).toBe("review");
+  expect(lane.runs.find((run) => run.stageId === "plan")!.attempts).toEqual(planAttempts);
+  expect(lane.cursor?.stageId).toBe("plan");
+});
+
+test("a review-loop the conversion cannot build without a guess is stored as sent, and the answer carries the refusals (#2187)", async () => {
+  const h = harness();
+  savePipelines([]);
+  /* Only a read-only stage passes into the review: no fix stage can copy it. */
+  const readOnly = await createPipelineFromRequest({
+    task: "Review a plan",
+    repoDir: "/repo",
+    stages: [{ ...RUN_STAGES[0], next: "review" }, { ...REVIEW_LOOP_STAGE, next: null }] as never,
+    autoStart: false,
+  }, h.ports);
+  expect(readOnly.error).toBeUndefined();
+  expect(readOnly.convertedStages).toBeUndefined();
+  expect(readOnly.legacyReview).toEqual([{ stageId: "review", refusals: [expect.objectContaining({ code: "implementer-read-only" })] }]);
+  expect(readOnly.pipeline!.stages.find((stage) => stage.id === "review")).toMatchObject({ kind: "review-loop", onFail: null });
+  expect(readOnly.pipeline!.stages).toHaveLength(2);
+
+  /* A full plan has no slot for the fix stage, on add-stage as at creation. */
+  const seven = Array.from({ length: 7 }, (_, index) => ({ ...BUILD_ONLY[0], id: `build${index}`, next: index < 6 ? `build${index + 1}` : null }));
+  const full = await createPipelineFromRequest({ task: "Seven builds", repoDir: "/repo", stages: seven as never, autoStart: false }, h.ports);
+  const added = await patchPipeline(full.pipeline!.id, { action: "add-stage", stage: REVIEW_LOOP_STAGE as never }, h.ports);
+  expect(added.error).toBeUndefined();
+  expect(added.convertedStages).toBeUndefined();
+  expect(added.legacyReview).toEqual([{ stageId: "review", refusals: [expect.objectContaining({ code: "stage-count" })] }]);
+  const stored = loadPipelines().find((pipeline) => pipeline.id === full.pipeline!.id)!;
+  expect(stored.stages).toHaveLength(8);
+  expect(stored.stages.at(-1)).toMatchObject({ id: "review", kind: "review-loop" });
+});
+
+test("graph edits on a stored legacy lane never convert its review-loop (#2187)", async () => {
+  const h = harness();
+  const lane = await create(h.ports, [
+    { ...BUILD_ONLY[0], next: "review" },
+    { ...REVIEW_LOOP_STAGE, next: null },
+    { ...BUILD_ONLY[0], id: "docs", prompt: "Docs", next: null },
+  ] as never);
+  expect(lane.stages.map((stage) => [stage.id, stage.kind])).toEqual([["build", "run"], ["review", "review-loop"], ["docs", "run"]]);
+  const reordered = await patchPipeline(lane.id, { action: "reorder-stage", stageIds: ["build", "docs", "review"] }, h.ports);
+  expect(reordered.error).toBeUndefined();
+  expect(reordered.convertedStages).toBeUndefined();
+  const stored = loadPipelines()[0]!;
+  expect(stored.stages.map((stage) => [stage.id, stage.kind])).toEqual([["build", "run"], ["docs", "run"], ["review", "review-loop"]]);
+  expect(stored.stages.find((stage) => stage.id === "review")!.onFail).toBeNull();
 });
 
 /* A needs_decision that carries findings routes along the fail edge (#1785);
@@ -9084,6 +9865,8 @@ test("a review-loop binds its implementer through the activation graph across a 
     ] as never,
   }, ports);
   expect(created.pipeline).toBeDefined();
+  /* A lane stored before #2187, whose review-loop runs as an embedded flow. */
+  savePipelines([asStoredLegacyReviewLane(created.pipeline!, created.convertedStages)]);
   await tickPipelines([], ports); // provision
   await tickPipelines([], ports); // spawn seed
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "seeded")], ports); // seed → buildB
@@ -9166,6 +9949,8 @@ test("consecutive reviews cross a migration boundary and resume positional imple
     ] as never,
   }, ports);
   expect(created.pipeline).toBeDefined();
+  /* A lane stored before #2187, whose review-loop runs as an embedded flow. */
+  savePipelines([asStoredLegacyReviewLane(created.pipeline!, created.convertedStages)]);
   await tickPipelines([], ports); // provision
   await tickPipelines([], ports); // spawn build
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "built")], ports); // build → review1
@@ -10763,12 +11548,18 @@ test("a review flow paused on the scan in a phase past spawning parks at once (#
   expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toBeUndefined();
 });
 
-test("a failed receipt that staged a session is not re-dispatched into a read-write worktree (#1678 review)", async () => {
+test("a failed receipt that staged a session is not re-dispatched into a read-write worktree holding changes (#1678 review)", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
   ] as never);
   await tickPipelines([], h.ports);
+  /* The staged host left an edit behind, so only retry-stage's reset may
+     clear the way for another writer. */
+  const baseExec = h.ports.exec;
+  h.ports.exec = (rawCommand, rawArgs, cwd) => rawArgs[0] === "status"
+    ? { code: 0, stdout: " M src/partial-edit.ts\n", stderr: "" }
+    : baseExec(rawCommand, rawArgs, cwd);
   const claims: string[] = [];
   let spawnCalls = 0;
   h.ports.spawnAgent = async (_input, onReserved) => {
@@ -10822,6 +11613,49 @@ test("a failed receipt that staged a session still retries a read-only stage (#1
   h.advanceWallClock(scheduled.at(-1)!);
   await tickPipelines([], h.ports);
   expect(spawnCalls).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
+});
+
+test("a read-write launch the deploy handover failed after staging waits and relaunches when its worktree is untouched (#1835)", async () => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  /* The incident's header build attempt 2: the runtime host went away while
+     the release changed hands, after the launch had staged its session. */
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls === 1) {
+      await onReserved({ launchId: "launch-handover", conversationId: "conversation_handover" });
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-handover"
+    ? { ...failedReceipt("launch-handover", "conversation_handover", HOST_UNAVAILABLE), staged: true }
+    : null;
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); }, sleep: forbiddenSleep });
+
+  await tickPipelines([], h.ports);
+
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.stateDetail).toStartWith("stage spawn deferred: ");
+  expect(waiting.runs[0]!.attempts[0]).toMatchObject({
+    state: "pending",
+    launchId: null,
+    retiredLaunches: [{ launchId: "launch-handover" }],
+  });
+
+  /* The successor answers: the same attempt launches once more. */
+  h.advanceWallClock(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
 });
 
@@ -12834,4 +13668,141 @@ test.each(["path-pending", "starting", "closed", "closed-pending"] as const)("ne
     expect(f.registry.settleSpawn(receipt.launchId, oldEntry).kind).toBe("conflict");
     expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.launchId).toBe(next.launchId);
   } finally { setAgentRegistryForTests(null); }
+});
+
+/* Integration (#1695 K6c, #1709): a real, isolated registry switches the stage's conversation to another
+   account through the structured reconfigure; the message the operator sent while the switch waited is
+   carried by the commit and delivered by the ordinary migration tick; that delivery is what starts the
+   successor's turn, and the stage settles on the successor's verdict. No host, socket or account is touched. */
+test("a stage conversation switched to another account continues on the message held for the switch and settles on the successor's verdict without the fail edge (#1695 K6c)", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { advanceConversationMigration, reconcileMigrations } = await import("@/lib/accounts/migration/coordinator");
+  const { applyStructuredReconfigure } = await import("@/lib/runtime/structuredReconfigure");
+  const { procBackend } = await import("@/lib/proc");
+  const { boardFor } = await import("@/lib/board/store");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "k6c-switched-stage-registry.json"));
+  const sourcePath = "/codex/k6c-stage-source.jsonl";
+  const successorPath = "/codex/accounts/account-b/k6c-stage-successor.jsonl";
+  const profile = emptyLaunchProfile({ cwd: "/repo", project: "repo" });
+  const hostProcess = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
+  const observe = (turn: "busy" | "idle", observedAt: string) => registry.reconcileConversations([{
+    engine: "codex", path: sourcePath, accountId: "account-a", launchProfile: profile,
+    turn: { state: turn, source: "assistant", terminalAt: turn === "idle" ? observedAt : null }, observedAt,
+  }] as never);
+  const recordHost = (activeTurnRef: string | null) => registry.upsert({
+    key: { engine: "codex", sessionId: stageConversationGeneration() },
+    artifactPath: sourcePath, cwd: "/repo", accountId: "account-a", launchProfile: profile,
+    status: activeTurnRef ? "live" : "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:k6c", process: hostProcess, eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(hostProcess)}`, pendingAction: null,
+  });
+  observe("busy", "2026-07-21T10:00:10.000Z");
+  const stageConversation = registry.conversationForPath(sourcePath)!.id;
+  function stageConversationGeneration() { return registry.conversation(stageConversation)!.generations[0]!.id; }
+  recordHost("turn-source");
+
+  const h = harness();
+  const spawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    const spawned = await spawn(input, (reserved) => onReserved({ ...reserved, conversationId: stageConversation }));
+    return { ...spawned, conversationId: stageConversation, transcript: sourcePath };
+  };
+  /* Where the conversation lives now, as the registry says: the engine follows it across the switch. */
+  const basePath = h.ports.pathForConversation;
+  const baseConversation = h.ports.conversationIdForPath;
+  h.ports.pathForConversation = (id) => id === stageConversation ? registry.conversation(stageConversation)?.generations.at(-1)?.path ?? null : basePath(id);
+  h.ports.conversationIdForPath = (pathname) => registry.conversationForPath(pathname)?.id ?? baseConversation(pathname);
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build", next: null, onFail: { to: "recover", maxRounds: 1 } },
+    { id: "recover", kind: "run", role: { roleId: "builder" }, prompt: "Recover {{prev.output}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  makeStructuredAttempt();
+  pinStageHead(h);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.conversationId).toBe(stageConversation);
+
+  /* The successor engine answers only what it is sent. */
+  const successor = {
+    received: [] as string[],
+    receive(text: string) {
+      this.received.push(text);
+      h.durableTurns.set(successorPath, { turn: "busy", message: null });
+      h.setConversationActive(true);
+    },
+    finishTurn() {
+      if (this.received.length === 0) return;
+      h.durableTurns.set(successorPath, { turn: "terminal", message: { text: PASS_TEXT, ts: 5_600_000 } });
+      h.setConversationActive(false);
+    },
+  };
+  const provider = {
+    virtualSource: true as const,
+    async create(input: { operationId: string }) {
+      return { operationId: input.operationId, nativeId: "k6c-stage-successor", path: successorPath, continuityPaths: [], historyHash: "k6c-history", host: { kind: "codex-app-server" as const, identity: "k6c-successor-host", epoch: 1, verifiedAt: "2026-07-21T10:01:00.000Z" } };
+    },
+    async verify() {},
+  };
+  const effect = { operationId: "k6c-switch-to-b", conversationId: stageConversation, kind: "reconfigure" as const, model: "gpt-5.6-sol", effort: "medium", fast: false, accountId: "account-b", eventSeq: 11 };
+  const applySwitch = () => applyStructuredReconfigure(effect, {
+    registry,
+    validateAccount: async () => {},
+    resolveAccount: ((engine: string, accountId: string) => ({ accountId, home: process.env.LLV_STATE_DIR!, engine })) as never,
+    releaseHost: async () => true,
+    recover: (async () => true) as never,
+    migrate: (conversationId, _target, store, ownsOperation, reconfigureOperationId) =>
+      advanceConversationMigration(conversationId, store, provider, { ownsOperation, reconfigureOperationId, deferBoardRepair: true }),
+  });
+
+  /* The operator switches the stage's conversation while its turn runs, then tells it to carry on there. */
+  expect(await applySwitch()).toBe("pending");
+  expect(registry.conversation(stageConversation)!.migration?.phase).toBe("waiting-turn");
+  const held = registry.holdDelivery(stageConversation, "Continue the build on the other account.", "k6c-continue");
+  expect(held.state).toBe("held");
+
+  /* The source turn ends without a verdict and its host is released, well inside the grace a dead host gets. */
+  h.durableTurns.set(sourcePath, { turn: "terminal", message: { text: "Halfway through; continuing on the other account.", ts: 5_000_000 } });
+  h.setConversationActive(false);
+  const releasedAt = h.ports.now();
+  h.ports.conversationHostUnavailableSince = async () => releasedAt;
+  h.advanceWallClock(60_000);
+  await tickPipelines([entry(sourcePath)], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+
+  /* The queue runs the switch again at the turn boundary, and it commits on account B. */
+  recordHost(null);
+  observe("idle", "2026-07-21T10:00:30.000Z");
+  expect(await applySwitch()).toBe("applied");
+  expect(registry.conversation(stageConversation)!.generations.at(-1)).toMatchObject({ accountId: "account-b", path: successorPath });
+
+  /* The ordinary migration tick delivers what the switch carried, to the successor, once. */
+  const delivered: Array<{ path: string; operationId: string }> = [];
+  const port = {
+    async deliver({ delivery, path: target }: { delivery: { text: string; command: { operationId: string } }; path: string }) {
+      delivered.push({ path: target, operationId: delivery.command.operationId });
+      successor.receive(delivery.text);
+      return "delivered" as const;
+    },
+  };
+  const tick = () => reconcileMigrations(provider, port, registry, { remapBoardPaths: (project) => boardFor(project), transferBoardPathPlacements: () => {} });
+  await tick();
+  await tick();
+  expect(delivered).toEqual([{ path: successorPath, operationId: held.command.operationId }]);
+  expect(successor.received).toEqual(["Continue the build on the other account."]);
+
+  h.ports.conversationHostUnavailableSince = async () => null;
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([{ ...entry(successorPath), activity: "live" }], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", agentPath: successorPath });
+
+  successor.finishTurn();
+  await tickPipelines([entry(successorPath)], h.ports);
+  await tickPipelines([entry(successorPath)], h.ports);
+
+  const current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts).toHaveLength(1);
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "passed", agentPath: successorPath, conversationId: stageConversation, verdict: { status: "pass" } });
+  expect(current.runs.find((run) => run.stageId === "recover")?.attempts ?? []).toEqual([]);
+  expect(current.cursor?.activatedBy?.edge ?? null).not.toBe("fail");
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
 });

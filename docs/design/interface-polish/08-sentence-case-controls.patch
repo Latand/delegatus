@@ -1,0 +1,70 @@
+diff --git a/src/lib/i18n/en.ts b/src/lib/i18n/en.ts
+index 3feb7e3..8de3fa1 100644
+--- a/src/lib/i18n/en.ts
++++ b/src/lib/i18n/en.ts
+@@ -514,10 +514,10 @@ export const en = {
+   /* Issue #702: no transport promise. #685 inverted the rollout gates, so a
+      deployment that declares a runtime host spawns structured and pane-less —
+      the placeholder used to name a tmux session the spawn never opens. */
+-  "composer.placeholderSpawn": "prompt — the agent will start…",
++  "composer.placeholderSpawn": "Prompt — the agent will start…",
+   "composer.placeholderResolving": "message the agent — reconnecting to its session…",
+   "composer.placeholderSend": "message the agent…",
+-  "composer.placeholderOrchestrator": "what should get done in {project}?",
++  "composer.placeholderOrchestrator": "What should get done in {project}?",
+   "composer.textAria": "Text for the agent",
+   /* Chat-first mobile composer (issue #419 reopened): the model/reasoning +
+      attachment second row folds behind this compact primary-row action so the
+@@ -555,7 +555,7 @@ export const en = {
+ 
+   // Agent control strip (issue #241)
+   "strip.live": "live",
+-  "strip.resume": "resume",
++  "strip.resume": "Resume",
+   "strip.deadMode": "dead host",
+   "strip.moreActions": "More actions",
+   "strip.stopSubagent": "interrupts the root agent",
+@@ -1342,7 +1342,7 @@ export const en = {
+   "feed.liveEarlierSteps": { one: "{count} earlier step", other: "{count} earlier steps" },
+   "feed.backToLive": "Back to the live tail",
+   "feed.newCount": "{count} new",
+-  "feed.down": "down",
++  "feed.down": "Jump to latest",
+   "feed.pickLog": "Pick a log on the left — the feed updates itself",
+   "feed.showEarlier": "show earlier",
+   "feed.showEarlierHidden": "show earlier (hidden {count})",
+diff --git a/src/lib/i18n/uk.ts b/src/lib/i18n/uk.ts
+index 82ec38f..e4f4467 100644
+--- a/src/lib/i18n/uk.ts
++++ b/src/lib/i18n/uk.ts
+@@ -501,10 +501,10 @@ export const uk: Record<keyof typeof en, Message> = {
+   "composer.deliveredEcho": "Доставлено — зʼявиться у стрічці",
+   "composer.retrySend": "Надіслати ще раз",
+   "composer.placeholderRelay": "написати — передам через кореневу сесію…",
+-  "composer.placeholderSpawn": "промпт — агент запуститься…",
++  "composer.placeholderSpawn": "Промпт — агент запуститься…",
+   "composer.placeholderResolving": "написати агенту — відновлюємо з'єднання з сесією…",
+   "composer.placeholderSend": "написати агенту…",
+-  "composer.placeholderOrchestrator": "що зробити в {project}?",
++  "composer.placeholderOrchestrator": "Що зробити в {project}?",
+   "composer.textAria": "Текст для агента",
+   "composer.optionsShow": "Показати параметри повідомлення",
+   "composer.optionsHide": "Сховати параметри повідомлення",
+@@ -592,7 +592,7 @@ export const uk: Record<keyof typeof en, Message> = {
+ 
+   // Agent control strip (issue #241)
+   "strip.live": "наживо",
+-  "strip.resume": "відновити",
++  "strip.resume": "Відновити",
+   "strip.deadMode": "мертвий хост",
+   "strip.moreActions": "Більше дій",
+   "strip.stopSubagent": "перериває кореневого агента",
+@@ -1289,7 +1289,7 @@ export const uk: Record<keyof typeof en, Message> = {
+   "feed.liveEarlierSteps": { one: "{count} попередній крок", few: "{count} попередні кроки", many: "{count} попередніх кроків", other: "{count} попередніх кроків" },
+   "feed.backToLive": "Повернутись до живого хвоста",
+   "feed.newCount": "{count} нових",
+-  "feed.down": "вниз",
++  "feed.down": "До останнього",
+   "feed.pickLog": "Вибери лог зліва — стрічка оновлюється сама",
+   "feed.showEarlier": "показати раніше",
+   "feed.showEarlierHidden": "показати раніше (сховано {count})",

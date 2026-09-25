@@ -71,6 +71,9 @@ export type CachedPullRequest = {
   /** Issues of the same repository this PR closes (`closingIssuesReferences`). */
   closes: number[];
   checkedAt: string;
+  /** The head commit as last read. For a merged PR it is the commit the PR
+      delivered, which the worktree sweep proves a lane is contained in (#2202). */
+  headRefOid?: string;
 };
 
 /** One repository of the forge cache, indexed for read-time joins. */

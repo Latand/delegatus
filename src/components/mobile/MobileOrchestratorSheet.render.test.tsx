@@ -80,7 +80,6 @@ function quietBannerCount(file: FileEntry): number {
       file={file}
       incumbent={null}
       pendingMandate=""
-      viewerMcpRegistered={false}
       submitting={false}
       rotate={{ open: false, seat: null, vacated: false, opening: false, submitting: false, failure: null, onOpen: () => undefined, onCancel: () => undefined, onConfirm: () => undefined }}
       tick={{ onOpen: () => undefined, onClose: () => undefined }}
@@ -119,7 +118,7 @@ for (const reason of ["catalog", "surface", null] as const) {
       <MobileOrchestratorSheet project="atlas" projectName="Atlas" sheet="seat" now={1_800_000_000}
         state={{ ...state, bindFailure: reason }} status={{ seat, pending: null, exists: true, viewerMcpRegistered: false }}
         file={reason === "catalog" ? null : stalledFile()} incumbent={null} pendingMandate=""
-        viewerMcpRegistered={false} submitting={false}
+        submitting={false}
         rotate={{ open: false, seat: null, vacated: false, opening: false, submitting: false, failure: null, onOpen() {}, onCancel() {}, onConfirm() {} }}
         tick={{ onOpen() {}, onClose() {} }}
         onConfirm={() => {}} onRecheck={() => {}} onOpenConversation={() => {}} onClose={() => {}} />,

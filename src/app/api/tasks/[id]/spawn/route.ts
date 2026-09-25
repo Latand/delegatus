@@ -10,6 +10,7 @@ import {
   resolveProjectSpawnAccount,
 } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
@@ -68,6 +69,8 @@ interface TaskSpawnDependencies {
   resolveSpawnedTranscriptPath: typeof resolveSpawnedTranscriptPath;
   ensureTaskPipelineForAssignment?: typeof ensureTaskPipelineForAssignment;
   recordOperatorActivity?: typeof recordDirectOperatorWakatimeActivity;
+  /** The activity dashboard's request ledger; never throws. */
+  recordOperatorRequest?: typeof recordOperatorRequest;
 }
 
 const productionDependencies: TaskSpawnDependencies = {
@@ -79,6 +82,7 @@ const productionDependencies: TaskSpawnDependencies = {
   resolveSpawnedTranscriptPath,
   ensureTaskPipelineForAssignment,
   recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+  recordOperatorRequest,
 };
 
 function cwdFromBody(value: unknown): { cwd?: string; error?: string; status?: number } {
@@ -317,6 +321,7 @@ async function postTaskSpawn(
     } catch {
       return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
     }
+    dependencies.recordOperatorRequest?.(req, { kind: "spawn", idempotencyKey: `task-spawn:${clientAttemptId}`, project: task.project });
   }
   const taskTitle = task.text.split("\n")[0]?.trim() ?? "";
   const spec = {

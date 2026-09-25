@@ -1,0 +1,17 @@
+diff --git a/src/components/kanban/kanbanBoard.css b/src/components/kanban/kanbanBoard.css
+index 6d9863e..7d0b8b3 100644
+--- a/src/components/kanban/kanbanBoard.css
++++ b/src/components/kanban/kanbanBoard.css
+@@ -293,6 +293,12 @@
+ .kb .pill[data-status="assigned"] { --st: var(--color-accent); --st-soft: var(--color-accent-soft); }
+ .kb .pill[data-status="blocked"] { --st: var(--color-danger); --st-soft: var(--color-danger-soft); }
+ .kb .pill[data-status="done"] { --st: var(--color-success); --st-soft: var(--color-success-soft); }
++/* Inside a status column the column already names the status, so the pill
++   drops its tint and keeps a dot in the status hue: the violet accent then
++   means "interactive" only, and one filled shape per card is left to the
++   actions. */
++.kb .column .card .pill { background: var(--surface-well); color: var(--color-secondary); }
++.kb .column .card .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--st); flex-shrink: 0; }
+ .kb .card .age { color: var(--color-muted); font-size: var(--text-label); white-space: nowrap; }
+ .kb .card .foot .spacer { flex: 1; }
+ .kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }

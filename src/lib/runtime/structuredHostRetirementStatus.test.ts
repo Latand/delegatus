@@ -30,7 +30,7 @@ function report(): StructuredHostRetirementReport {
   return { version: 1, startedAt: "2026-07-01T11:59:59.000Z", finishedAt: capturedAt, idleHours: 6,
     evaluated: 1, deferred: 0, standDown: null, retired: [], failed: [],
     refused: [{ key, conversationId, clause: "events-flushed", reason: "event tail unavailable", undetermined: true }],
-    reclaimed: { rssBytes: 0, swapBytes: 0, processes: 0 } };
+    refusedByFlag: {}, reclaimed: { rssBytes: 0, swapBytes: 0, processes: 0 } };
 }
 
 function registryFixture(project = "project-a") {
@@ -56,6 +56,29 @@ test("the real sweep shape retains an undetermined target and separates replacem
   expect(result.items[0]).toMatchObject({ conversationId, generationId: generation, sessionKey: key,
     operationId: null, process: null, phase: "evaluation", result: "undetermined", reason: "event tail unavailable",
     current: { generationId: generation, conversationGenerationId: replacement, ownership: "unknown" } });
+});
+
+test("the report names the flags behind no-active-flags refusals, per item and across the sweep (#2137)", () => {
+  const value = report();
+  value.refused = [{ key, conversationId, clause: "no-active-flags", reason: "the host is flagged waitingOnApproval",
+    flags: ["waitingOnApproval"] }];
+  /* The whole sweep's counts, which include hosts of projects this caller
+     cannot see: flag names and counts only, never a host. */
+  value.refusedByFlag = { waitingOnApproval: 1, "some-future-capability-v9": 4 };
+  const result = projectRetirementStatus({ project: "project-a" }, sources(value));
+  expect(result.refusedByFlag).toEqual({ waitingOnApproval: 1, "some-future-capability-v9": 4 });
+  expect(result.items[0]).toMatchObject({ result: "refused", clause: "no-active-flags", flags: ["waitingOnApproval"] });
+
+  /* Another project's caller still sees the counts, and none of the targets. */
+  const elsewhere = projectRetirementStatus({ project: "project-b" }, sources(value));
+  expect(elsewhere.items).toEqual([]);
+  expect(elsewhere.refusedByFlag).toEqual({ waitingOnApproval: 1, "some-future-capability-v9": 4 });
+
+  /* A report written before the count existed answers null, not an empty map. */
+  const legacy = report() as Partial<StructuredHostRetirementReport>;
+  delete legacy.refusedByFlag;
+  expect(projectRetirementStatus({ project: "project-a" }, sources(legacy as StructuredHostRetirementReport)).refusedByFlag).toBeNull();
+  expect(projectRetirementStatus({ project: "project-a" }, { ...sources(), readReport: () => Buffer.from("{}") }).refusedByFlag).toBeNull();
 });
 
 test("pages cap both returned and examined subjects and never expose another project", () => {

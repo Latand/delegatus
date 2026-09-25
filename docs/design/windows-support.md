@@ -222,7 +222,7 @@ script, or a feature that stays a WSL route).
 
 | Location | Assumption | Class |
 |---|---|---|
-| `scripts/rebuild.sh`, `install-legacy-tmux-supervisor.sh`, `ensure-legacy-tmux-session.sh`, `e2e-viewer-replacement.ts`, `deploy-staging.ts`, `bootstrap-runtime-host.ts`, `runtime-host-viewer-adapter.ts`, `migrate-legacy-tmux.ts` | maintainer deploy and Docker tooling | N |
+| `scripts/rebuild.sh`, `e2e-viewer-replacement.ts`, `deploy-staging.ts`, `bootstrap-runtime-host.ts`, `runtime-host-viewer-adapter.ts`, `migrate-legacy-tmux.ts` | maintainer deploy and Docker tooling | N |
 | `scripts/install-mcp.sh` | registers the MCP server with `claude mcp add` via bash | N (docs: the README's manual registration command works from PowerShell; phase 3 revisits) |
 | `scripts/setup-whisper.sh`, `scripts/whisper_transcribe.py`, `src/lib/transcribe/local.ts` | local dictation needs a POSIX venv | N (cloud backends are unaffected; local dictation is a WSL route) |
 | `bin/telegram-login-bridge.py`, `bin/telegram-mcp-server.py`, `src/lib/telegram/connectorLog.ts:18,76` (`fcntl.flock`), `bin/provision-telegram-connector.mjs` | Telegram connector is Python + `fcntl` + uid checks | N (Telegram stays a WSL/Linux route) |

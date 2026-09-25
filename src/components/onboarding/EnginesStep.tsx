@@ -3,7 +3,9 @@
 import { RefreshCw } from "lucide-react";
 
 import { MobileAccountsBody } from "@/components/AccountsPanel";
+import { CopilotAccountList, copilotSignedIn, useCopilotAccounts } from "@/components/CopilotFooterRow";
 import { EngineMark } from "@/components/EngineMark";
+import { engineTintOf } from "@/components/utils";
 import type { AccountOption, EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { RoleEngine } from "@/lib/roles/types";
@@ -14,7 +16,9 @@ import type { RoleEngine } from "@/lib/roles/types";
  * each account's state and its sign-in (the Claude browser-and-code flow, the
  * Codex device code) — with "Add a {engine} account" last, so several
  * accounts per engine are one row away (#2004) and there is one sign-in
- * implementation.
+ * implementation. Copilot sits beside them (#2166, newcomer audit F6) with the
+ * footer switcher's own rows: it runs single agents, while the orchestrator
+ * needs Claude or Codex, and the card says so.
  */
 
 export type CliPresence = "found" | "missing" | null;
@@ -104,6 +108,54 @@ function EngineCard({ state, cli, now, onRecheck }: { state: EngineAccountsState
   );
 }
 
+/** Copilot's card: its accounts come from their own route, so the card reads
+    that list and hands it the footer switcher's rows (#2166). */
+function CopilotCard() {
+  const { t } = useLocale();
+  const accounts = useCopilotAccounts({ polling: true });
+  const { body, load } = accounts;
+  const loading = body === null;
+  const missing = body !== null && !body.cli.present;
+  const signedIn = copilotSignedIn(body);
+  const stateLine = loading ? null : missing
+    ? t("onboarding.engines.missing")
+    : signedIn ? t("onboarding.engines.connectedCopilot", { label: signedIn.label }) : t("onboarding.engines.signedOut");
+  const tone = signedIn && !missing ? "text-success" : missing ? "text-danger" : "text-warning";
+  return (
+    <div
+      data-onboarding-engine="copilot"
+      data-engine-state={loading ? "loading" : missing ? "missing" : signedIn ? "connected" : "signed-out"}
+      className="flex min-w-0 flex-col gap-2 rounded-[12px] border border-border bg-card p-3"
+      style={{ borderLeft: `3px solid ${engineTintOf("copilot").color}` }}
+    >
+      {loading ? (
+        <div className="h-14 animate-pulse rounded-[8px] bg-sunken motion-reduce:animate-none" aria-busy />
+      ) : (
+        <div className="flex min-w-0 items-center gap-2.5">
+          <EngineMark engine="copilot" size={18} />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="text-body font-semibold text-primary">Copilot</span>
+            <span data-onboarding-engine-header="" className={`truncate text-ui ${tone}`} title={stateLine ?? undefined}>{stateLine}</span>
+          </span>
+          {missing ? (
+            <button type="button" onClick={() => void load()} className="inline-flex h-8 shrink-0 items-center gap-1 rounded-[8px] border border-border bg-canvas px-2.5 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11">
+              <RefreshCw className="h-3 w-3" aria-hidden />
+              {t("onboarding.engines.recheck")}
+            </button>
+          ) : null}
+        </div>
+      )}
+      {missing ? <p className="text-ui text-secondary">{t("onboarding.engines.missingCopilot")}</p> : null}
+      {loading ? null : <p data-onboarding-copilot-note="" className="text-ui text-muted">{t("onboarding.engines.copilotNote")}</p>}
+      {loading ? null : (
+        <div data-onboarding-accounts="copilot" inert={missing} className={`-mx-3 -mb-3 flex flex-col gap-2 border-t border-border bg-sunken px-3 py-2.5 text-[11.5px] ${missing ? "opacity-55" : ""}`}>
+          <CopilotAccountList accounts={accounts} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function EnginesStep({ claude, codex, cli, now, onRecheck }: {
   claude: EngineAccountsState;
   codex: EngineAccountsState;
@@ -127,6 +179,7 @@ export function EnginesStep({ claude, codex, cli, now, onRecheck }: {
       <div className="grid grid-cols-2 items-start gap-4 max-sm:grid-cols-1 max-sm:gap-3">
         <EngineCard state={claude} cli={cli.claude} now={now} onRecheck={onRecheck} />
         <EngineCard state={codex} cli={cli.codex} now={now} onRecheck={onRecheck} />
+        <CopilotCard />
       </div>
       {note ? (
         <p data-onboarding-engines-note="" className={`rounded-[8px] px-3 py-2 text-body ${claudeOn || codexOn ? "bg-sunken text-secondary" : "bg-warning-soft text-warning"}`}>{note}</p>

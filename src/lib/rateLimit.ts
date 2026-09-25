@@ -3,7 +3,7 @@ import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts
 import { effectiveRemaining, gatingWindows } from "@/lib/accounts/migration/quotaPolicy";
 import type { Flow, FlowBlock } from "@/lib/flows/types";
 import { SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES } from "@/lib/limitWindows";
-import { providerThrottleState, type ProviderThrottleState } from "@/lib/limitsThrottle";
+import { hostProviderRetryAt, type ProviderThrottleState } from "@/lib/limitsThrottle";
 import { modelTierWindows, tierWindowKey, type Engine, type EngineLimits, type FileEntry, type LimitsProvenance, type LimitWindow, type LimitWindowSource, type QuotaWindowKey, type RateLimitState, type TierLimitWindow } from "@/lib/types";
 
 type HostedEngine = Extract<Engine, "claude" | "codex">;
@@ -196,6 +196,12 @@ export interface RateLimitProjectionSnapshot {
     artifactPath: string;
     accountId: string | null;
     status: string;
+    /** The host's own report that the running turn retries the provider, and
+        whether it holds a permission request open (#2215). */
+    structuredHost?: {
+      providerRetry?: { retryAt: string } | null;
+      pendingPermissions?: readonly unknown[] | null;
+    } | null;
   }>;
   conversations: Record<string, {
     id: string;
@@ -265,7 +271,6 @@ export function projectRateLimitReadModel(
   flows: Flow[],
   snapshot: RateLimitProjectionSnapshot,
   now = Date.now(),
-  limitsProvenance: (engine: HostedEngine, accountId: string) => LimitsProvenance | null = () => null,
   hostIsLive: (entry: NonNullable<RateLimitProjectionSnapshot["entries"]>[string]) => boolean = () => false,
 ): { files: ProviderThrottleFileEntry[]; flows: Flow[] } {
   const hosts = new Map<string, { conversationId: string; engine: HostedEngine; accountId: string | null }>();
@@ -281,22 +286,27 @@ export function projectRateLimitReadModel(
       });
     }
   }
-  const activeEntries = new Map<string, { engine: HostedEngine; accountId: string }>();
+  const activeEntries = new Map<string, {
+    engine: HostedEngine;
+    accountId: string;
+    structuredHost: NonNullable<RateLimitProjectionSnapshot["entries"]>[string]["structuredHost"];
+  }>();
   for (const entry of Object.values(snapshot.entries ?? {})) {
     const host = hosts.get(entry.artifactPath);
     if (!host || !entry.accountId || !["starting", "live", "idle", "handoff"].includes(entry.status) || !hostIsLive(entry)) continue;
-    activeEntries.set(entry.artifactPath, { engine: host.engine, accountId: entry.accountId });
+    activeEntries.set(entry.artifactPath, { engine: host.engine, accountId: entry.accountId, structuredHost: entry.structuredHost });
   }
-  const providerThrottleByAccount: Record<HostedEngine, Map<string, ProviderThrottleState | null>> = {
-    claude: new Map(),
-    codex: new Map(),
-  };
-  const providerThrottleFor = (engine: HostedEngine, accountId: string): ProviderThrottleState | null => {
-    const engineAccounts = providerThrottleByAccount[engine];
-    if (!engineAccounts.has(accountId)) {
-      engineAccounts.set(accountId, providerThrottleState(limitsProvenance(engine, accountId), now));
-    }
-    return engineAccounts.get(accountId) ?? null;
+  /* Provider throttle is a fact about ONE turn, and only the engine running it
+     can report it (#2215). It used to be read off the account: the usage
+     poller's own 429 from the usage endpoint, stamped on every busy turn of
+     that account, so a turn held by a permission request read as throttled
+     with a retry time that moved each time the poller backed off. */
+  const providerThrottleFor = (
+    structuredHost: NonNullable<RateLimitProjectionSnapshot["entries"]>[string]["structuredHost"],
+  ): ProviderThrottleState | null => {
+    if (structuredHost?.pendingPermissions?.length) return null;
+    const retryAt = hostProviderRetryAt(structuredHost?.providerRetry, now);
+    return retryAt ? { reason: "provider_throttled", retryAt } : null;
   };
 
   const projectedFiles = files.map((file) => {
@@ -308,7 +318,7 @@ export function projectRateLimitReadModel(
       ? snapshot.quotaObservations[engine][accountId]
       : undefined;
     const providerThrottle = activeEntry && file.authoritativeTurn?.state === "busy"
-      ? providerThrottleFor(activeEntry.engine, activeEntry.accountId)
+      ? providerThrottleFor(activeEntry.structuredHost)
       : null;
     /* The scanner's process signal still supports the legacy quota display,
        whose only claim is which account window to show. Provider throttle

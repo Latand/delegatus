@@ -12,14 +12,15 @@ import {
   admitScannedConversations,
   commitTaskMembership,
   ensureTaskMembership,
+  failUnstartedLaunchMembership,
   planAdmissions,
   recordLaunchIdentity,
   refineTask,
   UNTITLED_TASK_TEXT,
 } from "./membership";
-import { patchTask } from "./commands";
+import { dismissUnstartedLaunch, patchTask } from "./commands";
 import { loadTasks, saveTasks } from "./store";
-import type { BoardTask } from "./types";
+import { LAUNCH_NOT_STARTED_ERROR, type BoardTask, type TaskAssignment } from "./types";
 
 const now = "2026-09-09T10:00:00.000Z";
 let serial = 0;
@@ -215,7 +216,9 @@ test("admission planning covers roots and their children, skips held ones, gives
   ];
   const held = task("held", "fixture", { assignments: [{ path: entries[4]!.path, conversationId: entries[4]!.conversationId!, panePid: null, state: "delivered", error: null, at: now }] });
   const p = pipeline("p1", [{ agentPath: entries[5]!.path, conversationId: entries[5]!.conversationId! }, { agentPath: entries[6]!.path, conversationId: entries[6]!.conversationId! }]);
-  const plans = planAdmissions(entries, [held], [p]);
+  /* Planned at the moment the fixtures were written (mtime 1 s), so these
+     conversations are still running and their placeholder waits for a name. */
+  const plans = planAdmissions(entries, [held], [p], ADMISSION_BATCH, 1_000);
   expect(plans.map((plan) => [plan.origin.kind, plan.origin.key])).toEqual([["pipeline", "p1"], ["pipeline", "p1"], ["conversation", "conversation_fixture_1"], ["conversation", "conversation_fixture_2"]]);
   expect(plans[3]!.inherit).toEqual([{ conversationId: "conversation_fixture_1", path: entries[0]!.path }]);
   const admitted = admitConversations([held], plans, deps);
@@ -401,4 +404,62 @@ test("a child is planned only once its parent is covered, follows a parent plann
   expect(tasks.length).toBe(2);
   expect(tasks[0]!.assignments.map((assignment) => assignment.conversationId)).toEqual(["conversation_fixture_20", "conversation_fixture_21", "conversation_fixture_22"]);
   expect(planAdmissions([grandchild, child, orphan, root], tasks, [])).toEqual([]);
+});
+
+test("a rotation's handoff digest and a reply-with-ok probe mint no task; ordinary work beside them does", () => {
+  const digest = entry(901, { cwd: "/srv/installation/.config/agent-log-viewer/state/orchestrator/handoff-digests/seat3-rotate-to-4/cwd", title: "You are compacting the rotation history of a project manager agent's mandate. Write a digest", root: "codex-sessions", engine: "codex", fmt: "codex" });
+  const probe = entry(902, { cwd: "/var/tmp/llv-probe", title: "Reply with exactly: ok" });
+  const work = entry(903, { title: "Fix the flaky upload test" });
+  const plans = planAdmissions([digest, probe, work], [], [], ADMISSION_BATCH, Date.parse(now));
+  expect(plans.map((plan) => plan.identity.path)).toEqual([work.path]);
+});
+
+test("a conversation that has already ended is admitted under its own title; a live one waits for its first action", () => {
+  const nowMs = Date.parse(now);
+  const ended = entry(911, { title: "Old investigation of the cache", mtime: (nowMs - 2 * 60 * 60_000) / 1000, activity: "idle" });
+  const live = entry(912, { title: "Fresh launch", mtime: nowMs / 1000, activity: "live" });
+  const quietButRunning = entry(913, { title: "Long build", mtime: (nowMs - 2 * 60 * 60_000) / 1000, activity: "idle", proc: "running" });
+  const plans = planAdmissions([ended, live, quietButRunning], [], [], ADMISSION_BATCH, nowMs);
+  const admitted = admitConversations([], plans, deps).tasks;
+  const byTitle = new Map(admitted.map((task) => [task.text, task.origin?.refinement] as const));
+  expect(byTitle.get("Old investigation of the cache")).toBe("titled");
+  expect(byTitle.get("Fresh launch")).toBe("pending");
+  expect(byTitle.get("Long build")).toBe("pending");
+});
+
+function linked(launchId: string, conversationId: string, extra: Partial<TaskAssignment> = {}): TaskAssignment {
+  return { launchId, clientAttemptId: `attempt-${launchId}`, conversationId, path: null, panePid: null, state: "linked", error: null, at: now, ...extra };
+}
+
+test("a failed launch's own row turns failed and its task goes back to Inbox; the task keeps the row", () => {
+  const failure = { launchId: "launch-1", conversationId: "conversation_1", clientAttemptId: "attempt-launch-1", error: "No healthy Claude account is available. Re-login Main in Accounts and retry." };
+  const result = failUnstartedLaunchMembership([task("t1", "p", { status: "assigned", assignments: [linked("launch-1", "conversation_1")] })], failure, now);
+  expect(result.changed).toBe(true);
+  expect(result.tasks[0]).toMatchObject({ status: "inbox", assignments: [{ launchId: "launch-1", state: "failed", error: failure.error }] });
+});
+
+test("settling a failed launch leaves every other state of the task alone", () => {
+  const failure = { launchId: "launch-1", conversationId: "conversation_1", clientAttemptId: "attempt-launch-1", error: "boom" };
+  /* Something else is live on it: it stays Assigned. */
+  const busy = failUnstartedLaunchMembership([task("t1", "p", { status: "assigned", assignments: [linked("launch-1", "conversation_1"), linked("launch-0", "conversation_0", { state: "delivered" })] })], failure, now);
+  expect(busy.tasks[0]).toMatchObject({ status: "assigned", assignments: [{ state: "failed" }, { state: "delivered" }] });
+  /* Blocked stays Blocked. */
+  expect(failUnstartedLaunchMembership([task("t1", "p", { status: "blocked", assignments: [linked("launch-1", "conversation_1")] })], failure, now).tasks[0]!.status).toBe("blocked");
+  /* A row the launch did not create — another conversation that gained this
+     launch id, or a delivered row — is not this launch's to fail. */
+  const foreign = failUnstartedLaunchMembership([task("t1", "p", { status: "assigned", assignments: [linked("launch-1", "conversation_other"), linked("launch-1", "conversation_1", { state: "delivered" })] })], failure, now);
+  expect(foreign.changed).toBe(false);
+  /* The placeholder the launch minted for itself had nowhere to be before. */
+  const own = failUnstartedLaunchMembership([task("t1", "p", { status: "assigned", origin: { kind: "launch", key: "attempt-launch-1", refinement: "pending" }, assignments: [linked("launch-1", "conversation_1")] })], failure, now);
+  expect(own.changed).toBe(false);
+});
+
+test("a launch its own failure marked failed can still be dismissed on the card", () => {
+  const failed = task("t1", "p", { assignments: [linked("launch-1", "conversation_1", { state: "failed", error: "No healthy Claude account is available." })] });
+  const result = dismissUnstartedLaunch([failed], "t1", { launchId: "launch-1", conversationId: "conversation_1" }, now);
+  if (!result.ok) throw new Error(result.error);
+  expect(result.task.assignments[0]).toMatchObject({ state: "failed", error: LAUNCH_NOT_STARTED_ERROR });
+  /* A second dismissal changes nothing. */
+  const again = dismissUnstartedLaunch(result.tasks, "t1", { launchId: "launch-1", conversationId: "conversation_1" }, now);
+  expect(again.ok && again.tasks).toBe(result.tasks);
 });

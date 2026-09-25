@@ -39,7 +39,7 @@ export interface PipelinePorts {
 }
 
 /** Actions whose effects reach past the record: the catalog is read again after them. */
-const REFRESH_ACTIONS = new Set(["retry-stage", "skip-stage", "resume", "pause", "close", "continue-review"]);
+const REFRESH_ACTIONS = new Set(["retry-stage", "skip-stage", "resume", "pause", "close", "continue-review", "accept-head"]);
 
 export const browserPipelinePorts: PipelinePorts = {
   async read(id) {

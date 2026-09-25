@@ -1,0 +1,212 @@
+{
+  "readings": {
+    "board-draft-1440": {
+      "words": "Create this project's orchestratorYou talk to it like a colleague: «fix the flaky test in X», «take issues 12 and 14», «review PR 30». It opens lanes, spawns implementers and fresh reviewers, and merges on APPROVE. It reports back here; it deploys on its own unless you edit that out below.viewer MCP: run scripts/install-mcp.sh or claude mcp add viewer -- bun ./bin/mcp-server.mjsAgent engineClaudeCodexReasoningmodel: defaultOpus 5.5FableSonnetHaikueffort: defaultlowmediumhighextra highmaxBuilt-in default mandate v26 (edit)Sent as the first messageWorking directory: /repo/atlasOne task? Spawn one agent and talk to it directly (Create → Agent). The orchestrator pays off when several things run at once while you are elsewhere.Create orchestrator",
+      "rulesOpen": false,
+      "radios": 2,
+      "runsOnValue": null,
+      "confirmText": "Create orchestrator",
+      "seat": {
+        "left": 324,
+        "width": 1040,
+        "top": 60,
+        "bottom": 735
+      },
+      "edges": {
+        "avatar": 13,
+        "heading": 17,
+        "intro": 17,
+        "example": null,
+        "runsOn": null,
+        "rules": 17,
+        "confirm": 17,
+        "byHand": null
+      },
+      "insets": {
+        "foldFromRight": 13,
+        "runsOnLabel": null,
+        "bodyTop": 16,
+        "bodyBottom": 198,
+        "footerTop": 37,
+        "footerBottom": null,
+        "gapHeadingIntro": 19.8,
+        "gapRunsOnRules": null,
+        "gapConfirmByHand": null
+      },
+      "draftHeight": 675,
+      "columns": [
+        {
+          "status": "inbox",
+          "top": 787,
+          "left": 264,
+          "emptyBottom": 918.8,
+          "empty": "Nothing in the inboxNew tasks land here."
+        },
+        {
+          "status": "assigned",
+          "top": 787,
+          "left": 556,
+          "emptyBottom": 918.8,
+          "empty": "Nothing in progressMove a task here or add an agent to one."
+        },
+        {
+          "status": "blocked",
+          "top": 787,
+          "left": 1048,
+          "emptyBottom": 936.2,
+          "empty": "Nothing blockedMove a task here when it waits on something outside it."
+        },
+        {
+          "status": "done",
+          "top": 787,
+          "left": 1340,
+          "emptyBottom": 918.8,
+          "empty": "Nothing finished yetFinished tasks keep their history here."
+        }
+      ],
+      "clipped": [],
+      "viewportHeight": 900,
+      "conversationsView": false
+    },
+    "board-draft-1280": {
+      "words": "Create this project's orchestratorYou talk to it like a colleague: «fix the flaky test in X», «take issues 12 and 14», «review PR 30». It opens lanes, spawns implementers and fresh reviewers, and merges on APPROVE. It reports back here; it deploys on its own unless you edit that out below.viewer MCP: run scripts/install-mcp.sh or claude mcp add viewer -- bun ./bin/mcp-server.mjsAgent engineClaudeCodexReasoningmodel: defaultOpus 5.5FableSonnetHaikueffort: defaultlowmediumhighextra highmaxBuilt-in default mandate v26 (edit)Sent as the first messageWorking directory: /repo/atlasOne task? Spawn one agent and talk to it directly (Create → Agent). The orchestrator pays off when several things run at once while you are elsewhere.Create orchestrator",
+      "rulesOpen": false,
+      "radios": 2,
+      "runsOnValue": null,
+      "confirmText": "Create orchestrator",
+      "seat": {
+        "left": 264,
+        "width": 1000,
+        "top": 60,
+        "bottom": 660
+      },
+      "edges": {
+        "avatar": 13,
+        "heading": 17,
+        "intro": 17,
+        "example": null,
+        "runsOn": null,
+        "rules": 17,
+        "confirm": 17,
+        "byHand": null
+      },
+      "insets": {
+        "foldFromRight": 13,
+        "runsOnLabel": null,
+        "bodyTop": 16,
+        "bodyBottom": 123,
+        "footerTop": 37,
+        "footerBottom": null,
+        "gapHeadingIntro": 19.8,
+        "gapRunsOnRules": null,
+        "gapConfirmByHand": null
+      },
+      "draftHeight": 600,
+      "columns": [
+        {
+          "status": "inbox",
+          "top": 712,
+          "left": 264,
+          "emptyBottom": 843.8,
+          "empty": "Nothing in the inboxNew tasks land here."
+        },
+        {
+          "status": "assigned",
+          "top": 712,
+          "left": 556,
+          "emptyBottom": 843.8,
+          "empty": "Nothing in progressMove a task here or add an agent to one."
+        },
+        {
+          "status": "blocked",
+          "top": 712,
+          "left": 1048,
+          "emptyBottom": 861.2,
+          "empty": "Nothing blockedMove a task here when it waits on something outside it."
+        },
+        {
+          "status": "done",
+          "top": 712,
+          "left": 1340,
+          "emptyBottom": 843.8,
+          "empty": "Nothing finished yetFinished tasks keep their history here."
+        }
+      ],
+      "clipped": [],
+      "viewportHeight": 800,
+      "conversationsView": false
+    },
+    "board-draft-1280-uk": {
+      "words": "Створити оркестратора для цього проєктуВи говорите з ним як з колегою: «полагодь нестабільний тест у X», «візьми задачі 12 і 14», «переглянь PR 30». Він відкриває лінії роботи, запускає виконавців і свіжих ревʼюерів та зливає на APPROVE. Він звітує вам тут; а деплоїть сам, якщо ви не приберете це нижче.viewer MCP: виконайте scripts/install-mcp.sh або claude mcp add viewer -- bun ./bin/mcp-server.mjsДвигун агентаClaudeCodexМіркуваннямодель: типоваOpus 5.5FableSonnetHaikuміркування: типовінизькісереднівисокідуже високімаксимальніВбудований типовий мандат v26 (редагувати)Надсилається як перше повідомленняРобоча тека: /repo/atlasОдна задача? Запустіть одного агента й говоріть з ним напряму (Створити → Агент). Оркестратор окупається, коли кілька справ ідуть одночасно, поки вас немає.Створити оркестратора",
+      "rulesOpen": false,
+      "radios": 2,
+      "runsOnValue": null,
+      "confirmText": "Створити оркестратора",
+      "seat": {
+        "left": 264,
+        "width": 1000,
+        "top": 60,
+        "bottom": 660
+      },
+      "edges": {
+        "avatar": 13,
+        "heading": 17,
+        "intro": 17,
+        "example": null,
+        "runsOn": null,
+        "rules": 17,
+        "confirm": 17,
+        "byHand": null
+      },
+      "insets": {
+        "foldFromRight": 13,
+        "runsOnLabel": null,
+        "bodyTop": 16,
+        "bodyBottom": 123,
+        "footerTop": 37,
+        "footerBottom": null,
+        "gapHeadingIntro": 19.8,
+        "gapRunsOnRules": null,
+        "gapConfirmByHand": null
+      },
+      "draftHeight": 600,
+      "columns": [
+        {
+          "status": "inbox",
+          "top": 712,
+          "left": 264,
+          "emptyBottom": 843.8,
+          "empty": "Вхідні порожніНові задачі з'являються тут."
+        },
+        {
+          "status": "assigned",
+          "top": 712,
+          "left": 556,
+          "emptyBottom": 843.8,
+          "empty": "Нічого в роботіПеренесіть задачу сюди або додайте до неї агента."
+        },
+        {
+          "status": "blocked",
+          "top": 712,
+          "left": 1048,
+          "emptyBottom": 861.2,
+          "empty": "Нічого не заблокованоПереносьте сюди задачу, яка чекає на щось поза нею."
+        },
+        {
+          "status": "done",
+          "top": 712,
+          "left": 1340,
+          "emptyBottom": 861.2,
+          "empty": "Ще нічого не завершеноЗавершені задачі зберігають тут свою історію."
+        }
+      ],
+      "clipped": [],
+      "viewportHeight": 800,
+      "conversationsView": false
+    },
+    "overview-band-1440": null,
+    "overview-band-1280": null,
+    "overview-band-1280-uk": null
+  },
+  "failures": []
+}

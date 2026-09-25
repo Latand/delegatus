@@ -2,21 +2,44 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "e94faa2c0c2cfa25e678f8103b9fab6eaf693163ef17cf52551490a45142d879",
+  "generatorSha256": "bf75bb97ad0938fd039b283431c28bea5797d6d39c74e7c8b0659e8674a235f1",
   "seed": "scripts/readme-demo-state.ts",
-  "seedSha256": "8f2451583658be2f7e83fbb840d94e19a114379f635f828692ae17ccb3350c0a",
+  "seedSha256": "e85bd6d5891534fbd3362f7cd242c95840d6b200dd0f1a8256eaae9e2f379aa0",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
   "assets": [
     {
       "path": "board.svg",
-      "description": "A project's board: tasks by status, the agents working on each, and a running pipeline; account limits in the sidebar.",
+      "description": "A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, and a card that names why it needs you; account limits in the sidebar.",
       "viewport": {
         "width": 1280,
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 14,
-      "sha256": "e729caad53aafbece1fdf2eeae6d0ac0e572e26eae971a21b8caf387a5bc2127"
+      "rasterTiles": 13,
+      "renderBack": {
+        "worstTileMean": 3.173,
+        "changedTileShare": 0,
+        "meanDifference": 0.209,
+        "ringsClipped": 0
+      },
+      "sha256": "27e9fdad2356cbd6f40be770ef2364e39d219b8a1a8466279190179c93bf4c9a"
+    },
+    {
+      "path": "orchestrator.svg",
+      "description": "A project's orchestrator on top of its board: its chat with the operator, and beside it the log of the reports it filed.",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "colorScheme": "dark",
+      "rasterTiles": 12,
+      "renderBack": {
+        "worstTileMean": 3.714,
+        "changedTileShare": 0,
+        "meanDifference": 0.321,
+        "ringsClipped": 1
+      },
+      "sha256": "03d362a704848c51a13e435bf5e68c1687b88f6cb06db816b0d64fc5700ac2fa"
     },
     {
       "path": "conversation.svg",
@@ -26,8 +49,14 @@
         "height": 960
       },
       "colorScheme": "dark",
-      "rasterTiles": 22,
-      "sha256": "dfc9b15067b70d9775b80076dddbc3f338fab5b6d31b5ffbf4aad4ff610834e1"
+      "rasterTiles": 17,
+      "renderBack": {
+        "worstTileMean": 3.591,
+        "changedTileShare": 0,
+        "meanDifference": 0.325,
+        "ringsClipped": 2
+      },
+      "sha256": "bea023f39b0bd19e05b40e76dd46365f8ad026e4cb6bc1b68a1e728ea2e32e63"
     },
     {
       "path": "pipeline.svg",
@@ -37,8 +66,14 @@
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 25,
-      "sha256": "82771d19626ac9f68ff1e57b0f86e52349ff3fbf4e77347b1ff0aa83a271daa9"
+      "rasterTiles": 23,
+      "renderBack": {
+        "worstTileMean": 4.015,
+        "changedTileShare": 0,
+        "meanDifference": 0.287,
+        "ringsClipped": 0
+      },
+      "sha256": "084576fccc276c2ea50c49842681aef20bdcfcc7b428531223f6d0657e6b6739"
     },
     {
       "path": "accounts.svg",
@@ -48,19 +83,48 @@
         "height": 800
       },
       "colorScheme": "dark",
-      "rasterTiles": 16,
-      "sha256": "bae95f27cf0636e8e5160e72acb76e78dc2ac9cc734a1d24887c0f4b1182dacf"
+      "rasterTiles": 15,
+      "renderBack": {
+        "worstTileMean": 3.005,
+        "changedTileShare": 0,
+        "meanDifference": 0.241,
+        "ringsClipped": 0
+      },
+      "sha256": "6dc43244090481e9414e60ce8305d2c48caf880fe6b681ee09370ae562460a7b"
     },
     {
       "path": "phone-conversation.svg",
-      "description": "The same conversation on a 390 px phone screen, its test run expanded.",
+      "description": "The same conversation on a phone screen, its test run expanded.",
       "viewport": {
-        "width": 390,
-        "height": 844
+        "width": 392,
+        "height": 848
       },
       "colorScheme": "dark",
-      "rasterTiles": 5,
-      "sha256": "19ea66a25e1b2db88bad1192538840fc75312a01d1d40242c73d0ecca03bbdfa"
+      "rasterTiles": 2,
+      "renderBack": {
+        "worstTileMean": 4.005,
+        "changedTileShare": 0,
+        "meanDifference": 0.453,
+        "ringsClipped": 0
+      },
+      "sha256": "e02443bb797a661a03a909ff145be4a9790371ba20f995b048ab27c4394ced0e"
+    },
+    {
+      "path": "phone-board.svg",
+      "description": "A project's board on a phone: the four status columns as tabs, with the card that needs you pinned first.",
+      "viewport": {
+        "width": 392,
+        "height": 848
+      },
+      "colorScheme": "dark",
+      "rasterTiles": 4,
+      "renderBack": {
+        "worstTileMean": 3.064,
+        "changedTileShare": 0,
+        "meanDifference": 0.163,
+        "ringsClipped": 0
+      },
+      "sha256": "14ef07c85db632f0a2937d3278982e4a4428a69a4e496b51b869863845d37cf0"
     }
   ]
 }

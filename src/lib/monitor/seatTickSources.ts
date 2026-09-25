@@ -20,12 +20,12 @@ import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
-import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
-import { pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
+import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
-import type { Pipeline } from "@/lib/pipelines/types";
+import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment, ledgerDeployment } from "@/lib/runtime/deploymentLedger";
@@ -406,6 +406,9 @@ export async function withdrawRuntimeWake(
 
 export interface SeatTickSources {
   seatFor: typeof orchestratorSeatFor;
+  /** Whether an orchestrator ever held the project (#2170). Absent: assumed,
+      so a missing seat is reported as it always was. */
+  seatEverHeld?: (project: string) => boolean;
   /** Projects that currently hold an active seat. */
   activeSeats: () => string[];
   pipelines: () => readonly Pipeline[];
@@ -433,6 +436,9 @@ export interface SeatTickSources {
   /** One deployment off the ledger by id (#2063). Absent reads as none. */
   deployment?: typeof ledgerDeployment;
   retirementReport: () => StructuredHostRetirementReport | null;
+  /** The retirement journal's sweeps finished at or after `sinceMs` (#1818).
+      Absent reads as none. */
+  retirementJournal?: (sinceMs: number) => RetirementJournalWindow;
   /** The project's own tick settings (#1275), read fresh per check so a change
       an agent just recorded takes effect at the very next check rather than at
       the next deploy. A project nobody configured reads the defaults. */
@@ -516,6 +522,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
     seatFor: (project) => orchestratorSeatForCurrentProject(project),
+    seatEverHeld: (project) => orchestratorSeatEverHeld(project),
     activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
     pipelines: () => loadPipelinesForList(),
     archivedPipelines: () => loadArchivedPipelines(),
@@ -538,6 +545,7 @@ export function defaultSeatTickSources(): SeatTickSources {
       const report = readJsonCache(statePath("host-retirement-report.json"));
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
+    retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
     settings: (project) => readSeatTickSettings(project),
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
@@ -685,6 +693,13 @@ function laneMovedAt(pipeline: Pipeline): string | null {
  * records the transcript that created it, so a lane the operator or another
  * agent opened settles onto their board and never onto this seat's wake.
  */
+/** How many other open pipelines a finished marked lane's task waits on
+    (#2187 §5.3), the most over its tasks; absent when none waits. */
+export function taskWaitField(pipeline: Pipeline): { taskWaits?: number } {
+  const open = Math.max(0, ...(pipeline.taskFinishWaits ?? []).map((wait) => wait.open.length));
+  return open > 0 ? { taskWaits: open } : {};
+}
+
 function ownSettledLanes(
   project: string,
   seat: SeatTickSeatInput | null,
@@ -717,6 +732,7 @@ function ownSettledLanes(
         ? { detail: redactBounded(pipeline.stateDetail ?? "", OWN_LANE_DETAIL_LIMIT) || null }
         : {}),
       ...(settled === "needs_review" && pipelineReviewSummary(pipeline) ? { review: pipelineReviewSummary(pipeline)! } : {}),
+      ...taskWaitField(pipeline),
     });
   }
   const at = (lane: SeatTickOwnLaneInput) => (lane.updatedAt ? Date.parse(lane.updatedAt) : Number.NaN);
@@ -829,7 +845,13 @@ function activityOf(record: AgentLivenessRecord | undefined): SeatTickActivity |
      without it is how a settled turn that had simply gone quiet was reported as
      the seat's stall (#1262): the threshold measures silence, not an open
      turn. */
-  return record ? { lifecycle: record.lifecycle, reason: record.reason, turnState: record.turnState } : null;
+  if (!record) return null;
+  return {
+    lifecycle: record.lifecycle,
+    reason: record.reason,
+    turnState: record.turnState,
+    ...(record.permission ? { permission: { tool: record.permission.tool, command: record.permission.command, reason: record.permission.reason } } : {}),
+  };
 }
 
 /**
@@ -896,6 +918,150 @@ async function seatInput(project: string, policy: SeatTickPolicy, sources: SeatT
   };
 }
 
+/** One sweep as the retirement journal keeps it: retirements whole, refusals
+    as a count per clause, and `no-active-flags` refusals as a count per flag
+    (#2137; empty for a sweep journaled before that count existed). */
+export interface RetirementJournalSweep {
+  finishedAt: string;
+  retired: number;
+  refusedByClause: Record<string, number>;
+  refusedByFlag: Record<string, number>;
+}
+
+/** The sweeps inside a window, oldest first. `covered` says the journal
+    reaches back past the window's start: a journal younger than the window
+    cannot say that nothing retired across it. */
+export interface RetirementJournalWindow {
+  covered: boolean;
+  sweeps: RetirementJournalSweep[];
+}
+
+/** The window a sweep that retires nothing is judged over. Four times the
+    default six-hour idle bound, so an idle host has had every chance to go. */
+export const RETIREMENT_STALL_WINDOW_MS = 24 * 3_600_000;
+/** Refusals on one clause across the window that make a window without a
+    retirement a stall rather than a quiet machine. At one sweep per five
+    minutes that is more than three hosts refused on the same clause in every
+    sweep of the day; the #1818 journal held about 1900 a day. */
+export const RETIREMENT_STALL_REFUSALS = 1000;
+/** Enough of the journal's tail to hold a day of sweeps several times over. */
+const RETIREMENT_JOURNAL_TAIL_BYTES = 1024 * 1024;
+
+/**
+ * The clause holding every host back, when a window of sweeps retired nothing
+ * (#1818). A predicate stuck on one clause produces neither a failure nor an
+ * undetermined refusal, so the report the other signal reads stays clean while
+ * the host population grows; the journal's per-clause counts are where it
+ * shows. Null when the window is not fully observed, when anything retired, or
+ * when no clause crossed the threshold.
+ *
+ * When that clause is `no-active-flags`, `flags` carries the flags it refused
+ * on across the window, most frequent first: a flag the classifier does not
+ * know refuses every host that carries it, and the name is the whole diagnosis
+ * (#2137).
+ */
+export function stalledRetirementClause(
+  window: RetirementJournalWindow,
+  threshold: number = RETIREMENT_STALL_REFUSALS,
+): { clause: string; refusals: number; sweeps: number; flags: [string, number][] } | null {
+  if (!window.covered || window.sweeps.length === 0) return null;
+  if (window.sweeps.some((sweep) => sweep.retired > 0)) return null;
+  const totals = new Map<string, number>();
+  const flagTotals = new Map<string, number>();
+  for (const sweep of window.sweeps) {
+    for (const [clause, count] of Object.entries(sweep.refusedByClause)) totals.set(clause, (totals.get(clause) ?? 0) + count);
+    for (const [flag, count] of Object.entries(sweep.refusedByFlag)) flagTotals.set(flag, (flagTotals.get(flag) ?? 0) + count);
+  }
+  let worst: { clause: string; refusals: number } | null = null;
+  for (const [clause, refusals] of totals) if (!worst || refusals > worst.refusals) worst = { clause, refusals };
+  if (!worst || worst.refusals <= threshold) return null;
+  const flags = worst.clause === "no-active-flags"
+    ? [...flagTotals].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    : [];
+  return { ...worst, sweeps: window.sweeps.length, flags };
+}
+
+/** Flags named in the stall signal; the rest are counted, not listed, so an
+    unexpected flood of flag names cannot swamp the tick's agenda. */
+const RETIREMENT_STALL_FLAGS_SHOWN = 5;
+
+function stalledRetirementFlags(flags: readonly [string, number][]): string {
+  if (flags.length === 0) return "";
+  const shown = flags.slice(0, RETIREMENT_STALL_FLAGS_SHOWN).map(([flag, count]) => `${flag} ${count}`).join(", ");
+  const more = flags.length > RETIREMENT_STALL_FLAGS_SHOWN ? `, +${flags.length - RETIREMENT_STALL_FLAGS_SHOWN} more` : "";
+  return ` (flags: ${shown}${more})`;
+}
+
+/** A journal record's `name -> count` map, keeping only finite counts. */
+function journalCounts(value: unknown): Record<string, number> {
+  const counts: Record<string, number> = {};
+  if (value && typeof value === "object") {
+    for (const [name, count] of Object.entries(value)) {
+      if (typeof count === "number" && Number.isFinite(count)) counts[name] = count;
+    }
+  }
+  return counts;
+}
+
+/** The journal's last `bytes`, as sweeps oldest first, and whether the read
+    started mid-file. A line that does not parse is skipped. */
+function retirementJournalTail(filename: string, bytes: number): { sweeps: RetirementJournalSweep[]; truncated: boolean } {
+  let descriptor: number;
+  try {
+    descriptor = fs.openSync(filename, "r");
+  } catch {
+    return { sweeps: [], truncated: false };
+  }
+  let text: string;
+  let truncated: boolean;
+  try {
+    const size = fs.fstatSync(descriptor).size;
+    const start = Math.max(0, size - bytes);
+    const buffer = Buffer.alloc(size - start);
+    fs.readSync(descriptor, buffer, 0, buffer.length, start);
+    text = buffer.toString("utf8");
+    truncated = start > 0;
+    if (truncated) text = text.slice(text.indexOf("\n") + 1);
+  } catch {
+    return { sweeps: [], truncated: false };
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  const sweeps: RetirementJournalSweep[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line) as { finishedAt?: unknown; retired?: unknown; refusedByClause?: unknown; refusedByFlag?: unknown };
+      if (typeof record.finishedAt !== "string" || !Number.isFinite(Date.parse(record.finishedAt)) || !Array.isArray(record.retired)) continue;
+      sweeps.push({
+        finishedAt: record.finishedAt,
+        retired: record.retired.length,
+        refusedByClause: journalCounts(record.refusedByClause),
+        refusedByFlag: journalCounts(record.refusedByFlag),
+      });
+    } catch { /* a torn line */ }
+  }
+  return { sweeps, truncated };
+}
+
+/**
+ * The journal's sweeps since `sinceMs`, reading the rotated copy only when the
+ * current file starts inside the window. Covered once a sweep older than the
+ * window is seen; a tail that ends inside the window, or a journal that begins
+ * inside it, is not.
+ */
+export function readRetirementJournalWindow(filename: string, sinceMs: number): RetirementJournalWindow {
+  const sweeps: RetirementJournalSweep[] = [];
+  for (const file of [filename, `${filename}.1`]) {
+    const tail = retirementJournalTail(file, RETIREMENT_JOURNAL_TAIL_BYTES);
+    const within = tail.sweeps.filter((sweep) => Date.parse(sweep.finishedAt) >= sinceMs);
+    sweeps.unshift(...within);
+    if (within.length < tail.sweeps.length) return { covered: true, sweeps };
+    if (tail.truncated) break;
+  }
+  return { covered: false, sweeps };
+}
+
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [];
   /* The LATEST deployment, asked for as such. The ledger's default ordering is
@@ -913,6 +1079,15 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
   const undetermined = report?.refused.filter((refusal) => refusal.undetermined).length ?? 0;
   if (report && (report.failed.length > 0 || undetermined > 0)) {
     found.push({ id: "host-retirement", label: `host retirement: ${report.failed.length} failed, ${undetermined} undetermined` });
+  }
+  const stalled = sources.retirementJournal
+    ? stalledRetirementClause(sources.retirementJournal(sources.now() - RETIREMENT_STALL_WINDOW_MS))
+    : null;
+  if (stalled) {
+    found.push({
+      id: "host-retirement-stalled",
+      label: `host retirement: nothing retired in ${stalled.sweeps} sweeps over ${RETIREMENT_STALL_WINDOW_MS / 3_600_000}h while ${stalled.clause} refused ${stalled.refusals} times${stalledRetirementFlags(stalled.flags)}`,
+    });
   }
   /* The one signal that is about the seat itself: its own turn has stopped
      progressing. The tick's wake is what brings such a seat back, which is the
@@ -1257,12 +1432,18 @@ async function unmergedPullRequests(context: {
     });
     const lane = lanes.find(named) ?? owner;
     if (!lane || !isFinished(lane)) continue;
+    /* #2187 §4.6: a pull request the merge runner is working on is the
+       runner's, not the seat's; one it stopped on comes back with its reason. */
+    if (lane.merge && PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state)) continue;
     found.push({
       number: pullRequest.number,
       title: redactBounded(pullRequest.title, PULL_REQUEST_TITLE_LIMIT),
       pipelineId: lane.id,
       pipelineTitle: redactBounded(lane.task.split("\n")[0] ?? "", PULL_REQUEST_TITLE_LIMIT),
       updatedAt: pullRequest.updatedAt,
+      ...(pipelineCompletedUnreviewed(lane) ? { lastFixUnreviewed: true as const } : {}),
+      ...(lane.merge?.state === "blocked" && lane.merge.reason ? { mergeBlocked: redactBounded(lane.merge.reason, PULL_REQUEST_TITLE_LIMIT) } : {}),
+      ...taskWaitField(lane),
     });
   }
   /* An answer, so the run of failures is over: the source spoke, whatever it
@@ -1808,6 +1989,7 @@ export async function gatherSeatTickInput(
     project: canonical,
     now,
     seat,
+    ...(seat ? {} : { seatEverHeld: sources.seatEverHeld?.(canonical) ?? true }),
     pipelines,
     tasks,
     events,

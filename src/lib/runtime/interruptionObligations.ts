@@ -2,8 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { DeliveryOperationOwner } from "@/lib/agent/registry";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+
+import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
 
 /**
  * A conversation whose in-flight turn the Viewer cut, and the one continuation
@@ -88,6 +91,46 @@ export function interruptionObligationId(input: Pick<InterruptionObligation,
 
 export function interruptionObligationUnresolved(obligation: InterruptionObligation): boolean {
   return obligation.state === "owed" || obligation.state === "submitted";
+}
+
+/** How a submitted continuation's delivery ended, as the registry records it. */
+export interface SubmittedContinuationOutcome {
+  state: "delivered" | "failed";
+  /** When it arrived or failed; null when no record of that moment is left. */
+  at: string | null;
+  resolution: string;
+  /** Neither the reservation nor its owner row is left: settled long enough ago
+      that retention dropped both. */
+  compacted: boolean;
+}
+
+/**
+ * Reads a `submitted` obligation's outcome from its delivery reservation, the
+ * one its id keys (#1835). Null while that delivery is still in flight. The
+ * queue answers `submitted` on admission and says nothing more, so this is how
+ * both startup and the pipeline engine learn the continuation arrived.
+ */
+export function submittedContinuationOutcome(
+  obligation: Pick<InterruptionObligation, "id" | "conversationId" | "operationId">,
+  snapshot: {
+    heldDeliveries: Record<string, Pick<HeldDelivery, "clientMessageId" | "conversationId" | "state" | "deliveredAt" | "error">>;
+    deliveryOperationOwners: Record<string, Pick<DeliveryOperationOwner, "terminalState" | "terminalReason" | "settledAt">>;
+  },
+  canonical: (conversationId: ViewerConversationId) => string,
+): SubmittedContinuationOutcome | null {
+  const reservation = Object.values(snapshot.heldDeliveries).find((delivery) =>
+    delivery.clientMessageId === obligation.id
+      && canonical(delivery.conversationId) === canonical(obligation.conversationId));
+  const owner = obligation.operationId ? snapshot.deliveryOperationOwners[obligation.operationId] : undefined;
+  const settled = reservation
+    ? reservation.state === "delivered" || reservation.state === "failed" ? reservation.state : null
+    : owner?.terminalState ?? "delivered";
+  if (settled === null) return null;
+  const at = reservation?.state === "delivered" ? reservation.deliveredAt ?? owner?.settledAt ?? null : owner?.settledAt ?? null;
+  const resolution = settled === "failed"
+    ? reservation?.error || owner?.terminalReason || "the continuation delivery failed"
+    : reservation || owner ? "delivered" : "delivered; its settled reservation was compacted";
+  return { state: settled, at, resolution, compacted: !reservation && !owner };
 }
 
 function sameOwner(left: InterruptionOwner | null, right: InterruptionOwner | null): boolean {
@@ -349,12 +392,12 @@ export function interruptionContinuationText(obligation: InterruptionObligation)
   const turn = `The interrupted turn's last transcript event is ${obligation.checkpoint.lastEventKind ?? "a record"} at ${at}.`;
   const opening = obligation.reason === "viewer-release"
     ? [
-      "A Viewer deployment interrupted your turn while it was in flight: the Viewer that hosted you was replaced and this conversation was re-hosted by its successor.",
+      VIEWER_RELEASE_INTERRUPTION_OPENING,
       turn,
       "Resume that turn.",
     ]
     : [
-      "Viewer restarted and severed your structured host mid-turn.",
+      VIEWER_RESTART_INTERRUPTION_OPENING,
       turn,
       "You were re-hosted automatically; resume that turn.",
     ];

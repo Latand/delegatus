@@ -323,3 +323,27 @@ test("a continuation the delivery surface refuses stays owed and is sent once wh
   await tickPipelines([], h.ports);
   expect(h.continuations).toHaveLength(2);
 });
+
+test.each([
+  { state: "submitted" as const, messaged: 0 },
+  { state: "delivered" as const, messaged: 0 },
+  { state: "failed" as const, messaged: 1 },
+])("a cut the Viewer release recorded ($state) gets its continuation from the successor, not a second one from here (#1835)", async ({ state, messaged }) => {
+  const h = harness();
+  await runningStage(h);
+  /* The release recorded the cut before it let the host go; the successor's
+     startup owns the one continuation that obligation names. */
+  const recordedAt = new Date(h.wallClock()).toISOString();
+  h.ports.conversationInterruption = (conversationId) => conversationId === STAGE_CONVERSATION
+    ? { state, recordedAt, resolvedAt: state === "submitted" ? null : recordedAt }
+    : null;
+
+  h.succeed();
+  await tickPipelines([], h.ports);
+  h.advance(RESUME_SILENCE_MS + 60_000);
+  await tickPipelines([], h.ports);
+
+  /* Only a continuation the queue refused for good leaves this one owed. */
+  expect(h.continuations).toHaveLength(messaged);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+});

@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { DELETE, POST } from "./route";
+import { DELETE, PATCH, POST } from "./route";
 
 test("POST ensures a pipeline from the attached conversation profile", async () => {
   let tasks: BoardTask[] = [{
@@ -62,4 +62,84 @@ test("DELETE rejects a body without a stable assignment handle", async () => {
   const response = await DELETE(request, { params: Promise.resolve({ id: "task-1" }) });
   expect(response.status).toBe(400);
   expect(await response.json()).toEqual({ error: "launchId, path, conversationId or panePid is required" });
+});
+
+function ghostTask(extra: Partial<BoardTask> = {}): BoardTask {
+  return {
+    id: "ghost",
+    project: "viewer",
+    status: "assigned",
+    text: "Exercise legacy spawn fixture",
+    placement: "unplaced",
+    origin: { kind: "launch", key: "launch-ghost", refinement: "pending" },
+    assignments: [{ launchId: "launch-ghost", conversationId: "conversation_ghost", path: null, panePid: null, state: "linked", error: null, at: "2026-09-23T16:17:59.900Z", engine: "codex" }],
+    createdAt: "2026-09-23T16:17:59.900Z",
+    updatedAt: "2026-09-23T16:17:59.900Z",
+    ...extra,
+  } as BoardTask;
+}
+
+function dismissRequest(body: unknown): NextRequest {
+  return new NextRequest("http://127.0.0.1/api/tasks/ghost/assignment", {
+    method: "PATCH",
+    headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+test("PATCH dismisses a launch that never started: its row is kept as failed and the ghost placeholder is done", async () => {
+  let tasks = [ghostTask()];
+  const dependencies = {
+    mutateTasks: (mutator: (current: BoardTask[]) => { tasks?: BoardTask[]; result: unknown }) => {
+      const mutation = mutator(tasks);
+      if (mutation.tasks) tasks = mutation.tasks;
+      return mutation.result;
+    },
+    transcriptExists: () => false,
+    linkedPipeline: () => false,
+  } as unknown as Parameters<typeof PATCH.withDependencies>[2];
+  const response = await PATCH.withDependencies(dismissRequest({ launchId: "launch-ghost", conversationId: "conversation_ghost", dismiss: "launch-did-not-start" }), { params: Promise.resolve({ id: "ghost" }) }, dependencies);
+  expect(response.status).toBe(200);
+  expect(tasks).toHaveLength(1);
+  expect(tasks[0]!.status).toBe("done");
+  expect(tasks[0]!.assignments).toEqual([expect.objectContaining({ launchId: "launch-ghost", state: "failed", error: "launch did not start (dismissed)" })]);
+});
+
+test("PATCH refuses a launch whose conversation has a transcript, and a body that names nothing", async () => {
+  let tasks = [ghostTask()];
+  const dependencies = {
+    mutateTasks: (mutator: (current: BoardTask[]) => { tasks?: BoardTask[]; result: unknown }) => {
+      const mutation = mutator(tasks);
+      if (mutation.tasks) tasks = mutation.tasks;
+      return mutation.result;
+    },
+    transcriptExists: () => true,
+    linkedPipeline: () => false,
+  } as unknown as Parameters<typeof PATCH.withDependencies>[2];
+  const started = await PATCH.withDependencies(dismissRequest({ conversationId: "conversation_ghost", dismiss: "launch-did-not-start" }), { params: Promise.resolve({ id: "ghost" }) }, dependencies);
+  expect(started.status).toBe(409);
+  const nothing = await PATCH.withDependencies(dismissRequest({ dismiss: "launch-did-not-start" }), { params: Promise.resolve({ id: "ghost" }) }, dependencies);
+  expect(nothing.status).toBe(400);
+  const unknown = await PATCH.withDependencies(dismissRequest({ conversationId: "conversation_ghost" }), { params: Promise.resolve({ id: "ghost" }) }, dependencies);
+  expect(unknown.status).toBe(400);
+  expect(tasks[0]!.assignments[0]!.state).toBe("linked");
+});
+
+test("PATCH dismisses a launch its own failure already marked failed, and clears the Needs-you item it raised (#2170)", async () => {
+  let tasks = [ghostTask({ status: "inbox", origin: undefined, assignments: [{ launchId: "launch-ghost", conversationId: "conversation_ghost", path: null, panePid: null, state: "failed", error: "No healthy Claude account is available.", at: "2026-09-23T16:17:59.900Z" }] })];
+  const cleared: unknown[] = [];
+  const dependencies = {
+    mutateTasks: (mutator: (current: BoardTask[]) => { tasks?: BoardTask[]; result: unknown }) => {
+      const mutation = mutator(tasks);
+      if (mutation.tasks) tasks = mutation.tasks;
+      return mutation.result;
+    },
+    transcriptExists: () => false,
+    linkedPipeline: () => false,
+    clearAttention: async (ref: unknown) => { cleared.push(ref); },
+  } as unknown as Parameters<typeof PATCH.withDependencies>[2];
+  const response = await PATCH.withDependencies(dismissRequest({ launchId: "launch-ghost", conversationId: "conversation_ghost", dismiss: "launch-did-not-start" }), { params: Promise.resolve({ id: "ghost" }) }, dependencies);
+  expect(response.status).toBe(200);
+  expect(tasks[0]).toMatchObject({ status: "inbox", assignments: [{ state: "failed", error: "launch did not start (dismissed)" }] });
+  expect(cleared).toEqual([expect.objectContaining({ launchId: "launch-ghost", conversationId: "conversation_ghost" })]);
 });

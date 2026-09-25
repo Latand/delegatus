@@ -341,6 +341,93 @@ test("an active flag blocks retirement, and a capability advertisement never doe
   expect(probe.report.refused[0]).toMatchObject({ clause: "no-active-flags" });
 });
 
+/* #2137, measured on a copy of the live registry: every idle Codex host
+   carried exactly these flags, and the no-active-flags clause refused all of
+   them on every sweep for a day (274 sweeps, 1536 refusals, nothing retired). */
+const MEASURED_CODEX_FLAGS = [STRUCTURED_IMAGE_CAPABILITY, "native-queue", "native-inject", "native-turn-profile"];
+
+function codexSnapshot(activeFlags: readonly string[]): RegistryFile {
+  return snapshot({
+    entries: {
+      [`codex:${SESSION}`]: entry({
+        key: { engine: "codex", sessionId: SESSION },
+        structuredHost: { ...(entry().structuredHost as object), kind: "codex-app-server", activeFlags: [...activeFlags] },
+      }),
+    },
+    conversations: { [CONVERSATION]: conversation({ engine: "codex" }) },
+  });
+}
+
+test("an idle, settled Codex host carrying the measured advertisements retires, and an active one still refuses (#2137)", async () => {
+  const idle = await sweep({ snapshot: () => codexSnapshot(MEASURED_CODEX_FLAGS) });
+  expect(idle.report.refused).toEqual([]);
+  expect(idle.report.retired.map((item) => item.key)).toEqual([`codex:${SESSION}`]);
+  expect(idle.report.retired[0]!.passed).toContain("no-active-flags");
+  expect(idle.terminated).toHaveLength(1);
+  expect(idle.report.refusedByFlag).toEqual({});
+
+  /* The app-server's own thread flag is real activity: the host is waiting on
+     an approval, and retiring it would drop the question. */
+  const active = await sweep({ snapshot: () => codexSnapshot([...MEASURED_CODEX_FLAGS, "waitingOnApproval"]) });
+  expect(active.terminated).toEqual([]);
+  expect(active.report.refused).toEqual([{
+    key: `codex:${SESSION}`,
+    conversationId: CONVERSATION,
+    clause: "no-active-flags",
+    reason: "the host is flagged waitingOnApproval",
+    flags: ["waitingOnApproval"],
+  }]);
+  expect(active.report.refusedByFlag).toEqual({ waitingOnApproval: 1 });
+});
+
+test("the report and the journal count the flags behind every no-active-flags refusal (#2137)", async () => {
+  const other = [`${SESSION.slice(0, -1)}7`, `${SESSION.slice(0, -1)}8`];
+  const hosts = (flags: readonly string[][]): RegistryFile => {
+    const file = snapshot({ entries: {}, conversations: {} });
+    flags.forEach((activeFlags, index) => {
+      const session = [SESSION, ...other][index]!;
+      const conversationId = `${CONVERSATION}${index}`;
+      file.entries[`codex:${session}`] = entry({
+        key: { engine: "codex", sessionId: session },
+        artifactPath: `/rollouts/${index}.jsonl`,
+        structuredHost: { ...(entry().structuredHost as object), activeFlags: [...activeFlags] },
+      }) as unknown as RegistryFile["entries"][string];
+      file.conversations[conversationId] = conversation({
+        id: conversationId,
+        engine: "codex",
+        generations: [{ ...((conversation().generations as Record<string, unknown>[])[0]!), id: session, path: `/rollouts/${index}.jsonl` }],
+      }) as unknown as RegistryFile["conversations"][string];
+    });
+    return file;
+  };
+  const probe = await sweep({
+    snapshot: () => hosts([
+      [...MEASURED_CODEX_FLAGS, "waitingOnUserInput"],
+      [...MEASURED_CODEX_FLAGS, "waitingOnApproval", "waitingOnUserInput"],
+      ["some-future-capability-v9"],
+    ]),
+  });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused.map((item) => item.flags)).toEqual([
+    ["waitingOnUserInput"],
+    ["waitingOnApproval", "waitingOnUserInput"],
+    ["some-future-capability-v9"],
+  ]);
+  expect(probe.report.refusedByFlag).toEqual({ waitingOnUserInput: 2, waitingOnApproval: 1, "some-future-capability-v9": 1 });
+  const record = structuredHostRetirementJournalRecord(probe.report);
+  expect(record.refusedByClause).toEqual({ "no-active-flags": 3 });
+  expect(record.refusedByFlag).toEqual({ waitingOnUserInput: 2, waitingOnApproval: 1, "some-future-capability-v9": 1 });
+
+  /* A refusal on any other clause names no flags. */
+  const busy = await sweep({
+    snapshot: () => snapshot({
+      entries: { [`claude:${SESSION}`]: entry({ structuredHost: { ...(entry().structuredHost as object), activeTurnRef: "turn-7" } }) },
+    }),
+  });
+  expect(busy.report.refused[0]).not.toHaveProperty("flags");
+  expect(busy.report.refusedByFlag).toEqual({});
+});
+
 test("an undelivered handoff entry blocks retirement", async () => {
   const row = {
     operationId: "handoff-1",

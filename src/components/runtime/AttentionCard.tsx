@@ -224,7 +224,8 @@ export function AttentionCard({ attention, onApprove, onDeny, onAnswerQuestion, 
               disabled={busy}
               onClick={onApprove}
             >
-              <Check className="h-4 w-4" aria-hidden /> {t("runtime.attention.approve")}
+              {/* Claude's allow grants this one call and no standing rule (#2215). */}
+              <Check className="h-4 w-4" aria-hidden /> {t(attention.kind === "permission" && attention.request.protocol?.engine === "claude" ? "runtime.attention.allowOnce" : "runtime.attention.approve")}
             </button>
           ) : null}
           {onDeny ? (

@@ -1,0 +1,1193 @@
+{
+  "frames": [
+    {
+      "key": "390-dark-inbox",
+      "phase": "before",
+      "cards": [
+        {
+          "task": "t-systemd",
+          "titleText": "Retire the systemd install path",
+          "edge": "warning",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-wrap",
+          "titleText": "Let the operator pin one conversation above the column so it stays in reach while the rest of the column scrolls under it",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 3
+        },
+        {
+          "task": "t-tray",
+          "titleText": "Hide the Hidden tray when it holds nothing",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-attention",
+          "titleText": "request_attention: the target blinks, intent open opens the conversation (#1696)",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 2
+        },
+        {
+          "task": "t-quota",
+          "titleText": "Spend quota before its window resets",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        }
+      ]
+    },
+    {
+      "key": "390-dark-assigned",
+      "phase": "before",
+      "cards": [
+        {
+          "task": "t-data",
+          "titleText": "Mobile data: stop repeated full-board downloads and hidden-tab traffic",
+          "edge": "warning",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 4
+        },
+        {
+          "task": "t-copilot",
+          "titleText": "GitHub Copilot as a third engine the Viewer can launch",
+          "edge": "warning",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 4
+        },
+        {
+          "task": "t-many",
+          "titleText": "Kanban: say what each pipeline of a task does",
+          "edge": "warning",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 2
+        },
+        {
+          "task": "t-favicon",
+          "titleText": "Restore /favicon.ico with the Delegatus emblem",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-upload",
+          "titleText": "Redesign attachment upload for large files",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-uk",
+          "titleText": "Перевірити, що мобільна дошка не завантажує весь проєкт при кожному опитуванні",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 2
+        },
+        {
+          "task": "t-long",
+          "titleText": "Board and phone: one definition of «working» everywhere a count is shown, so the bar, the tabs, the cards, the seat and the switcher never disagree about how many agents are running; today the bar counts open turns, the switcher counts live transcripts, the seat counts its own children and the cards count members whose row state is working or held, and on a busy afternoon the phone showed three different numbers for the same five agents within one screen, which made the operator open each conversation to find out which number was true; pick the row state as the one authority and have every surface read it",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 12
+        },
+        {
+          "task": "t-kanban",
+          "titleText": "Phone kanban: a convenient board on mobile, merged with today's phone view",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 2
+        },
+        {
+          "task": "t-skeletons",
+          "titleText": "Skeletons and state transitions on phone and desktop",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-chips",
+          "titleText": "PR and issue chips on pipelines and task cards",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-seat",
+          "titleText": "Seat wakes after its own deploy and keeps its mandate",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        }
+      ]
+    },
+    {
+      "key": "390-dark-done",
+      "phase": "before",
+      "cards": [
+        {
+          "task": "t-done-0",
+          "titleText": "The board only moves forward",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-1",
+          "titleText": "The jump strip takes its own room",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-2",
+          "titleText": "One pipeline block and one tone map",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-3",
+          "titleText": "Deploy gate reads the pinned runtime",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-4",
+          "titleText": "Queue drain on reconnect",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-5",
+          "titleText": "Archive TTL for closed lanes",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-6",
+          "titleText": "Catalog pages stay in snapshot order",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-7",
+          "titleText": "Voice utterances render once",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-8",
+          "titleText": "Held deliveries heal themselves",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-9",
+          "titleText": "Board zoom keeps the focused card",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-10",
+          "titleText": "Seat rotation keeps the mandate",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-11",
+          "titleText": "Stage verdict recovery after a host restart",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-12",
+          "titleText": "Fast conversation switching",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-13",
+          "titleText": "Reconnect note stays quiet",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-14",
+          "titleText": "Search lands on the message",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-15",
+          "titleText": "Composer keeps its draft across screens",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-16",
+          "titleText": "Accounts screen on the phone",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-17",
+          "titleText": "Host sheet names each PID",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-18",
+          "titleText": "Receipts carry their inverse",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-19",
+          "titleText": "Project sheet scrolls to the current project",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        }
+      ]
+    },
+    {
+      "key": "390-light-inbox",
+      "phase": "before",
+      "cards": [
+        {
+          "task": "t-systemd",
+          "titleText": "Retire the systemd install path",
+          "edge": "warning",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-wrap",
+          "titleText": "Let the operator pin one conversation above the column so it stays in reach while the rest of the column scrolls under it",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 3
+        },
+        {
+          "task": "t-tray",
+          "titleText": "Hide the Hidden tray when it holds nothing",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-attention",
+          "titleText": "request_attention: the target blinks, intent open opens the conversation (#1696)",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 2
+        },
+        {
+          "task": "t-quota",
+          "titleText": "Spend quota before its window resets",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        }
+      ]
+    },
+    {
+      "key": "390-light-assigned",
+      "phase": "before",
+      "cards": [
+        {
+          "task": "t-data",
+          "titleText": "Mobile data: stop repeated full-board downloads and hidden-tab traffic",
+          "edge": "warning",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 4
+        },
+        {
+          "task": "t-copilot",
+          "titleText": "GitHub Copilot as a third engine the Viewer can launch",
+          "edge": "warning",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 4
+        },
+        {
+          "task": "t-many",
+          "titleText": "Kanban: say what each pipeline of a task does",
+          "edge": "warning",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 2
+        },
+        {
+          "task": "t-favicon",
+          "titleText": "Restore /favicon.ico with the Delegatus emblem",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-upload",
+          "titleText": "Redesign attachment upload for large files",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-uk",
+          "titleText": "Перевірити, що мобільна дошка не завантажує весь проєкт при кожному опитуванні",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 2
+        },
+        {
+          "task": "t-long",
+          "titleText": "Board and phone: one definition of «working» everywhere a count is shown, so the bar, the tabs, the cards, the seat and the switcher never disagree about how many agents are running; today the bar counts open turns, the switcher counts live transcripts, the seat counts its own children and the cards count members whose row state is working or held, and on a busy afternoon the phone showed three different numbers for the same five agents within one screen, which made the operator open each conversation to find out which number was true; pick the row state as the one authority and have every surface read it",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 12
+        },
+        {
+          "task": "t-kanban",
+          "titleText": "Phone kanban: a convenient board on mobile, merged with today's phone view",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 2
+        },
+        {
+          "task": "t-skeletons",
+          "titleText": "Skeletons and state transitions on phone and desktop",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-chips",
+          "titleText": "PR and issue chips on pipelines and task cards",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-seat",
+          "titleText": "Seat wakes after its own deploy and keeps its mandate",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        }
+      ]
+    },
+    {
+      "key": "390-light-done",
+      "phase": "before",
+      "cards": [
+        {
+          "task": "t-done-0",
+          "titleText": "The board only moves forward",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-1",
+          "titleText": "The jump strip takes its own room",
+          "edge": "colour",
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-2",
+          "titleText": "One pipeline block and one tone map",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-3",
+          "titleText": "Deploy gate reads the pinned runtime",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-4",
+          "titleText": "Queue drain on reconnect",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-5",
+          "titleText": "Archive TTL for closed lanes",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-6",
+          "titleText": "Catalog pages stay in snapshot order",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-7",
+          "titleText": "Voice utterances render once",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-8",
+          "titleText": "Held deliveries heal themselves",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-9",
+          "titleText": "Board zoom keeps the focused card",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-10",
+          "titleText": "Seat rotation keeps the mandate",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-11",
+          "titleText": "Stage verdict recovery after a host restart",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-12",
+          "titleText": "Fast conversation switching",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-13",
+          "titleText": "Reconnect note stays quiet",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-14",
+          "titleText": "Search lands on the message",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-15",
+          "titleText": "Composer keeps its draft across screens",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-16",
+          "titleText": "Accounts screen on the phone",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-17",
+          "titleText": "Host sheet names each PID",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-18",
+          "titleText": "Receipts carry their inverse",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        },
+        {
+          "task": "t-done-19",
+          "titleText": "Project sheet scrolls to the current project",
+          "edge": null,
+          "icon": null,
+          "iconSource": null,
+          "iconColour": null,
+          "iconBox": null,
+          "iconOffFirstLine": null,
+          "titleInset": 0,
+          "titleLeftOfIcon": null,
+          "lineLefts": [
+            24
+          ],
+          "titleLines": 1
+        }
+      ]
+    }
+  ],
+  "failures": []
+}

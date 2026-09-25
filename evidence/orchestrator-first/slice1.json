@@ -1,0 +1,281 @@
+{
+  "readings": {
+    "board-draft-1440": {
+      "words": "Create the orchestrator for atlasThe orchestrator takes your requests, opens the tasks, runs the agents and reviews, and reports back. You watch and give it work.Once it runs, write to it here: “add a delete command to todo.py”, “make the tests pass”.Runs onClaude · Opus 5.5 · high effortChangeWorks in /repo/atlasIts instructions (v27) (edit)Sent as the first messageCreate the orchestratorRather do one thing by hand? + in the top bar adds a task or starts a single agent.",
+      "rulesOpen": false,
+      "radios": 0,
+      "runsOnValue": "Claude · Opus 5.5 · high effort",
+      "confirmText": "Create the orchestrator",
+      "seat": {
+        "left": 324,
+        "width": 1040,
+        "top": 60,
+        "bottom": 380.4
+      },
+      "edges": {
+        "avatar": 13,
+        "heading": 13,
+        "intro": 13,
+        "example": 13,
+        "runsOn": 13,
+        "rules": 13,
+        "confirm": 13,
+        "byHand": 13
+      },
+      "insets": {
+        "foldFromRight": 13,
+        "runsOnLabel": 13,
+        "bodyTop": 12,
+        "bodyBottom": 12,
+        "footerTop": 13,
+        "footerBottom": 12,
+        "gapHeadingIntro": 13.8,
+        "gapRunsOnRules": 12,
+        "gapConfirmByHand": 8
+      },
+      "draftHeight": 320.4,
+      "columns": [
+        {
+          "status": "inbox",
+          "top": 432.4,
+          "left": 264,
+          "emptyBottom": 581.5,
+          "empty": "No tasks yetThe orchestrator adds a task here for each thing you ask."
+        },
+        {
+          "status": "assigned",
+          "top": 432.4,
+          "left": 556,
+          "emptyBottom": 564.2,
+          "empty": "Nothing in progressA task moves here when the orchestrator starts an agent on it."
+        },
+        {
+          "status": "blocked",
+          "top": 432.4,
+          "left": 1048,
+          "emptyBottom": 581.5,
+          "empty": "Nothing blockedMove a task here when it waits on something outside it."
+        },
+        {
+          "status": "done",
+          "top": 432.4,
+          "left": 1340,
+          "emptyBottom": 564.2,
+          "empty": "Nothing finished yetFinished tasks keep their history here."
+        }
+      ],
+      "clipped": [],
+      "viewportHeight": 900,
+      "conversationsView": false
+    },
+    "board-draft-1280": {
+      "words": "Create the orchestrator for atlasThe orchestrator takes your requests, opens the tasks, runs the agents and reviews, and reports back. You watch and give it work.Once it runs, write to it here: “add a delete command to todo.py”, “make the tests pass”.Runs onClaude · Opus 5.5 · high effortChangeWorks in /repo/atlasIts instructions (v27) (edit)Sent as the first messageCreate the orchestratorRather do one thing by hand? + in the top bar adds a task or starts a single agent.",
+      "rulesOpen": false,
+      "radios": 0,
+      "runsOnValue": "Claude · Opus 5.5 · high effort",
+      "confirmText": "Create the orchestrator",
+      "seat": {
+        "left": 264,
+        "width": 1000,
+        "top": 60,
+        "bottom": 380.4
+      },
+      "edges": {
+        "avatar": 13,
+        "heading": 13,
+        "intro": 13,
+        "example": 13,
+        "runsOn": 13,
+        "rules": 13,
+        "confirm": 13,
+        "byHand": 13
+      },
+      "insets": {
+        "foldFromRight": 13,
+        "runsOnLabel": 13,
+        "bodyTop": 12,
+        "bodyBottom": 12,
+        "footerTop": 13,
+        "footerBottom": 12,
+        "gapHeadingIntro": 13.8,
+        "gapRunsOnRules": 12,
+        "gapConfirmByHand": 8
+      },
+      "draftHeight": 320.4,
+      "columns": [
+        {
+          "status": "inbox",
+          "top": 432.4,
+          "left": 264,
+          "emptyBottom": 581.5,
+          "empty": "No tasks yetThe orchestrator adds a task here for each thing you ask."
+        },
+        {
+          "status": "assigned",
+          "top": 432.4,
+          "left": 556,
+          "emptyBottom": 564.2,
+          "empty": "Nothing in progressA task moves here when the orchestrator starts an agent on it."
+        },
+        {
+          "status": "blocked",
+          "top": 432.4,
+          "left": 1048,
+          "emptyBottom": 581.5,
+          "empty": "Nothing blockedMove a task here when it waits on something outside it."
+        },
+        {
+          "status": "done",
+          "top": 432.4,
+          "left": 1340,
+          "emptyBottom": 564.2,
+          "empty": "Nothing finished yetFinished tasks keep their history here."
+        }
+      ],
+      "clipped": [],
+      "viewportHeight": 800,
+      "conversationsView": false
+    },
+    "board-draft-1280-uk": {
+      "words": "Створіть оркестратора для atlasОркестратор приймає ваші запити, заводить задачі, запускає агентів і рев'ю та звітує вам. Ви спостерігаєте й даєте йому роботу.Коли він запуститься, пишіть йому тут: «додай команду видалення в todo.py», «полагодь тести».Працює наClaude · Opus 5.5 · зусилля highЗмінитиПрацює в /repo/atlasЙого інструкції (v27) (редагувати)Надсилається як перше повідомленняСтворити оркестратораХочете зробити щось вручну? + на верхній панелі додає задачу або запускає одного агента.",
+      "rulesOpen": false,
+      "radios": 0,
+      "runsOnValue": "Claude · Opus 5.5 · зусилля high",
+      "confirmText": "Створити оркестратора",
+      "seat": {
+        "left": 264,
+        "width": 1000,
+        "top": 60,
+        "bottom": 399.2
+      },
+      "edges": {
+        "avatar": 13,
+        "heading": 13,
+        "intro": 13,
+        "example": 13,
+        "runsOn": 13,
+        "rules": 13,
+        "confirm": 13,
+        "byHand": 13
+      },
+      "insets": {
+        "foldFromRight": 13,
+        "runsOnLabel": 13,
+        "bodyTop": 12,
+        "bodyBottom": 12,
+        "footerTop": 13,
+        "footerBottom": 12,
+        "gapHeadingIntro": 13.8,
+        "gapRunsOnRules": 12,
+        "gapConfirmByHand": 8
+      },
+      "draftHeight": 339.2,
+      "columns": [
+        {
+          "status": "inbox",
+          "top": 451.2,
+          "left": 264,
+          "emptyBottom": 600.4,
+          "empty": "Задач ще немаєОркестратор додає сюди задачу на кожне ваше прохання."
+        },
+        {
+          "status": "assigned",
+          "top": 451.2,
+          "left": 556,
+          "emptyBottom": 583,
+          "empty": "Нічого в роботіЗадача переходить сюди, коли оркестратор запускає на ній агента."
+        },
+        {
+          "status": "blocked",
+          "top": 451.2,
+          "left": 1048,
+          "emptyBottom": 600.4,
+          "empty": "Нічого не заблокованоПереносьте сюди задачу, яка чекає на щось поза нею."
+        },
+        {
+          "status": "done",
+          "top": 451.2,
+          "left": 1340,
+          "emptyBottom": 600.4,
+          "empty": "Ще нічого не завершеноЗавершені задачі зберігають тут свою історію."
+        }
+      ],
+      "clipped": [],
+      "viewportHeight": 800,
+      "conversationsView": false
+    },
+    "overview-band-1440": {
+      "band": {
+        "left": 264,
+        "right": 1424,
+        "top": 134.4,
+        "height": 86
+      },
+      "columnLeft": 264,
+      "pageLeft": 248,
+      "pageRight": 1440,
+      "insets": {
+        "pictureLeft": 13,
+        "pictureTop": 13,
+        "pictureBottom": 13,
+        "buttonRight": 13,
+        "pictureToText": 12,
+        "titleLeft": 121,
+        "textLeft": 121,
+        "titleToText": 5.4
+      },
+      "text": "Start with an orchestratorThe orchestrator takes your requests, opens the tasks, runs the agents and reviews, and reports back. You watch and give it work. Create an orchestrator",
+      "buttonFill": "rgb(38, 42, 54)",
+      "overflow": false
+    },
+    "overview-band-1280": {
+      "band": {
+        "left": 264,
+        "right": 1264,
+        "top": 134.4,
+        "height": 86
+      },
+      "columnLeft": 264,
+      "pageLeft": 248,
+      "pageRight": 1280,
+      "insets": {
+        "pictureLeft": 13,
+        "pictureTop": 13,
+        "pictureBottom": 13,
+        "buttonRight": 13,
+        "pictureToText": 12,
+        "titleLeft": 121,
+        "textLeft": 121,
+        "titleToText": 5.4
+      },
+      "text": "Start with an orchestratorThe orchestrator takes your requests, opens the tasks, runs the agents and reviews, and reports back. You watch and give it work. Create an orchestrator",
+      "buttonFill": "rgb(38, 42, 54)",
+      "overflow": false
+    },
+    "overview-band-1280-uk": {
+      "band": {
+        "left": 264,
+        "right": 1264,
+        "top": 134.4,
+        "height": 86
+      },
+      "columnLeft": 264,
+      "pageLeft": 248,
+      "pageRight": 1280,
+      "insets": {
+        "pictureLeft": 13,
+        "pictureTop": 13,
+        "pictureBottom": 13,
+        "buttonRight": 13,
+        "pictureToText": 12,
+        "titleLeft": 121,
+        "textLeft": 121,
+        "titleToText": 5.4
+      },
+      "text": "Почніть з оркестратораОркестратор приймає ваші запити, заводить задачі, запускає агентів і рев'ю та звітує вам. Ви спостерігаєте й даєте йому роботу. Створити оркестратора",
+      "buttonFill": "rgb(38, 42, 54)",
+      "overflow": false
+    }
+  },
+  "failures": []
+}

@@ -6,11 +6,15 @@ import {
 export interface TranscriptIndexFeed {
   sources: readonly TranscriptIndexSource[];
   complete: boolean;
+  /** When the scan that listed `sources` began; the time the feed arrived
+      when the scanner did not say. */
+  listedAt?: number;
 }
 
 type TranscriptIndexRun = (
   sources: readonly TranscriptIndexSource[],
   complete: boolean,
+  listedAt: number,
 ) => Promise<void>;
 
 interface ScheduledFeed {
@@ -36,8 +40,17 @@ function state(): TranscriptFeedState {
 async function productionRun(
   sources: readonly TranscriptIndexSource[],
   complete: boolean,
+  listedAt: number,
 ): Promise<void> {
   const indexed = await indexTranscriptSources(sources, { complete });
+  /* The activity record reads the same inventory right after (its own
+     failures never fail the index). */
+  try {
+    const { recordActivityFromIndexFeed } = await import("@/lib/activity/continuous");
+    await recordActivityFromIndexFeed(sources, complete, listedAt);
+  } catch (error) {
+    console.error(`[activity] recording failed: ${error instanceof Error ? error.message : String(error)}; the next pass retries`);
+  }
   if (indexed.failures.length) {
     throw new Error(`${indexed.failures.length} transcript file(s) could not be indexed`);
   }
@@ -53,7 +66,7 @@ async function drain(current: TranscriptFeedState): Promise<void> {
     const scheduled = current.pending;
     delete current.pending;
     try {
-      await scheduled.run(scheduled.feed.sources, scheduled.feed.complete);
+      await scheduled.run(scheduled.feed.sources, scheduled.feed.complete, scheduled.feed.listedAt ?? Date.now());
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[transcript search] background indexing failed: ${detail}; a later scan will retry`);
@@ -88,7 +101,7 @@ export function scheduleTranscriptIndex(
 ): void {
   if (process.env.NODE_ENV === "test" && !options.force) return;
   const current = state();
-  current.pending = { feed, run: options.run ?? productionRun };
+  current.pending = { feed: { ...feed, listedAt: feed.listedAt ?? Date.now() }, run: options.run ?? productionRun };
   if (current.active || current.scheduled) return;
   current.scheduled = true;
   setImmediate(() => start(current));

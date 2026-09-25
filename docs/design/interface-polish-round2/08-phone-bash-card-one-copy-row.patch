@@ -1,0 +1,56 @@
+diff --git a/src/components/feed/cards/ToolCard.tsx b/src/components/feed/cards/ToolCard.tsx
+index 378ca21..6e21662 100644
+--- a/src/components/feed/cards/ToolCard.tsx
++++ b/src/components/feed/cards/ToolCard.tsx
+@@ -8,7 +8,7 @@ import { getLocale } from "@/lib/i18n";
+ 
+ import { GlyphIcon, Loader2 } from "../../icons";
+ import { hhmm } from "../../utils";
+-import { ACTION_GUTTER, MESSAGE_ACTION } from "../actionStyles";
++import { MESSAGE_ACTION } from "../actionStyles";
+ import { CopyButton } from "../CopyButton";
+ import { hasImageBlock, tr, type ToolEvent, type ToolOutputBlock } from "../parse";
+ import type { ArgChip } from "../tools";
+@@ -92,7 +92,7 @@ function ToolMeta({ event }: { event: ToolEvent }) {
+   const end = event.endTs !== undefined ? hhmm(event.endTs) : "";
+   const span = end && start ? tr("tools.ranAt", { start, end }) : "";
+   const exit = exitLabel(event);
+-  if (!event.cwd && !span && !exit) return null;
++  if (!event.cwd && !span && !exit && !event.command) return null;
+   return (
+     <div className="mb-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted">
+       {exit ? (
+@@ -110,6 +110,14 @@ function ToolMeta({ event }: { event: ToolEvent }) {
+           <CopyButton text={event.cwd} label={tr("tools.copyCwd")} className="shrink-0 p-0.5" />
+         </span>
+       ) : null}
++      {/* On a coarse pointer the command's copy target ends this row, so the
++          command below keeps its own height instead of a 50 px band (#1978
++          reserved it so the 44 px target could not hang into the output). */}
++      {event.command ? (
++        <span className="-my-2.5 ml-auto hidden shrink-0 [@media(pointer:coarse)]:inline-flex">
++          <CopyButton text={event.command} label={tr("tools.copyCommand")} className={MESSAGE_ACTION} />
++        </span>
++      ) : null}
+     </div>
+   );
+ }
+@@ -126,15 +134,15 @@ function ToolMeta({ event }: { event: ToolEvent }) {
+    size; the fine pointer's 22px control already fits beside one line. */
+ function CommandBlock({ command }: { command: string }) {
+   return (
+-    <div className="group/cmd relative [@media(pointer:coarse)]:min-h-[50px]">
+-      <pre className={`max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] py-0.5 font-mono text-ui text-primary ${ACTION_GUTTER}`}>
++    <div className="group/cmd relative">
++      <pre className="max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] py-0.5 pr-[28px] font-mono text-ui text-primary [@media(pointer:coarse)]:pr-0">
+         <span className="select-none text-muted">$ </span>
+         {command}
+       </pre>
+       <CopyButton
+         text={command}
+         label={tr("tools.copyCommand")}
+-        className={`absolute right-[6px] top-[6px] ${MESSAGE_ACTION} group-hover/cmd:opacity-100`}
++        className={`absolute right-[6px] top-[6px] ${MESSAGE_ACTION} group-hover/cmd:opacity-100 [@media(pointer:coarse)]:hidden`}
+       />
+     </div>
+   );

@@ -1,0 +1,462 @@
+{
+  "readings": {
+    "1440-en-light": [
+      {
+        "task": "t-stop-fix",
+        "kind": null,
+        "reason": "last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
+        "answers": [
+          [
+            "close",
+            "Close the pipeline"
+          ],
+          [
+            "continue-review",
+            "One more round"
+          ]
+        ],
+        "findings": [],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-park",
+        "kind": null,
+        "reason": "Review failed · 1 finding",
+        "answers": [
+          [
+            "skip-stage",
+            "Skip Review"
+          ],
+          [
+            "retry-stage",
+            "Retry Review"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage does not take the stage address from the project config."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-once",
+        "kind": null,
+        "reason": "Review failed · 1 finding",
+        "answers": [
+          [
+            "skip-stage",
+            "Skip Review"
+          ],
+          [
+            "retry-stage",
+            "Retry Review"
+          ]
+        ],
+        "findings": [
+          "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-legacy",
+        "kind": null,
+        "reason": "Review failed · 2 findings",
+        "answers": [
+          [
+            "skip-stage",
+            "Skip Review"
+          ],
+          [
+            "retry-stage",
+            "Retry Review"
+          ]
+        ],
+        "findings": [
+          "round limit reached"
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      }
+    ],
+    "1440-en-dark": [
+      {
+        "task": "t-stop-fix",
+        "kind": null,
+        "reason": "last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
+        "answers": [
+          [
+            "close",
+            "Close the pipeline"
+          ],
+          [
+            "continue-review",
+            "One more round"
+          ]
+        ],
+        "findings": [],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-park",
+        "kind": null,
+        "reason": "Review failed · 1 finding",
+        "answers": [
+          [
+            "skip-stage",
+            "Skip Review"
+          ],
+          [
+            "retry-stage",
+            "Retry Review"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage does not take the stage address from the project config."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-once",
+        "kind": null,
+        "reason": "Review failed · 1 finding",
+        "answers": [
+          [
+            "skip-stage",
+            "Skip Review"
+          ],
+          [
+            "retry-stage",
+            "Retry Review"
+          ]
+        ],
+        "findings": [
+          "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-legacy",
+        "kind": null,
+        "reason": "Review failed · 2 findings",
+        "answers": [
+          [
+            "skip-stage",
+            "Skip Review"
+          ],
+          [
+            "retry-stage",
+            "Retry Review"
+          ]
+        ],
+        "findings": [
+          "round limit reached"
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      }
+    ],
+    "1440-uk-light": [
+      {
+        "task": "t-stop-fix",
+        "kind": null,
+        "reason": "останнє ревʼю: невдача на 4f1c2a9d · поточний коміт 9b2e7d4c не переглянуто",
+        "answers": [
+          [
+            "close",
+            "Закрити конвеєр"
+          ],
+          [
+            "continue-review",
+            "Ще один раунд"
+          ]
+        ],
+        "findings": [],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-park",
+        "kind": null,
+        "reason": "Review провалено · 1 зауваження",
+        "answers": [
+          [
+            "skip-stage",
+            "Пропустити Review"
+          ],
+          [
+            "retry-stage",
+            "Повторити Review"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-once",
+        "kind": null,
+        "reason": "Review провалено · 1 зауваження",
+        "answers": [
+          [
+            "skip-stage",
+            "Пропустити Review"
+          ],
+          [
+            "retry-stage",
+            "Повторити Review"
+          ]
+        ],
+        "findings": [
+          "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-legacy",
+        "kind": null,
+        "reason": "Review провалено · 2 зауваження",
+        "answers": [
+          [
+            "skip-stage",
+            "Пропустити Review"
+          ],
+          [
+            "retry-stage",
+            "Повторити Review"
+          ]
+        ],
+        "findings": [
+          "round limit reached"
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      }
+    ],
+    "1440-uk-dark": [
+      {
+        "task": "t-stop-fix",
+        "kind": null,
+        "reason": "останнє ревʼю: невдача на 4f1c2a9d · поточний коміт 9b2e7d4c не переглянуто",
+        "answers": [
+          [
+            "close",
+            "Закрити конвеєр"
+          ],
+          [
+            "continue-review",
+            "Ще один раунд"
+          ]
+        ],
+        "findings": [],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-park",
+        "kind": null,
+        "reason": "Review провалено · 1 зауваження",
+        "answers": [
+          [
+            "skip-stage",
+            "Пропустити Review"
+          ],
+          [
+            "retry-stage",
+            "Повторити Review"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-once",
+        "kind": null,
+        "reason": "Review провалено · 1 зауваження",
+        "answers": [
+          [
+            "skip-stage",
+            "Пропустити Review"
+          ],
+          [
+            "retry-stage",
+            "Повторити Review"
+          ]
+        ],
+        "findings": [
+          "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-legacy",
+        "kind": null,
+        "reason": "Review провалено · 2 зауваження",
+        "answers": [
+          [
+            "skip-stage",
+            "Пропустити Review"
+          ],
+          [
+            "retry-stage",
+            "Повторити Review"
+          ]
+        ],
+        "findings": [
+          "round limit reached"
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      }
+    ]
+  },
+  "failures": [
+    "1440-en-light stop-after-fix: drawn as null",
+    "1440-en-light stop-after-fix: reason \"last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed\"",
+    "1440-en-light stop-after-fix: answers [[\"close\",\"Close the pipeline\"],[\"continue-review\",\"One more round\"]], expected [[\"accept-head\",\"pipelineBlock.answer.acceptAsIs\"],[\"continue-review\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-en-light stop-after-fix: no finding listed under the reason",
+    "1440-en-light park: drawn as null",
+    "1440-en-light park: reason \"Review failed · 1 finding\"",
+    "1440-en-light park: answers [[\"skip-stage\",\"Skip Review\"],[\"retry-stage\",\"Retry Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-en-light once: drawn as null",
+    "1440-en-light once: reason \"Review failed · 1 finding\"",
+    "1440-en-light once: answers [[\"skip-stage\",\"Skip Review\"],[\"retry-stage\",\"Retry Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-en-light legacy: drawn as null",
+    "1440-en-light legacy: reason \"Review failed · 2 findings\"",
+    "1440-en-light legacy: answers [[\"skip-stage\",\"Skip Review\"],[\"retry-stage\",\"Retry Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-en-light legacy: the flow's own detail is still listed as a finding: [\"round limit reached\"]",
+    "1440-en-dark stop-after-fix: drawn as null",
+    "1440-en-dark stop-after-fix: reason \"last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed\"",
+    "1440-en-dark stop-after-fix: answers [[\"close\",\"Close the pipeline\"],[\"continue-review\",\"One more round\"]], expected [[\"accept-head\",\"pipelineBlock.answer.acceptAsIs\"],[\"continue-review\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-en-dark stop-after-fix: no finding listed under the reason",
+    "1440-en-dark park: drawn as null",
+    "1440-en-dark park: reason \"Review failed · 1 finding\"",
+    "1440-en-dark park: answers [[\"skip-stage\",\"Skip Review\"],[\"retry-stage\",\"Retry Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-en-dark once: drawn as null",
+    "1440-en-dark once: reason \"Review failed · 1 finding\"",
+    "1440-en-dark once: answers [[\"skip-stage\",\"Skip Review\"],[\"retry-stage\",\"Retry Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-en-dark legacy: drawn as null",
+    "1440-en-dark legacy: reason \"Review failed · 2 findings\"",
+    "1440-en-dark legacy: answers [[\"skip-stage\",\"Skip Review\"],[\"retry-stage\",\"Retry Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-en-dark legacy: the flow's own detail is still listed as a finding: [\"round limit reached\"]",
+    "1440-uk-light stop-after-fix: drawn as null",
+    "1440-uk-light stop-after-fix: reason \"останнє ревʼю: невдача на 4f1c2a9d · поточний коміт 9b2e7d4c не переглянуто\"",
+    "1440-uk-light stop-after-fix: answers [[\"close\",\"Закрити конвеєр\"],[\"continue-review\",\"Ще один раунд\"]], expected [[\"accept-head\",\"pipelineBlock.answer.acceptAsIs\"],[\"continue-review\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-uk-light stop-after-fix: no finding listed under the reason",
+    "1440-uk-light park: drawn as null",
+    "1440-uk-light park: reason \"Review провалено · 1 зауваження\"",
+    "1440-uk-light park: answers [[\"skip-stage\",\"Пропустити Review\"],[\"retry-stage\",\"Повторити Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-uk-light once: drawn as null",
+    "1440-uk-light once: reason \"Review провалено · 1 зауваження\"",
+    "1440-uk-light once: answers [[\"skip-stage\",\"Пропустити Review\"],[\"retry-stage\",\"Повторити Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-uk-light legacy: drawn as null",
+    "1440-uk-light legacy: reason \"Review провалено · 2 зауваження\"",
+    "1440-uk-light legacy: answers [[\"skip-stage\",\"Пропустити Review\"],[\"retry-stage\",\"Повторити Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-uk-light legacy: the flow's own detail is still listed as a finding: [\"round limit reached\"]",
+    "1440-uk-dark stop-after-fix: drawn as null",
+    "1440-uk-dark stop-after-fix: reason \"останнє ревʼю: невдача на 4f1c2a9d · поточний коміт 9b2e7d4c не переглянуто\"",
+    "1440-uk-dark stop-after-fix: answers [[\"close\",\"Закрити конвеєр\"],[\"continue-review\",\"Ще один раунд\"]], expected [[\"accept-head\",\"pipelineBlock.answer.acceptAsIs\"],[\"continue-review\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-uk-dark stop-after-fix: no finding listed under the reason",
+    "1440-uk-dark park: drawn as null",
+    "1440-uk-dark park: reason \"Review провалено · 1 зауваження\"",
+    "1440-uk-dark park: answers [[\"skip-stage\",\"Пропустити Review\"],[\"retry-stage\",\"Повторити Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-uk-dark once: drawn as null",
+    "1440-uk-dark once: reason \"Review провалено · 1 зауваження\"",
+    "1440-uk-dark once: answers [[\"skip-stage\",\"Пропустити Review\"],[\"retry-stage\",\"Повторити Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-uk-dark legacy: drawn as null",
+    "1440-uk-dark legacy: reason \"Review провалено · 2 зауваження\"",
+    "1440-uk-dark legacy: answers [[\"skip-stage\",\"Пропустити Review\"],[\"retry-stage\",\"Повторити Review\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "1440-uk-dark legacy: the flow's own detail is still listed as a finding: [\"round limit reached\"]"
+  ]
+}

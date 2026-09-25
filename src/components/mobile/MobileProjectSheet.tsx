@@ -11,6 +11,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "../projectModel";
+import { ResourcesFooter } from "../ResourcesFooter";
 import { BoardRowsSkeleton } from "../skeletons";
 import { fmtAge } from "../utils";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
@@ -110,7 +111,15 @@ export function MobileProjectSheet({
   };
 
   return (
-    <MobileSheet name="projects" title={t("mobile2.projects.title")} onClose={onClose}>
+    /* The phone has no rail, so the rail's resources block rides at the foot of
+       the sheet that stands in for it: memory pressure, the agent hosts and
+       what Delegatus itself holds stay one tap away (#1817). */
+    <MobileSheet
+      name="projects"
+      title={t("mobile2.projects.title")}
+      onClose={onClose}
+      footer={<div className="-mx-4 min-w-0 flex-1"><ResourcesFooter /></div>}
+    >
       <MobileSheetRow
         icon={<Layers className="h-[18px] w-[18px]" aria-hidden />}
         label={t("mobile2.projects.overview")}

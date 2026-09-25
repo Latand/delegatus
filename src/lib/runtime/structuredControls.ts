@@ -1,5 +1,5 @@
 import { structuredHostsEnabled } from "./flags";
-import { agentRegistry, type AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
+import { agentRegistry, type AgentRegistry, type ProcessIdentity, type StructuredHostColumns } from "@/lib/agent/registry";
 import { reconfigurationFromBody, type AgentReconfiguration } from "@/lib/agent/reconfigure";
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
@@ -62,6 +62,10 @@ export interface StructuredControlRequest {
   action: string;
   operationId?: string;
   reconfiguration?: Partial<AgentReconfiguration>;
+  /** `permission` only (#2215): allow once or deny. */
+  decision?: string;
+  /** `permission` only: the request to answer; the oldest pending one when absent. */
+  requestId?: string;
   /** Who is making this request, for attributing an out-of-pool account choice.
       Absent means the operator: an agent is the only caller that can name
       itself here, exactly as `requireOperatorAuthority` reads a request. */
@@ -129,6 +133,64 @@ function sameProfile(
   return left.model === right.model && left.effort === right.effort && (left.fast ?? null) === (right.fast ?? null);
 }
 
+/** What an operator's deny tells the agent. */
+const OPERATOR_DENY_MESSAGE = "The operator denied this request.";
+
+/**
+ * Answers a structured host's pending tool permission request (#2215): the
+ * structured counterpart of pressing a key in a terminal dialog, which a host
+ * with no terminal cannot offer. The answer travels as the same durable
+ * `answer` operation the conversation's own Allow and Deny buttons submit, so
+ * a retry under one operation id replays the first receipt.
+ */
+async function answerPermissionRequest(
+  request: StructuredControlRequest,
+  conversationId: `conversation_${string}`,
+  host: StructuredHostColumns,
+  dependencies: { client?: RuntimeHostClient | null; operationId?: () => string; kick?: () => void },
+): Promise<StructuredControlResult> {
+  const decision = request.decision;
+  if (decision !== "allow" && decision !== "deny") {
+    return { status: 400, body: { error: "permission needs decision allow or deny" } };
+  }
+  const pending = host.pendingPermissions ?? [];
+  const requestId = request.requestId
+    ? (pending.some((candidate) => candidate.id === request.requestId) ? request.requestId : null)
+    : pending[0]?.id ?? null;
+  if (!requestId) {
+    return {
+      status: 409,
+      body: {
+        error: request.requestId
+          ? "that permission request is not pending on this conversation; it was answered or its turn ended"
+          : "no tool permission request is pending on this conversation",
+      },
+    };
+  }
+  const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
+  if (!client) {
+    return { status: 503, body: { error: "structured runtime host is unavailable", code: RUNTIME_HOST_UNAVAILABLE_CODE } };
+  }
+  const operationId = request.operationId ?? (dependencies.operationId ?? newOperationId)();
+  try {
+    const result = await client.command({
+      kind: "answer",
+      operationId,
+      idempotencyKey: operationId,
+      conversationId,
+      attentionId: requestId,
+      resolution: decision === "allow" ? { behavior: "allow" } : { behavior: "deny", message: OPERATOR_DENY_MESSAGE },
+    });
+    (dependencies.kick ?? kickStructuredDeliveryQueue)();
+    return {
+      status: result.receipt.status === "delivered" || result.receipt.status === "answered" ? 200 : 202,
+      body: { ok: true, structured: true, target: conversationId, operationId, receipt: result.receipt },
+    };
+  } catch (error) {
+    return { status: 503, body: { error: error instanceof Error ? error.message : String(error) } };
+  }
+}
+
 export async function dispatchStructuredControl(
   request: StructuredControlRequest,
   dependencies: {
@@ -174,6 +236,10 @@ export async function dispatchStructuredControl(
     && !entry.host
     && (conversation.reconfigure?.status === "applying" || completedStructuredOwnership);
   if (!entry.structuredHost && !structuredKill && !structuredReconfigureRestart) return null;
+
+  if (request.action === "permission") {
+    return await answerPermissionRequest(request, conversation.id, entry.structuredHost!, dependencies);
+  }
 
   if (!STRUCTURED_CONTROL_ACTIONS.has(request.action)) {
     if (request.action === "resume") {

@@ -138,3 +138,17 @@ test("an agent-initiated child inherits its parent's task; a flow reviewer names
   const flow = launchMembershipInput({ engine: "codex", cwd: "/repo", clientAttemptId: "flow_f2_x", origin: { kind: "container", container: "flow", containerId: "f2" }, reviewsConversationId: "conversation_impl", parentConversationId: "conversation_impl", parentArtifactPath: "/sessions/impl.jsonl" }, receipt, noPipelines, projectFor);
   expect(flow.inherit).toEqual([{ conversationId: "conversation_impl", path: "/sessions/impl.jsonl" }]);
 });
+
+test("an orchestrator seat's launch task is created named, since no seat ever refines its own task", async () => {
+  const { ensureTaskMembership } = await import("./membership");
+  const seat = launchMembershipInput({ engine: "claude", cwd: "/repo", clientAttemptId: "seat-1", role: "orchestrator", launchProfile: { title: "Orchestrator for fixture" } }, receipt, noPipelines, projectFor);
+  const worker = launchMembershipInput({ engine: "claude", cwd: "/repo", clientAttemptId: "worker-1", role: "builder", launchProfile: { title: "Build the upload fix" } }, { launchId: "launch-2", conversationId: "conversation_two" }, noPipelines, projectFor);
+  const first = ensureTaskMembership([], seat);
+  const second = first.ok ? ensureTaskMembership(first.tasks, worker) : first;
+  expect(second.ok).toBeTrue();
+  if (!second.ok) return;
+  expect(second.tasks.map((task) => [task.text, task.origin?.refinement])).toEqual([
+    ["Orchestrator for fixture", "titled"],
+    ["Build the upload fix", "pending"],
+  ]);
+});

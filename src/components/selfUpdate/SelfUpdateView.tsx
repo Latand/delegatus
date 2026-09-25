@@ -1,8 +1,9 @@
 "use client";
 
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { parseInline, splitItem, type Inline } from "@/lib/selfUpdate/changelogMarkup";
 import type { ProcessView, Snapshot, Step } from "@/lib/selfUpdate/types";
 
 import type { Live } from "./useSelfUpdateFeed";
@@ -272,7 +273,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     </ol>
   );
 
-  if (update.state === "idle" || (update.state !== "running" && freshTarget)) {
+  if (update.state === "idle" || (update.state === "done" && freshTarget) || (managed && update.state === "failed" && freshTarget)) {
     if (!s.available || s.check.state !== "update-available") {
       const copy = s.check.state === "up-to-date"
         ? t(managed ? "selfUpdate.update.nothingToDeploy" : "selfUpdate.update.nothingToBuild", { sha: s.installed.short, branch })
@@ -331,6 +332,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     );
   }
   const failed = update.steps.find((step) => step.state === "failed") ?? update.steps[0]!;
+  const remoteMoved = !managed && failed.failure?.kind === "remote-moved";
   const failedName = stepName(failed.name, t);
   const cause = stepFailureText(failed, t);
   const copy = managed
@@ -340,14 +342,16 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     <section data-section="update" data-update="failed" className={`${CARD} ${EDGE.danger}`}>
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
         {heading(t("selfUpdate.update.to", { target }))}
-        <div className="flex justify-end max-sm:w-full">
-          <Button
+        <div className="flex flex-wrap justify-end gap-2 max-sm:w-full">
+          {freshTarget ? <Button action="update-checked" tone="primary" label={t("selfUpdate.update.checkedTarget", { target: freshTarget.short })} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} /> : null}
+          {remoteMoved && !freshTarget ? <Button action="check-failed" tone="primary" label={t("selfUpdate.update.checkAgain")} onClick={actions.check} disabled={s.busy !== null || s.check.state === "checking" || state.pending.has("check")} /> : null}
+          {!remoteMoved ? <Button
             action="retry"
-            tone="primary"
+            tone={freshTarget ? "secondary" : "primary"}
             label={managed ? t("selfUpdate.update.deployAgain") : t("selfUpdate.update.retryFrom", { step: failedName })}
             onClick={actions.retry}
             disabled={s.busy !== null || state.pending.has("update")}
-          />
+          /> : null}
         </div>
       </div>
       <div data-outcome="failed" className="flex flex-col gap-1 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger">
@@ -359,17 +363,46 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
   );
 }
 
-/** Changelog prose marks code with backticks; those spans render as code. */
-function Prose({ text }: { text: string }) {
-  const parts = text.split("`");
-  /* A cut summary can end inside a code span: its opening mark is dropped. */
-  if (parts.length % 2 === 0) parts.splice(-2, 2, `${parts.at(-2)}${parts.at(-1)}`);
+/* Raised over the expand's grown hit area, which reaches into the lines
+   around it: a tap on a link always opens the link. */
+const INLINE_LINK = "relative z-[1] rounded-[2px] text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+/* Inline in the item's line; the hit area grows past the text, more on touch. */
+const ENTRY_TOGGLE = "relative whitespace-nowrap rounded-[4px] text-label font-semibold text-accent before:absolute before:-inset-x-1.5 before:-inset-y-1 before:content-[''] pointer-coarse:before:-inset-y-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+
+/** Changelog markup as elements (`changelogMarkup.ts`). Text only ever
+    becomes a text node, and a link opens its PR or issue in a new tab. */
+function Inlines({ nodes }: { nodes: readonly Inline[] }): ReactNode {
+  return nodes.map((node, index) => {
+    switch (node.kind) {
+      case "text": return <Fragment key={index}>{node.text}</Fragment>;
+      case "code": return <code key={index} className="rounded-[4px] border border-border bg-sunken px-[3px] font-mono text-[0.92em]">{node.text}</code>;
+      case "strong": return <strong key={index} className="font-semibold"><Inlines nodes={node.children} /></strong>;
+      case "em": return <em key={index}><Inlines nodes={node.children} /></em>;
+      case "link": return <a key={index} href={node.href} target="_blank" rel="noopener noreferrer" title={node.href} className={INLINE_LINK}><Inlines nodes={node.children} /></a>;
+    }
+  });
+}
+
+/** One changelog item: its bold lead (or first sentence), and the rest
+    behind its own expand, so nothing is cut inside a span. */
+function ChangelogItem({ text, t }: { text: string; t: TFunction }) {
+  const [open, setOpen] = useState(false);
+  const { lead, rest, cut } = useMemo(() => splitItem(parseInline(text)), [text]);
+  const more = rest.length > 0;
   return (
-    <span>
-      {parts.map((part, index) => index % 2 === 1
-        ? <code key={index} className="rounded-[4px] border border-border bg-sunken px-[3px] font-mono text-[0.92em]">{part}</code>
-        : <span key={index}>{part}</span>)}
-    </span>
+    <li data-entry={open ? "open" : more ? "collapsed" : "whole"} className="[overflow-wrap:anywhere]">
+      <Inlines nodes={lead} />
+      {more && open ? <Inlines nodes={rest} /> : null}
+      {more && !open && cut ? "…" : null}
+      {more ? (
+        <>
+          {" "}
+          <button type="button" data-action="toggle-entry" aria-expanded={open} onClick={() => setOpen((value) => !value)} className={ENTRY_TOGGLE}>
+            {t(open ? "selfUpdate.changes.collapse" : "selfUpdate.changes.expand")}
+          </button>
+        </>
+      ) : null}
+    </li>
   );
 }
 
@@ -394,7 +427,7 @@ function ChangesSection({ s, t }: { s: Snapshot; t: TFunction }) {
             <div key={group.type}>
               <h3 className="m-0 mt-1 text-label font-semibold text-secondary">{group.type}</h3>
               <ul className="m-0 flex list-disc flex-col gap-1 pl-4 text-ui text-primary marker:text-muted">
-                {group.items.map((item, index) => <li key={index} className="[overflow-wrap:anywhere]"><Prose text={item} /></li>)}
+                {group.items.map((item, index) => <ChangelogItem key={`${index}:${item}`} text={item} t={t} />)}
               </ul>
               {group.more > 0 ? <p className="m-0 text-label text-muted">{t("selfUpdate.changes.more", { count: group.more })}</p> : null}
             </div>

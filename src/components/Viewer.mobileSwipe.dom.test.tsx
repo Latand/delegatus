@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { translate } from "@/lib/i18n";
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -75,7 +76,8 @@ const { Viewer } = await import("./Viewer");
 const { resetFilesClientCacheForTests } = await import("@/hooks/useFiles");
 const { pendingPipelineActs } = await import("./mobile/MobilePipelineScreen");
 const { receipts } = await import("./mobile/MobileReceipt");
-const { getMobileNav } = await import("./mobile/mobileNav");
+const { getMobileNav, resetMobileNavForTests } = await import("./mobile/mobileNav");
+const { resetDismissalOverlayForTests } = await import("./attention/dismissalOverlay");
 
 const NOW = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((NOW - secondsAgo) * 1_000).toISOString();
@@ -111,6 +113,11 @@ let pipelineReply: ((body: Record<string, unknown>) => Promise<Response>) | null
 /* What the file scan serves: a test the server closes a lane in moves it here. */
 let served: Pipeline[] = PIPELINES;
 const pipelinePatches: Array<Record<string, unknown>> = [];
+/* Every POST to `/api/attention/dismissals` (docs/design/needs-attention.md §5),
+   and how the server answers it: at once with its own instant, unless a test
+   holds the answer. */
+const dismissals: Array<Record<string, unknown>> = [];
+let dismissalReply: ((body: Record<string, unknown>) => Promise<Response>) | null = null;
 const originalFetch = globalThis.fetch;
 
 function stubFetch(): void {
@@ -133,6 +140,12 @@ function stubFetch(): void {
       return Response.json({ ok: true, board });
     }
     if (url.startsWith("/api/orchestrator/seat")) return Response.json({ seat: null, pending: null, exists: true });
+    if (url === "/api/attention/dismissals" && method === "POST") {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      dismissals.push(body);
+      if (dismissalReply) return dismissalReply(body);
+      return Response.json({ ok: true, dismissed: [], alreadyClear: [], at: new Date().toISOString(), by: { kind: "operator", surface: "phone" }, undo: body.undo === true });
+    }
     if (url.startsWith("/api/pipelines/") && method === "PATCH") {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       pipelinePatches.push(body);
@@ -155,9 +168,12 @@ beforeEach(() => {
   pipelineReply = null;
   served = PIPELINES;
   pipelinePatches.length = 0;
+  dismissals.length = 0;
+  dismissalReply = null;
+  resetDismissalOverlayForTests();
   pendingPipelineActs.cancel();
   receipts.dismiss();
-  getMobileNav().home();
+  resetMobileNavForTests();
   stubFetch();
 });
 
@@ -210,21 +226,22 @@ async function hold(target: HTMLElement): Promise<void> {
   act(() => { press("pointerup"); });
 }
 
-test("phone: Hide takes a lane out of the pin and out of the bar's badge on the tap, and a refused hide puts both back", async () => {
+test("phone: Dismiss takes a lane out of the pin and out of the bar's badge on the tap, and a refused dismissal puts both back", async () => {
   const host = await mountViewer();
   await until(() => row(host, "p-a") !== null && row(host, "p-b") !== null);
   expect(badge(host)).toBe("2");
 
   let refuse: (() => void) | null = null;
-  pipelineReply = () => new Promise<Response>((resolve) => {
-    refuse = () => resolve(new Response(JSON.stringify({ error: "the lane moved on" }), { status: 409 }));
+  dismissalReply = () => new Promise<Response>((resolve) => {
+    refuse = () => resolve(new Response(JSON.stringify({ ok: false, error: "the lane moved on" }), { status: 409 }));
   });
   await hold(row(host, "p-a")!);
-  act(() => sheetAction("hide").click());
+  act(() => sheetAction("dismiss").click());
 
   /* The server has not answered, and the pin and the count moved together:
      the lane still stands in Inbox, with nothing asked of the operator. */
-  expect(pipelinePatches).toEqual([{ action: "dismiss" }]);
+  expect(dismissals).toEqual([{ target: { kind: "subjects", subjects: [{ kind: "pipeline", pipelineId: "p-a", laneMovedAt: laneMovedAt(PIPELINES[0]!) }] }, undo: false, surface: "phone" }]);
+  expect(pipelinePatches).toEqual([]);
   expect(row(host, "p-a")).toBeNull();
   expect(card(host, "p-a")).not.toBeNull();
   expect(badge(host)).toBe("1");
@@ -309,44 +326,37 @@ test("phone: a Close lane that has gone out stays off the board and the badge un
   expect(receiptText()).toContain("the lane is still publishing");
 });
 
-test("phone: a lane hidden before that parked again hides again: its old Hide is cleared first, and the pin and the count stay gone once the server answers", async () => {
-  /* Hidden an hour before the round that parked it again, so it is back in
-     Needs you. The server here keeps a lane's first Hide instant through a
-     later dismiss, as the engine does, and undismiss clears it. */
+test("phone: a lane dismissed before that parked again is cleared for this decision with one request, and stays gone once the server answers", async () => {
+  /* Dismissed an hour before the round that parked it again, so it is back
+     in Needs you. The engine now stamps every dismissal with its own instant,
+     so there is nothing to clear first. */
   let stored = { ...lane("p-a", "Fast conversation switching"), dismissedAt: iso(7_000) } as Pipeline;
   served = [stored, PIPELINES[1]!];
   const host = await mountViewer();
   await until(() => row(host, "p-a") !== null && row(host, "p-b") !== null);
   expect(badge(host)).toBe("2");
-  const answers: Array<() => void> = [];
-  pipelineReply = (body) => new Promise<Response>((resolve) => {
-    answers.push(() => {
-      if (body.action === "dismiss") stored = { ...stored, dismissedAt: stored.dismissedAt ?? new Date().toISOString() };
-      if (body.action === "undismiss") stored = { ...stored, dismissedAt: null };
+  let answer: (() => void) | null = null;
+  dismissalReply = () => new Promise<Response>((resolve) => {
+    answer = () => {
+      const at = new Date().toISOString();
+      stored = { ...stored, dismissedAt: at, dismissedBy: { kind: "operator", surface: "phone" } } as Pipeline;
       served = [stored, PIPELINES[1]!];
-      resolve(Response.json({ ok: true, pipeline: stored }));
-    });
+      resolve(Response.json({ ok: true, dismissed: [{ kind: "pipeline", pipelineId: "p-a" }], alreadyClear: [], at, by: { kind: "operator", surface: "phone" }, undo: false }));
+    };
   });
 
   await hold(row(host, "p-a")!);
-  act(() => sheetAction("hide").click());
-  await until(() => answers.length === 1);
-  expect(pipelinePatches).toEqual([{ action: "undismiss" }]);
+  act(() => sheetAction("dismiss").click());
+  await until(() => answer !== null);
+  expect(dismissals).toHaveLength(1);
+  expect(pipelinePatches).toEqual([]);
   expect(row(host, "p-a")).toBeNull();
   expect(badge(host)).toBe("1");
 
-  /* The old Hide is cleared; the new one goes out, and the row stays gone. */
-  await act(async () => { answers[0]!(); await Bun.sleep(20); });
-  await until(() => answers.length === 2);
-  expect(pipelinePatches).toEqual([{ action: "undismiss" }, { action: "dismiss" }]);
-  expect(row(host, "p-a")).toBeNull();
-  expect(badge(host)).toBe("1");
-
-  /* The answer stamps this decision, so the echo keeps the lane hidden. */
-  await act(async () => { answers[1]!(); await Bun.sleep(40); });
+  /* The answer stamps this decision, so the next read keeps the lane cleared. */
+  await act(async () => { answer!(); await Bun.sleep(40); });
   expect(Date.parse(stored.dismissedAt!)).toBeGreaterThan(Date.parse(iso(3_600)));
   expect(row(host, "p-a")).toBeNull();
   expect(badge(host)).toBe("1");
-  /* The receipt that went up on the tap is still the Hide's own. */
-  expect(receiptText()).toContain(translate("en", "mobile2.board.pipelineHidden", { task: "Fast conversation switching" }));
+  expect(receiptText()).toContain(translate("en", "needs.dismissedReceipt", { title: "Fast conversation switching" }));
 });

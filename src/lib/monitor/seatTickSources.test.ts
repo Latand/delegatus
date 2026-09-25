@@ -19,7 +19,7 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
-const { gatherSeatTickInput: gatherProduction, repoDirForProject, runtimeWakeState, seatTickProjects, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { gatherSeatTickInput: gatherProduction, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
 const { SEND_UNVERIFIED_REASON } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
@@ -172,6 +172,7 @@ function sources(over: {
   /** The liveness plane's verdict for a child, by id (#1465). */
   childRows?: Record<string, AgentLivenessRecord>;
   seatConversationId?: string;
+  retirementJournal?: SeatTickSources["retirementJournal"];
   now?: number;
 }): SeatTickSources {
   return {
@@ -209,6 +210,7 @@ function sources(over: {
     lifecycleJournal: () => journal(over.events ?? []),
     latestDeployment: () => over.latestDeployment ?? ({ state: "unreadable", error: "no ledger" }) as never,
     retirementReport: () => null,
+    ...(over.retirementJournal ? { retirementJournal: over.retirementJournal } : {}),
     settings: () => over.settings ?? defaultSeatTickSettings(PROJECT),
     openPullRequests: async (options) => {
       over.pullRequestCalls?.push(options);
@@ -593,6 +595,113 @@ test("the deployment signal reports the latest deployment, and stays silent when
 });
 
 /* ------------------------------------------------------------------------- *
+ * #1818: a retirement sweep that retires nothing while one clause refuses.
+ * ------------------------------------------------------------------------- */
+
+function retirementSweeps(
+  count: number,
+  refusedByClause: Record<string, number>,
+  retiredAt: number | null = null,
+  refusedByFlag: Record<string, number> = {},
+) {
+  return Array.from({ length: count }, (_, index) => ({
+    finishedAt: new Date(NOW - (count - index) * 5 * 60_000).toISOString(),
+    retired: index === retiredAt ? 1 : 0,
+    refusedByClause,
+    refusedByFlag,
+  }));
+}
+
+test("a window that retires nothing while one clause refuses past the threshold names that clause", async () => {
+  const sinceCalls: number[] = [];
+  const stalled = await gather({
+    retirementJournal: (sinceMs) => {
+      sinceCalls.push(sinceMs);
+      return { covered: true, sweeps: retirementSweeps(288, { "seat-free": 1, "process-identity": 7 }) };
+    },
+  });
+  expect(sinceCalls).toEqual([NOW - RETIREMENT_STALL_WINDOW_MS]);
+  expect(stalled.signals).toEqual([{
+    id: "host-retirement-stalled",
+    label: "host retirement: nothing retired in 288 sweeps over 24h while process-identity refused 2016 times",
+  }]);
+
+  /* One retirement anywhere in the window is a sweep doing its job. */
+  const retiring = await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(288, { "process-identity": 7 }, 100) }) });
+  expect(retiring.signals).toEqual([]);
+  /* A journal that begins inside the window cannot say nothing retired across it. */
+  const young = await gather({ retirementJournal: () => ({ covered: false, sweeps: retirementSweeps(288, { "process-identity": 7 }) }) });
+  expect(young.signals).toEqual([]);
+  /* Refusals spread thin, or few, are a quiet machine. */
+  const quiet = await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(288, { "seat-free": 3, "turn-settled": 3 }) }) });
+  expect(quiet.signals).toEqual([]);
+});
+
+test("the stall threshold is strict and picks the clause with the most refusals", () => {
+  const window = { covered: true, sweeps: retirementSweeps(10, { "transcript-idle": 50, "handoff-queue-drained": 100 }) };
+  expect(stalledRetirementClause(window, 1000)).toBeNull();
+  expect(stalledRetirementClause(window, 999)).toEqual({ clause: "handoff-queue-drained", refusals: 1000, sweeps: 10, flags: [] });
+  expect(stalledRetirementClause({ covered: true, sweeps: [] }, 0)).toBeNull();
+});
+
+test("a stall on no-active-flags names the flags that refused, most frequent first (#2137)", async () => {
+  /* The measured day: 274 sweeps, no retirement, and every no-active-flags
+     refusal was an idle Codex host carrying its three app-server
+     advertisements. The signal has to name them, since the clause alone sends
+     the reader into the code. */
+  const flags = { "native-queue": 5, "native-inject": 5, "native-turn-profile": 5, waitingOnApproval: 1 };
+  const stalled = await gather({
+    retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(274, { "no-active-flags": 6, "turn-settled": 3 }, null, flags) }),
+  });
+  expect(stalled.signals).toEqual([{
+    id: "host-retirement-stalled",
+    label: "host retirement: nothing retired in 274 sweeps over 24h while no-active-flags refused 1644 times"
+      + " (flags: native-inject 1370, native-queue 1370, native-turn-profile 1370, waitingOnApproval 274)",
+  }]);
+
+  /* A flood of names is counted past the first five rather than listed. */
+  const many = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`flag-${index}`, 8 - index]));
+  const flooded = stalledRetirementClause({ covered: true, sweeps: retirementSweeps(200, { "no-active-flags": 6 }, null, many) });
+  expect(flooded?.flags.map(([flag]) => flag)).toEqual(Object.keys(many));
+  const label = (await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(200, { "no-active-flags": 6 }, null, many) }) })).signals[0]?.label;
+  expect(label).toEndWith("(flags: flag-0 1600, flag-1 1400, flag-2 1200, flag-3 1000, flag-4 800, +3 more)");
+
+  /* Flags ride only on the clause that refused on them. */
+  const other = stalledRetirementClause({ covered: true, sweeps: retirementSweeps(200, { "seat-free": 6, "no-active-flags": 1 }, null, flags) });
+  expect(other).toMatchObject({ clause: "seat-free", flags: [] });
+});
+
+test("the journal window reads through rotation and stops at the first sweep older than the window", () => {
+  const dir = fs.mkdtempSync(path.join(SANDBOX, "retirement-journal-"));
+  const file = path.join(dir, "host-retirement-journal.ndjson");
+  const line = (at: number, retired: number, refusedByClause: Record<string, number>, refusedByFlag?: Record<string, number>) => JSON.stringify({
+    version: 1, startedAt: new Date(at - 1_000).toISOString(), finishedAt: new Date(at).toISOString(), idleHours: 6,
+    evaluated: 9, deferred: 0, standDown: null, retired: Array.from({ length: retired }, () => ({ key: "k" })), failed: [],
+    reclaimed: { processes: 0, rssBytes: 0, swapBytes: 0 }, refusedByClause, undeterminedByClause: {},
+    ...(refusedByFlag ? { refusedByFlag } : {}),
+  });
+  const since = NOW - RETIREMENT_STALL_WINDOW_MS;
+  fs.writeFileSync(`${file}.1`, [line(since - 60_000, 1, { "seat-free": 1 }), line(since + 60_000, 0, { "seat-free": 2 })].join("\n") + "\n");
+  fs.writeFileSync(file, [
+    line(since + 120_000, 0, { "seat-free": 3 }),
+    "{\"torn",
+    line(NOW, 0, { "seat-free": 4, "no-active-flags": 2 }, { "native-queue": 2, bogus: "2" as unknown as number }),
+  ].join("\n") + "\n");
+
+  const window = readRetirementJournalWindow(file, since);
+  expect(window.covered).toBe(true);
+  expect(window.sweeps.map((sweep) => sweep.refusedByClause["seat-free"])).toEqual([2, 3, 4]);
+  /* A sweep journaled before the per-flag count reads as naming no flag. */
+  expect(window.sweeps.map((sweep) => sweep.refusedByFlag)).toEqual([{}, {}, { "native-queue": 2 }]);
+  expect(window.sweeps.every((sweep) => sweep.retired === 0)).toBe(true);
+
+  /* Without the rotated copy the journal starts inside the window. */
+  fs.rmSync(`${file}.1`);
+  expect(readRetirementJournalWindow(file, since)).toMatchObject({ covered: false });
+  expect(readRetirementJournalWindow(path.join(dir, "absent.ndjson"), since)).toEqual({ covered: false, sweeps: [] });
+});
+
+/* ------------------------------------------------------------------------- *
  * #1285: an event whose lane is over, and a backlog of them.
  * ------------------------------------------------------------------------- */
 
@@ -677,6 +786,66 @@ test("a finished lane whose branch still has an open pull request is carried, na
     updatedAt: new Date(NOW - 30 * 60_000).toISOString(),
   }]);
   expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
+});
+
+/* #2187 §3.5: a lane can complete on a spent review budget with a head no
+   reviewer saw; the seat that merges its pull request reads that first. */
+test("a finished lane whose last fix was never re-reviewed says so on its open pull request", async () => {
+  const unreviewed = finishedLane({
+    lastPassedCommit: "b".repeat(40),
+    stages: [
+      { id: "build", kind: "run", prompt: "Build", next: "critique", onFail: null },
+      { id: "critique", kind: "run", prompt: "Critique", next: null, onFail: { to: "build", maxRounds: 1 } },
+    ],
+    runs: [
+      { stageId: "build", attempts: [
+        { n: 1, state: "passed", activatedBy: null, completedAt: "2026-08-27T10:00:00.000Z" },
+        { n: 2, state: "passed", activatedBy: { stageId: "critique", attempt: 1, edge: "fail", budgetSpent: true }, completedAt: "2026-08-27T11:00:00.000Z" },
+      ] },
+      { stageId: "critique", attempts: [
+        { n: 1, state: "failed", budgetSpent: true, reviewedHead: "a".repeat(40), verdict: { status: "fail", findings: ["P2 gap"] } },
+      ] },
+    ],
+  });
+  const input = await gather({ pipelines: [unreviewed], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, pipelineId: "pipeline_z9", lastFixUnreviewed: true })]);
+  const verdict = seatTickDecision(input).verdict;
+  expect(verdict.kind === "wake" && verdict.reasons[0]!.detail)
+    .toBe("pull request #1289 left open by a lane that finished; last fix not re-reviewed");
+});
+
+/* #2187 §4.6: a pull request the merge runner is working on is the runner's;
+   one whose merge stopped comes back to the seat with the reason. */
+test("a pull request the merge runner holds is left out, and a stopped merge names its reason", async () => {
+  const merge = (state: string, reason: string | null) => ({
+    state, by: null, repository: "acme/widgets", prNumber: 1289, policyChangedAt: "2026-08-27T09:00:00.000Z", reviewedHead: "a".repeat(40),
+    chain: ["a".repeat(40)], updates: [], seenChecks: [], head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null,
+    requestedAt: "2026-08-27T10:00:00.000Z", mergedHead: null, mergeCommit: null, method: null, mergedAt: null, attempts: 0,
+    reason, blockedAt: reason ? "2026-08-27T11:00:00.000Z" : null, updatedAt: "2026-08-27T11:00:00.000Z",
+  });
+  for (const state of ["queued", "checking", "waiting-checks", "updating", "merging"]) {
+    const held = await gather({ pipelines: [finishedLane({ merge: merge(state, null) } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+    expect(held.pullRequests).toEqual([]);
+  }
+  const input = await gather({ pipelines: [finishedLane({ merge: merge("blocked", "conflict with the base branch") } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, mergeBlocked: "conflict with the base branch" })]);
+  const verdict = seatTickDecision(input).verdict;
+  expect(verdict.kind === "wake" && verdict.reasons[0]!.detail)
+    .toBe("pull request #1289 left open by a lane that finished; merge stopped: conflict with the base branch");
+});
+
+/* #2187 §5.3: a finished lane marked as finishing its task, whose move to
+   Done waits on another open pipeline, says so in the wake, so a seat that
+   marked the wrong lane sees it. */
+test("a finished lane whose task waits on other open pipelines says so on its pull request", async () => {
+  const waiting = finishedLane({ finishesTaskIds: ["task_big"], taskIds: ["task_big"], taskFinishWaits: [{ taskId: "task_big", since: "2026-08-27T11:00:00.000Z", open: ["pipeline_other"] }] } as never);
+  const input = await gather({ pipelines: [waiting], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, taskWaits: 1 })]);
+  const verdict = seatTickDecision(input).verdict;
+  const item = verdict.kind === "wake" ? verdict.items.find((entry) => entry.kind === "pull-request") : null;
+  expect(item?.label).toEndWith("unmerged since that lane finished; task waits for 1 open pipeline");
+  const quiet = await gather({ pipelines: [finishedLane()], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(quiet.pullRequests[0]).not.toHaveProperty("taskWaits");
 });
 
 test("a pull request no finished lane produced is not this seat's obligation", async () => {

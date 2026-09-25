@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useNowSeconds, BOARD_CLOCK_MS } from "@/hooks/useNowSeconds";
 import { isOpaqueProjectKey, projectTitle } from "@/lib/displayNames";
@@ -85,6 +85,9 @@ export interface OverviewKanbanProps {
   /** The phone's doors (#2098). Present, the Overview draws the phone kanban
       instead of the desktop board. */
   phone?: OverviewPhoneDoors | null;
+  /** What the desktop board draws above its columns, where a project's board
+      draws its orchestrator seat: the Overview's first-run band (#2166). */
+  lead?: ReactNode;
 }
 
 export interface OverviewPhoneDoors {
@@ -95,7 +98,7 @@ export interface OverviewPhoneDoors {
   onHiddenCount?: (count: number) => void;
 }
 
-export function OverviewKanban({ projects, displayNames, files, tasks, flows, pipelines, loaded, catalogFailures, onSelectProject, onOpenConversations, phone = null }: OverviewKanbanProps) {
+export function OverviewKanban({ projects, displayNames, files, tasks, flows, pipelines, loaded, catalogFailures, onSelectProject, onOpenConversations, phone = null, lead = null }: OverviewKanbanProps) {
   const { t } = useLocale();
   /* The dashboard's board clock, shared by cadence: the working predicate is
      read from row states that age, so it must advance between scans. */
@@ -197,6 +200,7 @@ export function OverviewKanban({ projects, displayNames, files, tasks, flows, pi
          seat-only task lands in the header's hidden count (#1841). */
       seatRefs={seatRefs}
       onOpenConversations={onOpenConversations}
+      seat={lead ? () => lead : undefined}
     />
   );
 }

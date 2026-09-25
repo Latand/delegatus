@@ -14,7 +14,7 @@ const REVIEW_FENCES = [
 // correctness for a UI diff stopped at the code and the author's evidence had
 // never mounted one of the surfaces the requirement named.
 const REVIEW_FRAME_RULES =
-  "Three standing rules. (1) Anchor the frame: when the assignment carries the requester's originating requirement, validate the work against that verbatim requirement, never against the artifact's previous revision — WRONG-PREMISE (\"this does not serve the original requirement\") is an expected verdict and outranks any finding about internal rigour. (2) Over-engineering pass: on every review, flag machinery heavier than the problem it solves (a library plus wrapper where a native primitive does), name the simpler mechanism, and report what to cut — OVER-BUILT is a first-class verdict, and a round that only removes scope is a successful round. (3) Rendered surfaces are part of correctness: when the diff touches UI (components, styles, layout), the review covers the rendered result and the code alike. Check that the author's rendered evidence reaches every surface and every viewport the requirement names; evidence that skips a named surface is REQUEST_CHANGES on its own. Where that evidence is missing and a harness exists, render from an export of the reviewed HEAD — never the live worktree, never the operator's Delegatus — and report overflow, clipped or zero-width controls, overlap and unreadable states as severity-ranked findings carrying the viewport and the measured numbers.";
+  "Three standing rules. (1) Anchor the frame: when the assignment carries the requester's originating requirement, validate the work against that verbatim requirement, never against the artifact's previous revision — WRONG-PREMISE (\"this does not serve the original requirement\") is an expected verdict and outranks any finding about internal rigour. (2) Over-engineering pass: on every review, flag machinery heavier than the problem it solves (a library plus wrapper where a native primitive does), name the simpler mechanism, and report what to cut — OVER-BUILT is a first-class verdict, and a round that only removes scope is a successful round. (3) Rendered surfaces are part of correctness: when the diff touches UI (components, styles, layout), the review covers the rendered result and the code alike. Check that the author's rendered evidence reaches every surface and every viewport the requirement names; evidence that skips a named surface is REQUEST_CHANGES on its own. Where that evidence is missing and a harness exists, render from an export of the reviewed HEAD made under $TMPDIR, the stage's own scratch directory that is removed when the stage settles — never the live worktree, never the operator's Delegatus, never a directory you name under /tmp or /var/tmp — and report overflow, clipped or zero-width controls, overlap and unreadable states as severity-ranked findings carrying the viewport and the measured numbers.";
 
 // #1428 — Delegatus indexes every message of every conversation on this machine,
 // and stages kept re-solving what an earlier one had already solved. Pipeline
@@ -63,7 +63,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "reviewer",
     name: "Reviewer",
-    description: "Reviews a code diff and returns severity-ranked evidence-backed findings.",
+    description: "Reviews a code diff and returns severity-ranked evidence-backed findings. High per lane for risky backend diffs.",
     config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "xhigh" },
     parameters: [
       { key: "diffSource", label: "Diff source", description: "Diff or pull request reference to inspect.", kind: "text", required: true },
@@ -90,7 +90,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "builder",
     name: "Builder",
-    description: "Writes product code for a scoped directive.",
+    description: "Writes product code for a scoped directive. Frontend xhigh only per lane, for the hardest UI; never raise GPT-6 Sol to xhigh by hand. Default Sol high vs Astra medium: decided at 30 Sol first reviews.",
     config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
     parameters: [
       { key: "mode", label: "Mode", description: "Implementation discipline.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
@@ -103,7 +103,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "architect",
     name: "Architect",
-    description: "Produces an evidence-grounded design without product edits.",
+    description: "Produces an evidence-grounded design without product edits. claude/fable/high per lane for the largest cross-cutting designs.",
     config: { engine: "claude", model: "opus", effort: "high" },
     parameters: [
       { key: "mode", label: "Mode", description: "Architecture output mode.", kind: "select", options: ["design", "spec", "architecture-audit"] },
@@ -126,7 +126,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "prod-auditor",
     name: "Prod-auditor",
     description: "Performs a read-only evidence-backed production investigation.",
-    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "xhigh" },
+    config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "high" },
     parameters: [
       { key: "questions", label: "Questions", description: "Production questions to investigate.", kind: "text", required: true },
     ],

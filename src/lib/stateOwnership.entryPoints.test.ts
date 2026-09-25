@@ -138,6 +138,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
     ["scripts/migrate-legacy-tmux.ts", [], "only `preflight --root <transcript>`"],
     ["scripts/runtime-host-viewer-adapter.ts", [], "deployment adapter protocol is required"],
     ["scripts/bootstrap-runtime-host.ts", ["--not-a-mode"], "unsupported option --not-a-mode"],
+    ["scripts/export-human-input.ts", [], "--host is required"],
   ] as const) {
     test(`${script} reaches its own body`, () => {
       const result = runEntryPoint([script, ...argv]);

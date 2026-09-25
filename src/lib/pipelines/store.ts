@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { isDismissedBy } from "@/lib/attention/dismissalTypes";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { effortScale } from "@/lib/agent/efforts";
@@ -14,7 +15,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
 import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid, MAX_LEGACY_REVIEW_CONVERSIONS } from "./legacyReviewDefinition";
 import { normalizeStageOutputPath } from "./stageAccess";
-import { MAX_DECISION_ANSWER_CHARS } from "./types";
+import { MAX_DECISION_ANSWER_CHARS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, pipelineActivitySettled } from "./types";
 import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
 
@@ -189,8 +190,23 @@ function isAttempt(value: unknown, index: number): boolean {
     isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
-    isUnresolvedTermination(attempt.unresolvedTermination)
+    isUnresolvedTermination(attempt.unresolvedTermination) &&
+    isPermissionDenials(attempt.permissionDenials)
   );
+}
+
+/** The automatic permission denials an attempt recorded (#2215). */
+function isPermissionDenials(value: unknown): boolean {
+  if (value === undefined) return true;
+  return Array.isArray(value) && value.every((denial) => {
+    if (!denial || typeof denial !== "object" || Array.isArray(denial)) return false;
+    const entry = denial as Record<string, unknown>;
+    return typeof entry.requestId === "string" && entry.requestId.length > 0
+      && isNullableString(entry.tool) && isNullableString(entry.command)
+      && isNullableString(entry.reason) && isNullableString(entry.reasonType)
+      && (entry.mode === "unattended" || entry.mode === "timeout")
+      && typeof entry.deniedAt === "string";
+  });
 }
 
 function isSpawnActivation(value: unknown): boolean {
@@ -338,7 +354,7 @@ function isFailEdge(value: unknown): boolean {
     Number.isInteger(edge.maxRounds) &&
     (edge.maxRounds as number) >= 1 &&
     (edge.maxRounds as number) <= MAX_FAIL_EDGE_ROUNDS &&
-    (edge.onExhausted === undefined || edge.onExhausted === "advance" || edge.onExhausted === "park")
+    (edge.onExhausted === undefined || (PIPELINE_FAIL_EDGE_EXHAUSTIONS as readonly unknown[]).includes(edge.onExhausted))
   );
 }
 
@@ -480,8 +496,8 @@ export function pipelineGraphError(
     if (onFail && (!Number.isInteger(onFail.maxRounds) || onFail.maxRounds < 1 || onFail.maxRounds > MAX_FAIL_EDGE_ROUNDS)) {
       return `stage ${stage.id} onFail maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`;
     }
-    if (onFail?.onExhausted !== undefined && onFail.onExhausted !== "advance" && onFail.onExhausted !== "park") {
-      return `stage ${stage.id} onFail onExhausted must be advance or park`;
+    if (onFail?.onExhausted !== undefined && !PIPELINE_FAIL_EDGE_EXHAUSTIONS.includes(onFail.onExhausted)) {
+      return `stage ${stage.id} onFail onExhausted must be advance, stop-after-fix or park`;
     }
   }
   /* Out-degree-1 pass graph: walking `next` from any stage must terminate
@@ -558,6 +574,20 @@ function isReviewGrant(value: unknown): boolean {
     && isActor(grant.actor) && typeof grant.at === "string";
 }
 
+function isReviewAcceptance(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const acceptance = value as Record<string, unknown>;
+  return typeof acceptance.clientRequestId === "string" && acceptance.clientRequestId.length > 0 && acceptance.clientRequestId.length <= 200
+    && typeof acceptance.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(acceptance.expectedRevision)
+    && typeof acceptance.stageId === "string" && acceptance.stageId.length > 0
+    && Number.isSafeInteger(acceptance.attempt) && (acceptance.attempt as number) >= 0
+    && typeof acceptance.fixStageId === "string" && acceptance.fixStageId.length > 0
+    && Number.isSafeInteger(acceptance.fixAttempt) && (acceptance.fixAttempt as number) > 0
+    && isNullableString(acceptance.reviewedHead)
+    && typeof acceptance.currentHead === "string"
+    && isActor(acceptance.actor) && typeof acceptance.at === "string";
+}
+
 /** An explicit legacy review-loop conversion and the definition it replaced. */
 function isLegacyReviewConversion(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -592,6 +622,50 @@ function isDecisionAnswer(value: unknown): boolean {
     && typeof answer.question === "string"
     && typeof answer.answer === "string" && answer.answer.trim().length > 0 && answer.answer.length <= MAX_DECISION_ANSWER_CHARS
     && isActor(answer.actor) && typeof answer.at === "string";
+}
+
+const MERGE_STATES = new Set(["queued", "checking", "waiting-checks", "updating", "merging", "merged", "blocked", "cancelled"]);
+const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/** The merge runner's record (#2187 §4.4). */
+function isPipelineMerge(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const merge = value as Record<string, unknown>;
+  return MERGE_STATES.has(String(merge.state))
+    && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
+    && typeof merge.repository === "string" && merge.repository.length > 0
+    && Number.isSafeInteger(merge.prNumber) && (merge.prNumber as number) > 0
+    && typeof merge.policyChangedAt === "string"
+    && typeof merge.reviewedHead === "string"
+    && isStringList(merge.chain)
+    && Array.isArray(merge.updates) && merge.updates.every((update) => Boolean(update) && typeof update === "object"
+      && typeof (update as Record<string, unknown>).requestedAt === "string" && isNullableString((update as Record<string, unknown>).head))
+    && isStringList(merge.seenChecks)
+    && isNullableString(merge.head) && isNullableString(merge.headSeenAt)
+    && (merge.lastChecks === null || isStringList(merge.lastChecks))
+    && isNullableString(merge.readAt) && isNullableString(merge.nextReadAt)
+    && (merge.readFailures === undefined || Number.isSafeInteger(merge.readFailures))
+    && typeof merge.requestedAt === "string"
+    && isNullableString(merge.mergedHead) && isNullableString(merge.mergeCommit)
+    && (merge.method === null || merge.method === "squash" || merge.method === "merge" || merge.method === "rebase")
+    && isNullableString(merge.mergedAt)
+    && Number.isSafeInteger(merge.attempts)
+    && isNullableString(merge.reason) && isNullableString(merge.blockedAt)
+    && typeof merge.updatedAt === "string";
+}
+
+/** #2187 §5.3: one entry per task, each naming a task the pipeline links. */
+function isTaskFinish(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const finish = value as Record<string, unknown>;
+  return typeof finish.taskId === "string" && finish.taskId.length > 0 && typeof finish.at === "string"
+    && (finish.outcome === "moved" || finish.outcome === "already-done");
+}
+
+function isTaskFinishWait(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const wait = value as Record<string, unknown>;
+  return typeof wait.taskId === "string" && wait.taskId.length > 0 && typeof wait.since === "string" && isStringList(wait.open);
 }
 
 function isPipeline(value: unknown): value is Pipeline {
@@ -633,6 +707,7 @@ function isPipeline(value: unknown): value is Pipeline {
     isNullableString(pipeline.closedAt) &&
     (pipeline.hiddenAt === undefined || isNullableString(pipeline.hiddenAt)) &&
     (pipeline.dismissedAt === undefined || isNullableString(pipeline.dismissedAt)) &&
+    (pipeline.dismissedBy === undefined || pipeline.dismissedBy === null || isDismissedBy(pipeline.dismissedBy)) &&
     (pipeline.unconfirmedHosts === undefined
       || (Array.isArray(pipeline.unconfirmedHosts) && pipeline.unconfirmedHosts.every(isUnconfirmedHost))) &&
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
@@ -640,6 +715,11 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
     (pipeline.reviewPending === undefined || isReviewPending(pipeline.reviewPending)) &&
     (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
+    (pipeline.reviewAcceptances === undefined || (Array.isArray(pipeline.reviewAcceptances) && pipeline.reviewAcceptances.every(isReviewAcceptance))) &&
+    (pipeline.merge === undefined || isPipelineMerge(pipeline.merge)) &&
+    (pipeline.finishesTaskIds === undefined || (isStringList(pipeline.finishesTaskIds) && new Set(pipeline.finishesTaskIds).size === pipeline.finishesTaskIds.length)) &&
+    (pipeline.taskFinishes === undefined || (Array.isArray(pipeline.taskFinishes) && pipeline.taskFinishes.every(isTaskFinish))) &&
+    (pipeline.taskFinishWaits === undefined || (Array.isArray(pipeline.taskFinishWaits) && pipeline.taskFinishWaits.every(isTaskFinishWait))) &&
     (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
       && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
@@ -1257,9 +1337,7 @@ export function loadArchivedPipelines(): Pipeline[] {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
-  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return false;
-  if (pipeline.activationCloseRequested) return false;
-  if (pipeline.delivery?.active || pipeline.delivery?.operation?.state === "running") return false;
+  if (!pipelineActivitySettled(pipeline)) return false;
   /* Closed records archive on closedAt. A discarded draft now closes like
      anything else (#1274), but records discarded before that fix are hidden
      with no closedAt at all, so their hiddenAt still stands in. Anything still

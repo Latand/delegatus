@@ -68,6 +68,52 @@
  * their markdown heading or HTML element id, and a sibling `retry.ts:180` /
  * `retry.ts:180:5` link opens the file at that line.
  *
+ * With BOARD_CAPTURE_CASE=resources it renders the resources footer (#2110,
+ * #1817) from a fixture served through LLV_RESOURCES_FIXTURE: a session table
+ * a failed refresh fell back on four days ago, and the same table current,
+ * each beside Delegatus's own processes. The rail footer and its open panel at
+ * 1280 × 800 in en and uk, light and dark, and the phone's projects sheet with
+ * the footer at its foot and the panel open at 390 × 844. It requires the
+ * Delegatus line in the footer, the stale mark and banner only on the stale
+ * table, the stale text still in the frame with the list scrolled to its end
+ * and a stale tag on every row, a Delegatus section with every process and no
+ * control in it, the panel inside the viewport with nothing overflowing
+ * sideways, and 44 px targets on the phone.
+ *
+ * With BOARD_CAPTURE_CASE=activity it renders the activity dashboard
+ * (docs/design/activity-dashboard-v2.md) on a home seeded with the design's
+ * invented, uneven work: thirteen projects with a long tail, ten of them git
+ * repositories whose Claude transcripts the Viewer's own scan indexes (the
+ * agent axis), a request ledger and this host's own export for the whole
+ * month, a stage host holding two projects whose export stops two days back,
+ * a heavy Monday, an empty weekend with night runs, a workday with agent work
+ * and no input (the probable-missing-source flag), and `hosts.json` and
+ * `settings.json` with two billable projects. At 1440 × 900 it captures 7
+ * days (en and uk, and 1280 × 800 in uk), 30 days, Today, a project open with
+ * its breakdowns, the drawer, the day, hour and Agents tooltips, Today with
+ * the stage host unread for three hours, the same home with none of your
+ * input read, and a home with no data at all; the phone at 390 × 844 keeps
+ * the prototype's layout. It also filters the page to one project
+ * (`?project=`): every project, one project chosen (en and uk), the header's
+ * picker open, and the phone with one project chosen, and requires the
+ * server's scoped totals to equal that project's row. It checks sideways overflow, the 7-day page ending
+ * inside 900 px, the trust chip and the Rhythm legend on one line, cut text,
+ * tooltips inside the viewport, and the marks on the unread and flagged days.
+ * With ACTIVITY_RENDER_DIR set, the images are copied there.
+ *
+ * With BOARD_CAPTURE_CASE=lightbox it walks the full-screen image viewer
+ * through one conversation's 26 invented pictures (#2144): inbox attachments,
+ * markdown images and pictures a tool showed its agent, interleaved. It opens
+ * the newest picture, steps ← to the first and → back to the last, and counts
+ * every image request the page makes, per step: nothing beyond the shown
+ * picture and its neighbours, and nothing fetched twice. On the desktop it
+ * also puts the other 25 pictures above rows the feed never mounts, collects
+ * garbage and waits out the pictures' 60 s freshness before walking back, so
+ * a picture the viewer stopped holding would have to be downloaded again.
+ * Real clicks, a real drag and real taps check that the dimmed backdrop closes
+ * the viewer while a click on the picture or a pan that ends off it does not;
+ * it renders the viewer mid-gallery at 1440 × 900 and 390 × 844.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -88,6 +134,7 @@ import path from "node:path";
 
 import { chromium, type Browser, type Page } from "playwright-core";
 
+import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 import { createCaptureDirectory } from "./capture-directory";
@@ -98,6 +145,10 @@ const repoRoot = path.resolve(import.meta.dir, "..");
 const captureCommit = () => process.env.BOARD_CAPTURE_COMMIT?.trim()
   || Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim();
 const BASE = createCaptureDirectory({ envName: "BOARD_CAPTURE_DIR", prefix: "llv-issue-1641", raw: process.env.BOARD_CAPTURE_DIR, repoRoot });
+/* Playwright makes its browser profile and artifacts under the temp root at launch and removes
+   them on close. A run killed before it closes leaves them, so they are made inside this run's
+   directory, which the Viewer's sweeper removes once it is stale (#1957). */
+nestProcessTempUnder(BASE);
 const HOME = path.join(BASE, "home");
 const OUT_DIR = path.join(BASE, "out");
 const STATE_DIR = path.join(HOME, ".config", "agent-log-viewer", "state");
@@ -3955,8 +4006,1095 @@ async function filePreviewMain(): Promise<void> {
   }
 }
 
-/* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), instead of the camera probes. */
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=resources (#2110, #1817)                                */
+/* ------------------------------------------------------------------------- */
+
+const RESOURCES_FIXTURE = path.join(BASE, "resources.json");
+const GIB = 1024 ** 3;
+const MIB = 1024 ** 2;
+
+/** A session table and Delegatus's own processes, shaped like the machine the
+    issue was reproduced on: four agent hosts, five Delegatus processes. */
+function writeResourcesFixture(stale: boolean): number {
+  const now = Date.now();
+  const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
+  const sessionsCapturedAt = stale ? iso(4 * 86_400_000 - 45 * 60_000) : iso(40_000);
+  const host = (index: number, title: string, role: string, stage: string | null, model: string, rss: number, swap: number, over: Record<string, unknown> = {}) => ({
+    target: `structured:codex:0000000${index}-2110-4000-8000-000000000000`, panePid: 41_000 + index, kind: "structured",
+    path: null, engine: "codex", title, project: "harbor", activity: "idle", lastActiveAt: stale ? iso(4 * 86_400_000 + index * 3_600_000) : iso(index * 1_800_000),
+    cwd: `$HOME/Projects/harbor-pipeline-${index}`, rssBytes: rss, swapBytes: swap, procCount: 5,
+    model, role, conversationId: null, stage, ownership: "owned", seat: false, turnBusy: false, ...over,
+  });
+  const processes = [
+    { pid: 892_225, role: "server", name: "bun-container", rssBytes: 1.3 * GIB, swapBytes: 0, procCount: 1 },
+    { pid: 921_801, role: "runtime-host", name: "main", rssBytes: 690 * MIB, swapBytes: 0, procCount: 1 },
+    { pid: 894_438, role: "worker", name: "accountMigrationController.worker", rssBytes: 1.3 * GIB, swapBytes: 210 * MIB, procCount: 1 },
+    { pid: 894_382, role: "worker", name: "wakatimeSync.worker", rssBytes: 980 * MIB, swapBytes: 0, procCount: 1 },
+    { pid: 2_787_025, role: "worker", name: "filesResponse.worker", rssBytes: 960 * MIB, swapBytes: 0, procCount: 1 },
+    { pid: 894_409, role: "worker", name: "telegram-mcp-server", rssBytes: 52 * MIB, swapBytes: 0, procCount: 1 },
+  ];
+  const fixture = {
+    system: { ramTotal: 32 * GIB, ramAvailable: 2.8 * GIB, swapTotal: 40 * GIB, swapUsed: 17 * GIB, capturedAt: iso(0) },
+    sessions: [
+      host(1, "orchestrator · You are the viewer's built-in Manager for the harbor backlog", "orchestrator", null, "gpt-6-astra", 375 * MIB, 1_000 * MIB, { seat: true }),
+      host(2, "Antispam tier 1: check a cheaper model against the labelled set", "builder", "jev-eval", "gpt-6-astra", 1.1 * GIB, 0, { turnBusy: true, activity: "live" }),
+      host(3, "Keep one owner per repository, pull request and head delivery", "builder", "implement", "gpt-6-astra", 1_030 * MIB, 0),
+      host(4, "Give an exact state for host release operations", "reviewer", "review", "gpt-6-astra", 285 * MIB, 580 * MIB),
+    ],
+    sessionsCapturedAt,
+    sessionsStale: stale,
+    viewer: {
+      actionable: false, capturedAt: iso(0),
+      rssBytes: processes.reduce((total, item) => total + item.rssBytes, 0),
+      swapBytes: processes.reduce((total, item) => total + item.swapBytes, 0),
+      procCount: processes.length,
+      processes,
+    },
+  };
+  fs.writeFileSync(RESOURCES_FIXTURE, JSON.stringify(fixture, null, 2) + "\n", "utf8");
+  return processes.length;
+}
+
+function readResources() {
+  const box = (element: Element | null) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+  };
+  const footer = document.querySelector("[data-resources-footer]");
+  const panel = document.querySelector("[data-resources-panel]");
+  const section = panel?.querySelector('[data-testid="resources-viewer-section"]') ?? null;
+  const scroller = panel?.querySelector(".overflow-y-auto") ?? null;
+  const overflowing = [...(panel?.querySelectorAll("*") ?? [])]
+    .filter((element) => {
+      const style = getComputedStyle(element);
+      if (style.overflowX !== "visible" || style.textOverflow === "ellipsis") return false;
+      return element.scrollWidth > element.clientWidth + 1 && element.clientWidth > 0;
+    })
+    .map((element) => `${element.tagName.toLowerCase()}.${String(element.className).slice(0, 60)}`);
+  return {
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+    pageOverflowX: document.documentElement.scrollWidth - window.innerWidth,
+    footer: box(footer),
+    footerButton: box(footer?.querySelector("button[aria-expanded]") ?? null),
+    viewerLine: footer?.querySelector('[data-testid="resources-viewer-line"]')?.textContent ?? null,
+    staleDot: Boolean(footer?.querySelector('[data-testid="resources-stale-dot"]')),
+    panel: box(panel),
+    panelScrollerOverflowX: scroller ? scroller.scrollWidth - scroller.clientWidth : null,
+    overflowing,
+    staleBanner: panel?.querySelector('[data-testid="resources-sessions-stale"]')?.textContent ?? null,
+    /* Where the stale text is drawn, and whether a scrolling box can take it away. */
+    staleBannerBox: box(panel?.querySelector('[data-testid="resources-sessions-stale"]') ?? null),
+    staleBannerScrolls: Boolean(scroller?.querySelector('[data-testid="resources-sessions-stale"]')),
+    staleRowMarks: panel?.querySelectorAll('[data-testid="resource-host-row"] [data-testid="resource-row-stale"]').length ?? 0,
+    scrollerAtBottom: scroller ? Math.abs(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) <= 1 : null,
+    hostRows: panel?.querySelectorAll('[data-testid="resource-host-row"]').length ?? 0,
+    section: box(section),
+    sectionText: section?.textContent ?? null,
+    sectionControls: section?.querySelectorAll("button, input, select, a[href]").length ?? null,
+    processRows: section?.querySelectorAll('[data-testid="resources-viewer-process"]').length ?? 0,
+    /* The title is the row's identity: it must keep real width beside the chips (#2110 phone rows). */
+    titleWidths: [...(panel?.querySelectorAll('[data-testid="resource-host-row"] [data-resource-title]') ?? [])].map((element) => Math.round(element.getBoundingClientRect().width)),
+    /* Every control drawn inside the panel's box, none pushed past its edge. */
+    controlsOutside: [...(panel?.querySelectorAll("button, select, input") ?? [])].filter((element) => {
+      const r = element.getBoundingClientRect();
+      const p = panel!.getBoundingClientRect();
+      return r.width > 0 && (r.left < p.left - 1 || r.right > p.right + 1);
+    }).map((element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 40)),
+    panelTargets: [...(panel?.querySelectorAll("button, select") ?? [])].map((element) => ({
+      label: (element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 40),
+      h: Math.round(element.getBoundingClientRect().height),
+    })),
+  };
+}
+
+type ResourcesReading = ReturnType<typeof readResources>;
+
+async function resourcesMain(): Promise<void> {
+  seedHome();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  SERVER_EXTRA_ENV.LLV_RESOURCES_FIXTURE = RESOURCES_FIXTURE;
+  let processCount = writeResourcesFixture(true);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit() };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    /* A home with no Viewer state opens the setup guide over everything; this
+       case is about the footer, so the guide is dismissed the way its × does. */
+    const dismissed = await fetch(`${baseUrl}/api/onboarding`, {
+      method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }),
+    });
+    must(dismissed.ok, `dismissing the setup guide answered ${dismissed.status}`);
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const shots = [
+      ...(["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ phone: false, lang, colorScheme, stale: true }))),
+      { phone: false, lang: "en" as const, colorScheme: "light" as const, stale: false },
+      { phone: true, lang: "en" as const, colorScheme: "light" as const, stale: true },
+      { phone: true, lang: "en" as const, colorScheme: "dark" as const, stale: true },
+      { phone: true, lang: "uk" as const, colorScheme: "light" as const, stale: true },
+      { phone: true, lang: "en" as const, colorScheme: "light" as const, stale: false },
+    ];
+    for (const shot of shots) {
+      processCount = writeResourcesFixture(shot.stale);
+      const tag = `${shot.phone ? "phone" : "desktop"}-${shot.lang}-${shot.colorScheme}-${shot.stale ? "stale" : "current"}`;
+      const context = await browser.newContext(shot.phone
+        ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: shot.colorScheme, reducedMotion: "reduce" }
+        : { viewport: { width: 1280, height: 800 }, colorScheme: shot.colorScheme, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), shot.lang);
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/`);
+      if (shot.phone) {
+        await page.waitForSelector('[data-mobile2-open="projects"]', { timeout: 30_000 });
+        await page.click('[data-mobile2-open="projects"]');
+        await page.waitForSelector('[data-mobile2-sheet="projects"]', { timeout: 10_000 });
+      }
+      await page.waitForSelector("[data-resources-footer]", { timeout: 15_000 }).catch(() => {});
+      await page.waitForTimeout(400);
+      const closed = await page.evaluate(readResources);
+      must(closed.footer !== null, `${tag}: the resources footer did not render`);
+      must(Boolean(closed.viewerLine?.includes("Delegatus") && /GiB|MiB/.test(closed.viewerLine)), `${tag}: the footer's Delegatus line reads «${closed.viewerLine}»`);
+      must(closed.staleDot === shot.stale, `${tag}: stale mark ${closed.staleDot} on a ${shot.stale ? "stale" : "current"} table`);
+      if (shot.phone) must((closed.footerButton?.h ?? 0) >= 44, `${tag}: the footer target is ${closed.footerButton?.h}px tall`);
+      if (closed.footer) {
+        const pad = 8;
+        const clip = shot.phone
+          ? { x: 0, y: 0, width: 390, height: 844 }
+          : { x: Math.max(0, closed.footer.x - pad), y: Math.max(0, closed.footer.y - 120), width: closed.footer.w + 2 * pad, height: Math.min(800 - Math.max(0, closed.footer.y - 120), closed.footer.h + 120 + pad) };
+        await page.screenshot({ path: path.join(OUT_DIR, `resources-${tag}-footer.png`), clip });
+      }
+      await page.click("[data-resources-footer] button[aria-expanded]");
+      await page.waitForSelector("[data-resources-panel]", { timeout: 10_000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      const open: ResourcesReading = await page.evaluate(readResources);
+      must(open.panel !== null, `${tag}: the panel did not open`);
+      if (open.panel) {
+        must(open.panel.x >= 0 && open.panel.y >= 0 && open.panel.x + open.panel.w <= open.viewport.w && open.panel.y + open.panel.h <= open.viewport.h,
+          `${tag}: panel ${JSON.stringify(open.panel)} leaves the ${open.viewport.w}×${open.viewport.h} viewport`);
+      }
+      must(open.pageOverflowX <= 0, `${tag}: the page overflows sideways by ${open.pageOverflowX}px`);
+      must((open.panelScrollerOverflowX ?? 0) <= 0, `${tag}: the panel list overflows sideways by ${open.panelScrollerOverflowX}px`);
+      must(open.overflowing.length === 0, `${tag}: overflowing elements ${JSON.stringify(open.overflowing)}`);
+      must(open.hostRows === 4, `${tag}: ${open.hostRows} host rows`);
+      must(shot.stale ? Boolean(open.staleBanner) : open.staleBanner === null, `${tag}: stale banner «${open.staleBanner}» on a ${shot.stale ? "stale" : "current"} table`);
+      must(open.section !== null && open.processRows === processCount, `${tag}: Delegatus section with ${open.processRows} of ${processCount} processes`);
+      must(open.sectionControls === 0, `${tag}: the Delegatus section carries ${open.sectionControls} controls`);
+      if (shot.phone) for (const target of open.panelTargets) must(target.h >= 44, `${tag}: «${target.label}» is ${target.h}px tall`);
+      must(open.titleWidths.length === 4 && open.titleWidths.every((width) => width >= 100), `${tag}: host titles are ${JSON.stringify(open.titleWidths)}px wide`);
+      must(open.controlsOutside.length === 0, `${tag}: controls outside the panel ${JSON.stringify(open.controlsOutside)}`);
+      await page.screenshot({ path: path.join(OUT_DIR, `resources-${tag}-panel.png`) });
+      must(open.staleRowMarks === (shot.stale ? 4 : 0), `${tag}: ${open.staleRowMarks} rows marked stale on a ${shot.stale ? "stale" : "current"} table`);
+      /* The section sits below the rows; scroll the list to its end, where the
+         review found the only stale mark scrolled away (#2110). */
+      await page.evaluate(() => {
+        const scroller = document.querySelector("[data-resources-panel] .overflow-y-auto");
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      });
+      await page.waitForTimeout(150);
+      const scrolled: ResourcesReading = await page.evaluate(readResources);
+      must(scrolled.scrollerAtBottom === true, `${tag}: the panel list did not reach its end`);
+      if (shot.stale) {
+        const mark = scrolled.staleBannerBox;
+        must(!scrolled.staleBannerScrolls, `${tag}: the stale text sits inside the scrolling list`);
+        must(mark !== null && mark.h > 0 && mark.y >= 0 && mark.y + mark.h <= scrolled.viewport.h
+          && scrolled.panel !== null && mark.y >= scrolled.panel.y && mark.y + mark.h <= scrolled.panel.y + scrolled.panel.h,
+          `${tag}: scrolled to the end, the stale text is at ${JSON.stringify(mark)}`);
+      }
+      await page.screenshot({ path: path.join(OUT_DIR, `resources-${tag}-panel-delegatus.png`) });
+      report[tag] = { closed, open, scrolled };
+      await context.close();
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "resources.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`resources measurements: ${path.join(OUT_DIR, "resources.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`resources acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("resources acceptance passed at 1280 × 800 and 390 × 844.");
+  }
+}
+
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=activity: the activity dashboard                         */
+/* ------------------------------------------------------------------------- */
+
+const ACTIVITY_TZ = "Europe/Kyiv";
+/* Invented projects (docs/design/activity-dashboard-v2.md, "The mockup"): ten
+   with agent work, as repositories whose Claude transcripts the Viewer
+   indexes, and three with your input alone, under plain keys. The stage host
+   holds orchard-client and harbor-ledger; the workstation holds every
+   project. */
+const ACTIVITY_REPOS = ["orchard-client", "lantern-api", "harbor-ledger", "kestrel-cli", "atlas-docs", "mesa-infra", "tidewater-app", "bramble-etl", "pebble-ui", "sorrel-bot"] as const;
+type ActivityRepo = typeof ACTIVITY_REPOS[number];
+type ActivityProject = ActivityRepo | "fennel-site" | "cobalt-auth" | "juniper-notes";
+const ACTIVITY_STAGE_PROJECTS: readonly ActivityProject[] = ["orchard-client", "harbor-ledger"];
+const ACTIVITY_BILLABLE: readonly ActivityProject[] = ["orchard-client", "harbor-ledger"];
+
+function activityRepoDir(name: ActivityRepo): string {
+  return path.join(HOME, "Projects", name);
+}
+
+/** One invented Claude conversation: a user record opens each turn and
+    assistant records carry it to its end. */
+function writeActivityTranscript(repo: ActivityRepo, file: number, turns: Array<{ start: number; minutes: number }>): void {
+  if (!turns.length) return;
+  const folder = path.join(HOME, ".claude/projects", projectSlug(activityRepoDir(repo)));
+  fs.mkdirSync(folder, { recursive: true });
+  const id = `${String(ACTIVITY_REPOS.indexOf(repo) + 1).padStart(4, "0")}${String(file).padStart(4, "0")}-2026-4000-8000-000000000000`;
+  const lines: unknown[] = [];
+  for (const [index, turn] of turns.entries()) {
+    const stamp = (offsetMin: number) => new Date(turn.start + offsetMin * 60_000).toISOString();
+    lines.push({ type: "user", uuid: `${id}-u${index}`, timestamp: stamp(0), cwd: activityRepoDir(repo), sessionId: id, message: { role: "user", content: `Next step ${index + 1} for ${repo}.` } });
+    for (let minute = 2; minute < turn.minutes; minute += 17) {
+      lines.push({ type: "assistant", uuid: `${id}-a${index}-${minute}`, timestamp: stamp(minute), cwd: activityRepoDir(repo), sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Progress on ${repo}, minute ${minute}.` }] } });
+    }
+    lines.push({ type: "assistant", uuid: `${id}-a${index}-end`, timestamp: stamp(turn.minutes), cwd: activityRepoDir(repo), sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Done with step ${index + 1}.` }] } });
+  }
+  fs.writeFileSync(path.join(folder, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+}
+
+/** A stretch of your input: one input every six minutes, on the workstation
+    (its request ledger, or its export for terminal prompts) or the stage host
+    (its export). */
+type ActivitySession = [at: string, minutes: number, project: ActivityProject, host: "ws" | "stage", surface?: "phone" | "tablet" | "terminal"];
+/** A stretch an agent worked. */
+type ActivityRun = [at: string, minutes: number, repo: ActivityRepo];
+interface ActivityPlan { sessions: ActivitySession[]; runs: ActivityRun[] }
+
+/* The last week, uneven on purpose: a full Friday, an empty weekend with
+   night runs, a heavy Monday, a workday nobody asked anything while agents
+   ran (the stage host unread, the day flagged), a Wednesday read on the
+   workstation alone, and today. */
+const ACTIVITY_PLANS: Record<"normal" | "heavy" | "flagged" | "lower" | "saturday" | "sunday" | "today", ActivityPlan> = {
+  normal: {
+    sessions: [["08:10", 95, "orchard-client", "stage"], ["09:50", 70, "lantern-api", "ws"], ["11:05", 45, "harbor-ledger", "ws", "phone"], ["13:00", 110, "orchard-client", "ws"], ["15:00", 55, "kestrel-cli", "ws"], ["16:00", 50, "lantern-api", "ws", "terminal"], ["17:05", 25, "fennel-site", "ws"]],
+    runs: [["00:20", 200, "lantern-api"], ["08:10", 150, "orchard-client"], ["13:00", 130, "orchard-client"], ["15:00", 70, "kestrel-cli"], ["16:00", 60, "lantern-api"], ["21:30", 120, "tidewater-app"], ["22:00", 70, "bramble-etl"]],
+  },
+  heavy: {
+    sessions: [["07:40", 110, "orchard-client", "stage"], ["09:35", 80, "harbor-ledger", "stage"], ["11:00", 60, "lantern-api", "ws"], ["12:10", 95, "orchard-client", "ws", "phone"], ["13:50", 85, "lantern-api", "ws"], ["15:20", 60, "atlas-docs", "ws"], ["16:25", 55, "mesa-infra", "ws"], ["17:25", 50, "kestrel-cli", "ws", "terminal"], ["18:20", 40, "harbor-ledger", "ws"], ["19:05", 30, "cobalt-auth", "ws"]],
+    runs: [["01:00", 210, "lantern-api"], ["07:40", 180, "orchard-client"], ["09:35", 120, "harbor-ledger"], ["12:10", 110, "orchard-client"], ["13:50", 150, "lantern-api"], ["15:20", 110, "atlas-docs"], ["16:25", 40, "mesa-infra"], ["20:00", 150, "tidewater-app"], ["22:10", 60, "pebble-ui"]],
+  },
+  flagged: {
+    sessions: [],
+    runs: [["00:30", 135, "tidewater-app"], ["10:00", 55, "kestrel-cli"]],
+  },
+  lower: {
+    sessions: [["09:55", 55, "lantern-api", "ws"], ["11:00", 45, "kestrel-cli", "ws"], ["14:00", 60, "lantern-api", "ws"], ["15:30", 70, "lantern-api", "ws", "terminal"], ["17:00", 30, "atlas-docs", "ws"]],
+    runs: [["01:00", 95, "harbor-ledger"], ["11:00", 80, "kestrel-cli"], ["14:00", 110, "lantern-api"], ["18:00", 50, "lantern-api"], ["20:10", 30, "mesa-infra"], ["22:00", 35, "sorrel-bot"]],
+  },
+  saturday: { sessions: [], runs: [["01:00", 240, "lantern-api"], ["11:30", 50, "orchard-client"], ["19:00", 80, "tidewater-app"]] },
+  sunday: { sessions: [], runs: [["02:00", 180, "atlas-docs"], ["14:10", 40, "bramble-etl"]] },
+  today: {
+    sessions: [["08:40", 35, "atlas-docs", "ws"], ["09:15", 100, "orchard-client", "stage"], ["11:00", 55, "harbor-ledger", "ws"], ["13:05", 90, "orchard-client", "ws"], ["14:40", 50, "juniper-notes", "ws"], ["16:00", 80, "lantern-api", "ws"], ["18:10", 60, "orchard-client", "stage"], ["19:40", 45, "lantern-api", "ws", "phone"]],
+    runs: [["02:30", 100, "atlas-docs"], ["09:00", 180, "orchard-client"], ["13:05", 120, "orchard-client"], ["16:00", 95, "lantern-api"], ["20:30", 60, "pebble-ui"]],
+  },
+};
+
+/** The month behind the week: workdays of two to five stretches over a
+    long tail of projects, some watched agent runs, a night run now and then. */
+function generatedActivityPlan(weekday: number, seed: number): ActivityPlan {
+  let state = seed >>> 0;
+  const random = () => ((state = (state * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const pick = <T,>(list: readonly T[]) => list[Math.floor(random() * list.length)]!;
+  const hhmm = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  const runs: ActivityRun[] = [];
+  if (random() < 0.6) runs.push([hhmm(30 + Math.floor(random() * 120)), 60 + Math.floor(random() * 150), pick(["lantern-api", "tidewater-app", "atlas-docs", "sorrel-bot"] as const)]);
+  if (weekday === 0 || weekday === 6) return { sessions: [], runs };
+  const weighted: readonly ActivityProject[] = ["orchard-client", "orchard-client", "orchard-client", "lantern-api", "lantern-api", "tidewater-app", "tidewater-app", "harbor-ledger", "kestrel-cli", "kestrel-cli", "mesa-infra", "cobalt-auth", "fennel-site", "atlas-docs"];
+  const sessions: ActivitySession[] = [];
+  let at = 8 * 60 + Math.floor(random() * 60);
+  const count = 2 + Math.floor(random() * 4);
+  for (let index = 0; index < count && at < 19 * 60; index += 1) {
+    const project = pick(weighted);
+    const minutes = 40 + Math.floor(random() * 80);
+    const host = ACTIVITY_STAGE_PROJECTS.includes(project) && random() < 0.5 ? "stage" : "ws";
+    sessions.push([hhmm(at), minutes, project, host, host === "ws" && random() < 0.2 ? "phone" : undefined]);
+    if ((ACTIVITY_REPOS as readonly string[]).includes(project) && random() < 0.8) runs.push([hhmm(at), minutes + Math.floor(random() * 60), project as ActivityRepo]);
+    at += minutes + 10 + Math.floor(random() * 70);
+  }
+  return { sessions, runs };
+}
+
+interface ActivityReading {
+  width: number;
+  height: number;
+  scrollWidth: number;
+  layout: string;
+  /** The bottom of the lowest card, and whether the document scrolls. */
+  pageEnd: number;
+  documentScrolls: boolean;
+  chip: { state: string; text: string; height: number; width: number } | null;
+  legend: { text: string; height: number; width: number; right: number; cardRight: number } | null;
+  header: { height: number; bottom: number } | null;
+  hero: string;
+  agents: string;
+  split: string;
+  caps: Array<{ key: string; text: string }>;
+  pairs: number;
+  rhythmRows: number;
+  cells: Record<string, number>;
+  projects: Array<{ project: string; coverage: string | null; you: string; agents: string }>;
+  foldedMore: string | null;
+  truncated: string[];
+  tooltip: { text: string; inside: boolean } | null;
+  drawer: { flags: string[]; hosts: Array<{ host: string; complete: string | null }> } | null;
+  /** The project the page is scoped to, as its chip reads, and the rows drawn chosen. */
+  scope: string | null;
+  selected: string[];
+  /** Options in the open project picker, or null when it is closed. */
+  pickerOptions: number | null;
+  words: number;
+  /* The narrow layout's own markers. */
+  tiles: number;
+  days: number;
+}
+
+function readActivity(): ActivityReading {
+  const root = document.querySelector<HTMLElement>("[data-activity-page]")!;
+  const rect = (element: Element | null) => element?.getBoundingClientRect() ?? null;
+  const chip = document.querySelector<HTMLElement>("[data-activity-trust]");
+  const legend = document.querySelector<HTMLElement>("[data-activity-legend]");
+  const rhythm = document.querySelector<HTMLElement>("[data-activity-rhythm]");
+  const cards = ["[data-activity-main]", "[data-activity-rhythm]", "[data-activity-projects]"].map((selector) => rect(document.querySelector(selector))?.bottom ?? 0);
+  const tooltip = document.querySelector<HTMLElement>("[data-activity-tooltip]");
+  const tip = rect(tooltip);
+  const drawer = document.querySelector<HTMLElement>("[data-activity-drawer]");
+  const cells: Record<string, number> = {};
+  for (const cell of document.querySelectorAll<SVGElement>("[data-activity-cell]")) cells[cell.dataset.activityCell ?? ""] = (cells[cell.dataset.activityCell ?? ""] ?? 0) + 1;
+  const visible = (element: HTMLElement) => !element.closest(".sr-only") && element.getClientRects().length > 0;
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight,
+    scrollWidth: document.documentElement.scrollWidth,
+    layout: root.dataset.activityLayout ?? "narrow",
+    pageEnd: Math.max(...cards),
+    documentScrolls: root.scrollHeight > root.clientHeight + 1,
+    chip: chip ? { state: chip.dataset.activityTrust ?? "", text: chip.textContent ?? "", height: chip.getBoundingClientRect().height, width: chip.getBoundingClientRect().width } : null,
+    legend: legend ? { text: legend.textContent ?? "", height: legend.getBoundingClientRect().height, width: legend.getBoundingClientRect().width, right: legend.getBoundingClientRect().right, cardRight: rhythm?.getBoundingClientRect().right ?? 0 } : null,
+    header: rect(document.querySelector("header")) ? { height: rect(document.querySelector("header"))!.height, bottom: rect(document.querySelector("header"))!.bottom } : null,
+    hero: document.querySelector("[data-activity-figure=you]")?.textContent ?? "",
+    agents: document.querySelector("[data-activity-agents-value]")?.textContent ?? "",
+    split: document.querySelector("[data-activity-split]")?.textContent ?? "",
+    caps: Array.from(document.querySelectorAll<SVGElement>("[data-activity-cap]")).map((cap) => ({ key: cap.dataset.activityCap ?? "", text: cap.textContent ?? "" })),
+    pairs: document.querySelectorAll("[data-activity-pair]").length,
+    rhythmRows: document.querySelectorAll("[data-activity-rhythm-row]").length,
+    cells,
+    projects: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-projects] [data-activity-project]")).map((row) => ({
+      project: row.dataset.activityProject ?? "",
+      coverage: row.dataset.coverage ?? null,
+      you: row.querySelector("[data-activity-project-you]")?.textContent ?? "",
+      agents: row.querySelector("[data-activity-project-agents]")?.textContent ?? "",
+    })),
+    foldedMore: document.querySelector<HTMLElement>("[data-activity-projects-more]")?.textContent ?? null,
+    /* Text cut by its box: a truncated name, a label that ran out of room. */
+    truncated: Array.from(root.querySelectorAll<HTMLElement>("span, div, button, h1, h2, a"))
+      .filter((element) => visible(element) && element.children.length === 0 && element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX !== "visible")
+      .map((element) => element.textContent ?? ""),
+    tooltip: tooltip && tip ? { text: tooltip.textContent ?? "", inside: tip.left >= 0 && tip.top >= 0 && tip.right <= window.innerWidth && tip.bottom <= window.innerHeight } : null,
+    drawer: drawer ? {
+      flags: Array.from(drawer.querySelectorAll("[data-activity-flag]")).map((flag) => flag.textContent ?? ""),
+      hosts: Array.from(drawer.querySelectorAll<HTMLElement>("[data-activity-host]")).map((host) => ({ host: host.dataset.activityHost ?? "", complete: host.dataset.complete ?? null })),
+    } : null,
+    scope: document.querySelector("[data-activity-scope-chip]")?.textContent ?? null,
+    selected: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-project][data-selected=true]")).map((row) => row.dataset.activityProject ?? ""),
+    pickerOptions: document.querySelector("[data-activity-picker=open]") ? document.querySelectorAll("[data-activity-picker-option]").length : null,
+    words: (root.innerText.match(/\S+/g) ?? []).length,
+    tiles: document.querySelectorAll("[data-activity-tile]").length,
+    days: document.querySelectorAll("[data-activity-day]").length,
+  };
+}
+
+async function activityMain(): Promise<void> {
+  const { zonedDays } = await import("../src/lib/activity/method");
+  const { exportLines, messageId, ledgerRowKey } = await import("../src/lib/activity/humanInput");
+  for (const dir of [OUT_DIR, path.join(BASE, "git-home"), path.join(BASE, "tmp"), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions")]) fs.mkdirSync(dir, { recursive: true });
+  for (const repo of ACTIVITY_REPOS) {
+    const dir = activityRepoDir(repo);
+    fs.mkdirSync(dir, { recursive: true });
+    git(dir, "init", "--initial-branch=main", ".");
+    fs.writeFileSync(path.join(dir, "README.md"), `# ${repo}\n`, "utf8");
+    git(dir, "add", "README.md");
+    git(dir, "commit", "-m", `${repo}: first commit`);
+  }
+  const now = Date.now();
+  /* Index 29 is today; the last week is 23-29. */
+  const days = zonedDays(now, 30, ACTIVITY_TZ);
+  const TODAY = 29;
+  const clock = (day: number, hhmm: string) => {
+    const [hh, mm] = hhmm.split(":").map(Number) as [number, number];
+    return days[day]!.start + (hh * 60 + mm) * 60_000;
+  };
+  const weekday = (day: number) => new Date(`${days[day]!.date}T12:00:00Z`).getUTCDay();
+  const workday = (day: number) => weekday(day) >= 1 && weekday(day) <= 5;
+  /* The stage host was not read the two days before today. */
+  const STAGE_UNREAD = [TODAY - 2, TODAY - 1];
+  const heavyDay = [TODAY - 3, TODAY - 4, TODAY - 5, TODAY - 6].find(workday) ?? TODAY - 3;
+  const planOf = (day: number): ActivityPlan => {
+    if (day === TODAY) return ACTIVITY_PLANS.today;
+    if (weekday(day) === 6 && day >= TODAY - 6) return ACTIVITY_PLANS.saturday;
+    if (weekday(day) === 0 && day >= TODAY - 6) return ACTIVITY_PLANS.sunday;
+    if (day === TODAY - 2) return ACTIVITY_PLANS.flagged;
+    if (day === TODAY - 1) return ACTIVITY_PLANS.lower;
+    if (day === heavyDay) return ACTIVITY_PLANS.heavy;
+    if (day >= TODAY - 6) return ACTIVITY_PLANS.normal;
+    return generatedActivityPlan(weekday(day), 7919 * (day + 1));
+  };
+  const plans = days.map((_, day) => planOf(day));
+  const flagDay = TODAY - 2;
+
+  /* Agent transcripts: one per project and day in the last week, one per
+     project for the month behind it. */
+  let transcripts = 0;
+  for (const repo of ACTIVITY_REPOS) {
+    const older: Array<{ start: number; minutes: number }> = [];
+    for (const [day, plan] of plans.entries()) {
+      const turns = plan.runs.filter(([, , name]) => name === repo)
+        .map(([at, minutes]) => ({ start: clock(day, at), minutes }))
+        .filter((turn) => turn.start + turn.minutes * 60_000 < now - 60_000);
+      if (day < TODAY - 6) older.push(...turns);
+      else if (turns.length) {
+        writeActivityTranscript(repo, day, turns);
+        transcripts += 1;
+      }
+    }
+    if (older.length) {
+      writeActivityTranscript(repo, 0, older);
+      transcripts += 1;
+    }
+  }
+
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity", days: { first: days[0]!.date, today: days[TODAY]!.date, flagged: days[flagDay]!.date, heavy: days[heavyDay]!.date, stageUnread: STAGE_UNREAD.map((day) => days[day]!.date) } };
+  const shots: string[] = [];
+  const activityDir = path.join(STATE_DIR, "activity");
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    /* The project keys the scan gave the repositories: the ledger names the same ones. */
+    const keys = await (async () => {
+      const deadline = Date.now() + 180_000;
+      while (Date.now() < deadline) {
+        const files = ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? [];
+        const of = (repo: ActivityRepo) => files.find((file) => file.path?.includes(projectSlug(activityRepoDir(repo))))?.project;
+        const found = Object.fromEntries(ACTIVITY_REPOS.map((repo) => [repo, of(repo)]));
+        if (ACTIVITY_REPOS.every((repo) => found[repo])) return found as Record<ActivityRepo, string>;
+        await Bun.sleep(2_000);
+      }
+      throw new Error("the seeded repositories never scanned");
+    })();
+    const keyOf = (project: ActivityProject) => (keys as Record<string, string>)[project] ?? project;
+
+    /* Your input: the workstation's request ledger, its own export (terminal
+       prompts), and the stage host's export. Nothing on the flagged day, and
+       nothing from the stage host while it was not read. */
+    fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
+    const kinds = ["message", "message", "answer", "message", "decision", "message", "voice"] as const;
+    const ledger: Array<Record<string, unknown>> = [];
+    const terminal: Parameters<typeof exportLines>[1][number][] = [];
+    const stage: Parameters<typeof exportLines>[1][number][] = [];
+    for (const [day, plan] of plans.entries()) {
+      for (const [at, minutes, project, host, surface] of plan.sessions) {
+        if (host === "stage" && STAGE_UNREAD.includes(day)) continue;
+        for (let offset = 0, index = 0; offset <= minutes - 10; offset += 6, index += 1) {
+          const time = clock(day, at) + offset * 60_000;
+          if (time >= now - 60_000) break;
+          const kind = kinds[index % kinds.length]!;
+          if (host === "stage") stage.push({ ids: [messageId("codex", `stage-${day}-${at}-${offset}`)], at: time, host: "stage", source: "transcripts", project: keyOf(project), kind: "message", surface: "unknown", hash: null });
+          else if (surface === "terminal") terminal.push({ ids: [messageId("claude-prompt", `workstation-${day}-${at}-${offset}`)], at: time, host: "workstation", source: "transcripts", project: keyOf(project), kind: "message", surface: "terminal", hash: null });
+          else ledger.push({ v: 1, key: ledgerRowKey(`seed-${ledger.length}-${time}`), at: time, kind, surface: surface ?? "desktop", project: keyOf(project) });
+        }
+      }
+    }
+    for (const entry of ledger) {
+      const file = path.join(activityDir, `requests-${new Date(entry.at as number).toISOString().slice(0, 10)}.jsonl`);
+      fs.appendFileSync(file, JSON.stringify(entry) + "\n", { mode: 0o600 });
+    }
+    const endOfToday = days[TODAY]!.end;
+    /* The workstation's export reads every store there, to the end of today. */
+    const localDir = path.join(activityDir, "hosts", "workstation");
+    fs.mkdirSync(localDir, { recursive: true });
+    fs.writeFileSync(path.join(localDir, "human-input.jsonl"), exportLines({
+      host: "workstation", coveredFrom: days[0]!.start - 86_400_000, coveredUntil: endOfToday, exportedAt: now, records: terminal.length + 212,
+      excluded: { "agent-message": 61, "stage-template": 9, recovery: 7, notification: 22, injected: 48, unmarked: 5, duplicate: 64 },
+    }, terminal));
+    /* The stage host's exports: the month up to the unread days, then today. */
+    const stageDir = path.join(activityDir, "hosts", "stage");
+    const writeStage = (spans: Array<{ name: string; from: number; until: number }>) => {
+      fs.rmSync(stageDir, { recursive: true, force: true });
+      fs.mkdirSync(stageDir, { recursive: true });
+      for (const [index, span] of spans.entries()) {
+        const inside = stage.filter((input) => input.at >= span.from && input.at < span.until);
+        fs.writeFileSync(path.join(stageDir, `${span.name}.jsonl`), exportLines({
+          host: "stage", coveredFrom: span.from, coveredUntil: span.until, exportedAt: Math.min(span.until, now), records: inside.length + 20,
+          excluded: index ? {} : { "agent-message": 14, "stage-template": 6, notification: 4, unmarked: 9, attachment: 3, duplicate: 11 },
+        }, inside));
+      }
+    };
+    writeStage([{ name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start }, { name: "today", from: days[TODAY]!.start, until: endOfToday }]);
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ACTIVITY_STAGE_PROJECTS.map(keyOf) }] }));
+    fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: ACTIVITY_TZ, billable: ACTIVITY_BILLABLE.map(keyOf) }));
+
+    /* Wait for the Viewer's own index to carry every seeded conversation. */
+    const deadline = Date.now() + 420_000;
+    let indexed = 0;
+    while (Date.now() < deadline) {
+      const body = await (await fetch(`${baseUrl}/api/activity?range=30d`)).json() as { coverage?: { agentIndex?: string }; projects?: Array<{ conversations: number }> };
+      indexed = body.coverage?.agentIndex === "ok" ? (body.projects ?? []).reduce((sum, row) => sum + row.conversations, 0) : 0;
+      if (indexed >= transcripts) break;
+      await Bun.sleep(3_000);
+    }
+    must(indexed >= transcripts, `the agent axis carries ${indexed} of ${transcripts} seeded conversations`);
+    report.api7d = await (await fetch(`${baseUrl}/api/activity?range=7d`)).json();
+
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const capture = async (name: string, query: string, options: { lang?: "en" | "uk"; phone?: boolean; size?: [number, number]; act?: (page: Page) => Promise<void> } = {}) => {
+      const [width, height] = options.phone ? [390, 844] : options.size ?? [1440, 900];
+      const context = await browser!.newContext({
+        viewport: { width, height },
+        reducedMotion: "reduce",
+        ...(options.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+      });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), options.lang ?? "en");
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/activity?${query}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
+      await page.waitForTimeout(400);
+      if (options.act) {
+        await options.act(page);
+        await page.waitForTimeout(300);
+      }
+      if (options.phone) {
+        const first = await page.evaluate(readActivity);
+        const full = await page.evaluate(() => document.querySelector<HTMLElement>("[data-activity-page]")!.scrollHeight);
+        if (full > first.height) await page.setViewportSize({ width, height: Math.min(full, 7_000) });
+        await page.waitForTimeout(300);
+      }
+      const reading = await page.evaluate(readActivity);
+      const file = path.join(OUT_DIR, `activity-${name}.png`);
+      await page.screenshot({ path: file });
+      shots.push(file);
+      report[name] = reading;
+      must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+      if (!options.phone) {
+        must(reading.layout === "desktop", `${name}: the ${reading.layout} layout at ${width}px`);
+        must(reading.chip !== null && reading.chip.height <= 30, `${name}: the trust chip is ${reading.chip?.height ?? "missing"}px tall`);
+        must(reading.header !== null && reading.header.height <= 36, `${name}: the header is ${reading.header?.height ?? "missing"}px tall`);
+        /* One line of 11 px text is about 16.5 px; two would be 33. */
+        if (reading.legend) must(reading.legend.height <= 20 && reading.legend.right <= reading.legend.cardRight, `${name}: the Rhythm legend takes ${reading.legend.height}px, right edge ${reading.legend.right} of ${reading.legend.cardRight}`);
+        const cut = reading.truncated.filter((text) => text.trim());
+        must(cut.length === 0, `${name}: text cut by its box: ${JSON.stringify(cut)}`);
+        if (reading.tooltip) must(reading.tooltip.inside, `${name}: the tooltip leaves the viewport`);
+      }
+      await context.close();
+      return reading;
+    };
+    const date = (day: number) => days[day]!.date;
+    const hoverPair = (day: number) => async (page: Page) => { await page.hover(`[data-activity-pair="${date(day)}"] rect[tabindex]`); };
+
+    /* 7 days, en and uk, and at 1280 × 800 in uk. */
+    const week = await capture("desktop-7d", "range=7d");
+    must(week.pairs === 7 && week.rhythmRows === 7, `7d: ${week.pairs} day pairs and ${week.rhythmRows} rhythm rows`);
+    must(week.pageEnd <= 900 && !week.documentScrolls, `7d: the page ends at ${week.pageEnd}px and scrolls ${week.documentScrolls}`);
+    must(week.chip?.state === "lower", `7d: the chip reads ${week.chip?.state}`);
+    const capOf = (reading: ActivityReading, day: number) => reading.caps.find((cap) => cap.key === date(day))?.text ?? "";
+    if (workday(flagDay)) must(capOf(week, flagDay) === "?", `7d: the flagged ${date(flagDay)} reads ${capOf(week, flagDay)}`);
+    must(capOf(week, TODAY - 1).startsWith("≥"), `7d: ${date(TODAY - 1)}, the stage host unread, reads ${capOf(week, TODAY - 1)}`);
+    must(week.split.includes("unclear"), `7d: the Agents split has no unclear part: ${week.split}`);
+    must(week.legend?.text.startsWith("You:") === true, `7d: the Rhythm legend reads ${week.legend?.text}`);
+    for (const project of ACTIVITY_STAGE_PROJECTS) must(week.projects.find((row) => row.project === keyOf(project))?.coverage === "unknown", `7d: ${project}, held by the unread stage host, reads complete`);
+    must(week.projects.find((row) => row.project === keyOf("lantern-api"))?.coverage === "complete", "7d: lantern-api reads a lower bound");
+    await capture("desktop-7d-uk", "range=7d", { lang: "uk" });
+    const narrow = await capture("desktop-1280x800-uk", "range=7d", { lang: "uk", size: [1280, 800] });
+    must(!narrow.documentScrolls, `1280 × 800 uk: the page scrolls (ends at ${narrow.pageEnd}px)`);
+
+    /* 30 days and Today. */
+    const month = await capture("desktop-30d", "range=30d");
+    must(month.pairs === 30 && month.rhythmRows === 30, `30d: ${month.pairs} pairs, ${month.rhythmRows} rows`);
+    must(month.pageEnd <= 900, `30d: the page ends at ${month.pageEnd}px`);
+    await capture("desktop-30d-uk", "range=30d", { lang: "uk" });
+    const today = await capture("desktop-today", "range=today");
+    must(today.rhythmRows === 0 && today.pairs === 24, `today: ${today.pairs} hour pairs, ${today.rhythmRows} rhythm rows`);
+
+    /* The project detail, its breakdowns, the drawer and the tooltips. */
+    await capture("desktop-projects", "range=7d", {
+      act: async (page) => {
+        await page.click(`[data-activity-project="${keyOf("harbor-ledger")}"] > button`);
+        await page.waitForSelector("[data-activity-project-details]");
+        await page.click("[data-activity-more-detail]");
+        await page.waitForSelector("[data-activity-breakdowns]");
+      },
+    });
+    const drawer = await capture("desktop-drawer", "range=7d", { act: async (page) => { await page.click("[data-activity-trust]"); await page.waitForSelector("[data-activity-drawer]"); } });
+    must((drawer.drawer?.flags.length ?? 0) >= (workday(flagDay) ? 2 : 1), `drawer: ${JSON.stringify(drawer.drawer?.flags)}`);
+    must(drawer.drawer?.hosts.find((host) => host.host === "stage")?.complete === "false", "drawer: the stage host reads complete");
+    await capture("desktop-drawer-uk", "range=7d", { lang: "uk", act: async (page) => { await page.click("[data-activity-trust]"); await page.waitForSelector("[data-activity-drawer]"); } });
+    await capture("desktop-hover-lower", "range=7d", { act: hoverPair(TODAY - 1) });
+    await capture("desktop-hover-heavy", "range=7d", { act: hoverPair(heavyDay) });
+    await capture("desktop-hover-flagged", "range=7d", { act: hoverPair(flagDay) });
+    await capture("desktop-hover-cell", "range=7d", { act: async (page) => { await page.locator(`[data-activity-rhythm-row="${date(TODAY - 1)}"] rect[data-activity-cell]`).nth(18).hover(); } });
+    await capture("desktop-hover-agents", "range=7d", { act: async (page) => { await page.hover("[data-activity-figure=agents]"); } });
+
+    /* The phone keeps the prototype's layout. */
+    const phone = await capture("phone-7d", "range=7d&view=days", { phone: true });
+    must(phone.layout === "narrow" && phone.tiles === 4 && phone.days === 7, `phone: ${phone.layout} layout, ${phone.tiles} tiles, ${phone.days} days`);
+
+    /* The whole page filtered to one project: orchard-client, billable and
+       held by the stage host, which was not read for two days and whose
+       agents nothing pulls. The server's scoped answer is the project's row
+       in its unscoped one, and the page draws that answer. */
+    const orchard = keyOf("orchard-client");
+    type Figures = { humanMs: number; humanHours: number; requests: number; wallMs: number; supervisedMs: number; unattendedMs: number; agentHoursMs: number; coverage: unknown; agentCoverage: unknown };
+    const figures = (value: Figures) => ({ humanMs: value.humanMs, humanHours: value.humanHours, requests: value.requests, wallMs: value.wallMs, supervisedMs: value.supervisedMs, unattendedMs: value.unattendedMs, agentHoursMs: value.agentHoursMs, coverage: value.coverage, agentCoverage: value.agentCoverage });
+    const unscoped = await (await fetch(`${baseUrl}/api/activity?range=7d`)).json() as { projects: Array<Figures & { project: string | null; name: string | null }> };
+    const scopedApi = await (await fetch(`${baseUrl}/api/activity?range=7d&project=${encodeURIComponent(orchard)}`)).json() as { scope: { project: string; name: string | null } | null; totals: Figures };
+    const orchardRow = unscoped.projects.find((row) => row.project === orchard)!;
+    report.projectFilterApi = { scope: scopedApi.scope, scoped: figures(scopedApi.totals), row: figures(orchardRow) };
+    must(JSON.stringify(figures(scopedApi.totals)) === JSON.stringify(figures(orchardRow)), `project filter: the scoped totals ${JSON.stringify(figures(scopedApi.totals))} are not the row ${JSON.stringify(figures(orchardRow))}`);
+    must(scopedApi.scope?.project === orchard, `project filter: the answer is scoped to ${JSON.stringify(scopedApi.scope)}`);
+    const rowYou = week.projects.find((row) => row.project === orchard)?.you ?? "";
+    const allProjects = await capture("desktop-project-all", "range=7d");
+    must(allProjects.scope === null && allProjects.selected.length === 0, `all projects: scope ${allProjects.scope}, selected ${allProjects.selected.join(",")}`);
+    const scoped = await capture("desktop-project-selected", `range=7d&project=${encodeURIComponent(orchard)}`);
+    must(scoped.scope === "orchard-client" && scoped.selected.join() === orchard, `one project: chip ${scoped.scope}, selected ${scoped.selected.join(",")}`);
+    must(rowYou !== "" && scoped.hero.replace(/\s/g, "").includes(rowYou.replace(/\s/g, "")), `one project: the hero "${scoped.hero}" is not the row's "${rowYou}"`);
+    must(scoped.agents.startsWith("≥"), `one project: its agents, missing the stage host, read "${scoped.agents}"`);
+    must(scoped.chip?.state === "lower", `one project: the chip reads ${scoped.chip?.state}`);
+    /* The chosen row opens, so rows may fold into "+ N more": shown and folded hold every project. */
+    const listed = (reading: ActivityReading) => reading.projects.length + Number(/\d+/.exec(reading.foldedMore ?? "")?.[0] ?? 0);
+    must(listed(scoped) === listed(allProjects), `one project: the list holds ${listed(scoped)} projects, not ${listed(allProjects)}`);
+    const picker = await capture("desktop-project-picker", "range=7d", { act: async (page) => { await page.click("[data-activity-picker-trigger]"); await page.waitForSelector("[data-activity-picker=open]"); } });
+    must((picker.pickerOptions ?? 0) >= ACTIVITY_REPOS.length, `picker: ${picker.pickerOptions} options`);
+    const scopedUk = await capture("desktop-project-selected-uk", `range=7d&project=${encodeURIComponent(orchard)}`, { lang: "uk" });
+    must(scopedUk.scope === "orchard-client" && scopedUk.chip?.state === "lower", `one project uk: chip ${scopedUk.scope}, trust ${scopedUk.chip?.state}`);
+    const phoneScoped = await capture("phone-project-selected", `range=7d&view=projects&project=${encodeURIComponent(orchard)}`, { phone: true });
+    must(phoneScoped.layout === "narrow" && phoneScoped.scope === "orchard-client" && phoneScoped.tiles === 4, `phone, one project: ${phoneScoped.layout} layout, chip ${phoneScoped.scope}, ${phoneScoped.tiles} tiles`);
+
+    /* Today with the stage host unread from 09:00 to 12:00: only once those
+       hours have passed, since an hour still to come draws nothing. */
+    if (clock(TODAY, "12:00") <= now) {
+      writeStage([
+        { name: "month", from: days[0]!.start - 86_400_000, until: days[STAGE_UNREAD[0]!]!.start },
+        { name: "today-morning", from: days[TODAY]!.start, until: clock(TODAY, "09:00") },
+        { name: "today-afternoon", from: clock(TODAY, "12:00"), until: endOfToday },
+      ]);
+      const gap = await capture("desktop-today-gap", "range=today");
+      must(gap.chip?.state === "lower", `today with a gap: the chip reads ${gap.chip?.state}`);
+      await capture("desktop-today-gap-uk", "range=today", { lang: "uk" });
+      const gapHour = await capture("desktop-today-gap-hover", "range=today", { act: async (page) => { await page.hover(`[data-activity-pair="${clock(TODAY, "10:00")}"] rect[tabindex]`); } });
+      must(gapHour.tooltip?.text.includes("not read (Stage host)") === true, `today with a gap: the 10:00 tooltip reads ${gapHour.tooltip?.text}`);
+    } else {
+      report.todayGap = "not captured: today's 09:00-12:00 is still to come in the capture's zone";
+    }
+
+    /* None of your input read, agent time still read. */
+    fs.rmSync(activityDir, { recursive: true, force: true });
+    fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ACTIVITY_STAGE_PROJECTS.map(keyOf) }] }));
+    const unread = await capture("desktop-unread-7d", "range=7d");
+    must(unread.chip?.state === "none" && unread.chip.text === "Your time not read", `unread: the chip reads ${unread.chip?.state} "${unread.chip?.text}"`);
+    /* The stage host's agents are not read either: agent time is at least what reads. */
+    must(unread.hero.includes("Unknown") && unread.agents.startsWith("≥≈"), `unread: hero ${unread.hero}, agents ${unread.agents}`);
+    must(!("supervised" in unread.cells) && !("unattended" in unread.cells) && !("you" in unread.cells), `unread: cells ${JSON.stringify(unread.cells)}`);
+    const unreadUk = await capture("desktop-unread-1280x800-uk", "range=7d", { lang: "uk", size: [1280, 800] });
+    must(unreadUk.chip?.text === "Ваш час не прочитано", `unread uk: the chip reads "${unreadUk.chip?.text}"`);
+
+    /* A home with no data at all. */
+    await stop(server);
+    server = null;
+    fs.rmSync(path.join(HOME, ".claude/projects"), { recursive: true, force: true });
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    const empty = await capture("desktop-empty", "range=7d");
+    /* This host's ingest reads it from its first pass on, so an empty home is
+       read for a few minutes of the range: the chip says a lower bound once
+       that pass has run, and your time still reads Unknown. */
+    must(empty.chip?.state !== "ok" && empty.hero.includes("Unknown") && !/\b0 h\b/.test(empty.hero), `empty: chip ${empty.chip?.state}, hero ${empty.hero}`);
+    must(empty.caps.every((cap) => cap.text === "?"), `empty: caps ${JSON.stringify(empty.caps)}`);
+    await capture("desktop-empty-uk", "range=7d", { lang: "uk" });
+    const emptyPhone = await capture("phone-empty", "range=30d&view=days", { phone: true });
+    must(emptyPhone.days === 30, `empty phone: ${emptyPhone.days} day rows`);
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(HOME).join("$HOME"));
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "activity.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  const target = process.env.ACTIVITY_RENDER_DIR?.trim();
+  if (target) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const file of [...shots, path.join(OUT_DIR, "activity.json")]) fs.copyFileSync(file, path.join(target, path.basename(file)));
+  }
+  console.log(`activity dashboard captures: ${OUT_DIR}${target ? ` (copied to ${target})` : ""}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`activity dashboard acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("activity dashboard acceptance passed at 1440 × 900, 1280 × 800 and 390 × 844.");
+  }
+}
+
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=lightbox (#2144)                                        */
+/* ------------------------------------------------------------------------- */
+
+const LIGHTBOX_COUNT = 26;
+const LIGHTBOX_INBOX = new Set([1, 5, 10, 15, 20, 25]);
+const LIGHTBOX_TOOL = new Set([3, 8, 13, 18, 23]);
+const LIGHTBOX_TOPICS = ["sign-in form", "empty inbox", "settings panel", "billing table", "error toast", "search results", "profile card", "dark theme", "export dialog", "onboarding step"];
+const LIGHTBOX_SHOTS = path.join(REPO_DIR, "shots");
+const LIGHTBOX_INBOX_DIR = path.join(HOME, ".config", "agent-log-viewer", "inbox");
+/** The picture the renders show: a markdown image in the middle of the walk. */
+const LIGHTBOX_MID = 12;
+type LightboxLayout = "dense" | "spread" | "unmounted";
+/** Short answers between the last picture and the rest in the `unmounted` layout: more rows
+    than the 1,500 a reader mounts, few enough bytes that every picture stays in the 768 KB
+    tail the feed reads. */
+const LIGHTBOX_FILLER = 1_600;
+const LIGHTBOX_TAIL_BYTES = 768 * 1024;
+
+/** Invented screens, painted by the browser: a coloured frame with its number large enough to read in a render. */
+async function paintLightboxPictures(browser: Browser): Promise<string[]> {
+  const page = await browser.newPage();
+  const pictures = await page.evaluate(([count, topics]) => Array.from({ length: count }, (_, i) => {
+    const n = i + 1;
+    const canvas = document.createElement("canvas");
+    canvas.width = 1200;
+    canvas.height = 750;
+    const g = canvas.getContext("2d")!;
+    const hue = (n * 47) % 360;
+    g.fillStyle = `hsl(${hue} 45% 92%)`;
+    g.fillRect(0, 0, 1200, 750);
+    g.fillStyle = `hsl(${hue} 55% 36%)`;
+    g.fillRect(0, 0, 1200, 96);
+    g.fillStyle = "#ffffff";
+    for (let column = 0; column < 3; column += 1) g.fillRect(60 + column * 370, 170, 330, 470);
+    g.font = "bold 44px sans-serif";
+    g.fillText(`Screen ${n} · ${topics[n % topics.length]}`, 48, 64);
+    g.fillStyle = `hsl(${hue} 55% 36%)`;
+    g.font = "bold 240px sans-serif";
+    g.textAlign = "center";
+    g.fillText(String(n), 600, 500);
+    return canvas.toDataURL("image/png").split(",")[1]!;
+  }), [LIGHTBOX_COUNT, LIGHTBOX_TOPICS] as const);
+  await page.close();
+  return pictures;
+}
+
+/** One conversation drawing the 26 pictures in order. `spread` puts a long note before each
+    picture, so a picture sits screens away from the next and the feed's own lazy thumbnails
+    reach only the last few; `dense` has them follow one another. `unmounted` puts 1,600 short
+    answers before the last picture, so the feed mounts none of the other rows and the viewer's
+    own elements are the only thing on the page that loads them. `urls` collects the URL each
+    picture that loads over the network is asked for by. */
+function writeLightboxConversation(id: string, layout: LightboxLayout, pictures: string[], urls: Map<string, number>): string {
+  const base = { cwd: REPO_DIR, sessionId: id };
+  const at = (n: number, s = 0) => `2100-01-03T10:${String(n).padStart(2, "0")}:${String(s).padStart(2, "0")}.000Z`;
+  const say = (uuid: string, n: number, text: string) => ({ type: "assistant", uuid, timestamp: at(n), ...base, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text }] } });
+  const lines: unknown[] = [{ type: "user", uuid: `${id}-u0`, timestamp: at(0), ...base, message: { role: "user", content: "Walk me through the redesign screens, one by one." } }];
+  for (let n = 1; n <= LIGHTBOX_COUNT; n += 1) {
+    const topic = LIGHTBOX_TOPICS[n % LIGHTBOX_TOPICS.length]!;
+    const bytes = Buffer.from(pictures[n - 1]!, "base64");
+    if (layout === "spread") lines.push(say(`${id}-n${n}`, n, `Notes before screen ${n}:\n${Array.from({ length: 120 }, (_, line) => `- Note ${line + 1} on the ${topic}: spacing, contrast and copy checked.`).join("\n")}`));
+    /* Bare answers: the session's own fields ride on the other rows, and the bytes they save keep every picture in the tail. */
+    if (layout === "unmounted" && n === LIGHTBOX_COUNT) for (let i = 1; i <= LIGHTBOX_FILLER; i += 1) lines.push({ type: "assistant", uuid: `${id}-f${i}`, timestamp: at(n - 1, 30), message: { role: "assistant", content: [{ type: "text", text: `Checked item ${i}.` }] } });
+    if (LIGHTBOX_INBOX.has(n)) {
+      const name = `img-${String(n).padStart(2, "0")}-redesign.png`;
+      fs.writeFileSync(path.join(LIGHTBOX_INBOX_DIR, name), bytes);
+      lines.push({ type: "user", uuid: `${id}-u${n}`, timestamp: at(n), ...base, message: { role: "user", content: `Screen ${n}, the ${topic}:\n${path.join(LIGHTBOX_INBOX_DIR, name)}` } });
+      urls.set(`/api/inbox?name=${encodeURIComponent(name)}`, n);
+    } else if (LIGHTBOX_TOOL.has(n)) {
+      const file = path.join(LIGHTBOX_SHOTS, `capture-${n}.png`);
+      lines.push({ type: "assistant", uuid: `${id}-t${n}`, timestamp: at(n), ...base, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "tool_use", id: `toolu_${n}`, name: "Read", input: { file_path: file } }] } });
+      lines.push({ type: "user", uuid: `${id}-r${n}`, timestamp: at(n, 1), ...base, message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_${n}`, content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: pictures[n - 1] } }] }] } });
+    } else {
+      const file = path.join(LIGHTBOX_SHOTS, `step-${n}.png`);
+      fs.writeFileSync(file, bytes);
+      lines.push(say(`${id}-a${n}`, n, `Screen ${n} is the ${topic}:\n![Screen ${n}, ${topic}](${file})`));
+      urls.set(`/api/image?path=${encodeURIComponent(file)}`, n);
+    }
+  }
+  lines.push({ type: "result", subtype: "success", uuid: `${id}-done`, timestamp: at(59), ...base, is_error: false, duration_ms: 1200, num_turns: 1, result: "All screens reviewed." });
+  const folder = path.join(HOME, ".claude/projects", projectSlug(REPO_DIR));
+  fs.mkdirSync(folder, { recursive: true });
+  const transcript = path.join(folder, `${id}.jsonl`);
+  fs.writeFileSync(transcript, lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+  const size = fs.statSync(transcript).size;
+  if (size > LIGHTBOX_TAIL_BYTES) throw new Error(`the ${layout} conversation is ${size} bytes; the feed would not read its first pictures`);
+  return transcript;
+}
+
+function seedLightbox(pictures: string[]): { transcripts: Record<LightboxLayout, string>; urls: Map<string, number> } {
+  for (const dir of [LIGHTBOX_SHOTS, LIGHTBOX_INBOX_DIR]) fs.mkdirSync(dir, { recursive: true });
+  const urls = new Map<string, number>();
+  /* Session ids assembled from parts, like the other seeded ones. */
+  const id = (tail: string) => ["00000026", "0000", "4000", "8000", tail.padStart(12, "0")].join("-");
+  const dense = writeLightboxConversation(id("cafe"), "dense", pictures, urls);
+  const spread = writeLightboxConversation(id("beef"), "spread", pictures, urls);
+  const unmounted = writeLightboxConversation(id("f00d"), "unmounted", pictures, urls);
+  return { transcripts: { dense, spread, unmounted }, urls };
+}
+
+/** The open viewer, read in the page. */
+function readLightbox() {
+  const rect = (el: Element | null) => { if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const dialog = document.querySelector<HTMLElement>("[role=dialog][aria-modal=true]");
+  const shown = dialog?.querySelector<HTMLImageElement>("img:not([hidden])") ?? null;
+  /* An inline picture's source is its whole encoding; the record keeps its length. */
+  const source = (img: Element | null) => { const src = img?.getAttribute("src") ?? null; return src?.startsWith("data:") ? `data:(${src.length} chars)` : src; };
+  return {
+    open: dialog !== null,
+    position: dialog?.querySelector("[data-lightbox-position]")?.textContent ?? null,
+    src: source(shown),
+    loaded: Boolean(shown && shown.complete && shown.naturalWidth > 0),
+    image: rect(shown),
+    /* The picture area the backdrop fills around the picture. */
+    area: rect(shown?.parentElement?.parentElement ?? null),
+    mounted: dialog ? [...dialog.querySelectorAll("img")].map(source) : [],
+    previous: rect(dialog?.querySelector("[data-lightbox-step=previous]") ?? null),
+    next: rect(dialog?.querySelector("[data-lightbox-step=next]") ?? null),
+    caption: dialog?.querySelector(".truncate")?.textContent ?? null,
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+  };
+}
+
+async function lightboxMain(): Promise<void> {
+  seedHome();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(encodeURIComponent(HOME)).join(encodeURIComponent("$HOME")).split(HOME).join("$HOME"));
+  const report: Record<string, unknown> = { commit: captureCommit(), pictures: LIGHTBOX_COUNT };
+  try {
+    /* `gc()` lets the walk drop every picture nothing holds any more. */
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage", "--js-flags=--expose-gc"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const { transcripts, urls } = seedLightbox(await paintLightboxPictures(browser));
+    report.networkPictures = urls.size;
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    const dismissed = await fetch(`${baseUrl}/api/onboarding`, {
+      method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }),
+    });
+    must(dismissed.ok, `dismissing the setup guide answered ${dismissed.status}`);
+    const lastSrc = `/api/image?path=${encodeURIComponent(path.join(LIGHTBOX_SHOTS, `step-${LIGHTBOX_COUNT}.png`))}`;
+    const thumbnail = `[data-log-feed-scroller] img[src="${lastSrc}"]`;
+    const viewports = [
+      { device: "desktop", phone: false, options: { viewport: { width: 1440, height: 900 } } },
+      { device: "phone", phone: true, options: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true } },
+    ] as const;
+    /* A phone's reader keeps only its last 1,000 lines while it follows the tail, fewer than
+       the 1,500 rows it mounts, so there every picture the feed holds has a mounted row. */
+    for (const { device, phone, options } of viewports) for (const layout of (phone ? ["dense", "spread"] : ["dense", "spread", "unmounted"]) as LightboxLayout[]) {
+      const tag = `${device}-${layout}`;
+      const context = await browser.newContext({ ...options, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      const page = await context.newPage();
+      /* Every image request the page puts on the network, attributed to the
+         phase it happened in. A picture the page already holds is served from
+         its own memory and never reaches the network. */
+      let phase = "feed";
+      const requests: { phase: string; picture: number | null; url: string }[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (!/^\/api\/(image|inbox|artifact)$/.test(url.pathname)) return;
+        const local = url.pathname + url.search;
+        requests.push({ phase, picture: urls.get(local) ?? null, url: local });
+      });
+      await page.goto(`${baseUrl}/#f=${encodeURIComponent(transcripts[layout])}`);
+      await page.waitForSelector(thumbnail, { timeout: 60_000 }).catch(() => {});
+      await page.waitForTimeout(1_500);
+      const feedPictures = requests.map((request) => request.picture);
+      /* The pictures a mounted feed row draws. */
+      const heldByFeed = (await page.evaluate(() => [...document.querySelectorAll("[data-log-feed-scroller] img")].map((img) => img.getAttribute("src") ?? "")))
+        .filter((src) => /^(\/api\/(image|inbox|artifact)\?|data:image\/)/.test(src))
+        .map((src) => (src.startsWith("data:") ? "inline" : urls.get(src) ?? src));
+      if (layout === "unmounted") must(JSON.stringify(heldByFeed) === JSON.stringify([LIGHTBOX_COUNT]), `${tag}: the feed's mounted rows draw pictures ${JSON.stringify(heldByFeed)}`);
+      const read = () => page.evaluate(readLightbox);
+      const settle = async () => {
+        await page.waitForFunction(() => {
+          const img = document.querySelector<HTMLImageElement>("[role=dialog] img:not([hidden])");
+          return Boolean(img && img.complete && img.naturalWidth > 0);
+        }, undefined, { timeout: 10_000 }).catch(() => {});
+        await page.waitForTimeout(250);
+      };
+
+      /* Open the newest picture, walk to the first, one step past it, and back. */
+      phase = "open";
+      await page.locator(thumbnail).click();
+      await settle();
+      const opened = await read();
+      const openPictures = requests.filter((request) => request.phase === "open").map((request) => request.picture);
+      must(opened.open && opened.position === `${LIGHTBOX_COUNT} / ${LIGHTBOX_COUNT}`, `${tag}: the viewer opened at «${opened.position}»`);
+      must(opened.next === null && opened.previous !== null, `${tag}: at the last picture the edge buttons are ${JSON.stringify({ previous: opened.previous, next: opened.next })}`);
+      for (const picture of openPictures) must(picture !== null && picture >= LIGHTBOX_COUNT - 1, `${tag}: opening the last picture asked for picture ${picture}`);
+      const walk: { position: string | null; loaded: boolean; mounted: number; requested: (number | null)[] }[] = [];
+      const stepOnce = async (key: "ArrowLeft" | "ArrowRight", label: string) => {
+        phase = label;
+        const before = requests.length;
+        await page.keyboard.press(key);
+        await settle();
+        const reading = await read();
+        walk.push({ position: reading.position, loaded: reading.loaded, mounted: reading.mounted.length, requested: requests.slice(before).map((request) => request.picture) });
+        return reading;
+      };
+      let mid: Awaited<ReturnType<typeof read>> | null = null;
+      for (let n = LIGHTBOX_COUNT - 1; n >= 1; n -= 1) {
+        const reading = await stepOnce("ArrowLeft", `left-to-${n}`);
+        must(reading.position === `${n} / ${LIGHTBOX_COUNT}`, `${tag}: ← to ${n} shows «${reading.position}»`);
+        must(reading.loaded, `${tag}: picture ${n} did not load`);
+        must(reading.mounted.length >= (n === 1 ? 2 : 3), `${tag}: at ${n} the viewer holds ${reading.mounted.length} pictures`);
+        /* Only the neighbour the move brought into reach may load. */
+        for (const picture of walk.at(-1)!.requested) must(picture === n - 1, `${tag}: at ${n} the page asked for picture ${picture}`);
+        if (n === LIGHTBOX_MID) {
+          mid = reading;
+          if (layout === "dense") await page.screenshot({ path: path.join(OUT_DIR, `lightbox-${device}-mid-gallery.png`) });
+        }
+      }
+      const pastFirst = await stepOnce("ArrowLeft", "left-past-first");
+      must(pastFirst.position === `1 / ${LIGHTBOX_COUNT}` && pastFirst.previous === null, `${tag}: ← at the first picture shows «${pastFirst.position}»`);
+      /* Nothing but the viewer holds pictures 1 to 25 here. Collect garbage and outlast
+         /api/image's 60 s freshness, so a picture the viewer let go of can only come back over
+         the network (/api/inbox answers no-store). */
+      let collected: boolean | null = null;
+      if (layout === "unmounted") {
+        const collect = () => page.evaluate(() => {
+          const gc = (globalThis as { gc?: () => void }).gc;
+          if (gc) { gc(); gc(); }
+          return Boolean(gc);
+        });
+        collected = await collect();
+        await page.waitForTimeout(61_000);
+        collected = (await collect()) && collected;
+        must(collected, `${tag}: the page could not collect garbage`);
+      }
+      const backFrom = requests.length;
+      for (let n = 2; n <= LIGHTBOX_COUNT; n += 1) await stepOnce("ArrowRight", `right-to-${n}`);
+      const pastLast = await stepOnce("ArrowRight", "right-past-last");
+      must(pastLast.position === `${LIGHTBOX_COUNT} / ${LIGHTBOX_COUNT}` && pastLast.next === null, `${tag}: → at the last picture shows «${pastLast.position}»`);
+      const backRequests = requests.length - backFrom;
+      must(backRequests === 0, `${tag}: walking back over reached pictures made ${backRequests} image requests`);
+      const perUrl = new Map<string, number>();
+      for (const request of requests) perUrl.set(request.url, (perUrl.get(request.url) ?? 0) + 1);
+      const refetched = [...perUrl].filter(([, count]) => count > 1);
+      must(refetched.length === 0, `${tag}: fetched more than once: ${JSON.stringify(refetched)}`);
+      must(mid !== null && mid.previous !== null && mid.next !== null, `${tag}: mid-gallery the edge buttons are ${JSON.stringify(mid && { previous: mid.previous, next: mid.next })}`);
+      if (mid) for (const [name, box] of [["previous", mid.previous], ["next", mid.next]] as const) {
+        must(Boolean(box && box.x >= 0 && box.y >= 0 && box.x + box.w <= mid.viewport.w && box.y + box.h <= mid.viewport.h), `${tag}: the ${name} button sits at ${JSON.stringify(box)}`);
+        if (phone) must((box?.h ?? 0) >= 44 && (box?.w ?? 0) >= 44, `${tag}: the ${name} button is ${box?.w}×${box?.h}px`);
+      }
+
+      /* The backdrop: a click on the picture keeps it, a drag that ends off
+         the picture keeps it, a still click or tap on the dimmed area closes it.
+         The drag ends below the picture and carries it down, so the closing
+         click lands above it. */
+      let backdrop: Record<string, boolean | null> | null = null;
+      if (layout === "dense") {
+        const center = (box: { x: number; y: number; w: number; h: number }) => ({ x: box.x + box.w / 2, y: box.y + box.h / 2 });
+        const now = await read();
+        const picture = center(now.image!);
+        const below = { x: Math.round(now.area!.x + now.area!.w / 2), y: now.area!.y + now.area!.h - 8 };
+        const above = { x: below.x, y: now.area!.y + 8 };
+        must(below.y > now.image!.y + now.image!.h && above.y < now.image!.y, `${tag}: no backdrop above and below the picture ${JSON.stringify({ image: now.image, area: now.area })}`);
+        if (phone) await page.touchscreen.tap(picture.x, picture.y);
+        else await page.mouse.click(picture.x, picture.y);
+        await page.waitForTimeout(250);
+        const afterPictureClick = (await read()).open;
+        must(afterPictureClick, `${tag}: a ${phone ? "tap" : "click"} on the picture closed the viewer`);
+        let afterPan: boolean | null = null;
+        if (!phone) {
+          await page.mouse.move(picture.x, picture.y);
+          await page.mouse.down();
+          await page.mouse.move(below.x - 40, below.y - 30, { steps: 8 });
+          await page.mouse.move(below.x, below.y, { steps: 4 });
+          await page.mouse.up();
+          await page.waitForTimeout(250);
+          afterPan = (await read()).open;
+          must(afterPan, `${tag}: a pan that ended off the picture closed the viewer`);
+        }
+        if (phone) await page.touchscreen.tap(above.x, above.y);
+        else await page.mouse.click(above.x, above.y);
+        await page.waitForTimeout(250);
+        const afterBackdrop = (await read()).open;
+        must(!afterBackdrop, `${tag}: a ${phone ? "tap" : "click"} on the backdrop left the viewer open`);
+        /* A viewer the backdrop failed to close would cover the thumbnail. */
+        if (afterBackdrop) await page.keyboard.press("Escape");
+        await page.locator(thumbnail).click();
+        await settle();
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(250);
+        const afterEscape = (await read()).open;
+        must(!afterEscape, `${tag}: Escape left the viewer open`);
+        backdrop = { afterPictureClick, afterPan, afterBackdrop, afterEscape };
+      }
+
+      const viewing = requests.filter((request) => request.phase !== "feed");
+      report[tag] = {
+        requests: {
+          feed: feedPictures.length,
+          open: openPictures.length,
+          walkingLeft: viewing.filter((request) => request.phase.startsWith("left")).length,
+          walkingBack: backRequests,
+          total: requests.length,
+          distinctUrls: perUrl.size,
+          fetchedTwice: refetched.length,
+        },
+        feedPictures: [...feedPictures].sort((a, b) => (a ?? 0) - (b ?? 0)),
+        heldByFeed,
+        collectedGarbageBeforeWalkingBack: collected,
+        openPictures,
+        walk,
+        opened,
+        midGallery: mid,
+        backdrop,
+        log: requests,
+      };
+      await context.close();
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "lightbox.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  console.log(`lightbox measurements: ${path.join(OUT_DIR, "lightbox.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`lightbox acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("lightbox acceptance passed at 1440 × 900 and 390 × 844.");
+  }
+}
+
+/* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
+else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
+else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
+else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
 else if ((SEAT_CASES as readonly string[]).includes(process.env.BOARD_CAPTURE_CASE ?? "")) await seatsMain(process.env.BOARD_CAPTURE_CASE as SeatCase);

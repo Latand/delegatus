@@ -34,10 +34,13 @@ import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
   ATTENTION_ARRIVAL_TIMEOUT_MS,
   awaitAttentionArrival,
+  noticeCapableViewOpen,
   raiseAttentionRequest,
   resolveDirectedAttentionView,
 } from "@/lib/attention/service";
 import { readAttentionFile } from "@/lib/attention/store";
+import { DismissalError, dismissAttention as dismissAttentionService, parseDismissalTarget, type DismissalPorts } from "@/lib/attention/dismissals";
+import type { DismissalTarget, DismissedBy } from "@/lib/attention/dismissalTypes";
 import {
   CONVERSATION_PATH_EXAMPLE,
   describeFocusTargetRejection,
@@ -93,14 +96,15 @@ import { projectSuccessionFor } from "@/lib/projects/succession";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
-import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
+import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
+import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
+import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
 import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup } from "@/lib/pipelines/store";
-import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport } from "@/lib/pipelines/types";
+import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport, PipelineMergeState } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import { listFiles } from "@/lib/scanner";
@@ -145,6 +149,7 @@ import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
+import { bridgeReportsEnabled, mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -175,6 +180,7 @@ import {
   type McpToolPayload,
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
+import { RETRYABLE_TELEGRAM_BOT_CODES, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 
 import {
   accountLimitRows,
@@ -200,11 +206,11 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
-import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
+import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
-const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review"]);
+const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 /* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
-const PIPELINE_RECEIPT_ACTIONS = new Set<PipelineAction>(["resolve-decision", "continue-review", "convert-legacy-review", "revert-legacy-review"]);
+const PIPELINE_RECEIPT_ACTIONS = new Set<PipelineAction>(["resolve-decision", "continue-review", "accept-head", "convert-legacy-review", "revert-legacy-review"]);
 const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
 
 interface LinkTaskToPipelineDependencies {
@@ -540,6 +546,8 @@ async function dispatchViewerControl(
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
+      ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
+      ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
     });
   }
   return result;
@@ -651,6 +659,14 @@ export interface ViewerMcpDomainDependencies {
       from. Called on the raise path, which is the moment that identity matters. */
   adoptRootSession(): void;
   raiseAttentionRequest: typeof raiseAttentionRequest;
+  /** What the dismissal service reads and writes besides its own record
+      (docs/design/needs-attention.md §5). Optional: production wires the
+      registry, the task store and the pipeline engine. */
+  dismissalPorts?: DismissalPorts;
+  /** Whether a phone the operator is looking at is open, for a request with no
+      desktop to move (docs/design/needs-attention.md §6). Optional: production
+      reads presence. */
+  noticeCapableViewOpen?: () => boolean;
   /** #873: block until the directed view lands or the handoff closes as a
       bounded failure. Optional so partial harnesses fall back to the real
       awaiter; tests override it only to shorten its clocks. */
@@ -1478,11 +1494,14 @@ function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipel
     ...(delivery.disposition === "comparison" ? { conflict: `Target owned by ${delivery.ownerId} at epoch ${delivery.epoch}; comparison lane created with Viewer publication disabled` } : {}) };
 }
 
+const PIPELINE_CREATION_QUEUED_NOTE = "Pipeline state is not writable right now (a Viewer deployment is handing over, or the store is busy), so this pipeline is queued under the pipelineId above. The serving release stores and starts it on its next controller pass; get_pipeline answers once it is stored. Do not create it again.";
+
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolPayload> {
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
   if (context?.dispatch) context.dispatch.attempted = true;
   const result = await createPipelineFromRequest(request as CreatePipelineRequest, undefined, {
     creationRequest: { key: `create_pipeline:${requestId(args)}`, digest: requestDigest("create_pipeline", request) },
+    queueWhenBusy: true,
   });
   if (!result.pipeline) {
     if (context?.dispatch) context.dispatch.attempted = false;
@@ -1495,7 +1514,19 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
     throw result.violations?.length ? new McpToolRefusal(message, { violations: result.violations }) : new Error(message);
   }
-  if (result.pipeline.state !== "draft") requestPipelineTick();
+  if (result.pipeline.state !== "draft" || result.queued) requestPipelineTick();
+  /* #1835: the store refused the write before admission — a deploy handover
+     fences it — so the record waits in the creation queue under this id. */
+  if (result.queued) {
+    return redactPayload({
+      ...pipelineAcknowledgement(result.pipeline),
+      queued: true,
+      queuedBecause: result.queued.reason,
+      note: PIPELINE_CREATION_QUEUED_NOTE,
+      ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+      ...newLegacyReviewFields(result),
+    });
+  }
   /* #1845: an acknowledgement, never the record. The record echoed the spec,
      every stage prompt and every composed role scaffold back to the caller that
      had just sent them — a median 10 KB per create. get_pipeline reads it. */
@@ -1503,7 +1534,20 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
     ...pipelineAcknowledgement(result.pipeline),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+    ...newLegacyReviewFields(result),
   });
+}
+
+/** What became of the review-loop stages a create or an add-stage brought in
+    (#2187 §3.2): the reviewer and fix stage each was stored as, and the
+    refusals of any stored as sent. */
+function newLegacyReviewFields(result: Pick<PipelineMutationResult, "convertedStages" | "legacyReview" | "finishesTaskDropped">) {
+  return {
+    ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}),
+    ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}),
+    /* #2187 §5.1: the finishesTask ids a create dropped, clamped rather than refused. */
+    ...(result.finishesTaskDropped?.length ? { finishesTaskDropped: result.finishesTaskDropped, finishesTaskNote: "these ids are not in taskIds, so the pipeline does not finish them" } : {}),
+  };
 }
 
 /** A close report as counts (#2030). Each list keeps its name, so a caller
@@ -1532,11 +1576,16 @@ function closeReportCounts(report: PipelineCloseReport) {
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
+  /* Clearing a lane off the operator's queue is the dismissal service's write
+     (docs/design/needs-attention.md §5): the same gate and the same attributed
+     record `dismiss_attention` writes. */
+  if (action === "dismiss" || action === "undismiss") return pipelineDismissal(pipelineId, action, args, dependencies);
   const request = withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact"]);
   const before = dependencies.readPipelineRecord
     ? dependencies.readPipelineRecord(pipelineId)
     : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
   const beforeFields = fieldValues(before);
+  if (action === "retry-stage") retryStageLaunch(request, before ?? null);
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
   const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
@@ -1550,6 +1599,8 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     if (result.legacyReviewPreview) throw new McpToolRefusal(message, { legacyReviewPreview: result.legacyReviewPreview });
     if (action === "publish" || action === "takeover") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
+    /* A stale guard names what moved, so the caller re-reads before retrying. */
+    if (result.code === "STAGE_CHANGED") throw new McpToolRefusal(message, { code: result.code, field: result.field, status: result.status });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
@@ -1580,6 +1631,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     ...(action === "attach-link" || action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline), ...(result.unchanged ? { unchanged: true } : {}) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
+    ...newLegacyReviewFields(result),
     ...(result.decisionAnswer ? { decisionAnswer: {
       clientRequestId: result.decisionAnswer.clientRequestId,
       stageId: result.decisionAnswer.stageId,
@@ -1606,6 +1658,46 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       at: result.legacyReviewConversion.at,
       ...(result.legacyReviewConversion.reverted ? { reverted: result.legacyReviewConversion.reverted } : {}),
     }, replayed: result.replayed } : {}),
+  });
+}
+
+/**
+ * The stage a retry-stage names (#1845). The engine reads a request carrying
+ * stageId as an explicit launch-receipt retry: it then needs that attempt's
+ * launchId beside it and accepts only a receipt that settled failed or
+ * conflicted, which refuses every stage whose agent started and then failed or
+ * parked. A stageId without a launchId therefore becomes the guard the engine
+ * reads as "retry the stage you wait on": expectedStageId, and expectedAttempt
+ * from the record this call saw, so a stage or attempt that moved on before
+ * the write is refused with STAGE_CHANGED. A launchId the caller names is
+ * passed through unchanged, for the engine to judge as a receipt retry.
+ */
+function retryStageLaunch(request: Record<string, unknown>, pipeline: Pipeline | null): void {
+  if (typeof request.stageId !== "string" || request.launchId !== undefined || !pipeline) return;
+  if (request.expectedStageId !== undefined && request.expectedStageId !== request.stageId) {
+    throw new McpToolRefusal(`retry-stage names stage ${request.stageId} and expectedStageId ${String(request.expectedStageId)}; name one stage`, { code: "STAGE_CHANGED", field: "expectedStageId", status: 400 });
+  }
+  request.expectedStageId = request.stageId;
+  if (request.expectedAttempt === undefined) request.expectedAttempt = latestOperationalStageAttempt(pipeline, request.stageId)?.n ?? 0;
+  delete request.stageId;
+}
+
+async function pipelineDismissal(pipelineId: string, action: "dismiss" | "undismiss", args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const read = () => dependencies.readPipelineRecord
+    ? dependencies.readPipelineRecord(pipelineId)
+    : dependencies.getPipelines?.().pipelines.find((pipeline) => pipeline.id === pipelineId) ?? null;
+  const beforeFields = fieldValues(read());
+  const outcome = await dismissThroughService({ kind: "pipeline", pipelineId }, action === "undismiss", mcpOperationId("pipeline_action", requestId(args)), dependencies);
+  const after = read();
+  if (!after) throw new Error("pipeline not found");
+  return redactPayload({
+    ...pipelineActionAcknowledgement(after),
+    revision: recordRevision(after),
+    changedFields: changedFieldNames(beforeFields, after),
+    taskIds: after.taskIds,
+    dismissal: { dismissed: outcome.dismissed.length > 0, alreadyClear: outcome.alreadyClear.length > 0, at: outcome.at, by: outcome.by },
+    ...(fullAnswer(args) ? { pipeline: after } : { omittedRecordCount: 1 }),
+    readMore: "get_pipeline(pipelineId) or pipeline_action with full:true returns the full record.",
   });
 }
 
@@ -2479,6 +2571,11 @@ function bridgeReport(args: McpToolArgs, dependencies: ViewerMcpDomainDependenci
 
   const origin = attributionOf(dependencies);
   const project = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
+  /* #2146: the operator turned this project's reports off. An answer, not an
+     error: the caller did nothing wrong, and nothing is stored. */
+  if (project && !bridgeReportsEnabled(project)) {
+    return { recorded: false, replayed: false, bridgeReports: false, message: "bridge reports are off for this project" };
+  }
   const seats = dependencies.authorizedSeats?.()
     ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const targetSeat = project
@@ -2732,6 +2829,8 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
   const base = full ? {
     project,
+    mergeOnReview: mergeOnReviewEnabled(project),
+    bridgeReports: bridgeReportsEnabled(project),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: pending,
     /* Terminalized pending intents (#878), oldest first: what was attempted
@@ -2750,6 +2849,10 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     })),
   } : {
     project,
+    /* #2187 §4.1: whether finished lanes here merge on their own. */
+    mergeOnReview: mergeOnReviewEnabled(project),
+    /* #2146: whether this project's bridge reports are on; off, file none. */
+    bridgeReports: bridgeReportsEnabled(project),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: compactOrchestratorSeat(pending),
     intentHistoryCount: history.length,
@@ -3170,6 +3273,56 @@ function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   return redactPayload({ count: accounts.length, accounts });
 }
 
+/*
+ * The Telegram bot account (docs/design/telegram-bot-account.md, Decision 6).
+ * The Viewer is the only process that holds the bot token, so all three tools
+ * reach it through the agent route; none of them carries the token or the
+ * bot's id either way. The send forwards the calling session's capability,
+ * which is how the route attributes the post to this conversation.
+ */
+async function telegramBotChats(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const query = new URLSearchParams({ op: "chats", ...(args.includeInactive === true ? { includeInactive: "1" } : {}) });
+  return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`));
+}
+
+async function telegramBotMessages(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const query = new URLSearchParams({ op: "messages", chat: required(args, "chat") });
+  for (const field of ["limit", "maxChars", "cursor", "since"] as const) {
+    const value = args[field];
+    if (typeof value === "number" || (typeof value === "string" && value !== "")) query.set(field, String(value));
+  }
+  return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`));
+}
+
+async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const result = await dispatchControl(control)("/api/telegram/bot/agent", {
+    op: "send",
+    clientRequestId: requestId(args),
+    chat: required(args, "chat"),
+    text: typeof args.text === "string" ? args.text : "",
+    ...(args.format === "html" || args.format === "plain" ? { format: args.format } : {}),
+    ...(typeof args.replyToMessageId === "number" ? { replyToMessageId: args.replyToMessageId } : {}),
+    ...(typeof args.topicId === "number" ? { topicId: args.topicId } : {}),
+    ...(args.silent === true ? { silent: true } : {}),
+  }, callerCapabilityHeaders()).catch((error: unknown) => {
+    /* The route's refusal names its code; which codes a new key may retry is
+       the bot's own vocabulary. Telegram's wait and the ids a partial send
+       posted ride along as fields. */
+    if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
+      const code = error.details.code;
+      const { retryAfterSeconds, sentMessageIds } = error.details;
+      throw new McpToolRefusal(error.message, {
+        code,
+        retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+        ...(Array.isArray(sentMessageIds) ? { sentMessageIds } : {}),
+      });
+    }
+    throw error;
+  });
+  return redactPayload(result);
+}
+
 /** create_orchestrator: atomically create, designate and deliver the ONE
     approved versioned default mandate (or the caller's edited text based on
     it). The seat route owns the durable intent, so a retry replays. */
@@ -3304,10 +3457,45 @@ function compactPullRequest(pipeline: Pipeline): { pr?: string } {
   return pr ? { pr } : {};
 }
 
+/** The compact row says it only when there is something to say: each setting
+    when it is away from its default, and the lane's merge when the runner
+    took it. */
+function compactMergeFields(pipeline: Pipeline): { mergeOnReview?: true; bridgeReports?: false; merge?: ReturnType<typeof mergeFields>["merge"] } {
+  const { mergeOnReview, bridgeReports, merge } = mergeFields(pipeline);
+  return {
+    ...(mergeOnReview ? { mergeOnReview: true as const } : {}),
+    ...(bridgeReports ? {} : { bridgeReports: false as const }),
+    ...(merge ? { merge } : {}),
+  };
+}
+
+/** #2187 §4.1: whether the lane's project merges when the review passes, and
+    where the lane's own merge stands when the runner took it. #2146: whether
+    the project's bridge reports are on. */
+function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number } } {
+  const merge = pipeline.merge;
+  return {
+    mergeOnReview: mergeOnReviewEnabled(pipeline.project),
+    bridgeReports: bridgeReportsEnabled(pipeline.project),
+    ...(merge ? { merge: { state: merge.state, reason: merge.reason, by: merge.by, pr: merge.prNumber } } : {}),
+  };
+}
+
 async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const pipeline = getPipelineRecord(pipelineId);
-  if (!pipeline) throw new Error("pipeline not found");
+  if (!pipeline) {
+    /* #1835: a create queued during a handover was answered with this id. */
+    const queued = queuedPipelineCreationStatus(pipelineId);
+    if (queued) {
+      throw new McpToolRefusal(queuedPipelineCreationMessage(pipelineId, queued), {
+        code: queued.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused",
+        pipelineId,
+        queuedCreation: queued,
+      });
+    }
+    throw new Error("pipeline not found");
+  }
   /* #1845: the two narrow reads. A stage read answers what one stage concluded;
      a compact read answers the list row. Without either, the whole record. */
   const stageId = text(args.stageId);
@@ -3470,9 +3658,9 @@ async function listPipelines(
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (pipeline: Pipeline) => {
-    if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline) };
-    if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline) };
-    return { ...pipelineCompactRow(pipeline), ...compactPullRequest(pipeline) };
+    if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline), mergeOnReview: mergeOnReviewEnabled(pipeline.project), bridgeReports: bridgeReportsEnabled(pipeline.project) };
+    if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline), ...mergeFields(pipeline) };
+    return { ...pipelineCompactRow(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
@@ -3825,8 +4013,20 @@ async function resources(args: McpToolArgs, dependencies: ViewerMcpDomainDepende
   const payload = result?.payload ?? await dependencies.readResources(fresh);
   const capturedAt = payload.system?.capturedAt ?? null;
   const capturedMs = capturedAt === null ? NaN : Date.parse(capturedAt);
-  return redactPayload({ ...payload, freshness: {
+  /* #2110: the session table has its own age. Rows a failed collection fell
+     back on are marked one by one, so a reader that skips freshness still
+     cannot take a days-old host for a running one. */
+  const sessionsCapturedAt = payload.sessionsCapturedAt ?? null;
+  const sessionsMs = sessionsCapturedAt === null ? NaN : Date.parse(sessionsCapturedAt);
+  const sessionsStale = payload.sessionsStale ?? null;
+  const sessions = sessionsStale === true
+    ? payload.sessions.map((session) => ({ ...session, stale: true, capturedAt: sessionsCapturedAt }))
+    : payload.sessions;
+  return redactPayload({ ...payload, sessions, freshness: {
     requestedAt, capturedAt, capturedAtScope: "system", ageMs: Number.isFinite(capturedMs) ? Math.max(0, Date.now() - capturedMs) : null,
+    sessionsCapturedAt,
+    sessionsAgeMs: Number.isFinite(sessionsMs) ? Math.max(0, Date.now() - sessionsMs) : null,
+    sessionsStale,
     refreshRequested: fresh,
     refreshSucceeded: fresh && result ? result.diagnostic.status === "complete" && result.diagnostic.cache.status === "miss" : null,
     cache: result?.diagnostic.cache.status ?? "unknown",
@@ -4189,6 +4389,7 @@ async function conversationAction(
     key: text(args.key),
     label: args.label,
     question: args.question,
+    ...(action === "permission" ? { decision: text(args.decision), requestId: text(args.requestId) } : {}),
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchUncertainError) {
       throw new McpDispatchUncertainError(error.message, { operationId });
@@ -4548,6 +4749,20 @@ async function requestAttention(
     ?? ((key: string) => readAttentionFile().requests.find((request) => request.operationKey === key) ?? null);
   let request = findByOperation(operationKey);
   let created: ReturnType<typeof raiseAttentionRequest> | null = null;
+  /* No desktop to move and a phone open: the request reaches the phone as a
+     quiet notice and moves nothing there (docs/design/needs-attention.md §6).
+     There is no arrival to wait for, so the call answers at once. */
+  const noticeAnswer = (notice: AttentionRequestV1, raised: typeof created) => redactPayload({
+    attentionId: notice.id,
+    request: notice,
+    delivered: "notice",
+    handoff: null,
+    recovered: raised === null,
+    superseded: raised?.superseded ?? [],
+    dropped: raised?.dropped ?? [],
+    ...mutationReceipt(operationKey),
+  });
+  if (request?.delivery === "notice") return noticeAnswer(request, null);
   if (!request) {
     /* Resolved BEFORE anything durable is written: with no view that can move,
        the honest answer is a refusal, not a pending ask nobody could ever act
@@ -4557,9 +4772,32 @@ async function requestAttention(
        the answer: two tabs share a device id, and only the named tab may run
        the move. */
     const view = resolveDirectedAttentionView();
+    if (!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) {
+      dependencies.adoptRootSession();
+      const raised = dependencies.raiseAttentionRequest({
+        origin: "root-agent",
+        raisedBy,
+        target,
+        frameAtCreation: {
+          project,
+          rect: isGeometricTarget(target) ? geometricFrameRect(target) : UNREAD_FRAME_RECT,
+          boardRevision: null,
+        },
+        intent,
+        reason,
+        /* Named nowhere: the phone reads the notice and never answers it, so a
+           desktop that opens before the record ends can still follow it. */
+        offeredTo: [],
+        delivery: "notice",
+        operationKey,
+        ...(zoom ? { zoom } : {}),
+        ...(contextLabel ? { contextLabel } : {}),
+      });
+      return noticeAnswer(raised.request, raised.adopted ? null : raised);
+    }
     if (!view) {
       throw new McpToolRefusal(
-        "no active Viewer can be moved right now: no visible, active desktop board is open",
+        "no active Viewer can be moved right now: no visible, active desktop board or phone is open",
         { code: "NO_ACTIVE_VIEW" },
       );
     }
@@ -4643,6 +4881,72 @@ async function requestAttention(
     dropped: created?.dropped ?? [],
     ...mutationReceipt(operationKey),
   });
+}
+
+/**
+ * Clear a needs-you flag through the one dismissal service
+ * (docs/design/needs-attention.md §5), for `dismiss_attention` and for
+ * `pipeline_action` dismiss/undismiss, which is the same write.
+ *
+ * The gate is `request_attention`'s, and it runs the same two phases: the
+ * caller's identity before the target is read, then the target's project
+ * against the seat. A refused caller writes nothing. Who dismissed is the
+ * server's own attribution, never the caller's claim, and the MCP operation
+ * rides on the record so a replay answers what the first run wrote.
+ */
+async function dismissThroughService(
+  target: DismissalTarget,
+  undo: boolean,
+  operationKey: string,
+  dependencies: ViewerMcpDomainDependencies,
+) {
+  const authority = dependencies.attentionAuthority();
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const admission = permitAttentionDismissal(authority, seats, null);
+  if (!admission.allowed) {
+    throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: admission.refusedAs });
+  }
+  const focus = focusTargetFromArgs(target.kind === "conversation"
+    ? { kind: "conversation", ...(target.conversationId ? { conversationId: target.conversationId } : {}), ...(target.path ? { path: target.path } : {}) }
+    : target, dependencies);
+  const project = canonicalOrchestratorProject(await focusTargetProject(focus, "", dependencies));
+  const verdict = permitAttentionDismissal(authority, seats, project);
+  if (!verdict.allowed) {
+    throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: verdict.refusedAs });
+  }
+  const attribution = attributionOf(dependencies);
+  const by: DismissedBy = { kind: attribution.kind, conversationId: attribution.conversationId, role: attribution.role };
+  try {
+    return await dismissAttentionService(
+      /* A conversation named by id resolves to its current transcript, which
+         is how the service keys it when the registry does not. */
+      target.kind === "conversation" && focus.kind === "conversation" ? { ...target, path: target.path ?? focus.path } : target,
+      by,
+      { undo, operationKey, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
+    );
+  } catch (error) {
+    if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status });
+    throw error;
+  }
+}
+
+async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  let target: DismissalTarget;
+  try {
+    target = parseDismissalTarget(args.target, { allowSubjects: false });
+  } catch (error) {
+    if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code });
+    throw error;
+  }
+  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies);
+  return {
+    dismissed: outcome.dismissed,
+    alreadyClear: outcome.alreadyClear,
+    ...(outcome.changed.length ? { changed: outcome.changed } : {}),
+    at: outcome.at,
+    by: outcome.by,
+    undo: outcome.undo,
+  };
 }
 
 /**
@@ -5159,7 +5463,7 @@ export function viewerMcpBindings(
           ? domainDependencies.readPipelineRecord(id)
           : domainDependencies.getPipelines?.().pipelines.find((item) => item.id === id);
         if (!pipeline) throw new Error("pipeline not found");
-        const refusal = args.action === "continue-review"
+        const refusal = args.action === "continue-review" || args.action === "accept-head"
           ? continueReviewActorRefusal(pipeline, pauseResumeActorOf(domainDependencies))
           : args.action === "convert-legacy-review" || args.action === "revert-legacy-review"
             ? legacyReviewActorRefusal(pipeline, pauseResumeActorOf(domainDependencies))
@@ -5192,6 +5496,7 @@ export function viewerMcpBindings(
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     suggest_replies: (args) => Promise.resolve(suggestReplies(args, domainDependencies)),
+    dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
     bridge_report: (args) => Promise.resolve(bridgeReport(args, domainDependencies)),
     bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     get_orchestrator: (args) => getOrchestrator(args, domainDependencies),
@@ -5205,5 +5510,8 @@ export function viewerMcpBindings(
     create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
   };
 }

@@ -335,6 +335,7 @@ export function describeMcpCall(
       resume: "Resuming",
       compact: "Compacting",
       "dialog-key": "Answering dialog in",
+      permission: "Answering a permission request in",
       archive: "Archiving",
       unarchive: "Unarchiving",
     };
@@ -462,6 +463,24 @@ export function describeMcpCall(
       subtitle: replaySubtitle(result, compact(string(args.reason))),
       links: kind === "conversation" && string(target.path)
         ? []
+        : entityLink(kind === "task" ? "task" : "pipeline", string(target.taskId) || string(target.pipelineId)),
+    };
+  }
+
+  if (toolName === "dismiss_attention") {
+    /* A needs-you flag cleared off the operator's board, or brought back: what
+       kind of thing, and whether anything actually moved. */
+    const target = record(args.target);
+    const kind = string(target.kind) || "target";
+    const undo = args.undo === true;
+    const cleared = Array.isArray(result.dismissed) ? result.dismissed.length : 0;
+    return {
+      icon: kind === "conversation" ? "conversation" : kind === "task" ? "task" : "pipeline",
+      verb: undo ? "Flagging" : "Clearing",
+      title: undo ? `Flagging a ${kind} again` : `Clearing needs-you on a ${kind}`,
+      subtitle: replaySubtitle(result, Array.isArray(result.dismissed) && !cleared ? "already clear" : ""),
+      links: kind === "conversation"
+        ? conversationLink({ conversationId: string(target.conversationId) })
         : entityLink(kind === "task" ? "task" : "pipeline", string(target.taskId) || string(target.pipelineId)),
     };
   }

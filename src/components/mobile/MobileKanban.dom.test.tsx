@@ -12,7 +12,9 @@ import type { PatchBody, PatchResult, TaskMutationPorts } from "@/components/kan
 
 import { MobileKanban } from "./MobileKanban";
 import { createMobileNav, MobileNavContext, type MobileNav } from "./mobileNav";
+import { fakeHistory } from "./mobileNavTestHistory";
 import { receipts, useReceipt } from "./MobileReceipt";
+import { resetTaskIconLoaderForTests } from "@/components/tasks/taskIconLoader";
 import { attentionKey } from "./phoneKanbanModel";
 import { resetPhoneKanbanPlaces } from "./phoneKanbanPlace";
 import { LONG_PRESS_MS } from "./swipeIntent";
@@ -104,20 +106,8 @@ function layout(files: readonly FileEntry[]): SchemeLayout {
 }
 
 function fakeNav(): { nav: MobileNav; pushes: () => number } {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=fixture" }];
-  let index = 0;
-  let pushes = 0;
-  const nav = createMobileNav({
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { pushes += 1; entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index > 0) index -= 1; },
-    },
-    href: () => entries[index]!.url,
-    onPopstate: () => () => {},
-  });
-  return { nav, pushes: () => pushes };
+  const history = fakeHistory("http://localhost/#p=fixture");
+  return { nav: createMobileNav(history.host), pushes: history.pushes };
 }
 
 /** The flow receipt the shell draws between the body and the dock. */
@@ -128,13 +118,13 @@ function Receipt() {
 
 interface Opened { tasks: string[]; conversations: string[]; pipelines: string[]; shown: string[][] }
 
-function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void }) {
+function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void; nav?: MobileNav; onNewTask?: () => void; onTellOrchestrator?: () => void }) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
   roots.push(root);
   const opened: Opened = { tasks: [], conversations: [], pipelines: [], shown: [] };
-  const { nav, pushes } = fakeNav();
+  const { nav, pushes } = input.nav ? { nav: input.nav, pushes: () => 0 } : fakeNav();
   const render = (tasks: BoardTask[]) => flushSync(() => root.render(
     <MobileNavContext.Provider value={nav}>
       <MobileKanban
@@ -157,6 +147,8 @@ function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipe
         onOpenPipeline={(entry) => opened.pipelines.push(entry.id)}
         onShown={(paths) => opened.shown.push([...paths])}
         onHiddenCount={input.onHiddenCount}
+        onNewTask={input.onNewTask}
+        onTellOrchestrator={input.onTellOrchestrator}
       />
       <Receipt />
     </MobileNavContext.Provider>,
@@ -299,6 +291,22 @@ test("a long-press opens the card's sheet; Move to moves the card at once with U
   expect(q(host, "[data-test-receipt]")!.textContent).toContain("the store is read-only");
 });
 
+test("a card sheet that comes back without its card (a reload, #2105) closes, and its entry goes with it", async () => {
+  const { files, tasks } = board();
+  /* The tab stands on the card sheet's entry, and nothing has chosen a card:
+     what a reload leaves behind. */
+  const history = fakeHistory("http://localhost/#p=fixture");
+  const nav = createMobileNav(history.host);
+  nav.openSheet("card");
+  expect(history.index()).toBe(1);
+  mount({ files, tasks, nav });
+  expect(nav.getState().sheet).toBeNull();
+  expect(q(dom.document.body as unknown as HTMLElement, "[data-phone-card-sheet]")).toBeNull();
+  await sleep(0);
+  expect(history.index()).toBe(0);
+  expect(history.state()).toMatchObject({ mobile2: { sheet: null } });
+});
+
 test("an empty column says so in the desktop's words and points to the nearest column with work", () => {
   const { files, tasks } = board();
   const { host } = mount({ files, tasks });
@@ -310,6 +318,38 @@ test("an empty column says so in the desktop's words and points to the nearest c
   expect(nearest.textContent).toContain(en("mobile2.kanban.tasks", { count: 2 }));
   click(nearest);
   expect(q(host, "[data-phone-kanban]")!.getAttribute("data-phone-kanban-active")).toBe("assigned");
+});
+
+/* #2166 §3.6: on a seatless project board the orchestrator is the way in, so
+   the empty Inbox's "New task" is the quieter, bordered button with the icon as
+   its one plus, and the empty Assigned's "Tell the orchestrator" keeps the
+   fill. The empty texts name who fills the columns. */
+test("an empty Inbox offers New task bordered with one plus, while Tell the orchestrator stays filled", () => {
+  const files = [file(1)];
+  const tasks = [task("d1", "done", [files[0]!.path])];
+  let newTasks = 0;
+  let tells = 0;
+  const { host } = mount({ files, tasks, onNewTask: () => { newTasks += 1; }, onTellOrchestrator: () => { tells += 1; } });
+
+  const inbox = q(host, "[data-phone-kanban-empty=inbox]")!;
+  expect(inbox.textContent).toContain("No tasks yet");
+  expect(inbox.textContent).toContain("The orchestrator adds a task here for each thing you ask.");
+  const newTask = q(host, '[data-phone-kanban-empty-action="inbox"]')!;
+  expect(newTask.className.split(/\s+/)).not.toContain("bg-accent");
+  expect(newTask.className.split(/\s+/)).toContain("border-border");
+  expect(newTask.textContent).toBe("New task");
+  expect((newTask.textContent ?? "").split("+").length - 1).toBe(0);
+  expect(newTask.querySelectorAll("svg")).toHaveLength(1);
+  click(newTask);
+  expect(newTasks).toBe(1);
+
+  const assigned = q(host, "[data-phone-kanban-empty=assigned]")!;
+  expect(assigned.textContent).toContain("A task moves here when the orchestrator starts an agent on it.");
+  const tell = q(host, '[data-phone-kanban-empty-action="assigned"]')!;
+  expect(tell.className.split(/\s+/)).toContain("bg-accent");
+  expect(tell.textContent).toBe(en("mobile2.kanban.tellOrchestrator"));
+  click(tell);
+  expect(tells).toBe(1);
 });
 
 test("Done opens twenty cards at a time and counts them all", () => {
@@ -407,4 +447,38 @@ test("⋯ › Hidden tasks lists what the columns do not draw, and Show brings a
   expect(patches.map((entry) => [entry.id, (entry.body as { hide?: boolean }).hide])).toEqual([["h1", false]]);
   /* Shown at once: the group is back in its column before the write answers. */
   expect(cardsIn(host, "assigned")).toEqual(expect.arrayContaining(["task:a1", "task:h1"]));
+});
+
+test("a task card leads its title with the task's icon in the task's colour, the neutral tone without one, and nothing when it has no icon (#2190)", async () => {
+  resetTaskIconLoaderForTests(async (names) => Object.fromEntries(names.map((name) => [name, [["path", { d: `M0 0h${name.length}`, key: name }]]])));
+  const tasks = [
+    { ...task("tinted", "assigned", [], "Let the operator pin one conversation above the column"), color: "teal", icon: "rocket" },
+    { ...task("suggested", "assigned", [], "Fix the crash when a lane closes"), color: "coral" },
+    { ...task("neutral", "assigned", [], "Restore /favicon.ico with the Delegatus emblem"), icon: "image" },
+    { ...task("bare", "assigned", [], "Hide the Hidden tray when it holds nothing"), color: "amber" },
+  ] as BoardTask[];
+  const { host } = mount({ files: [], tasks });
+  await sleep(10);
+  const row = (id: string) => q(host, `[data-phone-card="task:${id}"] [data-phone-card-title]`)!.parentElement!;
+  const icon = (id: string) => row(id).querySelector("[data-task-icon]") as unknown as HTMLElement | null;
+
+  /* Coloured: the stored icon, drawn, before the title, in the stripe's hue. */
+  expect(icon("tinted")?.getAttribute("data-task-icon")).toBe("rocket");
+  expect(icon("tinted")?.querySelector("svg")).not.toBeNull();
+  expect(icon("tinted")?.nextElementSibling?.hasAttribute("data-phone-card-title")).toBe(true);
+  expect(icon("tinted")?.style.color).toBe("#1a9e8f");
+  expect(icon("tinted")?.className).not.toMatch(/text-(secondary|muted)/);
+  /* The title's suggestion is tinted the same way. */
+  expect(icon("suggested")?.getAttribute("data-icon-source")).toBe("suggested");
+  expect(icon("suggested")?.style.color).toBe("#e07a5f");
+
+  /* Uncoloured: the neutral tone, no hue of its own. */
+  expect(icon("neutral")?.getAttribute("data-task-icon")).toBe("image");
+  expect(icon("neutral")?.style.color).toBe("");
+  expect(icon("neutral")?.className).toContain("text-secondary");
+
+  /* No icon: nothing drawn, not even the dashed placeholder; the title is the row's first child. */
+  expect(icon("bare")).toBeNull();
+  expect(row("bare").firstElementChild?.hasAttribute("data-phone-card-title")).toBe(true);
+  resetTaskIconLoaderForTests();
 });

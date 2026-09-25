@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
+import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { carryingTaskWorkLinks, pipelineWorkLinks } from "@/lib/forge/resolve";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
-import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipelines/engine";
+import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
+import { getPipeline, patchPipeline, type PipelineCloseReport, type PipelinePatchResult } from "@/lib/pipelines/engine";
 import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
 import { loadPipelines, pipelineRevision } from "@/lib/pipelines/store";
 import { loadTasks } from "@/lib/tasks/store";
@@ -19,7 +22,7 @@ export const dynamic = "force-dynamic";
 
 const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 
-const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review"]);
+const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 
 type PipelineApiError = ApiError & {
   code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
@@ -44,7 +47,13 @@ export async function GET(
   const { id } = await ctx.params;
   try {
     const pipeline = getPipeline(id);
-    if (!pipeline) return NextResponse.json({ error: "pipeline not found" }, { status: 404 });
+    if (!pipeline) {
+      /* #1835: a create queued during a handover was answered with this id. */
+      const queued = queuedPipelineCreationStatus(id);
+      return NextResponse.json(queued
+        ? { error: queuedPipelineCreationMessage(id, queued), code: queued.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused", queuedCreation: queued }
+        : { error: "pipeline not found" }, { status: 404 });
+    }
     /* #1695 C7 and graph slice 1: the digests a guarded graph edit names as
        `expectedStageDigest` — a stage's for override-stage and set-edge, the
        whole plan's for add-stage, remove-stage and reorder-stage. */
@@ -57,7 +66,7 @@ export async function GET(
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit; workLinks?: ResolvedWorkLinks; taskWorkLinks?: Record<string, ResolvedWorkLinks> } | PipelineApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit; convertedStages?: PipelinePatchResult["convertedStages"]; legacyReview?: PipelinePatchResult["legacyReview"]; workLinks?: ResolvedWorkLinks; taskWorkLinks?: Record<string, ResolvedWorkLinks> } | PipelineApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   let body: PatchPipelineRequest;
@@ -88,7 +97,16 @@ export async function PATCH(
       ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}),
     }, { status: result.status ?? 400 });
     if (CONTROLLER_ACTIONS.has(body.action)) requestPipelineTick();
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
+    /* The operator's answer to a decision is a request to the lane; an
+       agent's answer (named by its capability) is not recorded. */
+    if (body.action === "resolve-decision" && directOperatorActivityAuthority(req).ok) {
+      recordOperatorRequest(req, {
+        kind: "decision",
+        idempotencyKey: result.decisionAnswer ? `decision:${result.pipeline.id}:${result.decisionAnswer.clientRequestId}` : null,
+        project: result.pipeline.project,
+      });
+    }
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.reviewAcceptance ? { reviewAcceptance: result.reviewAcceptance, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}), ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
       workLinks: pipelineWorkLinks(result.pipeline),
       /* The task cards that aggregate this pipeline redraw from the same answer. */
       taskWorkLinks: carryingTaskWorkLinks(result.pipeline, loadTasks(), loadPipelines()),

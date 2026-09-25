@@ -200,7 +200,11 @@ export type SeatTickWakeReasonKind =
   /** A deployment the seat itself started with deploy_exact_sha reached a
       terminal phase (#2063). The seat ended its turn so the promotion could
       replace its host, and this is the wake that brings it back, once. */
-  | "deploy-settled";
+  | "deploy-settled"
+  /** A lane's stage or a spawned child holds a tool permission request nobody
+      has answered (#2215). Unattended ones are denied at once, so one standing
+      here is a request the automatic answer could not settle. */
+  | "permission-request";
 
 export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "lane-event",
@@ -211,6 +215,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "child-terminal",
   "own-lane-settled",
   "deploy-settled",
+  "permission-request",
 ];
 
 export interface SeatTickWakeReason {
@@ -244,7 +249,7 @@ export interface SeatTickItem {
   /** The lane and settled state this visible line announces on delivery. */
   laneAnnouncement?: string;
   /** `provisioning` is the outcome of the seat's own create call (#1799). */
-  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy";
+  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission";
   id: string;
   label: string;
   /** A settled child's readable transcript (#1881): the controller attaches
@@ -416,6 +421,9 @@ export interface SeatTickActivity {
    * which is never read as an open turn.
    */
   turnState?: LifecycleTurnState;
+  /** The tool permission request the turn waits on, when `reason` is
+      `permission_request` (#2215). */
+  permission?: { tool: string; command: string | null; reason: string | null };
 }
 
 /** The active seat as the check sees it: durable identity, the registry's turn
@@ -527,6 +535,10 @@ export interface SeatTickOwnLaneInput {
   /** Only on `needs_review` (#1938): the last review's verdict, the head it
       judged and the head nobody has reviewed. */
   review?: import("@/lib/pipelines/failEdgeBudget").PipelineReviewSummary;
+  /** The lane finishes its task and the move to Done waits on this many other
+      open pipelines on the task (#2187 §5.3), so a seat that marked the wrong
+      lane sees it. */
+  taskWaits?: number;
 }
 
 export interface SeatTickTaskInput {
@@ -589,6 +601,14 @@ export interface SeatTickPullRequestInput {
   pipelineId: string;
   pipelineTitle: string;
   updatedAt: string | null;
+  /** The lane completed on a spent review budget and its last fix was never
+      re-reviewed (#2187 §3.5), so the seat reads that before it merges. */
+  lastFixUnreviewed?: true;
+  /** The merge runner stopped this lane's merge (#2187 §4.6), in its words. */
+  mergeBlocked?: string;
+  /** The lane finishes its task and the move to Done waits on this many other
+      open pipelines on the task (#2187 §5.3). */
+  taskWaits?: number;
 }
 
 /**
@@ -1087,6 +1107,10 @@ export interface SeatTickCheckInput {
   project: string;
   now: number;
   seat: SeatTickSeatInput | null;
+  /** Read only while {@link seat} is null: whether an orchestrator ever held
+      the project (#2170). False for a project whose seat was never designated,
+      which raises no «no active seat» card. Absent reads as true. */
+  seatEverHeld?: boolean;
   pipelines: readonly SeatTickPipelineInput[];
   tasks: readonly SeatTickTaskInput[];
   /** Events after {@link SeatTickProjectState.eventsThrough}, oldest first. */

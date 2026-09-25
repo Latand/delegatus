@@ -33,6 +33,28 @@ async function pathFailure(path: string): Promise<ImageFailure> {
   }
 }
 
+/* How the card and the viewer name a picture and where its bytes load from.
+   A loaded picture's natural size stands in for dimensions the transcript did
+   not carry. */
+export function imageCardText(source: ImageSource, natural: { w: number; h: number } | null = null) {
+  const width = source.w ?? natural?.w;
+  const height = source.h ?? natural?.h;
+  const dims = width && height ? `${width}×${height}` : "";
+  /* An `<img>` cannot read a file's length, and a request only for a byte
+     count is not worth it, so a picture from disk shows its dimensions only. */
+  const kb = source.data !== undefined ? Math.round((source.bytes ?? (source.data.length * 3) / 4) / 1024) : source.bytes !== undefined ? Math.round(source.bytes / 1024) : null;
+  const size = kb === null ? "" : `${kb} ${tr("common.kb")}`;
+  const name = source.path !== undefined ? artifactBasename(source.path) : "";
+  return {
+    dims,
+    size,
+    name,
+    caption: [dims, size].filter(Boolean).join(" · "),
+    label: `${tr("render.image")} ${dims || name}`.trim(),
+    src: source.path !== undefined ? artifactContentUrl(source.path) : `data:${source.media};base64,${source.data}`,
+  };
+}
+
 /**
  * Every raster in the feed: a pasted or attached picture, and every picture
  * an agent looked at (#1498, #2075). It opens as a thumbnail; a tap opens the
@@ -46,22 +68,13 @@ async function pathFailure(path: string): Promise<ImageFailure> {
  * shows that picture from the transcript's own bytes, so a pill there would
  * only flash and vanish.
  */
-export function ImageCard({ inset = false, quietOutsideRoots = false, ...source }: ImageSource & { inset?: boolean; quietOutsideRoots?: boolean }) {
+export function ImageCard({ inset = false, quietOutsideRoots = false, at, ...source }: ImageSource & { inset?: boolean; quietOutsideRoots?: boolean; at?: number }) {
   const [view, setView] = useState<ImageView>("thumb");
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [failure, setFailure] = useState<ImageFailure | null>(null);
   const isMobile = useIsMobile();
   const path = source.path;
-  const width = source.w ?? natural?.w;
-  const height = source.h ?? natural?.h;
-  const dims = width && height ? `${width}×${height}` : "";
-  /* An `<img>` cannot read a file's length, and a request only for a byte
-     count is not worth it, so a picture from disk shows its dimensions only. */
-  const kb = source.data !== undefined ? Math.round((source.bytes ?? (source.data.length * 3) / 4) / 1024) : source.bytes !== undefined ? Math.round(source.bytes / 1024) : null;
-  const size = kb === null ? "" : `${kb} ${tr("common.kb")}`;
-  const caption = [dims, size].filter(Boolean).join(" · ");
-  const name = path !== undefined ? artifactBasename(path) : "";
-  const label = `${tr("render.image")} ${dims || name}`.trim();
+  const { dims, size, name, caption, label, src } = imageCardText(source, natural);
   const gutter = inset ? "" : "ml-9 ";
 
   if (failure === "outside" && quietOutsideRoots) return null;
@@ -98,7 +111,6 @@ export function ImageCard({ inset = false, quietOutsideRoots = false, ...source 
     );
   }
 
-  const src = path !== undefined ? artifactContentUrl(path) : `data:${source.media};base64,${source.data}`;
   const onLoad = (event: SyntheticEvent<HTMLImageElement>) => {
     const { naturalWidth, naturalHeight } = event.currentTarget;
     if (naturalWidth && naturalHeight && (naturalWidth !== natural?.w || naturalHeight !== natural?.h)) setNatural({ w: naturalWidth, h: naturalHeight });
@@ -129,7 +141,7 @@ export function ImageCard({ inset = false, quietOutsideRoots = false, ...source 
         </button>
       </div>
       {view === "full" ? (
-        <Lightbox src={src} alt={label} caption={caption || name} onClose={() => setView("thumb")} />
+        <Lightbox src={src} alt={label} caption={caption || name} at={at} onClose={() => setView("thumb")} />
       ) : null}
     </div>
   );

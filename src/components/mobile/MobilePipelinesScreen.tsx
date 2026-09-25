@@ -1,7 +1,7 @@
 "use client";
 
 import { EyeOff } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { ChevronDown, ChevronRight } from "@/components/icons";
 import { useLocale } from "@/lib/i18n";
@@ -9,6 +9,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 import { pipelineHiddenFromBoard } from "./mobileBoardModel";
+import { useMobileScrollMemory } from "./mobileNav";
 import { MobilePipelineCard } from "./MobilePipelineCard";
 import { MobileBarTitle, MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { pendingPipelineActs, useClosingPipelines, type PendingPipelineActs } from "./MobilePipelineScreen";
@@ -67,6 +68,9 @@ export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpe
   const { t } = useLocale();
   const flowsById = useMemo(() => new Map((flows ?? []).map((flow) => [flow.id, flow] as const)), [flows]);
   const [showCompleted, setShowCompleted] = useState(false);
+  /* Back to the list lands where the operator left it (#2105). */
+  const list = useRef<HTMLDivElement>(null);
+  useMobileScrollMemory(list, { kind: "pipelines" });
   /* The operator is told a close happened the moment they take it: the row
      goes on the tap, not when the receipt's four seconds run out, and stays
      gone until the server has answered the close. */
@@ -107,7 +111,7 @@ export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpe
       host={host}
       renderSheet={renderSheet}
     >
-      <div data-mobile2-pipelines className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pb-3">
+      <div ref={list} data-mobile2-pipelines className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pb-3">
         {model.needs.length ? (
           <>
             <Section label={t("mobile2.pipelines.needsYou")} count={model.needs.length} id="needs" />

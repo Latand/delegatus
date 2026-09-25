@@ -6,6 +6,7 @@ import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } fr
 import { effortTierLabel } from "@/components/builderCopy";
 import { requestAccountPanel } from "@/lib/accounts/openPanel";
 import { ENGINE_MODELS } from "@/lib/agent/models";
+import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { HealthFailure, HealthFailureCode, HealthRow, HealthRowId, HealthRun, HealthRuntime } from "@/lib/onboarding/healthCheck";
 
@@ -189,7 +190,7 @@ function FailureBlock({ run, row, onGoEngines, onLeave, onDetailsOpen }: { run: 
     }
     if (action === "agent" && found.agentPath) {
       onLeave();
-      window.location.hash = `#f=${encodeURIComponent(found.agentPath)}`;
+      navigateToFragment(`#f=${encodeURIComponent(found.agentPath)}`);
       return;
     }
     void navigator.clipboard?.writeText(healthCopyText(run, row)).then(() => setCopied(true), () => setCopied(false));

@@ -543,6 +543,37 @@ export function readBridgeReportLog(): BridgeReportLogV1 {
   return readLog();
 }
 
+/** The most one page of the report log holds (#2146). */
+export const BRIDGE_REPORT_PAGE_MAX = 100;
+
+/**
+ * One page of a project's reports, newest first, for the operator's report log
+ * (#2146). `inProject` decides which rows belong, because a row keeps the key
+ * its project had when it was written. `before` pages back by seq.
+ *
+ * A read and nothing else: no channel is opened and no cursor moves, so the
+ * voice relay's own delivery is exactly what it was before anybody looked.
+ * Legacy confirmation rows are retired authorization state and are left out.
+ */
+export function pageBridgeReports(options: {
+  inProject: (project: string) => boolean;
+  before?: number | null;
+  limit?: number;
+}): { reports: BridgeReportV1[]; nextBefore: number | null } {
+  const limit = Math.max(1, Math.min(BRIDGE_REPORT_PAGE_MAX, Math.floor(options.limit ?? 30)));
+  const before = typeof options.before === "number" && Number.isFinite(options.before) ? options.before : Number.POSITIVE_INFINITY;
+  const matching = readLog().reports.filter((report) =>
+    report.seq < before
+    && report.class !== LEGACY_CONFIRMATION_CLASS
+    && typeof report.project === "string"
+    && options.inProject(report.project));
+  const reports = matching.slice(-limit).reverse();
+  return {
+    reports,
+    nextBefore: matching.length > limit ? reports.at(-1)!.seq : null,
+  };
+}
+
 /** One serialized read-modify-write of the log. `mutate` edits the log it is
     handed and says whether it changed anything; only changed rows are written,
     and an unchanged log writes nothing, so its revision stays put. */

@@ -4,6 +4,7 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { tickFlows } from "@/lib/flows/engine";
+import { scheduleAutoMerge } from "@/lib/forge/autoMerge";
 import { scheduleForgeSweep } from "@/lib/forge/sweep";
 import { loadTasks } from "@/lib/tasks/store";
 import { completedFileScan } from "@/lib/scanner/scanCache";
@@ -52,6 +53,8 @@ export interface FlowPipelineControllerPorts {
   publishHeartbeat?: (heartbeat: FlowPipelineControllerHeartbeat) => void;
   /** Fire-and-forget PR state refresh (#2059); it gates its own intervals. */
   sweepForgeLinks?: () => void;
+  /** Fire-and-forget merge runner (#2187 §4.4); it paces its own reads. */
+  sweepAutoMerge?: () => void;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -101,6 +104,7 @@ function productionPorts(): FlowPipelineControllerPorts {
     tickFlows,
     publishHeartbeat: writeFlowPipelineControllerHeartbeat,
     sweepForgeLinks: () => scheduleForgeSweep({ loadPipelines, loadTasks }),
+    sweepAutoMerge: () => scheduleAutoMerge({ loadPipelines }),
   };
 }
 
@@ -124,6 +128,7 @@ export class FlowPipelineController {
       clearTimeout: ports.clearTimeout ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)),
       publishHeartbeat: ports.publishHeartbeat ?? (() => undefined),
       sweepForgeLinks: ports.sweepForgeLinks ?? (() => undefined),
+      sweepAutoMerge: ports.sweepAutoMerge ?? (() => undefined),
       log: ports.log ?? ((message, error) => {
         if (error === undefined) console.error(message);
         else console.error(message, error);
@@ -204,6 +209,13 @@ export class FlowPipelineController {
       this.ports.sweepForgeLinks();
     } catch (error) {
       this.ports.log("[flow pipeline controller] forge link sweep failed to start", error);
+    }
+    /* Beside it, the same way: `gh` runs with no lock held, and each result
+       is written under the pipeline lock against a fresh read. */
+    try {
+      this.ports.sweepAutoMerge();
+    } catch (error) {
+      this.ports.log("[flow pipeline controller] merge runner failed to start", error);
     }
     const blocked = [...this.activePhases.entries()]
       .sort((left, right) => left[1].startedAt - right[1].startedAt)[0];

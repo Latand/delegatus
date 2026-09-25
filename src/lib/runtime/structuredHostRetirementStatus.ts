@@ -11,8 +11,8 @@ const REPORT_BYTES = 1024 * 1024;
 export const RETIREMENT_SCAN_LIMIT = 100;
 export const RETIREMENT_MAX_PAGES = 20;
 type Subject = ReturnType<SqliteAgentRegistryStore["retirementSubject"]>;
-type Row = { key: string; conversationId: string | null; clause?: string; reason?: string; error?: string; undetermined?: true; via?: string };
-type Report = { version: 1; startedAt: string; finishedAt: string; retired: Row[]; refused: Row[]; failed: Row[] };
+type Row = { key: string; conversationId: string | null; clause?: string; reason?: string; error?: string; undetermined?: true; via?: string; flags?: unknown };
+type Report = { version: 1; startedAt: string; finishedAt: string; retired: Row[]; refused: Row[]; failed: Row[]; refusedByFlag?: unknown };
 export type RetirementStatusRequest = { project: string; limit?: number; cursor?: string };
 export type RetirementStatusSources = {
   readReport(): Buffer;
@@ -55,6 +55,25 @@ function parseReport(bytes: Buffer): Report {
   return value;
 }
 
+function flagNames(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((flag) => typeof flag === "string") ? value.slice(0, 32).map((flag) => flag.slice(0, 200)) : null;
+}
+
+/** The sweep's `flag -> count` over every `no-active-flags` refusal (#2137).
+    Flag names and counts only, never a host, so the whole sweep is shown to a
+    caller scoped to one project: a flag nobody classified refuses every host
+    that carries it, and a project whose own hosts are elsewhere in the report
+    would otherwise see a stall it cannot name. Null for a report written before
+    the count existed. */
+function refusedByFlag(value: unknown): Record<string, number> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const counts: Record<string, number> = {};
+  for (const [flag, count] of Object.entries(value).slice(0, 64)) {
+    if (typeof count === "number" && Number.isSafeInteger(count) && count >= 0) counts[flag.slice(0, 200)] = count;
+  }
+  return counts;
+}
+
 /** The latest sweep is the authority behind the seat-tick signal. The journal
     discards individual refusals; searching it cannot reconstruct their targets.
     A report's session key survives, but it records no operation or PID/start
@@ -64,7 +83,7 @@ export function projectRetirementStatus(request: RetirementStatusRequest, source
   const requestedAt = new Date(sources.now()).toISOString();
   const limit = Math.max(1, Math.min(100, Number.isFinite(request.limit) ? Math.trunc(request.limit!) : 25));
   const base = { kind: "host-retirement" as const, project: request.project, requestedAt, limit,
-    source: "latest-retirement-report" as const, maxPages: RETIREMENT_MAX_PAGES };
+    source: "latest-retirement-report" as const, maxPages: RETIREMENT_MAX_PAGES, refusedByFlag: null as Record<string, number> | null };
   let bytes: Buffer;
   let report: Report;
   try { bytes = sources.readReport(); report = parseReport(bytes); }
@@ -121,6 +140,7 @@ export function projectRetirementStatus(request: RetirementStatusRequest, source
       || !conversation.generations.some((generation) => generation.id === key[2])) { scopeUnknown = true; continue; }
     if (project !== request.project) continue;
     const observedAt = new Date(sources.now()).toISOString();
+    const flags = group === 0 ? flagNames(row.flags) : null;
     const result = group === 0 ? row.undetermined === true ? "undetermined" : "refused" : group === 1 ? "failed" : "retired";
     const entry = subject.entry?.key.engine === key[1] && subject.entry.key.sessionId === key[2] ? subject.entry : null;
     const process = entry?.structuredHost?.process;
@@ -130,6 +150,7 @@ export function projectRetirementStatus(request: RetirementStatusRequest, source
       identityReason: "the sweep report does not record an operation ID or a pinned process identity",
       phase: group === 0 ? "evaluation" : "termination", result,
       clause: typeof row.clause === "string" ? row.clause : null,
+      ...(flags ? { flags } : {}),
       reason: String(row.reason ?? row.error ?? "retirement recorded by the sweep").slice(0, 2000),
       startedAt: report.startedAt, finishedAt: report.finishedAt, timestampScope: "sweep", observedAt,
       current: { source: "registry", observedAt, generationId: key[2], conversationGenerationId: conversation.generations.at(-1)?.id ?? null,
@@ -140,7 +161,7 @@ export function projectRetirementStatus(request: RetirementStatusRequest, source
   }
   const exhausted = offset < total && page + 1 >= RETIREMENT_MAX_PAGES;
   const hasMore = offset < total && !exhausted;
-  return { ...base, status: scopeUnknown || exhausted ? "unknown" : "observed", observedAt: new Date(sources.now()).toISOString(),
+  return { ...base, refusedByFlag: refusedByFlag(report.refusedByFlag), status: scopeUnknown || exhausted ? "unknown" : "observed", observedAt: new Date(sources.now()).toISOString(),
     capturedAt: report.finishedAt, ageMs: Math.max(0, sources.now() - Date.parse(report.finishedAt)), refreshSucceeded: true,
     refreshMeaning: "report reread; no sweep requested", items, hasMore,
     cursor: hasMore ? Buffer.from(JSON.stringify({ fingerprint, offset, page: page + 1 })).toString("base64url") : null,

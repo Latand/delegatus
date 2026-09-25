@@ -117,12 +117,12 @@ export function draftOutcome(pipeline: Pipeline, stageId: string, draft: { text:
   return "undelivered";
 }
 
-export type PipelineActionKind = "pause" | "resume" | "retry-stage" | "skip-stage" | "close" | "continue-review";
+export type PipelineActionKind = "pause" | "resume" | "retry-stage" | "skip-stage" | "close" | "continue-review" | "accept-head" | "retry-merge" | "dismiss";
 
 export interface PipelineActionOption {
   action: PipelineActionKind;
   /** Why the engine would refuse it now, or null when it would accept it. */
-  refusal: "draft" | "ended" | "no-decision" | "no-review" | "other-stage" | null;
+  refusal: "draft" | "ended" | "no-decision" | "no-review" | "other-stage" | "no-merge" | null;
   /** The stage retry and skip act on: the one the pipeline waits on. */
   stageId: string | null;
   /** The `n` of that stage's latest own attempt, which retry and skip expect; `0` when it has none yet. */
@@ -134,7 +134,8 @@ export interface PipelineActionOption {
  * own preconditions would give (`patchPipeline`): a draft is only started or
  * edited elsewhere, an ended pipeline takes nothing, pause and resume swap,
  * retry and skip apply to the stage a `needs_decision` pipeline waits on, and
- * one more review round (`continue-review`, #1938) to a `needs_review` one.
+ * one more review round (`continue-review`, #1938) and taking the head as it
+ * is (`accept-head`, #2187) to a `needs_review` one.
  */
 export function pipelineActionOptions(pipeline: Pipeline): PipelineActionOption[] {
   const ended = pipelineEnded(pipeline);
@@ -150,6 +151,11 @@ export function pipelineActionOptions(pipeline: Pipeline): PipelineActionOption[
     { action: "skip-stage", refusal: general ?? (decisionStage ? null : "no-decision"), stageId: decisionStage, attempt },
     { action: "close", refusal: general, stageId: null, attempt: null },
     { action: "continue-review", refusal: general ?? (pipeline.state === "needs_review" ? null : "no-review"), stageId: null, attempt: null },
+    { action: "accept-head", refusal: general ?? (pipeline.state === "needs_review" ? null : "no-review"), stageId: null, attempt: null },
+    /* A completed lane's stopped merge (#2187 §4.6): tried again, or left
+       with its PR open, which is a dismissal of the need. */
+    { action: "retry-merge", refusal: pipeline.state === "completed" && (pipeline.merge?.state === "blocked" || pipeline.merge?.state === "cancelled") ? null : "no-merge", stageId: null, attempt: null },
+    { action: "dismiss", refusal: draft ? "draft" : pipeline.state === "closed" ? "ended" : null, stageId: null, attempt: null },
   ];
 }
 
@@ -163,6 +169,8 @@ export function actionObserved(action: PipelineActionKind, stageId: string | nul
   if (action === "pause") return now.state === "paused";
   if (action === "resume") return now.state !== "paused" && !pipelineEnded(now);
   if (action === "close") return now.state === "closed";
-  if (action === "continue-review") return now.state !== "needs_review";
+  if (action === "continue-review" || action === "accept-head") return now.state !== "needs_review";
+  if (action === "retry-merge") return now.merge !== undefined && now.merge.state !== "blocked" && now.merge.state !== "cancelled";
+  if (action === "dismiss") return Boolean(now.dismissedAt);
   return now.state !== "needs_decision" || now.cursor?.stageId !== stageId;
 }

@@ -26,11 +26,13 @@ import {
   MAX_STAGE_REPORT_SUMMARY_CHARS,
   MIN_STARTED_PIPELINE_STAGES,
 } from "@/lib/pipelines/limits";
-import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
+import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
+import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { TASK_COLORS } from "@/lib/tasks/types";
+import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
 import {
   MAX_REPLY_LABEL_CHARS, MAX_REPLY_SUGGESTIONS, MAX_REPLY_TEXT_BYTES, MIN_REPLY_SUGGESTIONS,
 } from "@/lib/suggestions/types";
@@ -77,6 +79,7 @@ export const MCP_TOOL_NAMES = [
   "lifecycle_events",
   "request_attention",
   "suggest_replies",
+  "dismiss_attention",
   "bridge_report",
   "bridge_directive",
   "get_orchestrator",
@@ -86,6 +89,9 @@ export const MCP_TOOL_NAMES = [
   "seat_tick_settings",
   "account_project_binding",
   "account_limits",
+  "telegram_bot_chats",
+  "telegram_bot_send",
+  "telegram_bot_messages",
 ] as const;
 
 export type McpToolName = typeof MCP_TOOL_NAMES[number];
@@ -122,6 +128,10 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      clientRequestId must answer from the receipt rather than re-offer drafts
      under a question the operator has since answered. */
   "suggest_replies",
+  /* Clears a needs-you flag the operator is shown, durably and attributed. A
+     replayed clientRequestId must answer with the first result rather than
+     clear again something that asked anew since. */
+  "dismiss_attention",
   /* Appends to the durable bridge log, so a replayed clientRequestId must return
      the original receipt rather than append the report a second time. */
   "bridge_report",
@@ -143,6 +153,9 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      (#1279), and the record it answers with outlives this process either way:
      a replayed clientRequestId must answer with what the first call recorded. */
   "account_project_binding",
+  /* Posts into a Telegram chat. A replayed clientRequestId must answer with
+     the message ids the first call posted, never post a second time. */
+  "telegram_bot_send",
 ]);
 
 /**
@@ -181,7 +194,7 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
 
 function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs): boolean {
   if (INTERRUPTED_RECOVERABLE_TOOLS.has(toolName)) return true;
-  if (toolName === "pipeline_action") return ["resolve-decision", "continue-review", "convert-legacy-review", "revert-legacy-review"].includes(String(args.action));
+  if (toolName === "pipeline_action") return ["resolve-decision", "continue-review", "accept-head", "convert-legacy-review", "revert-legacy-review"].includes(String(args.action));
   if (toolName !== "conversation_action") return false;
   return args.action === "archive" || args.action === "unarchive";
 }
@@ -306,6 +319,10 @@ export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpB
   ],
   list_conversations: [
     { path: ["limit"], min: 1, max: 100, fallback: 50 },
+  ],
+  telegram_bot_messages: [
+    { path: ["limit"], ...BOT_MESSAGES_LIMIT },
+    { path: ["maxChars"], ...BOT_MESSAGES_MAX_CHARS },
   ],
   search_transcripts: [
     { path: ["limit"], min: 1, max: 100, fallback: 20 },
@@ -2807,6 +2824,12 @@ export function createMcpToolService(
           const taskCode = (typedTool === "create_task" || typedTool === "update_task")
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
             && error.details.code.startsWith("TASK_") ? error.details.code : null;
+          /* A Telegram bot refusal answers with the bot's own code and its own
+             retryable: a generic retryable tool_failed after send_uncertain
+             would invite the double post the bot refuses to risk. */
+          const botRefusal = typedTool === "telegram_bot_send" && error instanceof McpToolRefusal
+            && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
+            ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an
           // uncertain dispatch as unknown. Cache that answer under the original
@@ -2821,9 +2844,9 @@ export function createMcpToolService(
             : failure(
             typedTool,
             requestId,
-            taskCode ?? "tool_failed",
+            taskCode ?? botRefusal?.code ?? "tool_failed",
             error instanceof Error ? error.message : String(error),
-            taskCode === null,
+            botRefusal ? botRefusal.retryable : taskCode === null,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
@@ -2920,19 +2943,22 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Create a durable board task.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
-    "Set `icon` to the lucide icon name that says what the task is about (bug, smartphone, rocket, search-check), so the card reads at a glance.",
+    "Pass `icon` (a lucide icon name) and `color` on every task you create, both picked by the rule below, so the card reads at a glance.",
+    renderTaskColorRule(),
   ].join(" "),
   update_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Update a durable board task.",
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
     "`refine` writes only the human part, as it always has.",
-    "`icon` sets the card's lucide icon; give one to a task that has none.",
+    "To change one line of `details`, send `replaceLine`, `removeLine` or `appendLine` instead of the whole field; the answer carries detailsLength and the revision, never the field.",
+    "`icon` and `color` set the card's lucide icon and colour; give both to a task you touch that lacks them, picked by the colour and icon rule in create_task's description.",
   ].join(" "),
   create_pipeline: [
     "Create a Delegatus pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
     "`taskIds` binds the pipeline to existing board tasks in the same call (#1720): every stage launch reads that list and joins those tasks, and a pipeline created without it is given a placeholder task of its own.",
-    "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail` ({to, maxRounds?, onExhausted?}). A spent fail edge hands its last findings to `to` once more and then follows the failing stage's pass edge without re-reviewing (`onExhausted: advance`, the default); `onExhausted: park` stops for the operator instead. The handoff happens once per stage; a later fail of the same stage parks. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
+    "`finishesTask` marks this pipeline as the one that finishes its tasks (#2187): true for every linked task, or a list of ids from taskIds (others are dropped and named in `finishesTaskDropped`). With the project's merge setting on, a marked lane's task moves to Done when its PR merges; with it off, when the lane completes. Either way it waits for every other started pipeline on the task to end. Default off; set it only when this lane's PR delivers the whole task.",
+    "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail` ({to, maxRounds?, onExhausted?}). What happens when the last review fails is `onExhausted`. advance (default): the fix stage (`to`) takes the last findings and the lane continues along the failing stage's pass edge, or completes, without re-reviewing. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. The handoff happens once per stage; a later fail of the same stage parks. A new `review-loop` stage is stored as a read-only reviewer and a fix stage with an advance fail edge; the answer's `convertedStages` names each pair as {reviewer, fixer}, and `legacyReview` lists any stage kept as sent with the refusals that kept it. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
     "A review-loop stage reviews the session of the run stage that reaches it, so it must be pass-reachable from a run stage through `next` edges — array order alone reaches nothing. review-loop stages are always read-only, may not define `onFail`, and take their engine/model/effort from their role (the registry reviewer preset runs on Codex) unless the stage overrides them.",
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
     "A read-only stage may name repository-relative outputs. It can write those paths, while the controller refuses undeclared worktree changes and agent-created commits and records only the declared outputs.",
@@ -2943,7 +2969,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
     "A refusal that happened before anything was admitted — the pipeline registry lock was never taken — does not consume the `clientRequestId` (#1766): it answers `retryable: true` with `outcome: not-executed` and `nextAction: retry-same-key`, and repeating the identical call under the SAME id runs the create instead of replaying the refusal. Every other refusal keeps its receipt, so a repeat replays it.",
   ].join(" "),
-  pipeline_action: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers an acknowledgement — pipelineId, state, cursor, closedAt, stageDigests and graphDigest — plus `close` for a close and `graphEdit` for a graph edit; get_pipeline reads the full record. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | park}; the last two apply to fail edges only, and a fail edge freezes once traversed. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
+  pipeline_action: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers an acknowledgement — pipelineId, state, cursor, closedAt, stageDigests and graphDigest — plus `close` for a close and `graphEdit` for a graph edit; get_pipeline reads the full record. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; the last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings and the lane continues or completes. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage with a `review-loop` stage stores it as a read-only reviewer and a fix stage copied from its predecessor, joined by an advance fail edge, and answers convertedStages [{reviewer, fixer}]; when that needs a guess (no read-write predecessor, no free stage slot) the stage is stored as sent and the answer carries legacyReview [{stageId, refusals}]. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Three fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], and a one-or-two-sentence summary.",
@@ -2969,17 +2995,17 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_flow: "Read one implement-review flow by durable id.",
   flow_action: "Apply a supported action to an implement-review flow. agent-decision durably submits an owner decision for one exact revision, HEAD, round, turn and optional pipeline stage attempt. Use submit-review, continue-fixing, stop or completed with a reason. Accepted decisions await authoritative completion of that same turn. Replay the original clientRequestId to recover its receipt. completed records a comment outcome and never grants review approval.",
   list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
-  conversation_action: "Control or archive Delegatus conversations. interrupt, kill, resume, compact, and dialog-key accept one conversation by id, transcript path, or selected-card reference. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
+  conversation_action: "Control or archive Delegatus conversations. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
   list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
-  deployment_status: "Read Delegatus deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Delegatus-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
-  resources: "Read system and Delegatus-owned agent resource usage. freshness reports requestedAt, system capturedAt, ageMs, cache source and refreshSucceeded from the existing collector diagnostic. A failed refresh can serve an older capture; null means no refresh outcome was established.",
+  deployment_status: "Read Delegatus deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Delegatus-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. `refusedByFlag` counts, across the whole sweep and every project, the flags behind each no-active-flags refusal, and a refused item names its own `flags`. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
+  resources: "Read system memory, Delegatus-owned agent sessions and Delegatus's own processes. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. viewer is null with viewerUnavailable \"not-the-viewer\" when this tool is served by a stdio MCP server beside the agent, which cannot measure the web server's tree; the HTTP transport answers it from the Viewer itself.",
   conversation_migration: "Select an explicit account for a structured conversation, automatically reseat by quota, retry, roll back or cancel a migration, withdraw an unclaimed account switch, or send messages a failed switch held on the current account. Explicit selection uses the browser account picker's semantics and never substitutes another account.",
-  agent_activity: "Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline} and drops the transcript paths, host detail and the selection and timing reports.",
+  agent_activity: "Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} when the turn waits on an unanswered tool permission request (reason permission_request), and drops the transcript paths, host detail and the selection and timing reports.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
-    "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were.",
+    "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were. On a phone the request shows as a notice; the phone's view never moves. With no desktop to move and a phone open, the call answers at once with delivered: \"notice\" and no handoff.",
     `Targets are typed and discriminated by \`kind\`, one shape per kind: ${FOCUS_TARGET_SHAPES.map((shape) => `${shape.kind} — ${shape.example}`).join("; ")}.`,
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
@@ -2990,7 +3016,12 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
     "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
   ].join(" "),
-  bridge_report: "Append one bounded report to the durable bridge log for the voice gateway to relay. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session.",
+  dismiss_attention: [
+    "Clear a needs-you flag the operator is shown, without answering anything (docs/design/needs-attention.md): a conversation's question, plan, prompt or undelivered message, a lane parked on a decision or a spent review budget, or everything on a task's card stops raising needs-you until something newer asks. Nothing else moves \u2014 no question is answered, no lane changes state, no message is dropped \u2014 and the card says who cleared it.",
+    "Authority is the same as request_attention's: the operator's own root/gateway session or the target project's designated orchestrator seat. A worker or unidentified caller is refused (DISMISS_NOT_PERMITTED) with nothing recorded, so a stage agent cannot clear its own question off the operator's board.",
+    "Targets: { kind: \"conversation\", conversationId | path }, { kind: \"pipeline\", pipelineId }, or { kind: \"task\", taskId } for its conversations and the lanes filed under it. undo: true brings back what was cleared. The answer lists what was dismissed and what was alreadyClear (a lane that asks nothing, one already cleared, an undo of nothing), neither of which is an error. Attributed to the calling session on the server; idempotent by clientRequestId. pipeline_action dismiss/undismiss is the same write.",
+  ].join(" "),
+  bridge_report: "Append one bounded report to the durable bridge log for the voice gateway to relay. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
   bridge_directive: "Relay the user's intent to the designated manager. The recipient and the delivery id are derived server-side, so a retry of the same root turn is one instruction, never two.",
   get_orchestrator: "Read a project's designated orchestrator: designation, health and activity, model and prompt version, transcript size, message/tool/compaction counts, context usage against its model's configured window (clearly labelled when estimated), predecessor lineage, and a bounded rotation recommendation — STRONGLY_RECOMMEND_ROTATION once usage reaches the configured threshold. Compact by default: the seat record without its mandate and role table, and counts for intentHistory and lineage; full:true returns them whole. Words only: it never rotates, creates, or interrupts anything itself.",
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
@@ -3014,6 +3045,23 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
   account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
+  telegram_bot_chats: [
+    "List the chats the operator's connected Telegram bot knows: per chat `chat` (the alias, else the chat id — the value the other telegram_bot_* tools take), `title`, `type`, `isForum`, `member`, `postAllowed` with `postRefusal` in words when false, `seesAllMessages` with `visibilityNote`, `lastMessageAt` and `storedMessages`; plus the bot's `receiving` state and note.",
+    "A chat appears once the bot has been added to it or has received a message there. Only chats the operator allowlisted with an alias accept posts. Left or removed chats are hidden unless includeInactive is true.",
+    "With no bot connected the answer is still ok, with `connected: false` and a note. Every answer carries `limits`: " + TELEGRAM_BOT_LIMITS.join(" "),
+  ].join(" "),
+  telegram_bot_send: [
+    "Post a message through the operator's Telegram bot into a chat the operator allowlisted — for example a report into a team group. `chat` is the alias (or chat id) from telegram_bot_chats.",
+    "`format` is plain (default) or html (Telegram's HTML subset: b, i, u, s, code, pre, a, blockquote, tg-spoiler). Plain text over 4096 characters is split into up to 4 messages; html over 4096 is refused. `replyToMessageId` replies to a message in that chat, `topicId` posts into a forum topic, `silent` sends without a notification.",
+    "The post is attributed in Delegatus to your conversation, resolved server-side. A chat outside the allowlist is refused before anything is sent (chat_not_allowed, bot_not_in_chat, chat_unknown, bot_not_connected); Telegram's own refusals come back as forbidden (blocked, removed, or a user who never wrote to the bot), format_invalid, or rate_limited with retryAfterSeconds.",
+    "A refusal answers ok:false with the bot's code as `code` and `retryable` saying whether a retry under a NEW clientRequestId may help (true only for rate_limited, network_failed, timed_out, telegram_failed); send_partial adds `details.sentMessageIds`.",
+    "Idempotent by clientRequestId: a repeat answers the first post's message ids; a repeat of a send that never finished, or one whose connection was cut or timed out, answers send_uncertain (not retryable) instead of posting twice.",
+  ].join(" "),
+  telegram_bot_messages: [
+    "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
+    "`chat` is the alias or chat id from telegram_bot_chats; reading is not limited to allowlisted chats. Page with `limit` and the answer's `nextCursor`; `since` (ISO time, inclusive) bounds how far back; `maxChars` truncates each text (`truncated: true`). Messages the bot posted appear with direction out and `sentBy` naming the posting conversation.",
+    "`storedSince` is the oldest stored message; nothing older exists locally. Every answer carries `limits` and the chat's `visibilityNote`, which says whether the bot sees every message there.",
+  ].join(" "),
   rotate_orchestrator: "Explicitly hand a project's orchestrator seat to a fresh successor: bounded handoff (predecessor transcript reference, open tasks, optional notes), atomic designation switch, manager-authority-only revocation of the predecessor, bidirectional lineage. Callable from any session, including the seat rotating itself; the answer and the durable record both name who triggered it. Never triggered automatically.",
 };
 
@@ -3078,7 +3126,7 @@ const pipelineStageSchema = z.object({
   id: z.string().regex(/^\s*[A-Za-z0-9_-]{1,64}\s*$/u)
     .describe("Stage id, unique within the pipeline: 1–64 characters of A–Z a–z 0–9 _ - (surrounding whitespace is trimmed). Referenced by next and onFail."),
   kind: z.enum(["run", "review-loop"])
-    .describe("run: an agent conversation that does the work. review-loop: a read-only review of the run stage whose next chain reaches it."),
+    .describe("run: an agent conversation that does the work. review-loop: a read-only review of the run stage whose next chain reaches it; a new one is stored as a read-only run reviewer plus a fix stage copied from that run, joined by an advance fail edge, and the answer names them in convertedStages (or lists legacyReview refusals when that needs a guess, and stores it as sent)."),
   "prompt": z.string().min(1)
     .describe(`Instruction for this stage's agent, appended to its role scaffold. Up to ${MAX_STAGE_PROMPT_LENGTH} characters once trimmed. {{task}} renders the pipeline task and {{prev.output}} the previous stage's final prose output; a prompt that places neither still receives the previous output as a labelled section appended after the instruction.`),
   next: z.string().nullable().optional()
@@ -3087,8 +3135,8 @@ const pipelineStageSchema = z.object({
     to: z.string().describe("Stage id this stage returns to on a fail verdict."),
     maxRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional()
       .describe(`How many times this stage reviews before its budget is spent (default ${DEFAULT_FAIL_EDGE_ROUNDS}).`),
-    onExhausted: z.enum(["advance", "park"]).optional()
-      .describe("What a fail on the last round does. advance (default): the findings go to the fail target once more, and when that fix passes the pipeline follows THIS stage's pass edge without asking this stage again; the stage keeps its findings and is marked budget spent. So maxRounds 3 means at most 3 reviews and 4 runs of the fail target. park: stop for the operator instead, as before (one more review after maxRounds fail loops). The handoff happens once per stage: if this stage runs again later, because another stage's fail edge loops back through it, and fails again, it parks as budget exhausted. Nothing merges on its own either way."),
+    onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional()
+      .describe("What a fail on the last round does. advance (default): the fix stage takes the last findings and the lane continues or completes: when that fix passes the pipeline follows THIS stage's pass edge without asking this stage again, or completes when that edge is null, even if the fix wrote a new head; the stage keeps its findings, is marked budget spent, and the next stage's input lists them as unreviewed. So maxRounds 3 means at most 3 reviews and 4 runs of the fail target. stop-after-fix: after that fix the lane waits for the operator in needs_review; use it only when the operator asked to look before merge. park: stop before the fix (one more review after maxRounds fail loops). The handoff happens once per stage: if this stage runs again later, because another stage's fail edge loops back through it, and fails again, it parks as budget exhausted. Nothing merges on its own either way."),
   }).nullable().optional()
     .describe("Fail successor for a run stage. A review-loop stage may not define one — it recovers through its own review flow."),
   role: z.object({
@@ -3243,6 +3291,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     /* Unknown, so the command clamps what the schema would refuse (#2102). */
     icon: z.unknown().optional()
       .describe("A lucide icon name for the card (#2102), kebab-case: bug, smartphone, rocket, search-check, shield. Bug and lucide:bug mean the same. A name lucide does not have, or a value that is no name, is stored as no icon and the answer carries a note."),
+    /* Unknown too, so an unknown colour is clamped with a note like an icon. */
+    color: z.unknown().optional()
+      .describe(`Colour label for the card: none, ${TASK_COLORS.join(", ")}, picked by the rule in this tool's description. A value that is no colour is stored as no colour and the answer carries a note.`),
   }).passthrough(),
   update_task: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3254,7 +3305,18 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     expectedRevision: z.string().min(1).optional().describe("Required for pos or placement updates: copy the opaque revision from get_task or list_tasks."),
     text: z.string().optional().describe("The HUMAN part: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context does not belong here; pass it as details."),
     details: z.string().nullable().optional()
-      .describe("Agent-facing context (#1834): a string sets or replaces it, null or an empty string clears it. Its own field, so an update carrying only details leaves text byte for byte and the reverse. Read the current value with get_task first, since list_tasks truncates it and a write replaces the whole field rather than appending."),
+      .describe("Agent-facing context (#1834): a string sets or replaces it, null or an empty string clears it. Its own field, so an update carrying only details leaves text byte for byte and the reverse. Read the current value with get_task first, since list_tasks truncates it and a write replaces the whole field rather than appending. To change one line, send replaceLine, removeLine or appendLine instead."),
+    replaceLine: z.object({
+      prefix: z.string().min(1).optional().describe("Replace the one details line starting with this text (leading spaces ignored). More or fewer than one match is refused and nothing is stored."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
+      text: z.string().describe("The new line."),
+    }).optional().describe("Replace one line of the stored details without resending the rest."),
+    removeLine: z.object({
+      prefix: z.string().min(1).optional().describe("Remove the one details line starting with this text (leading spaces ignored)."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
+    }).optional().describe("Remove one line of the stored details."),
+    appendLine: z.string().min(1).optional()
+      .describe("Append one line to the stored details. Edits apply in the order replaceLine, removeLine, appendLine, atomically against the details stored at the write and under the details limit; not combined with details."),
     status: z.enum(["inbox", "assigned", "blocked", "done"]).optional(),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Pinned retains existing pos when omitted; unplaced removes pos. Placement updates require expectedProject and expectedRevision."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
@@ -3287,6 +3349,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     task: z.string().min(1).describe("Board title for the pipeline."),
     taskIds: z.array(z.string()).optional()
       .describe("Board tasks this pipeline's work belongs to (#1720), recorded durably on the pipeline. EVERY stage launch — run, review-loop, retry, fail branch — reads this list at launch time and joins those tasks, so passing it in the create call is what keeps one product outcome on one card; a pipeline created without it is given a placeholder task of its own. Each id must name an existing task in the pipeline's project. pipeline_action \"link-task\" adds one afterwards, for the stages that have not started yet."),
+    finishesTask: z.union([z.boolean(), z.array(z.string())]).optional()
+      .describe("#2187: true marks every task in taskIds as one this pipeline finishes; a list marks those ids, and an id outside taskIds is dropped and named in the answer's finishesTaskDropped. A marked lane's task moves to Done when the lane completes (merge setting off) or when its PR merges (on), once no other started pipeline on the task is open. pipeline_action link-task with finishes changes it later."),
     spec: z.string().optional().describe("Acceptance criteria shared by every stage."),
     repoDir: z.string().min(1).describe("Absolute path of the existing git repository the pipeline worktree is cut from."),
     baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),
@@ -3303,7 +3367,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     pipelineId: entityIdSchema,
     /* #774: was `z.string().min(1)` while the route admitted a fixed set. */
-    action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review (#1938): the creator or operator resumes a needs_review pipeline, whose spent review budget left an unreviewed head, by adding addRounds review rounds; the review stage then runs on the current head. Requires addRounds and expectedRevision from get_pipeline. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
+    action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review (#1938): the creator or operator resumes a needs_review pipeline, whose spent review budget left an unreviewed head, by adding addRounds review rounds; the review stage then runs on the current head. Requires addRounds and expectedRevision from get_pipeline. accept-head (#2187): the creator or operator takes that unreviewed head as it is, and the lane follows the review stage's pass edge or completes; refused outside needs_review. Requires expectedRevision from get_pipeline. retry-merge (#2187): a completed lane whose automatic merge stopped (merge.state blocked or cancelled) goes back into its repository's merge queue; refused while the project's merge setting is off. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
+    stageId: z.string().min(1).optional().describe("The stage a graph edit, a legacy-review conversion or a retry-stage names. retry-stage: the stage the pipeline waits on, retried whatever ended its attempt; without launchId it is sent as expectedStageId with that stage's current attempt as expectedAttempt, so a stage or attempt that moved on is refused with STAGE_CHANGED."),
+    launchId: z.string().min(1).optional().describe("retry-stage only, optional, and only for an attempt whose launch failed: the launchId get_pipeline with stageId answers for it, sent with stageId. The engine then retries only a failed or conflicted launch receipt, so omit it for an agent that started and then failed or parked. A launch that is no longer the current attempt's is refused."),
     answer: z.string().min(1).max(12_000).optional(),
     addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("continue-review only: review rounds to add to the spent fail edge. Each fail but the last loops to the fix stage; the last hands its findings to one fix, then parks in needs_review again if that fix writes a new head."),
     reviewLimit: z.number().int().optional().describe("preview/convert-legacy-review only: the finite review count the converted reviewer gets, 1–9. It runs that many times when every review fails, the final review included; the default is the limit recorded on the stage's review flow."),
@@ -3318,6 +3384,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     link: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
       .describe("attach-link and detach-link (#2059): a PR or issue as \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com URL, or a list. A bare number means the pipeline's delivery repository. Attach what discovery cannot see: the pipeline's lane and delivery branches, its delivery.pr and the PR its stages reported are found without it. Allowed in every state; detach removes only links attached by hand. The answer carries workLinks, the resolved links."),
     kind: z.enum(["pr", "issue"]).optional().describe("attach-link only: whether link names a pull request or an issue, when the number alone leaves it open."),
+    taskId: z.string().min(1).optional().describe("link-task and unlink-task: the board task. unlink-task also clears finishes for it."),
+    finishes: z.boolean().optional().describe("link-task only (#2187): whether this pipeline finishes the task. An upsert: on a task already linked it only sets or clears the flag; absent leaves it as it is. A marked lane's task moves to Done when the lane completes (merge setting off) or its PR merges (on), once no other started pipeline on the task is open."),
   }).passthrough(),
   stage_report: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3469,8 +3537,12 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     selectedContext: selectedContextSchema,
     targets: z.array(conversationArchiveTargetSchema).min(1).max(100).optional()
       .describe("Archive/unarchive list form. Cannot be combined with the single-target fields."),
-    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "archive", "unarchive"]),
+    action: z.enum(["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "archive", "unarchive"]),
     key: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "Tab", "Enter", "Escape"]).optional(),
+    decision: z.enum(["allow", "deny"]).optional()
+      .describe("permission only: allow once or deny the structured host's pending tool permission request."),
+    requestId: z.string().optional()
+      .describe("permission only: the request to answer, when the conversation holds more than one; defaults to the oldest."),
     label: z.string().optional(),
     question: z.string().optional(),
   }).passthrough(),
@@ -3557,7 +3629,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Silence under a live host that counts as a stall. A dead host over an open turn is always stalled."),
     limit: boundedNumericInput("agent_activity", "limit"),
     compact: z.boolean().optional()
-      .describe("Compact by default; false retains full evidence fields. Each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}."),
+      .describe("Compact by default; false retains full evidence fields. Each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission when a tool permission request holds the turn."),
   }).passthrough(),
   lifecycle_events: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3588,6 +3660,19 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Durable conversation whose composer these drafts belong under. Defaults to the calling conversation, and must BE it \u2014 another conversation is refused."),
     replies: z.array(replyDraftSchema).min(MIN_REPLY_SUGGESTIONS).max(MAX_REPLY_SUGGESTIONS)
       .describe(`${MIN_REPLY_SUGGESTIONS}\u2013${MAX_REPLY_SUGGESTIONS} drafts, ordered as the operator should read them. Two to four distinct ones is the usual shape.`),
+  }).passthrough(),
+  dismiss_attention: z.object({
+    clientRequestId: clientRequestIdSchema,
+    target: z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("conversation"),
+        conversationId: z.string().min(1).optional().describe('Durable "conversation_…" id. The form to prefer.'),
+        path: z.string().min(1).optional().describe("Transcript .jsonl path. Supply at least one of the two."),
+      }).passthrough(),
+      z.object({ kind: z.literal("pipeline"), pipelineId: z.string().min(1) }).passthrough(),
+      z.object({ kind: z.literal("task"), taskId: z.string().min(1).describe("Board task id: its assignments and the lanes filed under it.") }).passthrough(),
+    ]).describe("What to clear."),
+    undo: z.boolean().optional().describe("true brings back what an earlier dismissal cleared."),
   }).passthrough(),
   bridge_report: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3682,6 +3767,27 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     engine: z.enum(["claude", "codex", "copilot"]).optional().describe("Only this engine's accounts."),
     accountId: z.string().trim().min(1).optional().describe("Only this account."),
+  }).passthrough(),
+  telegram_bot_chats: z.object({
+    clientRequestId: clientRequestIdSchema,
+    includeInactive: z.boolean().optional().describe("Also list chats the bot left or was removed from. Default false."),
+  }).passthrough(),
+  telegram_bot_send: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The chat's alias or chat id, as telegram_bot_chats lists it."),
+    text: z.string().min(1).describe("The message. Plain text up to 16384 characters (split into up to 4 messages); html up to 4096."),
+    format: z.enum(["plain", "html"]).optional().describe("plain (default) or html: Telegram's HTML subset."),
+    replyToMessageId: z.number().int().positive().optional().describe("Reply to this message in the same chat. Sent anyway if it no longer exists."),
+    topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
+    silent: z.boolean().optional().describe("Send without a notification sound."),
+  }).passthrough(),
+  telegram_bot_messages: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The chat's alias or chat id, as telegram_bot_chats lists it."),
+    limit: boundedNumericInput("telegram_bot_messages", "limit"),
+    cursor: z.string().optional().describe("nextCursor from the previous page."),
+    since: z.string().optional().describe("ISO time; only messages at or after it."),
+    maxChars: boundedNumericInput("telegram_bot_messages", "maxChars"),
   }).passthrough(),
 };
 

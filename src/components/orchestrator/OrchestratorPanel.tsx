@@ -1,12 +1,15 @@
 "use client";
 
-import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, PanelLeft, PanelTop, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, LogIn, PanelLeft, PanelTop, RefreshCw, RotateCcw, ScrollText, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AgentLaunchControls,
+  launchEngineLabel,
+  openLaunchSignIn,
   useAgentLaunchDraft,
   useLaunchAccountCatalog,
+  useLaunchReadiness,
   type LaunchAccountCatalog,
   type LaunchDraftStorage,
 } from "@/components/draft/AgentLaunchControls";
@@ -27,11 +30,12 @@ import { decisionLine } from "../attention/decision";
 import { FeedSkeleton } from "../skeletons";
 import { RoleFrameMark } from "../RoleFrameMark";
 import { ProcessStatusControls } from "../TaskHeader";
-import { useOrchestratorDraftPrefill, useOrchestratorDraftReveal } from "./draftPrefill";
+import { seatDraftReadiness, useOrchestratorDraftPrefill, useOrchestratorDraftReveal, usePendingSeatConfirm } from "./draftPrefill";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { OrchestratorConversation } from "./OrchestratorConversation";
 import { PreviousSeatsControl } from "./PreviousSeats";
+import { RunsOnRow } from "./RunsOnRow";
 import {
   deriveOrchestratorPanelState,
   deriveRotateDraftState,
@@ -54,6 +58,28 @@ import { useOrchestratorIncumbent } from "./useOrchestratorIncumbent";
 import { useOrchestratorSeat, type OrchestratorSeatRead } from "./useOrchestratorSeat";
 import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
 import { useSeatSurface } from "./useSeatSurface";
+import { ReportLog } from "./reportLog/ReportLog";
+
+/** The seat's width from which the report log sits beside the chat (#2146). */
+export const REPORT_LOG_SPLIT_WIDTH = 720;
+const reportLogBesideKey = (project: string) => `llvReportLogBeside:${project}`;
+
+/** Whether the log beside the chat is open for `project`: open unless hidden. */
+function readReportLogBeside(project: string): boolean {
+  try {
+    return window.localStorage.getItem(reportLogBesideKey(project)) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function rememberReportLogBeside(project: string, open: boolean): void {
+  try {
+    window.localStorage.setItem(reportLogBesideKey(project), open ? "1" : "0");
+  } catch {
+    /* private mode */
+  }
+}
 
 /**
  * How often an UNBOUND seat re-asks the status read while its attempts are
@@ -225,6 +251,36 @@ export function OrchestratorPanel({
     [files, seatConversationId, seatPath, currentPath],
   );
   const surface = useSeatSurface(file);
+
+  /* The report log (#2146): a column right of the chat while the seat sits on
+     top and is at least REPORT_LOG_SPLIT_WIDTH wide, open unless the operator
+     hid it for this project; narrower, it takes the transcript's place when
+     asked, with the composer kept under it. */
+  const panelRef = useRef<HTMLElement | null>(null);
+  const [panelWidth, setPanelWidth] = useState(0);
+  useEffect(() => {
+    const node = panelRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => setPanelWidth(entry?.contentRect.width ?? 0));
+    observer.observe(node);
+    setPanelWidth(node.getBoundingClientRect().width);
+    return () => observer.disconnect();
+  }, []);
+  const reportsSplit = variant === "seat" && placement === "top" && panelWidth >= REPORT_LOG_SPLIT_WIDTH;
+  const [beside, setBeside] = useState(() => ({ project, open: readReportLogBeside(project) }));
+  if (beside.project !== project) setBeside({ project, open: readReportLogBeside(project) });
+  const reportsBeside = beside.project === project ? beside.open : readReportLogBeside(project);
+  const [reportsInPlace, setReportsInPlace] = useState(false);
+  const reportsOpen = reportsSplit ? reportsBeside : reportsInPlace;
+  const toggleReports = () => {
+    if (!reportsSplit) {
+      setReportsInPlace((open) => !open);
+      return;
+    }
+    const next = !reportsBeside;
+    setBeside({ project, open: next });
+    rememberReportLogBeside(project, next);
+  };
   /* The folded seat's one live signal (issue #1802): a reply that landed while
      the panel was away. Expanded, the transcript IS the reading, so every
      reply the operator can see is marked seen; folded, a newer one than the
@@ -391,6 +447,10 @@ export function OrchestratorPanel({
     }, replayRequestId);
   };
 
+  /* The setup guide's Create (#2166 §2.2): once this draft is ready, its own
+     Confirm is pressed for the operator, once. */
+  usePendingSeatConfirm(project, launch, seatDraftReadiness(state.kind), () => confirmCreate());
+
   /**
    * Open the rotate draft — on the incumbent's OWN parameters.
    *
@@ -410,8 +470,26 @@ export function OrchestratorPanel({
     }
   };
 
+  const reportsAvailable = state.kind === "live" && !rotating && Boolean(file) && !collapsed;
+  const reportsToggle = reportsAvailable ? (
+    <button
+      type="button"
+      className={variant === "seat"
+        ? "icon-btn seat-dock seat-reports"
+        : `flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${reportsOpen ? "bg-accent-soft text-accent" : "bg-canvas text-muted hover:text-primary"}`}
+      data-report-log-toggle={reportsOpen ? "open" : "closed"}
+      aria-pressed={reportsOpen}
+      onClick={toggleReports}
+      aria-label={t(reportsOpen ? "reportLog.hide" : "reportLog.show")}
+      title={t(reportsOpen ? "reportLog.hide" : "reportLog.show")}
+    >
+      <ScrollText className={variant === "seat" ? undefined : "h-4 w-4"} aria-hidden />
+    </button>
+  ) : null;
+
   return (
     <section
+      ref={panelRef}
       className="flex h-full min-h-0 min-w-0 flex-col bg-card"
       data-orchestrator-panel={project}
       data-orchestrator-state={state.kind}
@@ -486,6 +564,7 @@ export function OrchestratorPanel({
               <span>{t("orchPanel.seatUnreadReply")}</span>
             </span>
           ) : null}
+          {reportsToggle}
           {onTogglePlacement ? (
             <button
               type="button"
@@ -527,6 +606,7 @@ export function OrchestratorPanel({
           <span className="truncate text-caption text-muted" title={projectName}>{projectName}</span>
         </span>
         <StateBadge state={state} file={file} />
+        {reportsToggle}
         <button
           type="button"
           onClick={onClose}
@@ -663,8 +743,20 @@ export function OrchestratorPanel({
               status={status}
               onCancel={() => setRotateFrom(null)}
             />
+          ) : file && reportsOpen && reportsSplit ? (
+            <div className="flex min-h-0 min-w-0 flex-1" data-report-log-layout="beside">
+              <OrchestratorConversation file={file} projectName={projectName} hostControls={false} />
+              <div className="flex min-h-0 w-[clamp(300px,34%,440px)] shrink-0 flex-col border-l border-border">
+                <ReportLog key={project} project={project} variant="column" />
+              </div>
+            </div>
           ) : file ? (
-            <OrchestratorConversation file={file} projectName={projectName} hostControls={variant !== "seat"} />
+            <OrchestratorConversation
+              file={file}
+              projectName={projectName}
+              hostControls={variant !== "seat"}
+              transcriptSlot={reportsOpen && reportsAvailable ? <ReportLog key={project} project={project} variant="column" /> : undefined}
+            />
           ) : (
             <Centered>
               {state.bindFailure ? (
@@ -692,7 +784,6 @@ export function OrchestratorPanel({
           projectName={projectName}
           cwd={projectCwd}
           launch={launch}
-          viewerMcpRegistered={status?.viewerMcpRegistered === true}
           onMandate={setMandate}
           onRestore={() => setMandate(ORCHESTRATOR_SYSTEM_PROMPT)}
           onConfirm={() => confirmCreate()}
@@ -812,7 +903,6 @@ function RotateDraft({
       projectName={projectName}
       cwd={cwd}
       launch={launch}
-      viewerMcpRegistered={status?.viewerMcpRegistered === true}
       onMandate={setMandate}
       onRestore={() => setMandate(base)}
       onKeepIncumbent={() => setMandate(seat.mandate)}
@@ -841,7 +931,6 @@ function OrchestratorDraft({
   projectName,
   cwd,
   launch,
-  viewerMcpRegistered,
   onMandate,
   onRestore,
   onKeepIncumbent,
@@ -864,7 +953,6 @@ function OrchestratorDraft({
   projectName: string;
   cwd?: string;
   launch: ReturnType<typeof useAgentLaunchDraft>;
-  viewerMcpRegistered: boolean;
   onMandate: (value: string) => void;
   onRestore: () => void;
   onKeepIncumbent?: () => void;
@@ -880,37 +968,40 @@ function OrchestratorDraft({
   const staleVersion = incumbent && orchestratorMandateStale(incumbent.promptVersion) ? incumbent.promptVersion : null;
   const keepOffered = staleVersion !== null && incumbent !== null && mandate !== incumbent.mandate && onKeepIncumbent !== undefined;
   const summary = mandateSummaryOf(mandate, incumbent);
+  /* The engine readiness preflight the agent launcher shares (#2170): on a
+     signed-out account the draft says so before anything is pressed, and its
+     primary opens that account's sign-in instead of designating. */
+  const readiness = useLaunchReadiness(launch);
+  const signInFirst = readiness.kind === "signed-out" ? readiness : null;
   /* The rules are collapsed by default: they are the part an operator rarely
      changes, and 58 lines of them ahead of the pickers is what made this draft
      unreadable (#1163).
      The disclosure keeps its OWN open state — the operator's toggle is theirs
-     to keep — and this only ever nudges it open, when there is something in
+     to keep — and this only ever nudges it open when there is something in
      there to read: a mandate already edited (typed here, or restored from a
-     previous visit), or a designation that failed on text about to be fixed.
-     The two reasons are watched SEPARATELY, on their own arrival. Folded into
-     one `edited || errored` boolean they hide each other: after an edit has
-     opened the disclosure and the operator has folded it back, the boolean is
-     already true when the designation fails, the effect never re-runs, and the
-     text the error is about stays behind a click. */
+     previous visit). A failed designation no longer opens it (#2166): the
+     error block says what went wrong above, and a newcomer's first failure
+     buried the button under sixty lines of rules they never wrote. */
   const rules = useRef<HTMLDetailsElement>(null);
   const launchChoices = useRef<HTMLDivElement>(null);
   useOrchestratorDraftReveal(project ?? "", launchChoices);
   useEffect(() => {
     if (edited && rules.current) rules.current.open = true;
   }, [edited]);
-  useEffect(() => {
-    if (errored && rules.current) rules.current.open = true;
-  }, [errored]);
   return (
     <form
       className="flex min-h-0 flex-1 flex-col"
       data-orchestrator-draft={mode}
       onSubmit={(event) => {
         event.preventDefault();
-        onConfirm();
+        if (signInFirst) openLaunchSignIn(signInFirst);
+        else onConfirm();
       }}
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+      {/* One inset for the whole draft, the seat's own 12 px (#2185): the
+          heading, the text, the Runs on row, the rules and the footer start on
+          the edge the seat head's avatar starts on. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
         {errored ? (
           <div
             className="shrink-0 rounded-surface border border-danger/40 bg-danger-soft px-3 py-2.5"
@@ -939,7 +1030,7 @@ function OrchestratorDraft({
         ) : (
           <div className="shrink-0">
             <h2 className="text-title font-semibold text-primary">
-              {t(rotate ? "orchPanel.rotateHeading" : "orchPanel.draftTitle")}
+              {rotate ? t("orchPanel.rotateHeading") : t("orchPanel.draftTitle", { project: projectName })}
             </h2>
             {rotate ? (
               <p className="mt-1 text-ui leading-4 text-muted">{t("orchPanel.rotateHint")}</p>
@@ -949,29 +1040,24 @@ function OrchestratorDraft({
           </div>
         )}
 
-        {/* What this thing IS, in plain sentences, before any picker: you talk
-            to it the way you would talk to a colleague, it runs the work, and it
-            acts on its own unless the rules below say otherwise (#1163). A
-            rotation is not an introduction — that operator already has one. */}
+        {/* What this thing IS, in one plain sentence, and what you would write
+            to it, before anything to choose (#1163, #2166): no issue numbers,
+            no review jargon, no promise about merges or releases. A rotation
+            is not an introduction — that operator already has one. */}
         {rotate ? null : (
-          <p className="shrink-0 text-ui leading-5 text-secondary" data-orchestrator-intro>
-            {t("orchPanel.introTalk")}{" "}
-            {t("orchPanel.introRuns")}{" "}
-            {t("orchPanel.introReports")}
-          </p>
+          <div className="shrink-0">
+            <p className="max-w-[760px] text-body leading-[1.45] text-secondary" data-orchestrator-intro>{t("orchPanel.intro")}</p>
+            <p className="mt-1 max-w-[760px] text-ui leading-[1.45] text-muted" data-orchestrator-example>{t("orchPanel.example")}</p>
+          </div>
         )}
 
-        <p
-          className="shrink-0 rounded-control border border-border bg-canvas px-3 py-2 font-mono text-caption text-secondary"
-          data-viewer-mcp-status={viewerMcpRegistered ? "registered" : "missing"}
-          role="status"
-        >
-          {t(viewerMcpRegistered ? "orchPanel.viewerMcpRegistered" : "orchPanel.viewerMcpMissing")}
-        </p>
-
-        <div ref={launchChoices} className="shrink-0" data-orchestrator-launch-choices>
-          <AgentLaunchControls draft={launch} disabled={submitting} stacked />
-        </div>
+        {rotate ? (
+          <div ref={launchChoices} className="shrink-0" data-orchestrator-launch-choices>
+            <AgentLaunchControls draft={launch} disabled={submitting} stacked />
+          </div>
+        ) : (
+          <RunsOnRow draft={launch} disabled={submitting} cwd={cwd} revealRef={launchChoices} />
+        )}
 
         {/* Said above the folded rules, where it is read: the incumbent's
             mandate is behind the default, and its text is the one alternative
@@ -1037,24 +1123,23 @@ function OrchestratorDraft({
         </details>
 
         {/* The directory is a fact about the LAUNCH, not about the rules, so it
-            stays visible while they are folded away. */}
-        {cwd ? (
+            stays visible while they are folded away: on the Runs on row for a
+            create, under the rules for a rotation. */}
+        {rotate && cwd ? (
           <p className="shrink-0 truncate font-mono text-caption text-muted" title={cwd}>
-            {t(rotate ? "orchPanel.cwdInherited" : "orchPanel.cwd", { cwd })}
+            {t("orchPanel.cwdInherited", { cwd })}
           </p>
         ) : null}
       </div>
 
-      <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-sunken px-4 py-3">
-        {/* Words, and only words (#1163): one task is better served by one agent
-            the operator talks to directly, and this pays off when several things
-            run at once while they are elsewhere. Nothing here counts anything,
-            and nothing here stands between them and the button. */}
-        {rotate || errored ? null : (
-          <p className="text-ui leading-4 text-muted" data-orchestrator-one-task>{t("orchPanel.oneTask")}</p>
-        )}
+      <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-sunken p-3">
         {formError ? (
           <p className="text-ui font-semibold text-danger" role="alert">{formError}</p>
+        ) : null}
+        {signInFirst ? (
+          <p className="text-ui font-semibold text-warning" role="status" data-orchestrator-sign-in-first>
+            {t("launch.accountSignedOut", { label: signInFirst.label, engine: launchEngineLabel(signInFirst.engine) })}
+          </p>
         ) : null}
         <div className="flex items-center gap-2">
           {onCancel ? (
@@ -1076,14 +1161,24 @@ function OrchestratorDraft({
           >
             {submitting
               ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
-              : rotate
-                ? <RefreshCw className="h-4 w-4" aria-hidden />
-                : <Bot className="h-4 w-4" aria-hidden />}
+              : signInFirst
+                ? <LogIn className="h-4 w-4" aria-hidden />
+                : rotate
+                  ? <RefreshCw className="h-4 w-4" aria-hidden />
+                  : <Bot className="h-4 w-4" aria-hidden />}
             <span className="truncate">
-              {t(errored ? "orchPanel.confirmRetry" : rotate ? "orchPanel.rotateConfirm" : "orchPanel.confirm")}
+              {signInFirst
+                ? t("launch.signInFirst", { engine: launchEngineLabel(signInFirst.engine) })
+                : t(errored ? "orchPanel.confirmRetry" : rotate ? "orchPanel.rotateConfirm" : "orchPanel.confirm")}
             </span>
           </button>
         </div>
+        {/* Words, and only words (#1163, #2166): the manual way is still there
+            and says where, under the button, quieter than it. Nothing here
+            stands between the operator and the button. */}
+        {rotate || errored ? null : (
+          <p className="text-ui leading-4 text-muted" data-orchestrator-by-hand>{t("orchPanel.byHand")}</p>
+        )}
       </div>
     </form>
   );
@@ -1153,7 +1248,7 @@ export function seatWordOf(t: (key: MessageKey) => string, state: OrchestratorPa
 }
 
 function StateBadge({ state, file, word = false }: { state: OrchestratorPanelState; file: FileEntry | null; word?: boolean }) {
-  const { t, locale } = useLocale();
+  const { t } = useLocale();
   const seatBadge = state.kind === "live" ? seatBadgeOf(state) : null;
   const badge = seatBadge ? SEAT_BADGE[seatBadge] : null;
   const tone = badge
@@ -1175,7 +1270,7 @@ function StateBadge({ state, file, word = false }: { state: OrchestratorPanelSta
   /* The tooltip follows the badge: a seat the badge calls «needs you» carries
      the decision behind it, and every other badge is already its own whole
      answer. */
-  const decision = seatBadge === "needs-you" && file ? decisionLine(t, locale, file) : null;
+  const decision = seatBadge === "needs-you" && file ? decisionLine(t, file) : null;
   if (word) {
     /* The seat header's form: a dot and the word, toned the same way. */
     const wordTone = tone.includes("success") ? "working" : tone.includes("warning") ? "needs" : tone.includes("danger") ? "failed" : tone.includes("accent") ? "accent" : "quiet";

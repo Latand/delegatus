@@ -38,8 +38,12 @@ export function taskAcknowledgement(task: BoardTask, args: Record<string, unknow
   return {
     taskId: task.id, revision: taskRevision(task), task: full ? task : compactTask(task),
     changedFields: fields,
+    /* The agent's details are answered by length, never echoed (#1845): a line
+       edit exists so a one-line change costs one line each way. */
+    ...(fields.includes("details") ? { detailsLength: task.details?.length ?? 0 } : {}),
     changes: Object.fromEntries(fields.filter(key => !["id", "project", "revision", "updatedAt", "createdAt"].includes(key)).map(key => {
       const value = (task as unknown as Record<string, unknown>)[key];
+      if (key === "details") return [key, { length: typeof value === "string" ? value.length : 0 }];
       if (typeof value === "string") return [key, firstLine(value) === value ? value : { preview: firstLine(value), length: value.length, truncated: true }];
       if (Array.isArray(value)) return [key, { count: value.length, omittedCount: value.length }];
       if (value && typeof value === "object" && Buffer.byteLength(JSON.stringify(value)) > 300) return [key, { omitted: true }];

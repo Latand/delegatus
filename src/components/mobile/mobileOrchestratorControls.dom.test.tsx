@@ -63,6 +63,7 @@ mock.module("@/hooks/useLogTail", () => ({
 const { MobileFocusView } = await import("./MobileFocusView");
 const { MobileSeatCard } = await import("./MobileSeatCard");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
+const { fakeHistory } = await import("./mobileNavTestHistory");
 const { resetOrchestratorSeatCacheForTests } = await import("../orchestrator/useOrchestratorSeat");
 const { resetOrchestratorIncumbentCacheForTests } = await import("../orchestrator/useOrchestratorIncumbent");
 
@@ -213,21 +214,7 @@ const NOW = Date.parse("2100-01-02T12:00:00.000Z") / 1000;
 /* A fake history per mount: the navigation store says which sheet is open
    (§3.3), so an open sheet is never inherited by the next test. */
 function navHost() {
-  let state: unknown = null;
-  const listeners = new Set<(next: unknown) => void>();
-  return {
-    history: {
-      get state() { return state; },
-      pushState(next: unknown) { state = next; },
-      replaceState(next: unknown) { state = next; },
-      back() { for (const listener of [...listeners]) listener(state); },
-    },
-    href: () => "http://localhost/",
-    onPopstate(listener: (next: unknown) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
+  return fakeHistory("http://localhost/").host;
 }
 
 let nav = createMobileNav(navHost());
@@ -405,7 +392,7 @@ test("Rotate opens the seat's configuration prefilled from the incumbent, and th
      server composes the handoff either way. */
   const mandate = panel.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
   expect(mandate.value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
-  expect(panel.querySelector("[data-orchestrator-mandate-kind]")!.textContent).toBe(`Built-in default mandate v${ORCHESTRATOR_PROMPT_VERSION}`);
+  expect(panel.querySelector("[data-orchestrator-mandate-kind]")!.textContent).toBe(`Its instructions (v${ORCHESTRATOR_PROMPT_VERSION})`);
   expect(panel.querySelector("[data-orchestrator-mandate-stale]")!.textContent).toContain(`based on v3; the current default is v${ORCHESTRATOR_PROMPT_VERSION}`);
   const keep = panel.querySelector("[data-orchestrator-keep-incumbent]") as HTMLButtonElement;
   expect(keep.className).toContain("min-h-11");

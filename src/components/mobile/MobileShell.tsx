@@ -9,6 +9,9 @@ import { useRuntimeBusState } from "@/hooks/useRuntime";
 import { useLocale } from "@/lib/i18n";
 
 import { MobileAccountsPanel } from "../AccountsPanel";
+import { useWalkStop } from "../onboarding/walkStop";
+import { TelegramFooterRow } from "../TelegramConnect";
+import { ReportLog } from "../orchestrator/reportLog/ReportLog";
 import { MobileReceipt } from "./MobileReceipt";
 import { screenKey, topScreen, useMobileNav, useMobileNavStore, type MobileScreenKind, type MobileSheetName } from "./mobileNav";
 
@@ -74,6 +77,10 @@ export function bannerKind(enabled: boolean, connection: ConnectionState, hasArr
     it owns (the project switcher, the attention queue). */
 export interface MobileShellHost {
   attentionCount: number;
+  /** An agent's request_attention the operator has not seen yet: the ⚠ badge
+      carries an accent dot, and shows the dot alone when nothing else needs
+      the operator (docs/design/needs-attention.md §6). Nothing moves. */
+  noticeDot?: boolean;
   /** The arrival banner for the slot, or null. Runtime states outrank it. */
   arrival: ReactNode;
   /** The sheet for a name the host owns; null for one it does not. */
@@ -173,6 +180,7 @@ export function MobileShell({
   back = false,
   host,
   onOpenSearch,
+  barAction,
   searchTestId,
   menu = true,
   renderSheet,
@@ -194,6 +202,9 @@ export function MobileShell({
   host?: MobileShellHost | null;
   /** The search target (issue #1054) — the board bar only; absent, no target. */
   onOpenSearch?: () => void;
+  /** One more control in the bar, before search: the orchestrator
+      conversation's report log (#2146). */
+  barAction?: ReactNode;
   searchTestId?: string;
   /** The ⋯ target: every screen opens the board menu over itself. */
   menu?: boolean;
@@ -226,7 +237,12 @@ export function MobileShell({
   const claim = useCallback((next: boolean) => setClaimed(next), []);
   const effectiveHost = host ?? outer?.host ?? null;
   const close = () => nav.closeSheet();
-  const attention = (effectiveHost?.attentionCount ?? 0) > 0;
+  const attentionCount = effectiveHost?.attentionCount ?? 0;
+  const noticeDot = effectiveHost?.noticeDot === true;
+  const attention = attentionCount > 0 || noticeDot;
+  /* The interface walk's third stop points at the badge, which is hidden at
+     zero: while it shows, the slot is drawn empty-outlined (#2166 §3.8). */
+  const walkSlot = useWalkStop() === 3 && !attention && screen === "board";
   const showSearch = Boolean(onOpenSearch);
   const sheet = !claimed && state.sheet
     ? (renderSheet?.(state.sheet, close) ?? outer?.renderSheet?.(state.sheet, close) ?? effectiveHost?.renderSheet(state.sheet, close) ?? null)
@@ -284,19 +300,31 @@ export function MobileShell({
             <button
               type="button"
               data-mobile2-open="attention"
-              data-mobile2-attention-count={effectiveHost?.attentionCount}
-              aria-label={t("mobile2.bar.attention", { count: effectiveHost?.attentionCount ?? 0 })}
+              data-mobile2-attention-count={attentionCount}
+              data-walk-anchor="needs"
+              data-mobile2-notice={noticeDot ? "" : undefined}
+              aria-label={[attentionCount ? t("mobile2.bar.attention", { count: attentionCount }) : null, noticeDot ? t("notices.dot") : null].filter(Boolean).join(", ")}
               aria-haspopup="dialog"
               aria-expanded={state.sheet === "attention"}
-              className="flex h-11 shrink-0 items-center px-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="flex h-11 min-w-11 shrink-0 items-center justify-center px-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               onClick={() => nav.openSheet("attention")}
             >
-              <span className="inline-flex h-7 items-center gap-1 rounded-full border border-warning/45 bg-warning-soft px-2.5 text-ui font-bold tabular-nums text-warning">
-                <TriangleAlert className="h-[13px] w-[13px]" aria-hidden />
-                {effectiveHost?.attentionCount}
-              </span>
+              {attentionCount ? (
+                <span className="relative inline-flex h-7 items-center gap-1 rounded-full border border-warning/45 bg-warning-soft px-2.5 text-ui font-bold tabular-nums text-warning">
+                  <TriangleAlert className="h-[13px] w-[13px]" aria-hidden />
+                  {attentionCount}
+                  {noticeDot ? <span data-mobile2-notice-dot aria-hidden className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent ring-2 ring-canvas" /> : null}
+                </span>
+              ) : (
+                <span data-mobile2-notice-dot aria-hidden className="h-2.5 w-2.5 rounded-full bg-accent" />
+              )}
             </button>
+          ) : walkSlot ? (
+            <span data-walk-anchor="needs" className="flex h-11 min-w-11 shrink-0 items-center justify-center px-[3px]">
+              <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-dashed border-strong px-2 text-ui font-bold tabular-nums text-muted">0</span>
+            </span>
           ) : null}
+          {barAction}
           {showSearch ? (
             <button type="button" data-testid={searchTestId} data-mobile2-open="search" aria-label={t("mobile2.bar.search")} className={ICON_BUTTON} onClick={onOpenSearch}>
               <Search className="h-5 w-5" aria-hidden />
@@ -370,12 +398,27 @@ export function MobileBarTitle({ children, meta }: { children: ReactNode; meta?:
 /** The accounts screen the board menu pushes (README §3.1, §4.8): the shell's
     bar with ‹ over the phone's accounts layout (lane 9, `AccountsPanel.tsx`);
     the screen and its route are the shell's. */
+/** The orchestrator's report log on the phone (#2146), over its conversation. */
+export function MobileReportsScreen({ project, host, renderSheet }: { project: string; host?: MobileShellHost | null; renderSheet?: SheetRenderer }) {
+  const { t } = useLocale();
+  return (
+    <MobileShell screen="reports" back title={<MobileBarTitle>{t("reportLog.title")}</MobileBarTitle>} host={host} renderSheet={renderSheet}>
+      <ReportLog key={project} project={project} variant="screen" />
+    </MobileShell>
+  );
+}
+
 export function MobileAccountsScreen({ host, renderSheet }: { host?: MobileShellHost | null; renderSheet?: SheetRenderer }) {
   const { t } = useLocale();
   return (
     <MobileShell screen="accounts" back title={<MobileBarTitle>{t("mobile2.accounts.title")}</MobileBarTitle>} host={host} renderSheet={renderSheet}>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain" data-mobile2-accounts>
         <MobileAccountsPanel />
+        {/* The Telegram accounts, personal and bot: on desktop the row sits in
+            the rail's footer, which the phone does not draw. */}
+        <div className="border-t border-border" data-mobile2-telegram>
+          <TelegramFooterRow />
+        </div>
       </div>
     </MobileShell>
   );
