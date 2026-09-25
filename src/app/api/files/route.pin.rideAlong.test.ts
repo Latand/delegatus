@@ -26,18 +26,20 @@ const previous = {
   claude: process.env.LLV_CLAUDE_HOME,
   tmp: process.env.TMPDIR,
   home: process.env.HOME,
+  claudeTmp: process.env.CLAUDE_CODE_TMPDIR,
 };
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 process.env.LLV_CODEX_HOME = path.join(sandbox, "codex");
 process.env.LLV_CLAUDE_HOME = path.join(sandbox, "claude");
 process.env.TMPDIR = fs.mkdtempSync(path.join(sandbox, "tmp-"));
 /* The Claude background-task root is the one root no LLV_* variable redirects:
-   `claudeTasksRoot()` takes `<tmpdir>/claude-<uid>` only when it EXISTS and
-   otherwise falls back to the literal `/tmp/claude-<uid>`, which on a real
-   machine is the operator's own live task tree. Creating it inside the
-   redirected TMPDIR — and pinning HOME, which `ROOTS` reads at import — keeps
-   the corpus this file declares the only corpus it scans. */
+   it follows Claude Code's own rule, `CLAUDE_CODE_TMPDIR` or else the temp
+   dir, joined with `claude-<uid>`. Clearing an inherited CLAUDE_CODE_TMPDIR,
+   creating the root inside the redirected TMPDIR, and pinning HOME, which
+   `ROOTS` reads at import, keep the corpus this file declares the only corpus
+   it scans. */
 process.env.HOME = fs.mkdtempSync(path.join(sandbox, "home-"));
+delete process.env.CLAUDE_CODE_TMPDIR;
 fs.mkdirSync(path.join(process.env.TMPDIR, `claude-${process.getuid?.() ?? 1000}`), { recursive: true });
 
 const { GET } = await import("./route");
@@ -78,7 +80,7 @@ for (let index = 0; index < DEFAULT_SCHEME_PROJECT_CAP + 2; index += 1) {
 rollout("recent", "/repo/recent", 5_600_000, 0.001);
 
 afterAll(() => {
-  for (const [key, value] of [["LLV_STATE_DIR", previous.state], ["LLV_CODEX_HOME", previous.codex], ["LLV_CLAUDE_HOME", previous.claude], ["TMPDIR", previous.tmp], ["HOME", previous.home]] as const) {
+  for (const [key, value] of [["LLV_STATE_DIR", previous.state], ["LLV_CODEX_HOME", previous.codex], ["LLV_CLAUDE_HOME", previous.claude], ["TMPDIR", previous.tmp], ["HOME", previous.home], ["CLAUDE_CODE_TMPDIR", previous.claudeTmp]] as const) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
