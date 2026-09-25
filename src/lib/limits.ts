@@ -15,6 +15,7 @@ import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { WINDOW_SECONDS, clampPercent, mergeSamples, type WindowKey } from "@/lib/burndown";
 import { relabelCachedWindows, routeWindowsByHorizon, SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES } from "@/lib/limitWindows";
 import { historySamples, historySince, recordLimitSample, RETENTION_S } from "@/lib/limitsHistoryStore";
+import { startupDiagnostic } from "@/lib/startupDiagnostics";
 import { quotaAsEngineLimits, quotaUsesSource, reconcileQuotaReadings } from "@/lib/rateLimit";
 import { modelTierWindows, LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON, type BurndownPayload, type BurndownSeries, type EngineBurndown, type EngineLimits, type LimitSample, type LimitsPayload, type LimitsProvenance, type LimitWindow, type TierLimitWindow } from "./types";
 
@@ -380,7 +381,7 @@ function inflightReads(): Map<string, Promise<ResolvedRead>> {
 
 function logFallbackReasons(entries: ReadonlyArray<readonly [EngineName, LimitsProvenance]>): void {
   for (const [engine, meta] of entries) {
-    if (meta.reason) console.warn(`[limits] ${engine} fallback: ${safeReason(meta.reason)}`);
+    if (meta.reason) startupDiagnostic("warn", `[limits] ${engine} fallback: ${safeReason(meta.reason)}`);
   }
 }
 
@@ -841,7 +842,7 @@ export async function readCodexLimits(options: {
   } catch (error) {
     const detail = redactAppServerDetail(error instanceof Error ? error.message : String(error));
     const initializeTimedOut = /request timed out:\s*initialize\b/i.test(detail);
-    console.warn(`[limits] Codex app-server probe for ${account.id} failed: ${detail}`);
+    startupDiagnostic("warn", `[limits] Codex app-server probe for ${account.id} failed: ${detail}`);
     if (transcript.data) {
       // With no probe to reconcile against, nothing downstream would retire the
       // projection, so it is served only while the exhaustion it describes is
