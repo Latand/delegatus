@@ -271,7 +271,12 @@ const OVERVIEW_SCENE = new URLSearchParams(location.search).has("overview");
    phone's rows-only read with that request once the driver switches it on. */
 const NEEDS_SCENE = new URLSearchParams(location.search).has("needs");
 const NOTICE = new URLSearchParams(location.search).has("notice");
-const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE || NEEDS_SCENE;
+/* #2190 (`?icons=1`): the kanban scene with its task cards dressed the way an
+   operator dresses them: coloured with a chosen icon, coloured with the icon
+   the title suggests, uncoloured with an icon, and with no icon at all, both
+   coloured and not, under titles long enough to wrap. */
+const ICONS_SCENE = new URLSearchParams(location.search).has("icons");
+const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE || NEEDS_SCENE || ICONS_SCENE;
 const kanbanFiles: FileEntry[] = [];
 const kanbanLinks: { pipelines: Record<string, unknown>; tasks: Record<string, unknown> } = { pipelines: {}, tasks: {} };
 /* A resolved role names its engine, as a stored one does. */
@@ -500,6 +505,27 @@ if (KANBAN) {
   /* The live seat: the card above the tabs, never a card in a column. */
   kanbanConversation("Orchestrator", "settled", 300);
 }
+if (ICONS_SCENE) {
+  kanbanTasks.push(kanbanTask("t-wrap", "inbox", "Let the operator pin one conversation above the column so it stays in reach while the rest of the column scrolls under it", { updatedAt: iso(4 * 3_600) }));
+  const dress: Record<string, { color?: string; icon?: string }> = {
+    /* Inbox */
+    "t-systemd": { color: "coral", icon: "server" },
+    "t-quota": { icon: "hourglass" },
+    "t-attention": { color: "violet" },
+    "t-tray": { color: "amber" },
+    /* Assigned */
+    "t-data": { color: "sky", icon: "cloud-download" },
+    "t-copilot": { color: "violet" },
+    "t-favicon": { icon: "image" },
+    "t-upload": { color: "lime", icon: "upload" },
+    "t-long": { color: "pink" },
+    /* Done */
+    "t-done-0": { color: "slate" },
+    "t-done-1": { color: "coral", icon: "columns-3" },
+    "t-done-3": { icon: "rocket" },
+  };
+  for (const row of kanbanTasks as Array<Record<string, unknown>>) Object.assign(row, dress[row.id as string] ?? {});
+}
 const SEAT_PATH = kanbanFiles.find((entry) => entry.title === "Orchestrator")?.path ?? null;
 
 /* The Overview's projects: keys the way a repository resolves (opaque, read by
@@ -579,9 +605,12 @@ const telegramBot = BOT_SCENE === "typed"
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+/* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
+const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The phone's Move to and Hide (#2072 slice 4): the task store's guarded
      PATCH, applied to the fixture's own rows and recorded. */
   if (KANBAN && url.pathname.startsWith("/api/tasks/") && method === "PATCH") {
