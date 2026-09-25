@@ -326,7 +326,9 @@ export function liveOrWaitingConversationCwds(file: RegistryShape, now = Date.no
     if (hosted || pending) cwds.add(entry.cwd);
   }
   for (const delivery of Object.values(file.heldDeliveries ?? {})) {
-    if (delivery?.state !== "held" && delivery?.state !== "assigned") continue;
+    /* `delivery-uncertain` was written and never confirmed; the reaper counts
+       it as undelivered too. */
+    if (delivery?.state !== "held" && delivery?.state !== "assigned" && delivery?.state !== "delivery-uncertain") continue;
     const generations = file.conversations?.[delivery.conversationId ?? ""]?.generations ?? [];
     const cwd = generations.at(-1)?.launchProfile?.cwd;
     if (cwd) cwds.add(cwd);
@@ -348,6 +350,16 @@ function pipelinePrCandidates(pipelines: readonly SweptPipeline[]): { heads: Set
     }
   }
   return { heads, numbers };
+}
+
+/** What the checkout has checked out now, read in the checkout itself: the
+    listing is minutes old by the time a sweep of hundreds reaches it. */
+async function checkedOut(git: GitRun, worktree: string): Promise<{ head: string; branch: string | null } | null> {
+  const head = await git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], worktree);
+  if (head.code !== 0 || !head.stdout.trim()) return null;
+  const symbolic = await git(["symbolic-ref", "--quiet", "HEAD"], worktree);
+  const branch = symbolic.code === 0 ? symbolic.stdout.trim().replace(/^refs\/heads\//, "") || null : null;
+  return { head: head.stdout.trim(), branch };
 }
 
 async function mainRoot(git: GitRun, directory: string): Promise<string | null> {
@@ -398,6 +410,8 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
   /* The first read skips what is plainly busy; each removal reads them again. */
   const initial = readGuards();
 
+  /* A project registered at a linked checkout, or inside one, is its root. */
+  const projectRoots = (ports.repositories ?? []).filter(Boolean).map(resolve);
   const roots = new Map<string, string>();
   for (const candidate of [...ports.pipelines.map((pipeline) => pipeline.repoDir), ...(ports.repositories ?? [])]) {
     if (!candidate || !fs.existsSync(candidate)) continue;
@@ -435,7 +449,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       const owners = ports.pipelines.filter((pipeline) => pipeline.worktreeDir && resolve(pipeline.worktreeDir) === worktree);
       const pipelineId = owners[0]?.id;
       const base = { path: worktree, ...(pipelineId ? { pipelineId } : {}) };
-      if (worktree === mainPath || roots.has(worktree)) continue;
+      if (worktree === mainPath || roots.has(worktree) || projectRoots.some((project) => inside(project, worktree))) continue;
       if (initial.open.some((open) => inside(open, worktree))) {
         keep({ ...base, reason: "open-pipeline" });
         continue;
@@ -492,30 +506,33 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         keep({ ...base, reason: "ignored-files", detail: ignored.slice(0, 5).join(", ") + (ignored.length > 5 ? `, … ${ignored.length - 5} more` : "") });
         continue;
       }
-      const head = entry.head;
-      let contained: MergedPullRequest | null = null;
-      let known = false;
-      for (const pr of [...prs.values()].sort((a, b) => b.number - a.number)) {
-        if (!head) break;
-        const present = await ports.git(["cat-file", "-e", `${pr.headRefOid}^{commit}`], root);
-        if (present.code !== 0) continue;
-        known = true;
-        const ancestor = await ports.git(["merge-base", "--is-ancestor", head, pr.headRefOid], root);
-        if (ancestor.code === 0) {
-          contained = pr;
-          break;
+      /** The merged PR whose head contains what the checkout has checked out
+          now, or why none does. */
+      const prove = async (): Promise<{ pr: MergedPullRequest; branch: string | null } | WorktreeKept> => {
+        const current = await checkedOut(ports.git, worktree);
+        if (!current) return { ...base, reason: "unmerged-commits", detail: "HEAD unreadable" };
+        let known = false;
+        for (const pr of [...prs.values()].sort((a, b) => b.number - a.number)) {
+          const present = await ports.git(["cat-file", "-e", `${pr.headRefOid}^{commit}`], root);
+          if (present.code !== 0) continue;
+          known = true;
+          const ancestor = await ports.git(["merge-base", "--is-ancestor", current.head, pr.headRefOid], root);
+          if (ancestor.code === 0) return { pr, branch: current.branch };
         }
-      }
-      if (!contained) {
-        keep({ ...base, reason: known ? "unmerged-commits" : "pr-head-unknown", detail: [...prs.keys()].map((n) => `#${n}`).join(", ") });
+        return { ...base, reason: known ? "unmerged-commits" : "pr-head-unknown", detail: [...prs.keys()].map((n) => `#${n}`).join(", ") };
+      };
+      let proof = await prove();
+      if ("reason" in proof) {
+        keep(proof);
         continue;
       }
+      let contained = proof.pr;
       if (report.removed.length >= maxRemovals) {
         keep({ ...base, reason: "deferred" });
         continue;
       }
       const bytes = await measure(worktree);
-      const removal: WorktreeRemoval = { ...base, bytes, pr: { number: contained.number, url: contained.url }, branch: entry.branch };
+      let removal: WorktreeRemoval = { ...base, bytes, pr: { number: contained.number, url: contained.url }, branch: proof.branch };
       if (dryRun) {
         report.removed.push(removal);
         report.removedBytes += bytes;
@@ -533,6 +550,15 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         keep({ ...base, reason: "map-write-failed" });
         continue;
       }
+      /* A commit made since the status read leaves the checkout clean, so the
+         removal below would not refuse it: HEAD is proven again last. */
+      proof = await prove();
+      if ("reason" in proof) {
+        keep(proof);
+        continue;
+      }
+      contained = proof.pr;
+      removal = { ...removal, pr: { number: contained.number, url: contained.url }, branch: proof.branch };
       /* Never `--force`: git refuses a checkout that changed since the status read. */
       const removed = await ports.git(["worktree", "remove", worktree], root);
       if (removed.code !== 0) {
@@ -544,7 +570,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       report.removedBytes += bytes;
       /* The lane branch goes with it; its tip is contained in the merged head,
          which is what makes `-D` safe after a squash merge `-d` cannot see. */
-      const branches = new Set<string>(entry.branch ? [entry.branch] : []);
+      const branches = new Set<string>(proof.branch ? [proof.branch] : []);
       for (const owner of owners) if (owner.branch) branches.add(owner.branch);
       for (const branch of branches) {
         const tip = await ports.git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], root);

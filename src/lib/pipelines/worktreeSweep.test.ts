@@ -593,6 +593,77 @@ test("a git status that fails keeps the worktree as uncommitted", async () => {
   expect(branchExists(root, "status/fails")).toBe(true);
 });
 
+test("a commit made on a detached HEAD after the listing keeps the worktree as unmerged-commits", async () => {
+  const root = repository();
+  const detached = lane(root, path.join(caseDir, "late-commit"), "late/commit");
+  git(["checkout", "-q", "--detach"], detached.dir);
+  git(["branch", "-D", "late/commit"], root);
+  let late = "";
+  const report = await sweepMergedWorktrees(ports({
+    /* The delivered PR number alone makes the detached checkout a candidate. */
+    pipelines: [pipeline({
+      repoDir: root,
+      worktreeDir: detached.dir,
+      branch: "late/commit",
+      delivery: { target: { branch: "late/commit", pr: 115 } } as SweptPipeline["delivery"],
+    })],
+    /* The owner commits while the sweep works: after the listing, before the
+       status read, and the committing process is gone before the removal. */
+    git: (args, cwd) => {
+      if (args[0] === "status" && cwd === detached.dir && !late) {
+        fs.writeFileSync(path.join(detached.dir, "late.txt"), "late\n");
+        git(["add", "late.txt"], detached.dir);
+        git(["commit", "-q", "-m", "late"], detached.dir);
+        late = git(["rev-parse", "HEAD"], detached.dir);
+      }
+      return realGit(args, cwd);
+    },
+    prs: [merged(115, "late/commit", detached.tip)],
+  }));
+  expect(late).not.toBe("");
+  expect(report.kept).toEqual([expect.objectContaining({ path: detached.dir, reason: "unmerged-commits", detail: "#115" })]);
+  expect(report.removed).toEqual([]);
+  expect(fs.existsSync(detached.dir)).toBe(true);
+  expect(git(["rev-parse", "HEAD"], detached.dir)).toBe(late);
+});
+
+test("a commit made after the measurement is proven again right before the removal", async () => {
+  const root = repository();
+  const moving = lane(root, path.join(caseDir, "moving"), "moving");
+  const report = await sweepMergedWorktrees(ports({
+    repositories: [root],
+    prs: [merged(116, "moving", moving.tip)],
+    measure: async (directory) => {
+      fs.writeFileSync(path.join(directory, "later.txt"), "later\n");
+      git(["add", "later.txt"], directory);
+      git(["commit", "-q", "-m", "later"], directory);
+      return 1;
+    },
+  }));
+  expect(report.kept).toEqual([expect.objectContaining({ path: moving.dir, reason: "unmerged-commits" })]);
+  expect(report.removed).toEqual([]);
+  expect(fs.existsSync(moving.dir)).toBe(true);
+  expect(branchExists(root, "moving")).toBe(true);
+});
+
+test("a project registered at a merged, clean linked worktree keeps its root", async () => {
+  const root = repository();
+  const project = lane(root, path.join(caseDir, "project-at-linked"), "project/linked");
+  const inner = lane(root, path.join(caseDir, "project-holds-inner"), "project/inner");
+  const other = lane(root, path.join(caseDir, "project-sibling"), "project/sibling");
+  fs.mkdirSync(path.join(inner.dir, "packages", "web"), { recursive: true });
+  const report = await sweepMergedWorktrees(ports({
+    repositories: [project.dir, path.join(inner.dir, "packages", "web")],
+    prs: [merged(117, "project/linked", project.tip), merged(118, "project/inner", inner.tip), merged(119, "project/sibling", other.tip)],
+  }));
+  expect(report.repositories).toEqual([root]);
+  expect(report.kept).toEqual([]);
+  expect(report.removed.map((removal) => removal.path)).toEqual([other.dir]);
+  expect(fs.existsSync(project.dir)).toBe(true);
+  expect(fs.existsSync(inner.dir)).toBe(true);
+  expect(branchExists(root, "project/linked")).toBe(true);
+});
+
 test("the mode knob reads on, off and dry-run", () => {
   expect(worktreeSweepMode({})).toBe("on");
   expect(worktreeSweepMode({ LLV_WORKTREE_SWEEP: "1" })).toBe("on");
@@ -615,13 +686,18 @@ test("live or waiting conversations: hosted, freshly starting, or holding a queu
     conversations: {
       q: { generations: [{ launchProfile: { cwd: "/w/old" } }, { launchProfile: { cwd: "/w/queued" } }] },
       r: { generations: [{ launchProfile: { cwd: "/w/delivered" } }] },
+      s: { generations: [{ launchProfile: { cwd: "/w/assigned" } }] },
+      /* Written and never confirmed: the message may still be on its way. */
+      u: { generations: [{ launchProfile: { cwd: "/w/uncertain" } }] },
     },
     heldDeliveries: {
       h1: { conversationId: "q", state: "held" },
       h2: { conversationId: "r", state: "delivered" },
+      h3: { conversationId: "s", state: "assigned" },
+      h4: { conversationId: "u", state: "delivery-uncertain" },
     },
   }, now);
-  expect(cwds.sort()).toEqual(["/w/idle", "/w/live", "/w/queued", "/w/starting"]);
+  expect(cwds.sort()).toEqual(["/w/assigned", "/w/idle", "/w/live", "/w/queued", "/w/starting", "/w/uncertain"]);
 });
 
 test("the porcelain listing parses branches, detached heads, locks and prunable entries", () => {
