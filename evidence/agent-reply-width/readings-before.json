@@ -1,0 +1,237 @@
+{
+  "readings": {
+    "seat-1440-default": {
+      "seatWidth": 1040,
+      "seatCentreOffset": 0,
+      "reportWidth": 476.5,
+      "reportInkWidth": 473.9,
+      "bubbleWidths": [
+        476.5,
+        124.7
+      ],
+      "bubbleRightInset": 12,
+      "insets": {
+        "headAvatar": 12,
+        "foldRight": 8,
+        "feedAvatar": 12,
+        "reportText": 48,
+        "strip": 16,
+        "stripBox": 10,
+        "composerBox": 10,
+        "modelRow": 10
+      },
+      "headGaps": {
+        "avatarToTitle": 8,
+        "titleToProject": 8,
+        "projectToState": 8,
+        "headPadLeft": 12,
+        "headPadRight": 8
+      }
+    },
+    "grip-1440": false,
+    "cards-1440": {
+      "cards": [
+        {
+          "id": "task:t-pending",
+          "top": 12,
+          "bottom": 16,
+          "left": 15,
+          "right": 13,
+          "titleLeft": 39,
+          "footTextLeft": 15,
+          "chip": null
+        },
+        {
+          "id": "task:t-longtitle",
+          "top": 12,
+          "bottom": 16,
+          "left": 15,
+          "right": 13.5,
+          "titleLeft": 39,
+          "footTextLeft": 15,
+          "chip": null
+        },
+        {
+          "id": "task:t-onboarding",
+          "top": 12,
+          "bottom": 16,
+          "left": 15,
+          "right": 13.5,
+          "titleLeft": 39,
+          "footTextLeft": 15,
+          "chip": null
+        },
+        {
+          "id": "lineage:conversation_links-review",
+          "top": 12,
+          "bottom": 11.9,
+          "left": 15,
+          "right": 13,
+          "titleLeft": 39,
+          "footTextLeft": 24,
+          "chip": {
+            "boxLeft": 15,
+            "textLeft": 24,
+            "baselineDelta": -0.3,
+            "textEdgeAbove": 15,
+            "gapAbove": 14.9,
+            "gapBelow": 4
+          }
+        }
+      ],
+      "dividerGaps": {
+        "above": 23.5,
+        "below": 20.4
+      }
+    },
+    "rail-1440": {
+      "brandLeft": 16,
+      "menuRight": 16,
+      "filterLeft": 10,
+      "folderRight": 10,
+      "rowLeft": 8,
+      "rowRight": 8,
+      "input": {
+        "top": 50,
+        "height": 32
+      },
+      "folder": {
+        "top": 50,
+        "width": 28,
+        "height": 32
+      },
+      "headerToFilter": 10,
+      "filterToFirstRow": 8
+    },
+    "reader-1440": {
+      "width": 426,
+      "head": 12,
+      "avatar": 24,
+      "agentText": 60,
+      "statusRow": 130,
+      "liveTailPill": 178.9,
+      "strip": 22,
+      "composerBox": 22,
+      "modelRow": 22,
+      "bubbleRight": 24,
+      "stripRight": 22
+    },
+    "seat-1280-default": {
+      "seatWidth": 992,
+      "seatCentreOffset": 0,
+      "reportWidth": 476.5,
+      "reportInkWidth": 473.9,
+      "bubbleWidths": [
+        476.5,
+        124.7
+      ],
+      "bubbleRightInset": 12,
+      "insets": {
+        "headAvatar": 12,
+        "foldRight": 8,
+        "feedAvatar": 12,
+        "reportText": 48,
+        "strip": 16,
+        "stripBox": 10,
+        "composerBox": 10,
+        "modelRow": 10
+      },
+      "headGaps": {
+        "avatarToTitle": 8,
+        "titleToProject": 8,
+        "projectToState": 8,
+        "headPadLeft": 12,
+        "headPadRight": 8
+      }
+    },
+    "grip-1280": false,
+    "cards-1280": {
+      "cards": [
+        {
+          "id": "task:t-pending",
+          "top": 12,
+          "bottom": 16,
+          "left": 15,
+          "right": 13,
+          "titleLeft": 39,
+          "footTextLeft": 15,
+          "chip": null
+        },
+        {
+          "id": "task:t-longtitle",
+          "top": 12,
+          "bottom": 16,
+          "left": 15,
+          "right": 13.5,
+          "titleLeft": 39,
+          "footTextLeft": 15,
+          "chip": null
+        },
+        {
+          "id": "task:t-onboarding",
+          "top": 12,
+          "bottom": 16,
+          "left": 15,
+          "right": 13.5,
+          "titleLeft": 39,
+          "footTextLeft": 15,
+          "chip": null
+        },
+        {
+          "id": "lineage:conversation_links-review",
+          "top": 12,
+          "bottom": 11.9,
+          "left": 15,
+          "right": 13,
+          "titleLeft": 39,
+          "footTextLeft": 24,
+          "chip": {
+            "boxLeft": 15,
+            "textLeft": 24,
+            "baselineDelta": -0.3,
+            "textEdgeAbove": 15,
+            "gapAbove": 14.9,
+            "gapBelow": 4
+          }
+        }
+      ],
+      "dividerGaps": {
+        "above": 23.5,
+        "below": 20.4
+      }
+    },
+    "rail-1280": {
+      "brandLeft": 16,
+      "menuRight": 16,
+      "filterLeft": 10,
+      "folderRight": 10,
+      "rowLeft": 8,
+      "rowRight": 8,
+      "input": {
+        "top": 50,
+        "height": 32
+      },
+      "folder": {
+        "top": 50,
+        "width": 28,
+        "height": 32
+      },
+      "headerToFilter": 10,
+      "filterToFirstRow": 8
+    },
+    "reader-1280": {
+      "width": 426,
+      "head": 12,
+      "avatar": 24,
+      "agentText": 60,
+      "statusRow": 130,
+      "liveTailPill": 178.9,
+      "strip": 22,
+      "composerBox": 22,
+      "modelRow": 22,
+      "bubbleRight": 24,
+      "stripRight": 22
+    }
+  },
+  "failures": []
+}

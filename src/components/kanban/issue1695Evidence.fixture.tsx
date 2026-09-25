@@ -50,7 +50,13 @@ const EDITING = SCENARIO === "editing";
 const CODENAME_TIERS = SCENARIO === "tier-codename";
 const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
 const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
-const STAGES = SCENARIO === "stages" || ACCOUNTS;
+/* The orchestrator's long report (#2179): a status answer with a heading,
+   lists, a code block and a table, the shape of reply the seat wrapped into a
+   narrow ribbon, so its measure can be read beside the operator's bubble. It
+   builds on the stages board, which carries the «Not on a task» divider and a
+   conversation with no task, for the insets of #2185. */
+const AGENT_REPORT = SCENARIO === "agent-report";
+const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 /* The pipeline block in variant B (#2072 slice 3, docs/design/desktop-flat-cards.md §9):
    the variant renders' cards, with Ukrainian content when the page is uk. */
 const FLAT = SCENARIO === "pipeline-block";
@@ -1065,6 +1071,41 @@ function transcriptOf(pathname: string): string {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
     return `${long.join("\n")}\n`;
+  }
+  if (AGENT_REPORT && file === orchestrator) {
+    return `${[
+      asked(12 * MIN, "Where are we on the release? Give me the whole picture before I decide what to cut."),
+      said(11 * MIN, [
+        "Here is where the release stands. Two lanes are done, one is in review and one is waiting on you; nothing is blocked on infrastructure.",
+        "",
+        "**Done**",
+        "- Search: the verifier failed once (results were empty for 40 s after the alias swap), the fail edge sent it back to Implement, and attempt 2 passed review. Verify is green on the live index.",
+        "- Export presets: the eleven toggles are three presets and one advanced sheet; the old keys still read, and a saved export from last month opens unchanged.",
+        "",
+        "**Waiting on you**",
+        "1. Release notes: two anchors match the same heading, and the implementer needs to know which one wins before it rewrites the links.",
+        "2. Passkeys: the fallback pipeline needs the domain settled; I have not started it.",
+        "",
+        "The check the verifier ran, for the record:",
+        "",
+        "```",
+        "bun scripts/verify-search.ts --index live --swap-window 60s",
+        "  swap window      41.8 s   (limit 60 s)",
+        "  empty results     0 of 1 200 queries",
+        "```",
+        "",
+        "| Lane | Stage | State | Since |",
+        "| --- | --- | --- | --- |",
+        "| Search fix | Verify | passed | 09:40 |",
+        "| Export presets | Review | round 2 | 10:05 |",
+        "| Release notes | Implement | waiting on you | 10:12 |",
+        "| Passkey fallback | not started | needs the domain | - |",
+        "",
+        "If you pick the first anchor, I can have the release notes merged within the hour and cut the release after Verify reruns on the merged head.",
+      ].join("\n")),
+      asked(4 * MIN, "First anchor. Go."),
+      said(3 * MIN, "Told the implementer: the first anchor wins. I will report back when the release notes are merged and Verify has rerun on the merged head."),
+    ].join("\n")}\n`;
   }
   const lines = file === orchestrator
     ? [

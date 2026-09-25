@@ -233,7 +233,7 @@ test("phone: internal relay cards drop the avatar-column indent too", () => {
   expect(classOf(host.firstElementChild)).not.toContain("ml-9");
 });
 
-test("desktop: every message keeps its avatar column, indent and margins, and prose is set at the reading measure (#2148)", () => {
+test("desktop: every message keeps its avatar column, indent and margins, and prose is set at the agent's measure, wider than the bubble (#2179)", () => {
   setViewport("desktop");
   const host = mount(
     <>
@@ -248,7 +248,7 @@ test("desktop: every message keeps its avatar column, indent and margins, and pr
   expect(host.querySelector("[data-mobile-tool-line]")).toBeNull();
   expect(host.querySelector(".bg-claude")).toBeTruthy();
   expect(classOf(host.querySelector(".group\\/msg"))).toContain("my-3 flex gap-2.5");
-  expect(classOf(host.querySelector("[data-tts-message]"))).toBe("min-w-0 flex-1 max-w-[68ch] whitespace-pre-wrap break-words");
+  expect(classOf(host.querySelector("[data-tts-message]"))).toBe("min-w-0 flex-1 max-w-[clamp(68ch,85%,100ch)] whitespace-pre-wrap break-words");
   /* The operator's bubble: three quarters of the reader, up to the measure,
      with its copy control beside it as before. */
   expect(classOf(host.querySelector(".bg-user"))).toContain("max-w-[min(75%,68ch)]");
