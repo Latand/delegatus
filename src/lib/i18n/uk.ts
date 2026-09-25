@@ -3212,6 +3212,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.dragHint": "Відпустіть над колонкою, щоб змінити статус · Esc скасовує",
   "kanban.skipToBoard": "Перейти до дошки",
   "kanban.seatResize": "Змінити висоту чату оркестратора",
+  "kanban.seatResizeWidth": "Змінити ширину чату оркестратора",
+  "kanban.seatResizeWidthHint": "Тягніть або натискайте стрілки; подвійне клацання повертає ширину за замовчуванням",
   "kanban.columnWiden": "Розширити «{column}»",
   "kanban.columnNarrow": "Повернути вузьку",
   "kanban.columnPin": "Тримати широкою",

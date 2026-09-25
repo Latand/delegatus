@@ -13,15 +13,28 @@
      the value is substituted where the board's grid reads it. */
   --shelf-balanced: calc(var(--shelf-w) + (100% - 3 * var(--shelf-w) - 3 * 16px) * 0.35 / 3);
   --target: 28px;
-  /* The page's spacing (point 9 of the open-agents review): the edge the
+  /* One spacing scale, and one inset per container on it (#2185): what a
+     container holds starts on its inset, so a title, the text under it, a chip
+     and a divider share one left edge. The project rail's rows keep theirs in
+     their own component (8 px). */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --inset-card: var(--space-3);
+  --inset-conversation: var(--space-3);
+  --inset-seat: var(--space-3);
+  /* Between the items of a header row. */
+  --gap-head: var(--space-2);
+  /* The page's edges (point 9 of the open-agents review): the edge the
      project's name, the Orchestrator row on top, the open-agents rail and the
-     columns start on, the gap above and below the Orchestrator row (and
-     under the scroll mode's jump strip), and the inset at which a card and
-     the rail's rows hold their content. The edge follows the board's layout
-     mode, set on this element. */
+     columns start on, and the gap above and below the Orchestrator row (and
+     under the scroll mode's jump strip). The edge follows the board's layout
+     mode, set on this element: the board's own 20 px wide, then the scale's
+     16 and 12. The open-agents rail's rows hold their content on a card's
+     inset. */
   --kb-edge: 20px;
-  --kb-stack: 12px;
-  --kb-card-inset: 14px;
+  --kb-stack: var(--space-3);
   --kb-grid-dot: color-mix(in srgb, var(--color-primary) 9%, transparent);
   position: relative;
   display: flex;
@@ -34,8 +47,8 @@
   background: var(--surface-canvas);
   -webkit-font-smoothing: antialiased;
 }
-.kb[data-mode="scroll"] { --kb-edge: 16px; }
-.kb[data-mode="tabs"] { --kb-edge: 12px; }
+.kb[data-mode="scroll"] { --kb-edge: var(--space-4); }
+.kb[data-mode="tabs"] { --kb-edge: var(--space-3); }
 /* The board's own controls start from nothing. The conversations and the
    orchestrator mounted inside it are the Viewer's components, styled by their
    own utilities, so none of these element rules reach into them. */
@@ -208,7 +221,9 @@
 .kb .empty { border: 1px dashed var(--border-strong); border-radius: var(--radius-surface); padding: 20px 14px; text-align: center; color: var(--color-muted); font-size: var(--text-ui); }
 .kb .empty strong { display: block; color: var(--color-secondary); font-weight: 600; margin-bottom: 2px; }
 
-.kb .divider { display: flex; align-items: center; gap: 10px; color: var(--color-muted); font-size: var(--text-label); font-weight: 600; padding: 4px 2px 0; }
+/* Its line sits halfway between the cards above and below: the column's gap
+   on both sides and no padding of its own on either. */
+.kb .divider { display: flex; align-items: center; gap: 10px; color: var(--color-muted); font-size: var(--text-label); font-weight: 600; padding: 0 2px; }
 .kb .divider::before, .kb .divider::after { content: ""; flex: 1; height: 1px; background: var(--border-default); }
 
 .kb .tabs-nav { display: flex; gap: 4px; padding: 10px 12px; }
@@ -229,7 +244,7 @@
 /* ── Card ─────────────────────────────────────────────────────────────────── */
 .kb .card {
   position: relative; display: flex; flex-direction: column; gap: 6px;
-  padding: 10px 12px 10px var(--kb-card-inset); border-radius: var(--radius-surface); background: var(--surface-card);
+  padding: var(--inset-card); border-radius: var(--radius-surface); background: var(--surface-card);
   border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast), opacity var(--motion-base);
   touch-action: pan-y; outline-offset: 2px;
@@ -251,8 +266,8 @@
 .kb .card .head { display: flex; align-items: flex-start; gap: 6px; }
 .kb .card .title {
   flex: 1; min-width: 0; margin: 0; font-size: var(--text-body); font-weight: 600; line-height: 18px;
-  text-align: left; color: var(--color-primary); border-radius: 4px; padding: 1px 4px; margin-left: -4px;
-  display: flex; align-items: center; min-height: var(--target);
+  text-align: left; color: var(--color-primary); border-radius: 4px; padding: 0 4px; margin-left: -4px;
+  display: flex; align-items: flex-start; min-height: var(--target);
 }
 .kb .card .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; word-break: break-word; }
 .kb .card .title.pending { color: var(--color-muted); font-weight: 500; font-style: italic; }
@@ -301,7 +316,10 @@
 .kb .card .icon-btn.dismiss { margin-left: -4px; }
 .kb .card .icon-btn.dismiss:hover { color: var(--color-success); }
 
-.kb .card .foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; flex-wrap: wrap; row-gap: 4px; }
+.kb .card .foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; flex-wrap: wrap; row-gap: var(--space-2); }
+/* A foot row is as tall as its text: «+ Agent» keeps its 28 px target by
+   reaching 6 px into the space above and below it, so the card's last line of
+   text sits as far from its bottom edge as the title does from its top. */
 .kb .pill {
   display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px 0 9px; border-radius: 999px;
   font-size: var(--text-label); font-weight: 600; background: var(--st-soft); color: var(--st);
@@ -315,11 +333,14 @@
 .kb .pill[data-status="done"] { --st: var(--color-success); --st-soft: var(--color-success-soft); }
 .kb .card .age { color: var(--color-muted); font-size: var(--text-label); white-space: nowrap; }
 .kb .card .foot .spacer { flex: 1; }
-.kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
+.kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); margin-block: calc((16px - var(--target, 32px)) / 2); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 .kb .card .add .plus { color: var(--color-accent); font-size: 14px; line-height: 1; }
 .kb .card .add:hover { background: var(--surface-well); color: var(--color-primary); }
 .kb .card .undo { display: inline-flex; align-items: center; height: var(--target, 32px); padding: 0 6px; margin-left: -6px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-accent); }
 .kb .card .undo:hover { background: var(--surface-well); }
+/* A card no task holds: the chip is a line of its own between the conversation
+   above it and the counts that wrap below it, with the same 12 px on both sides. */
+.kb .card .foot:has(> .origin-chip) { margin-top: 0; row-gap: var(--space-3); }
 .kb .card .origin-chip { height: 20px; padding: 0 8px; display: inline-flex; align-items: center; border-radius: 999px; border: 1px dashed var(--border-strong); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
 
 /* The project a card belongs to (#1820). Only the cross-project Overview
@@ -633,13 +654,13 @@
   display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden;
   border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
 }
-.kb .open-rail .or-head { flex-shrink: 0; padding: 8px 10px 7px var(--kb-card-inset); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); border-bottom: 1px solid var(--border-default); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kb .open-rail .or-head { flex-shrink: 0; padding: 8px 10px 7px var(--inset-card); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); border-bottom: 1px solid var(--border-default); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kb .or-list { list-style: none; margin: 0; padding: 0; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .kb .or-seg { position: relative; display: flex; align-items: center; }
 .kb .or-seg + .or-seg { border-top: 1px solid var(--border-default); }
 .kb .or-seg[data-current] { background: var(--surface-well); }
 .kb .or-seg[data-current]::before { content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 3px; border-radius: 0 2px 2px 0; background: var(--role); }
-.kb .or-seg .or-jump { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px var(--kb-card-inset); text-align: left; }
+.kb .or-seg .or-jump { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px var(--inset-card); text-align: left; }
 .kb .or-seg .or-jump:hover { background: var(--surface-well); }
 .kb .or-seg .or-jump:focus-visible { outline-offset: -2px; }
 .kb .or-emblem { position: relative; flex-shrink: 0; width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: #fff; background: var(--role-fill); }
@@ -663,7 +684,7 @@
 .kb .or-seg:is(:hover, :focus-within) .or-x { opacity: 1; }
 .kb .or-seg .or-x:hover { color: var(--color-primary); background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--border-default); }
 .kb .or-seg .or-x svg { width: 13px; height: 13px; }
-.kb .or-close-all { flex-shrink: 0; width: 100%; padding: 7px 10px 7px var(--kb-card-inset); text-align: left; border-top: 1px solid var(--border-default); font-size: var(--text-label); font-weight: 600; color: var(--color-muted); }
+.kb .or-close-all { flex-shrink: 0; width: 100%; padding: 7px 10px 7px var(--inset-card); text-align: left; border-top: 1px solid var(--border-default); font-size: var(--text-label); font-weight: 600; color: var(--color-muted); }
 .kb .or-close-all:hover { color: var(--color-primary); background: var(--surface-well); }
 /* Short of room: the count alone, which opens the same list. */
 .kb .open-rail .or-count {
@@ -673,7 +694,7 @@
 }
 .kb .open-rail .or-count:is(:hover, [aria-expanded="true"]) { border-color: var(--border-strong); }
 .kb .popover.open-agents { width: 280px; padding: 4px 0 0; overflow: hidden; display: flex; flex-direction: column; }
-.kb .popover.open-agents .head { padding: 6px 10px 7px var(--kb-card-inset); font-size: var(--text-label); color: var(--color-secondary); border-bottom: 1px solid var(--border-default); }
+.kb .popover.open-agents .head { padding: 6px 10px 7px var(--inset-card); font-size: var(--text-label); color: var(--color-secondary); border-bottom: 1px solid var(--border-default); }
 @media (pointer: coarse) {
   .kb .or-seg .or-x { opacity: 1; width: 36px; height: 36px; }
   .kb .or-seg .or-jump, .kb .or-close-all { min-height: 44px; }
@@ -710,18 +731,23 @@
 .kb .seat [data-orchestrator-conversation] [data-feed-state] { padding-bottom: 4px; }
 .kb .seat [data-orchestrator-conversation] [data-agent-control-strip] { padding-top: 2px; padding-bottom: 2px; }
 .kb .seat [data-orchestrator-conversation] form { padding-top: 4px; padding-bottom: 4px; }
+/* The transcript, the control strip and the composer with its model row
+   start on the seat's inset, where the head's avatar does (#2185). */
+.kb .seat [data-orchestrator-conversation] :is([data-feed-state], [data-agent-control-strip], form) { padding-left: var(--inset-seat); padding-right: var(--inset-seat); }
 .kb .seat-head [data-orchestrator-incumbent] { min-width: 0; }
 .kb .seat.folded [data-orchestrator-panel] > :not(.seat-head):not(.seat-rail) { display: none; }
 /* Two rows when the seat is open: the title, Previous seats and the seat's own
    controls on the first, who holds it and its host control (`.seat-meta`) on
    the second. The head wraps rather than squeezing, so a row that runs out of
    room moves an element down instead of drawing it over its neighbour. */
-.kb .seat-head { display: flex; flex-wrap: wrap; row-gap: 6px; flex-shrink: 0; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; min-height: 46px; container: seat-head / inline-size; }
+/* The head's items are one gap apart, and Fold ends as far from the right edge
+   as the avatar starts from the left (#2185). */
+.kb .seat-head { display: flex; flex-wrap: wrap; row-gap: 6px; flex-shrink: 0; align-items: center; gap: var(--gap-head); padding: 6px var(--inset-seat); min-height: 46px; container: seat-head / inline-size; }
 .kb .seat:not(.folded) .seat-head { border-bottom: 1px solid var(--border-default); }
 .kb .seat .av { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: #fff; background: var(--color-claude); }
 .kb .seat .av.codex { background: var(--color-codex); }
 .kb .seat .av svg { width: 14px; height: 14px; }
-.kb .seat-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.kb .seat-title { display: inline-flex; align-items: center; gap: var(--gap-head); min-width: 0; }
 .kb .seat-title strong { font-size: var(--text-body); font-weight: 650; white-space: nowrap; }
 .kb .seat-title .proj { font-size: var(--text-label); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .seat-title .state { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-label); font-weight: 600; color: var(--color-muted); white-space: nowrap; }
@@ -758,7 +784,7 @@
 :root[data-role-frame] .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread))[data-role-host]::after,
 :root[data-role-frame] .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .role-mark { display: none; }
 .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) { max-width: none; }
-.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head { padding-left: 0; }
+.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head { padding-left: 0; padding-right: 0; }
 .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head .icon-btn.seat-fold { border-color: transparent; background: none; }
 .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head .icon-btn.seat-fold:hover { background: var(--surface-well); color: var(--color-primary); }
 .kb .seat .grow { flex: 1; }
@@ -802,6 +828,11 @@
 .kb .seat.side.folded { width: 44px; }
 .kb .seat-grip.vertical { left: auto; right: -7px; top: 0; bottom: 0; width: 14px; height: auto; cursor: ew-resize; }
 .kb .seat-grip.vertical::before { width: 4px; height: 44px; }
+/* On top (#2179): a width the operator dragged, never past the board's own
+   edges. The grip on the right edge stops short of the corner the
+   height grip holds. */
+.kb .seat.sized:not(.side) { width: min(var(--seat-top-w), calc(100% - 2 * var(--kb-edge))); max-width: none; }
+.kb .seat-grip.vertical.top-width { top: 12px; bottom: 12px; }
 /* Collapsed at the side: the 44 px rail, one button. */
 .kb .seat-rail {
   display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; height: 100%;
@@ -864,7 +895,7 @@
 .kb .reader-slot { width: 100%; min-width: 0; }
 .kb .reader-host { display: flex; width: 100%; max-width: 780px; min-width: 0; }
 .kb .reader.conv {
-  width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 10px; max-height: var(--conv-in-card-h); overflow: hidden;
+  width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px var(--inset-conversation) 10px; max-height: var(--conv-in-card-h); overflow: hidden;
   border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
   container-type: inline-size; text-align: left;
 }
@@ -873,6 +904,17 @@
 .kb .reader.conv.folded { gap: 2px; padding-bottom: 6px; border-color: var(--border-default); max-height: none; }
 .kb .reader.conv.folded > :not(.conv-head):not(.rlatest) { display: none; }
 .kb .reader [data-feed-state] > .text-center { margin-top: 12px; margin-bottom: 8px; }
+/* One left edge inside an open conversation (#2185): the head, the avatars,
+   the «working…» row, the live-tail marker, the control strip, the composer
+   and its model row all start on the reader's inset. The transcript reaches
+   out to the reader's edges so its scrollbar sits there and its rows keep the
+   inset as their own padding; the rows below it are already inside it. A
+   conversation in the Stages sheet has no frame of its own and keeps its pane's. */
+.kb .reader.conv:not(.in-sheet) [data-log-feed-scroller] { margin-left: calc(-1 * var(--inset-conversation)); margin-right: calc(-1 * var(--inset-conversation)); }
+.kb .reader.conv:not(.in-sheet) [data-feed-state] { padding-left: var(--inset-conversation); padding-right: var(--inset-conversation); }
+.kb .reader.conv:not(.in-sheet) :is([data-turn-status], [data-agent-control-strip], form) { padding-left: 0; padding-right: 0; }
+.kb .reader.conv:not(.in-sheet) [data-turn-status] { justify-content: flex-start; }
+.kb .reader.conv:not(.in-sheet) [data-live-tail-pill] { left: 0; translate: none; }
 .kb .reader .conv-head { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex-shrink: 0; }
 .kb .reader .ch-row { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 28px; }
 .kb .reader .ch-row .spacer { flex: 1; }
@@ -930,8 +972,8 @@
 /* ── Task editing, colour and hide (K4b, prototype `renderEditor`, swatches) ─ */
 .kb .card .title:has(> .title-trigger) { padding: 0; margin-left: 0; }
 .kb .card .title-trigger {
-  flex: 1; min-width: 0; display: flex; align-items: center; min-height: var(--target); text-align: left;
-  border-radius: 4px; padding: 1px 4px; margin-left: -4px; cursor: text; font-weight: inherit; font-style: inherit; color: inherit;
+  flex: 1; min-width: 0; display: flex; align-items: flex-start; min-height: var(--target); text-align: left;
+  border-radius: 4px; padding: 0 4px; margin-left: -4px; cursor: text; font-weight: inherit; font-style: inherit; color: inherit;
 }
 .kb .card .title-trigger:hover { background: var(--surface-well); }
 .kb .card button.desc { cursor: text; border-radius: 4px; }
