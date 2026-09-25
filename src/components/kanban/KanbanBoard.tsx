@@ -10,7 +10,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
-import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
+import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import { latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
@@ -907,6 +907,24 @@ export function KanbanBoard(props: KanbanBoardProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- shortTitle reads the card it is given
   }, [controller, flash, show, t]);
 
+  /* ── Priority ───────────────────────────────────────────────────────────── */
+  const setPriority = useCallback((card: KanbanCardModel, priority: TaskPriority) => {
+    const raw = card.task ? tasksById.current.get(card.task.id) : undefined;
+    if (!raw) return;
+    void controller.edit(raw, { field: "priority", value: priority }).then((outcome) => {
+      if (outcome.kind !== "failed") return;
+      flash(card.id);
+      show(t("kanban.priorityFailed", { title: shortTitle(card), error: outcome.error }), {
+        label: t("kanban.retry"),
+        run: () => {
+          const current = cardsByIdRef.current.get(card.id);
+          if (current) setPriority(current, priority);
+        },
+      }, { error: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shortTitle reads the card it is given
+  }, [controller, flash, show, t]);
+
   /* ── Icon (#2102) ─────────────────────────────────────────────────────── */
   const setIcon = useCallback((card: KanbanCardModel, icon: string | null) => {
     const raw = card.task ? tasksById.current.get(card.task.id) : undefined;
@@ -1178,6 +1196,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
       onPick: (color) => setColor(card, color),
     };
     if (value.kind === "colour") return { label: t("kanban.colour"), items: [{ type: "head", label: t("kanban.colour") }, swatches] };
+    /* Only the Inbox sorts by it, so the hints say where the card goes there. */
+    const priorityItems: KanbanMenuItem[] = card.task ? [
+      { type: "sep" },
+      { type: "head", label: t("kanban.priority") },
+      ...TASK_PRIORITIES.map((priority): KanbanMenuItem => ({
+        type: "radio",
+        label: t(`kanban.priority.${priority}`),
+        why: priority === "normal" ? null : t(`kanban.priorityHint.${priority}`),
+        checked: card.priority === priority,
+        onSelect: () => setPriority(card, priority),
+      })),
+    ] : [];
     /* One ⋯ per card: each lane's actions are a group here, headed by the
        lane's title when the card holds more than one. */
     const laneGroups = card.pipelines.flatMap((entry): KanbanMenuItem[] => {
@@ -1191,6 +1221,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       items: [
         { type: "head", label: t("kanban.moveTo") },
         ...statusItems(card, false),
+        ...priorityItems,
         { type: "sep" },
         { type: "head", label: t("kanban.colour") },
         swatches,

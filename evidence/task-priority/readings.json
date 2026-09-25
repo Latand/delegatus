@@ -1,0 +1,205 @@
+{
+  "readings": {
+    "desktop-1440-en": {
+      "inbox": [
+        "t-prio-deploy",
+        "t-prio-limits",
+        "t-prio-notes",
+        "t-prio-export",
+        "t-prio-cleanup",
+        "t-prio-idea"
+      ],
+      "assigned": [
+        "t-prio-banner",
+        "t-prio-search",
+        "t-prio-docs"
+      ],
+      "marks": {
+        "t-prio-deploy": [
+          "high",
+          "High priority"
+        ],
+        "t-prio-limits": [
+          "high",
+          "High priority"
+        ],
+        "t-prio-cleanup": [
+          "low",
+          "Low priority"
+        ],
+        "t-prio-idea": [
+          "low",
+          "Low priority"
+        ],
+        "t-prio-banner": [
+          "low",
+          "Low priority"
+        ],
+        "t-prio-search": [
+          "high",
+          "High priority"
+        ]
+      },
+      "squeezed": [],
+      "misplaced": []
+    },
+    "desktop-1440-en-menu": {
+      "heads": [
+        "Move to",
+        "Priority",
+        "Colour"
+      ],
+      "checked": [
+        "Inbox",
+        "Normal",
+        ""
+      ]
+    },
+    "desktop-1440-en-raised": [
+      "t-prio-notes",
+      "t-prio-deploy",
+      "t-prio-limits",
+      "t-prio-export",
+      "t-prio-cleanup",
+      "t-prio-idea"
+    ],
+    "phone-390-en": {
+      "inbox": [
+        "t-prio-deploy",
+        "t-prio-limits",
+        "t-prio-notes",
+        "t-prio-export",
+        "t-prio-cleanup",
+        "t-prio-idea"
+      ],
+      "marks": {
+        "t-prio-deploy": "high",
+        "t-prio-limits": "high",
+        "t-prio-cleanup": "low",
+        "t-prio-idea": "low"
+      },
+      "overflowX": 0
+    },
+    "phone-390-en-sheet": [
+      [
+        "high",
+        "High",
+        "false",
+        44
+      ],
+      [
+        "normal",
+        "Normal",
+        "true",
+        44
+      ],
+      [
+        "low",
+        "Low",
+        "false",
+        44
+      ]
+    ],
+    "desktop-1440-uk": {
+      "inbox": [
+        "t-prio-deploy",
+        "t-prio-limits",
+        "t-prio-notes",
+        "t-prio-export",
+        "t-prio-cleanup",
+        "t-prio-idea"
+      ],
+      "assigned": [
+        "t-prio-banner",
+        "t-prio-search",
+        "t-prio-docs"
+      ],
+      "marks": {
+        "t-prio-deploy": [
+          "high",
+          "Високий пріоритет"
+        ],
+        "t-prio-limits": [
+          "high",
+          "Високий пріоритет"
+        ],
+        "t-prio-cleanup": [
+          "low",
+          "Низький пріоритет"
+        ],
+        "t-prio-idea": [
+          "low",
+          "Низький пріоритет"
+        ],
+        "t-prio-banner": [
+          "low",
+          "Низький пріоритет"
+        ],
+        "t-prio-search": [
+          "high",
+          "Високий пріоритет"
+        ]
+      },
+      "squeezed": [],
+      "misplaced": []
+    },
+    "desktop-1440-uk-menu": {
+      "heads": [
+        "Перенести до",
+        "Пріоритет",
+        "Колір"
+      ],
+      "checked": [
+        "Вхідні",
+        "Звичайний",
+        ""
+      ]
+    },
+    "desktop-1440-uk-raised": [
+      "t-prio-notes",
+      "t-prio-deploy",
+      "t-prio-limits",
+      "t-prio-export",
+      "t-prio-cleanup",
+      "t-prio-idea"
+    ],
+    "phone-390-uk": {
+      "inbox": [
+        "t-prio-deploy",
+        "t-prio-limits",
+        "t-prio-notes",
+        "t-prio-export",
+        "t-prio-cleanup",
+        "t-prio-idea"
+      ],
+      "marks": {
+        "t-prio-deploy": "high",
+        "t-prio-limits": "high",
+        "t-prio-cleanup": "low",
+        "t-prio-idea": "low"
+      },
+      "overflowX": 0
+    },
+    "phone-390-uk-sheet": [
+      [
+        "high",
+        "Високий",
+        "false",
+        44
+      ],
+      [
+        "normal",
+        "Звичайний",
+        "true",
+        44
+      ],
+      [
+        "low",
+        "Низький",
+        "false",
+        44
+      ]
+    ]
+  },
+  "failures": []
+}

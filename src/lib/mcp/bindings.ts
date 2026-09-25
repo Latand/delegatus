@@ -154,7 +154,7 @@ import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
-import type { BoardTask } from "@/lib/tasks/types";
+import { TASK_PRIORITIES, taskPriority, type BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
 import { resolveSiblings } from "@/lib/view/siblings";
@@ -3721,7 +3721,8 @@ function listTaskRow(task: TaskPipelineReadModel) {
 function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
   const scope = { project: text(args.project), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
-    openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase() };
+    openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(),
+    priorities: stringSet(args.priority, [...TASK_PRIORITIES]) };
   const source = dependencies.taskSelectionSource?.();
   const project = (task: TaskPipelineReadModel) => args.full === true ? task : args.compact === false ? listTaskRow(task) : compactTask(task);
   const page = source ? boardSelection(source.filename, "tasks").page(source, scope, args.cursor,
@@ -3732,6 +3733,7 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
     matches: task => (!scope.project || task.project === scope.project)
       && (!statuses.length || statuses.includes(task.status)) && (!scope.openOnly || task.status !== "done")
       && (!scope.placement || task.placement === scope.placement)
+      && (!scope.priorities.length || scope.priorities.includes(taskPriority(task)))
       && (!scope.updatedSince || task.updatedAt >= scope.updatedSince)
       && (!scope.ids.length || scope.ids.includes(task.id))
       && (!scope.query || task.text.toLowerCase().includes(scope.query)),

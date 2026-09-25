@@ -177,7 +177,7 @@ function taskPorts(patches: Array<{ id: string; body: PatchBody }>, refuse = () 
       patches.push({ id, body });
       await sleep(5);
       if (refuse()) return { ok: false, status: 500, error: "the store is read-only" };
-      stored = { ...stored, ...("status" in body ? { status: body.status } : {}), ...("text" in body ? { text: body.text } : {}), revision: `${(stored as BoardTask & { revision: string }).revision}+` } as BoardTask;
+      stored = { ...stored, ...("status" in body ? { status: body.status } : {}), ...("text" in body ? { text: body.text } : {}), ...("priority" in body ? { priority: body.priority === "normal" ? undefined : body.priority } : {}), revision: `${(stored as BoardTask & { revision: string }).revision}+` } as BoardTask;
       return { ok: true, task: stored };
     },
     async read() { return stored; },
@@ -448,4 +448,33 @@ test("the task screen groups what it holds: 24 px between the stages, the task w
   /* The history group draws nothing, and takes no gap, when it holds nothing. */
   const history = q(groups, '[data-phone-task-group="history"]')!;
   expect(history.className).toContain("empty:hidden");
+});
+
+test("priority is set from the task sheet: the menu's Priority row opens three levels, the choice is ticked at once and written on its own", async () => {
+  const patches: Array<{ id: string; body: PatchBody }> = [];
+  const { nav } = mount(taskPorts(patches), noPipelinePorts, { ...theTask, status: "inbox" } as BoardTask);
+  const body = dom.document.body as unknown as HTMLElement;
+  flushSync(() => nav.openSheet("menu"));
+  const row = q(body, '[data-phone-task-menu="priority"]')!;
+  expect(row.textContent).toContain(en("kanban.priority"));
+  /* It sits with the task's own settings, before Colour. */
+  expect(qa(body, "[data-phone-task-menu]").map((entry) => entry.getAttribute("data-phone-task-menu")).slice(0, 3)).toEqual(["rename", "priority", "colour"]);
+  click(row);
+  const levels = () => qa(body, "[data-phone-task-priority]");
+  expect(levels().map((entry) => [entry.getAttribute("data-phone-task-priority"), entry.textContent, entry.getAttribute("aria-checked")])).toEqual([
+    ["high", en("kanban.priority.high"), "false"],
+    ["normal", en("kanban.priority.normal"), "true"],
+    ["low", en("kanban.priority.low"), "false"],
+  ]);
+  expect(levels().every((entry) => entry.getAttribute("role") === "menuitemradio")).toBe(true);
+  click(q(body, '[data-phone-task-priority="high"]'));
+  expect(nav.getState().sheet).toBeNull();
+  await sleep(20);
+  expect(patches).toHaveLength(1);
+  expect(patches[0]!.body).toEqual({ priority: "high", expectedProject: "fixture", expectedRevision: "r-t-many-1" });
+
+  /* Reopened, the sheet ticks what is now stored. */
+  flushSync(() => nav.openSheet("menu"));
+  click(q(body, '[data-phone-task-menu="priority"]'));
+  expect(q(body, '[data-phone-task-priority][aria-checked="true"]')!.getAttribute("data-phone-task-priority")).toBe("high");
 });

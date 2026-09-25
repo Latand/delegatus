@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
-import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
+import { taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
 
 /**
  * Optimistic status moves for the kanban board (#1695 K2).
@@ -57,6 +57,8 @@ export type PatchResult = { ok: true; task: BoardTask } | { ok: false; status: n
 
 export type TaskFieldChange =
   | { field: "color"; value: TaskColor | null }
+  /* Normal is the absent value, so setting it clears high or low. */
+  | { field: "priority"; value: TaskPriority }
   /* A lucide icon name (#2102); null clears it. */
   | { field: "icon"; value: string | null }
   /* `replaces` names the stored hide (its `at`) of a group that came back to
@@ -82,7 +84,7 @@ export type FieldEditOutcome =
   | { kind: "conflict"; field: TaskField; task: BoardTask; serverValue: unknown }
   | { kind: "failed"; field: TaskField; error: string; status: number; code?: string };
 
-export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus } | { color: TaskColor | "none" } | { icon: string } | { hide: boolean } | { text: string } | { details: string });
+export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus } | { color: TaskColor | "none" } | { priority: TaskPriority } | { icon: string } | { hide: boolean } | { text: string } | { details: string });
 
 export interface TaskMutationPorts {
   patch(id: string, body: PatchBody): Promise<PatchResult>;
@@ -114,6 +116,7 @@ interface FieldOverride {
 /** The field as a stored row holds it. */
 export function fieldValue(task: BoardTask, field: TaskField): unknown {
   if (field === "color") return task.color ?? null;
+  if (field === "priority") return taskPriority(task);
   if (field === "icon") return task.icon ?? null;
   if (field === "hide") return Boolean(task.groupHidden);
   if (field === "details") return task.details ?? "";
@@ -123,6 +126,7 @@ export function fieldValue(task: BoardTask, field: TaskField): unknown {
 /** The change that would show `value` in `field`. */
 function changeOf(field: TaskField, value: unknown): TaskFieldChange {
   if (field === "color") return { field, value: (value as TaskColor | null) ?? null };
+  if (field === "priority") return { field, value: value === "high" || value === "low" ? value : "normal" };
   if (field === "icon") return { field, value: typeof value === "string" && value ? value : null };
   if (field === "hide") return { field, value: Boolean(value) };
   if (field === "details") return { field, value: String(value ?? "") };
@@ -132,6 +136,7 @@ function changeOf(field: TaskField, value: unknown): TaskFieldChange {
 /** Whether a stored row already shows `change`. */
 export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
   if (change.field === "color") return (task.color ?? null) === change.value;
+  if (change.field === "priority") return taskPriority(task) === change.value;
   if (change.field === "icon") return (task.icon ?? null) === change.value;
   if (change.field === "text") return task.text === change.value;
   if (change.field === "details") return (task.details ?? "") === change.value;
@@ -140,7 +145,7 @@ export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
 }
 
 /** The edits a board shows ahead of the poll, per task. */
-export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; icon?: string | null; hide?: boolean; text?: string; details?: string }>;
+export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; priority?: TaskPriority; icon?: string | null; hide?: boolean; text?: string; details?: string }>;
 
 /**
  * The tasks a board draws: the stored rows with the edits this device has sent
@@ -164,6 +169,10 @@ export function drawnTasks(tasks: readonly BoardTask[], edits: FieldEdits, stamp
     if ("color" in edit) {
       if (edit.color) next.color = edit.color;
       else delete next.color;
+    }
+    if ("priority" in edit) {
+      if (edit.priority === "high" || edit.priority === "low") next.priority = edit.priority;
+      else delete next.priority;
     }
     if ("icon" in edit) {
       if (edit.icon) next.icon = edit.icon;
@@ -330,6 +339,7 @@ export class TaskStatusMutations {
   private bodyFor(change: TaskFieldChange, guard: { project: string; revision: string }): PatchBody {
     const fence = { expectedProject: guard.project, expectedRevision: guard.revision };
     if (change.field === "color") return { ...fence, color: change.value ?? "none" };
+    if (change.field === "priority") return { ...fence, priority: change.value };
     if (change.field === "icon") return { ...fence, icon: change.value ?? "none" };
     if (change.field === "hide") return { ...fence, hide: change.value };
     if (change.field === "details") return { ...fence, details: change.value };
