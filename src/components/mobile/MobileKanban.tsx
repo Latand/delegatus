@@ -16,6 +16,7 @@ import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { updateTask } from "@/components/tasks/taskApi";
 import { blockAgeSeconds } from "@/components/pipelines/pipelineBlockModel";
 import { humanizeDuration } from "@/components/turnDuration";
@@ -387,6 +388,19 @@ function CardView({ item, now, project, onOpen, onLongPress, onDismiss, onUndo }
         </span>
       ) : null}
       <span className="flex min-w-0 items-start gap-2">
+        {/* The task's icon, as the desktop card resolves it (#2102), in the
+            task's colour (#2190). It sits level with the first title line and
+            the title wraps under itself; a task with no icon draws none, and
+            its title keeps the card's edge. */}
+        {item.kind === "task" ? (
+          <TaskIcon
+            icon={card.icon}
+            title={pending ? "" : card.title}
+            tint={card.color ? TASK_COLOR_HEX[card.color] : null}
+            omitDefault
+            className="mt-[calc((1.25em-16px)/2)] text-body"
+          />
+        ) : null}
         <span
           data-phone-card-title=""
           className={`min-w-0 flex-1 line-clamp-2 text-body leading-[1.25] [overflow-wrap:anywhere] ${pending ? "font-normal italic text-muted" : "font-semibold text-primary"}`}

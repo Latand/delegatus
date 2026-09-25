@@ -24,8 +24,8 @@ test("an assistant message keeps its actions out of the text flow", () => {
   /* No absolutely-positioned cluster over the body. */
   expect(html).not.toContain("absolute right-0 top-0");
   /* The body element itself is no longer a positioning context for actions;
-     it is set at the reading measure (#2148). */
-  expect(html).toContain('class="min-w-0 flex-1 max-w-[68ch] whitespace-pre-wrap break-words"');
+     it is set at the agent's measure, wider than the operator's bubble (#2179). */
+  expect(html).toContain('class="min-w-0 flex-1 max-w-[clamp(68ch,85%,100ch)] whitespace-pre-wrap break-words"');
   /* The actions occupy a reserved row of their own above the text. */
   expect(html).toMatch(/mb-0\.5 flex min-h-6 items-center gap-1/);
 });

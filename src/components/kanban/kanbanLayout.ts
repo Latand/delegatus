@@ -55,3 +55,21 @@ export function kanbanLayoutModeBeside(width: number, seatWidth: number): Kanban
   const mode = kanbanLayoutMode(width - seatWidth);
   return mode === "tabs" && seatWidth > 0 && kanbanLayoutMode(width) !== "tabs" ? "scroll" : mode;
 }
+
+/** The open-agents rail at the board's side: its names and roles, or the
+    count alone. */
+export type OpenRailTier = "full" | "compact";
+
+/** The rail's width in each tier, padding included; the stylesheet draws
+    inside it, from the page's edge (at most 20 px, `--kb-edge`), so the
+    compact tier holds that edge and its 36 px count. */
+export const OPEN_RAIL_WIDTH: Readonly<Record<OpenRailTier, number>> = { full: 200, compact: 56 };
+
+/** The rail takes its own strip beside the columns, so it covers nothing on
+    them. It shows its names while that strip leaves the columns the mode they
+    would have beside the count alone, and keeps a scrolling board at least
+    768 px wide; otherwise it is the count. */
+export function openRailTier(width: number): OpenRailTier {
+  const full = width - OPEN_RAIL_WIDTH.full;
+  return full >= 768 && kanbanLayoutMode(full) === kanbanLayoutMode(width - OPEN_RAIL_WIDTH.compact) ? "full" : "compact";
+}

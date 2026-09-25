@@ -8380,3 +8380,731 @@ describe("interface polish round 2: press and open/close motion, the status menu
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+describe("the open agents at the board's side: short names, role emblem and colour, one click to each", () => {
+  /* The `stages` scenario with 1, 3 and 7 of its conversations open as
+     readers, remembered in this browser's storage before the first render,
+     at 1440×900 and 1920×1080 in English and Ukrainian, and at 1600×900,
+     where the names would cost the columns their layout and the rail is the
+     count. What only a browser settles, and is gated here: the rail stands
+     beside the columns and overlaps none of them; it lists exactly the open
+     readers with the role their ribbon wears; a segment brings its reader
+     into the window and focuses it; Alt+J walks on from there. Frames go to
+     OPEN_AGENTS_PNG_DIR. */
+  const OPEN = {
+    1: ["search-ver-2"],
+    3: ["search-ver-2", "rounds-review", "upload-plan"],
+    7: ["search-ver-2", "rounds-review", "upload-plan", "upload-ui", "export-impl", "links-impl", "search-rev"],
+  } as const;
+  const seedReaders = (ids: readonly string[]) => `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(ids.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
+
+  interface RailReading {
+    tier: string | null;
+    segments: Array<{ key: string; role: string; readerRole: string | null; name: string; card: string | null; dot: string | null }>;
+    /** The chip, or the count alone: what the strip draws. */
+    rail: { x: number; y: number; width: number; height: number } | null;
+    overlaps: string[];
+    head: string | null;
+    pageErrors: string[];
+  }
+  const readRail = (page: Page) => page.evaluate((): Omit<RailReading, "pageErrors"> => {
+    const rail = document.querySelector<HTMLElement>("[data-open-rail]");
+    const box = rail?.getBoundingClientRect() ?? null;
+    const chip = rail?.querySelector<HTMLElement>(".or-chip, .or-count")?.getBoundingClientRect() ?? null;
+    const overlaps = box ? [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status], [data-kanban-board] .card")].filter((element) => {
+      const other = element.getBoundingClientRect();
+      return other.width > 0 && other.height > 0 && other.left < box.right - 0.5 && other.right > box.left + 0.5 && other.top < box.bottom - 0.5 && other.bottom > box.top + 0.5;
+    }).map((element) => element.dataset.status ?? element.dataset.id ?? element.className) : [];
+    return {
+      tier: rail?.dataset.openRail ?? null,
+      segments: [...document.querySelectorAll<HTMLElement>("[data-open-agent]")].map((segment) => ({
+        key: segment.dataset.openAgent!,
+        role: segment.dataset.role!,
+        readerRole: document.querySelector<HTMLElement>(`[data-kanban-reader="${segment.dataset.openAgent}"]`)?.dataset.role ?? null,
+        name: segment.querySelector(".or-name")?.textContent ?? "",
+        card: segment.querySelector(".or-card")?.textContent ?? null,
+        dot: segment.querySelector("[data-open-agent-dot]")?.getAttribute("data-open-agent-dot") ?? null,
+      })),
+      rail: chip ? { x: Math.round(chip.x), y: Math.round(chip.y), width: Math.round(chip.width), height: Math.round(chip.height) } : null,
+      overlaps,
+      head: rail?.querySelector("[data-open-rail-count]")?.textContent ?? null,
+    };
+  });
+  /* The reader the operator is in, and how much of it the window shows. */
+  const readFocus = (page: Page) => page.evaluate(() => {
+    const reader = document.activeElement?.closest<HTMLElement>("[data-kanban-reader]") ?? null;
+    const box = reader?.getBoundingClientRect();
+    return {
+      key: reader?.dataset.kanbanReader ?? null,
+      headInWindow: box ? box.top >= 0 && box.top + 40 <= window.innerHeight && box.left >= 0 && box.left + 120 <= window.innerWidth : false,
+    };
+  });
+
+  browserTest("1, 3 and 7 open agents at 1440×900 and 1920×1080, the count alone at 1600×900, in English and Ukrainian", async () => {
+    const pngDir = process.env.OPEN_AGENTS_PNG_DIR ?? "/var/tmp/llv-open-agents-evidence";
+    const out = path.resolve(".artifacts/open-agents-rail");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=stages`;
+    const open = async (viewport: { width: number; height: number }, lang: "en" | "uk", ids: readonly string[]) => {
+      const opened = await openFixture(browser, url, viewport, "light", lang);
+      await opened.context.addInitScript(seedReaders(ids));
+      await opened.page.reload();
+      await opened.page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
+      await opened.page.waitForFunction((count) => document.querySelectorAll("[data-kanban-reader]").length >= count, ids.length, { timeout: 30_000 });
+      /* The seat folded, so the board has the window; `O` is its own key, and a click could land on the attention island over its head. */
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      if (await opened.page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await opened.page.keyboard.press("o");
+      await opened.page.waitForTimeout(700);
+      return opened;
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 1080 }] as const) {
+          for (const count of [1, 3, 7] as const) {
+            const label = `${viewport.width}x${viewport.height}-${count}-${lang}`;
+            const ids = OPEN[count];
+            const { context, page, pageErrors } = await open(viewport, lang, ids);
+            try {
+              await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+              const reading = await readRail(page);
+              readings[label] = { ...reading, pageErrors };
+              if (reading.tier !== "full") failures.push(`${label}: the rail is ${reading.tier}, expected its names`);
+              if (JSON.stringify(reading.segments.map((segment) => segment.key)) !== JSON.stringify(ids.map((id) => `conversation_${id}`))) failures.push(`${label}: the rail lists ${reading.segments.map((segment) => segment.key).join(", ")}`);
+              for (const segment of reading.segments) {
+                if (segment.role !== segment.readerRole) failures.push(`${label}: ${segment.key} wears ${segment.role}, its reader ${segment.readerRole}`);
+                if (!segment.name || /conversation_|\/repo\//.test(`${segment.name} ${segment.card ?? ""}`)) failures.push(`${label}: ${segment.key} is named «${segment.name}»`);
+              }
+              if (reading.overlaps.length) failures.push(`${label}: the rail overlaps ${reading.overlaps.join(", ")}`);
+              if (!reading.rail || reading.rail.y + reading.rail.height > viewport.height + 1) failures.push(`${label}: the rail is not whole in the window (${JSON.stringify(reading.rail)})`);
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+              if (count === 7) {
+                /* One click on the last segment takes the board there; Alt+J walks on, round the end. */
+                const last = `conversation_${ids[ids.length - 1]}`;
+                await page.locator(`[data-open-agent-jump="${last}"]`).click();
+                await page.waitForTimeout(500);
+                const jumped = await readFocus(page);
+                await page.screenshot({ path: path.join(pngDir, `${label}-jumped.png`) });
+                if (jumped.key !== last || !jumped.headInWindow) failures.push(`${label}: after the click the operator is in ${JSON.stringify(jumped)}`);
+                await page.keyboard.press("Alt+KeyJ");
+                await page.waitForTimeout(500);
+                const cycled = await readFocus(page);
+                await page.screenshot({ path: path.join(pngDir, `${label}-alt-j.png`) });
+                if (cycled.key !== `conversation_${ids[0]}` || !cycled.headInWindow) failures.push(`${label}: Alt+J landed in ${JSON.stringify(cycled)}`);
+                await page.locator(`[data-open-agent="conversation_${ids[2]}"]`).hover();
+                await page.waitForTimeout(250);
+                await page.locator("[data-open-rail]").screenshot({ path: path.join(pngDir, `${label}-rail-hover.png`) });
+                (readings[label] as Record<string, unknown>).jumped = jumped;
+                (readings[label] as Record<string, unknown>).cycled = cycled;
+              }
+            } finally {
+              await context.close();
+            }
+          }
+        }
+        {
+          const label = `1600x900-7-${lang}`;
+          const { context, page, pageErrors } = await open({ width: 1600, height: 900 }, lang, OPEN[7]);
+          try {
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            const reading = await readRail(page);
+            if (reading.tier !== "compact") failures.push(`${label}: the rail is ${reading.tier}, expected the count`);
+            if (reading.head !== "7") failures.push(`${label}: the count reads «${reading.head}»`);
+            if (reading.overlaps.length) failures.push(`${label}: the rail overlaps ${reading.overlaps.join(", ")}`);
+            await page.locator("[data-open-rail-count]").click();
+            await page.waitForSelector(".popover.open-agents", { timeout: 5_000 });
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}-list.png`) });
+            const listed = await readRail(page);
+            if (listed.segments.length !== 7) failures.push(`${label}: the list holds ${listed.segments.length}`);
+            await page.locator(`.popover.open-agents [data-open-agent-jump="conversation_${OPEN[7][3]}"]`).click();
+            await page.waitForTimeout(500);
+            const jumped = await readFocus(page);
+            await page.screenshot({ path: path.join(pngDir, `${label}-jumped.png`) });
+            if (jumped.key !== `conversation_${OPEN[7][3]}` || !jumped.headInWindow) failures.push(`${label}: after the click the operator is in ${JSON.stringify(jumped)}`);
+            readings[label] = { ...reading, listed: listed.segments.length, jumped, pageErrors };
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/open-agents-rail", { recursive: true });
+    fs.writeFileSync("evidence/open-agents-rail/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  /* The page's edges, read in the same frames. The project's name, the
+     folded Orchestrator row and the rail start on one left edge; the row
+     stands one gap below the bar and one gap above what the board draws
+     next (the columns, or the strip over them, the scroll mode's jump
+     strip or the tabbed mode's tabs, which starts where the first column
+     does and stands that gap above the columns); the rail's top is the columns' top; the
+     rail's rows and the cards hold their content at one inset; and every
+     column's title sits at the same offset in its column, framed or not.
+     The first column the board shows starts on that edge too, and beside
+     the rail it stands the board's edge (`--kb-edge`) clear of it, the same
+     space the rail keeps from the sidebar, in every mode; the scroller's
+     snap once scrolled that edge away at 1440×900. Each case runs with the
+     rail, in its full tier at 1440×900 and 1920×1080 and as the count at
+     1600×900, and without it, and at 1000×800 and 700×800 without it,
+     where the board scrolls and where it shows tabs. */
+  interface EdgeReading {
+    mode: string | null;
+    tier: string | null;
+    name: number | null;
+    seat: { left: number; top: number; bottom: number } | null;
+    bar: number;
+    rail: { left: number; top: number; right: number } | null;
+    edge: number;
+    column: number | null;
+    strip: { left: number; top: number; bottom: number } | null;
+    columns: number;
+    railInset: number | null;
+    cardInset: number | null;
+    titles: Record<string, { left: number; top: number }>;
+  }
+  const readEdges = (page: Page) => page.evaluate((): EdgeReading => {
+    const rect = (element: Element | null | undefined) => element?.getBoundingClientRect() ?? null;
+    const lead = document.querySelector(".bar[data-bar=\"project\"] .bar-lead");
+    const walker = lead ? document.createTreeWalker(lead, NodeFilter.SHOW_TEXT, { acceptNode: (node) => node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP }) : null;
+    const text = walker?.nextNode() ?? null;
+    let name: number | null = null;
+    if (text) {
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      name = range.getBoundingClientRect().left;
+    }
+    const seat = rect(document.querySelector(".kb-page > .seat"));
+    const railBox = rect(document.querySelector("[data-open-rail] :is(.or-chip, .or-count)"));
+    const strip = rect(document.querySelector(".scroll-wrap > .tabs-nav > button"));
+    const chip = rect(document.querySelector("[data-open-rail] .or-chip"));
+    const emblem = rect(document.querySelector("[data-open-rail] .or-emblem"));
+    const cardEl = document.querySelector<HTMLElement>("[data-kanban-board] .column[data-status=\"inbox\"] .card");
+    const cardBox = rect(cardEl);
+    const cardHead = rect(cardEl?.querySelector(".head"));
+    const titles: Record<string, { left: number; top: number }> = {};
+    for (const column of document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")) {
+      const box = column.getBoundingClientRect();
+      const title = column.querySelector(".col-head h2")?.getBoundingClientRect();
+      if (title && box.width > 0) titles[column.dataset.status!] = { left: title.left - box.left, top: title.top - box.top };
+    }
+    const scroller = document.querySelector("[data-kanban-board] .board")?.getBoundingClientRect();
+    const shown = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0 && (!scroller || box.right > scroller.left + 0.5));
+    const kb = document.querySelector("[data-kanban-board]");
+    const columns = Math.min(...[...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => box.top));
+    return {
+      mode: document.querySelector<HTMLElement>("[data-kanban-board]")?.dataset.mode ?? null,
+      tier: document.querySelector<HTMLElement>("[data-open-rail]")?.dataset.openRail ?? null,
+      name,
+      seat: seat ? { left: seat.left, top: seat.top, bottom: seat.bottom } : null,
+      bar: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
+      rail: railBox ? { left: railBox.left, top: railBox.top, right: railBox.right } : null,
+      edge: kb ? parseFloat(getComputedStyle(kb).getPropertyValue("--kb-edge")) : Number.NaN,
+      column: shown.length ? Math.min(...shown.map((box) => box.left)) : null,
+      strip: strip ? { left: strip.left, top: strip.top, bottom: strip.bottom } : null,
+      columns,
+      railInset: chip && emblem ? emblem.left - chip.left : null,
+      cardInset: cardBox && cardHead ? cardHead.left - cardBox.left : null,
+      titles,
+    };
+  });
+  const edgeFailures = (label: string, edges: EdgeReading, railExpected: boolean): string[] => {
+    const failures: string[] = [];
+    const near = (a: number | null | undefined, b: number | null | undefined) => a != null && b != null && Math.abs(a - b) <= 0.5;
+    if (!edges.seat) return [`${label}: no Orchestrator row on top`];
+    if (!near(edges.name, edges.seat.left)) failures.push(`${label}: the project's name starts at ${edges.name}, the Orchestrator row at ${edges.seat.left}`);
+    if (railExpected) {
+      if (!edges.rail) failures.push(`${label}: no rail`);
+      else {
+        if (!near(edges.rail.left, edges.seat.left)) failures.push(`${label}: the rail starts at ${edges.rail.left}, the Orchestrator row at ${edges.seat.left}`);
+        if (!near(edges.rail.top, edges.columns)) failures.push(`${label}: the rail's top is ${edges.rail.top}, the columns' ${edges.columns}`);
+        if (edges.column != null && !near(edges.column - edges.rail.right, edges.edge)) failures.push(`${label}: the first column stands ${edges.column - edges.rail.right} px clear of the rail, the board's edge is ${edges.edge}`);
+      }
+      if (edges.tier === "full" && !near(edges.railInset, edges.cardInset)) failures.push(`${label}: the rail's rows hold their content ${edges.railInset} in, the cards ${edges.cardInset}`);
+    }
+    if (!railExpected && !near(edges.column, edges.seat.left)) failures.push(`${label}: the first column starts at ${edges.column}, the Orchestrator row at ${edges.seat.left}`);
+    const above = edges.seat.top - edges.bar;
+    const next = edges.strip ?? { top: edges.columns, bottom: edges.columns };
+    const below = next.top - edges.seat.bottom;
+    if (!near(above, below)) failures.push(`${label}: ${above} px above the Orchestrator row, ${below} below it`);
+    if (edges.strip && !near(edges.columns - edges.strip.bottom, above)) failures.push(`${label}: the ${edges.mode} strip stands ${edges.columns - edges.strip.bottom} px above the columns, the row ${above} below the bar`);
+    if (edges.strip && !near(edges.strip.left, edges.column)) failures.push(`${label}: the ${edges.mode} strip starts at ${edges.strip.left}, the first column at ${edges.column}`);
+    const inbox = edges.titles.inbox;
+    for (const [status, title] of Object.entries(edges.titles)) {
+      if (inbox && (!near(title.left, inbox.left) || !near(title.top, inbox.top))) failures.push(`${label}: ${status}'s title sits at ${title.left},${title.top} in its column, Inbox's at ${inbox.left},${inbox.top}`);
+    }
+    return failures;
+  };
+
+  browserTest("one left edge, one gap round the Orchestrator row, the rail level with the columns, one inset for its rows and the cards", async () => {
+    const pngDir = process.env.OPEN_AGENTS_PNG_DIR ?? "/var/tmp/llv-open-agents-evidence";
+    const out = path.resolve(".artifacts/open-agents-rail");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 1600, height: 900 }, { width: 1000, height: 800 }, { width: 700, height: 800 }] as const) {
+          for (const ids of viewport.width < 1440 ? [[]] as const : [OPEN[3], []] as const) {
+            const label = `edges-${viewport.width}x${viewport.height}-${ids.length}-${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, "light", lang);
+            try {
+              await context.addInitScript(seedReaders(ids));
+              await page.reload();
+              await page.waitForSelector("[data-kanban-board] .column[data-status] .card >> visible=true", { timeout: 30_000 });
+              if (ids.length) await page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
+              await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+              if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+              await page.waitForTimeout(700);
+              await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+              const edges = await readEdges(page);
+              readings[label] = { ...edges, pageErrors };
+              failures.push(...edgeFailures(label, edges, ids.length > 0));
+              if (ids.length && edges.tier !== (viewport.width === 1600 ? "compact" : "full")) failures.push(`${label}: the rail is ${edges.tier}`);
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/open-agents-rail", { recursive: true });
+    fs.writeFileSync("evidence/open-agents-rail/edges.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+describe("#2179 #2185 agent replies wider than the operator's bubble, a seat dragged wider, one inset per container", () => {
+  /*
+   * Over the fixture's `agent-report` scenario, where the orchestrator has
+   * just answered with a long report (a list, a code block and a table), at
+   * 1440 and 1280 in Chromium:
+   *
+   *   - the agent's reply runs wider than the operator's bubble, and stays
+   *     inside a readable measure on the widest seat;
+   *   - the seat on top takes a width grip on its right edge: a drag widens it
+   *     (both edges move, it stays centred), the arrows move it by 40 px, and
+   *     the width comes back after a reload for this project only. At 1280 the
+   *     board beside the project rail is already the seat's width, so the drag
+   *     is read with the rail put away;
+   *   - the containers the designer marked (#2185) are measured by their INK:
+   *     a card's top, bottom and side insets, the space above and below the
+   *     «Not on a task» divider, the origin chip against the card's text edge
+   *     and baseline, the left edges of everything in an open conversation and
+   *     in the seat, the gaps between the seat's header items, Fold's inset,
+   *     and the rail's filter row.
+   *
+   *   AGENT_REPLY_STAMP=after AGENT_REPLY_PNG_DIR=… CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "agent replies wider"
+   *
+   * `AGENT_REPLY_STAMP=before` only records (it is how the merge base was
+   * read); `after` also gates. Readings go to
+   * `evidence/agent-reply-width/readings-<stamp>.json`; frames to
+   * `AGENT_REPLY_PNG_DIR`, or `.artifacts/agent-reply-width/`, never committed.
+   */
+  const STAMP = process.env.AGENT_REPLY_STAMP === "before" ? "before" : "after";
+  const OUT = path.resolve(process.env.AGENT_REPLY_PNG_DIR ?? ".artifacts/agent-reply-width");
+  const EVIDENCE = path.resolve("evidence/agent-reply-width");
+  const FRAMES = [{ width: 1440, height: 900 }, { width: 1280, height: 800 }] as const;
+  const SEAT = "[data-kanban-seat]";
+  const READER = '[data-kanban-reader="conversation_export-impl"]';
+  const HIDE_TOAST = "[data-attention-toast] { display: none !important; }";
+
+  /* Ink: the union of the visible text runs, glyphs and images inside an
+     element, which is what the eye reads as its edge. */
+  const INK = `(() => {
+    const visible = el => {
+      while (el && getComputedStyle(el).display === "contents") el = el.parentElement;
+      return Boolean(el) && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden" && Number(getComputedStyle(el).opacity) > 0;
+    };
+    /* The alphabetic baseline of an element's first text run: the run's box
+       top plus its font's ascent, which is where Chrome sets the content area. */
+    window.__baseline = el => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rect = range.getClientRects()[0];
+        if (!rect) continue;
+        const style = getComputedStyle(node.parentElement);
+        const context = document.createElement("canvas").getContext("2d");
+        context.font = style.fontWeight + " " + style.fontSize + " " + style.fontFamily;
+        return rect.top + context.measureText(node.nodeValue).fontBoundingBoxAscent;
+      }
+      return null;
+    };
+    window.__ink = (root, skip) => {
+      if (!root) return null;
+      let top = Infinity, left = Infinity, right = -Infinity, bottom = -Infinity;
+      /* A line the clamp or a scroller hides is no ink: each rect is cut by
+         every ancestor that clips. */
+      const clipOf = el => {
+        let clip = null;
+        for (let at = el; at; at = at.parentElement) {
+          const style = getComputedStyle(at);
+          if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+          const r = at.getBoundingClientRect();
+          clip = clip ? { top: Math.max(clip.top, r.top), left: Math.max(clip.left, r.left), right: Math.min(clip.right, r.right), bottom: Math.min(clip.bottom, r.bottom) } : { top: r.top, left: r.left, right: r.right, bottom: r.bottom };
+        }
+        return clip;
+      };
+      const add = (r, clip) => {
+        const cut = clip ? { top: Math.max(clip.top, r.top), left: Math.max(clip.left, r.left), right: Math.min(clip.right, r.right), bottom: Math.min(clip.bottom, r.bottom) } : r;
+        if (cut.right - cut.left < 0.5 || cut.bottom - cut.top < 0.5) return;
+        top = Math.min(top, cut.top); left = Math.min(left, cut.left); right = Math.max(right, cut.right); bottom = Math.max(bottom, cut.bottom);
+      };
+      const skipped = el => skip && el.closest(skip);
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue.trim() || !visible(node.parentElement) || skipped(node.parentElement)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const clip = clipOf(node.parentElement);
+        for (const r of range.getClientRects()) add(r, clip);
+      }
+      for (const el of root.querySelectorAll("svg, img")) if (visible(el) && !skipped(el) && !el.parentElement.closest("svg")) add(el.getBoundingClientRect(), clipOf(el.parentElement));
+      return top === Infinity ? null : { top, left, right, bottom };
+    };
+    window.__box = el => { if (!el) return null; const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+  })()`;
+  const round = (value: unknown): unknown => typeof value === "number" ? Math.round(value * 10) / 10
+    : Array.isArray(value) ? value.map(round)
+      : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, round(entry)])) : value;
+
+  async function ready(page: Page) {
+    await page.addStyleTag({ content: HIDE_TOAST });
+    await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+    await page.waitForSelector(`${SEAT} [data-orchestrator-panel]`, { state: "attached", timeout: 20_000 });
+    await page.waitForFunction((seat) => document.querySelector(`${seat} [data-feed-state]`)?.getAttribute("data-feed-state") === "items", SEAT, { timeout: 15_000 });
+    await page.addScriptTag({ content: INK });
+    await page.waitForTimeout(500);
+  }
+
+  /* The report's first line at the top of the seat's transcript, or with
+     `lower`, its code block and table. */
+  async function showReport(page: Page, lower = false) {
+    await page.evaluate(({ seat, lower }) => {
+      const scroller = document.querySelector<HTMLElement>(`${seat} [data-log-feed-scroller]`)!;
+      const report = [...document.querySelectorAll<HTMLElement>(`${seat} [data-tts-message]`)].find((el) => el.textContent?.includes("Here is where the release stands"))!;
+      const anchor = lower ? report.querySelector("pre") ?? report : report;
+      scroller.scrollTop += anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top - (lower ? 40 : 8);
+    }, { seat: SEAT, lower });
+    await page.waitForTimeout(300);
+  }
+
+  const readSeat = (page: Page) => page.evaluate((seat) => {
+    const w = window as unknown as { __ink: (el: Element | null, skip?: string) => { top: number; left: number; right: number; bottom: number } | null; __box: (el: Element | null) => { top: number; left: number; right: number; bottom: number; width: number; height: number } | null };
+    const root = document.querySelector(seat)!;
+    const box = w.__box(root)!;
+    const report = [...root.querySelectorAll("[data-tts-message]")].find((el) => el.textContent?.includes("Here is where the release stands")) ?? null;
+    const bubbles = [...root.querySelectorAll("[data-user-bubble]")];
+    const avatar = report?.parentElement?.firstElementChild ?? null;
+    const head = root.querySelector(".seat-head");
+    const title = root.querySelector(".seat-title");
+    const strong = w.__ink(title?.querySelector("strong") ?? null);
+    const proj = w.__ink(title?.querySelector(".proj") ?? null);
+    const state = w.__box(title?.querySelector(".state i") ?? null) ?? w.__ink(title?.querySelector(".state") ?? null);
+    const av = w.__box(root.querySelector(".seat-head .av"));
+    const fold = w.__box(root.querySelector("[data-seat-collapse]"));
+    const strip = root.querySelector("[data-agent-control-strip]");
+    const field = root.querySelector("[data-orchestrator-conversation] form textarea")?.parentElement ?? null;
+    const modelRow = root.querySelector("[data-orchestrator-conversation] form [data-runtime-pill], [data-orchestrator-conversation] form [data-testid] > div:last-child button");
+    const border = parseFloat(getComputedStyle(root).borderLeftWidth) || 0;
+    const inner = box.left + border;
+    const edge = (value: number | null | undefined) => value == null ? null : value - inner;
+    return {
+      seatWidth: box.width,
+      seatCentreOffset: (box.left + box.right) / 2 - (() => { const frame = root.parentElement!.getBoundingClientRect(); return (frame.left + frame.right) / 2; })(),
+      reportWidth: report ? w.__box(report)!.width : null,
+      reportInkWidth: report ? (() => { const ink = w.__ink(report.querySelector("[data-tts-body]") ? report : report); return ink ? ink.right - ink.left : null; })() : null,
+      bubbleWidths: bubbles.map((el) => w.__box(el)!.width),
+      bubbleRightInset: bubbles.length ? box.right - border - w.__box(bubbles[0]!)!.right : null,
+      insets: {
+        headAvatar: edge(av?.left),
+        foldRight: fold ? box.right - border - fold.right : null,
+        feedAvatar: edge(w.__box(avatar)?.left),
+        reportText: edge(report ? w.__ink(report.querySelector("[data-tts-body]") ?? report)?.left : null),
+        strip: edge(strip ? w.__ink(strip)?.left : null),
+        stripBox: edge(w.__box(strip?.firstElementChild?.firstElementChild ?? null)?.left),
+        composerBox: edge(w.__box(field)?.left),
+        modelRow: edge(w.__box(modelRow)?.left),
+      },
+      headGaps: {
+        avatarToTitle: av && strong ? strong.left - av.right : null,
+        titleToProject: strong && proj ? proj.left - strong.right : null,
+        projectToState: proj && state ? state.left - proj.right : null,
+        headPadLeft: head ? parseFloat(getComputedStyle(head).paddingLeft) : null,
+        headPadRight: head ? parseFloat(getComputedStyle(head).paddingRight) : null,
+      },
+    };
+  }, SEAT);
+
+  const readCards = (page: Page) => page.evaluate(() => {
+    const w = window as unknown as { __ink: (el: Element | null, skip?: string) => { top: number; left: number; right: number; bottom: number } | null; __box: (el: Element | null) => { top: number; left: number; right: number; bottom: number; width: number; height: number } | null };
+    const column = document.querySelector('.column[data-status="inbox"]')!;
+    const cards = [...column.querySelectorAll<HTMLElement>(".card")].map((card) => {
+      const box = w.__box(card)!;
+      const ink = w.__ink(card, ".label, .saving")!;
+      const titleText = w.__ink(card.querySelector(".title"));
+      const text = w.__ink(card.querySelector(".foot .age, .foot .origin-chip"));
+      const chip = card.querySelector(".origin-chip");
+      const chipAge = chip?.nextElementSibling ?? null;
+      const baseline = (el: Element | null) => el ? (window as unknown as { __baseline: (el: Element) => number | null }).__baseline(el) : null;
+      return {
+        id: card.dataset.id,
+        top: ink.top - box.top,
+        bottom: box.bottom - ink.bottom,
+        left: ink.left - box.left,
+        right: box.right - ink.right,
+        titleLeft: titleText ? titleText.left - box.left : null,
+        footTextLeft: text ? text.left - box.left : null,
+        chip: chip ? {
+          boxLeft: w.__box(chip)!.left - box.left,
+          textLeft: w.__ink(chip)!.left - box.left,
+          baselineDelta: (() => { const a = baseline(chip); const b = baseline(chipAge); return a !== null && b !== null ? a - b : null; })(),
+          textEdgeAbove: (() => { const latest = card.querySelector(".tile .latest, .tile .row"); const ink2 = w.__ink(latest); return ink2 ? ink2.left - box.left : null; })(),
+          /* From the text above it to its frame, and from its frame to the line below it. */
+          gapAbove: (() => { const members = w.__ink(card.querySelector(".members")); return members ? w.__box(chip)!.top - members.bottom : null; })(),
+          gapBelow: (() => {
+            const chipBox = w.__box(chip)!;
+            const below = [...chip.parentElement!.children].map((el) => w.__ink(el)).filter((ink): ink is NonNullable<typeof ink> => Boolean(ink) && ink!.top >= chipBox.bottom - 0.5);
+            return below.length ? Math.min(...below.map((ink) => ink.top)) - chipBox.bottom : null;
+          })(),
+        } : null,
+      };
+    });
+    const divider = column.querySelector<HTMLElement>(".divider");
+    let dividerGaps = null as null | { above: number; below: number };
+    if (divider) {
+      const line = divider.getBoundingClientRect();
+      const mid = (w.__ink(divider)!.top + w.__ink(divider)!.bottom) / 2;
+      const prev = divider.previousElementSibling?.getBoundingClientRect();
+      const next = divider.nextElementSibling?.getBoundingClientRect();
+      dividerGaps = { above: prev ? mid - prev.bottom : NaN, below: next ? next.top - mid : NaN };
+      void line;
+    }
+    return { cards, dividerGaps };
+  });
+
+  const readReader = (page: Page) => page.evaluate((selector) => {
+    const w = window as unknown as { __ink: (el: Element | null, skip?: string) => { top: number; left: number; right: number; bottom: number } | null; __box: (el: Element | null) => { top: number; left: number; right: number; bottom: number; width: number; height: number } | null };
+    const root = document.querySelector(selector)!;
+    const box = w.__box(root)!;
+    const border = parseFloat(getComputedStyle(root).borderLeftWidth) || 0;
+    const edge = (value: number | null | undefined) => value == null ? null : Math.round((value - box.left - border) * 10) / 10;
+    const agent = [...root.querySelectorAll("[data-tts-message]")].pop() ?? null;
+    const avatar = agent?.parentElement?.firstElementChild ?? null;
+    const status = root.querySelector("[data-turn-status]");
+    const pill = root.querySelector("[data-live-tail-pill]");
+    const strip = root.querySelector("[data-agent-control-strip]");
+    const field = root.querySelector("form textarea")?.parentElement ?? null;
+    const model = root.querySelector("form [data-runtime-pill]");
+    const bubble = root.querySelector("[data-user-bubble]");
+    return {
+      width: box.width,
+      head: edge(w.__box([...root.querySelectorAll(".conv-head .ch-row > *")].find((el) => el.getClientRects().length > 0) ?? null)?.left),
+      avatar: edge(w.__box(avatar)?.left),
+      agentText: edge(agent ? w.__ink(agent.querySelector("[data-tts-body]") ?? agent)?.left : null),
+      statusRow: edge(w.__box(status?.firstElementChild ?? null)?.left),
+      liveTailPill: edge(w.__box(pill)?.left),
+      strip: edge(w.__box(strip?.firstElementChild?.firstElementChild ?? null)?.left),
+      composerBox: edge(w.__box(field)?.left),
+      modelRow: edge(w.__box(model)?.left),
+      bubbleRight: bubble ? Math.round((box.right - border - w.__box(bubble)!.right) * 10) / 10 : null,
+      stripRight: strip ? Math.round((box.right - border - (w.__box(strip.firstElementChild)!.right)) * 10) / 10 : null,
+    };
+  }, READER);
+
+  const readRail = (page: Page) => page.evaluate(() => {
+    const w = window as unknown as { __box: (el: Element | null) => { top: number; left: number; right: number; bottom: number; width: number; height: number } | null };
+    const aside = document.querySelector("aside")!;
+    const asideBox = w.__box(aside)!;
+    const header = aside.querySelector("header");
+    const input = aside.querySelector("input");
+    const folder = aside.querySelector('[data-testid="rail-create-project"]');
+    const first = aside.querySelector("nav button");
+    const menu = aside.querySelector("[data-rail-menu]");
+    const brand = aside.querySelector("[data-brand-mark]");
+    const inputBox = w.__box(input)!;
+    const folderBox = w.__box(folder);
+    return {
+      brandLeft: w.__box(brand)!.left - asideBox.left,
+      menuRight: asideBox.right - 1 - w.__box(menu)!.right,
+      filterLeft: inputBox.left - asideBox.left,
+      folderRight: folderBox ? asideBox.right - 1 - folderBox.right : null,
+      rowLeft: w.__box(first)!.left - asideBox.left,
+      rowRight: asideBox.right - 1 - w.__box(first)!.right,
+      input: { top: inputBox.top, height: inputBox.height },
+      folder: folderBox ? { top: folderBox.top, width: folderBox.width, height: folderBox.height } : null,
+      headerToFilter: inputBox.top - w.__box(header)!.bottom,
+      filterToFirstRow: w.__box(first)!.top - inputBox.bottom,
+    };
+  });
+
+  browserTest("#2179 #2185: agent replies, the seat's width grip, and the insets the designer marked", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/agent-reply-width-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const url = `${server.base}?scenario=agent-report`;
+    const shot = (page: Page, name: string, selector?: string) => selector
+      ? page.locator(selector).first().screenshot({ path: path.join(OUT, `${name}-${STAMP}.png`) })
+      : page.screenshot({ path: path.join(OUT, `${name}-${STAMP}.png`) });
+    try {
+      for (const viewport of FRAMES) {
+        const label = String(viewport.width);
+        const { context, page, pageErrors } = await openFixture(browser, url, viewport, "light");
+        try {
+          await ready(page);
+          await showReport(page);
+          const seat = await readSeat(page);
+          readings[`seat-${label}-default`] = round(seat);
+          await shot(page, `seat-${label}-default`, SEAT);
+          await shot(page, `board-${label}-seat`);
+          await showReport(page, true);
+          await shot(page, `seat-${label}-default-table`, SEAT);
+          await showReport(page);
+          if (STAMP === "after") {
+            const widest = Math.max(0, ...seat.bubbleWidths);
+            if (!(seat.reportWidth !== null && seat.reportWidth > widest + 40)) failures.push(`${label}: the agent's reply (${seat.reportWidth}px) is not wider than the operator's bubble (${widest}px)`);
+            /* Boxes: the head's avatar, the transcript's avatar, the strip's first control, the composer and the model row. */
+            const { headAvatar, feedAvatar, stripBox, composerBox, modelRow } = seat.insets;
+            const insets = [feedAvatar, stripBox, composerBox, modelRow].filter((value): value is number => typeof value === "number");
+            if (insets.length < 4 || insets.some((value) => Math.abs(value - headAvatar!) > 1)) failures.push(`${label}: the seat's rows are on different left edges ${JSON.stringify(seat.insets)}`);
+            if (seat.insets.foldRight === null || Math.abs(seat.insets.foldRight - seat.insets.headAvatar!) > 1) failures.push(`${label}: Fold sits ${seat.insets.foldRight}px from the right, the avatar ${seat.insets.headAvatar}px from the left`);
+          }
+
+          /* The width grip, where it exists. */
+          const grip = page.locator(`${SEAT} [data-seat-grip="top-width"]`);
+          const hasGrip = (await grip.count()) > 0;
+          readings[`grip-${label}`] = hasGrip;
+          if (STAMP === "after" && !hasGrip) failures.push(`${label}: the seat on top has no width grip`);
+          if (hasGrip) {
+            if (viewport.width < 1440) {
+              await page.click("[data-rail-hide]");
+              await page.waitForTimeout(500);
+              await showReport(page);
+              readings[`seat-${label}-rail-away`] = round(await readSeat(page));
+              await shot(page, `seat-${label}-rail-away-default`, SEAT);
+            }
+            const before = (await page.locator(SEAT).boundingBox())!;
+            const handle = (await grip.boundingBox())!;
+            await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+            await page.mouse.down();
+            await page.mouse.move(handle.x + handle.width / 2 + 120, handle.y + handle.height / 2, { steps: 6 });
+            await page.mouse.up();
+            await page.waitForTimeout(500);
+            await showReport(page);
+            const wide = await readSeat(page);
+            readings[`seat-${label}-dragged`] = round(wide);
+            await shot(page, `seat-${label}-dragged`, SEAT);
+            await showReport(page, true);
+            await shot(page, `seat-${label}-dragged-table`, SEAT);
+            await showReport(page);
+            await shot(page, `board-${label}-seat-dragged`);
+            const after = (await page.locator(SEAT).boundingBox())!;
+            if (!(after.width > before.width + 100)) failures.push(`${label}: a 120 px drag took the seat from ${before.width}px to ${after.width}px`);
+            if (Math.abs(wide.seatCentreOffset) > 2) failures.push(`${label}: the dragged seat is off centre by ${wide.seatCentreOffset}px`);
+            if (!(wide.reportWidth !== null && seat.reportWidth !== null && wide.reportWidth >= seat.reportWidth)) failures.push(`${label}: the reply narrowed when the seat widened (${seat.reportWidth} → ${wide.reportWidth})`);
+            /* The arrows, then a reload: the width is this project's. */
+            await grip.focus();
+            await page.keyboard.press("ArrowLeft");
+            await page.waitForTimeout(300);
+            const keyed = (await page.locator(SEAT).boundingBox())!.width;
+            if (!(keyed < after.width - 20)) failures.push(`${label}: ArrowLeft left the seat at ${keyed}px (was ${after.width}px)`);
+            const stored = await page.evaluate(() => localStorage.getItem("llv:kanban-seat:v2"));
+            readings[`stored-${label}`] = stored;
+            await page.reload();
+            await ready(page);
+            const reloaded = (await page.locator(SEAT).boundingBox())!.width;
+            if (Math.abs(reloaded - keyed) > 1) failures.push(`${label}: the seat came back ${reloaded}px wide after a reload, ${keyed}px before`);
+            if (!stored || !/"atlas":\d+/.test(stored)) failures.push(`${label}: the width is not stored per project: ${stored}`);
+            if (viewport.width < 1440) {
+              await page.click("[data-rail-hide]").catch(() => undefined);
+            }
+          }
+          if (pageErrors.length) failures.push(`${label} seat: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+
+        /* The board with the seat folded: cards, the divider, the chip; then one open conversation. */
+        const board = await openFixture(browser, url, viewport, "light");
+        try {
+          await ready(board.page);
+          await board.page.click(`${SEAT} [data-seat-collapse]`);
+          await board.page.waitForTimeout(500);
+          const cards = await readCards(board.page);
+          readings[`cards-${label}`] = round(cards);
+          readings[`rail-${label}`] = round(await readRail(board.page));
+          await shot(board.page, `cards-${label}`, '.column[data-status="inbox"]');
+          await board.page.screenshot({ path: path.join(OUT, `rail-${label}-${STAMP}.png`), clip: { x: 0, y: 0, width: 248, height: 220 } });
+          await board.page.locator(".seat-head").first().screenshot({ path: path.join(OUT, `seat-head-${label}-folded-${STAMP}.png`) });
+          await board.page.click('.card[data-id="task:t-export"] .tile >> nth=0');
+          await board.page.waitForFunction((selector) => document.querySelector(`${selector} [data-feed-state]`)?.getAttribute("data-feed-state") === "items", READER, { timeout: 15_000 });
+          await board.page.waitForTimeout(600);
+          const reader = await readReader(board.page);
+          readings[`reader-${label}`] = round(reader);
+          await shot(board.page, `reader-${label}`, READER);
+          await shot(board.page, `board-${label}-reader`);
+          if (STAMP === "after") {
+            for (const card of cards.cards) {
+              if (Math.abs(card.top - card.bottom) > 1.5) failures.push(`${label}: card ${card.id} top ${card.top}px, bottom ${card.bottom}px`);
+              if (card.chip && Math.abs(card.chip.baselineDelta ?? 99) > 0.5) failures.push(`${label}: card ${card.id}'s origin chip is ${card.chip.baselineDelta}px off the age's baseline`);
+              if (card.chip && (card.chip.gapAbove === null || card.chip.gapBelow === null || Math.abs(card.chip.gapAbove - card.chip.gapBelow) > 1)) failures.push(`${label}: card ${card.id}'s origin chip has ${card.chip.gapAbove}px above and ${card.chip.gapBelow}px below`);
+              if (card.chip && card.chip.textEdgeAbove !== null && Math.abs(card.chip.boxLeft - card.chip.textEdgeAbove) > 1) failures.push(`${label}: card ${card.id}'s origin chip starts ${card.chip.boxLeft}px in, the text above ${card.chip.textEdgeAbove}px`);
+            }
+            if (!cards.dividerGaps || Math.abs(cards.dividerGaps.above - cards.dividerGaps.below) > 1) failures.push(`${label}: the divider has ${JSON.stringify(cards.dividerGaps)} around it`);
+            const edges = [reader.head, reader.avatar, reader.statusRow, reader.liveTailPill, reader.strip, reader.composerBox, reader.modelRow].filter((value): value is number => typeof value === "number");
+            if (edges.some((value) => Math.abs(value - reader.avatar!) > 1)) failures.push(`${label}: the open conversation's rows start on different edges ${JSON.stringify(reader)}`);
+            const rail = await readRail(board.page);
+            if (rail.folder && (Math.abs(rail.folder.top - rail.input.top) > 0.5 || Math.abs(rail.folder.height - rail.input.height) > 0.5 || Math.abs(rail.folder.width - rail.folder.height) > 0.5)) failures.push(`${label}: the rail's folder button ${JSON.stringify(rail.folder)} beside the field ${JSON.stringify(rail.input)}`);
+            if (Math.abs(rail.headerToFilter - rail.filterToFirstRow) > 0.5 || Math.abs(rail.filterLeft - rail.rowLeft) > 0.5) failures.push(`${label}: the rail's filter row ${JSON.stringify(rail)}`);
+          }
+          if (board.pageErrors.length) failures.push(`${label} board: page errors ${board.pageErrors.join(" | ")}`);
+        } finally {
+          await board.context.close();
+        }
+      }
+
+      /* Tried and compared: the agent's reply in a light container of its own. */
+      if (STAMP === "after") {
+        const trial = await openFixture(browser, url, FRAMES[0], "light");
+        try {
+          await ready(trial.page);
+          await trial.page.addStyleTag({ content: `${SEAT} [data-tts-message] { background: var(--surface-well); border-radius: var(--radius-surface); padding: 8px 14px 10px; }` });
+          await showReport(trial.page);
+          await trial.page.locator(SEAT).screenshot({ path: path.join(OUT, "seat-1440-trial-agent-container.png") });
+        } finally {
+          await trial.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, `readings-${STAMP}.json`), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (STAMP === "after" && failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});

@@ -1,0 +1,323 @@
+{
+  "readings": {
+    "seat-1440-default": {
+      "seatWidth": 1040,
+      "seatCentreOffset": 0,
+      "reportWidth": 700.8,
+      "reportInkWidth": 695.8,
+      "bubbleWidths": [
+        476.5,
+        124.7
+      ],
+      "bubbleRightInset": 12,
+      "insets": {
+        "headAvatar": 12,
+        "foldRight": 12,
+        "feedAvatar": 12,
+        "reportText": 48,
+        "strip": 18,
+        "stripBox": 12,
+        "composerBox": 12,
+        "modelRow": 12
+      },
+      "headGaps": {
+        "avatarToTitle": 8,
+        "titleToProject": 8,
+        "projectToState": 8,
+        "headPadLeft": 12,
+        "headPadRight": 12
+      }
+    },
+    "grip-1440": true,
+    "seat-1440-dragged": {
+      "seatWidth": 1160,
+      "seatCentreOffset": 0,
+      "reportWidth": 700.8,
+      "reportInkWidth": 695.8,
+      "bubbleWidths": [
+        476.5,
+        124.7
+      ],
+      "bubbleRightInset": 12,
+      "insets": {
+        "headAvatar": 12,
+        "foldRight": 12,
+        "feedAvatar": 12,
+        "reportText": 48,
+        "strip": 18,
+        "stripBox": 12,
+        "composerBox": 12,
+        "modelRow": 12
+      },
+      "headGaps": {
+        "avatarToTitle": 8,
+        "titleToProject": 8,
+        "projectToState": 8,
+        "headPadLeft": 12,
+        "headPadRight": 12
+      }
+    },
+    "stored-1440": "{\"height\":null,\"collapsed\":{},\"placement\":\"top\",\"width\":null,\"topWidths\":{\"atlas\":1120},\"sideWidths\":{},\"heightV\":2}",
+    "cards-1440": {
+      "cards": [
+        {
+          "id": "task:t-pending",
+          "top": 13,
+          "bottom": 12,
+          "left": 13,
+          "right": 13,
+          "titleLeft": 37,
+          "footTextLeft": 13,
+          "chip": null
+        },
+        {
+          "id": "task:t-longtitle",
+          "top": 13,
+          "bottom": 12,
+          "left": 13,
+          "right": 13.5,
+          "titleLeft": 37,
+          "footTextLeft": 13,
+          "chip": null
+        },
+        {
+          "id": "task:t-onboarding",
+          "top": 13,
+          "bottom": 12,
+          "left": 13,
+          "right": 13.5,
+          "titleLeft": 37,
+          "footTextLeft": 13,
+          "chip": null
+        },
+        {
+          "id": "lineage:conversation_links-review",
+          "top": 13,
+          "bottom": 13.9,
+          "left": 13,
+          "right": 13,
+          "titleLeft": 37,
+          "footTextLeft": 22,
+          "chip": {
+            "boxLeft": 13,
+            "textLeft": 22,
+            "baselineDelta": -0.3,
+            "textEdgeAbove": 13,
+            "gapAbove": 12.9,
+            "gapBelow": 12
+          }
+        }
+      ],
+      "dividerGaps": {
+        "above": 19.5,
+        "below": 20.4
+      }
+    },
+    "rail-1440": {
+      "brandLeft": 8,
+      "menuRight": 8,
+      "filterLeft": 8,
+      "folderRight": 8,
+      "rowLeft": 8,
+      "rowRight": 8,
+      "input": {
+        "top": 48,
+        "height": 32
+      },
+      "folder": {
+        "top": 48,
+        "width": 32,
+        "height": 32
+      },
+      "headerToFilter": 8,
+      "filterToFirstRow": 8
+    },
+    "reader-1440": {
+      "width": 428,
+      "head": 12,
+      "avatar": 12,
+      "agentText": 48,
+      "statusRow": 12,
+      "liveTailPill": 12,
+      "strip": 12,
+      "composerBox": 12,
+      "modelRow": 12,
+      "bubbleRight": 12,
+      "stripRight": 12
+    },
+    "seat-1280-default": {
+      "seatWidth": 1000,
+      "seatCentreOffset": 0,
+      "reportWidth": 700.8,
+      "reportInkWidth": 695.8,
+      "bubbleWidths": [
+        476.5,
+        124.7
+      ],
+      "bubbleRightInset": 12,
+      "insets": {
+        "headAvatar": 12,
+        "foldRight": 12,
+        "feedAvatar": 12,
+        "reportText": 48,
+        "strip": 18,
+        "stripBox": 12,
+        "composerBox": 12,
+        "modelRow": 12
+      },
+      "headGaps": {
+        "avatarToTitle": 8,
+        "titleToProject": 8,
+        "projectToState": 8,
+        "headPadLeft": 12,
+        "headPadRight": 12
+      }
+    },
+    "grip-1280": true,
+    "seat-1280-rail-away": {
+      "seatWidth": 1040,
+      "seatCentreOffset": 0,
+      "reportWidth": 700.8,
+      "reportInkWidth": 695.8,
+      "bubbleWidths": [
+        476.5,
+        124.7
+      ],
+      "bubbleRightInset": 12,
+      "insets": {
+        "headAvatar": 12,
+        "foldRight": 12,
+        "feedAvatar": 12,
+        "reportText": 48,
+        "strip": 18,
+        "stripBox": 12,
+        "composerBox": 12,
+        "modelRow": 12
+      },
+      "headGaps": {
+        "avatarToTitle": 8,
+        "titleToProject": 8,
+        "projectToState": 8,
+        "headPadLeft": 12,
+        "headPadRight": 12
+      }
+    },
+    "seat-1280-dragged": {
+      "seatWidth": 1206,
+      "seatCentreOffset": 0,
+      "reportWidth": 700.8,
+      "reportInkWidth": 695.8,
+      "bubbleWidths": [
+        476.5,
+        124.7
+      ],
+      "bubbleRightInset": 12,
+      "insets": {
+        "headAvatar": 12,
+        "foldRight": 12,
+        "feedAvatar": 12,
+        "reportText": 48,
+        "strip": 18,
+        "stripBox": 12,
+        "composerBox": 12,
+        "modelRow": 12
+      },
+      "headGaps": {
+        "avatarToTitle": 8,
+        "titleToProject": 8,
+        "projectToState": 8,
+        "headPadLeft": 12,
+        "headPadRight": 12
+      }
+    },
+    "stored-1280": "{\"height\":null,\"collapsed\":{},\"placement\":\"top\",\"width\":null,\"topWidths\":{\"atlas\":1166},\"sideWidths\":{},\"heightV\":2}",
+    "cards-1280": {
+      "cards": [
+        {
+          "id": "task:t-pending",
+          "top": 13,
+          "bottom": 12,
+          "left": 13,
+          "right": 13,
+          "titleLeft": 37,
+          "footTextLeft": 13,
+          "chip": null
+        },
+        {
+          "id": "task:t-longtitle",
+          "top": 13,
+          "bottom": 12,
+          "left": 13,
+          "right": 13.5,
+          "titleLeft": 37,
+          "footTextLeft": 13,
+          "chip": null
+        },
+        {
+          "id": "task:t-onboarding",
+          "top": 13,
+          "bottom": 12,
+          "left": 13,
+          "right": 13.5,
+          "titleLeft": 37,
+          "footTextLeft": 13,
+          "chip": null
+        },
+        {
+          "id": "lineage:conversation_links-review",
+          "top": 13,
+          "bottom": 13.9,
+          "left": 13,
+          "right": 13,
+          "titleLeft": 37,
+          "footTextLeft": 22,
+          "chip": {
+            "boxLeft": 13,
+            "textLeft": 22,
+            "baselineDelta": -0.3,
+            "textEdgeAbove": 13,
+            "gapAbove": 12.9,
+            "gapBelow": 12
+          }
+        }
+      ],
+      "dividerGaps": {
+        "above": 19.5,
+        "below": 20.4
+      }
+    },
+    "rail-1280": {
+      "brandLeft": 8,
+      "menuRight": 8,
+      "filterLeft": 8,
+      "folderRight": 8,
+      "rowLeft": 8,
+      "rowRight": 8,
+      "input": {
+        "top": 48,
+        "height": 32
+      },
+      "folder": {
+        "top": 48,
+        "width": 32,
+        "height": 32
+      },
+      "headerToFilter": 8,
+      "filterToFirstRow": 8
+    },
+    "reader-1280": {
+      "width": 428,
+      "head": 12,
+      "avatar": 12,
+      "agentText": 48,
+      "statusRow": 12,
+      "liveTailPill": 12,
+      "strip": 12,
+      "composerBox": 12,
+      "modelRow": 12,
+      "bubbleRight": 12,
+      "stripRight": 12
+    }
+  },
+  "failures": []
+}
