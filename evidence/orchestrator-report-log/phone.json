@@ -14,12 +14,12 @@
         "screen": "reports",
         "entries": 30,
         "classes": [
+          "status",
+          "blocked",
           "completed",
           "review_verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "fresh": 3,
         "github": 14,
@@ -85,12 +85,12 @@
         "screen": "reports",
         "entries": 30,
         "classes": [
+          "status",
+          "blocked",
           "completed",
           "review_verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "fresh": 3,
         "github": 14,
@@ -156,12 +156,12 @@
         "screen": "reports",
         "entries": 30,
         "classes": [
+          "status",
+          "blocked",
           "completed",
           "review_verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "fresh": 3,
         "github": 14,
@@ -227,12 +227,12 @@
         "screen": "reports",
         "entries": 30,
         "classes": [
+          "status",
+          "blocked",
           "completed",
           "review_verdict",
           "question",
-          "blocked",
-          "failed",
-          "status"
+          "failed"
         ],
         "fresh": 3,
         "github": 14,

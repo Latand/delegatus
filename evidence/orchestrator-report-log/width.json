@@ -1,0 +1,287 @@
+{
+  "rule": {
+    "chatMin": 630,
+    "logMin": 360,
+    "logMax": 440,
+    "split": 990
+  },
+  "readings": {
+    "1280-normal-en": {
+      "opened": {
+        "seat": 1000,
+        "panel": 998,
+        "layout": "beside",
+        "conversation": 638,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 816,
+        "sideways": 0
+      }
+    },
+    "1280-normal-uk": {
+      "opened": {
+        "seat": 1000,
+        "panel": 998,
+        "layout": "beside",
+        "conversation": 638,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 744,
+        "sideways": 0
+      }
+    },
+    "1280-maximised-en": {
+      "opened": {
+        "seat": 1000,
+        "panel": 998,
+        "layout": "beside",
+        "conversation": 638,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 816,
+        "sideways": 0
+      }
+    },
+    "1280-maximised-uk": {
+      "opened": {
+        "seat": 1000,
+        "panel": 998,
+        "layout": "beside",
+        "conversation": 638,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 744,
+        "sideways": 0
+      }
+    },
+    "1440-normal-en": {
+      "opened": {
+        "seat": 1040,
+        "panel": 1038,
+        "layout": "beside",
+        "conversation": 678,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 816,
+        "sideways": 0
+      }
+    },
+    "1440-normal-uk": {
+      "opened": {
+        "seat": 1040,
+        "panel": 1038,
+        "layout": "beside",
+        "conversation": 678,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 744,
+        "sideways": 0
+      }
+    },
+    "1440-maximised-en": {
+      "opened": {
+        "seat": 1160,
+        "panel": 1158,
+        "layout": "beside",
+        "conversation": 764,
+        "log": 393,
+        "column": 394,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 816,
+        "sideways": 0
+      }
+    },
+    "1440-maximised-uk": {
+      "opened": {
+        "seat": 1160,
+        "panel": 1158,
+        "layout": "beside",
+        "conversation": 764,
+        "log": 393,
+        "column": 394,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 744,
+        "sideways": 0
+      }
+    },
+    "1728-normal-en": {
+      "opened": {
+        "seat": 1040,
+        "panel": 1038,
+        "layout": "beside",
+        "conversation": 678,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 816,
+        "sideways": 0
+      }
+    },
+    "1728-normal-uk": {
+      "opened": {
+        "seat": 1040,
+        "panel": 1038,
+        "layout": "beside",
+        "conversation": 678,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 744,
+        "sideways": 0
+      }
+    },
+    "1728-maximised-en": {
+      "opened": {
+        "seat": 1440,
+        "panel": 1438,
+        "layout": "beside",
+        "conversation": 998,
+        "log": 439,
+        "column": 440,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 816,
+        "sideways": 0
+      }
+    },
+    "1728-maximised-uk": {
+      "opened": {
+        "seat": 1440,
+        "panel": 1438,
+        "layout": "beside",
+        "conversation": 998,
+        "log": 439,
+        "column": 440,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 744,
+        "sideways": 0
+      }
+    },
+    "1920-normal-en": {
+      "opened": {
+        "seat": 1040,
+        "panel": 1038,
+        "layout": "beside",
+        "conversation": 678,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 816,
+        "sideways": 0
+      }
+    },
+    "1920-normal-uk": {
+      "opened": {
+        "seat": 1040,
+        "panel": 1038,
+        "layout": "beside",
+        "conversation": 678,
+        "log": 359,
+        "column": 360,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 744,
+        "sideways": 0
+      }
+    },
+    "1920-maximised-en": {
+      "opened": {
+        "seat": 1632,
+        "panel": 1630,
+        "layout": "beside",
+        "conversation": 1190,
+        "log": 439,
+        "column": 440,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 816,
+        "sideways": 0
+      }
+    },
+    "1920-maximised-uk": {
+      "opened": {
+        "seat": 1632,
+        "panel": 1630,
+        "layout": "beside",
+        "conversation": 1190,
+        "log": 439,
+        "column": 440,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 744,
+        "sideways": 0
+      }
+    },
+    "1440-dragged-900-en": {
+      "opened": {
+        "seat": 900,
+        "panel": 898,
+        "layout": null,
+        "conversation": 898,
+        "log": null,
+        "column": null,
+        "toggle": "closed",
+        "entries": 0,
+        "draft": 816,
+        "sideways": 0
+      },
+      "toggled": {
+        "seat": 900,
+        "panel": 898,
+        "layout": null,
+        "conversation": 898,
+        "log": 898,
+        "column": null,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 816,
+        "sideways": 0
+      }
+    },
+    "1440-dragged-900-uk": {
+      "opened": {
+        "seat": 900,
+        "panel": 898,
+        "layout": null,
+        "conversation": 898,
+        "log": null,
+        "column": null,
+        "toggle": "closed",
+        "entries": 0,
+        "draft": 744,
+        "sideways": 0
+      },
+      "toggled": {
+        "seat": 900,
+        "panel": 898,
+        "layout": null,
+        "conversation": 898,
+        "log": 898,
+        "column": null,
+        "toggle": "open",
+        "entries": 30,
+        "draft": 744,
+        "sideways": 0
+      }
+    }
+  },
+  "failures": []
+}

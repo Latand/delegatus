@@ -67,7 +67,7 @@ import { ReportLog } from "./reportLog/ReportLog";
 export const REPORT_LOG_CHAT_MIN_WIDTH = 630;
 /** The log column's width range; between the two it is 34% of the seat. */
 export const REPORT_LOG_MIN_WIDTH = 360;
-export const REPORT_LOG_MAX_WIDTH = 480;
+export const REPORT_LOG_MAX_WIDTH = 440;
 /** The seat's width from which the report log sits beside the chat. */
 export const REPORT_LOG_SPLIT_WIDTH = REPORT_LOG_CHAT_MIN_WIDTH + REPORT_LOG_MIN_WIDTH;
 const reportLogBesideKey = (project: string) => `llvReportLogBeside:${project}`;
