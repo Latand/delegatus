@@ -1,0 +1,754 @@
+{
+  "results": [
+    {
+      "key": "stop-after-fix-390-en-dark",
+      "stamp": "before",
+      "kind": null,
+      "reason": "last review fail on 44444444 · current head 99999999 unreviewed",
+      "answers": [
+        [
+          "close",
+          "Close lane"
+        ],
+        [
+          "continue-review",
+          "One more round"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-fix"
+        ],
+        "scrollHeight": 716,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "park-390-en-dark",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review failed · 1 finding",
+      "answers": [
+        [
+          "skip-stage",
+          "Skip stage"
+        ],
+        [
+          "retry-stage",
+          "Retry stage"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage does not take the stage address from the project config."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-park"
+        ],
+        "scrollHeight": 738,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "once-390-en-dark",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review failed · 1 finding",
+      "answers": [
+        [
+          "skip-stage",
+          "Skip stage"
+        ],
+        [
+          "retry-stage",
+          "Retry stage"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-once"
+        ],
+        "scrollHeight": 809,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "legacy-390-en-dark",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review failed · 2 findings",
+      "answers": [
+        [
+          "skip-stage",
+          "Skip stage"
+        ],
+        [
+          "retry-stage",
+          "Retry stage"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "round limit reached"
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-legacy"
+        ],
+        "scrollHeight": 695,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stop-after-fix-390-en-light",
+      "stamp": "before",
+      "kind": null,
+      "reason": "last review fail on 44444444 · current head 99999999 unreviewed",
+      "answers": [
+        [
+          "close",
+          "Close lane"
+        ],
+        [
+          "continue-review",
+          "One more round"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-fix"
+        ],
+        "scrollHeight": 716,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "park-390-en-light",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review failed · 1 finding",
+      "answers": [
+        [
+          "skip-stage",
+          "Skip stage"
+        ],
+        [
+          "retry-stage",
+          "Retry stage"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage does not take the stage address from the project config."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-park"
+        ],
+        "scrollHeight": 738,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "once-390-en-light",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review failed · 1 finding",
+      "answers": [
+        [
+          "skip-stage",
+          "Skip stage"
+        ],
+        [
+          "retry-stage",
+          "Retry stage"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-once"
+        ],
+        "scrollHeight": 809,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "legacy-390-en-light",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review failed · 2 findings",
+      "answers": [
+        [
+          "skip-stage",
+          "Skip stage"
+        ],
+        [
+          "retry-stage",
+          "Retry stage"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "round limit reached"
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-legacy"
+        ],
+        "scrollHeight": 695,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stop-after-fix-390-uk-dark",
+      "stamp": "before",
+      "kind": null,
+      "reason": "останнє ревʼю: невдача на 44444444 · поточний коміт 99999999 не переглянуто",
+      "answers": [
+        [
+          "close",
+          "Закрити конвеєр"
+        ],
+        [
+          "continue-review",
+          "Ще один раунд"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-fix"
+        ],
+        "scrollHeight": 749,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "park-390-uk-dark",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review провалено · 1 зауваження",
+      "answers": [
+        [
+          "skip-stage",
+          "Пропустити етап"
+        ],
+        [
+          "retry-stage",
+          "Повторити етап"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-park"
+        ],
+        "scrollHeight": 771,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "once-390-uk-dark",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review провалено · 1 зауваження",
+      "answers": [
+        [
+          "skip-stage",
+          "Пропустити етап"
+        ],
+        [
+          "retry-stage",
+          "Повторити етап"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-once"
+        ],
+        "scrollHeight": 859,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "legacy-390-uk-dark",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review провалено · 2 зауваження",
+      "answers": [
+        [
+          "skip-stage",
+          "Пропустити етап"
+        ],
+        [
+          "retry-stage",
+          "Повторити етап"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "round limit reached"
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [
+          "«Opus 5.5» × «· цикл ревью · цикл рев'ю · спроба 1»",
+          "«Opus 5.5» × «· цикл ревью · цикл рев'ю · спроба 1»"
+        ],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-legacy"
+        ],
+        "scrollHeight": 695,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stop-after-fix-390-uk-light",
+      "stamp": "before",
+      "kind": null,
+      "reason": "останнє ревʼю: невдача на 44444444 · поточний коміт 99999999 не переглянуто",
+      "answers": [
+        [
+          "close",
+          "Закрити конвеєр"
+        ],
+        [
+          "continue-review",
+          "Ще один раунд"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-fix"
+        ],
+        "scrollHeight": 749,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "park-390-uk-light",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review провалено · 1 зауваження",
+      "answers": [
+        [
+          "skip-stage",
+          "Пропустити етап"
+        ],
+        [
+          "retry-stage",
+          "Повторити етап"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-park"
+        ],
+        "scrollHeight": 771,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "once-390-uk-light",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review провалено · 1 зауваження",
+      "answers": [
+        [
+          "skip-stage",
+          "Пропустити етап"
+        ],
+        [
+          "retry-stage",
+          "Повторити етап"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-once"
+        ],
+        "scrollHeight": 859,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "legacy-390-uk-light",
+      "stamp": "before",
+      "kind": null,
+      "reason": "Review провалено · 2 зауваження",
+      "answers": [
+        [
+          "skip-stage",
+          "Пропустити етап"
+        ],
+        [
+          "retry-stage",
+          "Повторити етап"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "round limit reached"
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [
+          "«Opus 5.5» × «· цикл ревью · цикл рев'ю · спроба 1»",
+          "«Opus 5.5» × «· цикл ревью · цикл рев'ю · спроба 1»"
+        ],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-legacy"
+        ],
+        "scrollHeight": 695,
+        "clientHeight": 690
+      }
+    }
+  ],
+  "failures": [
+    "stop-after-fix-390-en-dark: drawn as null",
+    "stop-after-fix-390-en-dark: reason \"last review fail on 44444444 · current head 99999999 unreviewed\"",
+    "stop-after-fix-390-en-dark: answers [[\"close\",\"Close lane\"],[\"continue-review\",\"One more round\"]], expected [[\"accept-head\",\"pipelineBlock.answer.acceptAsIs\"],[\"continue-review\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "park-390-en-dark: drawn as null",
+    "park-390-en-dark: reason \"Review failed · 1 finding\"",
+    "park-390-en-dark: answers [[\"skip-stage\",\"Skip stage\"],[\"retry-stage\",\"Retry stage\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "once-390-en-dark: drawn as null",
+    "once-390-en-dark: reason \"Review failed · 1 finding\"",
+    "once-390-en-dark: answers [[\"skip-stage\",\"Skip stage\"],[\"retry-stage\",\"Retry stage\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "legacy-390-en-dark: drawn as null",
+    "legacy-390-en-dark: reason \"Review failed · 2 findings\"",
+    "legacy-390-en-dark: answers [[\"skip-stage\",\"Skip stage\"],[\"retry-stage\",\"Retry stage\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "legacy-390-en-dark: the flow's own detail is still listed as a finding",
+    "stop-after-fix-390-en-light: drawn as null",
+    "stop-after-fix-390-en-light: reason \"last review fail on 44444444 · current head 99999999 unreviewed\"",
+    "stop-after-fix-390-en-light: answers [[\"close\",\"Close lane\"],[\"continue-review\",\"One more round\"]], expected [[\"accept-head\",\"pipelineBlock.answer.acceptAsIs\"],[\"continue-review\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "park-390-en-light: drawn as null",
+    "park-390-en-light: reason \"Review failed · 1 finding\"",
+    "park-390-en-light: answers [[\"skip-stage\",\"Skip stage\"],[\"retry-stage\",\"Retry stage\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "once-390-en-light: drawn as null",
+    "once-390-en-light: reason \"Review failed · 1 finding\"",
+    "once-390-en-light: answers [[\"skip-stage\",\"Skip stage\"],[\"retry-stage\",\"Retry stage\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "legacy-390-en-light: drawn as null",
+    "legacy-390-en-light: reason \"Review failed · 2 findings\"",
+    "legacy-390-en-light: answers [[\"skip-stage\",\"Skip stage\"],[\"retry-stage\",\"Retry stage\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "legacy-390-en-light: the flow's own detail is still listed as a finding",
+    "stop-after-fix-390-uk-dark: drawn as null",
+    "stop-after-fix-390-uk-dark: reason \"останнє ревʼю: невдача на 44444444 · поточний коміт 99999999 не переглянуто\"",
+    "stop-after-fix-390-uk-dark: answers [[\"close\",\"Закрити конвеєр\"],[\"continue-review\",\"Ще один раунд\"]], expected [[\"accept-head\",\"pipelineBlock.answer.acceptAsIs\"],[\"continue-review\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "park-390-uk-dark: drawn as null",
+    "park-390-uk-dark: reason \"Review провалено · 1 зауваження\"",
+    "park-390-uk-dark: answers [[\"skip-stage\",\"Пропустити етап\"],[\"retry-stage\",\"Повторити етап\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "once-390-uk-dark: drawn as null",
+    "once-390-uk-dark: reason \"Review провалено · 1 зауваження\"",
+    "once-390-uk-dark: answers [[\"skip-stage\",\"Пропустити етап\"],[\"retry-stage\",\"Повторити етап\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "legacy-390-uk-dark: drawn as null",
+    "legacy-390-uk-dark: reason \"Review провалено · 2 зауваження\"",
+    "legacy-390-uk-dark: answers [[\"skip-stage\",\"Пропустити етап\"],[\"retry-stage\",\"Повторити етап\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "legacy-390-uk-dark: the flow's own detail is still listed as a finding",
+    "legacy-390-uk-dark: text over text: [\"«Opus 5.5» × «· цикл ревью · цикл рев'ю · спроба 1»\",\"«Opus 5.5» × «· цикл ревью · цикл рев'ю · спроба 1»\"]",
+    "stop-after-fix-390-uk-light: drawn as null",
+    "stop-after-fix-390-uk-light: reason \"останнє ревʼю: невдача на 44444444 · поточний коміт 99999999 не переглянуто\"",
+    "stop-after-fix-390-uk-light: answers [[\"close\",\"Закрити конвеєр\"],[\"continue-review\",\"Ще один раунд\"]], expected [[\"accept-head\",\"pipelineBlock.answer.acceptAsIs\"],[\"continue-review\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "park-390-uk-light: drawn as null",
+    "park-390-uk-light: reason \"Review провалено · 1 зауваження\"",
+    "park-390-uk-light: answers [[\"skip-stage\",\"Пропустити етап\"],[\"retry-stage\",\"Повторити етап\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "once-390-uk-light: drawn as null",
+    "once-390-uk-light: reason \"Review провалено · 1 зауваження\"",
+    "once-390-uk-light: answers [[\"skip-stage\",\"Пропустити етап\"],[\"retry-stage\",\"Повторити етап\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "legacy-390-uk-light: drawn as null",
+    "legacy-390-uk-light: reason \"Review провалено · 2 зауваження\"",
+    "legacy-390-uk-light: answers [[\"skip-stage\",\"Пропустити етап\"],[\"retry-stage\",\"Повторити етап\"]], expected [[\"skip-stage\",\"pipelineBlock.answer.acceptWithoutReview\"],[\"retry-stage\",\"pipelineBlock.answer.reviewAgain\"]]",
+    "legacy-390-uk-light: the flow's own detail is still listed as a finding",
+    "legacy-390-uk-light: text over text: [\"«Opus 5.5» × «· цикл ревью · цикл рев'ю · спроба 1»\",\"«Opus 5.5» × «· цикл ревью · цикл рев'ю · спроба 1»\"]"
+  ]
+}

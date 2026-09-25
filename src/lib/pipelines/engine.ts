@@ -113,6 +113,7 @@ import type {
   PipelineStageInput,
   PipelineStageAttempt,
   PipelineDecisionAnswer,
+  PipelineReviewAcceptance,
   PipelineReviewGrant,
   PipelineLegacyReviewConversion,
   PipelineStageReport,
@@ -2214,7 +2215,12 @@ function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication">): boolean
 /** Advance along the pass edge, persisting the relay record: the completed
     attempt's output is the next activation's `{{prev.output}}`, written in the
     same mutation as the verdict/commit that produced it (exactly-once, #353). */
-function advancePipeline(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts, attempt?: PipelineStageAttempt | null): void {
+function advancePipeline(
+  pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts, attempt?: PipelineStageAttempt | null,
+  /** `accept-head` (#2187 §3.4): the operator took the unreviewed head, so the
+      `stop-after-fix` stop is already behind this lane. */
+  accepted = false,
+): void {
   const successor = passSuccessor(pipeline, stage, attempt);
   const detail = successor.handoff ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
   /* #1938, #2187: a fix that took a spent budget's last findings and wrote a
@@ -2224,7 +2230,8 @@ function advancePipeline(pipeline: Pipeline, stage: PipelineStage, ports: Pipeli
      asked for `stop-after-fix` stops in needs_review for the operator; a fix
      that wrote nothing new moves on under either. */
   if (
-    successor.handoff
+    !accepted
+    && successor.handoff
     && attempt
     && successor.handoff.source.onFail
     && failEdgeExhaustion(successor.handoff.source.onFail) === "stop-after-fix"
@@ -2305,7 +2312,7 @@ function parkForReview(
 
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
   const short = (sha: string | null) => sha ? sha.slice(0, 12) : "unknown";
-  return `review budget spent: last review failed (${pending.verdict}, ${pending.findings} finding${pending.findings === 1 ? "" : "s"}), head ${short(pending.currentHead)} unreviewed; reviewed ${short(pending.reviewedHead)}. continue-review adds rounds`;
+  return `review budget spent (onExhausted: stop-after-fix): last review failed (${pending.verdict}, ${pending.findings} finding${pending.findings === 1 ? "" : "s"}), head ${short(pending.currentHead)} unreviewed; reviewed ${short(pending.reviewedHead)}. continue-review adds rounds`;
 }
 
 /** The next stage reads the fix's output and, beside it, the findings nobody
@@ -2465,7 +2472,7 @@ function routeFailedAttempt(
     return true;
   }
   if (targetStage && parkOnExhaustedBudget) {
-    park(pipeline, `fail-edge budget exhausted after ${used} round(s): ${detail}`, attempt);
+    park(pipeline, `fail-edge budget exhausted after ${used} round(s) (onExhausted: ${failEdgeExhaustion(stage.onFail)}): ${detail}`, attempt);
     return true;
   }
   return false;
@@ -5808,8 +5815,8 @@ function replaceStartedStages(
  */
 function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
   const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt") => Object.hasOwn(req, field) && req[field] !== undefined;
-  if (req.expectedRevision !== undefined && req.action !== "resolve-decision" && req.action !== "continue-review") {
-    return { error: "expectedRevision applies only to resolve-decision and continue-review", status: 400, field: "expectedRevision" };
+  if (req.expectedRevision !== undefined && req.action !== "resolve-decision" && req.action !== "continue-review" && req.action !== "accept-head") {
+    return { error: "expectedRevision applies only to resolve-decision, continue-review and accept-head", status: 400, field: "expectedRevision" };
   }
   if (req.addRounds !== undefined && req.action !== "continue-review") {
     return { error: "addRounds applies only to continue-review", status: 400, field: "addRounds" };
@@ -6767,6 +6774,8 @@ export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field">
   decisionAnswer?: PipelineDecisionAnswer;
   /** The grant an accepted or replayed continue-review holds (#1938). */
   reviewContinuation?: PipelineReviewGrant;
+  /** The acceptance an accepted or replayed accept-head holds (#2187). */
+  reviewAcceptance?: PipelineReviewAcceptance;
   /** What preview-legacy-review answers; nothing is written. */
   legacyReviewPreview?: legacyReview.LegacyReviewPreview;
   /** The conversion an accepted, replayed or reverted legacy-review action holds. */
@@ -6965,6 +6974,68 @@ function continueReview(
   pipeline.pausedState = null;
   pipeline.stateDetail = null;
   return { pipeline, reviewContinuation: grant, replayed: false };
+}
+
+/**
+ * Accept the head a `stop-after-fix` lane stopped on (#2187 §3.4): the
+ * creator or the operator takes the last fix without another review, and the
+ * lane goes on along the review stage's pass edge exactly as `advance` would
+ * have, completing when that edge is null. Admitted only in needs_review, with
+ * continue-review's actor rule; the acceptance is recorded, and a replay of
+ * the same clientRequestId answers with it. No host or Git work here.
+ */
+function acceptHead(
+  pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
+): PipelinePatchResult {
+  const refusal = continueReviewActorRefusal(pipeline, actor);
+  if (refusal) return { ...refusal, error: "only the pipeline creator conversation or a direct user action can accept this head" };
+  if (!actor) return { error: "accept-head needs an actor", status: 403 };
+  if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    return { error: "accept-head requires clientRequestId (up to 200 characters) and expectedRevision from get_pipeline", status: 400 };
+  }
+  const guardShape = stageGuardShapeError(req);
+  if (guardShape) return guardShape;
+  const prior = pipeline.reviewAcceptances?.find((entry) => entry.clientRequestId === req.clientRequestId);
+  if (prior) {
+    if (prior.expectedRevision !== req.expectedRevision || prior.actor.kind !== actor.kind
+      || (prior.actor.kind === "agent" && actor.kind === "agent" && prior.actor.conversationId !== actor.conversationId)) {
+      return { error: "clientRequestId already belongs to a different accept-head", status: 409 };
+    }
+    return { pipeline, reviewAcceptance: prior, replayed: true };
+  }
+  const pending = pipeline.reviewPending;
+  if (pipeline.state !== "needs_review" || !pending) {
+    return { error: `accept-head requires a pipeline in needs_review; this one is ${pipeline.state}`, status: 409 };
+  }
+  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+    return { error: "the pipeline changed since it was read; read it again before accepting its head", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
+  }
+  const review = pipeline.stages.find((stage) => stage.id === pending.stageId);
+  const fixStage = pipeline.stages.find((stage) => stage.id === pending.fixStageId);
+  const fix = runFor(pipeline, pending.fixStageId)?.attempts.find((attempt) => attempt.n === pending.fixAttempt);
+  if (!review?.onFail || !fixStage || !fix || fix.state !== "passed") {
+    return { error: "the review stage or the fix it handed off to is no longer in this pipeline", status: 409 };
+  }
+  if (pipeline.lastPassedCommit !== pending.currentHead) {
+    return { error: `the pipeline head moved from ${pending.currentHead} to ${pipeline.lastPassedCommit}; read it again`, status: 409, code: "STAGE_CHANGED" };
+  }
+  const acceptance: PipelineReviewAcceptance = {
+    clientRequestId: req.clientRequestId,
+    expectedRevision: req.expectedRevision,
+    stageId: pending.stageId,
+    attempt: pending.attempt,
+    fixStageId: pending.fixStageId,
+    fixAttempt: pending.fixAttempt,
+    reviewedHead: pending.reviewedHead,
+    currentHead: pending.currentHead,
+    actor: structuredClone(actor),
+    at: ports.now(),
+  };
+  pipeline.reviewAcceptances = [...(pipeline.reviewAcceptances ?? []), acceptance];
+  delete pipeline.reviewPending;
+  advancePipeline(pipeline, fixStage, ports, fix, true);
+  return { pipeline, reviewAcceptance: acceptance, replayed: false };
 }
 
 /** Who may convert or revert a legacy review-loop stage: the creator
@@ -7179,6 +7250,11 @@ export async function patchPipeline(
     }
     if (req.action === "resolve-decision") {
       const result = resolveDecision(pipeline, req, actor, ports);
+      if (result.pipeline && !result.replayed) persist();
+      return result;
+    }
+    if (req.action === "accept-head") {
+      const result = acceptHead(pipeline, req, actor, ports);
       if (result.pipeline && !result.replayed) persist();
       return result;
     }

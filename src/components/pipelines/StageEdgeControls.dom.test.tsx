@@ -103,7 +103,7 @@ test("a one-stage pipeline offers a self-targeting fail edge and configures it (
   host.remove();
 });
 
-test("a fail edge offers what a spent budget does, defaulting to advance, and keeps its rounds when it changes (#1868)", async () => {
+test("a fail edge offers what a spent budget does, fix then continue or fix then wait, defaulting to continue, and keeps its rounds when it changes (#1868, #2187)", async () => {
   const patches: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (_url: string, init?: { method?: string; body?: string }) => {
     if (init?.method === "PATCH") patches.push(JSON.parse(init.body ?? "{}") as Record<string, unknown>);
@@ -117,17 +117,35 @@ test("a fail edge offers what a spent budget does, defaulting to advance, and ke
   const selects = [...host.querySelectorAll("select")] as HTMLSelectElement[];
   expect(selects).toHaveLength(3);
   const exhausted = selects[2]!;
-  expect([...exhausted.options].map((option) => option.value)).toEqual(["advance", "park"]);
+  expect([...exhausted.options].map((option) => [option.value, option.textContent])).toEqual([
+    ["advance", "Fix, then continue"],
+    ["stop-after-fix", "Fix, then wait for me"],
+  ]);
   expect(exhausted.value).toBe("advance");
+  expect(host.querySelector("[data-edge-exhausted-hint]")?.textContent).toContain("moves on or completes");
 
   flushSync(() => {
-    Object.getOwnPropertyDescriptor(dom.HTMLSelectElement.prototype, "value")!.set!.call(exhausted, "park");
+    Object.getOwnPropertyDescriptor(dom.HTMLSelectElement.prototype, "value")!.set!.call(exhausted, "stop-after-fix");
     exhausted.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
   });
   await Bun.sleep(0);
 
-  expect(patches).toEqual([{ action: "set-edge", stageId: "implement", edge: "fail", to: "implement", maxRounds: 3, onExhausted: "park" }]);
+  expect(patches).toEqual([{ action: "set-edge", stageId: "implement", edge: "fail", to: "implement", maxRounds: 3, onExhausted: "stop-after-fix" }]);
 
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("a stored park edge shows a third, disabled option so the select never misreports the record (#2187)", () => {
+  const { pipeline, stage } = oneStagePipeline();
+  stage.onFail = { to: "implement", maxRounds: 2, onExhausted: "park" };
+  const { host, root } = mount(<StageEdgeControls pipeline={pipeline} stage={stage} />);
+  const exhausted = [...host.querySelectorAll("select")][2] as HTMLSelectElement;
+  expect(exhausted.value).toBe("park");
+  const park = [...exhausted.options].find((option) => option.value === "park")!;
+  expect(park.textContent).toBe("Stop without fixing");
+  expect(park.disabled).toBe(true);
+  expect(host.querySelector("[data-edge-exhausted-hint]")?.getAttribute("data-edge-exhausted-hint")).toBe("park");
   flushSync(() => root.unmount());
   host.remove();
 });

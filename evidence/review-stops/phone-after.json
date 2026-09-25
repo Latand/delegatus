@@ -1,0 +1,693 @@
+{
+  "results": [
+    {
+      "key": "stop-after-fix-390-en-dark",
+      "stamp": "after",
+      "kind": "stop-after-fix",
+      "reason": "Stopped after the last fix, as this pipeline asked: the fix is not reviewed.",
+      "answers": [
+        [
+          "accept-head",
+          "Accept as is"
+        ],
+        [
+          "continue-review",
+          "Review again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-fix"
+        ],
+        "scrollHeight": 733,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "park-390-en-dark",
+      "stamp": "after",
+      "kind": "park",
+      "reason": "Stopped: the last of 3 review rounds failed, and this pipeline stops before fixing.",
+      "answers": [
+        [
+          "skip-stage",
+          "Accept without review"
+        ],
+        [
+          "retry-stage",
+          "Review again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage does not take the stage address from the project config."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-park"
+        ],
+        "scrollHeight": 754,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "once-390-en-dark",
+      "stamp": "after",
+      "kind": "once",
+      "reason": "Stopped: Review failed again after its last fix round.",
+      "answers": [
+        [
+          "skip-stage",
+          "Accept without review"
+        ],
+        [
+          "retry-stage",
+          "Review again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-once"
+        ],
+        "scrollHeight": 809,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "legacy-390-en-dark",
+      "stamp": "after",
+      "kind": "legacy",
+      "reason": "Stopped: the older review loop ends at its round limit without a last fix.",
+      "answers": [
+        [
+          "skip-stage",
+          "Accept without review"
+        ],
+        [
+          "retry-stage",
+          "Review again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage does not take the stage address from the project config."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-legacy"
+        ],
+        "scrollHeight": 709,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stop-after-fix-390-en-light",
+      "stamp": "after",
+      "kind": "stop-after-fix",
+      "reason": "Stopped after the last fix, as this pipeline asked: the fix is not reviewed.",
+      "answers": [
+        [
+          "accept-head",
+          "Accept as is"
+        ],
+        [
+          "continue-review",
+          "Review again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-fix"
+        ],
+        "scrollHeight": 733,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "park-390-en-light",
+      "stamp": "after",
+      "kind": "park",
+      "reason": "Stopped: the last of 3 review rounds failed, and this pipeline stops before fixing.",
+      "answers": [
+        [
+          "skip-stage",
+          "Accept without review"
+        ],
+        [
+          "retry-stage",
+          "Review again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage does not take the stage address from the project config."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-park"
+        ],
+        "scrollHeight": 754,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "once-390-en-light",
+      "stamp": "after",
+      "kind": "once",
+      "reason": "Stopped: Review failed again after its last fix round.",
+      "answers": [
+        [
+          "skip-stage",
+          "Accept without review"
+        ],
+        [
+          "retry-stage",
+          "Review again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-once"
+        ],
+        "scrollHeight": 809,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "legacy-390-en-light",
+      "stamp": "after",
+      "kind": "legacy",
+      "reason": "Stopped: the older review loop ends at its round limit without a last fix.",
+      "answers": [
+        [
+          "skip-stage",
+          "Accept without review"
+        ],
+        [
+          "retry-stage",
+          "Review again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage does not take the stage address from the project config."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-legacy"
+        ],
+        "scrollHeight": 709,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stop-after-fix-390-uk-dark",
+      "stamp": "after",
+      "kind": "stop-after-fix",
+      "reason": "Зупинено після останнього виправлення, як просив цей пайплайн: виправлення не перевірене.",
+      "answers": [
+        [
+          "accept-head",
+          "Прийняти як є"
+        ],
+        [
+          "continue-review",
+          "Ще одне ревʼю"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-fix"
+        ],
+        "scrollHeight": 766,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "park-390-uk-dark",
+      "stamp": "after",
+      "kind": "park",
+      "reason": "Зупинено: останній із 3 раундів ревʼю провалено, і цей пайплайн зупиняється до виправлення.",
+      "answers": [
+        [
+          "skip-stage",
+          "Прийняти без ревʼю"
+        ],
+        [
+          "retry-stage",
+          "Ще одне ревʼю"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-park"
+        ],
+        "scrollHeight": 787,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "once-390-uk-dark",
+      "stamp": "after",
+      "kind": "once",
+      "reason": "Зупинено: Review знову провалено після останнього раунду виправлень.",
+      "answers": [
+        [
+          "skip-stage",
+          "Прийняти без ревʼю"
+        ],
+        [
+          "retry-stage",
+          "Ще одне ревʼю"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-once"
+        ],
+        "scrollHeight": 875,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "legacy-390-uk-dark",
+      "stamp": "after",
+      "kind": "legacy",
+      "reason": "Зупинено: старий цикл ревʼю закінчується на ліміті раундів без останнього виправлення.",
+      "answers": [
+        [
+          "skip-stage",
+          "Прийняти без ревʼю"
+        ],
+        [
+          "retry-stage",
+          "Ще одне ревʼю"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-legacy"
+        ],
+        "scrollHeight": 709,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stop-after-fix-390-uk-light",
+      "stamp": "after",
+      "kind": "stop-after-fix",
+      "reason": "Зупинено після останнього виправлення, як просив цей пайплайн: виправлення не перевірене.",
+      "answers": [
+        [
+          "accept-head",
+          "Прийняти як є"
+        ],
+        [
+          "continue-review",
+          "Ще одне ревʼю"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-fix"
+        ],
+        "scrollHeight": 766,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "park-390-uk-light",
+      "stamp": "after",
+      "kind": "park",
+      "reason": "Зупинено: останній із 3 раундів ревʼю провалено, і цей пайплайн зупиняється до виправлення.",
+      "answers": [
+        [
+          "skip-stage",
+          "Прийняти без ревʼю"
+        ],
+        [
+          "retry-stage",
+          "Ще одне ревʼю"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-park"
+        ],
+        "scrollHeight": 787,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "once-390-uk-light",
+      "stamp": "after",
+      "kind": "once",
+      "reason": "Зупинено: Review знову провалено після останнього раунду виправлень.",
+      "answers": [
+        [
+          "skip-stage",
+          "Прийняти без ревʼю"
+        ],
+        [
+          "retry-stage",
+          "Ще одне ревʼю"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-once"
+        ],
+        "scrollHeight": 875,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "legacy-390-uk-light",
+      "stamp": "after",
+      "kind": "legacy",
+      "reason": "Зупинено: старий цикл ревʼю закінчується на ліміті раундів без останнього виправлення.",
+      "answers": [
+        [
+          "skip-stage",
+          "Прийняти без ревʼю"
+        ],
+        [
+          "retry-stage",
+          "Ще одне ревʼю"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "findings": [
+        "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-stop-legacy"
+        ],
+        "scrollHeight": 709,
+        "clientHeight": 690
+      }
+    }
+  ],
+  "failures": []
+}

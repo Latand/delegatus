@@ -113,6 +113,11 @@ const ARCS = SCENARIO === "issue1798";
 /* #1938: a lane whose review budget ran out and whose last fix wrote a head
    nobody reviewed — parked in needs_review, never completed. */
 const REVIEW_SPENT = SCENARIO === "issue1938" || FLAT;
+/* #2187 §3.4: one lane parked on a review for each row of the table — stopped
+   after the last fix as the pipeline asked, a spent budget that stops before
+   fixing, a reviewer that failed again after its last fix round, and an older
+   review loop at its round limit — with the words at their longest. */
+const REVIEW_STOPS = SCENARIO === "review-stops";
 /* The seat's header at its fullest: a mandate a version behind the default,
    so the stale chip draws, a designated incumbent with its effort, account and
    a context past the rotation line, twenty previous seats and a running host
@@ -375,6 +380,79 @@ const reviewSpentPipelines: Pipeline[] = REVIEW_SPENT ? (() => {
       stateDetail: "review budget spent: last review failed (fail, 2 findings), head 9b2e7d4c1a0f unreviewed; reviewed 4f1c2a9d3b7e. continue-review adds rounds",
       reviewPending: { stageId: "critique", attempt: 1, fixStageId: "build", fixAttempt: 2, reviewedHead: REVIEWED_HEAD, currentHead: UNREVIEWED_HEAD, verdict: "fail", findings: findings.length, at: iso(20 * MIN) },
     })];
+})() : [];
+
+const reviewStopPipelines: Pipeline[] = REVIEW_STOPS ? (() => {
+  const readOnly = { ...role("reviewer", "codex"), access: "read-only" };
+  const reviewer = (next: string | null, onFail: Record<string, unknown> | null, over: Record<string, unknown> = {}) =>
+    stage("review", "reviewer", next, { kind: "run", onFail, effectiveRole: readOnly, ...over });
+  const conv = (id: string, title: string, ago: number, over: Record<string, unknown> = {}) => add(conversation(id, title, { mtime: now - ago, ...over }));
+  const fail = (text: string) => ({ status: "fail", findings: [text] });
+  const pass = { status: "pass", findings: [] };
+  const builds = (key: string, count: number, activations: Array<Record<string, unknown> | null>, from: number) => Array.from({ length: count }, (_, index) => {
+    const at = from - index * 30 * MIN;
+    return attempt(index + 1, "passed", conv(`stop-${key}-build-${index + 1}`, `Build pass ${index + 1}`, at - 10 * MIN), { startedAt: iso(at), completedAt: iso(at - 10 * MIN), verdict: pass, activatedBy: activations[index] ?? null });
+  });
+  const reviews = (key: string, texts: string[], from: number, over: Record<string, unknown> = {}) => texts.map((text, index) => {
+    const at = from - index * 30 * MIN;
+    return attempt(index + 1, "failed", conv(`stop-${key}-review-${index + 1}`, `Review pass ${index + 1}`, at - 10 * MIN, { engine: "codex", model: "gpt-6-astra" }), {
+      effectiveRole: readOnly, startedAt: iso(at), completedAt: iso(at - 10 * MIN), verdict: fail(text), activatedBy: { stageId: "build", attempt: index + 1, edge: "pass" }, ...over,
+    });
+  });
+  const pillFinding = L("P2 — The Model pill cuts its name at 360 px when two accounts are on.", "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти.");
+  const captureFinding = L("P2 — capture --stage does not take the stage address from the project config.", "P2 — capture --stage не бере адресу стейджу з конфігу проєкту.");
+  const parkDetail = `fail-edge budget exhausted after 2 round(s) (onExhausted: park): ${captureFinding}`;
+  const onceDetail = `fail-edge budget exhausted after 1 round(s) (onExhausted: advance): ${pillFinding}`;
+  return [
+    /* Row 1: stop-after-fix. The last fix landed and the pipeline asked to wait. */
+    pipeline("p-stop-fix", L("Composer model pills: one width at 390", "Кнопки моделі в композері: одна ширина на 390"), "t-stop-fix", "needs_review",
+      [stage("build", "builder", "review"), reviewer(null, { to: "build", maxRounds: 2, onExhausted: "stop-after-fix" })],
+      [
+        { stageId: "build", attempts: builds("fix", 3, [null, { stageId: "review", attempt: 1, edge: "fail" }, { stageId: "review", attempt: 2, edge: "fail", budgetSpent: true }], 110 * MIN) },
+        { stageId: "review", attempts: reviews("fix", [pillFinding, pillFinding], 95 * MIN, { reviewedHead: REVIEWED_HEAD }).map((entry, index) => (index === 1 ? { ...entry, budgetSpent: true } : entry)) },
+      ], null, {
+        lastPassedCommit: UNREVIEWED_HEAD,
+        stateDetail: "review budget spent (onExhausted: stop-after-fix): last review failed (fail, 1 finding), head 9b2e7d4c1a0f unreviewed; reviewed 4f1c2a9d3b7e. continue-review adds rounds",
+        reviewPending: { stageId: "review", attempt: 2, fixStageId: "build", fixAttempt: 3, reviewedHead: REVIEWED_HEAD, currentHead: UNREVIEWED_HEAD, verdict: "fail", findings: 1, at: iso(12 * MIN) },
+      }),
+    /* Row 2: park. The last of three review rounds failed; the edge stops before fixing. */
+    pipeline("p-stop-park", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "t-stop-park", "needs_decision",
+      [stage("build", "builder", "review"), reviewer(null, { to: "build", maxRounds: 2, onExhausted: "park" })],
+      [
+        { stageId: "build", attempts: builds("park", 3, [null, { stageId: "review", attempt: 1, edge: "fail" }, { stageId: "review", attempt: 2, edge: "fail" }], 130 * MIN) },
+        { stageId: "review", attempts: reviews("park", [captureFinding, captureFinding, captureFinding], 115 * MIN).map((entry, index) => (index === 2 ? { ...entry, error: parkDetail } : entry)) },
+      ], { stageId: "review", state: "running", input: null, activatedBy: { stageId: "build", attempt: 3, edge: "pass" } }, { stateDetail: parkDetail }),
+    /* Row 3: the once-per-stage rule. Verify sent the work back through the
+       review, which had already handed its last findings on, and it failed again. */
+    pipeline("p-stop-once", L("Deploy failure notifies the seat and the phone", "Невдалий деплой сповіщає сесію і телефон"), "t-stop-once", "needs_decision",
+      [stage("build", "builder", "review"), reviewer("verify", { to: "build", maxRounds: 1 }), stage("verify", "verifier", null, { onFail: { to: "build", maxRounds: 1 } })],
+      [
+        { stageId: "build", attempts: builds("once", 3, [null, { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true }, { stageId: "verify", attempt: 1, edge: "fail" }], 160 * MIN) },
+        { stageId: "review", attempts: reviews("once", [pillFinding, pillFinding], 145 * MIN).map((entry, index) => (index === 0
+          ? { ...entry, budgetSpent: true }
+          : { ...entry, error: onceDetail, startedAt: iso(40 * MIN), completedAt: iso(30 * MIN), activatedBy: { stageId: "build", attempt: 3, edge: "pass" } })) },
+        { stageId: "verify", attempts: [attempt(1, "failed", conv("stop-once-verify-1", "Verify pass 1", 80 * MIN), { startedAt: iso(90 * MIN), completedAt: iso(80 * MIN), verdict: fail(pillFinding), activatedBy: { stageId: "build", attempt: 2, edge: "pass" } })] },
+      ], { stageId: "review", state: "running", input: null, activatedBy: { stageId: "build", attempt: 3, edge: "pass" } }, { stateDetail: onceDetail }),
+    /* §3.5: a lane that completed under the default after its last fix,
+       which no reviewer saw. */
+    pipeline("p-stop-done", L("Conversation: wider agent replies", "Розмова: ширші відповіді агентів"), "t-stop-done", "completed",
+      [stage("build", "builder", "review"), reviewer(null, { to: "build", maxRounds: 2 })],
+      [
+        { stageId: "build", attempts: builds("done", 3, [null, { stageId: "review", attempt: 1, edge: "fail" }, { stageId: "review", attempt: 2, edge: "fail", budgetSpent: true }], 240 * MIN) },
+        { stageId: "review", attempts: reviews("done", [pillFinding, pillFinding], 225 * MIN, { reviewedHead: REVIEWED_HEAD }).map((entry, index) => (index === 1 ? { ...entry, budgetSpent: true } : entry)) },
+      ], null, { lastPassedCommit: UNREVIEWED_HEAD, closedAt: iso(170 * MIN), stateDetail: "budget spent: last findings handed to the fix stage, not re-reviewed" }),
+    /* Row 4: an older review loop at its round limit, whose flow stored its
+       own detail as the first finding. */
+    pipeline("p-stop-legacy", L("Screenshot catalog: one capture command for every feature", "Каталог скриншотів: одна команда зйомки для кожної фічі"), "t-stop-legacy", "needs_decision",
+      [stage("build", "builder", "review"), stage("review", "reviewer", null, { effectiveRole: readOnly })],
+      [
+        { stageId: "build", attempts: builds("legacy", 1, [null], 200 * MIN) },
+        { stageId: "review", attempts: [attempt(1, "failed", conv("stop-legacy-review-1", "Review loop", 20 * MIN, { engine: "codex", model: "gpt-6-astra" }), {
+          effectiveRole: readOnly, startedAt: iso(180 * MIN), completedAt: iso(20 * MIN), activatedBy: { stageId: "build", attempt: 1, edge: "pass" },
+          verdict: { status: "fail", findings: ["round limit reached", captureFinding] }, error: "review loop ended in needs_decision: round limit reached",
+        })] },
+      ], { stageId: "review", state: "reviewing", input: null, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } }, { stateDetail: "review loop ended in needs_decision: round limit reached" }),
+  ];
 })() : [];
 
 const arcPipelines: Pipeline[] = ARCS ? (() => {
@@ -653,6 +731,7 @@ const pipelines: Pipeline[] = [
   ...unstartedPipelines,
   ...flatPipelines,
   ...reviewSpentPipelines,
+  ...reviewStopPipelines,
   ...balancePipelines,
   ...arcPipelines,
   ...labelPipelines,
@@ -914,6 +993,13 @@ const tasks: BoardTask[] = [
         { launchId: "launch-mixed-failed", conversationId: mixedFailed!.conversationId, path: mixedFailed!.path, panePid: null, state: "spawning", error: null, at: iso(60 * MIN), engine: "claude" },
       ] as unknown as BoardTask["assignments"],
     } as Partial<BoardTask>),
+  ] : []),
+  ...(REVIEW_STOPS ? [
+    task("t-stop-fix", "assigned", L("Composer model pills: one width at 390", "Кнопки моделі в композері однієї ширини"), L("At 390 px the model and effort pills drift apart. The operator wants to look before the merge.", "На 390 px кнопки моделі й зусилля розʼїжджаються. Оператор хоче подивитися перед мерджем."), 12 * MIN),
+    task("t-stop-park", "assigned", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "", 6 * MIN),
+    task("t-stop-once", "assigned", L("Deploy failure notifies the seat and the phone", "Сповіщення, коли деплой падає"), "", 4 * MIN),
+    task("t-stop-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 170 * MIN),
+    task("t-stop-legacy", "assigned", L("Screenshot catalog: one capture command for every feature", "Каталог скриншотів: одна команда зйомки для кожної фічі"), "", 2 * MIN),
   ] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];

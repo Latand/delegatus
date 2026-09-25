@@ -3107,3 +3107,111 @@ browserTest("#2190: phone task cards carry the task's icon in the card's colour"
   fs.writeFileSync(path.join("evidence/task-icons", `phone-${ICON_PHASE}.json`), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 300_000);
+
+/*
+ * #2187 — a lane parked on a review says why in one line and answers in
+ * plain words (docs/design/merge-policy-and-task-finishing.md §3.4), on the
+ * phone's task screen at 390 × 844, en and uk, dark and light: one task per
+ * row of the table (`?review-stops=1`). Each lane draws the table's reason
+ * line and its two answers in the table's words, 44 px tall, with no label cut
+ * by its button, plus the task screen's own gates (no sideways overflow, no
+ * text over text or a control, no small or crossing control).
+ *
+ *   REVIEW_STOPS_STAMP=after REVIEW_STOPS_PNG_DIR=… LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2187"
+ *
+ * `REVIEW_STOPS_STAMP=before` only records, which is how the merge base was
+ * drawn; the desktop board's half of the issue is the kanban driver's case.
+ */
+const REVIEW_STOPS = [
+  { task: "t-stop-fix", kind: "stop-after-fix", reason: "pipelineBlock.stop.afterFix", answers: [["accept-head", "pipelineBlock.answer.acceptAsIs"], ["continue-review", "pipelineBlock.answer.reviewAgain"]] },
+  { task: "t-stop-park", kind: "park", reason: "pipelineBlock.stop.park", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
+  { task: "t-stop-once", kind: "once", reason: "pipelineBlock.stop.once", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
+  { task: "t-stop-legacy", kind: "legacy", reason: "pipelineBlock.stop.legacy", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
+] as const;
+
+browserTest("#2187: each row of §3.4's table draws its reason and plain answers on the phone's task screen at 390, en and uk, uncut and apart", async () => {
+  const stamp = process.env.REVIEW_STOPS_STAMP === "before" ? "before" : "after";
+  const out = path.resolve(process.env.REVIEW_STOPS_PNG_DIR ?? ".artifacts/review-stops");
+  const evidence = path.resolve("evidence/review-stops");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      for (const scheme of ["dark", "light"] as const) {
+        for (const lane of REVIEW_STOPS) {
+          const key = `${lane.kind}-390-${lang}-${scheme}`;
+          const fail = (text: string) => failures.push(`${key}: ${text}`);
+          const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+          await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+          try {
+            const page = await context.newPage();
+            const pageErrors: string[] = [];
+            page.on("pageerror", (error) => pageErrors.push(error.message));
+            await page.goto(`${fixtureBase}/?kanban=1&review-stops=1#p=atlas`);
+            await page.waitForSelector(`[data-phone-card="task:${lane.task}"]`, { timeout: 20_000 });
+            await pause(page, 600);
+            await page.locator(`[data-phone-card="task:${lane.task}"]`).click();
+            await page.waitForSelector(`[data-mobile2-task="${lane.task}"] [data-phone-task-body="${lane.task}"]`, { timeout: 10_000 });
+            await page.mouse.move(0, 0);
+            await pause(page, 600);
+            await page.screenshot({ path: path.join(out, `${stamp}-phone-${key}.png`) });
+            const screen = await readTaskScreen(page);
+            const drawn = await page.evaluate(() => {
+              const answer = document.querySelector("[data-phone-task-body] .pb-answer");
+              const reason = answer?.querySelector("[data-review-stop]") ?? answer?.querySelector(".stage-report, .review-heads") ?? null;
+              const buttons = [...(answer?.querySelectorAll<HTMLElement>("[data-answer-action]") ?? [])];
+              const cut = buttons.flatMap((button) => {
+                const frame = button.getBoundingClientRect();
+                const range = document.createRange();
+                range.selectNodeContents(button);
+                const ink = [...range.getClientRects()].filter((rect) => rect.width * rect.height > 0.5);
+                const outside = ink.some((rect) => rect.left < frame.left - 0.5 || rect.right > frame.right + 0.5 || rect.top < frame.top - 0.5 || rect.bottom > frame.bottom + 0.5);
+                return button.scrollWidth > button.clientWidth + 1 || outside ? [(button.textContent ?? "").trim()] : [];
+              });
+              return {
+                kind: reason?.getAttribute("data-review-stop") ?? null,
+                reason: reason?.textContent?.trim() ?? null,
+                answers: buttons.map((button) => [button.getAttribute("data-answer-action") ?? "", (button.textContent ?? "").trim()]),
+                heights: buttons.map((button) => Math.round(button.getBoundingClientRect().height)),
+                findings: [...(answer?.querySelectorAll(".stage-findings li .text") ?? [])].map((item) => (item.textContent ?? "").trim()),
+                cut,
+              };
+            });
+            results.push({ key, stamp, ...drawn, screen });
+            const t = (name: string, params?: Record<string, string | number>) => translate(lang, name as never, params);
+            if (drawn.kind !== lane.kind) fail(`drawn as ${drawn.kind}`);
+            if (lane.kind === "once") {
+              const [lead, trail] = t(lane.reason, { stage: "\u0000" }).split("\u0000");
+              if (!drawn.reason?.startsWith(lead!) || !drawn.reason.endsWith(trail!)) fail(`reason ${JSON.stringify(drawn.reason)}`);
+            } else if (drawn.reason !== t(lane.reason, lane.kind === "park" ? { count: 3 } : undefined)) fail(`reason ${JSON.stringify(drawn.reason)}`);
+            const want = lane.answers.map(([action, name]) => [action, t(name)]);
+            if (JSON.stringify(drawn.answers) !== JSON.stringify(want)) fail(`answers ${JSON.stringify(drawn.answers)}, expected ${JSON.stringify(want)}`);
+            if (drawn.heights.some((height) => height < 44)) fail(`answers shorter than 44 px: ${drawn.heights.join(", ")}`);
+            if (drawn.cut.length) fail(`labels cut by their button: ${drawn.cut.join(" | ")}`);
+            if (lane.kind === "legacy" && drawn.findings.some((text) => /round limit reached/.test(text))) fail("the flow's own detail is still listed as a finding");
+            if (screen.overflowX > 0.5 || screen.bodyOverflowX > 0.5) fail(`overflows sideways by ${Math.max(screen.overflowX, screen.bodyOverflowX)} px`);
+            if (screen.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(screen.smallControls)}`);
+            if (screen.crossingControls.length) fail(`controls crossing: ${JSON.stringify(screen.crossingControls)}`);
+            if (screen.inkOverlaps.length) fail(`text over text: ${JSON.stringify(screen.inkOverlaps.slice(0, 6))}`);
+            if (screen.inkOnControls.length) fail(`text over a control: ${JSON.stringify(screen.inkOnControls.slice(0, 6))}`);
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+            await page.close();
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(evidence, `phone-${stamp}.json`), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (stamp === "after" && failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

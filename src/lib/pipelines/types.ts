@@ -536,6 +536,25 @@ export type PipelineReviewGrant = {
   at: string;
 };
 
+/** One accepted `accept-head` (#2187 §3.4), append-only: the operator or the
+    creator took a head the last fix wrote and nobody reviewed, and the lane
+    went on along the review stage's pass edge as `advance` would have. */
+export type PipelineReviewAcceptance = {
+  clientRequestId: string;
+  expectedRevision: string;
+  /** The review stage whose spent budget stopped the lane, and its last attempt. */
+  stageId: string;
+  attempt: number;
+  /** The fix that took the last findings, and its passed attempt. */
+  fixStageId: string;
+  fixAttempt: number;
+  reviewedHead: string | null;
+  /** The head accepted without a review. */
+  currentHead: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor;
+  at: string;
+};
+
 /** Where a converted review's round limit came from: the caller's edit, the
     limit recorded on the stage's review flow, or the limit every review flow
     the pipeline engine created carried. */
@@ -779,6 +798,8 @@ export type Pipeline = {
   reviewPending?: PipelineReviewPending;
   /** Accepted continue-review grants, oldest first (#1938). */
   reviewGrants?: PipelineReviewGrant[];
+  /** Accepted accept-head answers, oldest first (#2187 §3.4). */
+  reviewAcceptances?: PipelineReviewAcceptance[];
   /** Explicit legacy review-loop conversions, oldest first. */
   legacyReviewConversions?: PipelineLegacyReviewConversion[];
   /** Accepted stage completion calls, oldest first, at most
@@ -822,6 +843,7 @@ export const PIPELINE_ACTIONS = [
   "retry-stage",
   "resolve-decision",
   "continue-review",
+  "accept-head",
   "preview-legacy-review",
   "convert-legacy-review",
   "revert-legacy-review",
@@ -841,7 +863,7 @@ export const PIPELINE_ACTIONS = [
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 
 export type PatchPipelineRequest = {
-  /** Required for resolve-decision and continue-review, preserved as its durable receipt key. */
+  /** Required for resolve-decision, continue-review and accept-head, preserved as its durable receipt key. */
   clientRequestId?: string;
   /** Opaque revision returned by get_pipeline or the pipeline detail route. */
   expectedRevision?: string;

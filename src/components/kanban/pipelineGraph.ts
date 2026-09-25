@@ -135,7 +135,8 @@ export function stageViews(pipeline: Pipeline, flowsById: ReadonlyMap<string, Fl
     const attempts = operationalAttempts(pipeline, stage.id).length;
     const rounds = stage.kind === "review-loop" ? roundsOf(attempt, flowsById) : [];
     const mine = startedMs(attempt);
-    const newerUpstream = attempt && !LIVE_CHIPS.has(state) && Number.isFinite(mine)
+    /* A stage the lane waits on is where it stands, however new its upstream. */
+    const newerUpstream = attempt && !LIVE_CHIPS.has(state) && state !== "needs_decision" && Number.isFinite(mine)
       && [...upstreamOf(predecessors, stage.id)].some((id) => startedMs(latestAttempt(pipeline, id)) > mine);
     views.set(stage.id, newerUpstream
       ? { state: "pending", again: true, previous: state, attempts, attempt, rounds: [] }

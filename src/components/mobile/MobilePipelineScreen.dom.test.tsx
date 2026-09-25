@@ -448,13 +448,17 @@ test("a spent review budget is answered inside the review stage: its heads, Clos
   const host = mount(<MobilePipelineScreen pipeline={review} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
   const answers = qa(host, "[data-answer-action]");
   expect(answers.map((el) => [el.getAttribute("data-answer-action"), el.textContent])).toEqual([
-    ["close", translate("en", "mobile2.pipeline.archive")],
-    ["continue-review", translate("en", "pipelineBlock.oneMoreRound")],
+    ["accept-head", translate("en", "pipelineBlock.answer.acceptAsIs")],
+    ["continue-review", translate("en", "pipelineBlock.answer.reviewAgain")],
   ]);
   const stage = answers[0]!.closest(".pb-stage") as unknown as HTMLElement;
   expect(stage.getAttribute("data-stage")).toBe("review");
   expect(stage.getAttribute("data-stage-current")).toBe("1");
-  expect(q(stage, "[data-review-heads]")!.textContent).toContain("9b2e7d4c");
+  /* One line on why it stopped (#2187 §3.4); the two heads ride its tooltip. */
+  const reason = q(stage, "[data-review-stop]")!;
+  expect(reason.getAttribute("data-review-stop")).toBe("stop-after-fix");
+  expect(reason.textContent).toBe(translate("en", "pipelineBlock.stop.afterFix"));
+  expect(reason.getAttribute("title")).toContain("9b2e7d4c");
   /* The lane has no cursor; the bar counts the stage the screen expands, the
      number its row carries. */
   expect(q(host, "[data-mobile2-meta] .pstate-word")!.textContent).toBe(translate("en", "pipelineState.needs_review"));

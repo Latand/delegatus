@@ -8,7 +8,7 @@ import type { KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 
 import {
-  blockAgeSeconds, cardChainLevels, currentChipIndex, pipelineAnswers, pipelineReason, sameTitle, STAGE_MARK, type ChainItem,
+  answerLabel, blockAgeSeconds, cardChainLevels, currentChipIndex, pipelineAnswers, pipelineReason, reviewStop, reviewStopFindings, sameTitle, STAGE_MARK, type ChainItem,
 } from "./pipelineBlockModel";
 import type { StageChipState } from "./pipelineModel";
 
@@ -98,7 +98,7 @@ function parked(overrides: Partial<Pipeline> = {}): Pipeline {
 }
 const nameOf = (entry: PipelineStage) => entry.id[0]!.toUpperCase() + entry.id.slice(1);
 
-test("a decision is answered with Skip and Retry on the stage it waits on, a spent review budget with Close and One more round", () => {
+test("a decision is answered with Skip and Retry on the stage it waits on, a stop after the last fix with Accept as is and Review again", () => {
   const decision = pipelineAnswers(parked(), nameOf)!;
   expect(decision.kind).toBe("decision");
   expect(decision.choices).toEqual([
@@ -114,9 +114,73 @@ test("a decision is answered with Skip and Retry on the stage it waits on, a spe
   const answers = pipelineAnswers(review, nameOf)!;
   expect(answers.kind).toBe("review");
   expect(answers.stage?.id).toBe("review");
-  expect(answers.choices.map((choice) => choice.action)).toEqual(["close", "continue-review"]);
-  expect(pipelineReason(t, review, nameOf)).toBe("head 9b2e7d4c unreviewed · no rounds left");
+  expect(answers.choices.map((choice) => choice.action)).toEqual(["accept-head", "continue-review"]);
+  expect(answers.stop?.kind).toBe("stop-after-fix");
+  expect(answers.choices.map((choice) => answerLabel(t, answers, choice, false))).toEqual(["Accept as is", "Review again"]);
+  expect(answers.choices.map((choice) => answerLabel(t, answers, choice, true))).toEqual(["Accept as is", "Review again"]);
+  expect(pipelineReason(t, review, nameOf)).toBe("Stopped after the last fix, as this pipeline asked: the fix is not reviewed.");
+  /* Any other decision keeps the stage's own words. */
+  expect(decision.stop).toBeNull();
+  expect(decision.choices.map((choice) => answerLabel(t, decision, choice, false))).toEqual(["Skip Implement", "Retry Implement"]);
+  expect(decision.choices.map((choice) => answerLabel(t, decision, choice, true))).toEqual(["Skip stage", "Retry stage"]);
 
   expect(pipelineAnswers(parked({ state: "running" }), nameOf)).toBeNull();
   expect(pipelineReason(t, parked({ state: "running" }), nameOf)).toBeNull();
+});
+
+/* #2187 §3.4: a lane parked on a review, by each of the table's rows. */
+function parkedReview(onExhausted: "advance" | "stop-after-fix" | "park", detail: string, reviews = 3, overrides: Partial<Pipeline> = {}): Pipeline {
+  const review = { ...stage("review"), onFail: { to: "implement", maxRounds: 2, onExhausted } };
+  return parked({
+    stages: [{ ...stage("implement"), next: "review" }, review],
+    stateDetail: detail,
+    cursor: { stageId: "review", state: "running", input: null, activatedBy: null },
+    runs: [
+      { stageId: "implement", attempts: [1, 2, 3].map((n) => ({ n, state: "passed", activatedBy: n > 1 ? { stageId: "review", attempt: n - 1, edge: "fail" } : null })) },
+      { stageId: "review", attempts: Array.from({ length: reviews }, (_, index) => ({
+        n: index + 1, state: "failed", effectiveRole: { access: "read-only" },
+        verdict: { status: "fail", findings: ["P2 — capture misses the stage"], rankedFindings: [{ severity: "P2", text: "capture misses the stage" }] },
+      })) },
+    ],
+    ...overrides,
+  } as Partial<Pipeline>);
+}
+
+test("each review stop names its reason and its plain answers; a stop that is no review keeps Skip and Retry (#2187 §3.4)", () => {
+  const park = parkedReview("park", "fail-edge budget exhausted after 2 round(s) (onExhausted: park): P2 — capture misses the stage");
+  const parkAnswers = pipelineAnswers(park, nameOf)!;
+  expect(parkAnswers.stop).toMatchObject({ kind: "park", rounds: 3 });
+  expect(parkAnswers.choices.map((choice) => choice.action)).toEqual(["skip-stage", "retry-stage"]);
+  expect(parkAnswers.choices.map((choice) => answerLabel(t, parkAnswers, choice, false))).toEqual(["Accept without review", "Review again"]);
+  expect(parkAnswers.choices.map((choice) => answerLabel(t, parkAnswers, choice, true))).toEqual(["Accept without review", "Review again"]);
+  expect(pipelineReason(t, park, nameOf)).toBe("Stopped: the last of 3 review rounds failed, and this pipeline stops before fixing.");
+  expect(translate("uk", "pipelineBlock.stop.park", { count: 3 })).toBe("Зупинено: останній із 3 раундів ревʼю провалено, і цей пайплайн зупиняється до виправлення.");
+
+  /* The once-per-stage rule: this reviewer already handed its last findings on. */
+  const handedOn = (pipeline: Pipeline): Pipeline => ({ ...pipeline, runs: pipeline.runs.map((run) => (run.stageId === "review" ? { ...run, attempts: run.attempts.map((entry, index) => (index === 0 ? { ...entry, budgetSpent: true } : entry)) } : run)) });
+  const once = handedOn(parkedReview("advance", "fail-edge budget exhausted after 2 round(s) (onExhausted: advance): P2 — capture misses the stage"));
+  expect(reviewStop(once)?.kind).toBe("once");
+  /* A spent edge that parked on a failure with no verdict never handed anything on: today's words. */
+  expect(reviewStop(parkedReview("advance", "fail-edge budget exhausted after 2 round(s) (onExhausted: advance): host exited"))).toBeNull();
+  expect(pipelineReason(t, once, nameOf)).toBe("Stopped: Review failed again after its last fix round.");
+
+  const legacy = parked({
+    stages: [{ ...stage("implement"), next: "review" }, { ...stage("review"), kind: "review-loop" }],
+    stateDetail: "review loop ended in needs_decision: round limit reached",
+    cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
+    runs: [{ stageId: "review", attempts: [{ n: 1, state: "failed", verdict: { status: "fail", findings: ["round limit reached", "P2 — capture misses the stage"] } }] }],
+  } as Partial<Pipeline>);
+  const legacyStop = reviewStop(legacy)!;
+  expect(legacyStop.kind).toBe("legacy");
+  expect(pipelineReason(t, legacy, nameOf)).toBe("Stopped: the older review loop ends at its round limit without a last fix.");
+  /* The flow's own detail was stored as the first finding; the reason says it in words. */
+  expect(reviewStopFindings(legacy, legacyStop).map((finding) => finding.text)).toEqual(["P2 — capture misses the stage"]);
+
+  /* A read-write stage with a fail edge, a reviewer parked for another reason,
+     and a legacy loop parked short of its limit keep today's words. */
+  expect(reviewStop(parkedReview("park", "fail-edge budget exhausted after 2 round(s) (onExhausted: park): x", 3, {
+    runs: [{ stageId: "review", attempts: [{ n: 3, state: "failed", effectiveRole: { access: "read-write" } }] }],
+  } as Partial<Pipeline>))).toBeNull();
+  expect(reviewStop(parkedReview("park", "reviewer asked a question"))).toBeNull();
+  expect(reviewStop(parked({ ...legacy, stateDetail: "review flow paused in relaying: kickoff delivery failed", runs: [] } as Partial<Pipeline>))).toBeNull();
 });

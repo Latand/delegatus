@@ -5,6 +5,7 @@ import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipeli
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { translate, type TFunction } from "@/lib/i18n";
+import { MAX_PIPELINE_STAGES } from "@/lib/pipelines/limits";
 
 import {
   PIPELINE_TEMPLATES,
@@ -51,6 +52,8 @@ import {
   templateStageInputs,
   buildStagePrompt,
   defaultStageWiring,
+  canAddReviewAfter,
+  optimisticAddReview,
   optimisticAddStage,
   optimisticRemoveStage,
   optimisticReorderStage,
@@ -1315,6 +1318,43 @@ describe("optimistic stage mutations (issue #221 §3 — instant add/remove)", (
   test("optimisticAddStage gives a review-loop read-only access by default", () => {
     const next = optimisticAddStage(pipeline({ stages: chain() }), { id: "r", kind: "review-loop", prompt: "{{task}}", next: null }, 2);
     expect(next.stages[2]!.effectiveRole.access).toBe("read-only");
+  });
+
+  test("optimisticAddReview inserts a read-only reviewer and a fixer copied from the implementer in one frame, as the engine stores them (#2187)", () => {
+    const before = pipeline({ stages: chain() });
+    const next = optimisticAddReview(before, { id: "stage-3", kind: "review-loop", prompt: "{{prev.output}}", next: null }, 1);
+    expect(next.stages.map((stage) => stage.id)).toEqual(["a", "stage-3", "stage-3-fix", "b"]);
+    const [implement, reviewer, fixer] = next.stages;
+    expect(implement!.next).toBe("stage-3");
+    expect(reviewer).toMatchObject({ kind: "run", next: "b", onFail: { to: "stage-3-fix", maxRounds: 5, onExhausted: "advance" } });
+    expect(reviewer!.effectiveRole.access).toBe("read-only");
+    expect(fixer).toMatchObject({ kind: "run", next: "stage-3", onFail: null });
+    expect(fixer!.effectiveRole.access).toBe("read-write");
+    expect(before.stages).toHaveLength(2);
+    /* A predecessor that cannot fix is sent as it is, and so is drawn. */
+    const readOnly = pipeline({ stages: chain().map((stage, index) => (index === 0 ? { ...stage, effectiveRole: { ...stage.effectiveRole, access: "read-only" } } : stage)) });
+    expect(optimisticAddReview(readOnly, { id: "r", kind: "review-loop", prompt: "{{prev.output}}", next: null }, 1).stages.map((stage) => [stage.id, stage.kind])).toEqual([["a", "run"], ["r", "review-loop"], ["b", "run"]]);
+  });
+
+  test("Add review needs two free stage slots and a run before it (#2187)", () => {
+    const run = (id: string): PipelineStage => ({ ...chain()[0]!, id, next: null });
+    const full = (count: number) => pipeline({ stages: Array.from({ length: count }, (_, index) => run(`s${index}`)) });
+    expect(canAddReviewAfter(full(MAX_PIPELINE_STAGES - 2), 0)).toBe(true);
+    expect(canAddReviewAfter(full(MAX_PIPELINE_STAGES - 1), 0)).toBe(false);
+    expect(canAddReviewAfter(full(MAX_PIPELINE_STAGES), 0)).toBe(false);
+    /* Before every run it would be the chain's first stage, which cannot start. */
+    expect(canAddReviewAfter(full(2), -1)).toBe(false);
+  });
+
+  test("a lane stopped after its last fix marks its review stage as the one it waits on (#2187)", () => {
+    const stages = [{ ...chain()[0]!, next: "review" }, { ...chain()[1]!, id: "review", onFail: { to: "a", maxRounds: 1, onExhausted: "stop-after-fix" } }] as PipelineStage[];
+    const parked = pipeline({
+      state: "needs_review", stages,
+      runs: [{ stageId: "review", attempts: [{ n: 1, state: "failed", effectiveRole: stages[1]!.effectiveRole } as unknown as PipelineStageAttempt] }],
+      reviewPending: { stageId: "review", attempt: 1, fixStageId: "a", fixAttempt: 2, reviewedHead: null, currentHead: "h", verdict: "fail", findings: 1, at: "" },
+    } as Partial<Pipeline>);
+    expect(stageChipState(parked, stages[1]!)).toBe("needs_decision");
+    expect(stageChipState({ ...parked, state: "completed" }, stages[1]!)).toBe("failed");
   });
 
   test("optimisticRemoveStage drops the stage and heals the chain", () => {

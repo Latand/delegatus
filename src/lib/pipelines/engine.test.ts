@@ -9281,6 +9281,87 @@ test("continue-review resumes review of the current head with an explicit added 
   expect(current.lastPassedCommit).toBe(REVIEW_HEADS[1]);
 });
 
+function acceptHead(pipeline: Pipeline, clientRequestId: string, expectedRevision = pipelineRevision(pipeline)) {
+  return patchPipeline(pipeline.id, { action: "accept-head", clientRequestId, expectedRevision }, movingHeadPorts!);
+}
+
+test("accept-head completes a stop-after-fix lane along the review stage's null pass edge, records who accepted, replays and is refused outside needs_review (#2187)", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }, null) as never);
+  await tickPipelines([], h.ports);
+  /* Refused while the lane still runs. */
+  const running = loadPipelines()[0]!;
+  const early = await acceptHead(running, "accept-early");
+  expect(early.status).toBe(409);
+  expect(early.error).toContain("requires a pipeline in needs_review");
+  await failEveryCritique(h, 1, h.beforeBuildPass);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_review");
+  const revision = pipelineRevision(parked);
+
+  expect((await patchPipeline(parked.id, { action: "accept-head", expectedRevision: revision }, h.ports)).status).toBe(400);
+  expect((await acceptHead(parked, "accept-stale", "0".repeat(64))).code).toBe("STAGE_CHANGED");
+  /* Another conversation is not the creator. */
+  const stranger = await patchPipeline(parked.id, { action: "accept-head", clientRequestId: "accept-x", expectedRevision: revision }, h.ports, { kind: "agent", conversationId: "not-the-creator" } as never);
+  expect(stranger.status).toBe(403);
+  expect(loadPipelines()[0]!.state).toBe("needs_review");
+
+  const accepted = await acceptHead(parked, "accept-1", revision);
+  expect(accepted.error).toBeUndefined();
+  expect(accepted.replayed).toBe(false);
+  expect(accepted.reviewAcceptance).toMatchObject({
+    clientRequestId: "accept-1",
+    stageId: "critique",
+    attempt: 1,
+    fixStageId: "build",
+    fixAttempt: 2,
+    reviewedHead: REVIEW_HEADS[0],
+    currentHead: REVIEW_HEADS[1],
+    actor: { kind: "operator" },
+  });
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("completed");
+  expect(current.cursor).toBeNull();
+  expect(current.closedAt).not.toBeNull();
+  expect(current.reviewPending).toBeUndefined();
+  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(current.lastPassedCommit).toBe(REVIEW_HEADS[1]);
+  expect(current.reviewAcceptances).toHaveLength(1);
+  /* No reviewer pass was invented for the accepted head. */
+  expect(current.runs.find((run) => run.stageId === "critique")!.attempts.map((attempt) => attempt.state)).toEqual(["failed"]);
+
+  const replay = await acceptHead(parked, "accept-1", revision);
+  expect(replay.replayed).toBe(true);
+  expect(replay.reviewAcceptance?.clientRequestId).toBe("accept-1");
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(pipelineRevision(current));
+  const late = await acceptHead(current, "accept-2");
+  expect(late.status).toBe(409);
+  expect(late.error).toContain("this one is completed");
+  expect(loadPipelines()[0]!.reviewAcceptances).toHaveLength(1);
+});
+
+test("accept-head follows the review stage's pass edge to the next stage with the unreviewed findings in its input (#2187)", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }) as never);
+  await tickPipelines([], h.ports);
+  await failEveryCritique(h, 1, h.beforeBuildPass);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_review");
+  const accepted = await acceptHead(parked, "accept-ship");
+  expect(accepted.error).toBeUndefined();
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("running");
+  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(current.cursor).toMatchObject({ stageId: "ship", state: "pending", activatedBy: { stageId: "build", attempt: 2, edge: "pass" } });
+  expect(current.cursor!.input).toContain("built v2");
+  expect(current.cursor!.input).toContain("Unreviewed findings:");
+  /* The controller runs the next stage like any other activation. */
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "ship")?.attempts).toHaveLength(1);
+});
+
 test("stop-after-fix, maxRounds 2: added rounds run bounded fix loops, park again in needs_review on a new unreviewed head, and the review activation count stays exact across a retry (#1938)", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
