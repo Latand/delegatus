@@ -527,6 +527,10 @@ export interface SeatTickOwnLaneInput {
   /** Only on `needs_review` (#1938): the last review's verdict, the head it
       judged and the head nobody has reviewed. */
   review?: import("@/lib/pipelines/failEdgeBudget").PipelineReviewSummary;
+  /** The lane finishes its task and the move to Done waits on this many other
+      open pipelines on the task (#2187 §5.3), so a seat that marked the wrong
+      lane sees it. */
+  taskWaits?: number;
 }
 
 export interface SeatTickTaskInput {
@@ -594,6 +598,9 @@ export interface SeatTickPullRequestInput {
   lastFixUnreviewed?: true;
   /** The merge runner stopped this lane's merge (#2187 §4.6), in its words. */
   mergeBlocked?: string;
+  /** The lane finishes its task and the move to Done waits on this many other
+      open pipelines on the task (#2187 §5.3). */
+  taskWaits?: number;
 }
 
 /**

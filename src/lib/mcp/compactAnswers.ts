@@ -37,6 +37,7 @@ export function pipelineAcknowledgement(pipeline: Pipeline) {
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
     taskIds: [...(pipeline.taskIds ?? [])],
+    ...finishesTaskFields(pipeline),
     branch: pipeline.branch,
     stages: (pipeline.stages ?? []).map((stage) => ({
       id: stage.id,
@@ -60,8 +61,18 @@ export function pipelineActionAcknowledgement(pipeline: Pipeline) {
     state: pipeline.state,
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
+    ...finishesTaskFields(pipeline),
     stageDigests: stageDigests(pipeline.stages ?? []),
     graphDigest: graphDigest(pipeline.stages ?? []),
+  };
+}
+
+/** The tasks the lane finishes, and those whose move to Done waits (#2187
+    §5), only when there are any. */
+function finishesTaskFields(pipeline: Pipeline) {
+  return {
+    ...(pipeline.finishesTaskIds?.length ? { finishesTaskIds: [...pipeline.finishesTaskIds] } : {}),
+    ...(pipeline.taskFinishWaits?.length ? { taskFinishWaits: pipeline.taskFinishWaits.map((wait) => ({ taskId: wait.taskId, open: wait.open.length })) } : {}),
   };
 }
 

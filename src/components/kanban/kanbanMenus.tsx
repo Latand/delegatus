@@ -15,9 +15,12 @@ export type KanbanMenuItem =
   /* The colour labels as a row of swatches, each a radio item; `null` is none. */
   | { type: "swatches"; label: string; value: TaskColor | null; names: (color: TaskColor | null) => string; hex: Record<TaskColor, string>; onPick: (color: TaskColor | null) => void }
   | {
-    type: "item" | "radio";
+    /* `check` is a toggle (menuitemcheckbox), drawn with the radio's tick. */
+    type: "item" | "radio" | "check";
     label: string;
     why?: string | null;
+    /** A second hint, in warning ink: something the choice waits on. */
+    warn?: string | null;
     kbd?: string;
     status?: TaskStatus;
     checked?: boolean;
@@ -135,8 +138,8 @@ export function KanbanMenu({ anchor, label, items, onClose }: {
                group, so a label can repeat in one menu (#2148). */
             key={`${index}-${item.type}-${item.label}`}
             type="button"
-            role={item.type === "radio" ? "menuitemradio" : "menuitem"}
-            aria-checked={item.type === "radio" ? Boolean(item.checked) : undefined}
+            role={item.type === "radio" ? "menuitemradio" : item.type === "check" ? "menuitemcheckbox" : "menuitem"}
+            aria-checked={item.type === "radio" || item.type === "check" ? Boolean(item.checked) : undefined}
             aria-disabled={item.disabled ? true : undefined}
             onClick={() => {
               if (item.disabled) return;
@@ -146,10 +149,11 @@ export function KanbanMenu({ anchor, label, items, onClose }: {
           >
             {item.icon ?? null}
             {item.status ? <span className="st" data-status={item.status} /> : null}
-            {item.type === "radio" ? <CheckGlyph /> : null}
+            {item.type === "radio" || item.type === "check" ? <CheckGlyph /> : null}
             <span className="lbl">
               {item.label}
               {item.why ? <span className="why">{item.why}</span> : null}
+              {item.warn ? <span className="why warn">{item.warn}</span> : null}
             </span>
             {item.kbd ? <span className="kbd">{item.kbd}</span> : null}
           </button>

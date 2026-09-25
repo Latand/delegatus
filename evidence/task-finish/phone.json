@@ -1,0 +1,507 @@
+{
+  "results": [
+    {
+      "key": "hold-390-en-dark",
+      "taskWait": "Done waits for 1 more pipeline",
+      "laneWaits": [
+        "finishes the task once 1 other pipeline ends"
+      ],
+      "flags": [],
+      "sheet": {
+        "checked": "true",
+        "role": "menuitemcheckbox",
+        "lines": [
+          "Finishes the task",
+          "When the pipeline completes and its PR merges, the task moves to Done.",
+          "1 other pipeline on this task is open; Done waits for it."
+        ],
+        "warnColor": "rgb(224, 174, 69)",
+        "hintColor": "rgb(139, 139, 152)",
+        "height": 93,
+        "inside": true,
+        "cut": false
+      },
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-other",
+          "lane-finish-hold"
+        ],
+        "scrollHeight": 817,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "done-390-en-dark",
+      "taskWait": null,
+      "laneWaits": [],
+      "flags": [
+        {
+          "pipeline": "lane-finish-done",
+          "state": "finished",
+          "text": "finished the task",
+          "beforeLinks": true,
+          "color": "rgb(79, 195, 111)"
+        }
+      ],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-done"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "marked-390-en-dark",
+      "taskWait": null,
+      "laneWaits": [],
+      "flags": [
+        {
+          "pipeline": "lane-finish-marked",
+          "state": "marked",
+          "text": "finishes the task",
+          "beforeLinks": true,
+          "color": "rgb(139, 139, 152)"
+        }
+      ],
+      "sheet": {
+        "checked": "true",
+        "role": "menuitemcheckbox",
+        "lines": [
+          "Finishes the task",
+          "When the pipeline completes and its PR merges, the task moves to Done."
+        ],
+        "warnColor": null,
+        "hintColor": "rgb(139, 139, 152)",
+        "height": 75,
+        "inside": true,
+        "cut": false
+      },
+      "patches": null,
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-marked"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "hold-390-en-light",
+      "taskWait": "Done waits for 1 more pipeline",
+      "laneWaits": [
+        "finishes the task once 1 other pipeline ends"
+      ],
+      "flags": [],
+      "sheet": {
+        "checked": "true",
+        "role": "menuitemcheckbox",
+        "lines": [
+          "Finishes the task",
+          "When the pipeline completes and its PR merges, the task moves to Done.",
+          "1 other pipeline on this task is open; Done waits for it."
+        ],
+        "warnColor": "rgb(138, 95, 0)",
+        "hintColor": "rgb(108, 108, 121)",
+        "height": 93,
+        "inside": true,
+        "cut": false
+      },
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-other",
+          "lane-finish-hold"
+        ],
+        "scrollHeight": 817,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "done-390-en-light",
+      "taskWait": null,
+      "laneWaits": [],
+      "flags": [
+        {
+          "pipeline": "lane-finish-done",
+          "state": "finished",
+          "text": "finished the task",
+          "beforeLinks": true,
+          "color": "rgb(23, 122, 55)"
+        }
+      ],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-done"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "marked-390-en-light",
+      "taskWait": null,
+      "laneWaits": [],
+      "flags": [
+        {
+          "pipeline": "lane-finish-marked",
+          "state": "marked",
+          "text": "finishes the task",
+          "beforeLinks": true,
+          "color": "rgb(108, 108, 121)"
+        }
+      ],
+      "sheet": {
+        "checked": "true",
+        "role": "menuitemcheckbox",
+        "lines": [
+          "Finishes the task",
+          "When the pipeline completes and its PR merges, the task moves to Done."
+        ],
+        "warnColor": null,
+        "hintColor": "rgb(108, 108, 121)",
+        "height": 75,
+        "inside": true,
+        "cut": false
+      },
+      "patches": [
+        {
+          "id": "lane-finish-marked",
+          "action": "link-task",
+          "taskId": "t-finish-marked",
+          "finishes": false
+        }
+      ],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-marked"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "hold-390-uk-dark",
+      "taskWait": "«Готово» чекає ще 1 пайплайн",
+      "laneWaits": [
+        "завершить задачу, коли закінчиться ще 1 пайплайн"
+      ],
+      "flags": [],
+      "sheet": {
+        "checked": "true",
+        "role": "menuitemcheckbox",
+        "lines": [
+          "Завершує задачу",
+          "Коли пайплайн завершиться і його PR змерджено, задача перейде в «Готово».",
+          "На задачі відкритий ще 1 пайплайн; «Готово» дочекається його."
+        ],
+        "warnColor": "rgb(224, 174, 69)",
+        "hintColor": "rgb(139, 139, 152)",
+        "height": 110,
+        "inside": true,
+        "cut": false
+      },
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-other",
+          "lane-finish-hold"
+        ],
+        "scrollHeight": 817,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "done-390-uk-dark",
+      "taskWait": null,
+      "laneWaits": [],
+      "flags": [
+        {
+          "pipeline": "lane-finish-done",
+          "state": "finished",
+          "text": "завершив задачу",
+          "beforeLinks": true,
+          "color": "rgb(79, 195, 111)"
+        }
+      ],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-done"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "marked-390-uk-dark",
+      "taskWait": null,
+      "laneWaits": [],
+      "flags": [
+        {
+          "pipeline": "lane-finish-marked",
+          "state": "marked",
+          "text": "завершує задачу",
+          "beforeLinks": true,
+          "color": "rgb(139, 139, 152)"
+        }
+      ],
+      "sheet": {
+        "checked": "true",
+        "role": "menuitemcheckbox",
+        "lines": [
+          "Завершує задачу",
+          "Коли пайплайн завершиться і його PR змерджено, задача перейде в «Готово»."
+        ],
+        "warnColor": null,
+        "hintColor": "rgb(139, 139, 152)",
+        "height": 75,
+        "inside": true,
+        "cut": false
+      },
+      "patches": null,
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-marked"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "hold-390-uk-light",
+      "taskWait": "«Готово» чекає ще 1 пайплайн",
+      "laneWaits": [
+        "завершить задачу, коли закінчиться ще 1 пайплайн"
+      ],
+      "flags": [],
+      "sheet": {
+        "checked": "true",
+        "role": "menuitemcheckbox",
+        "lines": [
+          "Завершує задачу",
+          "Коли пайплайн завершиться і його PR змерджено, задача перейде в «Готово».",
+          "На задачі відкритий ще 1 пайплайн; «Готово» дочекається його."
+        ],
+        "warnColor": "rgb(138, 95, 0)",
+        "hintColor": "rgb(108, 108, 121)",
+        "height": 110,
+        "inside": true,
+        "cut": false
+      },
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-other",
+          "lane-finish-hold"
+        ],
+        "scrollHeight": 817,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "done-390-uk-light",
+      "taskWait": null,
+      "laneWaits": [],
+      "flags": [
+        {
+          "pipeline": "lane-finish-done",
+          "state": "finished",
+          "text": "завершив задачу",
+          "beforeLinks": true,
+          "color": "rgb(23, 122, 55)"
+        }
+      ],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-done"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "marked-390-uk-light",
+      "taskWait": null,
+      "laneWaits": [],
+      "flags": [
+        {
+          "pipeline": "lane-finish-marked",
+          "state": "marked",
+          "text": "завершує задачу",
+          "beforeLinks": true,
+          "color": "rgb(108, 108, 121)"
+        }
+      ],
+      "sheet": {
+        "checked": "true",
+        "role": "menuitemcheckbox",
+        "lines": [
+          "Завершує задачу",
+          "Коли пайплайн завершиться і його PR змерджено, задача перейде в «Готово»."
+        ],
+        "warnColor": null,
+        "hintColor": "rgb(108, 108, 121)",
+        "height": 75,
+        "inside": true,
+        "cut": false
+      },
+      "patches": [
+        {
+          "id": "lane-finish-marked",
+          "action": "link-task",
+          "taskId": "t-finish-marked",
+          "finishes": false
+        }
+      ],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-finish-marked"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    }
+  ],
+  "failures": []
+}

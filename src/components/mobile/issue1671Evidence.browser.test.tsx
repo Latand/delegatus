@@ -3380,3 +3380,166 @@ browserTest("#2187: a completed lane says where its merge stands on the phone at
   fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * #2187 §5.3, §6 (mockups P3, P4): a pipeline that finishes its task, on the
+ * phone's task screen at 390, en and uk (`?task-finish=1`). The task whose
+ * marked lane merged while a second lane still runs says "Done waits for 1
+ * more pipeline" under its title and "finishes the task once 1 other pipeline
+ * ends" on the lane; that lane's ⋯ sheet carries "Finishes the task", checked,
+ * with the count in warning ink, on a 44 px row. A Done task's lane says
+ * "finished the task"; a running marked lane says "finishes the task" before
+ * its PR chip, and its toggle sends link-task. The task screen's own gates
+ * hold: no sideways overflow, no text over text or a control, no small or
+ * crossing control.
+ *
+ *   TASK_FINISH_PNG_DIR=… LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2187: a pipeline that finishes"
+ */
+browserTest("#2187: a pipeline that finishes its task says so on the phone at 390, en and uk, with the wait and the sheet's count", async () => {
+  const out = path.resolve(process.env.TASK_FINISH_PNG_DIR ?? ".artifacts/task-finish");
+  const evidence = path.resolve("evidence/task-finish");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const gates = (screen: TaskReading, fail: (text: string) => void) => {
+    if (screen.overflowX > 0.5 || screen.bodyOverflowX > 0.5) fail(`overflows sideways by ${Math.max(screen.overflowX, screen.bodyOverflowX)} px`);
+    if (screen.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(screen.smallControls)}`);
+    if (screen.crossingControls.length) fail(`controls crossing: ${JSON.stringify(screen.crossingControls)}`);
+    if (screen.inkOverlaps.length) fail(`text over text: ${JSON.stringify(screen.inkOverlaps.slice(0, 6))}`);
+    if (screen.inkOnControls.length) fail(`text over a control: ${JSON.stringify(screen.inkOnControls.slice(0, 6))}`);
+  };
+  const readFinish = () => {
+    const body = document.querySelector("[data-phone-task-body]");
+    return {
+      taskWait: body?.querySelector("[data-task-finish-wait]")?.textContent?.trim() ?? null,
+      laneWaits: [...(body?.querySelectorAll('p[data-pipeline-finish="waits"]') ?? [])].map((node) => node.textContent?.trim() ?? ""),
+      flags: [...(body?.querySelectorAll<HTMLElement>("span[data-pipeline-finish]") ?? [])].map((node) => ({
+        pipeline: node.getAttribute("data-pipeline-finish-for"), state: node.getAttribute("data-pipeline-finish"), text: node.textContent?.trim() ?? "",
+        beforeLinks: Boolean(node.nextElementSibling?.classList.contains("pb-links")), color: getComputedStyle(node).color,
+      })),
+    };
+  };
+  const readSheetRow = () => {
+    const row = document.querySelector<HTMLElement>('[data-phone-task-lane-action="finishes-task"]');
+    if (!row) return null;
+    const spans = [...row.querySelectorAll<HTMLElement>("span.flex-col > span")];
+    const box = row.getBoundingClientRect();
+    return {
+      checked: row.getAttribute("aria-checked"), role: row.getAttribute("role"), lines: spans.map((span) => span.textContent?.trim() ?? ""),
+      warnColor: spans[2] ? getComputedStyle(spans[2]).color : null, hintColor: spans[1] ? getComputedStyle(spans[1]).color : null,
+      height: Math.round(box.height), inside: box.left >= 0 && box.right <= window.innerWidth + 0.5,
+      cut: spans.some((span) => span.scrollWidth > span.clientWidth + 1),
+    };
+  };
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      for (const scheme of ["dark", "light"] as const) {
+        const t = (name: string, params?: Record<string, string | number>) => translate(lang, name as never, params);
+        const open = async (task: string) => {
+          const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+          await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${fixtureBase}/?kanban=1&task-finish=1#p=atlas`);
+          await page.waitForSelector(`[data-phone-card="task:${task}"]`, { timeout: 20_000 });
+          await pause(page, 600);
+          await page.locator(`[data-phone-card="task:${task}"]`).click();
+          await page.waitForSelector(`[data-mobile2-task="${task}"] [data-phone-task-body="${task}"]`, { timeout: 10_000 });
+          if (await page.locator("[data-phone-task-ended]").count()) await page.locator("[data-phone-task-ended]").click();
+          await page.mouse.move(0, 0);
+          await pause(page, 600);
+          return { context, page, pageErrors };
+        };
+        /* P4: the wait, on the task and on its marked lane, and the lane's sheet. */
+        {
+          const key = `hold-390-${lang}-${scheme}`;
+          const fail = (text: string) => failures.push(`${key}: ${text}`);
+          const { context, page, pageErrors } = await open("t-finish-hold");
+          try {
+            await page.screenshot({ path: path.join(out, `phone-${key}.png`) });
+            const drawn = await page.evaluate(readFinish);
+            const screen = await readTaskScreen(page);
+            if (drawn.taskWait !== t("pipelineBlock.finish.cardWaits", { count: 1 })) fail(`task wait ${JSON.stringify(drawn.taskWait)}`);
+            if (JSON.stringify(drawn.laneWaits) !== JSON.stringify([t("pipelineBlock.finish.waits", { count: 1 })])) fail(`lane wait ${JSON.stringify(drawn.laneWaits)}`);
+            if (drawn.flags.length) fail(`a waiting lane draws a flag ${JSON.stringify(drawn.flags)}`);
+            gates(screen, fail);
+            await page.locator('[data-phone-task-lane="lane-finish-hold"] [data-pipeline-menu]').click();
+            await page.waitForSelector('[data-phone-task-lane-action="finishes-task"]', { timeout: 10_000 });
+            await pause(page, 500);
+            await page.screenshot({ path: path.join(out, `phone-${key}-sheet.png`) });
+            const sheet = await page.evaluate(readSheetRow);
+            const want = [t("pipelineBlock.finish.menu"), t("pipelineBlock.finish.menuWhy"), t("pipelineBlock.finish.menuOpen", { count: 1 })];
+            if (!sheet || sheet.checked !== "true" || sheet.role !== "menuitemcheckbox" || JSON.stringify(sheet.lines) !== JSON.stringify(want)) fail(`sheet row ${JSON.stringify(sheet)}`);
+            if (sheet && (sheet.height < 44 || !sheet.inside || sheet.cut)) fail(`sheet row geometry ${JSON.stringify(sheet)}`);
+            if (sheet && sheet.warnColor === sheet.hintColor) fail(`the count is not in warning ink: ${sheet.warnColor}`);
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+            results.push({ key, ...drawn, sheet, screen });
+          } finally {
+            await context.close();
+          }
+        }
+        /* P3: the Done task its marked lane finished. */
+        {
+          const key = `done-390-${lang}-${scheme}`;
+          const fail = (text: string) => failures.push(`${key}: ${text}`);
+          const { context, page, pageErrors } = await open("t-finish-done");
+          try {
+            await page.screenshot({ path: path.join(out, `phone-${key}.png`) });
+            const drawn = await page.evaluate(readFinish);
+            const screen = await readTaskScreen(page);
+            if (JSON.stringify(drawn.flags.map((flag) => [flag.state, flag.text])) !== JSON.stringify([["finished", t("pipelineBlock.finish.done")]])) fail(`flags ${JSON.stringify(drawn.flags)}`);
+            if (drawn.taskWait !== null || drawn.laneWaits.length) fail(`waits on a finished task ${JSON.stringify(drawn)}`);
+            gates(screen, fail);
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+            results.push({ key, ...drawn, screen });
+          } finally {
+            await context.close();
+          }
+        }
+        /* The running marked lane: the flag before the PR chip, and the toggle. */
+        {
+          const key = `marked-390-${lang}-${scheme}`;
+          const fail = (text: string) => failures.push(`${key}: ${text}`);
+          const { context, page, pageErrors } = await open("t-finish-marked");
+          try {
+            await page.screenshot({ path: path.join(out, `phone-${key}.png`) });
+            const drawn = await page.evaluate(readFinish);
+            const screen = await readTaskScreen(page);
+            if (JSON.stringify(drawn.flags.map((flag) => [flag.pipeline, flag.state, flag.text, flag.beforeLinks])) !== JSON.stringify([["lane-finish-marked", "marked", t("pipelineBlock.finish.marked"), true]])) fail(`flags ${JSON.stringify(drawn.flags)}`);
+            gates(screen, fail);
+            await page.locator('[data-phone-task-lane="lane-finish-marked"] [data-pipeline-menu]').click();
+            await page.waitForSelector('[data-phone-task-lane-action="finishes-task"]', { timeout: 10_000 });
+            await pause(page, 500);
+            await page.screenshot({ path: path.join(out, `phone-${key}-sheet.png`) });
+            const sheet = await page.evaluate(readSheetRow);
+            /* No other lane on this task is open, so the sheet names no count. */
+            if (!sheet || sheet.checked !== "true" || sheet.lines.length !== 2) fail(`sheet row ${JSON.stringify(sheet)}`);
+            let patches: unknown = null;
+            if (scheme === "light") {
+              await page.locator('[data-phone-task-lane-action="finishes-task"]').click();
+              await page.waitForFunction(() => !document.querySelector('[data-phone-task-body] span[data-pipeline-finish]'), undefined, { timeout: 10_000 }).catch(() => fail("the flag stayed after clearing it"));
+              patches = await page.evaluate(() => (window as unknown as { evidence?: { pipelinePatches: Array<Record<string, unknown>> } }).evidence?.pipelinePatches ?? null);
+              const sent = (patches as Array<Record<string, unknown>> | null) ?? [];
+              if (!sent.some((entry) => entry.id === "lane-finish-marked" && entry.action === "link-task" && entry.taskId === "t-finish-marked" && entry.finishes === false)) fail(`the toggle sent ${JSON.stringify(patches)}`);
+            }
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+            results.push({ key, ...drawn, sheet, patches, screen });
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

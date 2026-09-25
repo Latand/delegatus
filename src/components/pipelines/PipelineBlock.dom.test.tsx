@@ -317,3 +317,33 @@ test("the screen density numbers the stages, folds the passed ones before the cu
   click(current.querySelector('[data-answer-action="retry-stage"]'));
   expect(answers).toEqual(["retry-stage"]);
 });
+
+/* #2187 §6: the lane that finishes its task says so on the lane row, before
+   the PR chip, in both the task row and the phone's screen block; a finished
+   lane whose task's move waits says so on a line of its own. */
+test("the flag on the lane row: finishes the task, finished it, and finishes it once other lanes end", () => {
+  const TASK = "task-big";
+  const done = (over: Partial<Pipeline>) => summarizePipeline(searchPipeline({ taskIds: [TASK], state: "completed", cursor: null, closedAt: iso(60), ...over }));
+  const marked = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ taskIds: [TASK], finishesTaskIds: [TASK] }))} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />, { "p-search": { links: [link(41)], noPr: false } as ResolvedWorkLinks });
+  const flag = marked.querySelector<HTMLElement>('.pb-chain [data-pipeline-finish="marked"]')!;
+  expect(flag.textContent).toBe("finishes the task");
+  /* Before the PR chip, never in the lane's head. */
+  expect(flag.nextElementSibling?.classList.contains("pb-links")).toBe(true);
+  expect(marked.querySelector(".pb-head [data-pipeline-finish]")).toBeNull();
+
+  const finished = mount(<PipelineBlock summary={done({ finishesTaskIds: [TASK], taskFinishes: [{ taskId: TASK, at: iso(30), outcome: "moved" }] })} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(finished.querySelector('[data-pipeline-finish="finished"]')?.textContent).toBe("finished the task");
+
+  const waits = mount(<PipelineBlock summary={done({ finishesTaskIds: [TASK], taskFinishWaits: [{ taskId: TASK, since: iso(30), open: ["p-other"] }] })} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(waits.querySelector('.pb-chain [data-pipeline-finish]')).toBeNull();
+  expect(waits.querySelector('p[data-pipeline-finish="waits"]')?.textContent).toBe("finishes the task once 1 other pipeline ends");
+
+  const plain = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ taskIds: [TASK] }))} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(plain.querySelector("[data-pipeline-finish]")).toBeNull();
+
+  setLocale("uk");
+  const screen = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ taskIds: [TASK], finishesTaskIds: [TASK] }))} density="screen" embedded taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(screen.querySelector('.pb-links-row [data-pipeline-finish="marked"]')?.textContent).toBe("завершує задачу");
+  const screenWaits = mount(<PipelineBlock summary={done({ finishesTaskIds: [TASK], taskFinishWaits: [{ taskId: TASK, since: iso(30), open: ["p-a", "p-b"] }] })} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(screenWaits.querySelector('p[data-pipeline-finish="waits"]')?.textContent).toBe("завершить задачу, коли закінчаться ще 2 пайплайни");
+});

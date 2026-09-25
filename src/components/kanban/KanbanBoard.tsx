@@ -15,6 +15,7 @@ import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import { latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
 import type { PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
+import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
 import type { BranchGroup } from "@/components/projectModel";
 import type { SchemeLayout } from "@/components/scheme/layout";
 import { updateTask } from "@/components/tasks/taskApi";
@@ -1287,6 +1288,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
     }
     const pauseOrResume = options.get("resume") ?? options.get("pause")!;
     const decision = retry.stageId ? names.get(retry.stageId) ?? retry.stageId : null;
+    /* #2187 §6: whether this lane finishes the card's task, with the count of
+       other open lanes Done would wait for, checked or not. */
+    const taskId = card.task?.id ?? null;
+    const finish = finishesTaskOffer(pipeline, taskId, card.pipelines.map((entry) => entry.pipeline));
+    const finishItems: KanbanMenuItem[] = finish && taskId ? [{
+      type: "check",
+      label: t("pipelineBlock.finish.menu"),
+      checked: finish.checked,
+      why: t("pipelineBlock.finish.menuWhy"),
+      warn: finish.open ? t("pipelineBlock.finish.menuOpen", { count: finish.open }) : null,
+      disabled: Boolean(busy),
+      onSelect: () => void toggleFinishesTask(pipelinePorts, pipeline, taskId, pipelineTitle(t, pipeline), t, (text, error) => show(text, undefined, error ? { error: true } : undefined)),
+    }] : [];
     return {
       label: t("kanban.pipelineAct.menu"),
       items: [
@@ -1297,6 +1311,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         item(pauseOrResume, t(`kanban.pipelineAct.label.${pauseOrResume.action}`, { title, stage: "" }), pauseOrResume.action === "pause" ? t("kanban.pipelineAct.pauseWhy") : null),
         item(retry, decision ? t("kanban.pipelineAct.retryStage", { stage: decision }) : t("kanban.pipelineAct.retryAny"), t("kanban.pipelineAct.retryWhy")),
         item(skip, decision ? t("kanban.pipelineAct.skipStage", { stage: decision }) : t("kanban.pipelineAct.skipAny"), t("kanban.pipelineAct.skipWhy")),
+        ...finishItems,
         { type: "sep" },
         item(options.get("close")!, t("kanban.pipelineAct.label.close", { title, stage: "" }), t("kanban.pipelineAct.closeWhy")),
       ],

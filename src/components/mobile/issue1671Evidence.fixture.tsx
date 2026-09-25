@@ -170,7 +170,7 @@ const evidence = {
   botPosts: [] as Array<Record<string, unknown>>,
   /* Every account select, the one path that moves the next message. */
   accountSelects: [] as Array<{ engine: string; body: unknown }>,
-  pipelinePatches: [] as Array<{ id: string; action: string }>,
+  pipelinePatches: [] as Array<{ id: string; action: string; taskId?: string; finishes?: boolean }>,
   closesAnswered: [] as string[],
   hidesAnswered: [] as Array<{ id: string; action: string; dismissedAt: string | null }>,
   boardMutations: [] as BoardMutationV1[],
@@ -531,6 +531,50 @@ if (KANBAN) {
      lane's automatic merge — waiting for checks, updating from main, merge
      stopped with its two answers, merged by Delegatus — read on the task
      screen at 390, en and uk. The ⋯ sheet carries the merge setting row. */
+  /* #2187 §5.3, §6 (mockups P3, P4, `?task-finish=1`): a task whose marked
+     lane merged while a second lane still runs, so its move to Done waits;
+     a Done task its marked lane finished; and a running lane marked to
+     finish its task. Read on the task screen at 390, en and uk. */
+  if (new URLSearchParams(location.search).has("task-finish")) {
+    const uk = localStorage.getItem("llv_lang") === "uk";
+    const L = (en: string, ua: string) => (uk ? ua : en);
+    const reviewerRole = { ...kanbanRole("reviewer"), access: "read-only" };
+    const HEAD = "5b2c9e1d7a3f4b6c8d0e2f4a6b8c0d2e4f6a8b0c";
+    const run = (key: string, stageId: string, ago: number) => {
+      const path = kanbanConversation(`${key} · ${stageId}`, "settled", ago);
+      return { n: 1, state: "passed", startedAt: iso(ago + 600), completedAt: iso(ago), agentPath: path, conversationId: idOf(path), activatedBy: null,
+        effectiveRole: stageId === "build" ? kanbanRole("builder") : reviewerRole, verdict: { status: "pass", findings: [] } };
+    };
+    const merged = (number: number, ago: number) => ({
+      state: "merged", by: "auto-merge", repository: "example/atlas", prNumber: number, policyChangedAt: iso(86_400), reviewedHead: HEAD, chain: [HEAD], updates: [],
+      seenChecks: ["privacy-publication"], head: HEAD, headSeenAt: iso(ago), lastChecks: [], readAt: iso(60), nextReadAt: null, readFailures: 0, requestedAt: iso(ago),
+      mergedHead: HEAD, mergeCommit: null, method: "squash", mergedAt: iso(ago - 600), attempts: 0, reason: null, blockedAt: null, updatedAt: iso(60),
+    });
+    const finished = (id: string, title: string, taskId: string, ago: number, over: Record<string, unknown>) => kanbanLane(id, title, [taskId], "completed", [
+      { id: "build", attempts: [run(id, "build", ago + 1_200)] },
+      { id: "review", role: "reviewer", onFail: { to: "build", maxRounds: 2 }, attempts: [run(id, "review", ago)] },
+    ], { lastPassedCommit: HEAD, closedAt: iso(ago), finishesTaskIds: [taskId], ...over });
+    const hold = finished("lane-finish-hold", L("Slice 3: merge runner and the setting", "Зріз 3: мердж і налаштування"), "t-finish-hold", 3_600,
+      { merge: merged(2240, 3_600), taskFinishWaits: [{ taskId: "t-finish-hold", since: iso(3_000), open: ["lane-finish-other"] }] });
+    const other = kanbanLane("lane-finish-other", L("Docs for the merge setting", "Документація налаштування мерджу"), ["t-finish-hold"], "running", [
+      { id: "build", state: "running", ago: 900 }, { id: "review", role: "reviewer" },
+    ]);
+    const done = finished("lane-finish-done", L("Conversation: wider agent replies", "Розмова: ширші відповіді агентів"), "t-finish-done", 5_400,
+      { merge: merged(2236, 5_400), taskFinishes: [{ taskId: "t-finish-done", at: iso(4_500), outcome: "moved" }] });
+    const marked = kanbanLane("lane-finish-marked", L("Slice 4: the pipeline that finishes its task", "Зріз 4: пайплайн, що завершує задачу"), ["t-finish-marked"], "running", [
+      { id: "build", state: "running", ago: 1_500 }, { id: "review", role: "reviewer" },
+    ], { finishesTaskIds: ["t-finish-marked"] });
+    kanbanPipelines.push(hold, other, done, marked);
+    kanbanLinks.pipelines[hold.id] = prLinks(2240, "merged");
+    kanbanLinks.pipelines[other.id] = prLinks(2242);
+    kanbanLinks.pipelines[done.id] = prLinks(2236, "merged");
+    kanbanLinks.pipelines[marked.id] = prLinks(2231);
+    kanbanTasks.push(
+      kanbanTask("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), { updatedAt: iso(3_000) }),
+      kanbanTask("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), { updatedAt: iso(4_500) }),
+      kanbanTask("t-finish-marked", "assigned", L("Pipelines that finish their task", "Пайплайни, що завершують задачу"), { updatedAt: iso(1_500) }),
+    );
+  }
   if (new URLSearchParams(location.search).has("merge-states")) {
     const uk = localStorage.getItem("llv_lang") === "uk";
     const L = (en: string, ua: string) => (uk ? ua : en);
@@ -885,20 +929,25 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname.startsWith("/api/pipelines/") && method === "PATCH") {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
-    const body = JSON.parse(String(init?.body)) as { action: string };
-    evidence.pipelinePatches.push({ id, action: body.action });
+    const body = JSON.parse(String(init?.body)) as { action: string; taskId?: string; finishes?: boolean };
+    evidence.pipelinePatches.push({ id, action: body.action, ...(body.taskId !== undefined ? { taskId: body.taskId } : {}), ...(body.finishes !== undefined ? { finishes: body.finishes } : {}) });
     if (evidence.refuseNextPipelinePatch) {
       evidence.refuseNextPipelinePatch = false;
       await new Promise((resolve) => setTimeout(resolve, 500));
       return json({ error: "refused by the evidence fixture" }, 409);
     }
-    const found = pipelines.find((pipeline) => pipeline.id === id);
+    const found = pipelines.find((pipeline) => pipeline.id === id) ?? kanbanPipelines.find((pipeline) => pipeline.id === id);
     if (!found) return json({ error: "pipeline not found" }, 404);
     if (evidence.pipelineAnswerDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.pipelineAnswerDelayMs));
     /* The engine's own rule: a dismissal stamps its own instant, and
        undismiss clears it. */
     if (body.action === "dismiss") found.dismissedAt = new Date().toISOString();
     if (body.action === "undismiss") found.dismissedAt = null;
+    /* #2187 §5.1: link-task is an upsert; `finishes` sets or clears the flag. */
+    if (body.action === "link-task" && body.taskId && body.finishes !== undefined) {
+      const others = (found.finishesTaskIds ?? []).filter((entry) => entry !== body.taskId);
+      found.finishesTaskIds = body.finishes ? [...others, body.taskId] : others;
+    }
     if (body.action === "dismiss" || body.action === "undismiss") evidence.hidesAnswered.push({ id, action: body.action, dismissedAt: found.dismissedAt ?? null });
     if (body.action === "close") {
       await new Promise((resolve) => setTimeout(resolve, CLOSE_ANSWER_MS));

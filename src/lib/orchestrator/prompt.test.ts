@@ -72,8 +72,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 25, and a v24 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(25);
+test("the default mandate is at version 26, and a v25 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(26);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -86,9 +86,11 @@ test("the default mandate is at version 25, and a v24 seat reads as stale", () =
      gives every new task an icon and a colour by one rule. v25 (#2187) says
      a spent review budget ends in one more fix and the lane completes, that
      stop-after-fix is the explicit stop, and that new review-loop stages are
-     stored as a reviewer and a fix stage. */
-  expect(orchestratorMandateStale(24)).toBe(true);
-  expect(orchestratorMandateStale(25)).toBe(false);
+     stored as a reviewer and a fix stage. v26 (#2187, D1 = A) puts every
+     automatic merge, the seat's too, under the project's merge setting and
+     says when to mark the lane that finishes a task. */
+  expect(orchestratorMandateStale(25)).toBe(true);
+  expect(orchestratorMandateStale(26)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('onExhausted?: "advance" | "stop-after-fix" | "park"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Use stop-after-fix only when the operator asked to look before merge");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("review-loop stages are converted to a reviewer and a fix stage when you create or add them");
@@ -115,7 +117,38 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   23: "4853170b7f7a47ad6e219e25276b2d2bc3a9baad55964b7b078f20735ea02cae",
   24: "3053cebbd39a69790a168102612399f4bb971b95893b1c001cf41197c9452109",
   25: "36b7de5003aead298b5bd6294aec840139503042f01260c3e797e89c512ed4d2",
+  26: "4da3e6ed8d2f92540fc4fb1bcab2373a7173ca673736250ee235d8219b19b547",
 };
+
+/* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
+   the seat reports the PR ready and merges only when the operator asks; on,
+   the runner merges and the seat leaves the lanes it holds alone and acts on
+   a stopped one. §5.4: when to mark the lane that finishes a task. */
+test("the merge bar follows the project's merge setting, and the mandate says when a lane finishes its task", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("merge on APPROVE");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("Merge bar: merge only on an APPROVE verdict");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("governs every automatic merge, yours included");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; report "PR ready: <url>" to the operator and merge only when they ask.');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never merge red");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("it waits for every other started lane on the task to end");
+  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain("bring each PR to ready; merges follow this project's merge setting.");
+});
+
+test("a mandate delivered with the greeting as it shipped up to v25 greets once, in the current words", () => {
+  const shipped = ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE.replace(
+    "and bring each PR to ready; merges follow this project's merge setting.",
+    "and merge on APPROVE.",
+  );
+  expect(shipped).toContain("Tell me what to ship — I open lanes, spawn implementers and reviewers, and merge on APPROVE. Nothing starts until you ask.");
+  const delivered = orchestratorMandateForDelivery(`Run the widgets project.\n\n${shipped}`);
+  expect(delivered).not.toContain("merge on APPROVE");
+  expect(delivered.split("## Initial visible status").length - 1).toBe(1);
+  expect(delivered).toContain(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE);
+});
 
 test("any edit to the default mandate text moves its version (#2030)", () => {
   const fingerprint = createHash("sha256").update(ORCHESTRATOR_SYSTEM_PROMPT).digest("hex");

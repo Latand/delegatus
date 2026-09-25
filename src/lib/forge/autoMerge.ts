@@ -3,8 +3,11 @@ import os from "node:os";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
 import { withPipelineMutation } from "@/lib/pipelines/store";
+import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline, type PipelineMerge, type PipelineMergeMethod, type PipelineStage } from "@/lib/pipelines/types";
 import { mergeOnReviewSetting, type MergeOnReviewSetting } from "@/lib/projects/settings";
+import { patchTask } from "@/lib/tasks/commands";
+import { mutateTasks } from "@/lib/tasks/store";
 
 import { forgeCacheView } from "./cache";
 import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
@@ -61,7 +64,12 @@ export interface AutoMergePorts {
       runner no longer polls (blocked or cancelled) that someone merged. */
   cachedState: (repository: string, number: number) => PullRequestState | null;
   log?: (message: string, error?: unknown) => void;
+  /** Moves a board task to Done for the finish sweep (#2187 §5.3) and says
+      what it found. Absent, the finish sweep does not run. */
+  finishTask?: (taskId: string, pipelineId: string) => TaskFinishOutcome;
 }
+
+export type TaskFinishOutcome = "moved" | "already-done" | "missing" | "refused";
 
 /* ── Eligibility (§4.2) ─────────────────────────────────────────────────── */
 
@@ -566,6 +574,100 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   }
 }
 
+/* ── A pipeline that finishes its task (#2187 §5) ───────────────────────── */
+
+/**
+ * Whether a marked lane has finished its tasks (§5.2): it completed, and when
+ * its project merges automatically and the lane has a pull request, that pull
+ * request merged, by the runner or by anyone. The setting is read now.
+ */
+export function laneFinishedForTasks(pipeline: Pipeline, ports: Pick<AutoMergePorts, "setting" | "pullRequestOf" | "cachedState">): boolean {
+  if (pipeline.state !== "completed") return false;
+  if (!ports.setting(pipeline.project).enabled) return true;
+  const pr = ports.pullRequestOf(pipeline);
+  if (!pr) return true;
+  return pipeline.merge?.state === "merged" || ports.cachedState(pr.repository, pr.number) === "merged";
+}
+
+/** The marked tasks a pipeline has not finished yet. */
+function unfinishedMarkedTasks(pipeline: Pipeline): string[] {
+  const finished = new Set((pipeline.taskFinishes ?? []).map((finish) => finish.taskId));
+  return (pipeline.finishesTaskIds ?? []).filter((taskId) => pipeline.taskIds.includes(taskId) && !finished.has(taskId));
+}
+
+const sameList = (left: readonly string[], right: readonly string[]) => left.length === right.length && left.every((item, index) => item === right[index]);
+
+/**
+ * One pass of the finish sweep (§5.3). For each task a finished marked lane
+ * names: with no other open pipeline on it, the task moves to Done and the
+ * finish is recorded once, so a task reopened afterwards stays open; with some
+ * open, nothing moves and the lane records which ones the move waits on. The
+ * task is written first and the record second, each under its own lock and
+ * never both at once: a crash between them leaves a Done task the next pass
+ * only records.
+ */
+export async function sweepTaskFinishes(ports: AutoMergePorts): Promise<void> {
+  if (!ports.finishTask) return;
+  const pipelines = ports.loadPipelines();
+  const now = ports.now();
+  for (const pipeline of pipelines) {
+    const marked = unfinishedMarkedTasks(pipeline);
+    const finished = marked.length > 0 && laneFinishedForTasks(pipeline, ports);
+    /* A wait whose lane no longer finishes the task (unmarked, reopened
+       lane, closed) says nothing true any more. */
+    const staleWaits = (pipeline.taskFinishWaits ?? []).filter((wait) => !finished || !marked.includes(wait.taskId));
+    if (staleWaits.length) {
+      await ports.mutate(pipeline.id, (live) => {
+        const liveMarked = unfinishedMarkedTasks(live);
+        const keep = (live.taskFinishWaits ?? []).filter((wait) => finished && liveMarked.includes(wait.taskId));
+        if (keep.length === (live.taskFinishWaits ?? []).length) return false;
+        if (keep.length) live.taskFinishWaits = keep;
+        else delete live.taskFinishWaits;
+        return true;
+      });
+    }
+    if (!finished) continue;
+    for (const taskId of marked) {
+      const open = openPipelinesOnTask(pipelines, taskId, pipeline.id);
+      if (open.length) {
+        await ports.mutate(pipeline.id, (live) => {
+          if (!unfinishedMarkedTasks(live).includes(taskId)) return false;
+          const waits = live.taskFinishWaits ?? [];
+          const current = waits.find((wait) => wait.taskId === taskId);
+          if (current && sameList(current.open, open)) return false;
+          live.taskFinishWaits = [...waits.filter((wait) => wait.taskId !== taskId), { taskId, since: current?.since ?? iso(now), open }];
+          return true;
+        });
+        continue;
+      }
+      const outcome = ports.finishTask(taskId, pipeline.id);
+      if (outcome === "missing" || outcome === "refused") {
+        if (outcome === "refused") ports.log?.(`[task finish] ${pipeline.id}: task ${taskId} could not be moved to Done`);
+        continue;
+      }
+      await ports.mutate(pipeline.id, (live) => {
+        if ((live.taskFinishes ?? []).some((finish) => finish.taskId === taskId)) return false;
+        live.taskFinishes = [...(live.taskFinishes ?? []), { taskId, at: iso(ports.now()), outcome }];
+        const waits = (live.taskFinishWaits ?? []).filter((wait) => wait.taskId !== taskId);
+        if (waits.length) live.taskFinishWaits = waits;
+        else delete live.taskFinishWaits;
+        return true;
+      });
+    }
+  }
+}
+
+/** The production move: the task's own store, under its own lock. */
+export function finishBoardTask(taskId: string): TaskFinishOutcome {
+  return mutateTasks((tasks) => {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (!task) return { tasks: undefined, result: "missing" as const };
+    if (task.status === "done") return { tasks: undefined, result: "already-done" as const };
+    const moved = patchTask(tasks, taskId, { status: "done" });
+    return moved.ok ? { tasks: moved.tasks, result: "moved" as const } : { tasks: undefined, result: "refused" as const };
+  });
+}
+
 /* ── Scheduling from the controller cycle ───────────────────────────────── */
 
 const scheduleHost = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvAutoMergeStartedAt?: number };
@@ -583,6 +685,7 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
     setting: mergeOnReviewSetting,
     pullRequestOf: lanePullRequest,
     cachedState: (repository, number) => forgeCacheView().repository(repository)?.pr(number)?.state ?? null,
+    finishTask: finishBoardTask,
     log: (message, error) => console.error(message, error ?? ""),
     ...overrides,
   };
@@ -596,8 +699,12 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
   if (now - (scheduleHost.__llvAutoMergeStartedAt ?? -Infinity) < MERGE_SCHEDULE_DEBOUNCE_MS) return;
   scheduleHost.__llvAutoMergeStartedAt = now;
   const ports = productionAutoMergePorts(overrides);
+  /* The finish sweep runs after the merge step, so a merge this pass made
+     finishes its task in the same pass. */
   const run = sweepAutoMerge(ports)
     .catch((error) => ports.log?.("[auto merge] sweep failed", error))
+    .then(() => sweepTaskFinishes(ports))
+    .catch((error) => ports.log?.("[task finish] sweep failed", error))
     .finally(() => { scheduleHost.__llvAutoMergeRunning = null; });
   scheduleHost.__llvAutoMergeRunning = run;
 }

@@ -66,7 +66,8 @@ A fresh seat greets you and stops:
 ```
 Ready in <project>.
 Tell me what to ship — I open lanes, spawn implementers and reviewers, and
-merge on APPROVE. Nothing starts until you ask.
+bring each PR to ready; merges follow this project's merge setting. Nothing
+starts until you ask.
 ```
 
 Then you talk to it in the dock's composer the way you would message a
@@ -86,8 +87,17 @@ What it does with work you accept:
 - **A pipeline** when the work wants declared stages: two to four stages in one
   dedicated worktree, each ending in a structured JSON verdict, each transition
   declared through `next` — see [docs/pipelines.md](pipelines.md).
-- **The merge bar**: merge only on an APPROVE verdict with green gates —
-  `tsc` and the tests. A red gate holds the merge.
+- **The merge bar**: a PR is ready on an APPROVE verdict (or a completed
+  lane) with green gates — `tsc` and the tests. The project's **Merge when the
+  review passes** setting, in the board's ⋯ menu, decides who merges it. Off
+  (the default), the orchestrator reports "PR ready" and merges only when you
+  ask. On, Delegatus merges completed lanes itself once their checks are
+  settled green, and the orchestrator leaves those alone and acts on a merge
+  that stopped. A red gate holds the merge either way.
+- **A lane that finishes its task**: the orchestrator marks the lane whose PR
+  delivers the whole task, and that task moves to Done when the lane completes
+  (setting off) or its PR merges (on), once every other started lane on the
+  task has ended.
 - **Task cards and reports** kept current as state changes.
 
 Everything it starts shows up on the project board as cards, descending from

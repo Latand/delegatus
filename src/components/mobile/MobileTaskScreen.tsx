@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Inbox, Link2, Palette, Pause, Pencil, Play, Plus, ScrollText, UserRoundCheck } from "lucide-react";
+import { ArrowRight, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Palette, Pause, Pencil, Play, Plus, ScrollText, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
@@ -13,6 +13,8 @@ import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pi
 import { textField, withField } from "@/components/kanban/taskText";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
+import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import { blockAgeSeconds, laneMergeUnsettled, pipelineEnded, pipelineNeedsYou, screenCurrentStageId } from "@/components/pipelines/pipelineBlockModel";
 import { attemptNavTarget, latestAttempt, resolveStageNavFile, stageNames } from "@/components/pipelines/pipelineModel";
 import { humanizeDuration } from "@/components/turnDuration";
@@ -647,6 +649,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
             density="screen"
             embedded
             nowMs={nowMs}
+            taskId={taskId}
             acting={lane.acting(pipeline)}
             onOpenStage={openStage}
             onOpenStages={props.onOpenPipeline}
@@ -671,6 +674,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
           density="task"
           nowMs={nowMs}
           taskTitle={pendingTitle ? null : title}
+          taskId={taskId}
           acting={lane.acting(pipeline)}
           largeAnswers
           onOpenStage={openStage}
@@ -692,6 +696,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     const pr = linkIndex.of({ kind: "pipeline", id: summary.pipeline.id })?.links.find((link) => link.kind === "pr");
     return pr ? [`#${pr.number}`] : [];
   });
+
+  const finishWaits = taskFinishWaitCount(lanes.map((summary) => summary.pipeline), taskId);
 
   /* ── Sheets ───────────────────────────────────────────────────────────── */
   const laneSummary = laneFor ? lanes.find((summary) => summary.pipeline.id === laneFor) ?? null : null;
@@ -739,6 +745,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
       const acting = lane.acting(pipeline);
       const icons = { pause: Pause, resume: Play, archive: CircleX } as const;
       const laneTitle = cleanTitle(pipelineTitle(t, pipeline), 90);
+      const finish = finishesTaskOffer(pipeline, taskId, lanes.map((summary) => summary.pipeline));
       return (
         <MobileSheet name="lane" title={laneTitle} onClose={close}>
           <div role="menu" aria-label={laneTitle} className="flex flex-col py-1" data-phone-task-lane-sheet={pipeline.id}>
@@ -763,6 +770,31 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 }}
                 attrs={{ "data-phone-task-lane-action": "open-conversation" }}
               />
+            ) : null}
+            {finish ? (
+              /* #2187 §6: one toggle, its hint, and the count of other open
+                 lanes Done would wait for, in warning ink. The hints wrap,
+                 which the one-line sheet row cannot. */
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={finish.checked}
+                disabled={Boolean(acting)}
+                data-phone-task-lane-action="finishes-task"
+                onClick={() => {
+                  close();
+                  void toggleFinishesTask(props.ports ?? browserPipelinePorts, pipeline, taskId, laneTitle, t, (text, error) => showReceipt(text, null, error ? { error: true } : undefined));
+                }}
+                className={`flex min-h-11 w-full items-start gap-3 px-4 py-2.5 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 ${finish.checked ? "text-accent" : "text-primary"}`}
+              >
+                <span className="flex h-[22px] w-[18px] shrink-0 items-center justify-center text-secondary"><Flag className="h-[18px] w-[18px]" aria-hidden /></span>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="text-body font-semibold">{t("pipelineBlock.finish.menu")}</span>
+                  <span className="text-label font-normal text-muted">{t("pipelineBlock.finish.menuWhy")}</span>
+                  {finish.open ? <span className="text-label font-normal text-warning" data-finish-open={finish.open}>{t("pipelineBlock.finish.menuOpen", { count: finish.open })}</span> : null}
+                </span>
+                <span className="flex h-[22px] w-5 shrink-0 items-center justify-center">{finish.checked ? <Check className="h-[18px] w-[18px] text-accent" aria-hidden /> : null}</span>
+              </button>
             ) : null}
             {mobilePipelineActions(pipeline).length ? <MobileSheetDivider /> : null}
             {mobilePipelineActions(pipeline).map((spec) => {
@@ -913,6 +945,13 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   {title}
                 </button></h1>
               )}
+              {finishWaits ? (
+                /* #2187 §5.3: the move to Done waits on other open pipelines. */
+                <p data-task-finish-wait={finishWaits} className="m-0 flex items-start gap-1 px-1 text-label text-muted [overflow-wrap:anywhere]">
+                  <Flag className="mt-[2px] h-3 w-3 shrink-0" aria-hidden />
+                  {t("pipelineBlock.finish.cardWaits", { count: finishWaits })}
+                </p>
+              ) : null}
             </div>
 
             {/* Groups under the title, 24 px apart and 8 px inside (#2148):
