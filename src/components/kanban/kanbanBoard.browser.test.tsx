@@ -9833,3 +9833,97 @@ describe("#2146 the orchestrator's report log beside its chat, and the Bridge re
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });
+
+describe("the board scrolls on the compositor at a device pixel ratio of 1", () => {
+  /*
+   * At a device pixel ratio under 1.5 Chromium keeps a scroller with no
+   * opaque background of its own on the main thread, to keep LCD text in it.
+   * On the live board that meant every scroll frame waited for a repaint and a
+   * re-layerize of the whole page: the content moved on about half of the
+   * frames, and a catalog update landing mid-scroll stopped it. The board's
+   * scrollers are promoted in kanbanBoard.css; this case scrolls each one that
+   * overflows, the page and the columns, down and back, under a trace, and
+   * requires every scroll frame the compositor reports to be one it scrolled
+   * itself (`SCROLL_COMPOSITOR_THREAD`), never `SCROLL_MAIN_THREAD`.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "compositor"
+   */
+  browserTest("the page and every overflowing column scroll without the main thread", async () => {
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/board-scroll-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    try {
+      /* Short enough that the columns overflow as well as the page. */
+      const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 1440, height: 640 }, "light", "en");
+      try {
+        await page.waitForSelector("[data-kanban-board] .card[data-id]", { timeout: 30_000 });
+        await page.waitForTimeout(800);
+        const scrollers = await page.evaluate(() => {
+          const targets = [document.querySelector<HTMLElement>(".kb .kb-page"), ...document.querySelectorAll<HTMLElement>(".kb .col-body")];
+          return targets.flatMap((element, index) => {
+            if (!element || element.scrollHeight - element.clientHeight < 40) return [];
+            element.dataset.scrollProbe = String(index);
+            return [{ probe: String(index), name: element.classList.contains("kb-page") ? "page" : `column ${element.closest<HTMLElement>(".column")?.dataset.status}`, distance: element.scrollHeight - element.clientHeight }];
+          });
+        });
+        if (!scrollers.some((scroller) => scroller.name === "page")) failures.push("the page does not overflow");
+        if (!scrollers.some((scroller) => scroller.name.startsWith("column"))) failures.push(`no column overflows: ${JSON.stringify(scrollers)}`);
+        const input = await context.newCDPSession(page);
+        const tracing = await browser.newBrowserCDPSession();
+        for (const scroller of scrollers) {
+          /* A point whose nearest scroller is this one, so the wheel lands on it. */
+          const at = await page.evaluate((probe) => {
+            const target = document.querySelector<HTMLElement>(`[data-scroll-probe="${probe}"]`)!;
+            target.scrollTop = 0;
+            target.scrollIntoView({ block: "nearest" });
+            const box = target.getBoundingClientRect();
+            const owner = (element: Element | null) => {
+              for (let node = element; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1) return node;
+              }
+              return null;
+            };
+            for (let y = Math.max(box.top, 0) + 8; y < Math.min(box.bottom, innerHeight) - 8; y += 17) {
+              for (let x = Math.max(box.left, 0) + 8; x < Math.min(box.right, innerWidth) - 8; x += 29) {
+                if (owner(document.elementFromPoint(x, y)) === target) return { x: Math.round(x), y: Math.round(y) };
+              }
+            }
+            return null;
+          }, scroller.probe);
+          if (!at) { failures.push(`${scroller.name}: no point on screen scrolls it`); continue; }
+          const events: Array<{ name: string; ph: string; pid: number; tid: number; args?: { name?: string; frame_reporter?: { state?: string; scroll_state?: string } } }> = [];
+          const collect = (event: { value: unknown[] }) => { events.push(...(event.value as typeof events)); };
+          tracing.on("Tracing.dataCollected", collect);
+          const complete = new Promise<void>((resolve) => tracing.once("Tracing.tracingComplete", () => resolve()));
+          await tracing.send("Tracing.start", { transferMode: "ReportEvents", traceConfig: { includedCategories: ["cc", "benchmark", "disabled-by-default-devtools.timeline.frame", "__metadata"] } } as never);
+          for (const down of [true, false]) {
+            await input.send("Input.synthesizeScrollGesture", { x: at.x, y: at.y, yDistance: down ? -scroller.distance : scroller.distance, speed: 1200, gestureSourceType: "mouse", preventFling: true });
+          }
+          await tracing.send("Tracing.end");
+          await complete;
+          tracing.off("Tracing.dataCollected", collect);
+          const moved = await page.evaluate((probe) => document.querySelector<HTMLElement>(`[data-scroll-probe="${probe}"]`)!.scrollTop, scroller.probe);
+          const compositor = new Set(events.filter((event) => event.ph === "M" && event.name === "thread_name" && event.args?.name === "Compositor").map((event) => `${event.pid}:${event.tid}`));
+          const states = new Map<string, number>();
+          for (const event of events) {
+            const frame = event.args?.frame_reporter;
+            if (event.name !== "PipelineReporter" || event.ph !== "b" || !compositor.has(`${event.pid}:${event.tid}`) || !frame?.scroll_state || frame.scroll_state === "SCROLL_NONE") continue;
+            states.set(frame.scroll_state, (states.get(frame.scroll_state) ?? 0) + 1);
+          }
+          const reading = Object.fromEntries(states);
+          if (!states.size) failures.push(`${scroller.name}: no scroll frames were traced (scrollTop ${moved})`);
+          if (states.has("SCROLL_MAIN_THREAD")) failures.push(`${scroller.name}: scrolled on the main thread ${JSON.stringify(reading)}`);
+        }
+        if (pageErrors.length) failures.push(`page errors ${pageErrors.join(" | ")}`);
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 300_000);
+});
