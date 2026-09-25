@@ -4702,6 +4702,10 @@ async function activityMain(): Promise<void> {
       ...(["en", "uk"] as const).map((lang) => ({ width: 390, height: 844, lang, colorScheme: "light" as const, from: "project" as const })),
     ];
     const arrivals: Record<string, unknown> = {};
+    /* An operator who has closed the first-run guide and its walk: they
+       would stand over the board. */
+    const onboarding = await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true, walk: "skipped" }) });
+    must(onboarding.ok, `phone arrivals: the guide was not dismissed (${onboarding.status})`);
     for (const arrival of phoneArrivals) {
       const name = `phone-arrive-${arrival.from}-${arrival.width}-${arrival.lang}-${arrival.colorScheme}`;
       const context = await browser.newContext({ viewport: { width: arrival.width, height: arrival.height }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, colorScheme: arrival.colorScheme, reducedMotion: "reduce" });
