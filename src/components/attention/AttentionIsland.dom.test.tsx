@@ -300,3 +300,43 @@ test("a terminal prompt keeps its own wording, and a stalled agent is not in the
   const stalledFile = { ...entry("/alpha-stalled", "alpha", NOW - 60), waitingInput: null, activity: "stalled", proc: "running", mtime: NOW - 60 } as FileEntry;
   expect(buildAttentionQueue([stalledFile], NOW)).toEqual([]);
 });
+
+test("a structured permission request names tool, command and reason, and answers Allow once or Deny from its row (#2215)", async () => {
+  const file = {
+    ...entry("/alpha-permission", "alpha", NOW - 120),
+    waitingInput: null,
+    conversationId: "conversation_alpha",
+    pendingPermission: {
+      id: "request-1",
+      tool: "Bash",
+      command: "rm -rf $R/*.json",
+      reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json",
+      reasonType: "safetyCheck",
+      since: new Date((NOW - 120) * 1000).toISOString(),
+    },
+  } as FileEntry;
+  const item = buildAttentionQueue([file], NOW)[0]!;
+  expect(item.reason.kind).toBe("permission");
+
+  const posts: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    posts.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ ok: true }), { status: 202 });
+  }) as typeof fetch;
+  try {
+    const host = await render(<AttentionQueueRow item={item} onOpen={() => {}} />);
+    expect(host.querySelector("[data-attention-decision]")!.textContent)
+      .toBe("permission: Bash: rm -rf $R/*.json — Dangerous rm operation on possibly-empty variable path: $R/*.json");
+    const allow = host.querySelector("[data-permission-allow]")!;
+    expect(allow.textContent).toBe("Allow once");
+    await click(allow);
+    await click(host.querySelector("[data-permission-deny]")!);
+    expect(posts).toEqual([
+      { conversationId: "conversation_alpha", path: "/alpha-permission", action: "permission", decision: "allow", requestId: "request-1", operationId: "permission:request-1:allow" },
+      { conversationId: "conversation_alpha", path: "/alpha-permission", action: "permission", decision: "deny", requestId: "request-1", operationId: "permission:request-1:deny" },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

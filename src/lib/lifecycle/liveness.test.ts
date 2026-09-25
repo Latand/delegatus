@@ -477,33 +477,38 @@ test("a live host whose transcript goes silent past the threshold is stalled", (
   })).toEqual({ lifecycle: "stalled", reason: "host_alive_transcript_silent" });
 });
 
-test("a live busy host follows its account throttle below the threshold and through retryAt plus grace", async () => {
+test("a live busy host follows its own host's provider retry below the threshold and through retryAt plus grace (#2215)", async () => {
   const dir = sandbox();
   const agentPath = path.join(dir, "provider-throttled.jsonl");
   fs.writeFileSync(agentPath, "{}\n", "utf8");
-  const accountId = "account-a";
   const retryAtMs = NOW + 5 * 60_000;
   const retryAt = new Date(retryAtMs).toISOString();
-  const entry = { ...structuredEntry(agentPath, 4242), accountId };
-  const registry = {
+  const quiet = structuredEntry(agentPath, 4242);
+  const retrying = {
+    ...quiet,
+    structuredHost: { ...quiet.structuredHost!, providerRetry: { at: new Date(NOW - 90_000).toISOString(), retryAt, status: 429, error: "rate_limit" } },
+  };
+  const registryOf = (entry: AgentRegistryEntry) => ({
     entries: { "codex:provider-throttled": entry },
     conversations: {},
-  } as unknown as RegistryFile;
-  const requestedAccounts: Array<[string, string]> = [];
+  } as unknown as RegistryFile);
+  const read = (entry: AgentRegistryEntry, overrides: { now?: number; stallAfterMs?: number; turn?: "busy" | "idle"; lastRecordTs?: number } = {}) => {
+    const now = overrides.now ?? NOW;
+    return agentLivenessSnapshot(overrides.stallAfterMs ? { stallAfterMs: overrides.stallAfterMs } : {}, sources({
+      now: () => now,
+      probe: { now: () => now, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+      listFiles: async () => [fileEntry({ path: agentPath })],
+      registrySnapshot: () => registryOf(entry),
+      pipelines: () => [],
+      transcriptEvidence: async () => ({ turn: overrides.turn ?? "busy", lastRecordTs: overrides.lastRecordTs ?? NOW - 60_000 }),
+    }));
+  };
 
-  const belowThreshold = await agentLivenessSnapshot({}, sources({
-    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
-    listFiles: async () => [fileEntry({ path: agentPath })],
-    registrySnapshot: () => registry,
-    pipelines: () => [],
-    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 60_000 }),
-    limitsProvenance: (engine, requestedAccountId) => {
-      requestedAccounts.push([engine, requestedAccountId]);
-      return { source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt };
-    },
-  }));
+  /* The host reported nothing: a quiet busy turn is running, however the
+     account's usage poller is doing. The account-wide reading is gone. */
+  expect((await read(quiet)).conversations[0]).toMatchObject({ lifecycle: "running", reason: "host_alive_turn_active", retryAt: null });
 
-  expect(requestedAccounts).toEqual([["codex", accountId]]);
+  const belowThreshold = await read(retrying);
   expect(belowThreshold.stalledCount).toBe(0);
   expect(belowThreshold.conversations[0]).toMatchObject({
     lifecycle: "waiting",
@@ -512,59 +517,16 @@ test("a live busy host follows its account throttle below the threshold and thro
     stalledForMs: null,
   });
 
-  const highThreshold = await agentLivenessSnapshot({ stallAfterMs: 12 * 60 * 60_000 }, sources({
-    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
-    listFiles: async () => [fileEntry({ path: agentPath })],
-    registrySnapshot: () => registry,
-    pipelines: () => [],
-    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: FROZEN_AT }),
-    limitsProvenance: (engine, requestedAccountId) => {
-      requestedAccounts.push([engine, requestedAccountId]);
-      return { source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt };
-    },
-  }));
+  const highThreshold = await read(retrying, { stallAfterMs: 12 * 60 * 60_000, lastRecordTs: FROZEN_AT });
+  expect(highThreshold.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "provider_throttled", retryAt, stalledForMs: null });
 
-  expect(requestedAccounts).toEqual([["codex", accountId], ["codex", accountId]]);
-  expect(highThreshold.conversations[0]).toMatchObject({
-    lifecycle: "waiting",
-    reason: "provider_throttled",
-    retryAt,
-    stalledForMs: null,
-  });
-
-  const settled = await agentLivenessSnapshot({}, sources({
-    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
-    listFiles: async () => [fileEntry({ path: agentPath })],
-    registrySnapshot: () => registry,
-    pipelines: () => [],
-    transcriptEvidence: async () => ({ turn: "idle" as const, lastRecordTs: FROZEN_AT }),
-    limitsProvenance: () => {
-      throw new Error("settled rows must not read throttle provenance");
-    },
-  }));
-  expect(settled.conversations[0]).toMatchObject({
-    lifecycle: "stalled",
-    reason: "host_alive_transcript_silent",
-    retryAt: null,
-  });
+  const settled = await read(retrying, { turn: "idle", lastRecordTs: FROZEN_AT });
+  expect(settled.conversations[0]).toMatchObject({ lifecycle: "stalled", reason: "host_alive_transcript_silent", retryAt: null });
 
   const afterGrace = retryAtMs + PROVIDER_THROTTLE_GRACE_MS + 1;
-  const stalled = await agentLivenessSnapshot({}, sources({
-    now: () => afterGrace,
-    probe: { now: () => afterGrace, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
-    listFiles: async () => [fileEntry({ path: agentPath })],
-    registrySnapshot: () => registry,
-    pipelines: () => [],
-    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: FROZEN_AT }),
-    limitsProvenance: () => ({ source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt }),
-  }));
-
+  const stalled = await read(retrying, { now: afterGrace, lastRecordTs: FROZEN_AT });
   expect(stalled.stalledCount).toBe(1);
-  expect(stalled.conversations[0]).toMatchObject({
-    lifecycle: "stalled",
-    reason: "host_alive_transcript_silent",
-    retryAt: null,
-  });
+  expect(stalled.conversations[0]).toMatchObject({ lifecycle: "stalled", reason: "host_alive_transcript_silent", retryAt: null });
 });
 
 test("newer provider progress supersedes an account throttle while tool-only traffic preserves the wait", () => {
@@ -645,44 +607,68 @@ test("provider progress remains superseded after a bounded tail rolls over", asy
   })).toEqual({ lifecycle: "waiting", reason: "provider_throttled", retryAt });
 });
 
-test("a liveness response resolves throttle provenance once per engine account", async () => {
+test("a pending permission request reads as waiting on permission_request, never provider_throttled (#2215)", async () => {
   const dir = sandbox();
-  const paths = [path.join(dir, "worker-a.jsonl"), path.join(dir, "worker-b.jsonl")];
-  for (const agentPath of paths) fs.writeFileSync(agentPath, "{}\n", "utf8");
-  const accountId = "account-a";
-  const retryAt = new Date(NOW + 5 * 60_000).toISOString();
-  const registry = {
-    entries: Object.fromEntries(paths.map((agentPath, index) => [
-      `codex:provider-throttled-${index}`,
-      { ...structuredEntry(agentPath, 5000 + index), accountId },
-    ])),
-    conversations: {},
-  } as unknown as RegistryFile;
-  let provenanceReads = 0;
-
+  const agentPath = path.join(dir, "permission-wedge.jsonl");
+  fs.writeFileSync(agentPath, "{}\n", "utf8");
+  const base = structuredEntry(agentPath, 4242);
+  const permission = {
+    id: "request-1",
+    tool: "Bash",
+    command: "rm -rf $R/*.json",
+    reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json",
+    reasonType: "safetyCheck",
+    since: new Date(NOW - 50 * 60_000).toISOString(),
+  };
+  const entry = {
+    ...base,
+    structuredHost: {
+      ...base.structuredHost!,
+      kind: "claude-broker" as const,
+      pendingAttention: [permission.id],
+      pendingPermissions: [permission],
+      /* Even with a provider retry on record, the request is what holds the turn. */
+      providerRetry: { at: new Date(NOW - 60 * 60_000).toISOString(), retryAt: new Date(NOW + 60_000).toISOString(), status: 429, error: "rate_limit" },
+    },
+  };
   const snapshot = await agentLivenessSnapshot({}, sources({
-    probe: {
-      now: () => NOW,
-      pidAlive: () => true,
-      processIdentity: () => "start-token-of-a-dead-host",
-    },
-    listFiles: async () => paths.map((agentPath) => fileEntry({ path: agentPath })),
-    registrySnapshot: () => registry,
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+    listFiles: async () => [fileEntry({ path: agentPath })],
+    registrySnapshot: () => ({ entries: { "claude:permission-wedge": entry }, conversations: {} }) as unknown as RegistryFile,
     pipelines: () => [],
-    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 60_000 }),
-    limitsProvenance: () => {
-      provenanceReads += 1;
-      return { source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt };
-    },
+    /* An hour of silence: without the request this would be a stall. */
+    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 50 * 60_000 }),
   }));
+  expect(snapshot.stalledCount).toBe(0);
+  expect(snapshot.conversations[0]).toMatchObject({
+    lifecycle: "waiting",
+    reason: "permission_request",
+    retryAt: null,
+    permission: { tool: "Bash", command: "rm -rf $R/*.json", reason: permission.reason },
+  });
 
-  expect(provenanceReads).toBe(1);
-  expect(snapshot.conversations).toHaveLength(2);
-  expect(snapshot.conversations.every((record) => (
-    record.lifecycle === "waiting"
-      && record.reason === "provider_throttled"
-      && record.retryAt === retryAt
-  ))).toBeTrue();
+  /* Once the host reports it answered, the ordinary table decides again. */
+  const answered = await agentLivenessSnapshot({}, sources({
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+    listFiles: async () => [fileEntry({ path: agentPath })],
+    registrySnapshot: () => ({ entries: { "claude:permission-wedge": { ...entry, structuredHost: { ...entry.structuredHost, pendingAttention: [], pendingPermissions: [], providerRetry: null } } }, conversations: {} }) as unknown as RegistryFile,
+    pipelines: () => [],
+    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 5_000 }),
+  }));
+  expect(answered.conversations[0]).toMatchObject({ lifecycle: "running", reason: "host_alive_turn_active" });
+  expect(answered.conversations[0]!.permission).toBeUndefined();
+});
+
+test("the decision table puts a pending permission ahead of silence and the provider", () => {
+  const permission = { id: "r", tool: "Bash", command: "rm -rf $X", reason: "flagged", reasonType: "safetyCheck", since: new Date(NOW).toISOString() };
+  expect(evaluateLiveness({
+    host: { state: "alive" }, turnState: "busy", silentForMs: 60 * 60_000, stallAfterMs: 10 * 60_000,
+    providerRetryAt: new Date(NOW + 60_000).toISOString(), pendingPermission: permission,
+  })).toEqual({ lifecycle: "waiting", reason: "permission_request", permission });
+  /* A dead host answers nothing; the zombie rule still wins. */
+  expect(evaluateLiveness({
+    host: { state: "gone" }, turnState: "busy", silentForMs: 60_000, stallAfterMs: 10 * 60_000, pendingPermission: permission,
+  })).toEqual({ lifecycle: "stalled", reason: "host_gone_turn_open" });
 });
 
 test("an unregistered transcript is aged: past the grace it has stopped starting up", () => {
@@ -1069,7 +1055,10 @@ test.each([false, true])("tool-only provider wait survives owner selection with 
   const retryAt = new Date(NOW + 60_000).toISOString();
   const snapshot = await agentLivenessSnapshot({ project: PROJECT, liveOnly: true, limit: 1 }, corpusSources(generation, {
     registrySnapshot: () => ({ entries: {
-      current: { ...structuredEntry(current, 4242), accountId: "account-a" },
+      current: (() => {
+        const entry = { ...structuredEntry(current, 4242), accountId: "account-a" };
+        return { ...entry, structuredHost: { ...entry.structuredHost!, providerRetry: { at: new Date(NOW - 90_000).toISOString(), retryAt, status: 429, error: "rate_limit" } } };
+      })(),
     }, conversations: {} }) as unknown as RegistryFile,
     describeTranscript: async (target) => describedTranscript(target, PROJECT, NOW - 60_000),
     transcriptEvidence: async (engine, target) => {
@@ -1077,7 +1066,6 @@ test.each([false, true])("tool-only provider wait survives owner selection with 
       expect(evidence).toMatchObject({ lastRecordTs: NOW - 1_000, providerProgressAt: null });
       return { ...evidence!, turn: "busy" };
     },
-    limitsProvenance: () => ({ source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt, throttleAt: new Date(NOW - 90_000).toISOString() }),
   }));
   expect(snapshot.conversations[0]).toMatchObject({ transcriptPath: current, lifecycle: "waiting", reason: "provider_throttled", retryAt });
   expect(snapshot.selection).toMatchObject({ selected: 1, hydrated: 1, recovered: present ? 0 : 1 });

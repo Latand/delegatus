@@ -5,6 +5,7 @@ import { chromium, type BrowserContext, type CDPSession, type Page } from "playw
 
 import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { translate } from "@/lib/i18n";
+import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 
 /*
@@ -4040,3 +4041,185 @@ browserTest("#2146: the seat's report log is one tap from its conversation on th
   fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * docs/design/needs-attention.md, the permission row (#2215): a Claude tool
+ * request its safety check raised, on the fixture's `?permission=1` scene, as
+ * the phone's Needs-you sheet shows it at 390 × 844 and 430 × 932 and as the
+ * desktop island's popover shows it at 1280 × 900, each in light and dark:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "permission row"
+ *
+ * The headline (tool, command, the engine's full decision_reason) ends in an
+ * ellipsis inside its row, the age stays visible beside it, and Allow once /
+ * Deny have size, sit inside the surface, overlap neither each other nor the
+ * row, and send the answer they name. Frames go to `LLV_PERMISSION_FRAMES`
+ * (default `.artifacts/permission-row`, not committed); readings to
+ * `evidence/needs-attention/permission-row.json`.
+ */
+const PERMISSION_OUT = path.resolve(process.env.LLV_PERMISSION_FRAMES || ".artifacts/permission-row");
+const PERMISSION_EVIDENCE = path.resolve("evidence/needs-attention");
+const PERMISSION_ROW = '[data-attention-row$=":permission:request-safety-1"]';
+
+/** The permission row's geometry, measured against the surface that holds it. */
+const readPermissionRow = (page: Page, surface: string) => page.evaluate(([rowSelector, surfaceSelector]) => {
+  const box = (element: Element | null) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height), right: Math.round(r.right), bottom: Math.round(r.bottom) };
+  };
+  type Box = NonNullable<ReturnType<typeof box>>;
+  const within = (inner: Box | null, outer: Box | null) => Boolean(inner && outer && inner.x >= outer.x - 0.5 && inner.right <= outer.right + 0.5 && inner.y >= outer.y - 0.5 && inner.bottom <= outer.bottom + 0.5);
+  const cross = (a: Box | null, b: Box | null) => Boolean(a && b && Math.min(a.right, b.right) - Math.max(a.x, b.x) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y) > 0.5);
+  const row = document.querySelector<HTMLElement>(rowSelector);
+  const holder = row?.parentElement ?? null;
+  const decision = row?.querySelector<HTMLElement>("[data-attention-decision]") ?? null;
+  const age = row?.querySelector<HTMLElement>("[data-attention-age]") ?? null;
+  const ageLine = age?.parentElement ?? null;
+  const allow = holder?.querySelector("[data-permission-allow]") ?? null;
+  const deny = holder?.querySelector("[data-permission-deny]") ?? null;
+  const surfaceBox = box(document.querySelector(surfaceSelector));
+  const rowBox = box(row);
+  const decisionBox = box(decision);
+  const ageBox = box(age);
+  const allowBox = box(allow);
+  const denyBox = box(deny);
+  const style = decision ? getComputedStyle(decision) : null;
+  return {
+    viewport: { width: innerWidth, height: innerHeight },
+    surface: surfaceBox,
+    row: rowBox,
+    decision: {
+      text: decision?.textContent ?? null,
+      box: decisionBox,
+      scrollWidth: decision?.scrollWidth ?? 0,
+      clientWidth: decision?.clientWidth ?? 0,
+      textOverflow: style?.textOverflow ?? null,
+      whiteSpace: style?.whiteSpace ?? null,
+      insideRow: within(decisionBox, rowBox),
+    },
+    age: {
+      text: age?.textContent ?? null,
+      box: ageBox,
+      insideRow: within(ageBox, rowBox),
+      /* Clipped by its line's overflow box, as the phone's meta line clips. */
+      insideLine: within(ageBox, box(ageLine)),
+      crossesDecision: cross(ageBox, decisionBox),
+    },
+    allow: { text: allow?.textContent ?? null, box: allowBox },
+    deny: { text: deny?.textContent ?? null, box: denyBox },
+    buttonsInsideSurface: within(allowBox, surfaceBox) && within(denyBox, surfaceBox),
+    buttonsCrossEachOther: cross(allowBox, denyBox),
+    buttonsCrossRow: cross(allowBox, rowBox) || cross(denyBox, rowBox),
+    buttonsInViewport: [allowBox, denyBox].every((b) => Boolean(b && b.x >= 0 && b.right <= innerWidth && b.y >= 0 && b.bottom <= innerHeight)),
+  };
+}, [PERMISSION_ROW, surface] as const);
+
+type PermissionReading = Awaited<ReturnType<typeof readPermissionRow>>;
+
+function permissionFailures(reading: PermissionReading, headline: string, minButton: number): string[] {
+  const failures: string[] = [];
+  const fail = (label: string) => failures.push(label);
+  if (reading.decision.text !== headline) fail(`the headline reads ${JSON.stringify(reading.decision.text)}`);
+  if (!(reading.decision.scrollWidth > reading.decision.clientWidth)) fail(`the headline is not cut: ${reading.decision.scrollWidth} ≤ ${reading.decision.clientWidth}`);
+  if (reading.decision.textOverflow !== "ellipsis" || reading.decision.whiteSpace !== "nowrap") fail(`the headline does not end in an ellipsis: ${reading.decision.textOverflow} / ${reading.decision.whiteSpace}`);
+  if (!reading.decision.insideRow) fail(`the headline leaves its row: ${JSON.stringify(reading.decision.box)} in ${JSON.stringify(reading.row)}`);
+  if (!reading.age.text || !reading.age.box || reading.age.box.width <= 0) fail(`no age: ${JSON.stringify(reading.age)}`);
+  if (!reading.age.insideRow || !reading.age.insideLine) fail(`the age is clipped: ${JSON.stringify(reading.age)}`);
+  if (reading.age.crossesDecision) fail("the age sits on the headline");
+  for (const [name, button] of [["Allow once", reading.allow], ["Deny", reading.deny]] as const) {
+    if (button.text !== name) fail(`${name} reads ${JSON.stringify(button.text)}`);
+    if (!button.box || button.box.width <= 0 || button.box.height < minButton) fail(`${name} is ${JSON.stringify(button.box)}, wanted a height of ${minButton}`);
+  }
+  if (!reading.buttonsInsideSurface) fail("a button leaves the surface");
+  if (!reading.buttonsInViewport) fail("a button is off screen");
+  if (reading.buttonsCrossEachOther) fail("Allow once and Deny overlap");
+  if (reading.buttonsCrossRow) fail("a button sits on the row");
+  return failures;
+}
+
+browserTest("permission row: the headline truncates, the age stays, and Allow once / Deny answer from the phone sheet and the desktop popover", async () => {
+  fs.mkdirSync(PERMISSION_OUT, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const headline = translate("en", "attention.decisionPermissionNamed", { request: `Bash: ${FAKE_SAFETY_COMMAND} — ${FAKE_SAFETY_REASON}` });
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const answersOf = (page: Page) => page.evaluate(() => (window as unknown as { evidence: { permissionAnswers: Array<Record<string, unknown>> } }).evidence.permissionAnswers);
+  try {
+    for (const scheme of SCHEMES) {
+      for (const viewport of VIEWPORTS) {
+        const key = `phone-${viewport.width}-${scheme}`;
+        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+        await context.addInitScript(() => { localStorage.setItem("llv_lang", "en"); });
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${fixtureBase}/?permission=1#p=atlas`);
+          await page.waitForSelector("[data-mobile2-open='attention']", { timeout: 20_000 });
+          await pause(page, 600);
+          await page.locator("[data-mobile2-open='attention']").click();
+          await page.waitForSelector(`[data-mobile2-sheet="attention"] ${PERMISSION_ROW}`, { timeout: 10_000 });
+          await pause(page, 600);
+          await page.screenshot({ path: path.join(PERMISSION_OUT, `${key}.png`) });
+          const reading = await readPermissionRow(page, '[data-mobile2-sheet="attention"]');
+          const own = permissionFailures(reading, headline, 44);
+          await page.locator('[data-mobile2-sheet="attention"] [data-permission-deny]').click();
+          await pause(page, 400);
+          const answers = await answersOf(page);
+          if (answers.length !== 1 || answers[0]!.decision !== "deny" || answers[0]!.requestId !== "request-safety-1") own.push(`Deny sent ${JSON.stringify(answers)}`);
+          if (pageErrors.length) own.push(`page errors: ${pageErrors.join(" | ")}`);
+          failures.push(...own.map((label) => `${key}: ${label}`));
+          results.push({ key, reading, answers, failures: own });
+          await page.close();
+        } finally {
+          await context.close();
+        }
+      }
+      const key = `desktop-1280-${scheme}`;
+      const context = await browser.newContext({ viewport: { width: 1_280, height: 900 }, deviceScaleFactor: 2, colorScheme: scheme });
+      await context.addInitScript(() => { localStorage.setItem("llv_lang", "en"); });
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/?permission=1#p=atlas`);
+        await page.waitForSelector("[data-attention-count]", { timeout: 20_000 });
+        await pause(page, 600);
+        await page.locator("[data-attention-count]").click();
+        await page.waitForSelector(PERMISSION_ROW, { timeout: 10_000 });
+        await pause(page, 400);
+        /* The popover is the scrolling box the row sits in. */
+        const surface = await page.evaluate((selector) => {
+          let node = document.querySelector(selector)?.parentElement ?? null;
+          while (node && !node.className.includes("overflow-y-auto")) node = node.parentElement;
+          node?.setAttribute("data-evidence-popover", "");
+          return Boolean(node);
+        }, PERMISSION_ROW);
+        await page.screenshot({ path: path.join(PERMISSION_OUT, `${key}.png`) });
+        const clip = await rectOf(page, "[data-evidence-popover]");
+        if (clip) await page.screenshot({ path: path.join(PERMISSION_OUT, `${key}-popover.png`), clip: { x: Math.max(0, clip.x - 8), y: Math.max(0, clip.y - 48), width: clip.width + 16, height: clip.height + 56 } });
+        const reading = await readPermissionRow(page, "[data-evidence-popover]");
+        const own = surface ? permissionFailures(reading, headline, 18) : ["no popover holds the row"];
+        await page.locator(`${PERMISSION_ROW} + [data-permission-actions] [data-permission-allow]`).click();
+        await pause(page, 400);
+        const answers = await answersOf(page);
+        if (answers.length !== 1 || answers[0]!.decision !== "allow" || answers[0]!.requestId !== "request-safety-1") own.push(`Allow once sent ${JSON.stringify(answers)}`);
+        if (pageErrors.length) own.push(`page errors: ${pageErrors.join(" | ")}`);
+        failures.push(...own.map((label) => `${key}: ${label}`));
+        results.push({ key, reading, answers, failures: own });
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.mkdirSync(PERMISSION_EVIDENCE, { recursive: true });
+  fs.writeFileSync(path.join(PERMISSION_EVIDENCE, "permission-row.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);

@@ -11,7 +11,10 @@ import {
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { dispatchStructuredControl } from "@/lib/runtime/structuredControls";
 
-export const CONVERSATION_ACTIONS = ["interrupt", "kill", "resume", "compact", "dialog-key"] as const;
+/* `permission` answers a structured host's pending tool permission request
+   (#2215). `dialog-key` stays the terminal-dialog control: a structured host
+   has no terminal to press a key in, so it keeps refusing it. */
+export const CONVERSATION_ACTIONS = ["interrupt", "kill", "resume", "compact", "dialog-key", "permission"] as const;
 export type ConversationAction = typeof CONVERSATION_ACTIONS[number];
 
 export type ConversationActionRequest = {
@@ -22,6 +25,10 @@ export type ConversationActionRequest = {
   key?: string;
   label?: unknown;
   question?: unknown;
+  /** `permission` only: allow once or deny. */
+  decision?: string;
+  /** `permission` only: the request to answer; the oldest pending one when absent. */
+  requestId?: string;
 };
 
 type ConversationActionBody =
@@ -113,10 +120,14 @@ export async function applyConversationAction(
       conversationId: conversation?.id ?? request.conversationId,
       action: request.action,
       operationId: request.operationId,
+      ...(request.action === "permission" ? { decision: request.decision, requestId: request.requestId } : {}),
     });
     if (structured) return structured;
   }
   if (!transcriptPath) return failure("conversationId or transcriptPath is required", 400);
+  if (request.action === "permission") {
+    return failure("no structured host holds this conversation; a terminal-hosted permission prompt is answered with dialog-key", 409);
+  }
 
   if (request.action === "interrupt") return deliveryResult(await dependencies.interruptConversation(transcriptPath));
   if (request.action === "kill") {

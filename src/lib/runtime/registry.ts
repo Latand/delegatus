@@ -70,6 +70,8 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
+    ...(state.pendingPermissions?.length ? { pendingPermissions: state.pendingPermissions } : {}),
+    ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -132,6 +134,7 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
     && left.protocolVersion === right.protocolVersion
     && left.activeTurnRef === right.activeTurnRef
     && sameStrings(left.pendingAttention, right.pendingAttention)
+    && (left.providerRetry?.at ?? null) === (right.providerRetry?.at ?? null)
     && sameStrings(left.activeFlags, right.activeFlags);
 }
 

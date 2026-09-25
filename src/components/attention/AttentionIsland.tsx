@@ -10,6 +10,7 @@ import type { AttentionItem } from "../attention";
 import { cleanTitle, fmtAge } from "../utils";
 import { decisionLine, needLabel } from "./decision";
 import { laneNeed } from "./needReason";
+import { PermissionActions } from "./PermissionActions";
 
 interface Props {
   /** `buildNeedsYouQueue`'s length (conversations and parked lanes), passed in
@@ -124,7 +125,7 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
  */
 export function AttentionQueueRow({ item, onOpen }: { item: AttentionItem; onOpen: () => void }) {
   const { t } = useLocale();
-  return (
+  const row = (
     <button
       type="button"
       data-attention-row={item.id}
@@ -138,7 +139,7 @@ export function AttentionQueueRow({ item, onOpen }: { item: AttentionItem; onOpe
         <span className="shrink-0 rounded-full border border-border bg-canvas px-1.5 text-[10px] font-semibold text-muted" title={item.project}>
           {projectDisplayName(item.project, item.file.projectName)}
         </span>
-        <span className="shrink-0 text-[10.5px] text-muted">{fmtAge(item.since)}</span>
+        <span data-attention-age className="shrink-0 text-[10.5px] text-muted">{fmtAge(item.since)}</span>
       </span>
       <span
         data-attention-decision
@@ -147,6 +148,14 @@ export function AttentionQueueRow({ item, onOpen }: { item: AttentionItem; onOpe
         {decisionLine(t, item.file) ?? t("attention.decisionQuestion")}
       </span>
     </button>
+  );
+  /* A structured permission request is answered right here (#2215). */
+  if (item.reason.kind !== "permission" || !item.file.pendingPermission) return row;
+  return (
+    <div className="min-w-0">
+      {row}
+      <PermissionActions file={item.file} />
+    </div>
   );
 }
 

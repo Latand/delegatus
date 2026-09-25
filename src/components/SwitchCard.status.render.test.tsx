@@ -115,6 +115,7 @@ test("dead and reused structured-host identities keep stalled card rendering", (
       activeTurnRef: "turn-1",
       pendingAttention: [],
       activeFlags: [],
+      providerRetry: { at: new Date((NOW_S - 5) * 1000).toISOString(), retryAt, status: 429, error: null },
     },
     claimEpoch: 1,
     claimOwner: null,
@@ -155,7 +156,6 @@ test("dead and reused structured-host identities keep stalled card rendering", (
     [],
     snapshot,
     NOW_S * 1000,
-    () => ({ source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt }),
     (entry) => {
       const fullEntry = entry as AgentRegistryEntry;
       return identityAlive(fullEntry.host?.agent, probe)

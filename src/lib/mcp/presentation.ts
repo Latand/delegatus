@@ -335,6 +335,7 @@ export function describeMcpCall(
       resume: "Resuming",
       compact: "Compacting",
       "dialog-key": "Answering dialog in",
+      permission: "Answering a permission request in",
       archive: "Archiving",
       unarchive: "Unarchiving",
     };

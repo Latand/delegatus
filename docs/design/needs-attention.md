@@ -119,7 +119,7 @@ answered.
 | 10 | Lane `paused` | **Goes.** Remove `paused` from `PIPELINE_ATTENTION_STATES` and delete the dead `pipelineNeedsAttention`. | Someone paused it on purpose, and nothing is asked. |
 | 11, 12 | Failed assignment, overdue | **Unchanged.** They are scheme placement rules, never a needs-you reason. | Neither raises the state today. Adding a "Launch failed" reason is new scope (see Deferred). |
 | 13 | Engine child promotion | **Unchanged.** Its `attentionId` half follows the new model by itself. | It is a placement rule. |
-| 14 | Structured-host approvals | **Unchanged in this slice** (Deferred). | Under the bypass-approvals policy they are rare, and the conversation already shows them. |
+| 14 | Structured-host approvals | **Changed by #2215** for Claude tool permission requests; other approvals unchanged. | Claude's safety check asks even under bypass, and an unanswered request held two stages for an hour each. See "Structured permission requests" below. |
 | 15 | `request_attention` | Section 6. | |
 
 ## 4. The reason model
@@ -488,12 +488,57 @@ and the privacy gate from the merge base.
   a badge dot and a sheet row the operator can tap, and desktop behaviour is
   unchanged (section 6).
 
+## Structured permission requests (#2215)
+
+Claude Code sends a `can_use_tool` control request over the stdio prompt
+channel even under `--permission-mode bypassPermissions` when its safety check
+flags a command (`decision_reason_type: "safetyCheck"`,
+`classifier_approvable: false`). The structured host lists each pending one in
+its state (`pendingPermissions`: tool, command excerpt, `decision_reason`), and
+the registry keeps it on the conversation's host row. Every request is answered
+by someone:
+
+- **Unattended** conversations — a pipeline stage, or any delegated spawn
+  (recorded delegation depth above zero) that is not an orchestrator seat —
+  have no operator composer. The delivery controller's permission guard
+  (`src/lib/runtime/permissionGuard.ts`) denies the request at once. The deny
+  message is the engine's `decision_reason` verbatim followed by "No one can
+  approve this here; rewrite the command so it does not need permission.", and
+  the turn continues. The denial is recorded on the stage attempt
+  (`permissionDenials`) and in the lifecycle journal (`permission_denied`).
+- **Attended** conversations — the operator's own sessions and orchestrator
+  seats — raise a `permission` reason in `attentionReason`, named by tool,
+  command and reason, with Allow once and Deny on the Needs-you row and in the
+  conversation's card. A request nobody answers in ten minutes is denied the
+  same way as an unattended one, with `mode: "timeout"`. The headline runs to
+  hundreds of characters, so on the phone sheet it takes a line of its own that
+  ends in an ellipsis and the meta line under it keeps the age and the model;
+  the desktop popover row already truncates its decision line. The rendered
+  readings (390 and 430 px phone, 1280 px desktop, light and dark) are in
+  `evidence/needs-attention/permission-row.json`, from the "permission row"
+  case of the phone driver.
+- **Answering from outside the browser**: `conversation_action` has a
+  `permission` action with `decision: "allow" | "deny"` and an optional
+  `requestId` (the oldest pending request by default). `dialog-key` stays the
+  terminal-dialog control and keeps refusing structured hosts, which have no
+  terminal to press a key in.
+- **Activity**: `agent_activity` reports such a turn as `waiting` with reason
+  `permission_request` and the request itself, and the seat wake lists it as a
+  `permission` item. `provider_throttled` is reported only when the host itself
+  saw the CLI retry a provider error (`system`/`api_retry`); the account's
+  usage-endpoint 429 no longer labels anyone's turn.
+
+AskUserQuestion and ExitPlanMode also arrive as `can_use_tool`. They are
+questions, so the transcript's pending question surfaces them and they have no
+timeout; an unattended conversation still gets an immediate deny, because
+nobody could answer it there.
+
 ## Deferred: not currently justified
 
-- **Structured-host approvals (#14) as a reason.** The runtime bus's open
-  approvals would become a `permission` reason in `attentionReason`. It is rare
-  under the bypass-approvals policy, and the conversation already shows it.
-  Worth doing once anything runs with approvals on.
+- **Other structured-host approvals (#14) as a reason.** Codex and Copilot
+  approvals on the runtime bus would become a `permission` reason the same way.
+  They are rare under the bypass-approvals policy, and the conversation already
+  shows them.
 - **Structured park causes.** A `parkCause` enum stored by `park()` across its
   47 call sites, so a lane reason can say "fail-edge budget spent" or "rate
   limited until 16:40" without reading prose. For now the `stateDetail` line

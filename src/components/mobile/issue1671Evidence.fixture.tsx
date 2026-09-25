@@ -135,6 +135,21 @@ const files: FileEntry[] = [
     { mtime: now - 900 - i * 600, activity: i < 2 ? "recent" : "idle", engine: i % 3 === 1 ? "codex" : "claude", model: i % 3 === 1 ? "gpt-5.6" : "opus" },
   )),
 ];
+/* #2215 (`?permission=1`): a Claude conversation whose structured host holds
+   the tool request the engine's safety check raises under bypassPermissions,
+   with the command and the full decision_reason the fake CLI of the host
+   tests sends (`src/lib/runtime/fixtures/fakeClaudePermissionCli.ts`, which
+   reads the filesystem and so cannot load here). */
+const PERMISSION_SCENE = new URLSearchParams(location.search).has("permission");
+const PERMISSION_COMMAND = "rm -rf $R/home $R/*.json";
+const PERMISSION_REASON = "Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)";
+if (PERMISSION_SCENE) {
+  files.unshift(conversation("/repo/scratch-reset.jsonl", "Clear the scratch tree before the rerun", {
+    activity: "live", proc: "running", pid: 4_402, mtime: now - 180, model: "claude-opus-5-5", effort: "high",
+    lastTurn: { startedAt: (now - 600) * 1_000, endedAt: null },
+    pendingPermission: { id: "request-safety-1", tool: "Bash", command: PERMISSION_COMMAND, reason: PERMISSION_REASON, reasonType: "safetyCheck", since: iso(180) },
+  }));
+}
 const catalog = Array.from({ length: 45 }, (_, i) => conversation(`/repo/history-${i}.jsonl`, `Stored conversation ${i + 1}`, { mtime: now - 90_000 - i * 3_600 }));
 /* A superseded round only the stored catalog still lists, as the conversations
    route marks it (#1671): the board never shows it. */
@@ -186,6 +201,8 @@ const evidence = {
   refuseNextPipelinePatch: false,
   /* Every task PATCH the phone's columns sent (#2072 slice 4). */
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
+  /* Every Allow once / Deny a Needs-you row sent (#2215). */
+  permissionAnswers: [] as Array<Record<string, unknown>>,
   /* Holds each pipeline answer this long, so a step can watch the frames
      painted while its requests are out. */
   pipelineAnswerDelayMs: 0,
@@ -764,6 +781,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  if (url.pathname === "/api/conversation-host" && method === "POST") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (body.action === "permission") {
+      evidence.permissionAnswers.push(body);
+      return json({ ok: true }, 202);
+    }
+  }
   /* The phone's Move to and Hide (#2072 slice 4): the task store's guarded
      PATCH, applied to the fixture's own rows and recorded. */
   if (KANBAN && url.pathname.startsWith("/api/tasks/") && method === "PATCH") {
