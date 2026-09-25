@@ -180,7 +180,7 @@ describe("parsing", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-    expect(() => assertNotLiveState("/home/someone/.config/agent-log-viewer/state/state.sqlite")).toThrow(/live state/);
+    expect(() => assertNotLiveState("/srv/someone/.config/agent-log-viewer/state/state.sqlite")).toThrow(/live state/);
     expect(() => assertNotLiveState("/var/tmp/scratch/state.sqlite")).not.toThrow();
   });
 
