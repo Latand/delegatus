@@ -4389,6 +4389,7 @@ async function conversationAction(
     key: text(args.key),
     label: args.label,
     question: args.question,
+    ...(action === "permission" ? { decision: text(args.decision), requestId: text(args.requestId) } : {}),
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchUncertainError) {
       throw new McpDispatchUncertainError(error.message, { operationId });

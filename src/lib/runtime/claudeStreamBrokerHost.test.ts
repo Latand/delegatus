@@ -1387,6 +1387,56 @@ describe("ClaudeStreamBrokerHost", () => {
     await host.release();
   });
 
+  test("reports pending permission requests and the provider retry it announced (#2215)", async () => {
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    const sent = host.send({ id: "turn-retry", text: "begin" });
+    child.emitJson({ type: "system", subtype: "init", session_id: host.identity.sessionId, apiKeySource: "none", model: "claude-test" });
+    child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "user-retry", message: { role: "user", content: [{ type: "text", text: "begin" }] } });
+    await sent;
+
+    /* The CLI's own retry frame is the provider evidence; the next output clears it. */
+    const before = Date.now();
+    child.emitJson({ type: "system", subtype: "api_retry", session_id: host.identity.sessionId, attempt: 1, max_retries: 10, retry_delay_ms: 30_000, error_status: 429, error: "rate_limit" });
+    await Bun.sleep(0);
+    const retrying = (await host.health()).providerRetry!;
+    expect(retrying).toMatchObject({ status: 429, error: "rate_limit" });
+    expect(Date.parse(retrying.retryAt) - Date.parse(retrying.at)).toBe(30_000);
+    expect(Date.parse(retrying.at)).toBeGreaterThanOrEqual(before - 1);
+
+    child.emitJson({ type: "control_request", request_id: "permission-safety", request: {
+      subtype: "can_use_tool", tool_name: "Bash", input: { command: "rm -rf $R/*.json" },
+      decision_reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json", decision_reason_type: "safetyCheck",
+    } });
+    child.emitJson({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [] } } });
+    await Bun.sleep(0);
+    const pending = await host.health();
+    expect(pending.providerRetry).toBeNull();
+    expect(pending.pendingAttention).toEqual(["permission-safety", "question"]);
+    /* The question is the transcript's to surface; only the permission is listed. */
+    expect(pending.pendingPermissions).toEqual([{
+      id: "permission-safety",
+      tool: "Bash",
+      command: "rm -rf $R/*.json",
+      reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json",
+      reasonType: "safetyCheck",
+      since: expect.any(String),
+    }]);
+
+    child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId, result: "done" });
+    await Bun.sleep(0);
+    expect((await host.health()).pendingPermissions).toEqual([]);
+    await host.release();
+  });
+
   test("retires control attention from response acknowledgements and cancellations", async () => {
     const ledger = new RecordingDeliveryLedger();
     const child = new FakeClaude(ledger);

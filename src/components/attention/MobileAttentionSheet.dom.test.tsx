@@ -192,3 +192,26 @@ test("the × closes through the host", () => {
   click(q(host, "[data-mobile2-close]"));
   expect(closed).toBe(1);
 });
+
+test("a permission row puts its long headline on a truncated line of its own and keeps the age on the meta line (#2215)", () => {
+  const command = "rm -rf $R/home $R/*.json";
+  const reason = "Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)";
+  const file = conversation("/p/scratch.jsonl", "Clear the scratch tree", NOW - 180, {
+    engine: "claude", fmt: "claude", model: "opus", pendingQuestion: null, conversationId: "conversation_scratch",
+    pendingPermission: { id: "request-1", tool: "Bash", command, reason, reasonType: "safetyCheck", since: new Date((NOW - 180) * 1000).toISOString() },
+  } as Partial<FileEntry>);
+  const host = mount(<MobileAttentionSheet entries={buildMobileAttentionQueue(buildAttentionQueue([file], NOW, PROJECT), [])} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
+  const row = q(host, "[data-attention-row]")!;
+  const decision = row.querySelector("[data-attention-decision]")!;
+  expect(decision.textContent).toBe(`permission: Bash: ${command} — ${reason}`);
+  /* Its own line, allowed to shrink and ending in an ellipsis, beside no meta. */
+  expect(decision.className).toContain("truncate");
+  expect(decision.className).toContain("min-w-0");
+  expect(decision.className).not.toContain("shrink-0");
+  const age = row.querySelector("[data-attention-age]")!;
+  expect(age.textContent).toBe("3m");
+  expect(age.parentElement!.contains(decision)).toBe(false);
+  expect(age.parentElement!.textContent).toContain("opus");
+  expect(q(host, "[data-permission-allow]")).not.toBeNull();
+  expect(q(host, "[data-permission-deny]")).not.toBeNull();
+});

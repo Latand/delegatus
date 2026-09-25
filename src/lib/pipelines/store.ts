@@ -190,8 +190,23 @@ function isAttempt(value: unknown, index: number): boolean {
     isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
-    isUnresolvedTermination(attempt.unresolvedTermination)
+    isUnresolvedTermination(attempt.unresolvedTermination) &&
+    isPermissionDenials(attempt.permissionDenials)
   );
+}
+
+/** The automatic permission denials an attempt recorded (#2215). */
+function isPermissionDenials(value: unknown): boolean {
+  if (value === undefined) return true;
+  return Array.isArray(value) && value.every((denial) => {
+    if (!denial || typeof denial !== "object" || Array.isArray(denial)) return false;
+    const entry = denial as Record<string, unknown>;
+    return typeof entry.requestId === "string" && entry.requestId.length > 0
+      && isNullableString(entry.tool) && isNullableString(entry.command)
+      && isNullableString(entry.reason) && isNullableString(entry.reasonType)
+      && (entry.mode === "unattended" || entry.mode === "timeout")
+      && typeof entry.deniedAt === "string";
+  });
 }
 
 function isSpawnActivation(value: unknown): boolean {

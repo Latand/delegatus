@@ -16,6 +16,7 @@ import { humanizeDuration } from "../turnDuration";
 import { cleanTitle, fileModelLabel } from "../utils";
 import { nextMobileAttention, type MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine } from "./decision";
+import { PermissionActions } from "./PermissionActions";
 
 /*
  * The Needs-you sheet (issue #1439, lane 8; docs/design/mobile-v2/README.md
@@ -192,7 +193,8 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
   const { t } = useLocale();
   const title = cleanTitle(item.file.title, 90);
   const decision = decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
-  return (
+  const headline = item.reason.kind === "permission" && Boolean(item.file.pendingPermission);
+  const row = (
     <button
       type="button"
       data-attention-row={item.id}
@@ -207,10 +209,19 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
       <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
+        {/* A permission headline (tool, command, reason) runs to hundreds of
+            characters, so it gets a line of its own that ends in an ellipsis
+            and the meta line keeps the age in view: the request is denied
+            at ten minutes (#2215). */}
+        {headline ? <span data-attention-decision className="min-w-0 truncate text-label font-medium text-muted">{decision}</span> : null}
         <span className={META}>
-          <span data-attention-decision className="shrink-0">{decision}</span>
-          {SEP}
-          <span className="shrink-0">{humanizeDuration(Math.max(0, now - item.since))}</span>
+          {headline ? null : (
+            <>
+              <span data-attention-decision className="shrink-0">{decision}</span>
+              {SEP}
+            </>
+          )}
+          <span data-attention-age className="shrink-0">{humanizeDuration(Math.max(0, now - item.since))}</span>
           {item.file.model ? (
             <>
               {SEP}
@@ -222,6 +233,14 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
       </span>
       <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
     </button>
+  );
+  /* A structured permission request is answered right here (#2215). */
+  if (!headline) return row;
+  return (
+    <div className="min-w-0">
+      {row}
+      <PermissionActions file={item.file} size="touch" />
+    </div>
   );
 }
 

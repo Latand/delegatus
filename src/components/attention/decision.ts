@@ -76,8 +76,10 @@ function decisionText(t: TFunction, reason: ConversationReason): string {
        conversation, and it truncates into nonsense on a badge. */
     case "question":
       return reason.header || t("attention.decisionQuestion");
+    /* A structured request names its tool, command and reason (#2215); the
+       screen-scrape fallback has only the generic phrase. */
     case "permission":
-      return t("attention.decisionPermission");
+      return reason.header ? t("attention.decisionPermissionNamed", { request: reason.header }) : t("attention.decisionPermission");
     case "delivery":
       return t("attention.decisionDelivery");
     /* The launch's own error is the decision: it names the account to sign
@@ -133,7 +135,7 @@ export function conversationNeedText(t: TFunction, reason: Pick<ConversationReas
     case "question":
       return reason.header || t("mobile2.board.badgeQuestion");
     case "permission":
-      return t("attention.decisionPermission");
+      return reason.header ? t("attention.decisionPermissionNamed", { request: reason.header }) : t("attention.decisionPermission");
     case "delivery":
       return t("needs.delivery");
     case "launch":

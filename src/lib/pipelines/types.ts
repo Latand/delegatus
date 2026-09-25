@@ -483,6 +483,23 @@ export type PipelineStageAttempt = {
       close may terminalize this attempt, however dead the registry row looks;
       the record is cleared once every one is proven gone. */
   unresolvedTermination?: PipelineUnresolvedTermination;
+  /** Tool permission requests this attempt's agent raised and nobody could
+      answer, each denied so the turn went on (#2215). Bounded, oldest first. */
+  permissionDenials?: PipelinePermissionDenial[];
+};
+
+export type PipelinePermissionDenial = {
+  /** The engine's control request id. */
+  requestId: string;
+  tool: string | null;
+  command: string | null;
+  /** The engine's `decision_reason`, which the deny message carried verbatim. */
+  reason: string | null;
+  reasonType: string | null;
+  /** `unattended`: denied at once, a stage has no one to ask. `timeout`: an
+      attended request nobody answered in time. */
+  mode: "unattended" | "timeout";
+  deniedAt: string;
 };
 
 export type PipelineUnresolvedTermination = {

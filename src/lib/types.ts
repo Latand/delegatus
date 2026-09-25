@@ -4,6 +4,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { TmuxEndpointHealth } from "@/lib/tmux";
 import type { Workflow } from "@/lib/workflows/types";
 import type { TurnState } from "@/lib/accounts/migration/contracts";
+import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
 
 export type RootKey =
   | "codex-sessions"
@@ -273,6 +274,9 @@ export interface FileEntry {
   lastAgentWorkAt?: number | null;
   /** Best-effort TUI scrape fallback for prompts without a transcript protocol. */
   waitingInput: WaitingInput | null;
+  /** The oldest tool permission request the conversation's structured host
+      holds open (#2215): a Needs-you item with Allow once and Deny. */
+  pendingPermission?: PendingPermissionRequest | null;
   /** Live pane wall or fresh structured account exhaustion. */
   rateLimit?: RateLimitState | null;
   /** claude-tasks only: recovered originating Bash command ("" if not found). */

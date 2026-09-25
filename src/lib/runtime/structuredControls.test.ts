@@ -16,6 +16,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { RuntimeOperationCommand } from "./contracts";
+import type { PendingPermissionRequest } from "./permissionRequests";
 import { dispatchStructuredControl } from "./structuredControls";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { applyConversationMigration } from "@/lib/accounts/migration/conversationCommand";
@@ -54,6 +55,7 @@ function structuredConversation(
     accountId?: string;
     parentConversationId?: `conversation_${string}`;
     registry?: AgentRegistry;
+    pendingPermissions?: PendingPermissionRequest[];
   } = {},
 ): { registry: AgentRegistry; path: string; conversationId: string } {
   const engine = options.engine ?? "codex";
@@ -84,7 +86,8 @@ function structuredConversation(
       protocolVersion: "fake-v1",
       writerClaimEpoch: 1,
       activeTurnRef: "turn-live",
-      pendingAttention: [],
+      pendingAttention: (options.pendingPermissions ?? []).map((request) => request.id),
+      ...(options.pendingPermissions ? { pendingPermissions: options.pendingPermissions } : {}),
       activeFlags: [],
     },
     claimEpoch: 1,
@@ -104,6 +107,66 @@ test("structured ownership fences the dialog-key control before legacy routing",
   });
 
   expect(result).toEqual({ status: 409, body: { error: "structured host does not support the dialog-key control" } });
+});
+
+const SAFETY_REQUEST: PendingPermissionRequest = {
+  id: "request-safety",
+  tool: "Bash",
+  command: "rm -rf $R/*.json",
+  reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json",
+  reasonType: "safetyCheck",
+  since: "2026-09-25T12:00:00.000Z",
+};
+
+test("conversation_action permission answers a structured host's pending permission request through the durable answer channel (#2215)", async () => {
+  const fixture = structuredConversation({ engine: "claude", pendingPermissions: [SAFETY_REQUEST, { ...SAFETY_REQUEST, id: "request-later" }] });
+  const commands: RuntimeOperationCommand[] = [];
+  const client = {
+    command: async (command: RuntimeOperationCommand) => {
+      commands.push(command);
+      return { operationId: command.operationId!, receipt: { operationId: command.operationId!, status: "queued", conversationId: fixture.conversationId }, replayed: false };
+    },
+  } as unknown as RuntimeHostClient;
+  const dispatch = (extra: { decision?: string; requestId?: string }, operationId: string) => dispatchStructuredControl(
+    { path: fixture.path, conversationId: "", action: "permission", operationId, ...extra },
+    { registry: fixture.registry, client, enabled: () => true, kick: () => {} },
+  );
+
+  /* Allow once, with no request named: the oldest pending one. */
+  expect(await dispatch({ decision: "allow" }, "op-allow")).toMatchObject({
+    status: 202,
+    body: { ok: true, structured: true, target: fixture.conversationId, operationId: "op-allow" },
+  });
+  expect(commands.at(-1)).toEqual({
+    kind: "answer",
+    operationId: "op-allow",
+    idempotencyKey: "op-allow",
+    conversationId: fixture.conversationId,
+    attentionId: "request-safety",
+    resolution: { behavior: "allow" },
+  });
+
+  /* Deny, naming the request. */
+  await dispatch({ decision: "deny", requestId: "request-later" }, "op-deny");
+  expect(commands.at(-1)).toMatchObject({
+    kind: "answer",
+    attentionId: "request-later",
+    resolution: { behavior: "deny", message: "The operator denied this request." },
+  });
+
+  /* A decision is required, and a request that is not pending is refused. */
+  expect(await dispatch({}, "op-none")).toEqual({ status: 400, body: { error: "permission needs decision allow or deny" } });
+  expect(await dispatch({ decision: "allow", requestId: "request-gone" }, "op-gone")).toMatchObject({ status: 409 });
+  expect(commands).toHaveLength(2);
+});
+
+test("conversation_action permission on a structured host with nothing pending says so", async () => {
+  const fixture = structuredConversation({ engine: "claude" });
+  const result = await dispatchStructuredControl(
+    { path: fixture.path, conversationId: "", action: "permission", decision: "allow" },
+    { registry: fixture.registry, client: null, enabled: () => true },
+  );
+  expect(result).toEqual({ status: 409, body: { error: "no tool permission request is pending on this conversation" } });
 });
 
 test("structured compact enters the durable command channel for the owned codex thread", async () => {

@@ -2173,6 +2173,9 @@ test("agent_activity exposes a provider throttle retryAt without journaling a st
               writerClaimEpoch: 1,
               activeTurnRef: null,
               pendingAttention: [],
+              /* The host's own report of a provider retry (#2215): the only
+                 evidence the throttle label is read from. */
+              providerRetry: { at: "2026-08-23T08:40:00.000Z", retryAt, status: 429, error: "rate_limit" },
               activeFlags: [],
             },
             claimEpoch: 1,
@@ -2186,10 +2189,6 @@ test("agent_activity exposes a provider throttle retryAt without journaling a st
       pipelines: () => [],
       describeTranscript: async () => null,
       transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: Date.parse("2026-08-23T08:20:00.000Z") }),
-      limitsProvenance: (engine: "claude" | "codex", requestedAccountId: string) => {
-        expect([engine, requestedAccountId]).toEqual(["codex", accountId]);
-        return { source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt };
-      },
     }),
     refreshLifecycleJournal: (input: unknown) => {
       journaled.push(input);

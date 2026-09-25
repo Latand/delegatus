@@ -92,6 +92,8 @@ import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
 import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
+import { normalizePendingPermissions, type PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
+import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
 
@@ -119,6 +121,10 @@ export interface StructuredHostColumns {
   writerClaimEpoch: number;
   activeTurnRef: string | null;
   pendingAttention: string[];
+  /** The pending attentions that are tool permission requests (#2215). */
+  pendingPermissions?: PendingPermissionRequest[];
+  /** The provider retry the engine reported for the open turn (#2215). */
+  providerRetry?: ProviderRetryEvidence | null;
   activeFlags: string[];
   /** Writer epoch that announced a release hand-off. Incumbent state writes at
       this epoch retain the marker; only a later claimant can complete it. */
@@ -1916,6 +1922,18 @@ function normalizeGeneration(value: NativeGeneration, policy?: McpGrantPolicy): 
   };
 }
 
+function normalizeProviderRetry(value: unknown): ProviderRetryEvidence | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const retry = value as Partial<ProviderRetryEvidence>;
+  if (typeof retry.at !== "string" || typeof retry.retryAt !== "string") return null;
+  return {
+    at: retry.at,
+    retryAt: retry.retryAt,
+    status: typeof retry.status === "number" ? retry.status : null,
+    error: typeof retry.error === "string" ? retry.error : null,
+  };
+}
+
 function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   if (!value || typeof value !== "object") return null;
   const host = value as Partial<StructuredHostColumns>;
@@ -1946,6 +1964,10 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     activeFlags: Array.isArray(host.activeFlags)
       ? host.activeFlags.filter((item): item is string => typeof item === "string")
       : [],
+    ...(Array.isArray(host.pendingPermissions) && host.pendingPermissions.length > 0
+      ? { pendingPermissions: normalizePendingPermissions(host.pendingPermissions) }
+      : {}),
+    ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),
     ...(Number.isSafeInteger(host.releaseHandoffClaimEpoch) && (host.releaseHandoffClaimEpoch ?? -1) >= 0
       ? { releaseHandoffClaimEpoch: host.releaseHandoffClaimEpoch }
       : {}),
