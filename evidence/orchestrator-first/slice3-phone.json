@@ -1,0 +1,115 @@
+{
+  "readings": {
+    "walk-1-390": {
+      "stop": 1,
+      "anchor": {
+        "left": 12,
+        "top": 794,
+        "right": 378,
+        "bottom": 838
+      },
+      "anchorKind": "dock",
+      "emptySlot": null,
+      "spotlight": {
+        "left": 8,
+        "top": 790,
+        "right": 382,
+        "bottom": 842
+      },
+      "popover": {
+        "left": 12,
+        "top": 560,
+        "right": 378,
+        "bottom": 777.8
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16
+      },
+      "text": "1 of 3\nSkip\nThis is your orchestrator\n\nTap here to write to it, like to a colleague: what you want done in this project. It plans the work and answers in its conversation.\n\nNext"
+    },
+    "walk-2-390": {
+      "stop": 2,
+      "anchor": {
+        "left": 0,
+        "top": 118,
+        "right": 390,
+        "bottom": 167
+      },
+      "anchorKind": "tabs",
+      "emptySlot": null,
+      "spotlight": {
+        "left": 0,
+        "top": 114,
+        "right": 390,
+        "bottom": 171
+      },
+      "popover": {
+        "left": 12,
+        "top": 183,
+        "right": 378,
+        "bottom": 400.8
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16
+      },
+      "text": "2 of 3\nSkip\nIts work shows up on the board\n\nEach request becomes a task card. The agents it starts, and the review of their work, appear on the card. The card moves to Done when the work is finished.\n\nNext"
+    },
+    "walk-3-390": {
+      "stop": 3,
+      "anchor": {
+        "left": 250,
+        "top": 3.5,
+        "right": 294,
+        "bottom": 47.5
+      },
+      "anchorKind": "bar-slot",
+      "emptySlot": true,
+      "spotlight": {
+        "left": 246,
+        "top": 0,
+        "right": 298,
+        "bottom": 51.5
+      },
+      "popover": {
+        "left": 12,
+        "top": 64,
+        "right": 378,
+        "bottom": 321.8
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16
+      },
+      "text": "3 of 3\nSkip\n“Needs you” counts what waits on you\n\nA question, a plan to approve, a decision: a count appears here. Tap it to jump there. Everything else runs without you: you watch and give it work.\n\nGive it the first task\n\nShow this again from the menu: Interface walk."
+    },
+    "firstTask": {
+      "screen": "chat",
+      "sheet": false
+    },
+    "written": "skipped"
+  },
+  "failures": []
+}

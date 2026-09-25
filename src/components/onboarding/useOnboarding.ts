@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 import type { OnboardingMarker, OnboardingPatch, OnboardingStepId } from "@/lib/onboarding/marker";
 
@@ -21,6 +21,36 @@ const OPEN_EVENT = "llv:open-onboarding";
 export function openOnboarding(mode: OnboardingMode = "guide", step: OnboardingStepId | null = null): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent<OpenRequest>(OPEN_EVENT, { detail: { mode, step } }));
+}
+
+/* What the interface walk (#2166 §3.8) reads of the guide: whether the marker
+   has been read, what it says, and whether the guide's dialog is open. The
+   guide's host owns the read; the walk only follows it. */
+export type OnboardingSnapshot = { loaded: boolean; marker: OnboardingMarker | null; guideOpen: boolean };
+
+let snapshot: OnboardingSnapshot = { loaded: false, marker: null, guideOpen: false };
+const snapshotListeners = new Set<() => void>();
+
+export function publishOnboarding(next: Partial<OnboardingSnapshot>): void {
+  const merged = { ...snapshot, ...next };
+  if (merged.loaded === snapshot.loaded && merged.marker === snapshot.marker && merged.guideOpen === snapshot.guideOpen) return;
+  snapshot = merged;
+  for (const listener of snapshotListeners) listener();
+}
+
+const subscribeSnapshot = (listener: () => void) => {
+  snapshotListeners.add(listener);
+  return () => { snapshotListeners.delete(listener); };
+};
+
+const SERVER_SNAPSHOT: OnboardingSnapshot = { loaded: false, marker: null, guideOpen: false };
+
+export function useOnboardingSnapshot(): OnboardingSnapshot {
+  return useSyncExternalStore(subscribeSnapshot, () => snapshot, () => SERVER_SNAPSHOT);
+}
+
+export function resetOnboardingSnapshotForTests(): void {
+  snapshot = SERVER_SNAPSHOT;
 }
 
 export async function putOnboarding(patch: OnboardingPatch): Promise<OnboardingMarker | null> {
@@ -61,6 +91,9 @@ export function useOnboarding(): {
   const [marker, setMarker] = useState<OnboardingMarker | null>(null);
   const [checkMinutes, setCheckMinutes] = useState<number | null>(null);
 
+  useEffect(() => publishOnboarding({ guideOpen: mode !== null }), [mode]);
+  useEffect(() => { if (marker) publishOnboarding({ marker }); }, [marker]);
+
   useEffect(() => {
     const onOpen = (event: Event) => {
       const detail = (event as CustomEvent<OpenRequest | OnboardingMode | undefined>).detail;
@@ -77,6 +110,7 @@ export function useOnboarding(): {
       .then((body) => {
         if (cancelled || !body) return;
         setMarker(body.marker);
+        publishOnboarding({ loaded: true, marker: body.marker });
         if (typeof body.seatTickCheckMinutes === "number" && body.seatTickCheckMinutes > 0) setCheckMinutes(body.seatTickCheckMinutes);
         /* First run: never decided. A marker neither completed nor dismissed is
            a guide the page died in the middle of; both reopen by themselves. */

@@ -107,6 +107,12 @@ const LABELS = SCENARIO === "issue1865";
 const ORCH_FIRST = SCENARIO === "orchestrator-first";
 const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
 const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW;
+/* #2166 §3.8: the same project a moment after its seat was created, the seat
+   live and idle over empty columns, on an install whose onboarding marker has
+   never run the interface walk (`&install=existing` marks it an upgrade
+   instead). What the walk writes is kept in sessionStorage, so a reload reads
+   it back as the server would. */
+const ORCH_WALK = SCENARIO === "orchestrator-first-walk";
 const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet" || ORCH_FIRST_OVERVIEW;
 const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
 const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
@@ -1588,8 +1594,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         lastTurn: { startedAt: (now - 5 * 60 * MIN) * 1_000, endedAt: (now - 4 * 60 * MIN) * 1_000 },
       } as unknown as FileEntry))
       : files;
+    const seatOnly = ORCH_WALK ? files.filter((file) => file.path === orchestrator.path).map((file) => ({
+      ...file, activity: "idle", proc: null, pid: null, waitingInput: null, pendingQuestion: null, plan: null,
+      authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: iso(MIN) },
+      lastTurn: { startedAt: (now - 2 * MIN) * 1_000, endedAt: (now - MIN) * 1_000 },
+    } as unknown as FileEntry)) : [];
     const scoped = OVERVIEW_EMPTY
       ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
+      : ORCH_WALK
+      ? { files: seatOnly, projectCatalog: [{ project: PROJECT, conversations: 1, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : ORCH_FIRST
       ? { files: [], projectCatalog: [{ project: PROJECT, conversations: 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
@@ -1648,7 +1661,23 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json({ ok: true, project: PROJECT, mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" }, github: "acme/atlas" });
   }
-  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST ? [] : tasks });
+  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST || ORCH_WALK ? [] : tasks });
+  if (ORCH_WALK && url.pathname === "/api/onboarding") {
+    const existing = params.get("install") === "existing";
+    const stored = sessionStorage.getItem("evidence-walk");
+    const marker = {
+      schemaVersion: 1, completedAt: existing ? null : iso(2 * MIN), dismissedAt: existing ? iso(2 * MIN) : null, reason: existing ? "existing-install" : null,
+      steps: {}, lastHealth: null, walk: stored === "done" || stored === "skipped" ? stored : null,
+    };
+    if (method === "PUT") {
+      const patch = JSON.parse(String(init?.body ?? "{}")) as { walk?: string };
+      if (patch.walk) sessionStorage.setItem("evidence-walk", patch.walk);
+      const writes = JSON.parse(sessionStorage.getItem("evidence-walk-writes") ?? "[]") as unknown[];
+      sessionStorage.setItem("evidence-walk-writes", JSON.stringify([...writes, patch]));
+      return json({ marker: { ...marker, walk: patch.walk ?? marker.walk } });
+    }
+    return json({ marker, seatTickCheckMinutes: 10 });
+  }
   if (url.pathname === "/api/tasks" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     evidence.taskCreates.push(body);

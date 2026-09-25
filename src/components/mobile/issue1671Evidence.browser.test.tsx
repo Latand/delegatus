@@ -3718,3 +3718,143 @@ browserTest("#2166 slice 1: the phone's seatless board, its create draft and the
   fs.writeFileSync(path.join("evidence/orchestrator-first", BEFORE ? "slice1-phone-before.json" : "slice1-phone.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
   if (failures.length && !BEFORE) throw new Error(failures.join("\n"));
 }, 300_000);
+
+/*
+ * #2166 slice 3 (docs/design/orchestrator-first-onboarding.md §3.8) on the
+ * phone at 390 × 844: the interface walk over the board right after its seat
+ * was created (`?seatless=seatonly`), on an install whose marker never ran it
+ * (`&walk=1`).
+ *
+ *   - It starts by itself on stop 1, the board dock; stop 2 is the column
+ *     tabs; stop 3 is the bar's Needs-you slot, which the shell draws
+ *     empty-outlined while the stop shows because the badge hides at zero.
+ *   - Each spotlight covers its anchor inside the window, and the popover is
+ *     the window's width less 12 px on each side, wholly on screen, with Skip's
+ *     label ending as far from the right edge as the title starts from the
+ *     left, and the mark, title, body and dots on one left edge.
+ *   - "Give it the first task" opens the seat's conversation; a reload does not
+ *     start the walk again, and the board menu's "Interface walk" row does.
+ *
+ * Frames go to `LLV_2166_OUT`, outside the repository; readings to
+ * `evidence/orchestrator-first/slice3-phone.json`.
+ */
+browserTest("#2166 slice 3: the phone's interface walk at 390", async () => {
+  const out = path.resolve(process.env.LLV_2166_OUT ?? ".artifacts/orchestrator-first");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync("evidence/orchestrator-first", { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const readings: Record<string, unknown> = {};
+  const failures: string[] = [];
+  const near = (a: number | null | undefined, b: number | null | undefined, tolerance = 1) => a != null && b != null && Math.abs(a - b) <= tolerance;
+  const read = (page: Page) => page.evaluate(() => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const box = (node: Element | null | undefined) => {
+      if (!node) return null;
+      const rect = node.getBoundingClientRect();
+      return { left: round(rect.left), top: round(rect.top), right: round(rect.right), bottom: round(rect.bottom) };
+    };
+    const ink = (node: Element | null) => {
+      if (!node) return null;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+      return rects.length ? { left: Math.min(...rects.map((rect) => rect.left)), right: Math.max(...rects.map((rect) => rect.right)) } : null;
+    };
+    const pop = document.querySelector<HTMLElement>("[data-walk-popover]");
+    if (!pop) return null;
+    const stopNumber = Number(pop.dataset.walkPopover);
+    const key = stopNumber === 1 ? "seat" : stopNumber === 2 ? "board" : "needs";
+    const anchor = [...document.querySelectorAll<HTMLElement>(`[data-walk-anchor="${key}"]`)].find((node) => node.getBoundingClientRect().width > 0) ?? null;
+    const popBox = pop.getBoundingClientRect();
+    const border = parseFloat(getComputedStyle(pop).borderLeftWidth) || 0;
+    const from = (left: number | undefined) => (left == null ? null : round(left - popBox.left - border));
+    return {
+      stop: stopNumber,
+      anchor: box(anchor),
+      anchorKind: anchor?.hasAttribute("data-mobile2-board-dock") ? "dock" : anchor?.hasAttribute("data-phone-kanban-tabs") ? "tabs" : anchor?.closest("[data-mobile2-bar]") ? "bar-slot" : anchor ? "other" : null,
+      emptySlot: stopNumber === 3 ? Boolean(anchor && !anchor.matches("button")) : null,
+      spotlight: box(document.querySelector("[data-walk-spotlight]")),
+      popover: box(pop),
+      viewport: { width: innerWidth, height: innerHeight },
+      insets: {
+        mark: from(pop.querySelector("[data-walk-mark]")?.getBoundingClientRect().left),
+        title: from(ink(pop.querySelector("[data-walk-title]"))?.left),
+        body: from(ink(pop.querySelector("[data-walk-body]"))?.left),
+        dots: from(pop.querySelector("[data-walk-dots]")?.getBoundingClientRect().left),
+        skipFromRight: (() => { const value = ink(pop.querySelector("[data-walk-skip-label]")); return value ? round(popBox.right - border - value.right) : null; })(),
+      },
+      text: pop.innerText,
+    };
+  });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "light" });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  try {
+    await page.goto(`${base}/?kanban=1&seatless=seatonly&walk=1#p=atlas`);
+    await page.waitForSelector("[data-phone-kanban]", { timeout: 20_000 });
+    await page.waitForSelector('[data-walk-popover="1"]', { state: "visible", timeout: 20_000 });
+    for (const stopNumber of [1, 2, 3] as const) {
+      const label = `walk-${stopNumber}-390`;
+      await page.waitForSelector(`[data-walk-popover="${stopNumber}"]`, { state: "visible", timeout: 10_000 });
+      await pause(page, 600);
+      const reading = await read(page);
+      await page.screenshot({ path: path.join(out, `${label}-after.png`) });
+      readings[label] = reading;
+      if (!reading) { failures.push(`${label}: no popover`); break; }
+      const { anchor, spotlight, popover, viewport, insets } = reading;
+      const expected = stopNumber === 1 ? "dock" : stopNumber === 2 ? "tabs" : "bar-slot";
+      if (reading.anchorKind !== expected) failures.push(`${label}: points at ${reading.anchorKind}, not the ${expected}`);
+      if (stopNumber === 3 && !reading.emptySlot) failures.push(`${label}: the bar draws no empty Needs-you slot`);
+      if (!anchor || !spotlight) failures.push(`${label}: no anchor or no spotlight`);
+      else {
+        const seen = { left: Math.max(anchor.left, 0), top: Math.max(anchor.top, 0), right: Math.min(anchor.right, viewport.width), bottom: Math.min(anchor.bottom, viewport.height) };
+        if (spotlight.left > seen.left + 0.5 || spotlight.top > seen.top + 0.5 || spotlight.right < seen.right - 0.5 || spotlight.bottom < seen.bottom - 0.5) failures.push(`${label}: the spotlight ${JSON.stringify(spotlight)} does not cover ${JSON.stringify(seen)}`);
+        if (spotlight.left < -0.5 || spotlight.top < -0.5 || spotlight.right > viewport.width + 0.5 || spotlight.bottom > viewport.height + 0.5) failures.push(`${label}: the spotlight leaves the window`);
+      }
+      if (!popover || popover.left < 0 || popover.top < 0 || popover.right > viewport.width || popover.bottom > viewport.height) failures.push(`${label}: the popover ${JSON.stringify(popover)} leaves the window`);
+      if (popover && (!near(popover.left, 12) || !near(viewport.width - popover.right, 12))) failures.push(`${label}: the popover sits ${popover.left} / ${popover ? viewport.width - popover.right : null} from the edges`);
+      for (const [name, left] of [["title", insets.title], ["body", insets.body], ["dots", insets.dots]] as const) {
+        if (!near(left, insets.mark)) failures.push(`${label}: ${name} starts at ${left}, the mark at ${insets.mark}`);
+      }
+      if (!near(insets.skipFromRight, insets.title)) failures.push(`${label}: Skip ends ${insets.skipFromRight} from the right, the title starts ${insets.title} from the left`);
+      await page.locator("[data-walk-primary]").click();
+    }
+    await page.waitForSelector("[data-walk-popover]", { state: "detached", timeout: 5_000 });
+    await pause(page, 800);
+    const opened = await page.evaluate(() => ({
+      screen: document.querySelector("[data-mobile2-screen]:not([data-mobile2-screen=\"board\"])")?.getAttribute("data-mobile2-screen") ?? null,
+      sheet: Boolean(document.querySelector('[data-testid="mobile-orchestrator-sheet"]')),
+    }));
+    readings.firstTask = opened;
+    if (opened.screen !== "chat" && !opened.sheet) failures.push(`"Give it the first task" opened ${JSON.stringify(opened)}`);
+    await page.screenshot({ path: path.join(out, "walk-first-task-390-after.png") });
+
+    /* A reload: done stays done. The menu row starts it again. */
+    await page.goto(`${base}/?kanban=1&seatless=seatonly&walk=1#p=atlas`);
+    await page.waitForSelector("[data-phone-kanban]", { timeout: 20_000 });
+    await pause(page, 3_000);
+    if (await page.locator("[data-walk-popover]").count()) failures.push("the walk started again after a reload");
+    await page.screenshot({ path: path.join(out, "walk-before-390.png") });
+    await page.locator('[data-mobile2-open="menu"]').first().click();
+    await page.waitForSelector('[data-testid="menu-interface-walk"]', { state: "visible", timeout: 5_000 });
+    await pause(page, 400);
+    await page.screenshot({ path: path.join(out, "menu-walk-390-after.png") });
+    await page.locator('[data-testid="menu-interface-walk"]').click();
+    await page.waitForSelector('[data-walk-popover="1"]', { state: "visible", timeout: 10_000 });
+    await page.locator("[data-walk-skip]").click();
+    await page.waitForSelector("[data-walk-popover]", { state: "detached", timeout: 5_000 });
+    readings.written = await page.evaluate(() => sessionStorage.getItem("evidence-walk"));
+    if (readings.written !== "skipped") failures.push(`Skip left the marker at ${JSON.stringify(readings.written)}`);
+    if (errors.length) failures.push(`page errors ${errors.join(" | ")}`);
+  } catch (error) {
+    failures.push(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+  } finally {
+    await context.close();
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync("evidence/orchestrator-first/slice3-phone.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);

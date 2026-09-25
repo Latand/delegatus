@@ -21,6 +21,7 @@ import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal }
 import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
 import { openOnboarding } from "./onboarding/useOnboarding";
+import { startInterfaceWalk } from "./onboarding/walkStop";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
@@ -420,7 +421,7 @@ function RailHeaderMenu() {
             <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{pushLabel}</span>
             <PushBell onStatus={onPushStatus} />
           </div>
-          {/* #1876: the setup guide, its agent mapping and dictation, reachable again. */}
+          {/* #1876: the setup guide, its agent mapping and dictation, reachable again; #2166: the interface walk. */}
           <div className="my-1 border-t border-border" />
           <button
             type="button"
@@ -429,6 +430,14 @@ function RailHeaderMenu() {
             onClick={() => { setOpen(false); openOnboarding("guide"); }}
           >
             {t("onboarding.menu.guide")}
+          </button>
+          <button
+            type="button"
+            data-rail-menu-interface-walk=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); startInterfaceWalk(); }}
+          >
+            {t("onboarding.menu.walk")}
           </button>
           <button
             type="button"

@@ -39,6 +39,7 @@ import { roleNameById } from "./builderCopy";
 import { purgeLegacyOperatorCredential } from "./operatorCredential";
 import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { OnboardingHost } from "./onboarding/OnboardingDialog";
+import { OnboardingWalk } from "./onboarding/OnboardingWalk";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
@@ -1645,6 +1646,8 @@ function ViewerApp() {
       {/* #1876: the setup guide. Opens by itself on a first run and from the
           menus' "Setup guide" and "Agent mapping" rows. */}
       <OnboardingHost projects={guideProjects} currentProject={project === OVERVIEW ? null : project} onCreateProject={createProject} />
+      {/* #2166 §3.8: the interface walk, once when the first seat turns live and from the menu's "Interface walk". */}
+      <OnboardingWalk project={project === OVERVIEW ? null : project} projectCwd={project === OVERVIEW ? undefined : projectCwds[project]} mobile={isMobile} />
       {/* #2007: the Update surface, opened from the menus' "Update" row. */}
       <SelfUpdateHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock

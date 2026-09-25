@@ -675,6 +675,7 @@ if (SEATLESS) {
   if (SEATLESS === "donly") kanbanTasks.push(kanbanTask("t-done-only", "done", "Add a --version flag", { updatedAt: iso(86_400) }));
 }
 const SEAT_PATH = kanbanFiles.find((entry) => entry.title === "Orchestrator")?.path ?? null;
+const WALK_MARKER = new URLSearchParams(location.search).has("walk");
 
 /* The Overview's projects: keys the way a repository resolves (opaque, read by
    nobody; assembled so no hex run sits in the source), and the names the rail
@@ -785,6 +786,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ ok: true, project: PROJECT, mergeOnReview: { enabled: mergeSetting.enabled, changedAt: iso(86_400), changedBy: "operator" }, github: "example/atlas" });
   }
   if (KANBAN && url.pathname === "/api/tasks" && method === "GET") return json({ tasks: kanbanTasks });
+  /* #2166 §3.8 (`&walk=1`): an install whose onboarding marker has never run
+     the interface walk. What the walk writes is kept in sessionStorage, so a
+     reload reads it back as the server would. */
+  if (WALK_MARKER && url.pathname === "/api/onboarding") {
+    const stored = sessionStorage.getItem("evidence-walk");
+    const marker = { schemaVersion: 1, completedAt: iso(120), dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: stored === "done" || stored === "skipped" ? stored : null };
+    if (method === "PUT") {
+      const patch = JSON.parse(String(init?.body ?? "{}")) as { walk?: string };
+      if (patch.walk) sessionStorage.setItem("evidence-walk", patch.walk);
+      return json({ marker: { ...marker, walk: patch.walk ?? marker.walk } });
+    }
+    return json({ marker, seatTickCheckMinutes: 10 });
+  }
   if (url.pathname === "/api/files" && OVERVIEW_SCENE) {
     return json({
       files: kanbanFiles, projectCatalog: Object.values(OVERVIEW_KEYS).map((project) => ({ project, conversations: kanbanFiles.filter((entry) => entry.project === project).length, smt: now - 20 })),

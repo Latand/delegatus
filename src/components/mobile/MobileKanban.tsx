@@ -978,6 +978,7 @@ export function MobileKanban(props: MobileKanbanProps) {
         role="tablist"
         aria-label={t("mobile2.kanban.columns")}
         data-phone-kanban-tabs=""
+        data-walk-anchor="board"
         className="grid shrink-0 grid-cols-4 gap-1 border-b border-border px-1.5 pt-1"
         onKeyDown={onTabKey}
       >

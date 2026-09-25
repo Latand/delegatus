@@ -9885,3 +9885,208 @@ describe("#2166 the desktop leads with the orchestrator", () => {
     if (failures.length && !BEFORE) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("#2166 the interface walk", () => {
+  /*
+   * Slice 3 of docs/design/orchestrator-first-onboarding.md §6: the real
+   * Viewer over `?scenario=orchestrator-first-walk` — a project whose seat was
+   * created a moment ago, idle over empty columns — in Chromium at 1440 × 900
+   * and 1280 × 800, English, and at 1280 × 800 Ukrainian.
+   *
+   *   - On an install whose marker never ran the walk it starts by itself on
+   *     stop 1, with the seat folded beforehand: the walk expands it.
+   *   - Each stop's spotlight covers its anchor inside the window and stays in
+   *     the board's pane (its left edge right of the rail); the popover is
+   *     wholly on screen.
+   *   - The popover keeps #2185's one inset: Skip's label ends as far from the
+   *     right edge as the title starts from the left, and the mark, the title,
+   *     the body and the progress dots start on one left edge.
+   *   - "Give it the first task" focuses the seat's composer and writes
+   *     `walk: "done"`; a reload does not start it again.
+   *   - `&install=existing` never starts it by itself; the rail menu's
+   *     "Interface walk" does, and Skip writes `walk: "skipped"`.
+   *
+   * Readings go to `evidence/orchestrator-first/slice3.json`; frames to
+   * `LLV_2166_OUT`, outside the repository (`walk-before-*` is the same board
+   * with no walk showing).
+   */
+  const OUT = path.resolve(process.env.LLV_2166_OUT ?? ".artifacts/orchestrator-first");
+  const EVIDENCE = path.resolve("evidence/orchestrator-first");
+  const FRAMES = [
+    { label: "1440", width: 1440, height: 900, lang: "en" },
+    { label: "1280", width: 1280, height: 800, lang: "en" },
+    { label: "1280-uk", width: 1280, height: 800, lang: "uk" },
+  ] as const;
+  /* The seat folded in this browser before the page loads. */
+  const FOLDED = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null, topWidths: {}, sideWidths: {}, heightV: 2 })); } catch {}`;
+
+  const readStop = (page: Page) => page.evaluate(() => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const box = (node: Element | null | undefined) => {
+      if (!node) return null;
+      const rect = node.getBoundingClientRect();
+      return { left: round(rect.left), top: round(rect.top), right: round(rect.right), bottom: round(rect.bottom) };
+    };
+    const ink = (node: Element | null) => {
+      if (!node) return null;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+      if (!rects.length) return null;
+      return { left: round(Math.min(...rects.map((rect) => rect.left))), right: round(Math.max(...rects.map((rect) => rect.right))) };
+    };
+    const pop = document.querySelector<HTMLElement>("[data-walk-popover]");
+    if (!pop) return null;
+    const stop = Number(pop.dataset.walkPopover);
+    const key = stop === 1 ? "seat" : stop === 2 ? "board" : "needs";
+    const drawn = [...document.querySelectorAll<HTMLElement>(`[data-walk-anchor="${key}"]`)].find((node) => node.getBoundingClientRect().width > 0) ?? null;
+    const composer = stop === 1 ? drawn?.querySelector("[data-orchestrator-conversation] form") ?? null : null;
+    const anchor = composer ?? drawn;
+    const border = parseFloat(getComputedStyle(pop).borderLeftWidth) || 0;
+    const popBox = pop.getBoundingClientRect();
+    return {
+      stop,
+      anchor: box(anchor),
+      anchorIsComposer: Boolean(composer),
+      spotlight: box(document.querySelector("[data-walk-spotlight]")),
+      pane: box(anchor?.closest("[data-kanban-board]")),
+      railRight: box(document.querySelector("[data-rail-menu]")?.closest("aside"))?.right ?? null,
+      popover: box(pop),
+      viewport: { width: innerWidth, height: innerHeight },
+      /* From the popover's inner (padding) edges. */
+      insets: {
+        mark: round(pop.querySelector("[data-walk-mark]")!.getBoundingClientRect().left - popBox.left - border),
+        title: (() => { const value = ink(pop.querySelector("[data-walk-title]")); return value ? round(value.left - popBox.left - border) : null; })(),
+        body: (() => { const value = ink(pop.querySelector("[data-walk-body]")); return value ? round(value.left - popBox.left - border) : null; })(),
+        dots: round(pop.querySelector("[data-walk-dots]")!.getBoundingClientRect().left - popBox.left - border),
+        skipFromRight: (() => { const value = ink(pop.querySelector("[data-walk-skip-label]")); return value ? round(popBox.right - border - value.right) : null; })(),
+        primaryFromRight: round(popBox.right - border - pop.querySelector("[data-walk-primary]")!.getBoundingClientRect().right),
+      },
+      seatCollapsed: document.querySelector("[data-kanban-seat]")?.getAttribute("data-collapsed") ?? null,
+      focused: document.activeElement?.hasAttribute("data-walk-primary") ?? false,
+      text: pop.innerText,
+    };
+  });
+  type StopReading = NonNullable<Awaited<ReturnType<typeof readStop>>>;
+
+  const gate = (label: string, reading: StopReading, failures: string[]) => {
+    const near = (a: number | null, b: number | null, tolerance = 1) => a != null && b != null && Math.abs(a - b) <= tolerance;
+    const { anchor, spotlight, pane, popover, viewport, insets } = reading;
+    if (!anchor) failures.push(`${label}: no anchor drawn`);
+    if (!spotlight) failures.push(`${label}: no spotlight`);
+    if (anchor && spotlight) {
+      /* The anchor's visible part: inside the window and its pane. */
+      const seen = {
+        left: Math.max(anchor.left, 0, pane?.left ?? 0), top: Math.max(anchor.top, 0, pane?.top ?? 0),
+        right: Math.min(anchor.right, viewport.width, pane?.right ?? viewport.width), bottom: Math.min(anchor.bottom, viewport.height, pane?.bottom ?? viewport.height),
+      };
+      if (spotlight.left > seen.left + 0.5 || spotlight.top > seen.top + 0.5 || spotlight.right < seen.right - 0.5 || spotlight.bottom < seen.bottom - 0.5) {
+        failures.push(`${label}: the spotlight ${JSON.stringify(spotlight)} does not cover the anchor ${JSON.stringify(seen)}`);
+      }
+      if (pane && (spotlight.left < pane.left - 0.5 || spotlight.right > pane.right + 0.5 || spotlight.top < pane.top - 0.5 || spotlight.bottom > pane.bottom + 0.5)) {
+        failures.push(`${label}: the spotlight ${JSON.stringify(spotlight)} leaves its pane ${JSON.stringify(pane)}`);
+      }
+      if (reading.railRight != null && spotlight.left < reading.railRight - 0.5) failures.push(`${label}: the spotlight starts at ${spotlight.left}, over the rail ending at ${reading.railRight}`);
+    }
+    if (!popover || popover.left < 0 || popover.top < 0 || popover.right > viewport.width || popover.bottom > viewport.height) {
+      failures.push(`${label}: the popover ${JSON.stringify(popover)} leaves the ${viewport.width} × ${viewport.height} window`);
+    }
+    for (const [name, left] of [["title", insets.title], ["body", insets.body], ["dots", insets.dots]] as const) {
+      if (!near(left, insets.mark)) failures.push(`${label}: ${name} starts at ${left}, the mark at ${insets.mark}`);
+    }
+    if (!near(insets.skipFromRight, insets.title)) failures.push(`${label}: Skip ends ${insets.skipFromRight} from the right, the title starts ${insets.title} from the left`);
+    if (!near(insets.primaryFromRight, insets.title)) failures.push(`${label}: the button ends ${insets.primaryFromRight} from the right, the title starts ${insets.title} from the left`);
+    if (reading.stop === 1 && !reading.anchorIsComposer) failures.push(`${label}: stop 1 does not point at the seat's composer`);
+  };
+
+  browserTest("#2166 slice 3: the walk's three stops, measured, and when it starts", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "llv-2166-walk-")));
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const writes = (page: Page) => page.evaluate(() => JSON.parse(sessionStorage.getItem("evidence-walk-writes") ?? "[]") as unknown[]);
+    try {
+      for (const frame of FRAMES) {
+        const viewport = { width: frame.width, height: frame.height };
+        const opened = await openFixture(browser, "about:blank", viewport, "light", frame.lang);
+        const { page } = opened;
+        try {
+          await opened.context.addInitScript(FOLDED);
+          await page.goto(`${server.base}?scenario=orchestrator-first-walk#p=atlas`);
+          /* By itself, on the seat turning live. */
+          await page.waitForSelector('[data-walk-popover="1"]', { state: "visible", timeout: 30_000 });
+          for (const stop of [1, 2, 3] as const) {
+            const label = `walk-${stop}-${frame.label}`;
+            await page.waitForSelector(`[data-walk-popover="${stop}"]`, { state: "visible", timeout: 10_000 });
+            await page.waitForTimeout(700);
+            const reading = await readStop(page);
+            await page.screenshot({ path: path.join(OUT, `${label}-after.png`) });
+            readings[label] = reading;
+            if (!reading) { failures.push(`${label}: no popover`); break; }
+            gate(label, reading, failures);
+            if (stop === 1 && reading.seatCollapsed !== "0") failures.push(`${label}: the folded seat was not expanded`);
+            if (!reading.focused) failures.push(`${label}: focus is not in the popover`);
+            if (stop < 3) await page.locator("[data-walk-primary]").click();
+          }
+          /* The last button: the seat's composer, and the marker says done. */
+          await page.locator("[data-walk-primary]").click();
+          await page.waitForSelector("[data-walk-popover]", { state: "detached", timeout: 5_000 });
+          const composerFocused = await page.evaluate(() => Boolean(document.activeElement?.matches("[data-kanban-seat] [data-orchestrator-conversation] textarea")));
+          if (!composerFocused) failures.push(`walk-${frame.label}: "Give it the first task" left focus on ${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80) ?? "nothing")}`);
+          const written = await writes(page);
+          if (JSON.stringify(written) !== JSON.stringify([{ walk: "done" }])) failures.push(`walk-${frame.label}: wrote ${JSON.stringify(written)}`);
+          /* A reload: the marker says done, and the live seat starts nothing. */
+          await page.reload();
+          await page.waitForSelector("[data-kanban-seat]", { state: "visible", timeout: 30_000 });
+          await page.waitForTimeout(3_000);
+          if (await page.locator("[data-walk-popover]").count()) failures.push(`walk-${frame.label}: the walk started again after a reload`);
+          await page.screenshot({ path: path.join(OUT, `walk-before-${frame.label}.png`) });
+          if (opened.pageErrors.length) failures.push(`walk-${frame.label}: page errors ${opened.pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`walk-${frame.label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+
+      /* An upgraded install: nothing by itself; the rail menu's row starts it, and Skip writes skipped. */
+      for (const frame of FRAMES.slice(0, 2)) {
+        const viewport = { width: frame.width, height: frame.height };
+        const label = `menu-walk-${frame.label}`;
+        const opened = await openFixture(browser, `${server.base}?scenario=orchestrator-first-walk&install=existing#p=atlas`, viewport, "light", frame.lang);
+        const { page } = opened;
+        try {
+          await page.waitForSelector("[data-kanban-seat]", { state: "visible", timeout: 30_000 });
+          await page.waitForTimeout(3_000);
+          if (await page.locator("[data-walk-popover]").count()) failures.push(`${label}: an existing install started the walk by itself`);
+          await page.locator("[data-rail-menu]").click();
+          await page.waitForSelector("[data-rail-menu-interface-walk]", { state: "visible", timeout: 5_000 });
+          const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rail-menu-panel] button")].map((row) => row.innerText.trim()));
+          const guide = rows.indexOf("Setup guide");
+          if (guide < 0 || rows[guide + 1] !== "Interface walk" || rows[guide + 2] !== "Agent mapping") failures.push(`${label}: the menu reads ${JSON.stringify(rows)}`);
+          await page.screenshot({ path: path.join(OUT, `${label}-after.png`) });
+          await page.locator("[data-rail-menu-interface-walk]").click();
+          await page.waitForSelector('[data-walk-popover="1"]', { state: "visible", timeout: 10_000 });
+          await page.locator("[data-walk-primary]").click();
+          await page.locator("[data-walk-skip]").click();
+          await page.waitForSelector("[data-walk-popover]", { state: "detached", timeout: 5_000 });
+          const written = await writes(page);
+          readings[label] = { rows, written };
+          if (JSON.stringify(written) !== JSON.stringify([{ walk: "skipped" }])) failures.push(`${label}: Skip wrote ${JSON.stringify(written)}`);
+          if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "slice3.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});

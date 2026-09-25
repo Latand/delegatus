@@ -2435,7 +2435,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {seatSide && seatView}
       <div className="kb-page">
       {seatSide ? null : seatView}
-      <div className={`board-frame${railShown ? " with-rail" : ""}`} id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
+      <div className={`board-frame${railShown ? " with-rail" : ""}`} id={boardId} tabIndex={-1} aria-label={t("kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
       {/* The open agents stand beside the columns, below a seat on top, so the seat keeps its width. */}
       {railShown ? (
         <OpenAgentsRail
