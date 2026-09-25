@@ -13,6 +13,15 @@
      the value is substituted where the board's grid reads it. */
   --shelf-balanced: calc(var(--shelf-w) + (100% - 3 * var(--shelf-w) - 3 * 16px) * 0.35 / 3);
   --target: 28px;
+  /* The page's spacing (point 9 of the open-agents review): the edge the
+     project's name, the Orchestrator row on top, the open-agents rail and the
+     columns start on, the gap above and below the Orchestrator row (and
+     under the scroll mode's jump strip), and the inset at which a card and
+     the rail's rows hold their content. The edge follows the board's layout
+     mode, set on this element. */
+  --kb-edge: 20px;
+  --kb-stack: 12px;
+  --kb-card-inset: 14px;
   --kb-grid-dot: color-mix(in srgb, var(--color-primary) 9%, transparent);
   position: relative;
   display: flex;
@@ -25,6 +34,8 @@
   background: var(--surface-canvas);
   -webkit-font-smoothing: antialiased;
 }
+.kb[data-mode="scroll"] { --kb-edge: 16px; }
+.kb[data-mode="tabs"] { --kb-edge: 12px; }
 /* The board's own controls start from nothing. The conversations and the
    orchestrator mounted inside it are the Viewer's components, styled by their
    own utilities, so none of these element rules reach into them. */
@@ -57,7 +68,7 @@
    (`.bar-slot`) hold the Viewer's own components, styled by their utilities. */
 .kb .bar[data-bar="project"] {
   display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; height: 48px; flex-shrink: 0;
-  padding: 0 236px 0 16px;
+  padding: 0 236px 0 var(--kb-edge);
 }
 .kb .bar[data-bar="project"] :is(.bar-group, .bar-slot) { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 /* The search gives way first. Wide, the lead never shrinks below its content; narrow, it holds
@@ -74,7 +85,7 @@
 /* A bar under 768 px (a narrow desktop window) cannot hold the groups beside the island's
    reserve in one row; there, and only there, they wrap. The bar's own width decides, since it
    spans the Tasks panel: a board narrowed by the panel keeps its one-row bar. */
-.kb .bar[data-bar="project"][data-bar-wrap] { flex-wrap: wrap; height: auto; padding: 8px 236px 8px 16px; row-gap: 8px; }
+.kb .bar[data-bar="project"][data-bar-wrap] { flex-wrap: wrap; height: auto; padding: 8px 236px 8px var(--kb-edge); row-gap: 8px; }
 .kb .bar[data-bar="project"][data-bar-wrap] .grow { display: none; }
 
 /* The Overview's bar, as it was before #1801 (that lane was the project board only). The
@@ -124,14 +135,14 @@
 
 /* ── Board / columns ──────────────────────────────────────────────────────── */
 .kb .board {
-  flex: 1 1 auto; min-height: 0; display: grid; gap: 16px; padding: 16px 20px 20px;
+  flex: 1 1 auto; min-height: 0; display: grid; gap: 16px; padding: var(--kb-stack) var(--kb-edge) 20px;
   /* The tracks come from `kanbanColumnTracks` in KanbanBoard.tsx, one per
      column: balanced shelves wide, 220 px shelves narrow (1200–1399), the
      Overview's capped shelves, reading widths and the wide share (#1841). */
   grid-template-columns: var(--c-inbox) var(--c-assigned) var(--c-blocked) var(--c-done);
   grid-template-areas: "inbox assigned blocked done";
 }
-.kb .board.scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 12px; padding: 12px 16px 16px; }
+.kb .board.scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 12px; padding: var(--kb-stack) var(--kb-edge) 16px; }
 .kb .board.scroll .column { flex: 0 0 280px; scroll-snap-align: start; }
 .kb .board.scroll .column[data-status="assigned"] { flex-basis: 480px; }
 /* Tabs (640–767 px): one column at a time under a segmented strip. */
@@ -139,7 +150,9 @@
 .kb .board.tabs .column { display: none; }
 .kb .board.tabs .column.active { display: flex; flex: 1 1 auto; min-height: 0; }
 
-.kb .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-radius: var(--radius-surface); background: var(--surface-well); }
+/* Every column has the 1 px frame Assigned and a widened shelf draw, clear on
+   a shelf, so a title and a card sit at the same place in each. */
+.kb .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-radius: var(--radius-surface); background: var(--surface-well); border: 1px solid transparent; }
 .kb .column[data-status="inbox"] { grid-area: inbox; }
 .kb .column[data-status="assigned"] { grid-area: assigned; }
 .kb .column[data-status="blocked"] { grid-area: blocked; }
@@ -170,7 +183,7 @@
    buttons keep their size, and the «working» and «waiting on you» counters
    end in an ellipsis before anything wraps; under 300 px they shorten to a
    dot and their number. Each carries its full text as a title. */
-.kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px 14px; position: sticky; top: 0; z-index: 2; white-space: nowrap; container: col-head / inline-size; }
+.kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; position: sticky; top: 0; z-index: 2; white-space: nowrap; container: col-head / inline-size; }
 .kb .col-head > * { flex-shrink: 0; }
 .kb .col-head h2 { margin: 0; font-size: var(--text-body); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .kb .col-head .n { color: var(--color-muted); font-size: var(--text-ui); }
@@ -203,7 +216,7 @@
 .kb .tabs-nav button[aria-selected="true"] .n { color: inherit; }
 /* The jump tabs repeat the column heads, so they speak quietly: one light
    segmented row instead of four bordered buttons. */
-.kb .tabs-nav.jump { padding: 6px 20px 0; gap: 2px; }
+.kb .tabs-nav.jump { padding: var(--kb-stack) var(--kb-edge) 0; gap: 2px; }
 .kb .tabs-nav.jump button { height: 28px; border-color: transparent; background: none; font-weight: 500; color: var(--color-muted); }
 .kb .tabs-nav.jump button:hover { background: var(--surface-well); color: var(--color-primary); }
 /* The tab strip sits above the tabbed board, inset by the board's own side padding. */
@@ -213,7 +226,7 @@
 /* ── Card ─────────────────────────────────────────────────────────────────── */
 .kb .card {
   position: relative; display: flex; flex-direction: column; gap: 6px;
-  padding: 10px 12px 10px 14px; border-radius: var(--radius-surface); background: var(--surface-card);
+  padding: 10px 12px 10px var(--kb-card-inset); border-radius: var(--radius-surface); background: var(--surface-card);
   border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast), opacity var(--motion-base);
   touch-action: pan-y; outline-offset: 2px;
@@ -606,18 +619,23 @@
    (src/styles/roleFrames.css). */
 .kb .board-frame.with-rail { flex-direction: row; }
 .kb .board-frame.with-rail > :not(.open-rail) { flex: 1 1 0; min-width: 0; }
-.kb .open-rail { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; padding: 16px 0 20px 12px; }
+/* Its top is the columns' top: the board's own top padding, and in the
+   scroll mode the jump strip above the columns too (its 28 px buttons and
+   the same gap over them); the tabbed mode's strip is 10 + 36 + 10. */
+.kb .open-rail { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; padding: var(--kb-stack) 0 20px var(--kb-edge); }
+.kb[data-mode="scroll"] .open-rail { padding-top: calc(2 * var(--kb-stack) + 28px); }
+.kb[data-mode="tabs"] .open-rail { padding-top: 56px; }
 .kb .open-rail .or-chip {
   display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden;
   border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
 }
-.kb .open-rail .or-head { flex-shrink: 0; padding: 8px 10px 7px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); border-bottom: 1px solid var(--border-default); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kb .open-rail .or-head { flex-shrink: 0; padding: 8px 10px 7px var(--kb-card-inset); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); border-bottom: 1px solid var(--border-default); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kb .or-list { list-style: none; margin: 0; padding: 0; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .kb .or-seg { position: relative; display: flex; align-items: center; }
 .kb .or-seg + .or-seg { border-top: 1px solid var(--border-default); }
 .kb .or-seg[data-current] { background: var(--surface-well); }
 .kb .or-seg[data-current]::before { content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 3px; border-radius: 0 2px 2px 0; background: var(--role); }
-.kb .or-seg .or-jump { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px; text-align: left; }
+.kb .or-seg .or-jump { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px var(--kb-card-inset); text-align: left; }
 .kb .or-seg .or-jump:hover { background: var(--surface-well); }
 .kb .or-seg .or-jump:focus-visible { outline-offset: -2px; }
 .kb .or-emblem { position: relative; flex-shrink: 0; width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: #fff; background: var(--role-fill); }
@@ -641,10 +659,9 @@
 .kb .or-seg:is(:hover, :focus-within) .or-x { opacity: 1; }
 .kb .or-seg .or-x:hover { color: var(--color-primary); background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--border-default); }
 .kb .or-seg .or-x svg { width: 13px; height: 13px; }
-.kb .or-close-all { flex-shrink: 0; width: 100%; padding: 7px 10px; text-align: left; border-top: 1px solid var(--border-default); font-size: var(--text-label); font-weight: 600; color: var(--color-muted); }
+.kb .or-close-all { flex-shrink: 0; width: 100%; padding: 7px 10px 7px var(--kb-card-inset); text-align: left; border-top: 1px solid var(--border-default); font-size: var(--text-label); font-weight: 600; color: var(--color-muted); }
 .kb .or-close-all:hover { color: var(--color-primary); background: var(--surface-well); }
 /* Short of room: the count alone, which opens the same list. */
-.kb .open-rail[data-open-rail="compact"] { padding: 16px 0 20px 12px; }
 .kb .open-rail .or-count {
   width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--radius-control); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
@@ -652,7 +669,7 @@
 }
 .kb .open-rail .or-count:is(:hover, [aria-expanded="true"]) { border-color: var(--border-strong); }
 .kb .popover.open-agents { width: 280px; padding: 4px 0 0; overflow: hidden; display: flex; flex-direction: column; }
-.kb .popover.open-agents .head { padding: 6px 10px 7px; font-size: var(--text-label); color: var(--color-secondary); border-bottom: 1px solid var(--border-default); }
+.kb .popover.open-agents .head { padding: 6px 10px 7px var(--kb-card-inset); font-size: var(--text-label); color: var(--color-secondary); border-bottom: 1px solid var(--border-default); }
 @media (pointer: coarse) {
   .kb .or-seg .or-x { opacity: 1; width: 36px; height: 36px; }
   .kb .or-seg .or-jump, .kb .or-close-all { min-height: 44px; }
@@ -665,7 +682,7 @@
 .kb .skip-board:focus { transform: none; }
 
 .kb .seat {
-  position: relative; z-index: 3; flex: 0 0 auto; width: calc(100% - 40px); max-width: 1040px; margin: 12px auto 0;
+  position: relative; z-index: 3; flex: 0 0 auto; width: calc(100% - 2 * var(--kb-edge)); max-width: 1040px; margin: var(--kb-stack) auto 0;
   height: var(--seat-h, var(--seat-default-h));
   border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
   display: flex; flex-direction: column;
@@ -736,7 +753,7 @@
 .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) > [data-orchestrator-panel] { background: transparent; border-color: transparent; box-shadow: none; }
 :root[data-role-frame] .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread))[data-role-host]::after,
 :root[data-role-frame] .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .role-mark { display: none; }
-.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) { max-width: none; margin-top: 8px; }
+.kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) { max-width: none; }
 .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head { padding-left: 0; }
 .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head .icon-btn.seat-fold { border-color: transparent; background: none; }
 .kb .seat.folded:not(.side):not(:has(.seat-title .state:is(.needs, .failed), .seat-unread)) .seat-head .icon-btn.seat-fold:hover { background: var(--surface-well); color: var(--color-primary); }
@@ -826,9 +843,7 @@
 .kb .seats-pop .notes-retry { color: var(--color-accent); font-weight: 600; }
 .kb .seats-pop .notes .empty { color: var(--color-muted); }
 
-@media (max-width: 1199px) { .kb .seat:not(.side) { width: calc(100% - 32px); margin-top: 10px; } }
 @media (max-width: 767px) {
-  .kb .seat:not(.side) { width: calc(100% - 24px); margin-top: 8px; }
   .kb .seat-head { flex-wrap: wrap; row-gap: 2px; }
   .kb .seat-title .proj, .kb .seat-head .seat-prev .word, .kb .seat .seat-unread span { display: none; }
 }

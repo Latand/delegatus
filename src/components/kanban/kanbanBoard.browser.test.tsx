@@ -8542,4 +8542,137 @@ describe("the open agents at the board's side: short names, role emblem and colo
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);
+
+  /* The page's edges, read in the same frames. The project's name, the
+     folded Orchestrator row and the rail start on one left edge; the row
+     stands one gap below the bar and one gap above what the board draws
+     next (the columns, or the scroll mode's jump strip, which then stands
+     that gap above the columns); the rail's top is the columns' top; the
+     rail's rows and the cards hold their content at one inset; and every
+     column's title sits at the same offset in its column, framed or not.
+     Each case runs with the rail, in its full tier at 1440×900 and
+     1920×1080 and as the count at 1600×900, and without it. */
+  interface EdgeReading {
+    mode: string | null;
+    tier: string | null;
+    name: number | null;
+    seat: { left: number; top: number; bottom: number } | null;
+    bar: number;
+    rail: { left: number; top: number } | null;
+    strip: { top: number; bottom: number } | null;
+    columns: number;
+    railInset: number | null;
+    cardInset: number | null;
+    titles: Record<string, { left: number; top: number }>;
+  }
+  const readEdges = (page: Page) => page.evaluate((): EdgeReading => {
+    const rect = (element: Element | null | undefined) => element?.getBoundingClientRect() ?? null;
+    const lead = document.querySelector(".bar[data-bar=\"project\"] .bar-lead");
+    const walker = lead ? document.createTreeWalker(lead, NodeFilter.SHOW_TEXT, { acceptNode: (node) => node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP }) : null;
+    const text = walker?.nextNode() ?? null;
+    let name: number | null = null;
+    if (text) {
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      name = range.getBoundingClientRect().left;
+    }
+    const seat = rect(document.querySelector(".kb-page > .seat"));
+    const railBox = rect(document.querySelector("[data-open-rail] :is(.or-chip, .or-count)"));
+    const stripEl = document.querySelector(".scroll-wrap > .tabs-nav.jump");
+    const strip = rect(stripEl);
+    const chip = rect(document.querySelector("[data-open-rail] .or-chip"));
+    const emblem = rect(document.querySelector("[data-open-rail] .or-emblem"));
+    const cardEl = document.querySelector<HTMLElement>("[data-kanban-board] .column[data-status=\"inbox\"] .card");
+    const cardBox = rect(cardEl);
+    const cardHead = rect(cardEl?.querySelector(".head"));
+    const titles: Record<string, { left: number; top: number }> = {};
+    for (const column of document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")) {
+      const box = column.getBoundingClientRect();
+      const title = column.querySelector(".col-head h2")?.getBoundingClientRect();
+      if (title && box.width > 0) titles[column.dataset.status!] = { left: title.left - box.left, top: title.top - box.top };
+    }
+    const columns = Math.min(...[...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => box.top));
+    return {
+      mode: document.querySelector<HTMLElement>("[data-kanban-board]")?.dataset.mode ?? null,
+      tier: document.querySelector<HTMLElement>("[data-open-rail]")?.dataset.openRail ?? null,
+      name,
+      seat: seat ? { left: seat.left, top: seat.top, bottom: seat.bottom } : null,
+      bar: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
+      rail: railBox ? { left: railBox.left, top: railBox.top } : null,
+      strip: strip && stripEl ? { top: strip.top + parseFloat(getComputedStyle(stripEl).paddingTop), bottom: strip.bottom } : null,
+      columns,
+      railInset: chip && emblem ? emblem.left - chip.left : null,
+      cardInset: cardBox && cardHead ? cardHead.left - cardBox.left : null,
+      titles,
+    };
+  });
+  const edgeFailures = (label: string, edges: EdgeReading, railExpected: boolean): string[] => {
+    const failures: string[] = [];
+    const near = (a: number | null | undefined, b: number | null | undefined) => a != null && b != null && Math.abs(a - b) <= 0.5;
+    if (!edges.seat) return [`${label}: no Orchestrator row on top`];
+    if (!near(edges.name, edges.seat.left)) failures.push(`${label}: the project's name starts at ${edges.name}, the Orchestrator row at ${edges.seat.left}`);
+    if (railExpected) {
+      if (!edges.rail) failures.push(`${label}: no rail`);
+      else {
+        if (!near(edges.rail.left, edges.seat.left)) failures.push(`${label}: the rail starts at ${edges.rail.left}, the Orchestrator row at ${edges.seat.left}`);
+        if (!near(edges.rail.top, edges.columns)) failures.push(`${label}: the rail's top is ${edges.rail.top}, the columns' ${edges.columns}`);
+      }
+      if (edges.tier === "full" && !near(edges.railInset, edges.cardInset)) failures.push(`${label}: the rail's rows hold their content ${edges.railInset} in, the cards ${edges.cardInset}`);
+    }
+    const above = edges.seat.top - edges.bar;
+    const next = edges.strip ?? { top: edges.columns, bottom: edges.columns };
+    const below = next.top - edges.seat.bottom;
+    if (!near(above, below)) failures.push(`${label}: ${above} px above the Orchestrator row, ${below} below it`);
+    if (edges.strip && !near(edges.columns - edges.strip.bottom, above)) failures.push(`${label}: the jump strip stands ${edges.columns - edges.strip.bottom} px above the columns, the row ${above} below the bar`);
+    const inbox = edges.titles.inbox;
+    for (const [status, title] of Object.entries(edges.titles)) {
+      if (inbox && (!near(title.left, inbox.left) || !near(title.top, inbox.top))) failures.push(`${label}: ${status}'s title sits at ${title.left},${title.top} in its column, Inbox's at ${inbox.left},${inbox.top}`);
+    }
+    return failures;
+  };
+
+  browserTest("one left edge, one gap round the Orchestrator row, the rail level with the columns, one inset for its rows and the cards", async () => {
+    const pngDir = process.env.OPEN_AGENTS_PNG_DIR ?? "/var/tmp/llv-open-agents-evidence";
+    const out = path.resolve(".artifacts/open-agents-rail");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 1600, height: 900 }] as const) {
+          for (const ids of [OPEN[3], []] as const) {
+            const label = `edges-${viewport.width}x${viewport.height}-${ids.length}-${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, "light", lang);
+            try {
+              await context.addInitScript(seedReaders(ids));
+              await page.reload();
+              await page.waitForSelector("[data-kanban-board] .column[data-status] .card", { timeout: 30_000 });
+              if (ids.length) await page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
+              await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+              if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+              await page.waitForTimeout(700);
+              await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+              const edges = await readEdges(page);
+              readings[label] = { ...edges, pageErrors };
+              failures.push(...edgeFailures(label, edges, ids.length > 0));
+              if (ids.length && edges.tier !== (viewport.width === 1600 ? "compact" : "full")) failures.push(`${label}: the rail is ${edges.tier}`);
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/open-agents-rail", { recursive: true });
+    fs.writeFileSync("evidence/open-agents-rail/edges.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
 });

@@ -1,0 +1,455 @@
+{
+  "readings": {
+    "edges-1440x900-3-en": {
+      "mode": "scroll",
+      "tier": "full",
+      "name": 264,
+      "seat": {
+        "left": 264,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": {
+        "left": 264,
+        "top": 154
+      },
+      "strip": {
+        "top": 114,
+        "bottom": 142
+      },
+      "columns": 154,
+      "railInset": 15,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1440x900-0-en": {
+      "mode": "scroll",
+      "tier": null,
+      "name": 264,
+      "seat": {
+        "left": 264,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": null,
+      "strip": {
+        "top": 114,
+        "bottom": 142
+      },
+      "columns": 154,
+      "railInset": null,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1920x1080-3-en": {
+      "mode": "wide",
+      "tier": "full",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": {
+        "left": 268,
+        "top": 114
+      },
+      "strip": null,
+      "columns": 114,
+      "railInset": 15,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1920x1080-0-en": {
+      "mode": "wide",
+      "tier": null,
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": null,
+      "strip": null,
+      "columns": 114,
+      "railInset": null,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1600x900-3-en": {
+      "mode": "narrow",
+      "tier": "compact",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": {
+        "left": 268,
+        "top": 114
+      },
+      "strip": null,
+      "columns": 114,
+      "railInset": null,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1600x900-0-en": {
+      "mode": "narrow",
+      "tier": null,
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": null,
+      "strip": null,
+      "columns": 114,
+      "railInset": null,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1440x900-3-uk": {
+      "mode": "scroll",
+      "tier": "full",
+      "name": 264,
+      "seat": {
+        "left": 264,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": {
+        "left": 264,
+        "top": 154
+      },
+      "strip": {
+        "top": 114,
+        "bottom": 142
+      },
+      "columns": 154,
+      "railInset": 15,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1440x900-0-uk": {
+      "mode": "scroll",
+      "tier": null,
+      "name": 264,
+      "seat": {
+        "left": 264,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": null,
+      "strip": {
+        "top": 114,
+        "bottom": 142
+      },
+      "columns": 154,
+      "railInset": null,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1920x1080-3-uk": {
+      "mode": "wide",
+      "tier": "full",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": {
+        "left": 268,
+        "top": 114
+      },
+      "strip": null,
+      "columns": 114,
+      "railInset": 15,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1920x1080-0-uk": {
+      "mode": "wide",
+      "tier": null,
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": null,
+      "strip": null,
+      "columns": 114,
+      "railInset": null,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1600x900-3-uk": {
+      "mode": "narrow",
+      "tier": "compact",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": {
+        "left": 268,
+        "top": 114
+      },
+      "strip": null,
+      "columns": 114,
+      "railInset": null,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1600x900-0-uk": {
+      "mode": "narrow",
+      "tier": null,
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "rail": null,
+      "strip": null,
+      "columns": 114,
+      "railInset": null,
+      "cardInset": 15,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    }
+  },
+  "failures": []
+}

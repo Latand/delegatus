@@ -61,8 +61,9 @@ export function kanbanLayoutModeBeside(width: number, seatWidth: number): Kanban
 export type OpenRailTier = "full" | "compact";
 
 /** The rail's width in each tier, padding included; the stylesheet draws
-    inside it. */
-export const OPEN_RAIL_WIDTH: Readonly<Record<OpenRailTier, number>> = { full: 200, compact: 48 };
+    inside it, from the page's edge (at most 20 px, `--kb-edge`), so the
+    compact tier holds that edge and its 36 px count. */
+export const OPEN_RAIL_WIDTH: Readonly<Record<OpenRailTier, number>> = { full: 200, compact: 56 };
 
 /** The rail takes its own strip beside the columns, so it covers nothing on
     them. It shows its names while that strip leaves the columns the mode they
