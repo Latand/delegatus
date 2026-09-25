@@ -1,15 +1,15 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
 
-import type { Pipeline } from "./types";
+import { pipelineActivitySettled, type Pipeline } from "./types";
 
 /**
  * Removes the worktrees whose work is merged (#2202).
@@ -19,8 +19,9 @@ import type { Pipeline } from "./types";
  * `/home` was at 98%. This sweep removes a linked worktree of a registered
  * repository, and the local branch it had checked out, once the pull request
  * that branch delivered is merged. The pull request's state is read from the
- * forge, never from ancestry against the base branch: a squash merge leaves
- * the branch's commits outside the base for ever.
+ * forge cache the forge sweep keeps (#2059), never from ancestry against the
+ * base branch: a squash merge leaves the branch's commits outside the base for
+ * ever.
  *
  * Registered repositories are the ones a pipeline ran in and the ones the
  * operator created a project from; every linked worktree git lists for them is
@@ -30,8 +31,9 @@ import type { Pipeline } from "./types";
  *
  * Each of these keeps a worktree, and the report names which one did:
  *
- * - `open-pipeline` — a pipeline that is not completed or closed owns it, runs
- *   inside it, or runs its git in it.
+ * - `open-pipeline` — a pipeline that is not completed or closed, or whose
+ *   close teardown or delivery has not settled, owns it, runs inside it, or
+ *   runs its git in it.
  * - `no-merged-pr` — no merged pull request has its branch as head (or is the
  *   one its pipeline delivered). A completed lane whose PR was closed or never
  *   opened stays until someone decides.
@@ -42,6 +44,11 @@ import type { Pipeline } from "./types";
  *   holding a queued message runs there.
  * - `uncommitted` — tracked changes or untracked files; `git worktree remove`
  *   is never forced.
+ * - `ignored-files` — an ignored path that is not a rebuildable output
+ *   (`node_modules`, `.next`, `dist`, build caches): a `.env`, an agent's
+ *   `.claude` session files, a nested repository under an ignored
+ *   `.worktrees/`. `git worktree remove` deletes ignored files without asking,
+ *   and the status read above never lists them.
  * - `unmerged-commits` — its HEAD is not contained in the merged PR's head
  *   commit, so something was committed after the merge or never pushed.
  * - `pr-head-unknown` — the merged PR's head commit is not in the local
@@ -49,9 +56,15 @@ import type { Pipeline } from "./types";
  * - `holds-worktree` — another linked worktree that stays is nested in it.
  * - `locked`, `missing` — git marks it locked, or its directory is not
  *   reachable from here.
- * - `forge-unavailable` — the merged pull requests could not be read.
+ * - `forge-unavailable` — the forge cache holds no complete read of the
+ *   repository with head commits yet.
  * - `map-write-failed`, `remove-failed` — the removal itself could not be
  *   made safe or did not happen.
+ *
+ * The process, pipeline and conversation guards are read once to skip what is
+ * plainly busy, and read again immediately before each removal, after the
+ * measurement: a sweep can run for minutes, and git refuses a removal only
+ * when files changed, never when the directory is in use.
  *
  * Before a removal the checkout's worktree→project resolution is written to
  * `state/worktree-map.json`, so the conversations that ran there keep grouping
@@ -86,8 +99,6 @@ const FIRST_SWEEP_DELAY_MS = 10 * 60_000;
 const MAX_REMOVALS_PER_SWEEP = 200;
 /** Entries one size measurement visits before it reports a lower bound. */
 const MEASURE_ENTRY_LIMIT = 400_000;
-/** A process scan older than this is taken again before a removal. */
-const SCAN_MAX_AGE_MS = 60_000;
 /** A spawn or resume that has not settled in this long is not coming. */
 const PENDING_CONVERSATION_MS = 24 * HOUR_MS;
 
@@ -97,6 +108,7 @@ export type WorktreeKeptReason =
   | "in-use"
   | "live-conversation"
   | "uncommitted"
+  | "ignored-files"
   | "unmerged-commits"
   | "pr-head-unknown"
   | "holds-worktree"
@@ -135,21 +147,27 @@ export type WorktreeSweepReport = {
 
 export type GitRun = (args: string[], cwd: string) => Promise<ExecResult>;
 
-export type SweptPipeline = Pick<Pipeline, "id" | "state" | "repoDir" | "worktreeDir" | "branch" | "delivery"> & {
-  runs?: Pipeline["runs"];
-};
+export type SweptPipeline = Pick<Pipeline, "id" | "state" | "repoDir" | "worktreeDir" | "branch" | "delivery"> &
+  Partial<Pick<Pipeline, "closeTeardown" | "closeReport" | "activationCloseRequested">> & {
+    runs?: Pipeline["runs"];
+  };
 
 export type WorktreeSweepPorts = {
   mode: WorktreeSweepMode;
   git: GitRun;
   /** Every merged pull request of a GitHub repository (`owner/name`), or null
-      when the forge cannot be read. */
-  mergedPullRequests: (repository: string) => Promise<MergedPullRequest[] | null>;
+      when the forge has not been read completely. */
+  mergedPullRequests: (repository: string) => MergedPullRequest[] | null;
+  /** Every pipeline, archived ones included, to match lanes with their PRs. */
   pipelines: readonly SweptPipeline[];
+  /** The pipelines as they are now, read again before each removal; an open
+      one is never archived. Defaults to `pipelines`. */
+  currentPipelines?: () => readonly SweptPipeline[];
   /** Repository roots registered some other way (operator-created projects). */
   repositories?: readonly string[];
-  /** Working directories of conversations that are live or waiting. */
-  conversationCwds: readonly string[];
+  /** Working directories of conversations that are live or waiting, as they
+      are now; read again before each removal. */
+  conversationCwds: () => readonly string[];
   scan: () => ProcessScan;
   /** Writes the checkout's resolution to the worktree map; false refuses the removal. */
   recordResolution: (worktree: string) => boolean;
@@ -159,6 +177,60 @@ export type WorktreeSweepPorts = {
 };
 
 const OPEN_STATES: ReadonlySet<Pipeline["state"]> = new Set(["draft", "provisioning", "running", "needs_decision", "needs_review", "paused"]);
+
+/** Open, or completed and closed with a teardown or delivery still in flight. */
+function pipelineHoldsCheckout(pipeline: SweptPipeline): boolean {
+  return OPEN_STATES.has(pipeline.state) || !pipelineActivitySettled(pipeline);
+}
+
+/** Ignored outputs any checkout rebuilds, which a removal may take. Anything
+    else ignored keeps the worktree. */
+const REBUILDABLE_DIRECTORIES: ReadonlySet<string> = new Set([
+  "node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage",
+  "test-results", "playwright-report", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
+  ".venv", "venv", ".tox", ".nox",
+]);
+const REBUILDABLE_FILES: ReadonlySet<string> = new Set(["next-env.d.ts", ".DS_Store"]);
+
+/** A cache that carries its own `*` .gitignore (`.ruff_cache`, `.pytest_cache`)
+    is listed file by file, so any rebuildable directory on the path counts. */
+function rebuildable(ignored: string): boolean {
+  const segments = ignored.replace(/\/+$/, "").split("/");
+  const name = segments.at(-1) ?? "";
+  if (segments.some((segment) => REBUILDABLE_DIRECTORIES.has(segment) || segment.endsWith(".egg-info"))) return true;
+  return REBUILDABLE_FILES.has(name) || name.endsWith(".tsbuildinfo") || name.endsWith(".pyc");
+}
+
+function emptyDirectory(directory: string): boolean {
+  try {
+    return fs.readdirSync(directory).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** `git status --porcelain=v1 -z --ignored=matching`: the changed and
+    untracked paths, and the ignored ones a removal would lose. An ignored
+    directory is listed once, not descended into. */
+export function classifyStatus(raw: string): { changed: string[]; ignored: string[] } {
+  const changed: string[] = [];
+  const ignored: string[] = [];
+  const fields = raw.split("\0");
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index]!;
+    if (field.length < 4) continue;
+    const code = field.slice(0, 2);
+    const file = field.slice(3);
+    if (code === "!!") {
+      if (!rebuildable(file)) ignored.push(file);
+      continue;
+    }
+    changed.push(file);
+    /* A rename or copy carries its source path in the next field. */
+    if (code.includes("R") || code.includes("C")) index += 1;
+  }
+  return { changed, ignored };
+}
 
 function inside(candidate: string, directory: string): boolean {
   return candidate === directory || candidate.startsWith(directory + path.sep);
@@ -303,18 +375,25 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     report.keptCounts[kept.reason] = (report.keptCounts[kept.reason] ?? 0) + 1;
   };
   const resolve = (entry: string) => path.resolve(entry);
-  /* An open pipeline needs its own checkout and the repository it runs git in. */
-  const openWorktrees = ports.pipelines.filter((pipeline) => OPEN_STATES.has(pipeline.state))
-    .flatMap((pipeline) => [pipeline.worktreeDir, pipeline.repoDir].filter(Boolean).map(resolve));
-  const conversationCwds = ports.conversationCwds.map(resolve);
-  let scan = ports.scan();
-  let scannedAt = now();
-  const inUseBy = (directory: string): number | null => {
-    for (const process of scan.processes) {
-      if (process.paths.some((entry) => inside(resolve(entry), directory))) return process.pid;
+  const currentPipelines = ports.currentPipelines ?? (() => ports.pipelines);
+  /** What a live pipeline, process or conversation holds right now. An open
+      pipeline needs its own checkout and the repository it runs git in. */
+  const readGuards = () => ({
+    open: currentPipelines().filter(pipelineHoldsCheckout)
+      .flatMap((pipeline) => [pipeline.worktreeDir, pipeline.repoDir].filter(Boolean).map(resolve)),
+    conversations: ports.conversationCwds().map(resolve),
+    scan: ports.scan(),
+  });
+  const heldBy = (guards: ReturnType<typeof readGuards>, directory: string): WorktreeKept | null => {
+    if (guards.open.some((open) => inside(open, directory))) return { path: directory, reason: "open-pipeline" };
+    for (const process of guards.scan.processes) {
+      if (process.paths.some((entry) => inside(resolve(entry), directory))) return { path: directory, reason: "in-use", detail: `pid ${process.pid}` };
     }
+    if (guards.conversations.some((cwd) => inside(cwd, directory))) return { path: directory, reason: "live-conversation" };
     return null;
   };
+  /* The first read skips what is plainly busy; each removal reads them again. */
+  const initial = readGuards();
 
   const roots = new Map<string, string>();
   for (const candidate of [...ports.pipelines.map((pipeline) => pipeline.repoDir), ...(ports.repositories ?? [])]) {
@@ -336,7 +415,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     const mainPath = resolve(main.path);
     const remote = await ports.git(["remote", "get-url", "origin"], root);
     const repository = remote.code === 0 ? githubRepositoryOfRemote(remote.stdout.trim()) : null;
-    const merged = repository ? await ports.mergedPullRequests(repository) : [];
+    const merged = repository ? ports.mergedPullRequests(repository) : [];
     const byHead = new Map<string, MergedPullRequest[]>();
     const byNumber = new Map<number, MergedPullRequest>();
     for (const pr of merged ?? []) {
@@ -354,7 +433,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       const pipelineId = owners[0]?.id;
       const base = { path: worktree, ...(pipelineId ? { pipelineId } : {}) };
       if (worktree === mainPath || roots.has(worktree)) continue;
-      if (openWorktrees.some((open) => inside(open, worktree))) {
+      if (initial.open.some((open) => inside(open, worktree))) {
         keep({ ...base, reason: "open-pipeline" });
         continue;
       }
@@ -367,7 +446,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         continue;
       }
       if (repository && merged === null) {
-        keep({ ...base, reason: "forge-unavailable", detail: repository });
+        keep({ ...base, reason: "forge-unavailable", detail: `${repository} is not in the forge cache yet` });
         continue;
       }
       const candidates = pipelinePrCandidates(owners);
@@ -387,26 +466,27 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         keep({ ...base, reason: "holds-worktree", detail: nested });
         continue;
       }
-      if (now() - scannedAt > SCAN_MAX_AGE_MS) {
-        scan = ports.scan();
-        scannedAt = now();
-      }
-      const pid = inUseBy(worktree);
-      if (pid !== null) {
-        keep({ ...base, reason: "in-use", detail: `pid ${pid}` });
+      const busy = heldBy(initial, worktree);
+      if (busy) {
+        keep({ ...busy, ...base });
         continue;
       }
-      if (conversationCwds.some((cwd) => inside(cwd, worktree))) {
-        keep({ ...base, reason: "live-conversation" });
-        continue;
-      }
-      const status = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], worktree);
+      const status = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
       if (status.code !== 0) {
         keep({ ...base, reason: "uncommitted", detail: `git status failed: ${(status.stderr || "").trim()}` });
         continue;
       }
-      if (status.stdout.length > 0) {
-        keep({ ...base, reason: "uncommitted", detail: `${status.stdout.split("\0").filter(Boolean).length} path(s)` });
+      const classified = classifyStatus(status.stdout);
+      const changed = classified.changed;
+      /* An ignored container a nested worktree removed earlier in this sweep
+         left empty holds nothing. */
+      const ignored = classified.ignored.filter((entry) => !emptyDirectory(path.join(worktree, entry)));
+      if (changed.length > 0) {
+        keep({ ...base, reason: "uncommitted", detail: `${changed.length} path(s)` });
+        continue;
+      }
+      if (ignored.length > 0) {
+        keep({ ...base, reason: "ignored-files", detail: ignored.slice(0, 5).join(", ") + (ignored.length > 5 ? `, … ${ignored.length - 5} more` : "") });
         continue;
       }
       const head = entry.head;
@@ -437,6 +517,13 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         report.removed.push(removal);
         report.removedBytes += bytes;
         remaining.delete(worktree);
+        continue;
+      }
+      /* The measurement can take a while; what holds the checkout is read
+         again now, as close to the removal as it can be. */
+      const busyNow = heldBy(readGuards(), worktree);
+      if (busyNow) {
+        keep({ ...busyNow, ...base });
         continue;
       }
       if (!ports.recordResolution(worktree)) {
@@ -503,64 +590,19 @@ export const realGit: GitRun = (args, cwd) => new Promise((resolveRun) => {
   });
 });
 
-const GH_TIMEOUT_MS = 180_000;
-const MERGED_FULL_LIMIT = 5_000;
-const MERGED_PAGE_LIMIT = 100;
-/** A full re-read catches anything an incremental page could have missed. */
-const MERGED_FULL_EVERY_MS = 6 * HOUR_MS;
-
-type MergedMemo = { fullAt: number; prs: Map<number, MergedPullRequest> };
-const mergedHost = globalThis as typeof globalThis & { __llvWorktreeSweepMerged?: Map<string, MergedMemo> };
-
-function parseMerged(raw: string): MergedPullRequest[] | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
-  const out: MergedPullRequest[] = [];
-  for (const row of parsed as Array<Record<string, unknown>>) {
-    if (!row || !Number.isSafeInteger(row.number) || typeof row.url !== "string" || typeof row.headRefName !== "string") continue;
-    if (typeof row.headRefOid !== "string" || !/^[0-9a-f]{40}$/i.test(row.headRefOid)) continue;
-    out.push({ number: row.number as number, url: row.url, headRefName: row.headRefName, headRefOid: row.headRefOid });
-  }
-  return out;
-}
-
-/** Merged pull requests through `gh`: one full read per repository every six
-    hours, and between them one page of the most recently updated, merged into
-    the memory copy. A merged PR's head never changes, so nothing goes stale. */
-export function ghMergedPullRequests(run: (args: string[]) => Promise<string> = ghRun, now: () => number = Date.now) {
-  return async (repository: string): Promise<MergedPullRequest[] | null> => {
-    const memos = mergedHost.__llvWorktreeSweepMerged ??= new Map();
-    const memo = memos.get(repository);
-    const full = !memo || now() - memo.fullAt > MERGED_FULL_EVERY_MS;
-    const args = ["pr", "list", "--repo", repository, "--state", "merged", "--json", "number,url,headRefName,headRefOid"];
-    try {
-      const rows = parseMerged(await run(full
-        ? [...args, "--limit", String(MERGED_FULL_LIMIT)]
-        : [...args, "--limit", String(MERGED_PAGE_LIMIT), "--search", "sort:updated-desc"]));
-      if (rows === null) return memo ? [...memo.prs.values()] : null;
-      const next: MergedMemo = full ? { fullAt: now(), prs: new Map() } : memo!;
-      for (const row of rows) next.prs.set(row.number, row);
-      memos.set(repository, next);
-      return [...next.prs.values()];
-    } catch (error) {
-      console.error(`[worktree sweep] ${repository}: merged pull requests unavailable`, error instanceof Error ? error.message : String(error));
-      return memo ? [...memo.prs.values()] : null;
-    }
+/** Merged pull requests from the forge cache the forge sweep keeps (#2059):
+    null until it holds a complete read of the repository with head commits. A
+    merged PR's head never changes, so the cache is as good as a fresh read. */
+export function forgeCacheMergedPullRequests(read: () => ForgeCacheFile) {
+  return (repository: string): MergedPullRequest[] | null => {
+    const data = read();
+    const name = repository.toLowerCase();
+    const entry = data.repositories[name] ?? Object.values(data.repositories).find((candidate) => candidate.canonical === name);
+    if (!entry?.completeSince || !entry.headRefOids) return null;
+    return Object.entries(entry.prs).flatMap(([number, pr]) => pr.state === "merged" && pr.headRefOid
+      ? [{ number: Number(number), url: pr.url, headRefName: pr.headRefName, headRefOid: pr.headRefOid }]
+      : []);
   };
-}
-
-function ghRun(args: string[]): Promise<string> {
-  return new Promise((resolveRun, reject) => {
-    execFile("gh", args, { cwd: os.tmpdir(), timeout: GH_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => {
-      if (error) reject(error);
-      else resolveRun(String(stdout));
-    });
-  });
 }
 
 function withArchived(hot: readonly Pipeline[], archived: readonly Pipeline[]): Pipeline[] {
@@ -570,21 +612,23 @@ function withArchived(hot: readonly Pipeline[], archived: readonly Pipeline[]): 
 
 /** The ports as the Viewer runs them, over its own state. */
 export async function productionWorktreeSweepPorts(mode: WorktreeSweepMode): Promise<WorktreeSweepPorts> {
-  const [{ loadArchivedPipelines, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }] = await Promise.all([
+  const [{ loadArchivedPipelines, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/projects/curation"),
     import("@/lib/agent/registry"),
     import("@/lib/scanner/describe"),
+    import("@/lib/forge/cache"),
   ]);
   return {
     mode,
     git: realGit,
-    mergedPullRequests: ghMergedPullRequests(),
+    mergedPullRequests: forgeCacheMergedPullRequests(() => readForgeCache().data),
     /* Settled lanes move to the archive after a while; their delivered PR
        numbers are what find a PR whose head is not the lane branch. */
     pipelines: withArchived(loadPipelinesForList(), loadArchivedPipelines()),
+    currentPipelines: () => loadPipelinesForList(),
     repositories: projectCurationSnapshot().manualProjects.map((project) => project.root),
-    conversationCwds: liveOrWaitingConversationCwds(agentRegistry().readOnlySnapshot()),
+    conversationCwds: () => liveOrWaitingConversationCwds(agentRegistry().readOnlySnapshot()),
     scan: () => scanProcesses(),
     recordResolution: (worktree) => recordWorktreeResolution(worktree) !== null,
   };

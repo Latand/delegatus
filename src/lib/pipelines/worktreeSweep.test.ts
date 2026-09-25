@@ -10,8 +10,11 @@ import { projectForCwd, recordWorktreeResolution } from "@/lib/scanner/describe"
 import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { FileEntry, RootKey } from "@/lib/types";
 
+import type { ForgeCacheFile } from "@/lib/forge/cache";
+
 import {
-  ghMergedPullRequests,
+  classifyStatus,
+  forgeCacheMergedPullRequests,
   liveOrWaitingConversationCwds,
   parseWorktreeList,
   realGit,
@@ -102,9 +105,9 @@ function ports(overrides: Partial<WorktreeSweepPorts> & { prs?: MergedPullReques
   return {
     mode: "on",
     git: realGit,
-    mergedPullRequests: async () => prs,
+    mergedPullRequests: () => prs,
     pipelines: [],
-    conversationCwds: [],
+    conversationCwds: () => [],
     scan: () => NO_PROCESSES,
     recordResolution: (worktree) => recordWorktreeResolution(worktree) !== null,
     ...rest,
@@ -201,7 +204,7 @@ test("each guard keeps a merged worktree, and the main checkout is never a candi
       /* An open lane provisioned from a linked checkout runs its git there. */
       pipeline({ repoDir: hosting.dir, worktreeDir: path.join(caseDir, "g-hosted"), branch: "g/hosted", state: "needs_review" }),
     ],
-    conversationCwds: [path.join(talking.dir, "packages", "web")],
+    conversationCwds: () => [path.join(talking.dir, "packages", "web")],
     scan: () => scanProcesses(),
     prs: [
       merged(1, "main", mainTip),
@@ -340,25 +343,126 @@ test("the sweep writes its report, and LLV_WORKTREE_SWEEP turns it off", async (
   expect(armed).toBe(1);
 });
 
-test("merged pull requests are read in full once, then page by page, and a failed read keeps the last answer", async () => {
-  const oid = (n: number) => String(n).repeat(40).slice(0, 40);
-  const row = (n: number) => ({ number: n, url: `https://github.com/example/paged/pull/${n}`, headRefName: `b${n}`, headRefOid: oid(n) });
-  const calls: string[][] = [];
-  const answers: Array<string | Error> = [JSON.stringify([row(1), row(2)]), JSON.stringify([row(3)]), new Error("gh: timed out")];
-  let clock = 1_000;
-  const read = ghMergedPullRequests(async (args) => {
-    calls.push(args);
-    const answer = answers.shift()!;
-    if (answer instanceof Error) throw answer;
-    return answer;
-  }, () => clock);
-  expect((await read("example/paged"))!.map((pr) => pr.number)).toEqual([1, 2]);
-  clock += 60_000;
-  expect((await read("example/paged"))!.map((pr) => pr.number).sort()).toEqual([1, 2, 3]);
-  expect((await read("example/paged"))!.map((pr) => pr.number).sort()).toEqual([1, 2, 3]);
-  expect(calls[0]).toContain("5000");
-  expect(calls[1]).toContain("sort:updated-desc");
-  expect(await ghMergedPullRequests(async () => { throw new Error("offline"); })("example/never-read")).toBeNull();
+test("merged pull requests come from the forge cache once it holds a complete read with head commits", () => {
+  const oid = "a".repeat(40);
+  const entry = (extra: Partial<ForgeCacheFile["repositories"][string]>) => ({
+    canonical: null, completeSince: "2026-09-25T00:00:00Z", lastSweepAt: "2026-09-25T00:00:00Z", lastAttemptAt: null, lastError: null, issues: {}, headRefOids: true as const,
+    prs: {
+      "1": { url: "https://github.com/example/widgets/pull/1", headRefName: "b1", createdAt: "", state: "merged" as const, closes: [], checkedAt: "", headRefOid: oid },
+      "2": { url: "https://github.com/example/widgets/pull/2", headRefName: "b2", createdAt: "", state: "open" as const, closes: [], checkedAt: "", headRefOid: oid },
+      "3": { url: "https://github.com/example/widgets/pull/3", headRefName: "b3", createdAt: "", state: "merged" as const, closes: [], checkedAt: "" },
+    },
+    ...extra,
+  });
+  const read = (repositories: ForgeCacheFile["repositories"]) => forgeCacheMergedPullRequests(() => ({ schemaVersion: 1, repositories }));
+  expect(read({ "example/widgets": entry({}) })("Example/Widgets")).toEqual([
+    { number: 1, url: "https://github.com/example/widgets/pull/1", headRefName: "b1", headRefOid: oid },
+  ]);
+  /* Renamed: the record's old name keys the entry, the remote says the new one. */
+  expect(read({ "example/old-widgets": entry({ canonical: "example/widgets" }) })("example/widgets")?.map((pr) => pr.number)).toEqual([1]);
+  expect(read({})("example/widgets")).toBeNull();
+  expect(read({ "example/widgets": entry({ completeSince: null }) })("example/widgets")).toBeNull();
+  expect(read({ "example/widgets": entry({ headRefOids: undefined }) })("example/widgets")).toBeNull();
+});
+
+test("an ignored nested repository or .env keeps the worktree; rebuildable outputs do not", async () => {
+  const root = repository();
+  /* Shared by every worktree of the repository, so no lane has a changed .gitignore. */
+  fs.appendFileSync(path.join(root, ".git", "info", "exclude"), ".worktrees/\n.env\n*.tsbuildinfo\n.next/\n");
+  const nested = lane(root, path.join(caseDir, "ig-nested"), "ig/nested");
+  const other = path.join(nested.dir, ".worktrees", "other");
+  fs.mkdirSync(other, { recursive: true });
+  git(["init", "-q", "-b", "main"], other);
+  fs.writeFileSync(path.join(other, "wip.txt"), "uncommitted work of another repository\n");
+  const env = lane(root, path.join(caseDir, "ig-env"), "ig/env");
+  fs.writeFileSync(path.join(env.dir, ".env"), "LOCAL_SETTING=1\n");
+  const clean = lane(root, path.join(caseDir, "ig-clean"), "ig/clean");
+  fs.writeFileSync(path.join(clean.dir, "tsconfig.tsbuildinfo"), "{}");
+  fs.mkdirSync(path.join(clean.dir, ".next", "cache"), { recursive: true });
+  /* The status read that guarded before lists nothing for either. */
+  expect(git(["status", "--porcelain=v1", "--untracked-files=all"], nested.dir)).toBe("");
+  expect(git(["status", "--porcelain=v1", "--untracked-files=all"], env.dir)).toBe("");
+
+  const report = await sweepMergedWorktrees(ports({
+    repositories: [root],
+    prs: [merged(91, "ig/nested", nested.tip), merged(92, "ig/env", env.tip), merged(93, "ig/clean", clean.tip)],
+  }));
+  expect(report.kept).toEqual([
+    { path: nested.dir, reason: "ignored-files", detail: ".worktrees/" },
+    { path: env.dir, reason: "ignored-files", detail: ".env" },
+  ]);
+  expect(report.removed.map((removal) => removal.path)).toEqual([clean.dir]);
+  expect(fs.readFileSync(path.join(other, "wip.txt"), "utf8")).toContain("uncommitted");
+  expect(fs.existsSync(path.join(env.dir, ".env"))).toBe(true);
+  expect(fs.existsSync(clean.dir)).toBe(false);
+});
+
+test("the ignored-path classifier lets only rebuildable outputs through", () => {
+  const raw = [
+    "!! node_modules", "!! packages/web/node_modules/", "!! .next/", "!! tsconfig.tsbuildinfo",
+    /* A cache with its own `*` .gitignore is listed file by file. */
+    "!! .ruff_cache/.gitignore", "!! apps/api/.pytest_cache/v/", "!! apps/api/src/pkg.egg-info/",
+    "!! .env.local", "!! .claude/settings.local.json", "!! .artifacts/", "!! notes/build.md.bak",
+    "R  new.ts", "old.ts", "?? notes.txt", "",
+  ].join("\0");
+  expect(classifyStatus(raw)).toEqual({ changed: ["new.ts", "notes.txt"], ignored: [".env.local", ".claude/settings.local.json", ".artifacts/", "notes/build.md.bak"] });
+});
+
+test("the guards are read again after the measurement, right before each removal", async () => {
+  const root = repository();
+  const busy = lane(root, path.join(caseDir, "late-busy"), "late/busy");
+  const hosting = lane(root, path.join(caseDir, "late-hosting"), "late/hosting");
+  const talking = lane(root, path.join(caseDir, "late-talking"), "late/talking");
+  const quiet = lane(root, path.join(caseDir, "late-quiet"), "late/quiet");
+  const measured = new Set<string>();
+  const scans: number[] = [];
+  const report = await sweepMergedWorktrees(ports({
+    repositories: [root],
+    prs: [merged(101, "late/busy", busy.tip), merged(102, "late/hosting", hosting.tip), merged(103, "late/talking", talking.tip), merged(104, "late/quiet", quiet.tip)],
+    measure: async (directory) => {
+      measured.add(directory);
+      return 1;
+    },
+    /* Each appears only after its own checkout was measured: a shell started
+       there, a pipeline created with it as its repository, an agent spawned in it. */
+    scan: () => {
+      scans.push(measured.size);
+      return measured.has(busy.dir)
+        ? { ownNamespace: null, processes: [{ pid: 4242, paths: [path.join(busy.dir, "src")] }] } as unknown as ProcessScan
+        : NO_PROCESSES;
+    },
+    currentPipelines: () => measured.has(hosting.dir)
+      ? [pipeline({ repoDir: hosting.dir, worktreeDir: path.join(caseDir, "late-hosted"), branch: "late/hosted", state: "provisioning" })]
+      : [],
+    conversationCwds: () => measured.has(talking.dir) ? [talking.dir] : [],
+  }));
+  expect(Object.fromEntries(report.kept.map((kept) => [path.basename(kept.path), [kept.reason, kept.detail]]))).toEqual({
+    "late-busy": ["in-use", "pid 4242"],
+    "late-hosting": ["open-pipeline", undefined],
+    "late-talking": ["live-conversation", undefined],
+  });
+  expect(report.removed.map((removal) => removal.path)).toEqual([quiet.dir]);
+  for (const dir of [busy.dir, hosting.dir, talking.dir]) expect(fs.existsSync(dir)).toBe(true);
+  /* One read up front, then one per removal attempt. */
+  expect(scans).toEqual([0, 1, 2, 3, 4]);
+});
+
+test("a completed or closed pipeline whose teardown or delivery has not settled still holds its checkout", async () => {
+  const root = repository();
+  const tearing = lane(root, path.join(caseDir, "unsettled-teardown"), "unsettled/teardown");
+  const delivering = lane(root, path.join(caseDir, "unsettled-delivery"), "unsettled/delivery");
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [
+      pipeline({ repoDir: root, worktreeDir: tearing.dir, branch: "unsettled/teardown", state: "closed", closeTeardown: { id: "t", phase: "running", waitingForActivation: false, acknowledgeHosts: true, flow: null } }),
+      pipeline({ repoDir: root, worktreeDir: delivering.dir, branch: "unsettled/delivery", delivery: { target: {}, operation: { state: "running" } } as unknown as SweptPipeline["delivery"] }),
+    ],
+    prs: [merged(111, "unsettled/teardown", tearing.tip), merged(112, "unsettled/delivery", delivering.tip)],
+  }));
+  expect(report.kept.map((kept) => [path.basename(kept.path), kept.reason]).sort()).toEqual([
+    ["unsettled-delivery", "open-pipeline"],
+    ["unsettled-teardown", "open-pipeline"],
+  ]);
+  expect(report.removed).toEqual([]);
 });
 
 test("the mode knob reads on, off and dry-run", () => {

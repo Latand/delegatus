@@ -663,6 +663,59 @@ test("a deleted worktree still groups under its parent repo: a pipeline sibling 
   expect(projectForCwd(path.join(sibling, "src", "lib"))).toBe(parent);
 });
 
+test("two processes writing the worktree map keep each other's records (#2202)", () => {
+  /* The order the review reproduced: process A reads the map, process B
+     records a checkout the sweep is about to remove, A records another one.
+     A write used to replace the file with A's memory and drop B's record,
+     which after the removal can never be learned again. */
+  const base = path.join(SANDBOX, "two-writers");
+  const state = path.join(base, "state");
+  process.env.LLV_STATE_DIR = state;
+  fs.mkdirSync(state, { recursive: true });
+  resetProjectAliasesForTests();
+  const repo = path.join(base, "widgets");
+  const run = (args: string[], cwd: string) => {
+    const result = spawnSync("git", ["-c", "user.name=Sweep Test", "-c", "user.email=sweep@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  };
+  fs.mkdirSync(repo, { recursive: true });
+  run(["init", "-q", "-b", "main"], repo);
+  run(["remote", "add", "origin", "https://github.com/acme/widgets.git"], repo);
+  run(["commit", "-q", "--allow-empty", "-m", "initial"], repo);
+  const [a, b, c] = ["wt-a", "wt-b", "wt-c"].map((name) => {
+    const worktree = path.join(base, name);
+    run(["worktree", "add", "-q", "-b", name, worktree, "main"], repo);
+    return worktree;
+  });
+  const parent = projectForCwd(repo);
+  globalCache("worktree-git").clear();
+  globalCache("project-info-cwd-v2").clear();
+
+  /* A: resolves a live checkout, which loads the map, and flushes it. */
+  expect(projectForCwd(c)).toBe(parent);
+  persistWorktreeMap();
+
+  /* B: a second process on the same state records wt-b. */
+  const child: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: state };
+  delete child.LLV_STRUCTURED_HOST;
+  const script = `const { recordWorktreeResolution } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
+    + `if (!recordWorktreeResolution(${JSON.stringify(b)})) process.exit(3);`;
+  const second = spawnSync(process.execPath, ["-e", script], { cwd: path.join(import.meta.dir, "..", "..", ".."), env: child, encoding: "utf8" });
+  expect(second.stderr).toBe("");
+  expect(second.status).toBe(0);
+
+  /* A: records wt-a without having re-read the file. */
+  expect(recordWorktreeResolution(a)).not.toBeNull();
+  const onDisk = JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8")) as Record<string, unknown>;
+  expect(Object.keys(onDisk).sort()).toEqual([a, b, c].sort());
+
+  /* B's checkout is removed; A still resolves it through the file B wrote. */
+  run(["worktree", "remove", b], repo);
+  globalCache("worktree-git").clear();
+  globalCache("project-info-cwd-v2").clear();
+  expect(projectForCwd(b)).toBe(parent);
+});
+
 test("a pre-change slug follows its repository alias", () => {
   useStateDirectory("slug-alias-state");
   const identity = createRepository(path.join(SANDBOX, "slug-alias-main"));

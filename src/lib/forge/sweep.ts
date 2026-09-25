@@ -26,7 +26,7 @@ export const FORGE_FULL_LIMIT = 5_000;
 export const FORGE_FILL_LIMIT = 10;
 const FORGE_TIMEOUT_MS = 20_000;
 
-const PR_FIELDS = "number,url,headRefName,state,isDraft,createdAt,updatedAt,closingIssuesReferences";
+const PR_FIELDS = "number,url,headRefName,headRefOid,state,isDraft,createdAt,updatedAt,closingIssuesReferences";
 
 export interface ForgeSweepPorts {
   now: () => number;
@@ -71,6 +71,7 @@ function parseRows(raw: string, checkedAt: string): SweptRow[] | null {
       state: state as PullRequestState,
       closes,
       checkedAt,
+      ...(typeof row.headRefOid === "string" && /^[0-9a-f]{40}$/i.test(row.headRefOid) ? { headRefOid: row.headRefOid } : {}),
     });
   }
   return rows;
@@ -122,7 +123,7 @@ function due(entry: ForgeRepositoryEntry | undefined, demand: Demand, nudgedAt: 
 }
 
 type RepositoryOutcome =
-  | { ok: true; rows: SweptRow[]; complete: boolean; canonical: string | null; filled: SweptRow[]; issues: number[] }
+  | { ok: true; rows: SweptRow[]; complete: boolean; full: boolean; canonical: string | null; filled: SweptRow[]; issues: number[] }
   | { ok: false; error: ForgeSweepError };
 
 async function readRepository(repository: string, entry: ForgeRepositoryEntry | undefined, demand: Demand, ports: ForgeSweepPorts, startedAt: string): Promise<RepositoryOutcome> {
@@ -136,7 +137,10 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
   };
   let rows: SweptRow[] | ForgeSweepError | null = null;
   let complete = false;
-  if (entry?.completeSince && entry.lastSweepAt) {
+  let full = false;
+  /* An entry cached before head commits were read is read in full once, so
+     the merged PRs it already holds gain theirs. */
+  if (entry?.completeSince && entry.lastSweepAt && entry.headRefOids) {
     const page = await list(["--limit", String(FORGE_PAGE_LIMIT), "--search", "sort:updated-desc"]);
     if (typeof page === "string") return { ok: false, error: page };
     const oldest = Math.min(...page.map((row) => ms(row.updatedAt)).filter(Number.isFinite));
@@ -150,10 +154,11 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
     }
   }
   if (rows === null) {
-    const full = await list(["--limit", String(FORGE_FULL_LIMIT)]);
-    if (typeof full === "string") return { ok: false, error: full };
-    rows = full;
+    const all = await list(["--limit", String(FORGE_FULL_LIMIT)]);
+    if (typeof all === "string") return { ok: false, error: all };
+    rows = all;
     complete = true;
+    full = true;
   }
   const canonical = rows.map((row) => repositoryOfUrl(row.url)).find(Boolean) ?? null;
   const known = new Set([...Object.keys(entry?.prs ?? {}), ...Object.keys(entry?.issues ?? {})].map(Number));
@@ -173,7 +178,7 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
       if (/Could not resolve to a PullRequest/i.test(detail)) issues.push(number);
     }
   }
-  return { ok: true, rows, complete, canonical, filled, issues };
+  return { ok: true, rows, complete, full, canonical, filled, issues };
 }
 
 function applyOutcome(entry: ForgeRepositoryEntry, outcome: RepositoryOutcome, startedAt: string): void {
@@ -193,6 +198,7 @@ function applyOutcome(entry: ForgeRepositoryEntry, outcome: RepositoryOutcome, s
   for (const number of outcome.issues) entry.issues[String(number)] = { checkedAt: startedAt };
   if (outcome.canonical) entry.canonical = outcome.canonical;
   if (outcome.complete) entry.completeSince = entry.completeSince ?? startedAt;
+  if (outcome.full) entry.headRefOids = true;
   entry.lastSweepAt = startedAt;
 }
 
