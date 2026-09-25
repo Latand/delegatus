@@ -39,11 +39,13 @@ const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
 const { KanbanBoard } = await import("./KanbanBoard");
 const { resetTaskIconLoaderForTests } = await import("@/components/tasks/taskIconLoader");
+const { setLocale, translate } = await import("@/lib/i18n");
 
 const roots: Root[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) flushSync(() => root.unmount());
   document.body.replaceChildren();
+  setLocale("en");
 });
 
 const REV = (n: number) => ["task-v1:00000000", "0000", "4000", "8000", String(n).padStart(12, "0")].join("-");
@@ -390,7 +392,9 @@ test("a hide the server refuses for the seat returns the card with the reason, a
   expect(receiptTexts(view.host)).toEqual(["«Keep the project moving» holds the orchestrator's conversation, so it stays on the board"]);
 });
 
-test("Hide finished tasks keeps working and seat groups, writes one task at a time, reports each refusal, and one Undo brings the rest back", async () => {
+for (const lang of ["en", "uk"] as const) test(`Hide finished tasks keeps working and seat groups, writes one task at a time, reports each refusal, and one Undo brings the rest back (${lang})`, async () => {
+  setLocale(lang);
+  const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
   const seat: SeatRefs = { conversationIds: ["conversation_fixture_9"], paths: [] };
   const working = { ...conversation(2), activity: "live", proc: "running", pid: 4_401, mtime: NOW - 30 } as unknown as FileEntry;
   const tasks = [
@@ -411,15 +415,15 @@ test("Hide finished tasks keeps working and seat groups, writes one task at a ti
     changed: () => {},
   };
   const view = mount(tasks, { ports, seat, files: [working], manual: [working] });
-  expect(cardEl(view.host, "w")?.querySelector(".foot-meta.working")?.textContent).toBe("1 working");
+  expect(cardEl(view.host, "w")?.querySelector(".foot-meta.working")?.textContent).toBe(tr("kanban.activityWorking", { count: 1 }));
   click(view.host.querySelector('[data-colmenu="done"]'));
-  const item = menuItem(view.host, "Hide finished tasks (3)");
-  expect(item?.querySelector(".why")?.textContent).toBe("Keeps 1 task whose agent is still working.");
+  const item = menuItem(view.host, tr("kanban.hideFinished", { count: 3 }));
+  expect(item?.querySelector(".why")?.textContent).toBe(tr("kanban.hideFinishedKeeps", { count: 1 }));
   click(item);
   expect(["a", "b", "c"].map((id) => columnOf(view.host, id))).toEqual([null, null, null]);
   expect(columnOf(view.host, "w")).toBe("done");
   expect(columnOf(view.host, "s")).toBe("done");
-  const text = "Hidden 3 finished tasks · kept 1 with a working agent";
+  const text = tr("kanban.hiddenFinishedKept", { count: 3, kept: 1 });
   expect(receiptTexts(view.host)).toContain(text);
   await tick();
   expect(patches.map((patch) => patch.id)).toHaveLength(1);
@@ -433,12 +437,13 @@ test("Hide finished tasks keeps working and seat groups, writes one task at a ti
   answers[2]!({ ok: true, task: task(patches[2]!.id, "done", "x", { revision: REV(2), groupHidden: { at: "2026-09-14T12:00:00.000Z", by: "operator" } }) });
   await tick();
   expect(columnOf(view.host, first)).toBe("done");
-  expect(receiptTexts(view.host).some((text) => text?.endsWith("holds the orchestrator's conversation, so it stays on the board"))).toBe(true);
+  const titles: Record<string, string> = { a: "Merge the approved queue adapter", b: "Compact board stages", c: "Universal interrupt" };
+  expect(receiptTexts(view.host)).toContain(tr("kanban.hideProtected", { title: titles[first]! }));
 
   click(receiptAction(view.host, text));
   await tick();
   expect(patches.slice(3).map((patch) => [patch.id, (patch.body as { hide: boolean }).hide])).toEqual([[patches[1]!.id, false]]);
-  /* The server keeps the first group hidden: the undo says so with Retry,
+  /* The server keeps the first group hidden: the undo names it with Retry,
      the next unhide still goes out, and the count leaves it out. */
   answers[3]!({ ok: false, status: 500, error: "disk full" });
   await tick();
@@ -446,13 +451,49 @@ test("Hide finished tasks keeps working and seat groups, writes one task at a ti
   answers[4]!({ ok: true, task: task(patches[2]!.id, "done", "x", { revision: REV(3) }) });
   await tick();
   await tick();
-  const refusedText = "Couldn't undo: disk full";
+  const refusedText = tr("kanban.showFailed", { title: titles[patches[1]!.id]!, error: "disk full" });
+  expect(refusedText).toContain(`«${titles[patches[1]!.id]}»`);
   expect(receiptTexts(view.host)).toContain(refusedText);
-  expect(receiptAction(view.host, refusedText)?.textContent).toBe("Retry");
-  expect(receiptTexts(view.host)).toContain("1 task is back on the board");
-  expect(receiptTexts(view.host).some((line) => line?.startsWith("2 tasks"))).toBe(false);
+  expect(receiptAction(view.host, refusedText)?.textContent).toBe(tr("kanban.retry"));
+  expect(receiptTexts(view.host)).toContain(tr("kanban.backOnBoardMany", { count: 1 }));
+  expect(receiptTexts(view.host)).not.toContain(tr("kanban.backOnBoardMany", { count: 2 }));
   expect(columnOf(view.host, patches[1]!.id)).toBeNull();
   expect(columnOf(view.host, patches[2]!.id)).toBe("done");
+});
+
+test("an Undo of Hide finished tasks that fails for several groups counts them, with Retry", async () => {
+  const tasks = [task("a", "done", "Merge the approved queue adapter"), task("b", "done", "Compact board stages")];
+  const answers: Array<(result: PatchResult) => void> = [];
+  const patches: Array<{ id: string; body: PatchBody }> = [];
+  const ports: TaskMutationPorts = {
+    patch: (id, body) => {
+      patches.push({ id, body });
+      return new Promise((resolve) => answers.push(resolve));
+    },
+    read: async () => null,
+    changed: () => {},
+  };
+  const view = mount(tasks, { ports });
+  click(view.host.querySelector('[data-colmenu="done"]'));
+  click(menuItem(view.host, "Hide finished tasks (2)"));
+  const text = "Hidden 2 finished tasks";
+  for (let at = 0; at < 2; at += 1) {
+    await tick();
+    answers[at]!({ ok: true, task: task(patches[at]!.id, "done", "x", { revision: REV(2), groupHidden: { at: "2026-09-14T12:00:00.000Z", by: "operator" } }) });
+  }
+  await tick();
+  click(receiptAction(view.host, text));
+  for (let at = 2; at < 4; at += 1) {
+    await tick();
+    answers[at]!({ ok: false, status: 500, error: "disk full" });
+  }
+  await tick();
+  await tick();
+  expect(patches.slice(2).map((patch) => (patch.body as { hide: boolean }).hide)).toEqual([false, false]);
+  expect(receiptAction(view.host, "Couldn't show 2 tasks: disk full")?.textContent).toBe("Retry");
+  expect(translate("uk", "kanban.showFailedMany", { count: 2, error: "disk full" })).toBe("Не вдалося показати 2 задачі: disk full");
+  expect(columnOf(view.host, "a")).toBeNull();
+  expect(columnOf(view.host, "b")).toBeNull();
 });
 
 test("colour comes from the card menu or C, shows at once, and is written on its own", async () => {
@@ -679,7 +720,7 @@ test("an Undo the server refuses takes back its success receipt and offers Retry
   await tick();
   expect(columnOf(view.host, "a")).toBeNull();
   expect(receiptTexts(view.host)).not.toContain("«Merge the approved queue adapter» is back on the board");
-  expect(receiptAction(view.host, "Couldn't undo: disk full")?.textContent).toBe("Retry");
+  expect(receiptAction(view.host, "Couldn't show «Merge the approved queue adapter»: disk full")?.textContent).toBe("Retry");
 });
 
 const inboxOrder = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.column[data-status="inbox"] .card')].map((card) => card.getAttribute("data-id")!.replace("task:", ""));

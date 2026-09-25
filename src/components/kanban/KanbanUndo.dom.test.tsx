@@ -467,6 +467,40 @@ test("a redo that fails after a new edit was made while it was out offers no Ret
   expect(view.store.patches.filter((patch) => patch.id === "a")).toHaveLength(3);
 });
 
+for (const via of ["Ctrl+Z", "the receipt's Undo"] as const) test(`a redo that saves after a new edit was made while it was out goes back below that edit, and ${via} still undoes it`, async () => {
+  const view = mount([task("a", "inbox", "Write the release notes"), task("b", "inbox", "Repair old links")]);
+  await shiftRight(view.host, "a");
+  ctrlZ();
+  await tick();
+  await tick();
+  view.store.holdNext();
+  ctrlShiftZ();
+  await tick();
+  await shiftRight(view.host, "b");
+  view.store.answer(false);
+  await tick();
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("assigned");
+  expect(columnOf(view.host, "b")).toBe("assigned");
+
+  /* The newer edit is undone first. */
+  ctrlZ();
+  await tick();
+  await tick();
+  expect(view.store.patches.at(-1)).toMatchObject({ id: "b", body: { status: "inbox" } });
+  expect(columnOf(view.host, "b")).toBe("inbox");
+
+  /* Then the redone move of a, in one fenced write. */
+  const before = view.store.patches.length;
+  if (via === "Ctrl+Z") expect(ctrlZ().defaultPrevented).toBe(true);
+  else click(receiptAction(view.host, "Moved «Write the release notes» to Assigned"));
+  await tick();
+  await tick();
+  expect(view.store.patches.slice(before)).toEqual([{ id: "a", body: { status: "inbox", expectedProject: "fixture", expectedRevision: REV(14) } }]);
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  expect(columnOf(view.host, "b")).toBe("inbox");
+});
+
 test("an undo that fails after a new edit goes back below that edit: Ctrl+Z undoes the newer edit first", async () => {
   const view = mount([task("a", "inbox", "Write the release notes"), task("b", "inbox", "Repair old links")]);
   await shiftRight(view.host, "a");

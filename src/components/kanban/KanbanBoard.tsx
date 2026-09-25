@@ -676,20 +676,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const historyRef = useRef(history);
   historyRef.current = history;
   const entryReceipts = useRef(new WeakMap<HistoryEntry, number>());
-  /* Each application of an entry; a write that answers after the entry was
-     applied again leaves the stacks to the newer one. */
-  const entryRuns = useRef(new WeakMap<HistoryEntry, number>());
   const stepRef = useRef<(direction: HistoryDirection, chosen?: HistoryEntry) => boolean>(() => false);
   /** Undo or redo `chosen`, or the top of its stack. False when there is nothing to take, or `chosen` is not on that stack. */
   const step = useCallback((direction: HistoryDirection, chosen?: HistoryEntry) => stepRef.current(direction, chosen), []);
   const applyEntry = (entry: HistoryEntry, direction: HistoryDirection) => {
     const stacks = historyRef.current;
-    /* A new edit recorded while this write is out cleared the redo stack; the
-       entry must not come back onto it, or onto the undo stack above that edit. */
+    /* While this write is out the entry is on neither stack. A new edit
+       recorded meanwhile cleared the redo stack, so an undo must not come back
+       onto it; a redo goes back onto the undo stack below that edit. */
     const epoch = stacks.epoch;
     const undoing = direction === "undo";
-    const run = (entryRuns.current.get(entry) ?? 0) + 1;
-    entryRuns.current.set(entry, run);
     const previous = entryReceipts.current.get(entry);
     if (previous !== undefined) dismiss(previous);
     const reverse = { label: t(undoing ? "kanban.redo" : "kanban.undo"), run: () => void step(undoing ? "redo" : "undo", entry) };
@@ -725,7 +721,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
       return { target, kind: outcome.kind, error: outcome.kind === "failed" ? outcome.error : "" };
     });
     void Promise.all(writes).then((results) => {
-      const current = entryRuns.current.get(entry) === run;
       const saved = results.filter((result) => result.kind !== "conflict" && result.kind !== "failed").map((result) => result.target);
       const refused = results.filter((result) => result.kind === "conflict").map((result) => result.target);
       const failed = results.filter((result) => result.kind === "failed");
@@ -734,9 +729,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
         stacks.dropTask(target.taskId);
       }
       if (entry.kind === "hide") entry.tasks = saved;
-      if (saved.length && current && stacks.epoch === epoch) {
-        if (undoing) stacks.pushRedo(entry);
-        else stacks.pushUndo(entry);
+      if (saved.length) {
+        if (!undoing) stacks.pushUndo(entry, epoch);
+        else if (stacks.epoch === epoch) stacks.pushRedo(entry);
       }
       if (!saved.length) dismiss(receiptId);
       else if (saved.length < targets.length) {
@@ -754,12 +749,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
         /* What did not reach the server goes back where it came from, and Retry takes it again. */
         const rest: HistoryEntry = entry.kind !== "hide" ? entry : saved.length ? { ...entry, tasks: failed.map((result) => result.target) } : Object.assign(entry, { tasks: failed.map((result) => result.target) });
         /* A redo whose stack a new edit cleared has nothing to go back to and no Retry. */
-        const kept = (current || rest !== entry) && (undoing || stacks.epoch === epoch);
+        const kept = undoing || stacks.epoch === epoch;
         if (kept) {
           if (undoing) stacks.pushUndo(rest, epoch);
           else stacks.pushRedo(rest);
         }
-        entryReceipts.current.set(rest, show(t(undoing ? "kanban.undoFailed" : "kanban.redoFailed", { error: failed[0]!.error }), kept ? { label: t("kanban.retry"), run: () => void step(direction, rest) } : undefined, { error: true }));
+        /* A hide names the group that stayed as it was, or counts them. */
+        const error = failed[0]!.error;
+        const text = entry.kind !== "hide"
+          ? t(undoing ? "kanban.undoFailed" : "kanban.redoFailed", { error })
+          : failed.length === 1
+            ? t(undoing ? "kanban.showFailed" : "kanban.hideFailed", { title: failed[0]!.target.title, error })
+            : t(undoing ? "kanban.showFailedMany" : "kanban.hideFailedMany", { count: failed.length, error });
+        entryReceipts.current.set(rest, show(text, kept ? { label: t("kanban.retry"), run: () => void step(direction, rest) } : undefined, { error: true }));
       }
     });
   };

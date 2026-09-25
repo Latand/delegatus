@@ -3412,6 +3412,8 @@ export const en = {
   "kanban.undoRefusedMany": { one: "Someone else changed {count} task in the meantime, so it stays as it is", other: "Someone else changed {count} tasks in the meantime, so they stay as they are" },
   "kanban.undoFailed": "Couldn't undo: {error}",
   "kanban.redoFailed": "Couldn't redo: {error}",
+  "kanban.showFailedMany": { one: "Couldn't show {count} task: {error}", other: "Couldn't show {count} tasks: {error}" },
+  "kanban.hideFailedMany": { one: "Couldn't hide {count} task: {error}", other: "Couldn't hide {count} tasks: {error}" },
   "kanban.dismiss": "Dismiss",
   "kanban.dragHint": "Drop on a column to change its status · Esc cancels",
   "kanban.skipToBoard": "Skip to the board",

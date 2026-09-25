@@ -3307,6 +3307,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.undoRefusedMany": { one: "Хтось інший тим часом змінив {count} задачу, тому вона лишається як є", few: "Хтось інший тим часом змінив {count} задачі, тому вони лишаються як є", many: "Хтось інший тим часом змінив {count} задач, тому вони лишаються як є", other: "Хтось інший тим часом змінив {count} задач, тому вони лишаються як є" },
   "kanban.undoFailed": "Не вдалося скасувати: {error}",
   "kanban.redoFailed": "Не вдалося повторити: {error}",
+  "kanban.showFailedMany": { one: "Не вдалося показати {count} задачу: {error}", few: "Не вдалося показати {count} задачі: {error}", many: "Не вдалося показати {count} задач: {error}", other: "Не вдалося показати {count} задач: {error}" },
+  "kanban.hideFailedMany": { one: "Не вдалося сховати {count} задачу: {error}", few: "Не вдалося сховати {count} задачі: {error}", many: "Не вдалося сховати {count} задач: {error}", other: "Не вдалося сховати {count} задач: {error}" },
   "kanban.dismiss": "Закрити",
   "kanban.dragHint": "Відпустіть над колонкою, щоб змінити статус · Esc скасовує",
   "kanban.skipToBoard": "Перейти до дошки",

@@ -140,9 +140,13 @@ action is sent, so Ctrl+Z pressed while a write is still out queues behind
 it through the existing per-task chain. A write that ends `failed`,
 `conflict` or `settled` removes its entry; only what this board actually
 wrote is undoable. Recording a new action clears `redo`, and counts in the
-history's `epoch`: an undo or a redo still being written when a new action
-is recorded does not push its entry back onto either stack when it lands,
-so the cleared `redo` stays empty and Ctrl+Shift+Z does nothing.
+history's `epoch`. An undo still being written when a new action is
+recorded does not push its entry onto `redo` when it lands, so the cleared
+`redo` stays empty and Ctrl+Shift+Z does nothing. A redo in the same race
+that saves goes back onto `undo` at the epoch it was sent, below the newer
+action: the first Ctrl+Z undoes the newer action, the second undoes the
+redone one, and the redo's receipt keeps a working Undo. A failed undo goes
+back below the newer action the same way.
 
 ### 2. How each edit records its inverse
 
@@ -285,6 +289,10 @@ Copy, with the existing `kanban.undo` reused as the Undo label:
 | `kanban.retry` (exists, reworded in uk) | Retry | Спробувати ще раз (was «Повторити», which is now Redo) | — |
 | `kanban.undoFailed` (new, error) | Couldn't undo: {error} | Не вдалося скасувати: {error} | Retry |
 | `kanban.redoFailed` (new, error) | Couldn't redo: {error} | Не вдалося повторити: {error} | Retry |
+| `kanban.showFailed` (exists), for a hide's undo that failed for one group | Couldn't show «{title}»: {error} | Не вдалося показати «{title}»: {error} | Retry |
+| `kanban.hideFailed` (exists), for a hide's redo that failed for one group | Couldn't hide «{title}»: {error} | Не вдалося сховати «{title}»: {error} | Retry |
+| `kanban.showFailedMany` (new, error, plural) | Couldn't show {count} tasks: {error} | Не вдалося показати {count} задач: {error} | Retry |
+| `kanban.hideFailedMany` (new, error, plural) | Couldn't hide {count} tasks: {error} | Не вдалося сховати {count} задач: {error} | Retry |
 
 A redo of a move shows `kanban.moved` with Undo, a redo of a hide shows
 `kanban.hiddenReceipt` with Undo, a redo of a text edit shows
