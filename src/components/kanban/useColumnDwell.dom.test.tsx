@@ -220,12 +220,14 @@ test("a menu, popover or listbox portalled to the document suppresses it, one op
   const { host, widened } = mount();
   const card = inside(host, "done");
   /* The shapes a reader's composer opens on the body: the model, mic, account
-     and speak menus, the runtime popover, a listbox, a non-modal popover. */
-  const overlays: Array<[string, string]> = [["role", "menu"], ["role", "listbox"], ["data-runtime-popover", ""], ["role", "dialog"]];
+     and speak menus, the runtime popover, a listbox, a non-modal popover
+     floating fixed over the page. */
+  const overlays: Array<[string, string, string?]> = [["role", "menu"], ["role", "listbox"], ["data-runtime-popover", ""], ["role", "dialog", "position: fixed"]];
   let x = 900;
-  for (const [name, value] of overlays) {
+  for (const [name, value, style] of overlays) {
     const overlay = document.createElement("div");
     overlay.setAttribute(name, value);
+    if (style) overlay.setAttribute("style", style);
     document.body.appendChild(overlay);
     move(card, (x += 20), 300);
     wait(DWELL_MS * 2);
@@ -249,6 +251,62 @@ test("a menu, popover or listbox portalled to the document suppresses it, one op
   move(card, (x += 20), 300);
   wait(DWELL_MS);
   expect(widened).toEqual(["done"]);
+});
+
+test("a non-modal dialog holds it only while it floats; an inline disclosure with the role does not", () => {
+  const { host, widened } = mount();
+  const card = inside(host, "done");
+  /* A popover positioned by its wrapper, the way a portalled one sits. */
+  const wrapper = document.createElement("div");
+  wrapper.setAttribute("style", "position: absolute; top: 40px; left: 40px");
+  const popover = document.createElement("div");
+  popover.setAttribute("role", "dialog");
+  wrapper.appendChild(popover);
+  document.body.appendChild(wrapper);
+  move(card, 900, 300);
+  wait(DWELL_MS * 2);
+  expect(widened).toEqual([]);
+  wrapper.remove();
+
+  /* The rail's Copilot accounts panel: role="dialog", open, in the flow. */
+  const footer = document.createElement("div");
+  footer.setAttribute("style", "position: relative");
+  const disclosure = document.createElement("div");
+  disclosure.setAttribute("role", "dialog");
+  footer.appendChild(disclosure);
+  host.querySelector(".rail")!.appendChild(footer);
+  move(card, 920, 300);
+  wait(DWELL_CUE_MS);
+  expect(cued(host)).toEqual(["done"]);
+  wait(DWELL_MS - DWELL_CUE_MS);
+  expect(widened).toEqual(["done"]);
+});
+
+test("a pointer move never scans the document; only the dwell's timers do", () => {
+  const { host, widened } = mount();
+  const doc = document as unknown as Record<"querySelector" | "querySelectorAll" | "getSelection", (...args: unknown[]) => unknown>;
+  const scans: string[] = [];
+  const originals = { querySelector: doc.querySelector, querySelectorAll: doc.querySelectorAll, getSelection: doc.getSelection };
+  for (const name of Object.keys(originals) as Array<keyof typeof originals>) {
+    doc[name] = function (this: unknown, ...args: unknown[]) {
+      scans.push(name);
+      return originals[name].apply(this, args);
+    };
+  }
+  try {
+    /* A mouse sweeping across narrow columns, each move past the jitter. */
+    for (let step = 0; step < 60; step++) move(inside(host, step % 2 ? "done" : "blocked"), 400 + step * 20, 300);
+    expect(scans).toEqual([]);
+    /* Resting: one look when the cue would show and one at the threshold. */
+    wait(DWELL_CUE_MS);
+    const atCue = scans.length;
+    expect(atCue).toBeGreaterThan(0);
+    wait(DWELL_MS - DWELL_CUE_MS);
+    expect(scans.length).toBeGreaterThan(atCue);
+    expect(widened).toEqual(["done"]);
+  } finally {
+    Object.assign(doc, originals);
+  }
 });
 
 test("a press cancels and holds the column until the pointer leaves it; a key or a scroll restarts the count", () => {

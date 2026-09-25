@@ -40,16 +40,32 @@ export interface ColumnDwellOptions {
 }
 
 const COLUMN = ".column[data-status]";
-/* A menu, popover or dialog open anywhere in the document, the ones a reader's
+/* A menu, popover or modal open anywhere in the document, the ones a reader's
    composer portals to the body (model, mic, account, speak) included. */
-const OPEN_OVERLAY = 'dialog[open], [aria-modal="true"], [role="dialog"], [role="menu"], [role="listbox"], [data-runtime-popover]';
+const OPEN_OVERLAY = 'dialog[open], [aria-modal="true"], [role="menu"], [role="listbox"], [data-runtime-popover]';
 
-/** Anything outside the board's own state that also holds the pointer. */
-function held(event: { buttons: number } | null): boolean {
-  if (event && event.buttons !== 0) return true;
+/* A non-modal `role="dialog"` holds the pointer only while it floats over the
+   page. An inline disclosure that also carries the role (the Copilot accounts
+   panel in the rail footer) sits in the flow and leaves the dwell alone. */
+function floats(node: Element): boolean {
+  for (let element: Element | null = node; element && element !== document.body; element = element.parentElement) {
+    const position = window.getComputedStyle(element).position;
+    if (position === "fixed" || position === "absolute") return true;
+  }
+  return false;
+}
+
+/**
+ * Anything outside the board's own state that also holds the pointer: a
+ * selection, a menu, a popover, a dialog. It scans the document, so it runs
+ * only where the dwell decides (its two timers), never per pointer move.
+ */
+function held(): boolean {
   const selection = typeof document.getSelection === "function" ? document.getSelection() : null;
   if (selection && !selection.isCollapsed && selection.toString() !== "") return true;
-  return document.querySelector(OPEN_OVERLAY) !== null;
+  if (document.querySelector(OPEN_OVERLAY) !== null) return true;
+  for (const dialog of document.querySelectorAll('[role="dialog"]')) if (floats(dialog)) return true;
+  return false;
 }
 
 export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: ColumnDwellOptions): void {
@@ -68,7 +84,9 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
     let latched: HTMLElement | null = null;
 
     const statusOf = (column: HTMLElement) => column.dataset.status as TaskStatus;
-    const may = (column: HTMLElement) => column.isConnected && !optionsRef.current.busy() && !held(null) && optionsRef.current.canWiden(statusOf(column));
+    /* What a pointer move may check: no document scan. */
+    const eligible = (column: HTMLElement) => column.isConnected && optionsRef.current.canWiden(statusOf(column));
+    const may = (column: HTMLElement) => eligible(column) && !optionsRef.current.busy() && !held();
 
     const cancel = () => {
       if (cueTimer) clearTimeout(cueTimer);
@@ -82,7 +100,7 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
     };
     const arm = (column: HTMLElement, x: number, y: number) => {
       cancel();
-      if (!may(column)) return;
+      if (!eligible(column)) return;
       armed = column;
       anchor = { x, y };
       cueTimer = setTimeout(() => {
@@ -114,7 +132,8 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
       const column = columnAt(event.target);
       if (latched && latched !== column) latched = null;
       if (!column || column === latched) return cancel();
-      if (held(event)) return cancel();
+      /* A held button is a drag or a selection in progress. */
+      if (event.buttons !== 0) return cancel();
       if (armed === column && Math.hypot(event.clientX - anchor.x, event.clientY - anchor.y) <= DWELL_JITTER_PX) return;
       arm(column, event.clientX, event.clientY);
     };
