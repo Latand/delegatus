@@ -148,9 +148,9 @@ in one direction with the same two controller methods the action used:
 
 | Entry | Undo | Redo |
 |---|---|---|
-| status | `controller.move(task, from, { fence })` | `controller.move(task, to, { fence })` |
-| text | `controller.edit(task, { field: "text", value: before }, { fence })`, no `rebase` | same with `after` |
-| hide | `controller.edit(task, { field: "hide", value: false }, { fence })` per task, chained with `after` as `hideMany`'s Undo does | `{ field: "hide", value: true, replaces }` per task |
+| status | `controller.move(task, from, { fenced: true })` | `controller.move(task, to, { fenced: true })` |
+| text | `controller.edit(task, { field: "text", value: before }, { fenced: true })`, no `rebase` | same with `after` |
+| hide | `controller.edit(task, { field: "hide", value: false }, { fenced: true })` per task, chained with `after` as `hideMany`'s Undo does | `{ field: "hide", value: true, replaces }` per task |
 
 Call sites that record:
 
@@ -176,7 +176,10 @@ write from this board, including colour and priority and an undo itself,
 refreshes it, so a chain of the operator's own actions keeps every entry for
 that task valid, and an undo after a redo is fenced on the redo's revision.
 
-`move` and `edit` gain one option, `fence: string`. With it:
+`move` and `edit` gain one option, `fenced: true`. The fence is read from
+`own` when the write leaves the per-task queue, never when the key is
+pressed: a colour change still in flight when Ctrl+Z is pressed would
+otherwise leave the undo fenced on the revision before it. With it:
 
 - the body's `expectedRevision` is the fence, and `expectedProject` the
   task's stored project as `known` holds it;
@@ -198,8 +201,9 @@ Undo flow, in `history.undo()` on the board:
 
 1. Pop the top `undo` entry; await its `settled`. If false, drop it and take
    the next one.
-2. Read `fence = controller.ownRevision(taskId)`; with no own revision (the
-   controller was remade, which happens only on remount) drop the entry.
+2. With no own revision for the task (the controller was remade, which
+   happens only on remount, and the history with it) nothing is sent and
+   the undo answers `conflict`.
 3. Apply the inverse optimistically through the controller. Show the
    "undone" receipt with a Redo action at once, dismissing the receipt of the
    action it reverses.

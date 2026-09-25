@@ -262,7 +262,7 @@ test("/ inside the board finds a task and never reaches the Viewer's global sear
   }
 });
 
-test("U undoes only while the move's receipt is on screen", async () => {
+test("U undoes the last edit after its receipt has closed (#1856)", async () => {
   const patches: unknown[] = [];
   const ports: TaskMutationPorts = {
     patch: async (id, body) => {
@@ -278,13 +278,17 @@ test("U undoes only while the move's receipt is on screen", async () => {
   flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
   await tick();
   expect(columnOf(host, "a")).toBe("assigned");
-  /* The receipt is closed by hand: its Undo goes with it. */
+  /* The receipt is closed by hand: the edit stays in the board's history. */
   click([...host.querySelectorAll("[data-kanban-receipt] .close")].at(-1));
   expect(host.querySelector("[data-kanban-receipt]")).toBeNull();
   flushSync(() => document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "u", bubbles: true }) as unknown as Event));
   await tick();
-  expect(patches).toHaveLength(1);
-  expect(columnOf(host, "a")).toBe("assigned");
+  expect(patches).toEqual([
+    { id: "a", body: { status: "assigned", expectedProject: "fixture", expectedRevision: REV(1) } },
+    { id: "a", body: { status: "inbox", expectedProject: "fixture", expectedRevision: REV(2) } },
+  ]);
+  expect(columnOf(host, "a")).toBe("inbox");
+  expect(receiptTexts(host)).toEqual(["«Write the release notes» is back in Inbox"]);
 });
 
 /* ── #1841: a column can take the wide share; `O` folds the seat ─────────── */

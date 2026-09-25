@@ -10817,3 +10817,140 @@ describe("a column widens itself: the agent focused from the rail, the mouse res
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+describe("#1856 undo and redo on the desktop board", () => {
+  /*
+   * Rendered evidence for the board's undo and redo (#1856): the real Viewer
+   * over `issue1695Evidence.fixture.tsx?scenario=pipeline-block`, whose tasks
+   * carry Ukrainian titles under `llv_lang=uk`, at 1440 in English and in
+   * Ukrainian:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#1856"
+   *
+   * Gated per language:
+   *   - `]` on a card moves it and the receipt offers Undo;
+   *   - Ctrl+Z puts the card back through one PATCH fenced on the revision the
+   *     move returned, and the receipt is replaced by one offering Redo;
+   *   - an undo after an agent wrote the task where the page cannot see it
+   *     (`agentWritesDescriptionQuietly`) sends one PATCH, meets the 409,
+   *     leaves the card where the store has it, and says so in an error
+   *     receipt with no action whose text stays within two lines at 560 px.
+   *
+   * Measurements go to `evidence/issue-1856/undo-redo.json`; frames to
+   * `.artifacts/issue-1856/`, which is not committed.
+   */
+
+  const OUT = path.resolve(".artifacts/issue-1856");
+  const EVIDENCE = path.resolve("evidence/issue-1856");
+  type Evidence = {
+    agentWritesDescriptionQuietly: (id: string, description: string) => void;
+    taskPatches: Array<{ id: string; body: Record<string, unknown> }>;
+    taskWrites: Array<{ id: string; startedAt: number; answeredAt: number }>;
+    storedTask: (id: string) => Record<string, unknown> | null;
+  };
+  const columnOf = (page: Page, id: string) => page.evaluate((selector) => document.querySelector(selector)?.closest<HTMLElement>(".column")?.dataset.status ?? null, card(id));
+  const storedRevision = (page: Page, id: string) => page.evaluate((task) => (window as unknown as { evidence: Evidence }).evidence.storedTask(task)?.revision ?? null, id);
+  const receipts = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-kanban-receipt]")].map((receipt) => {
+    const message = receipt.querySelector<HTMLElement>(".msg")!;
+    const box = receipt.getBoundingClientRect();
+    return {
+      text: message.textContent ?? "",
+      action: receipt.querySelector(".act")?.textContent ?? null,
+      error: receipt.classList.contains("error"),
+      width: Math.round(box.width),
+      lines: Math.round(message.getBoundingClientRect().height / parseFloat(getComputedStyle(message).lineHeight)),
+      clipped: message.scrollHeight > message.clientHeight + 1,
+    };
+  }));
+  const patches = (page: Page) => page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.taskPatches);
+  const writesSettled = (page: Page, count: number) => page.waitForFunction((expected) => {
+    const writes = (window as unknown as { evidence: Evidence }).evidence.taskWrites;
+    return writes.length === expected && writes.every((write) => write.answeredAt > 0);
+  }, count, { timeout: 10_000 });
+  const short = (title: string) => (title.length > 48 ? `${title.slice(0, 46).trimEnd()}…` : title);
+  const titleOf = (page: Page, id: string) => page.evaluate((selector) => document.querySelector(`${selector} .title`)?.textContent ?? "", card(id));
+
+  browserTest("#1856: a move, its undo, and an undo refused after an agent's write, in English and Ukrainian at 1440", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const record: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        const opened = await openFixture(browser, `${server.base}?scenario=pipeline-block`, VIEWPORT, "light", lang);
+        const { page } = opened;
+        try {
+          await page.waitForSelector(card("t-export"), { timeout: 20_000 });
+          await page.waitForTimeout(800);
+          const frames: Record<string, unknown> = {};
+
+          /* The move. */
+          const title = await titleOf(page, "t-export");
+          await page.locator(card("t-export")).focus();
+          await page.keyboard.press("]");
+          await writesSettled(page, 1);
+          await page.waitForTimeout(300);
+          const moved = await receipts(page);
+          await page.screenshot({ path: path.join(OUT, `move-${lang}.png`) });
+          frames.move = { column: await columnOf(page, "t-export"), receipts: moved };
+          const movedText = tr("kanban.moved", { title: short(title), status: tr("kanban.status.blocked" as never) });
+          if (await columnOf(page, "t-export") !== "blocked") failures.push(`${lang} move: t-export in ${await columnOf(page, "t-export")}`);
+          if (JSON.stringify(moved.map((receipt) => [receipt.text, receipt.action])) !== JSON.stringify([[movedText, tr("kanban.undo")]])) failures.push(`${lang} move: receipts ${JSON.stringify(moved)}`);
+
+          /* Ctrl+Z, on the board. */
+          const afterMove = await storedRevision(page, "t-export");
+          await page.keyboard.press("Control+z");
+          await writesSettled(page, 2);
+          await page.waitForTimeout(300);
+          const undone = await receipts(page);
+          await page.screenshot({ path: path.join(OUT, `undo-${lang}.png`) });
+          const sent = await patches(page);
+          frames.undo = { column: await columnOf(page, "t-export"), receipts: undone, patch: sent[1] ?? null, fence: afterMove };
+          const backText = tr("kanban.movedBack", { title: short(title), status: tr("kanban.status.assigned" as never) });
+          if (await columnOf(page, "t-export") !== "assigned") failures.push(`${lang} undo: t-export in ${await columnOf(page, "t-export")}`);
+          if (JSON.stringify(undone.map((receipt) => [receipt.text, receipt.action])) !== JSON.stringify([[backText, tr("kanban.redo")]])) failures.push(`${lang} undo: receipts ${JSON.stringify(undone)}`);
+          if (sent[1]?.body.status !== "assigned" || !afterMove || sent[1]?.body.expectedRevision !== afterMove) failures.push(`${lang} undo: patch ${JSON.stringify(sent)}`);
+
+          /* An agent writes t-search where the page cannot see it; Ctrl+Z is refused. */
+          const searchTitle = await titleOf(page, "t-search");
+          await page.locator(card("t-search")).focus();
+          await page.keyboard.press("]");
+          await writesSettled(page, 3);
+          await page.waitForTimeout(300);
+          await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.agentWritesDescriptionQuietly("t-search", "Agent: keep the old index until the new one answers a warm query."));
+          await page.keyboard.press("Control+z");
+          await writesSettled(page, 4);
+          await page.waitForTimeout(600);
+          const refused = await receipts(page);
+          await page.screenshot({ path: path.join(OUT, `refusal-${lang}.png`) });
+          const all = await patches(page);
+          frames.refusal = { column: await columnOf(page, "t-search"), receipts: refused, patches: all.slice(2) };
+          const refusedText = tr("kanban.undoRefused", { title: short(searchTitle) });
+          const refusal = refused.find((receipt) => receipt.text === refusedText);
+          if (all.length !== 4) failures.push(`${lang} refusal: ${all.length} patches`);
+          if (await columnOf(page, "t-search") !== "blocked") failures.push(`${lang} refusal: t-search in ${await columnOf(page, "t-search")}`);
+          if (!refusal || !refusal.error || refusal.action !== null) failures.push(`${lang} refusal: receipts ${JSON.stringify(refused)}`);
+          else if (refusal.lines > 2 || refusal.clipped || refusal.width > 560) failures.push(`${lang} refusal: ${refusal.lines} lines, clipped ${refusal.clipped}, ${refusal.width} px`);
+          if (refused.some((receipt) => receipt.text === tr("kanban.movedBack", { title: short(searchTitle), status: tr("kanban.status.assigned" as never) }))) failures.push(`${lang} refusal: the undo's own receipt stayed`);
+          if (opened.pageErrors.length) failures.push(`${lang}: page errors ${opened.pageErrors.join(" | ")}`);
+          record[lang] = frames;
+        } catch (error) {
+          failures.push(`${lang}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    /* A revision has the shape of a UUID, which the publication gate refuses in
+       any committed file: the record keeps its counter only. */
+    const revisions = (_key: string, value: unknown) => (typeof value === "string" && value.startsWith("task-v1:") ? `revision ${Number(value.slice(-12))}` : value);
+    fs.writeFileSync(path.join(EVIDENCE, "undo-redo.json"), `${JSON.stringify({ viewport: VIEWPORT, frames: record, failures }, revisions, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 180_000);
+});

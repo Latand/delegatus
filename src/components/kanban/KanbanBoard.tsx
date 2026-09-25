@@ -59,6 +59,7 @@ import { pipelineTitle, stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
 import { textField, withField } from "./taskText";
+import { BoardHistory, type HistoryEntry } from "./boardHistory";
 import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
 import { usePipelineActions } from "./usePipelineActions";
 import { useBands } from "./useBands";
@@ -236,6 +237,15 @@ function withEntry<V>(map: ReadonlyMap<string, V>, key: string, value: V | undef
 
 const NO_EDITS: ReadonlyMap<string, never> = new Map<string, never>();
 
+type HistoryDirection = "undo" | "redo";
+
+/** A write's answer as a promise the history can wait on before it is known. */
+function settles(): { promise: Promise<boolean>; resolve: (saved: boolean) => void } {
+  let resolve!: (saved: boolean) => void;
+  const promise = new Promise<boolean>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 /** Presence measurement cadence while the operator is scrolling (#1546). The
     scan reads every card's rect, so it runs at most this often during a gesture
     and once more after it settles; presence is exact at rest and at worst one
@@ -296,14 +306,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
     | { kind: "agents" }
   >();
   const { receipts, show, dismiss } = useReceipts();
-  const latestUndo = useRef<{ receiptId: number; run: () => void } | null>(null);
-  /* `U` undoes only what a receipt on screen still offers: once that receipt
-     closes, by its timer or by hand, the undo it carried is gone with it. */
-  const receiptsRef = useRef(receipts);
-  receiptsRef.current = receipts;
-  useEffect(() => {
-    if (latestUndo.current && !receipts.some((receipt) => receipt.id === latestUndo.current!.receiptId)) latestUndo.current = null;
-  }, [receipts]);
 
   const { controller, statuses, edits } = useTaskMutations(allTasks, props.mutationPorts);
   /* Which cards show a pipeline's graph or its summary, as the operator chose. */
@@ -662,26 +664,133 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (element.isConnected && document.activeElement !== element) element.focus({ preventScroll: true });
     });
   });
-  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { receipt?: boolean; focus?: boolean } = {}) => {
+  /* ── Undo and redo (#1856) ───────────────────────────────────────────── */
+  /* The operator's own status moves, text edits and hides, per project and in
+     memory only (boardHistory.ts). An undo or a redo is written fenced on the
+     revision this board's own last write of the task produced, so a task
+     someone else changed in between is refused and stays as they left it. A
+     receipt's Undo, Ctrl+Z and U run the same step; each step replaces the
+     receipt of the entry it answers, so a run of Ctrl+Z shows one receipt. */
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a project switch starts an empty history
+  const history = useMemo(() => new BoardHistory(), [project]);
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  const entryReceipts = useRef(new WeakMap<HistoryEntry, number>());
+  /* Each application of an entry; a write that answers after the entry was
+     applied again leaves the stacks to the newer one. */
+  const entryRuns = useRef(new WeakMap<HistoryEntry, number>());
+  const stepRef = useRef<(direction: HistoryDirection, chosen?: HistoryEntry) => boolean>(() => false);
+  /** Undo or redo `chosen`, or the top of its stack. False when there is nothing to take. */
+  const step = useCallback((direction: HistoryDirection, chosen?: HistoryEntry) => stepRef.current(direction, chosen), []);
+  const applyEntry = (entry: HistoryEntry, direction: HistoryDirection) => {
+    const stacks = historyRef.current;
+    const undoing = direction === "undo";
+    const run = (entryRuns.current.get(entry) ?? 0) + 1;
+    entryRuns.current.set(entry, run);
+    const previous = entryReceipts.current.get(entry);
+    if (previous !== undefined) dismiss(previous);
+    const reverse = { label: t(undoing ? "kanban.redo" : "kanban.undo"), run: () => void step(undoing ? "redo" : "undo", entry) };
+    /* After a redo the board says what it said after the edit itself; a
+       bulk's undo counts what came back. */
+    const bulk = entry.kind === "hide" && entry.tasks.length > 1;
+    const said = () => entry.kind === "status"
+      ? t(undoing ? "kanban.movedBack" : "kanban.moved", { title: entry.title, status: statusLabel(t, undoing ? entry.from : entry.to) })
+      : entry.kind === "text"
+        ? t(undoing ? "kanban.textRestored" : "kanban.edited", { title: entry.title })
+        : entry.tasks.length === 1 && !(undoing && bulk)
+          ? t(undoing ? "kanban.restoredReceipt" : "kanban.hiddenReceipt", { title: entry.tasks[0]!.title })
+          : undoing ? t("kanban.backOnBoardMany", { count: entry.tasks.length }) : entry.text;
+    let receiptId = show(said(), reverse);
+    entryReceipts.current.set(entry, receiptId);
+    if (entry.kind === "hide" && undoing && entry.tasks.length === 1) pendingCardFocus.current = { cardId: `task:${entry.tasks[0]!.taskId}`, fallback: null, always: true };
+    const targets = entry.kind === "hide" ? entry.tasks : [{ taskId: entry.taskId, title: entry.title }];
+    let chain: Promise<unknown> = Promise.resolve();
+    const writes = targets.map(async (target) => {
+      const raw = tasksById.current.get(target.taskId);
+      /* A task that left the board was changed elsewhere, too. */
+      if (!raw) return { target, kind: "conflict" as const, error: "" };
+      let outcome: StatusMoveOutcome | FieldEditOutcome;
+      if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, { fenced: true });
+      else if (entry.kind === "text") outcome = await controller.edit(raw, { field: "text", value: undoing ? entry.before : entry.after }, { fenced: true });
+      else {
+        const write = controller.edit(raw, undoing ? { field: "hide", value: false } : { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { fenced: true, after: chain });
+        chain = write;
+        outcome = await write;
+      }
+      return { target, kind: outcome.kind, error: outcome.kind === "failed" ? outcome.error : "" };
+    });
+    void Promise.all(writes).then((results) => {
+      const current = entryRuns.current.get(entry) === run;
+      const saved = results.filter((result) => result.kind !== "conflict" && result.kind !== "failed").map((result) => result.target);
+      const refused = results.filter((result) => result.kind === "conflict").map((result) => result.target);
+      const failed = results.filter((result) => result.kind === "failed");
+      for (const target of refused) {
+        flash(`task:${target.taskId}`);
+        stacks.dropTask(target.taskId);
+      }
+      if (entry.kind === "hide") entry.tasks = saved;
+      if (saved.length && current) {
+        if (undoing) stacks.pushRedo(entry);
+        else stacks.pushUndo(entry);
+      }
+      if (!saved.length) dismiss(receiptId);
+      else if (saved.length < targets.length) {
+        /* Part of a bulk came through: the receipt counts only that part. */
+        dismiss(receiptId);
+        receiptId = show(said(), reverse);
+        entryReceipts.current.set(entry, receiptId);
+      }
+      if (refused.length) {
+        show(refused.length === 1
+          ? t(undoing ? "kanban.undoRefused" : "kanban.redoRefused", { title: refused[0]!.title })
+          : t("kanban.undoRefusedMany", { count: refused.length }), undefined, { error: true });
+      }
+      if (failed.length) {
+        /* What did not reach the server goes back where it came from, and Retry takes it again. */
+        const rest: HistoryEntry = entry.kind !== "hide" ? entry : saved.length ? { ...entry, tasks: failed.map((result) => result.target) } : Object.assign(entry, { tasks: failed.map((result) => result.target) });
+        if (current || rest !== entry) {
+          if (undoing) stacks.pushUndo(rest);
+          else stacks.pushRedo(rest);
+        }
+        entryReceipts.current.set(rest, show(t(undoing ? "kanban.undoFailed" : "kanban.redoFailed", { error: failed[0]!.error }), { label: t("kanban.retry"), run: () => void step(direction, rest) }, { error: true }));
+      }
+    });
+  };
+  stepRef.current = (direction, chosen) => {
+    const stacks = historyRef.current;
+    if (chosen) stacks.discard(chosen);
+    const entry = chosen ?? (direction === "undo" ? stacks.takeUndo() : stacks.takeRedo());
+    if (!entry) return false;
+    /* An edit still being written is undone once its write has answered; one
+       that did not save is skipped for the next. */
+    const answered = (saved: boolean) => {
+      if (saved) applyEntry(entry, direction);
+      else if (!chosen) step(direction);
+    };
+    if (entry.saved === undefined) void entry.settled.then(answered);
+    else answered(entry.saved);
+    return true;
+  };
+
+  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean } = {}) => {
     const task = card.task ? tasksById.current.get(card.task.id) ?? card.task : null;
     if (!task) return;
     const from = card.status;
     if (from === to) return;
     const title = card.titlePending ? t("kanban.untitled") : card.title;
     const short = title.length > 48 ? `${title.slice(0, 46).trimEnd()}…` : title;
-    const undo = () => {
-      const current = cardsByIdRef.current.get(card.id);
-      if (current) move(current, from, { receipt: false });
-    };
-    const receiptId = options.receipt === false
-      ? show(t("kanban.movedBack", { title: short, status: statusLabel(t, to) }))
-      : show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: undo });
-    if (options.receipt !== false) latestUndo.current = { receiptId, run: undo };
+    const written = settles();
+    const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, settled: written.promise };
+    historyRef.current.record(entry);
+    const receiptId = show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
+    entryReceipts.current.set(entry, receiptId);
     if (options.focus) focusMoved(card.id, to);
     void controller.move(task, to).then((outcome: StatusMoveOutcome) => {
+      written.resolve(outcome.kind === "saved");
+      /* The server already held the status: nothing of this board's is left to undo. */
+      if (outcome.kind === "settled") dismiss(receiptId);
       if (outcome.kind === "failed") {
         dismiss(receiptId);
-        if (latestUndo.current?.receiptId === receiptId) latestUndo.current = null;
         flash(card.id);
         show(t("kanban.moveFailed", { title: short, error: outcome.error }), {
           label: t("kanban.retry"),
@@ -692,7 +801,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
         }, { error: true });
       } else if (outcome.kind === "conflict") {
         dismiss(receiptId);
-        if (latestUndo.current?.receiptId === receiptId) latestUndo.current = null;
         flash(card.id);
         show(t("kanban.movedElsewhere", { title: short, status: statusLabel(t, outcome.serverStatus) }), {
           label: t("kanban.moveAnyway"),
@@ -703,7 +811,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         }, { error: true });
       }
     });
-  }, [controller, dismiss, flash, focusMoved, show, t]);
+  }, [controller, dismiss, flash, focusMoved, show, step, t]);
   const cardsByIdRef = useRef(cardsById);
   cardsByIdRef.current = cardsById;
 
@@ -799,11 +907,26 @@ export function KanbanBoard(props: KanbanBoardProps) {
       return;
     }
     setFailedEdits((current) => withEntry(current, cardId, undefined));
+    const sent = withField(currentText, field, value);
+    const newTitle = textField(sent, "title") || t("kanban.untitled");
+    const written = settles();
+    const entry: HistoryEntry = { kind: "text", taskId: raw.id, title: newTitle.length > 48 ? `${newTitle.slice(0, 46).trimEnd()}…` : newTitle, before: currentText, after: sent, settled: written.promise };
+    historyRef.current.record(entry);
+    const receiptId = show(t("kanban.edited", { title: entry.title }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
+    entryReceipts.current.set(entry, receiptId);
     const outcome: FieldEditOutcome = await controller.edit(raw, {
       field: "text",
-      value: withField(currentText, field, value),
+      value: sent,
       rebase: (stored) => (textField(stored, field) === found ? withField(stored, field, value) : null),
     });
+    /* A save rebased onto text an agent moved meanwhile is undone to that
+       text with only this edit's part put back. */
+    if (outcome.kind === "saved" && outcome.task.text !== sent) {
+      entry.before = withField(outcome.task.text, field, found);
+      entry.after = outcome.task.text;
+    }
+    written.resolve(outcome.kind === "saved");
+    if (outcome.kind !== "saved") dismiss(receiptId);
     if (outcome.kind === "failed") {
       flash(cardId);
       setFailedEdits((current) => withEntry(current, cardId, { field, draft, base: found, message: /[.!?…]$/.test(outcome.error.trim()) ? outcome.error.trim() : `${outcome.error.trim()}.` }));
@@ -817,7 +940,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     } else {
       setIncomingEdits((current) => withEntry(current, cardId, undefined));
     }
-  }, [controller, flash, t]);
+  }, [controller, dismiss, flash, show, step, t]);
   const commitEdit = useCallback((cardId: string) => {
     const entry = editingRef.current.get(cardId);
     if (!entry) return;
@@ -983,20 +1106,23 @@ export function KanbanBoard(props: KanbanBoardProps) {
       return;
     }
     pendingCardFocus.current = neighbourOf(card.id);
-    const undo = () => showGroup(raw.id, title, { focus: true });
-    const receiptId = show(card.working ? t("kanban.hiddenReceiptWorking", { title, count: card.working }) : t("kanban.hiddenReceipt", { title }), { label: t("kanban.undo"), run: undo });
-    latestUndo.current = { receiptId, run: undo };
+    const text = card.working ? t("kanban.hiddenReceiptWorking", { title, count: card.working }) : t("kanban.hiddenReceipt", { title });
+    const written = settles();
+    const entry: HistoryEntry = { kind: "hide", text, tasks: [{ taskId: raw.id, title }], settled: written.promise };
+    historyRef.current.record(entry);
+    const receiptId = show(text, { label: t("kanban.undo"), run: () => void step("undo", entry) });
+    entryReceipts.current.set(entry, receiptId);
     void controller.edit(raw, { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }).then((outcome) => {
+      written.resolve(outcome.kind === "saved");
       if (outcome.kind !== "failed") return;
       dismiss(receiptId);
-      if (latestUndo.current?.receiptId === receiptId) latestUndo.current = null;
       hideFailedReceipt(card, outcome, () => {
         const current = cardsByIdRef.current.get(card.id);
         if (current) hideCard(current);
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers read refs and the card they are given
-  }, [controller, dismiss, show, showGroup, t]);
+  }, [controller, dismiss, show, step, t]);
   /* Dismiss (docs/design/needs-attention.md §5): the card stops flagging the
      reasons it drew, on the click, and comes back only when something newer
      asks. Nothing else moves, so the receipt's Undo is the same request with
@@ -1034,48 +1160,31 @@ export function KanbanBoard(props: KanbanBoardProps) {
       return raw ? [{ card, raw }] : [];
     });
     if (!targets.length) return;
-    const refused = new Set<string>();
     let previous: Promise<unknown> = Promise.resolve();
     const outcomes = targets.map(({ raw }) => {
       const outcome = controller.edit(raw, { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { after: previous });
       previous = outcome;
       return outcome;
     });
-    /* Undo shows every group this hide hid, one write at a time. A group the
-       server keeps hidden gets its own receipt with Retry, and the count says
-       only how many came back. */
-    const undo = () => {
-      let chain: Promise<unknown> = Promise.resolve();
-      const back = targets.filter(({ raw }) => !refused.has(raw.id)).map(({ card, raw }) => {
-        const outcome = controller.edit(tasksById.current.get(raw.id) ?? raw, { field: "hide", value: false }, { after: chain });
-        chain = outcome;
-        return outcome.then((result) => {
-          if (result.kind !== "failed") return true;
-          const title = shortTitle(card);
-          show(t("kanban.showFailed", { title, error: result.error }), { label: t("kanban.retry"), run: () => showGroup(raw.id, title, { focus: true }) }, { error: true });
-          return false;
-        });
-      });
-      void Promise.all(back).then((results) => {
-        const count = results.filter(Boolean).length;
-        if (count) show(t("kanban.backOnBoardMany", { count }));
-      });
-    };
-    const receiptId = show(text, { label: t("kanban.undo"), run: undo });
-    latestUndo.current = { receiptId, run: undo };
-    targets.forEach(({ card, raw }, index) => {
-      void outcomes[index]!.then((outcome) => {
-        if (outcome.kind !== "failed") return;
-        refused.add(raw.id);
-        hideFailedReceipt(card, outcome, null);
-        if (refused.size === targets.length) {
-          dismiss(receiptId);
-          if (latestUndo.current?.receiptId === receiptId) latestUndo.current = null;
-        }
-      });
+    /* One entry for the whole bulk: its Undo shows every group this hide hid,
+       one write at a time. A group the server refused to hide leaves the
+       entry, and each gets its own receipt. */
+    const written = settles();
+    const entry: HistoryEntry = { kind: "hide", text, tasks: targets.map(({ card, raw }) => ({ taskId: raw.id, title: shortTitle(card) })), settled: written.promise };
+    historyRef.current.record(entry);
+    const receiptId = show(text, { label: t("kanban.undo"), run: () => void step("undo", entry) });
+    entryReceipts.current.set(entry, receiptId);
+    void Promise.all(targets.map(({ card, raw }, index) => outcomes[index]!.then((outcome) => {
+      if (outcome.kind === "saved") return true;
+      if (entry.kind === "hide") entry.tasks = entry.tasks.filter((target) => target.taskId !== raw.id);
+      if (outcome.kind === "failed") hideFailedReceipt(card, outcome, null);
+      return false;
+    }))).then((saved) => {
+      written.resolve(saved.some(Boolean));
+      if (!saved.some(Boolean)) dismiss(receiptId);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers read refs and the cards they are given
-  }, [controller, dismiss, show, showGroup, t]);
+  }, [controller, dismiss, show, step, t]);
   /* The column's own bulk hides, as its menu and the idle divider offer them. */
   const idleToHide = (column: KanbanModel["columns"][TaskStatus]) => column.shown.filter((card) => card.idle && !card.holdsSeat && card.task);
   const hideIdle = (status: TaskStatus) => {
@@ -1576,7 +1685,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     document.addEventListener("keydown", escape, true);
   }, [move]);
 
-  /* ── Keys: undo, find ────────────────────────────────────────────────── */
+  /* ── Keys: undo and redo, find ───────────────────────────────────────── */
   /* The Stages sheet stands over the board: while it is open, no key the
      board answers reaches behind it. */
   const sheetOpen = useRef(false);
@@ -1587,8 +1696,21 @@ export function KanbanBoard(props: KanbanBoardProps) {
   seatToggleRef.current = seatView ? seatFrame.toggle : null;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
+      /* Ctrl/Cmd+Z undoes the operator's last edit, Ctrl/Cmd+Shift+Z and
+         Ctrl+Y redo it (#1856). A field, the composer, a dialog or a menu keeps
+         the chord for itself, and an empty stack leaves it to the browser. */
+      const chord = (event.ctrlKey || event.metaKey) && !event.altKey ? event.key.toLowerCase() : "";
+      const direction = chord === "z" ? (event.shiftKey ? "redo" : "undo") : chord === "y" && event.ctrlKey && !event.metaKey && !event.shiftKey ? "redo" : null;
+      if (direction) {
+        if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='menu']")) return;
+        if (sheetOpen.current || menuOpenRef.current) return;
+        const inside = Boolean(target && rootRef.current?.contains(target) && !target.closest(VIEWER_OWNED));
+        if (!inside && target !== document.body) return;
+        if (step(direction)) event.preventDefault();
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       /* The bar's two ends and the island slot hold the Viewer's own controls (the project, its
          accounts, the panel toggles, ⋯ and the attention island): the board's keys stay out of
@@ -1612,19 +1734,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
         event.preventDefault();
         seatToggleRef.current();
       } else if (event.key === "u" || event.key === "U") {
-        if (sheetOpen.current) return;
+        /* The single-key alias of Ctrl+Z, kept from before the history. */
+        if (sheetOpen.current || menuOpenRef.current) return;
         if (!inBoard && target !== document.body) return;
-        const undo = latestUndo.current;
-        if (!undo || !receiptsRef.current.some((receipt) => receipt.id === undo.receiptId)) return;
-        event.preventDefault();
-        latestUndo.current = null;
-        dismiss(undo.receiptId);
-        undo.run();
+        if (target?.closest("[role='dialog'], [role='menu']")) return;
+        if (step("undo")) event.preventDefault();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [dismiss]);
+  }, [step]);
 
   /* ── Opening what a card holds ───────────────────────────────────────── */
   /* What to bring into view once React has committed: the card, and the

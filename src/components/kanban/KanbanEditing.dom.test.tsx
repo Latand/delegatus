@@ -438,16 +438,15 @@ test("Hide finished tasks keeps working and seat groups, writes one task at a ti
   click(receiptAction(view.host, text));
   await tick();
   expect(patches.slice(3).map((patch) => [patch.id, (patch.body as { hide: boolean }).hide])).toEqual([[patches[1]!.id, false]]);
-  /* The server keeps the first group hidden: it gets its own receipt with
-     Retry, the next unhide still goes out, and the count leaves it out. */
+  /* The server keeps the first group hidden: the undo says so with Retry,
+     the next unhide still goes out, and the count leaves it out. */
   answers[3]!({ ok: false, status: 500, error: "disk full" });
   await tick();
   expect(patches.slice(4).map((patch) => [patch.id, (patch.body as { hide: boolean }).hide])).toEqual([[patches[2]!.id, false]]);
   answers[4]!({ ok: true, task: task(patches[2]!.id, "done", "x", { revision: REV(3) }) });
   await tick();
   await tick();
-  const titles: Record<string, string> = { a: "Merge the approved queue adapter", b: "Compact board stages", c: "Universal interrupt" };
-  const refusedText = `Couldn't show «${titles[patches[1]!.id]}»: disk full`;
+  const refusedText = "Couldn't undo: disk full";
   expect(receiptTexts(view.host)).toContain(refusedText);
   expect(receiptAction(view.host, refusedText)?.textContent).toBe("Retry");
   expect(receiptTexts(view.host)).toContain("1 task is back on the board");
@@ -680,7 +679,7 @@ test("an Undo the server refuses takes back its success receipt and offers Retry
   await tick();
   expect(columnOf(view.host, "a")).toBeNull();
   expect(receiptTexts(view.host)).not.toContain("«Merge the approved queue adapter» is back on the board");
-  expect(receiptAction(view.host, "Couldn't show «Merge the approved queue adapter»: disk full")?.textContent).toBe("Retry");
+  expect(receiptAction(view.host, "Couldn't undo: disk full")?.textContent).toBe("Retry");
 });
 
 const inboxOrder = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.column[data-status="inbox"] .card')].map((card) => card.getAttribute("data-id")!.replace("task:", ""));

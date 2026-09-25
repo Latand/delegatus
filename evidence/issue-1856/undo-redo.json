@@ -1,0 +1,161 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "frames": {
+    "en": {
+      "move": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "Moved «Simplify the export settings sheet» to Blocked",
+            "action": "Undo",
+            "error": false,
+            "width": 439,
+            "lines": 1,
+            "clipped": false
+          }
+        ]
+      },
+      "undo": {
+        "column": "assigned",
+        "receipts": [
+          {
+            "text": "«Simplify the export settings sheet» is back in Assigned",
+            "action": "Redo",
+            "error": false,
+            "width": 441,
+            "lines": 1,
+            "clipped": false
+          }
+        ],
+        "patch": {
+          "id": "t-export",
+          "body": {
+            "status": "assigned",
+            "expectedProject": "atlas",
+            "expectedRevision": "revision 21"
+          }
+        },
+        "fence": "revision 21"
+      },
+      "refusal": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "«Simplify the export settings sheet» is back in Assigned",
+            "action": "Redo",
+            "error": false,
+            "width": 441,
+            "lines": 1,
+            "clipped": false
+          },
+          {
+            "text": "«Restore search results after the index rebuild» was changed elsewhere, so nothing was undone",
+            "action": null,
+            "error": true,
+            "width": 560,
+            "lines": 2,
+            "clipped": false
+          }
+        ],
+        "patches": [
+          {
+            "id": "t-search",
+            "body": {
+              "status": "blocked",
+              "expectedProject": "atlas",
+              "expectedRevision": "revision 1"
+            }
+          },
+          {
+            "id": "t-search",
+            "body": {
+              "status": "assigned",
+              "expectedProject": "atlas",
+              "expectedRevision": "revision 23"
+            }
+          }
+        ]
+      }
+    },
+    "uk": {
+      "move": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "«Спростити аркуш налаштувань експорту» перенесено до «Заблоковані»",
+            "action": "Скасувати",
+            "error": false,
+            "width": 560,
+            "lines": 2,
+            "clipped": false
+          }
+        ]
+      },
+      "undo": {
+        "column": "assigned",
+        "receipts": [
+          {
+            "text": "«Спростити аркуш налаштувань експорту» знову в «Призначені»",
+            "action": "Повторити",
+            "error": false,
+            "width": 549,
+            "lines": 1,
+            "clipped": false
+          }
+        ],
+        "patch": {
+          "id": "t-export",
+          "body": {
+            "status": "assigned",
+            "expectedProject": "atlas",
+            "expectedRevision": "revision 21"
+          }
+        },
+        "fence": "revision 21"
+      },
+      "refusal": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "«Спростити аркуш налаштувань експорту» знову в «Призначені»",
+            "action": "Повторити",
+            "error": false,
+            "width": 549,
+            "lines": 1,
+            "clipped": false
+          },
+          {
+            "text": "«Повернути результати пошуку після перебудови і…» змінили деінде, тому нічого не скасовано",
+            "action": null,
+            "error": true,
+            "width": 560,
+            "lines": 2,
+            "clipped": false
+          }
+        ],
+        "patches": [
+          {
+            "id": "t-search",
+            "body": {
+              "status": "blocked",
+              "expectedProject": "atlas",
+              "expectedRevision": "revision 1"
+            }
+          },
+          {
+            "id": "t-search",
+            "body": {
+              "status": "assigned",
+              "expectedProject": "atlas",
+              "expectedRevision": "revision 23"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "failures": []
+}
