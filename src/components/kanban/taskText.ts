@@ -20,3 +20,14 @@ export function withField(text: string, field: "title" | "description", value: s
   const first = newline < 0 ? text : text.slice(0, newline);
   return value ? `${first}\n${value}` : first;
 }
+
+/** A title short enough to quote in a receipt or a label: whole up to 48
+    characters, otherwise cut at the last space before the 46th and ended with
+    "…", so no word is broken. A first word longer than half the limit is cut
+    where the limit falls. */
+export function clipTitle(title: string, limit = 46): string {
+  if (title.length <= limit + 2) return title;
+  const head = title.slice(0, limit);
+  const space = /\s/.test(title[limit]) ? limit : head.search(/\s\S*$/);
+  return `${(space >= limit / 2 ? head.slice(0, space) : head).trimEnd()}…`;
+}

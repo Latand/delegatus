@@ -5,6 +5,14 @@
   },
   "frames": {
     "en": {
+      "before": {
+        "wells": {
+          "inbox": 1523,
+          "assigned": 1523,
+          "blocked": 1523,
+          "done": 1523
+        }
+      },
       "move": {
         "column": "blocked",
         "receipts": [
@@ -19,13 +27,17 @@
         ],
         "placement": {
           "paneCentre": 844,
-          "stackCentre": 844,
           "receiptCentres": [
             844
           ],
-          "pageBottom": 834,
-          "stackTop": 834,
-          "covered": []
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
         }
       },
       "undo": {
@@ -51,13 +63,17 @@
         "fence": "revision 21",
         "placement": {
           "paneCentre": 844,
-          "stackCentre": 844,
           "receiptCentres": [
             844
           ],
-          "pageBottom": 834,
-          "stackTop": 834,
-          "covered": []
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
         }
       },
       "refusal": {
@@ -100,14 +116,46 @@
         ],
         "placement": {
           "paneCentre": 844,
-          "stackCentre": 844,
           "receiptCentres": [
             844,
             844
           ],
-          "pageBottom": 772,
-          "stackTop": 772,
-          "covered": []
+          "stackTop": 776,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "closed": {
+        "lastCardBottoms": {
+          "before": {
+            "inbox": 554,
+            "assigned": 747,
+            "blocked": 747,
+            "done": 747
+          },
+          "after": {
+            "inbox": 554,
+            "assigned": 747,
+            "blocked": 747,
+            "done": 747
+          }
+        },
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [],
+          "stackTop": null,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
         }
       },
       "failure": {
@@ -124,17 +172,43 @@
         ],
         "placement": {
           "paneCentre": 844,
-          "stackCentre": 844,
           "receiptCentres": [
             844
           ],
-          "pageBottom": 834,
-          "stackTop": 834,
-          "covered": []
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "expired": {
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [],
+          "stackTop": null,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
         }
       }
     },
     "uk": {
+      "before": {
+        "wells": {
+          "inbox": 1523,
+          "assigned": 1523,
+          "blocked": 1523,
+          "done": 1523
+        }
+      },
       "move": {
         "column": "blocked",
         "receipts": [
@@ -149,13 +223,17 @@
         ],
         "placement": {
           "paneCentre": 844,
-          "stackCentre": 844,
           "receiptCentres": [
             844
           ],
-          "pageBottom": 826,
-          "stackTop": 826,
-          "covered": []
+          "stackTop": 830,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
         }
       },
       "undo": {
@@ -181,13 +259,17 @@
         "fence": "revision 21",
         "placement": {
           "paneCentre": 844,
-          "stackCentre": 844,
           "receiptCentres": [
             844
           ],
-          "pageBottom": 834,
-          "stackTop": 834,
-          "covered": []
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
         }
       },
       "refusal": {
@@ -202,7 +284,7 @@
             "clipped": false
           },
           {
-            "text": "Хтось інший тим часом змінив «Повернути результати пошуку після перебудови і…», тому нічого не скасовано",
+            "text": "Хтось інший тим часом змінив «Повернути результати пошуку після перебудови…», тому нічого не скасовано",
             "action": null,
             "error": true,
             "width": 560,
@@ -230,14 +312,46 @@
         ],
         "placement": {
           "paneCentre": 844,
-          "stackCentre": 844,
           "receiptCentres": [
             844,
             844
           ],
-          "pageBottom": 772,
-          "stackTop": 772,
-          "covered": []
+          "stackTop": 776,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "closed": {
+        "lastCardBottoms": {
+          "before": {
+            "inbox": 554,
+            "assigned": 747,
+            "blocked": 747,
+            "done": 747
+          },
+          "after": {
+            "inbox": 554,
+            "assigned": 747,
+            "blocked": 747,
+            "done": 747
+          }
+        },
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [],
+          "stackTop": null,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
         }
       },
       "failure": {
@@ -254,13 +368,31 @@
         ],
         "placement": {
           "paneCentre": 844,
-          "stackCentre": 844,
           "receiptCentres": [
             844
           ],
-          "pageBottom": 834,
-          "stackTop": 834,
-          "covered": []
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "expired": {
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [],
+          "stackTop": null,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
         }
       }
     }

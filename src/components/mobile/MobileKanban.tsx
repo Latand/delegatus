@@ -14,6 +14,7 @@ import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/component
 import { subjectOf } from "@/components/kanban/cardDismissal";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
+import { clipTitle } from "@/components/kanban/taskText";
 import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
@@ -119,7 +120,7 @@ export interface MobileKanbanProps extends PhoneBoardInput {
 
 function shortTitle(t: TFunction, item: PhoneCard): string {
   const title = item.kind === "pipeline" && item.shown ? pipelineTitle(t, item.shown.pipeline) : item.card.titlePending ? t("kanban.untitled") : item.card.title;
-  return title.length > 48 ? `${title.slice(0, 46).trimEnd()}…` : title;
+  return clipTitle(title);
 }
 
 /** An age on a card, with a unit (§3.4: "4m", "1h 5m"); a day or more reads

@@ -234,10 +234,16 @@ The receipt is the toast. Its timing and cap do not change: at most three,
 560 px wide at most, 30 px action button. Its place does: the design review
 found the viewport-centred stack left of the board beside an open project
 rail and over the cards at a column's foot, and undo makes a receipt and a
-refusal under it an ordinary pair. The stack now stands in a strip of its
-own under the board's page (`.kb-pane` in `KanbanBoard.tsx`), centred on
-the pane; while a receipt shows, the page gives up that height and the
-columns end above it, and an empty stack takes no room. `useReceipts` gains nothing; the
+refusal under it an ordinary pair. The stack now stands over the foot of
+the board's pane (`.kb-pane` in `KanbanBoard.tsx`), centred on the pane, and
+changes the size of no column: a first round that gave the stack a strip of
+its own shrank every column by the stack's height whenever a receipt came
+and grew them back when it went. While the stack shows, its height pads the
+foot of every card list (`--kb-receipts-inset`, set by `KanbanReceipts`), so
+a list scrolled to its end brings its last card above the stack; a list
+scrolled into that inset keeps the padding after the stack shrinks until the
+reader scrolls out of it, so its cards do not jump when a receipt leaves.
+`useReceipts` gains nothing; the
 board dismisses the receipt it answers before showing the next, so a run of
 Ctrl+Z shows one pill that changes, never three stacked. An action receipt
 and an error receipt can coexist (an undo that refused while another move's
@@ -265,8 +271,11 @@ Copy, with the existing `kanban.undo` reused as the Undo label:
 A redo of a move shows `kanban.moved` with Undo, a redo of a hide shows
 `kanban.hiddenReceipt` with Undo, a redo of a text edit shows
 `kanban.edited` with Undo: after a redo the board looks exactly as it did
-after the action. Titles are shortened to 48 characters as `move` already
-does (`:670-671`). `kanban.retry` is reused for Retry. `kanban.undoGone` and
+after the action. A title longer than 48 characters is cut by `clipTitle`
+(`taskText.ts`) back to the last space before the 46th character and ends
+in "…", so a Ukrainian title, about a third longer than its English one, is
+never cut inside a word; a single word longer than half that is still cut
+where the limit falls. Every receipt that quotes a title uses it. `kanban.retry` is reused for Retry. `kanban.undoGone` and
 `kanban.nothingToUndo` from the earlier design are not added: a deleted task
 is a task changed elsewhere, and an empty stack answers the key with nothing.
 

@@ -58,7 +58,7 @@ import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { pipelineTitle, stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
-import { textField, withField } from "./taskText";
+import { clipTitle, textField, withField } from "./taskText";
 import { BoardHistory, type HistoryEntry } from "./boardHistory";
 import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
 import { usePipelineActions } from "./usePipelineActions";
@@ -778,7 +778,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const from = card.status;
     if (from === to) return;
     const title = card.titlePending ? t("kanban.untitled") : card.title;
-    const short = title.length > 48 ? `${title.slice(0, 46).trimEnd()}…` : title;
+    const short = clipTitle(title);
     const written = settles();
     const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, settled: written.promise };
     historyRef.current.record(entry);
@@ -839,7 +839,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const pendingCardFocus = useRef<{ cardId: string; fallback: TaskStatus | null; always: boolean } | null>(null);
   const shortTitle = (card: KanbanCardModel) => {
     const title = card.titlePending ? t("kanban.untitled") : card.title;
-    return title.length > 48 ? `${title.slice(0, 46).trimEnd()}…` : title;
+    return clipTitle(title);
   };
   const startEdit = useCallback((card: KanbanCardModel, field: EditField) => {
     const task = card.task ? effectiveById.current.get(card.task.id) : undefined;
@@ -910,7 +910,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const sent = withField(currentText, field, value);
     const newTitle = textField(sent, "title") || t("kanban.untitled");
     const written = settles();
-    const entry: HistoryEntry = { kind: "text", taskId: raw.id, title: newTitle.length > 48 ? `${newTitle.slice(0, 46).trimEnd()}…` : newTitle, before: currentText, after: sent, settled: written.promise };
+    const entry: HistoryEntry = { kind: "text", taskId: raw.id, title: clipTitle(newTitle), before: currentText, after: sent, settled: written.promise };
     historyRef.current.record(entry);
     const receiptId = show(t("kanban.edited", { title: entry.title }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
     entryReceipts.current.set(entry, receiptId);
@@ -2601,7 +2601,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
       <div className={`kb-body${seatSide ? " seat-side" : ""}`}>
       {seatSide && seatView}
-      {/* The board's pane: its page, and under it the receipts, in a strip of their own centred on the pane. */}
+      {/* The board's pane: its page, and the receipts over its foot, centred on the pane. */}
       <div className="kb-pane">
       <div className="kb-page">
       {seatSide ? null : seatView}
