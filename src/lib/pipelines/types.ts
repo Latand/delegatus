@@ -714,6 +714,19 @@ export type PipelineCloseTeardown = {
   flow: { id: string; stageId: string; attempt: number } | null;
 };
 
+/** Nothing of the pipeline is still running: its close teardown settled with
+    every host confirmed gone, no close waits on a spawn, and no delivery is in
+    flight. A completed or closed pipeline that fails this still owns its
+    checkout. */
+export function pipelineActivitySettled(
+  pipeline: Pick<Pipeline, "closeTeardown" | "closeReport" | "activationCloseRequested" | "delivery">,
+): boolean {
+  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return false;
+  if (pipeline.activationCloseRequested) return false;
+  if (pipeline.delivery?.active || pipeline.delivery?.operation?.state === "running") return false;
+  return true;
+}
+
 export type Pipeline = {
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;

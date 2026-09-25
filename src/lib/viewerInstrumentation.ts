@@ -102,6 +102,8 @@ interface CurrentReleaseControllerLoaders {
   loadSeatTick?: () => Promise<{ startSeatTick: () => boolean }>;
   /** Optional for the same reason. */
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
+  /** Optional for the same reason. */
+  loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -389,6 +391,7 @@ export async function startCurrentReleaseControllers(
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
+    loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
   },
 ): Promise<void> {
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
@@ -468,6 +471,14 @@ export async function startCurrentReleaseControllers(
     tempSweep?.startTempSweep();
   } catch (error) {
     console.error("[temp sweep] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* Merged lanes' worktrees (#2202), on the same clock for the same reason.
+     `LLV_WORKTREE_SWEEP=0` turns it off, `dry-run` only reports. */
+  try {
+    const worktreeSweep = await loaders.loadWorktreeSweep?.();
+    worktreeSweep?.startWorktreeSweep();
+  } catch (error) {
+    console.error("[worktree sweep] start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();

@@ -37,6 +37,9 @@ export type ForgeRepositoryEntry = {
   prs: Record<string, StoredPullRequest>;
   /** Numbers a per-number read found are not pull requests. */
   issues: Record<string, { checkedAt: string }>;
+  /** A full read since `headRefOid` was added has run, so every merged PR in
+      `prs` carries its head commit. An entry without it is read in full once. */
+  headRefOids?: true;
 };
 
 export type ForgeCacheFile = {
@@ -69,6 +72,7 @@ function validEntry(value: unknown): ForgeRepositoryEntry | null {
       state: pr.state,
       closes: Array.isArray(pr.closes) ? pr.closes.filter((n): n is number => Number.isSafeInteger(n) && n > 0) : [],
       checkedAt: typeof pr.checkedAt === "string" ? pr.checkedAt : "",
+      ...(typeof pr.headRefOid === "string" && pr.headRefOid ? { headRefOid: pr.headRefOid } : {}),
     };
   }
   const text = (field: unknown) => (typeof field === "string" && field ? field : null);
@@ -80,6 +84,7 @@ function validEntry(value: unknown): ForgeRepositoryEntry | null {
     lastError: entry.lastError === "timed-out" || entry.lastError === "command-failed" || entry.lastError === "malformed-output" ? entry.lastError : null,
     prs,
     issues: entry.issues && typeof entry.issues === "object" && !Array.isArray(entry.issues) ? { ...entry.issues } : {},
+    ...(entry.headRefOids === true ? { headRefOids: true as const } : {}),
   };
 }
 
