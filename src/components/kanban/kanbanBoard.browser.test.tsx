@@ -8546,20 +8546,28 @@ describe("the open agents at the board's side: short names, role emblem and colo
   /* The page's edges, read in the same frames. The project's name, the
      folded Orchestrator row and the rail start on one left edge; the row
      stands one gap below the bar and one gap above what the board draws
-     next (the columns, or the scroll mode's jump strip, which then stands
-     that gap above the columns); the rail's top is the columns' top; the
+     next (the columns, or the strip over them, the scroll mode's jump
+     strip or the tabbed mode's tabs, which starts where the first column
+     does and stands that gap above the columns); the rail's top is the columns' top; the
      rail's rows and the cards hold their content at one inset; and every
      column's title sits at the same offset in its column, framed or not.
-     Each case runs with the rail, in its full tier at 1440×900 and
-     1920×1080 and as the count at 1600×900, and without it. */
+     The first column the board shows starts on that edge too, and beside
+     the rail it stands the board's edge (`--kb-edge`) clear of it, the same
+     space the rail keeps from the sidebar, in every mode; the scroller's
+     snap once scrolled that edge away at 1440×900. Each case runs with the
+     rail, in its full tier at 1440×900 and 1920×1080 and as the count at
+     1600×900, and without it, and at 1000×800 and 700×800 without it,
+     where the board scrolls and where it shows tabs. */
   interface EdgeReading {
     mode: string | null;
     tier: string | null;
     name: number | null;
     seat: { left: number; top: number; bottom: number } | null;
     bar: number;
-    rail: { left: number; top: number } | null;
-    strip: { top: number; bottom: number } | null;
+    rail: { left: number; top: number; right: number } | null;
+    edge: number;
+    column: number | null;
+    strip: { left: number; top: number; bottom: number } | null;
     columns: number;
     railInset: number | null;
     cardInset: number | null;
@@ -8578,8 +8586,7 @@ describe("the open agents at the board's side: short names, role emblem and colo
     }
     const seat = rect(document.querySelector(".kb-page > .seat"));
     const railBox = rect(document.querySelector("[data-open-rail] :is(.or-chip, .or-count)"));
-    const stripEl = document.querySelector(".scroll-wrap > .tabs-nav.jump");
-    const strip = rect(stripEl);
+    const strip = rect(document.querySelector(".scroll-wrap > .tabs-nav > button"));
     const chip = rect(document.querySelector("[data-open-rail] .or-chip"));
     const emblem = rect(document.querySelector("[data-open-rail] .or-emblem"));
     const cardEl = document.querySelector<HTMLElement>("[data-kanban-board] .column[data-status=\"inbox\"] .card");
@@ -8591,6 +8598,9 @@ describe("the open agents at the board's side: short names, role emblem and colo
       const title = column.querySelector(".col-head h2")?.getBoundingClientRect();
       if (title && box.width > 0) titles[column.dataset.status!] = { left: title.left - box.left, top: title.top - box.top };
     }
+    const scroller = document.querySelector("[data-kanban-board] .board")?.getBoundingClientRect();
+    const shown = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0 && (!scroller || box.right > scroller.left + 0.5));
+    const kb = document.querySelector("[data-kanban-board]");
     const columns = Math.min(...[...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => box.top));
     return {
       mode: document.querySelector<HTMLElement>("[data-kanban-board]")?.dataset.mode ?? null,
@@ -8598,8 +8608,10 @@ describe("the open agents at the board's side: short names, role emblem and colo
       name,
       seat: seat ? { left: seat.left, top: seat.top, bottom: seat.bottom } : null,
       bar: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
-      rail: railBox ? { left: railBox.left, top: railBox.top } : null,
-      strip: strip && stripEl ? { top: strip.top + parseFloat(getComputedStyle(stripEl).paddingTop), bottom: strip.bottom } : null,
+      rail: railBox ? { left: railBox.left, top: railBox.top, right: railBox.right } : null,
+      edge: kb ? parseFloat(getComputedStyle(kb).getPropertyValue("--kb-edge")) : Number.NaN,
+      column: shown.length ? Math.min(...shown.map((box) => box.left)) : null,
+      strip: strip ? { left: strip.left, top: strip.top, bottom: strip.bottom } : null,
       columns,
       railInset: chip && emblem ? emblem.left - chip.left : null,
       cardInset: cardBox && cardHead ? cardHead.left - cardBox.left : null,
@@ -8616,14 +8628,17 @@ describe("the open agents at the board's side: short names, role emblem and colo
       else {
         if (!near(edges.rail.left, edges.seat.left)) failures.push(`${label}: the rail starts at ${edges.rail.left}, the Orchestrator row at ${edges.seat.left}`);
         if (!near(edges.rail.top, edges.columns)) failures.push(`${label}: the rail's top is ${edges.rail.top}, the columns' ${edges.columns}`);
+        if (edges.column != null && !near(edges.column - edges.rail.right, edges.edge)) failures.push(`${label}: the first column stands ${edges.column - edges.rail.right} px clear of the rail, the board's edge is ${edges.edge}`);
       }
       if (edges.tier === "full" && !near(edges.railInset, edges.cardInset)) failures.push(`${label}: the rail's rows hold their content ${edges.railInset} in, the cards ${edges.cardInset}`);
     }
+    if (!railExpected && !near(edges.column, edges.seat.left)) failures.push(`${label}: the first column starts at ${edges.column}, the Orchestrator row at ${edges.seat.left}`);
     const above = edges.seat.top - edges.bar;
     const next = edges.strip ?? { top: edges.columns, bottom: edges.columns };
     const below = next.top - edges.seat.bottom;
     if (!near(above, below)) failures.push(`${label}: ${above} px above the Orchestrator row, ${below} below it`);
-    if (edges.strip && !near(edges.columns - edges.strip.bottom, above)) failures.push(`${label}: the jump strip stands ${edges.columns - edges.strip.bottom} px above the columns, the row ${above} below the bar`);
+    if (edges.strip && !near(edges.columns - edges.strip.bottom, above)) failures.push(`${label}: the ${edges.mode} strip stands ${edges.columns - edges.strip.bottom} px above the columns, the row ${above} below the bar`);
+    if (edges.strip && !near(edges.strip.left, edges.column)) failures.push(`${label}: the ${edges.mode} strip starts at ${edges.strip.left}, the first column at ${edges.column}`);
     const inbox = edges.titles.inbox;
     for (const [status, title] of Object.entries(edges.titles)) {
       if (inbox && (!near(title.left, inbox.left) || !near(title.top, inbox.top))) failures.push(`${label}: ${status}'s title sits at ${title.left},${title.top} in its column, Inbox's at ${inbox.left},${inbox.top}`);
@@ -8642,14 +8657,14 @@ describe("the open agents at the board's side: short names, role emblem and colo
     const failures: string[] = [];
     try {
       for (const lang of ["en", "uk"] as const) {
-        for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 1600, height: 900 }] as const) {
-          for (const ids of [OPEN[3], []] as const) {
+        for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 1600, height: 900 }, { width: 1000, height: 800 }, { width: 700, height: 800 }] as const) {
+          for (const ids of viewport.width < 1440 ? [[]] as const : [OPEN[3], []] as const) {
             const label = `edges-${viewport.width}x${viewport.height}-${ids.length}-${lang}`;
             const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, "light", lang);
             try {
               await context.addInitScript(seedReaders(ids));
               await page.reload();
-              await page.waitForSelector("[data-kanban-board] .column[data-status] .card", { timeout: 30_000 });
+              await page.waitForSelector("[data-kanban-board] .column[data-status] .card >> visible=true", { timeout: 30_000 });
               if (ids.length) await page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
               await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
               if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");

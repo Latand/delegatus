@@ -12,9 +12,13 @@
       "bar": 48,
       "rail": {
         "left": 264,
-        "top": 154
+        "top": 154,
+        "right": 448
       },
+      "edge": 16,
+      "column": 464,
       "strip": {
+        "left": 464,
         "top": 114,
         "bottom": 142
       },
@@ -52,7 +56,10 @@
       },
       "bar": 48,
       "rail": null,
+      "edge": 16,
+      "column": 264,
       "strip": {
+        "left": 264,
         "top": 114,
         "bottom": 142
       },
@@ -91,8 +98,11 @@
       "bar": 48,
       "rail": {
         "left": 268,
-        "top": 114
+        "top": 114,
+        "right": 448
       },
+      "edge": 20,
+      "column": 468,
       "strip": null,
       "columns": 114,
       "railInset": 15,
@@ -128,6 +138,8 @@
       },
       "bar": 48,
       "rail": null,
+      "edge": 20,
+      "column": 268,
       "strip": null,
       "columns": 114,
       "railInset": null,
@@ -164,8 +176,11 @@
       "bar": 48,
       "rail": {
         "left": 268,
-        "top": 114
+        "top": 114,
+        "right": 304
       },
+      "edge": 20,
+      "column": 324,
       "strip": null,
       "columns": 114,
       "railInset": null,
@@ -201,6 +216,8 @@
       },
       "bar": 48,
       "rail": null,
+      "edge": 20,
+      "column": 268,
       "strip": null,
       "columns": 114,
       "railInset": null,
@@ -225,6 +242,64 @@
       },
       "pageErrors": []
     },
+    "edges-1000x800-0-en": {
+      "mode": "tabs",
+      "tier": null,
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 101,
+        "bottom": 143
+      },
+      "bar": 89,
+      "rail": null,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 155,
+        "bottom": 191
+      },
+      "columns": 203,
+      "railInset": null,
+      "cardInset": 0,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-700x800-0-en": {
+      "mode": "tabs",
+      "tier": null,
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 168.5625,
+        "bottom": 210.5625
+      },
+      "bar": 156.5625,
+      "rail": null,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 222.5625,
+        "bottom": 258.5625
+      },
+      "columns": 270.5625,
+      "railInset": null,
+      "cardInset": 0,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
     "edges-1440x900-3-uk": {
       "mode": "scroll",
       "tier": "full",
@@ -237,9 +312,13 @@
       "bar": 48,
       "rail": {
         "left": 264,
-        "top": 154
+        "top": 154,
+        "right": 448
       },
+      "edge": 16,
+      "column": 464,
       "strip": {
+        "left": 464,
         "top": 114,
         "bottom": 142
       },
@@ -277,7 +356,10 @@
       },
       "bar": 48,
       "rail": null,
+      "edge": 16,
+      "column": 264,
       "strip": {
+        "left": 264,
         "top": 114,
         "bottom": 142
       },
@@ -316,8 +398,11 @@
       "bar": 48,
       "rail": {
         "left": 268,
-        "top": 114
+        "top": 114,
+        "right": 448
       },
+      "edge": 20,
+      "column": 468,
       "strip": null,
       "columns": 114,
       "railInset": 15,
@@ -353,6 +438,8 @@
       },
       "bar": 48,
       "rail": null,
+      "edge": 20,
+      "column": 268,
       "strip": null,
       "columns": 114,
       "railInset": null,
@@ -389,8 +476,11 @@
       "bar": 48,
       "rail": {
         "left": 268,
-        "top": 114
+        "top": 114,
+        "right": 304
       },
+      "edge": 20,
+      "column": 324,
       "strip": null,
       "columns": 114,
       "railInset": null,
@@ -426,6 +516,8 @@
       },
       "bar": 48,
       "rail": null,
+      "edge": 20,
+      "column": 268,
       "strip": null,
       "columns": 114,
       "railInset": null,
@@ -444,6 +536,64 @@
           "top": 17.578125
         },
         "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1000x800-0-uk": {
+      "mode": "tabs",
+      "tier": null,
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 101,
+        "bottom": 143
+      },
+      "bar": 89,
+      "rail": null,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 155,
+        "bottom": 191
+      },
+      "columns": 203,
+      "railInset": null,
+      "cardInset": 0,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-700x800-0-uk": {
+      "mode": "tabs",
+      "tier": null,
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 168.5625,
+        "bottom": 210.5625
+      },
+      "bar": 156.5625,
+      "rail": null,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 222.5625,
+        "bottom": 258.5625
+      },
+      "columns": 270.5625,
+      "railInset": null,
+      "cardInset": 0,
+      "titles": {
+        "assigned": {
           "left": 13,
           "top": 17.578125
         }

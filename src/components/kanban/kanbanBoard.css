@@ -142,7 +142,9 @@
   grid-template-columns: var(--c-inbox) var(--c-assigned) var(--c-blocked) var(--c-done);
   grid-template-areas: "inbox assigned blocked done";
 }
-.kb .board.scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 12px; padding: var(--kb-stack) var(--kb-edge) 16px; }
+/* The snap keeps the board's own edge: without the scroll padding a column
+   snaps flush to the scroller and the edge padding scrolls away. */
+.kb .board.scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding-inline: var(--kb-edge); gap: 12px; padding: var(--kb-stack) var(--kb-edge) 16px; }
 .kb .board.scroll .column { flex: 0 0 280px; scroll-snap-align: start; }
 .kb .board.scroll .column[data-status="assigned"] { flex-basis: 480px; }
 /* Tabs (640–767 px): one column at a time under a segmented strip. */
@@ -219,8 +221,9 @@
 .kb .tabs-nav.jump { padding: var(--kb-stack) var(--kb-edge) 0; gap: 2px; }
 .kb .tabs-nav.jump button { height: 28px; border-color: transparent; background: none; font-weight: 500; color: var(--color-muted); }
 .kb .tabs-nav.jump button:hover { background: var(--surface-well); color: var(--color-primary); }
-/* The tab strip sits above the tabbed board, inset by the board's own side padding. */
-.kb .scroll-wrap > .tabs-nav:not(.jump) { padding: 10px 24px; }
+/* The tab strip sits above the tabbed board on the board's edge, one gap
+   below the Orchestrator row and one gap above the column. */
+.kb .scroll-wrap > .tabs-nav:not(.jump) { padding: var(--kb-stack) var(--kb-edge); }
 .kb .tabs-nav.jump button { flex: 0 0 auto; padding: 0 12px; }
 
 /* ── Card ─────────────────────────────────────────────────────────────────── */
@@ -621,10 +624,11 @@
 .kb .board-frame.with-rail > :not(.open-rail) { flex: 1 1 0; min-width: 0; }
 /* Its top is the columns' top: the board's own top padding, and in the
    scroll mode the jump strip above the columns too (its 28 px buttons and
-   the same gap over them); the tabbed mode's strip is 10 + 36 + 10. */
+   the same gap over them); the tabbed mode's strip is its 36 px tabs with
+   a gap on each side. */
 .kb .open-rail { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; padding: var(--kb-stack) 0 20px var(--kb-edge); }
 .kb[data-mode="scroll"] .open-rail { padding-top: calc(2 * var(--kb-stack) + 28px); }
-.kb[data-mode="tabs"] .open-rail { padding-top: 56px; }
+.kb[data-mode="tabs"] .open-rail { padding-top: calc(2 * var(--kb-stack) + 36px); }
 .kb .open-rail .or-chip {
   display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden;
   border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
