@@ -40,13 +40,16 @@ export interface ColumnDwellOptions {
 }
 
 const COLUMN = ".column[data-status]";
+/* A menu, popover or dialog open anywhere in the document, the ones a reader's
+   composer portals to the body (model, mic, account, speak) included. */
+const OPEN_OVERLAY = 'dialog[open], [aria-modal="true"], [role="dialog"], [role="menu"], [role="listbox"], [data-runtime-popover]';
 
 /** Anything outside the board's own state that also holds the pointer. */
 function held(event: { buttons: number } | null): boolean {
   if (event && event.buttons !== 0) return true;
   const selection = typeof document.getSelection === "function" ? document.getSelection() : null;
   if (selection && !selection.isCollapsed && selection.toString() !== "") return true;
-  return Boolean(document.querySelector("dialog[open], [aria-modal='true']"));
+  return document.querySelector(OPEN_OVERLAY) !== null;
 }
 
 export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: ColumnDwellOptions): void {

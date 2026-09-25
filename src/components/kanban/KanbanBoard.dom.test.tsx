@@ -388,6 +388,19 @@ test("the mouse resting in a narrow column widens it after the dwell, with the c
     flushSync(() => document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
     expect(host.querySelector(".menu")).toBeNull();
 
+    /* A reader composer's menu (model, mic, account) portals to the body, outside
+       the board's own menu state: Blocked still stays narrow while it is open. */
+    const composerMenu = document.createElement("div");
+    composerMenu.setAttribute("role", "menu");
+    composerMenu.setAttribute("data-runtime-popover", "");
+    document.body.appendChild(composerMenu);
+    rest("blocked", 940);
+    wait(DWELL_MS / 2);
+    expect(column(host, "blocked").hasAttribute("data-dwell")).toBe(false);
+    wait(DWELL_MS * 2);
+    expect(wideColumns(host)).toEqual(["done"]);
+    composerMenu.remove();
+
     /* Pinned, the wide shelf keeps its share against any dwell. */
     click(host.querySelector('[data-col-pin="done"]'));
     rest("blocked", 910);

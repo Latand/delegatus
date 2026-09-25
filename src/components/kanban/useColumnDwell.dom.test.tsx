@@ -216,6 +216,41 @@ test("a drag, a menu, a dialog or a selection suppresses it, and a cue already s
   expect(widened).toEqual(["done"]);
 });
 
+test("a menu, popover or listbox portalled to the document suppresses it, one opened mid-count included", () => {
+  const { host, widened } = mount();
+  const card = inside(host, "done");
+  /* The shapes a reader's composer opens on the body: the model, mic, account
+     and speak menus, the runtime popover, a listbox, a non-modal popover. */
+  const overlays: Array<[string, string]> = [["role", "menu"], ["role", "listbox"], ["data-runtime-popover", ""], ["role", "dialog"]];
+  let x = 900;
+  for (const [name, value] of overlays) {
+    const overlay = document.createElement("div");
+    overlay.setAttribute(name, value);
+    document.body.appendChild(overlay);
+    move(card, (x += 20), 300);
+    wait(DWELL_MS * 2);
+    expect(cued(host)).toEqual([]);
+    expect(widened).toEqual([]);
+    overlay.remove();
+  }
+
+  /* Opened while the count runs: the cue goes and nothing widens at the threshold. */
+  move(card, (x += 20), 300);
+  wait(600);
+  expect(cued(host)).toEqual(["done"]);
+  const menu = document.createElement("div");
+  menu.setAttribute("role", "menu");
+  document.body.appendChild(menu);
+  wait(DWELL_MS);
+  expect(cued(host)).toEqual([]);
+  menu.remove();
+  expect(widened).toEqual([]);
+
+  move(card, (x += 20), 300);
+  wait(DWELL_MS);
+  expect(widened).toEqual(["done"]);
+});
+
 test("a press cancels and holds the column until the pointer leaves it; a key or a scroll restarts the count", () => {
   const { host, widened } = mount();
   const card = inside(host, "blocked");
