@@ -117,6 +117,82 @@ test("on macOS a pid the kernel does not attribute to this login is refused", ()
   expect(signals).toEqual([]);
 });
 
+/* The argv shapes a spawned `claude auth login --claudeai` really shows, read
+   off live processes on Linux (#2167): the native binary, an npm install's
+   `#!/usr/bin/env node` script before and after `env` execs node, a node
+   wrapper, and the Docker runtime's /bin/sh shim. */
+const NPM_CLAUDE = "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js";
+test("every real launch shape of the login is recognized, the env-node shebang included (#2167)", () => {
+  expect(isExpectedClaudeLoginArgv(["/opt/claude/bin/claude", "auth", "login", "--claudeai"])).toBe(true);
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/env", "node", "/usr/bin/claude", "auth", "login", "--claudeai"])).toBe(true);
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/env", "node", "/usr/local/lib/npm-global/bin/claude", "auth", "login", "--claudeai"])).toBe(true);
+  expect(isExpectedClaudeLoginArgv(["node", "/usr/bin/claude", "auth", "login", "--claudeai"])).toBe(true);
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/node", NPM_CLAUDE, "auth", "login", "--claudeai"])).toBe(true);
+  expect(isExpectedClaudeLoginArgv(["/bin/sh", "/usr/local/bin/claude", "auth", "login", "--claudeai"])).toBe(true);
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/env", "bash", "/usr/local/bin/claude", "auth", "login", "--claudeai"])).toBe(true);
+});
+
+test("the env shape still fences: another script, another command or extra words are refused", () => {
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/env", "node", "/tmp/evil.js", "auth", "login", "--claudeai"])).toBe(false);
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/env", "python3", "/usr/bin/claude", "auth", "login", "--claudeai"])).toBe(false);
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/env", "node", "/usr/bin/claude", "auth", "status", "--json"])).toBe(false);
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/env", "-S", "node", "/usr/bin/claude", "auth", "login", "--claudeai"])).toBe(false);
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/env", "node", "/usr/bin/claude", "auth", "login", "--claudeai", "--extra"])).toBe(false);
+  expect(isExpectedClaudeLoginArgv(["/usr/bin/env", "FOO=1", "node", "/usr/bin/claude", "auth", "login", "--claudeai"])).toBe(false);
+});
+
+test("on Linux a read that lands between env and node is read through until the login shows (#2167)", () => {
+  const account = createManagedClaudeAccount("Linux mid-exec");
+  // /proc/<pid>/cmdline is empty while the kernel swaps env's image for node's.
+  let reads = 0;
+  const supervisor = new ClaudeLoginSupervisor({ ...ports(), ...processIdentityPorts("linux", {
+    startToken: (pid) => (pid === LOGIN_PID ? LOGIN_TOKEN : null),
+    argv: (pid) => (pid !== LOGIN_PID ? ["bun", "server.js"] : (reads++ < 3 ? null : ["node", "/usr/bin/claude", "auth", "login", "--claudeai"])),
+  }) });
+
+  const operation = supervisor.start(account.id);
+
+  expect(operation).toEqual(expect.objectContaining({ phase: "awaiting_browser" }));
+  expect(reads).toBeGreaterThan(3);
+});
+
+/* A real `#!/usr/bin/env <interpreter>` script spawned by the supervisor and
+   judged by the real /proc fence, many times over: most first reads land while
+   `env` still holds the pid, and some inside its exec. `sh` stands in for node
+   so the test needs no node install; the kernel runs the same `env` chain. */
+test.skipIf(process.platform !== "linux")("on Linux a real env-shebang login clears the real /proc fence on every spawn (#2167)", async () => {
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "npm-"));
+  const script = path.join(directory, "claude");
+  fs.writeFileSync(script, "#!/usr/bin/env sh\nwhile read -r _line; do :; done\n", { mode: 0o755 });
+  const identity = processIdentityPorts("linux");
+  const spawned: Array<{ pid?: number; kill(signal?: NodeJS.Signals): boolean }> = [];
+  const phases: string[] = [];
+  try {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const account = createManagedClaudeAccount(`Linux npm ${attempt}`);
+      const supervisor = new ClaudeLoginSupervisor({
+        ...ports(),
+        ...identity,
+        kill: (pid, signal) => { signals.push(signal); try { process.kill(-pid, signal); } catch { /* already gone */ } },
+        spawn: (_command, args, options) => {
+          const real = spawn(script, args, options);
+          spawned.push(real);
+          return real as unknown as LoginChild;
+        },
+      });
+      const operation = supervisor.start(account.id);
+      phases.push(operation.phase);
+      if (operation.phase === "awaiting_browser") await supervisor.cancel(operation.operationId);
+    }
+    expect(phases).toEqual(Array(12).fill("awaiting_browser"));
+    // Still a fence: this test process is alive and is not that login.
+    expect(identity.isExpectedClaude(process.pid)).toBe(false);
+  } finally {
+    for (const real of spawned) { try { real.kill("SIGKILL"); } catch { /* already gone */ } }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("on macOS a login pid recycled after adoption is never signalled", async () => {
   const account = createManagedClaudeAccount("Darwin recycled after adoption");
   const table = loginTable();

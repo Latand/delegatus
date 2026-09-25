@@ -91,6 +91,16 @@ export function claudeLoginErrKey(code: string | null | undefined): ClaudeLoginE
   }
 }
 
+/** The failure line a sign-in row shows. A code without copy of its own is
+    named in it (#2167): "could not start" alone gave the operator nothing to
+    act on or report. */
+export function claudeLoginErrorText(t: TFunction, code: string | null | undefined): string {
+  const key = claudeLoginErrKey(code);
+  return key === "accounts.claudeLogin.err.generic" && code
+    ? t("accounts.claudeLogin.err.genericWithCode", { code })
+    : t(key);
+}
+
 /** One quota window (5h session or weekly) of an account, projected for the
     Accounts panel: how much is spent and when it resets. `resetsAt` is Unix
     seconds, or null when the engine did not report it. `windowMinutes` is the
@@ -581,6 +591,22 @@ export function createEngineAccountsStore(
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let pollIntervalMs: number | null = null;
   const listeners = new Set<() => void>();
+  /* A finished Claude sign-in is shown only by a tab that saw it (#2167): one
+     this tab watched while it ran, or one on an account this tab started a
+     sign-in for. A result left over from before a reload is history, and
+     showing it as the row's state made a fresh "sign in" look like it did
+     nothing whenever the new attempt ended the same way. */
+  const watchedLogins = new Set<string>();
+  const attemptedLogins = new Set<string>();
+  const currentLogins = (accounts: AccountOption[]): AccountOption[] => accounts.map((account) => {
+    const login = account.login;
+    if (!login) return account;
+    if (NONTERMINAL_CLAUDE_LOGIN_PHASES.has(login.phase)) {
+      watchedLogins.add(login.operationId);
+      return account;
+    }
+    return watchedLogins.has(login.operationId) || attemptedLogins.has(account.id) ? account : { ...account, login: null };
+  });
 
   const emit = () => {
     for (const listener of listeners) listener();
@@ -640,7 +666,7 @@ export function createEngineAccountsStore(
       setSnapshot({
         ...snapshot,
         active,
-        accounts,
+        accounts: currentLogins(accounts),
         migration,
         autoBalance,
         challenge: pendingDeviceAuth(accounts),
@@ -698,6 +724,7 @@ export function createEngineAccountsStore(
           }
           const login = parseClaudeLogin(body?.login);
           if (typeof body?.account?.id !== "string" || typeof body.account.label !== "string" || !login) throw new Error("account creation failed");
+          attemptedLogins.add(body.account.id);
           const created: AccountOption = {
             id: body.account.id,
             label: body.account.label,
@@ -843,6 +870,8 @@ export function createEngineAccountsStore(
   const retryLogin = (accountId: string): Promise<boolean> => {
     if (engine !== "claude") return Promise.resolve(false);
     return runMutation("login", async () => {
+      attemptedLogins.add(accountId);
+      let failureCode: string | null = null;
       try {
         const response = await fetcher(addUrl, {
           method: "POST",
@@ -858,7 +887,10 @@ export function createEngineAccountsStore(
           return false;
         }
         const login = parseClaudeLogin(body?.login);
-        if (response.status !== 202 || !login) throw new Error("login retry failed");
+        if (response.status !== 202 || !login) {
+          failureCode = codeOf(body);
+          throw new Error("login retry failed");
+        }
         // Replace the account's login op in place — the row is never removed (C8).
         const label = snapshot.accounts.find((account) => account.id === accountId)?.label ?? accountId;
         const accounts = snapshot.accounts.map((account) =>
@@ -871,8 +903,24 @@ export function createEngineAccountsStore(
           notice: { kind: "success", operation: "login", messageKey: "accounts.claudeLoginStarted", target: label, action: null },
         });
       } catch {
-        patchSnapshot({ notice: { kind: "error", operation: "login", messageKey: "accounts.claudeLogin.err.generic", action: { type: "retry", kind: "loginRetry", accountId } } });
         await refresh();
+        /* The attempt the route refused is usually on the row already, with
+           its reason and its own Retry; the notice is for the case where it
+           is not (the route or the network failed before an attempt existed),
+           and then it carries the route's code. */
+        const row = snapshot.accounts.find((account) => account.id === accountId);
+        const shownOnRow = row?.login?.result?.status === "failure";
+        patchSnapshot({
+          notice: shownOnRow
+            ? (snapshot.notice?.operation === "login" ? null : snapshot.notice)
+            : {
+                kind: "error",
+                operation: "login",
+                messageKey: "accounts.claudeLogin.err.generic",
+                ...(failureCode ? { detail: failureCode } : {}),
+                action: { type: "retry", kind: "loginRetry", accountId },
+              },
+        });
         return false;
       }
       await refresh();

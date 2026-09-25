@@ -69,8 +69,15 @@ export interface ClaudeLoginPorts {
   clearTimeout(timer: NodeJS.Timeout): void;
 }
 
+/* The kernel start time pins one process instance. A zombie has already
+   exited — only its parent's reap is outstanding — so it has no token: its
+   empty command line must not hold the fence's exec wait open. */
 function procStartToken(pid: number): string | null {
-  try { return fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(" ")[21] ?? null; } catch { return null; }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[0] === "Z" ? null : fields[19] ?? null;
+  } catch { return null; }
 }
 
 function exitPoller(startTokenOf: (pid: number) => string | null) {
@@ -87,7 +94,7 @@ export function isExpectedClaudeLoginCommand(commandLine: string): boolean {
 
 /** The command half of the fence, over an argument vector: Linux splits
     /proc/<pid>/cmdline on NUL to get one, macOS reads the kernel's exec-time
-    copy. Both platforms match the same three shapes here. */
+    copy. Both platforms match the same four shapes here. */
 export function isExpectedClaudeLoginArgv(argv: readonly string[]): boolean {
   const args = argv.filter(Boolean);
   const direct = /(?:^|\/)claude$/.test(args[0] ?? "") && args.length === 4;
@@ -97,12 +104,23 @@ export function isExpectedClaudeLoginArgv(argv: readonly string[]): boolean {
      login --claudeai`. Without this form the fence rejects every container
      login with launch_unfenced. */
   const shimmed = /(?:^|\/)(?:sh|dash|bash)$/.test(args[0] ?? "") && /(?:^|\/)claude$/.test(args[1] ?? "") && args.length === 5;
-  const offset = direct ? 1 : wrapped || shimmed ? 2 : -1;
+  /* An npm install of Claude Code is a `#!/usr/bin/env node` script. The spawn
+     returns once `env` is running, and `env` execs node on the same pid a
+     moment later, so a read in between sees `/usr/bin/env node <path>/claude
+     auth login --claudeai` — most reads do (#2167). */
+  const interpreted = /(?:^|\/)env$/.test(args[0] ?? "") && /^(?:node|bun|sh|dash|bash)$/.test(args[1] ?? "")
+    && /(?:^|\/)claude$/.test(args[2] ?? "") && args.length === 6;
+  const offset = direct ? 1 : wrapped || shimmed ? 2 : interpreted ? 3 : -1;
   return offset >= 0 && args[offset] === "auth" && args[offset + 1] === "login" && args[offset + 2] === "--claudeai";
 }
 
-function expectedClaude(pid: number): boolean {
-  try { return isExpectedClaudeLoginCommand(fs.readFileSync(`/proc/${pid}/cmdline`, "utf8")); } catch { return false; }
+/* An empty command line is a process between images (or a zombie), not a
+   command, so it reads as "not shown yet" and the fence waits it out. */
+function procArgv(pid: number): readonly string[] | null {
+  try {
+    const argv = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+    return argv.length ? argv : null;
+  } catch { return null; }
 }
 
 /** The two facts the fence needs about a pid: the kernel start token that
@@ -131,8 +149,10 @@ const darwinIdentityReaders: ProcessIdentityReaders = {
    the kernel swaps the image. Reading through that window is not a
    relaxation: adoption still requires seeing the login command, and every
    other answer (a stranger's argv, a pid that is gone) is returned at once.
-   Linux never lands here — the spawn returns only after the exec status pipe
-   reports success — which is why the /proc reads never needed this. */
+   On Linux the spawn returns only after the first exec succeeded, but an
+   interpreter chain execs again on the same pid (`env` → node for an npm
+   install), and a read that lands inside that second exec finds an empty
+   command line (#2167). */
 /* One second is far past any observed exec latency and is only ever spent on
    a pid that is alive but has not shown its command; a busy machine must not
    turn that into a refused login. */
@@ -177,13 +197,19 @@ function identityPortsFrom(readers: ProcessIdentityReaders): IdentityPorts {
   };
 }
 
-/** Linux keeps its /proc reads verbatim; darwin gets the kernel-backed pair.
-    `darwin` is injectable so the macOS branch can be exercised from a host
-    that has no macOS kernel to read. */
-export function processIdentityPorts(platform: NodeJS.Platform = process.platform, darwin: ProcessIdentityReaders = darwinIdentityReaders): IdentityPorts {
-  return platform === "darwin"
-    ? identityPortsFrom(darwin)
-    : { pidStartToken: procStartToken, isExpectedClaude: expectedClaude, waitForExit: exitPoller(procStartToken) };
+const procIdentityReaders: ProcessIdentityReaders = {
+  startToken: procStartToken,
+  argv: procArgv,
+};
+
+/** Linux reads /proc; darwin gets the kernel-backed pair. Both wait out an
+    exec in flight the same way. `readers` is injectable so either branch can
+    be exercised without the kernel it names. */
+export function processIdentityPorts(
+  platform: NodeJS.Platform = process.platform,
+  readers: ProcessIdentityReaders = platform === "darwin" ? darwinIdentityReaders : procIdentityReaders,
+): IdentityPorts {
+  return identityPortsFrom(readers);
 }
 
 /** A recognized Claude home is either a safe managed home or the exact legacy

@@ -324,9 +324,9 @@ test("a terminal failure renders sanitized copy in an alert plus Retry and exclu
   expect(html).toContain("Retry");
 });
 
-test("an unknown failure code falls back to the generic sanitized line", () => {
+test("an unknown failure code falls back to the generic line and names the code (#2167)", () => {
   const html = render(claudeState(loginView({ phase: "failed", loginUrl: null, acceptsCode: false, result: { status: "failure", code: "persistence_failed", message: "secret path" } })));
-  expect(html).toContain("Sign-in could not start. Try again.");
+  expect(html).toContain("Sign-in could not start (persistence_failed). Try again.");
   expect(html).not.toContain("secret path");
 });
 
