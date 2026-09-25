@@ -64,7 +64,7 @@ import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
-import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
+import { MobileAccountsScreen, MobileBarTitle, MobileReportsScreen, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
 import { MobileTaskScreen } from "./mobile/MobileTaskScreen";
@@ -100,6 +100,7 @@ import { boundFlowExpansions } from "./scheme/placementHorizon";
 import { ArchiveRestore } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
+import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { SoundToggle } from "./SoundToggle";
 import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
@@ -2039,9 +2040,11 @@ function ProjectDashboardView({
       { kind: "divider", key: "d-setup" },
       ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
       selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
-      /* The project's merge setting (#2187 §6), the same row as the desktop ⋯. */
+      /* The project's merge and bridge report settings (#2187 §6, #2146), the
+         same rows as the desktop ⋯. */
       { kind: "divider", key: "d-merge" },
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
+      { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
     );
     if (archived) {
       entries.push({ kind: "divider", key: "d4" }, {
@@ -2117,6 +2120,7 @@ function ProjectDashboardView({
             </BarMenuGroup>
             <BarMenuGroup name="project">
               <MergeOnReviewRow project={project} variant="menu" />
+              <BridgeReportsRow project={project} variant="menu" />
               {archived ? (
                 <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
                   <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
@@ -2238,6 +2242,9 @@ function ProjectDashboardView({
            focus view stays until lane 3 folds it into the bar's title cell. */
         mobileTop.kind === "accounts" ? (
           <MobileAccountsScreen host={mobileShell} renderSheet={renderMobileSheet} />
+        ) : mobileTop.kind === "reports" ? (
+          /* The orchestrator's report log (#2146), over its conversation. */
+          <MobileReportsScreen project={project} host={mobileShell} renderSheet={renderMobileSheet} />
         ) : mobileTop.kind === "task" ? (
           /* One task (#2072 slice 5, phone-kanban §3.5): its pipelines, its
              agents and its status, on the same stack as the board. A stage or

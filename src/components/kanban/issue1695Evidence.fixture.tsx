@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { runFocusTransaction } from "@/components/attention/navigate";
+import { reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
@@ -128,6 +129,10 @@ const MERGE_STATES = SCENARIO === "merge-states";
    to Done waits; and a Done task its marked lane finished. */
 const TASK_FINISH = SCENARIO === "task-finish";
 const MERGE_SETTING = { enabled: new URLSearchParams(location.search).get("merge") !== "off" };
+/* #2146: the project's Bridge reports switch, off with `?bridge=off`, and the
+   report log beside the seat's chat, empty with `?reports=empty`. */
+const BRIDGE_SETTING = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
+const REPORTS_EMPTY = new URLSearchParams(location.search).get("reports") === "empty";
 /* The seat's header at its fullest: a mandate a version behind the default,
    so the stale chip draws, a designated incumbent with its effort, account and
    a context past the rotation line, twenty previous seats and a running host
@@ -1632,11 +1637,25 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* #2187 §6: the project's merge setting, as the settings route answers it. */
   if (url.pathname === "/api/projects/settings") {
     if (method === "PUT") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown; bridgeReports?: unknown };
       evidence.settingWrites.push(body);
-      MERGE_SETTING.enabled = body.mergeOnReview === true;
+      if (typeof body.mergeOnReview === "boolean") MERGE_SETTING.enabled = body.mergeOnReview;
+      if (typeof body.bridgeReports === "boolean") BRIDGE_SETTING.enabled = body.bridgeReports;
     }
-    return json({ ok: true, project: PROJECT, mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" }, github: "acme/atlas" });
+    return json({
+      ok: true,
+      project: PROJECT,
+      mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
+      bridgeReports: { enabled: BRIDGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
+      github: "acme/atlas",
+    });
+  }
+  if (url.pathname === "/api/orchestrator/reports") {
+    const known = new Map<string, "task" | "pipeline">([
+      ...tasks.map((task) => [task.id, "task"] as const),
+      ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
+    ]);
+    return json(reportLogFixturePage(url, { project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY }));
   }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY ? [] : tasks });
   if (url.pathname === "/api/tasks" && method === "POST") {

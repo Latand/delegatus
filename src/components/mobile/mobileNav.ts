@@ -38,7 +38,9 @@ export type MobileScreen =
   | { kind: "task"; id: string }
   | { kind: "pipelines" }
   | { kind: "pipeline"; id: string }
-  | { kind: "accounts" };
+  | { kind: "accounts" }
+  /* The orchestrator's report log (#2146), one tap from its conversation. */
+  | { kind: "reports" };
 export type MobileScreenKind = MobileScreen["kind"];
 const SHEET_NAMES = ["projects", "attention", "menu", "host", "search", "seat", "rotate", "tick", "switch", "model", "stage", "row", "links", "card", "status", "lane", "hidden", "tasks"] as const;
 export type MobileSheetName = (typeof SHEET_NAMES)[number];
@@ -69,7 +71,7 @@ export interface MobileNavEntry {
   project: string | null;
 }
 
-const SCREEN_KINDS: ReadonlySet<string> = new Set(["board", "chat", "task", "pipelines", "pipeline", "accounts"]);
+const SCREEN_KINDS: ReadonlySet<string> = new Set(["board", "chat", "task", "pipelines", "pipeline", "accounts", "reports"]);
 const WITH_ID: ReadonlySet<string> = new Set(["chat", "task", "pipeline"]);
 const SHEETS: ReadonlySet<string> = new Set(SHEET_NAMES);
 /** Sheets that stay under a screen pushed from them, so Back from that screen
@@ -165,6 +167,8 @@ export function screenFragment(screen: MobileScreen): string | null {
       return "#pipelines";
     case "accounts":
       return "#accounts";
+    case "reports":
+      return "#reports";
     default:
       return null;
   }
@@ -174,6 +178,7 @@ export function screenFragment(screen: MobileScreen): string | null {
 export function screenFromFragment(hash: string): MobileScreen | null {
   if (hash === "#pipelines") return { kind: "pipelines" };
   if (hash === "#accounts") return { kind: "accounts" };
+  if (hash === "#reports") return { kind: "reports" };
   const match = hash.match(/^#(task|pipeline)=(.+)$/);
   if (!match) return null;
   let id = match[2]!;

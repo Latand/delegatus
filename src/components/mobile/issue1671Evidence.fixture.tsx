@@ -8,6 +8,7 @@
  */
 import { createRoot } from "react-dom/client";
 
+import { reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -739,6 +740,8 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 const mergeSetting = { enabled: true };
+/* #2146: the project's Bridge reports switch, off with `?bridge=off`. */
+const bridgeSetting = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
@@ -764,8 +767,25 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* #2187 §6: the project's merge setting, as the settings route answers it. */
   if (url.pathname === "/api/projects/settings") {
-    if (method === "PUT") mergeSetting.enabled = (JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown }).mergeOnReview === true;
-    return json({ ok: true, project: PROJECT, mergeOnReview: { enabled: mergeSetting.enabled, changedAt: iso(86_400), changedBy: "operator" }, github: "example/atlas" });
+    if (method === "PUT") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown; bridgeReports?: unknown };
+      if (typeof body.mergeOnReview === "boolean") mergeSetting.enabled = body.mergeOnReview;
+      if (typeof body.bridgeReports === "boolean") bridgeSetting.enabled = body.bridgeReports;
+    }
+    return json({
+      ok: true,
+      project: PROJECT,
+      mergeOnReview: { enabled: mergeSetting.enabled, changedAt: iso(86_400), changedBy: "operator" },
+      bridgeReports: { enabled: bridgeSetting.enabled, changedAt: iso(86_400), changedBy: "operator" },
+      github: "example/atlas",
+    });
+  }
+  if (url.pathname === "/api/orchestrator/reports") {
+    const known = new Map<string, "task" | "pipeline">([
+      ...(kanbanTasks as Array<{ id: string }>).map((task) => [task.id, "task"] as const),
+      ...kanbanPipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
+    ]);
+    return json(reportLogFixturePage(url, { project: PROJECT, github: "example/atlas", enabled: bridgeSetting.enabled, knownCards: known }));
   }
   if (KANBAN && url.pathname === "/api/tasks" && method === "GET") return json({ tasks: kanbanTasks });
   if (url.pathname === "/api/files" && OVERVIEW_SCENE) {

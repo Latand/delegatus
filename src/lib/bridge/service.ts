@@ -3,6 +3,7 @@ import {
   planBridgeReportDelivery,
   type BridgeDeliveryPlan,
 } from "@/lib/runtime/bridgeDelivery";
+import { bridgeReportsEnabled } from "@/lib/projects/settings";
 import { readEvidenceSync, type Evidence } from "@/lib/runtime/evidence";
 import { sendReceiptFor } from "@/lib/runtime/sendSettlement";
 import { rootIdentity as readRootIdentity } from "@/lib/root/store";
@@ -131,6 +132,9 @@ export function bridgeAsksForSeats(
  * moves in {@link acknowledgeBridgeDelivery} and only after delivery is real.
  */
 export function pendingBridgeDelivery(request: BridgeDeliveryRequest): BridgeDeliveryPlan {
+  /* #2146: a project whose bridge reports are off hands its call nothing. The
+     cursor stays where it is, so turning them back on resumes from there. */
+  if (!bridgeReportsEnabled(request.scope.project)) return { kind: "idle" };
   const identity = (request.rootIdentity ?? readRootIdentity)();
   openBridgeChannel(identity, request.now, request.scope);
   return planBridgeReportDelivery({
@@ -194,6 +198,7 @@ export function issueBridgeAcknowledgementToken(
 export function bridgeTurnStartPrelude(
   request: Omit<BridgeDeliveryRequest, "lastBatchAt" | "acknowledgedDeliveryIds">,
 ): { text: string; throughSeq: number } | null {
+  if (!bridgeReportsEnabled(request.scope.project)) return null;
   const identity = (request.rootIdentity ?? readRootIdentity)();
   openBridgeChannel(identity, request.now, request.scope);
   const batch = drainBridgeReports({ now: request.now, scope: request.scope });
