@@ -5,6 +5,7 @@ import { chromium, type BrowserContext, type CDPSession, type Page } from "playw
 
 import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { translate } from "@/lib/i18n";
+import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 
 /*
  * The phone's browser evidence driver: the real Viewer at phone width, in
@@ -2996,3 +2997,113 @@ browserTest("#2105: Back and the phone's screen history follow the path the oper
   fs.writeFileSync(path.join(PHONE_BACK_EVIDENCE, `history-${PHONE_BACK_PREFIX}.json`), `${JSON.stringify({ viewport, results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * #2190: the phone's task cards draw the task's icon before the title, tinted
+ * with the task's colour, in the neutral tone when the task has none, and not
+ * at all when the task has no icon; the title wraps under itself. The
+ * `?icons=1` scene dresses the kanban scene's tasks every one of those ways;
+ * Inbox, Assigned and Done at 390, dark and light:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable LLV_ICON_PHASE=after \
+ *     LLV_ICON_FRAMES=<dir> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2190"
+ *
+ * `LLV_ICON_PHASE=before` records frames and readings without the gates, for
+ * the tree before the change. Readings go to `evidence/task-icons/phone-<phase>.json`.
+ */
+const ICON_PHASE = process.env.LLV_ICON_PHASE === "before" ? "before" : "after";
+const ICON_OUT = path.resolve(process.env.LLV_ICON_FRAMES || ".artifacts/phone-card-icons");
+/** The scene's colours (`issue1671Evidence.fixture.tsx`, `ICONS_SCENE`), as the board draws them. */
+const ICON_TINTS: Record<string, string> = {
+  "t-systemd": "rgb(224, 122, 95)", "t-attention": "rgb(138, 99, 210)", "t-tray": "rgb(217, 164, 0)", "t-data": "rgb(61, 127, 214)",
+  "t-copilot": "rgb(138, 99, 210)", "t-upload": "rgb(124, 179, 66)", "t-long": "rgb(214, 79, 138)", "t-uk": "rgb(26, 158, 143)",
+  "t-done-0": "rgb(123, 138, 153)", "t-done-1": "rgb(224, 122, 95)",
+};
+/** The scene's tasks with a chosen icon; the rest draw what their title suggests, or nothing. */
+const ICON_STORED = new Set(["t-systemd", "t-quota", "t-data", "t-favicon", "t-upload", "t-done-1", "t-done-3"]);
+
+browserTest("#2190: phone task cards carry the task's icon in the card's colour", async () => {
+  fs.mkdirSync(ICON_OUT, { recursive: true });
+  fs.mkdirSync("evidence/task-icons", { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const frames: unknown[] = [];
+  const failures: string[] = [];
+  try {
+    for (const scheme of ["dark", "light"] as const) {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+      await context.addInitScript(() => { localStorage.setItem("llv_lang", "en"); });
+      try {
+        const page = await context.newPage();
+        await page.goto(`${fixtureBase}/?icons=1#p=atlas`);
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+        await pause(page, 800);
+        for (const status of ["inbox", "assigned", "done"] as const) {
+          await page.locator(`[data-phone-kanban-tab="${status}"]`).click();
+          await page.waitForFunction((wanted) => document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active") === wanted, status);
+          await pagerAtRest(page);
+          /* The icons load after the card draws (`taskIconLoader`). */
+          await pause(page, 600);
+          const key = `390-${scheme}-${status}`;
+          await page.screenshot({ path: path.join(ICON_OUT, `${ICON_PHASE}-${key}.png`) });
+          const cards = await page.evaluate((wanted) => {
+            const column = document.querySelector(`[data-phone-kanban-column="${wanted}"]`)!;
+            return [...column.querySelectorAll<HTMLElement>('[data-phone-card-kind="task"]')].map((card) => {
+              const title = card.querySelector<HTMLElement>("[data-phone-card-title]")!;
+              const icon = card.querySelector<HTMLElement>("[data-task-icon]");
+              const range = document.createRange();
+              range.selectNodeContents(title);
+              const lines = [...range.getClientRects()].filter((rect) => rect.width > 0.5);
+              const lineLefts = [...new Set(lines.map((rect) => Math.round(rect.left * 2) / 2))];
+              const cardBox = card.getBoundingClientRect();
+              const iconBox = icon?.getBoundingClientRect() ?? null;
+              const firstLine = lines[0] ?? null;
+              return {
+                task: (card.getAttribute("data-phone-card") ?? "").replace(/^task:/, ""),
+                titleText: title.textContent ?? "",
+                edge: card.getAttribute("data-edge") ?? card.closest("[data-phone-card-frame]")?.querySelector("[data-edge]")?.getAttribute("data-edge") ?? null,
+                icon: icon?.getAttribute("data-task-icon") ?? null,
+                /* The glyph itself, not only the box it will fill. */
+                glyph: Boolean(icon?.querySelector("svg")),
+                iconSource: icon?.getAttribute("data-icon-source") ?? null,
+                iconColour: icon ? getComputedStyle(icon).color : null,
+                iconBox: iconBox ? { x: iconBox.x, y: iconBox.y, width: iconBox.width, height: iconBox.height } : null,
+                /* The icon's middle against the first title line's middle. */
+                iconOffFirstLine: iconBox && firstLine ? (iconBox.top + iconBox.height / 2) - (firstLine.top + firstLine.height / 2) : null,
+                titleInset: title.getBoundingClientRect().left - (cardBox.left + parseFloat(getComputedStyle(card).paddingLeft)),
+                titleLeftOfIcon: iconBox ? title.getBoundingClientRect().left - iconBox.right : null,
+                lineLefts,
+                titleLines: lines.length,
+              };
+            });
+          }, status);
+          frames.push({ key, phase: ICON_PHASE, cards });
+          if (ICON_PHASE === "before") continue;
+          for (const card of cards) {
+            const fail = (text: string) => failures.push(`${key} ${card.task}: ${text}`);
+            if (!ICON_STORED.has(card.task) && suggestTaskIcon(card.titleText) === null) {
+              if (card.icon) fail(`a task with no icon draws ${card.icon}`);
+              if (Math.abs(card.titleInset) > 0.5) fail(`the title of an icon-less card starts ${card.titleInset} px off the card's content edge`);
+              continue;
+            }
+            if (!card.icon || !card.glyph) { fail(`no icon drawn before the title (${card.icon ?? "no box"})`); continue; }
+            const tint = ICON_TINTS[card.task];
+            if (tint && card.iconColour !== tint) fail(`icon drawn ${card.iconColour}, its colour is ${tint}`);
+            if (!tint && Object.values(ICON_TINTS).includes(card.iconColour ?? "")) fail(`an uncoloured task's icon is tinted ${card.iconColour}`);
+            if (card.lineLefts.length !== 1) fail(`the title's lines start at ${JSON.stringify(card.lineLefts)}, not under each other`);
+            if ((card.titleLeftOfIcon ?? 0) < 4) fail(`the title starts ${card.titleLeftOfIcon} px after the icon`);
+            if (Math.abs(card.iconOffFirstLine ?? 99) > 1.5) fail(`the icon sits ${card.iconOffFirstLine} px off the first title line`);
+          }
+        }
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join("evidence/task-icons", `phone-${ICON_PHASE}.json`), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);

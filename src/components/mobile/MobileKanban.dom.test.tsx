@@ -14,6 +14,7 @@ import { MobileKanban } from "./MobileKanban";
 import { createMobileNav, MobileNavContext, type MobileNav } from "./mobileNav";
 import { fakeHistory } from "./mobileNavTestHistory";
 import { receipts, useReceipt } from "./MobileReceipt";
+import { resetTaskIconLoaderForTests } from "@/components/tasks/taskIconLoader";
 import { attentionKey } from "./phoneKanbanModel";
 import { resetPhoneKanbanPlaces } from "./phoneKanbanPlace";
 import { LONG_PRESS_MS } from "./swipeIntent";
@@ -412,4 +413,38 @@ test("⋯ › Hidden tasks lists what the columns do not draw, and Show brings a
   expect(patches.map((entry) => [entry.id, (entry.body as { hide?: boolean }).hide])).toEqual([["h1", false]]);
   /* Shown at once: the group is back in its column before the write answers. */
   expect(cardsIn(host, "assigned")).toEqual(expect.arrayContaining(["task:a1", "task:h1"]));
+});
+
+test("a task card leads its title with the task's icon in the task's colour, the neutral tone without one, and nothing when it has no icon (#2190)", async () => {
+  resetTaskIconLoaderForTests(async (names) => Object.fromEntries(names.map((name) => [name, [["path", { d: `M0 0h${name.length}`, key: name }]]])));
+  const tasks = [
+    { ...task("tinted", "assigned", [], "Let the operator pin one conversation above the column"), color: "teal", icon: "rocket" },
+    { ...task("suggested", "assigned", [], "Fix the crash when a lane closes"), color: "coral" },
+    { ...task("neutral", "assigned", [], "Restore /favicon.ico with the Delegatus emblem"), icon: "image" },
+    { ...task("bare", "assigned", [], "Hide the Hidden tray when it holds nothing"), color: "amber" },
+  ] as BoardTask[];
+  const { host } = mount({ files: [], tasks });
+  await sleep(10);
+  const row = (id: string) => q(host, `[data-phone-card="task:${id}"] [data-phone-card-title]`)!.parentElement!;
+  const icon = (id: string) => row(id).querySelector("[data-task-icon]") as unknown as HTMLElement | null;
+
+  /* Coloured: the stored icon, drawn, before the title, in the stripe's hue. */
+  expect(icon("tinted")?.getAttribute("data-task-icon")).toBe("rocket");
+  expect(icon("tinted")?.querySelector("svg")).not.toBeNull();
+  expect(icon("tinted")?.nextElementSibling?.hasAttribute("data-phone-card-title")).toBe(true);
+  expect(icon("tinted")?.style.color).toBe("#1a9e8f");
+  expect(icon("tinted")?.className).not.toMatch(/text-(secondary|muted)/);
+  /* The title's suggestion is tinted the same way. */
+  expect(icon("suggested")?.getAttribute("data-icon-source")).toBe("suggested");
+  expect(icon("suggested")?.style.color).toBe("#e07a5f");
+
+  /* Uncoloured: the neutral tone, no hue of its own. */
+  expect(icon("neutral")?.getAttribute("data-task-icon")).toBe("image");
+  expect(icon("neutral")?.style.color).toBe("");
+  expect(icon("neutral")?.className).toContain("text-secondary");
+
+  /* No icon: nothing drawn, not even the dashed placeholder; the title is the row's first child. */
+  expect(icon("bare")).toBeNull();
+  expect(row("bare").firstElementChild?.hasAttribute("data-phone-card-title")).toBe(true);
+  resetTaskIconLoaderForTests();
 });
