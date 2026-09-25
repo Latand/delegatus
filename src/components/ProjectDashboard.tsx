@@ -100,6 +100,7 @@ import { boundFlowExpansions } from "./scheme/placementHorizon";
 import { ArchiveRestore } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
+import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { SoundToggle } from "./SoundToggle";
 import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
@@ -2038,6 +2039,9 @@ function ProjectDashboardView({
       { kind: "divider", key: "d-setup" },
       ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
       selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
+      /* The project's merge setting (#2187 §6), the same row as the desktop ⋯. */
+      { kind: "divider", key: "d-merge" },
+      { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
     );
     if (archived) {
       entries.push({ kind: "divider", key: "d4" }, {
@@ -2112,6 +2116,7 @@ function ProjectDashboardView({
               <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
             </BarMenuGroup>
             <BarMenuGroup name="project">
+              <MergeOnReviewRow project={project} variant="menu" />
               {archived ? (
                 <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
                   <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}

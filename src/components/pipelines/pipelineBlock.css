@@ -142,6 +142,14 @@
 .pblock .pb-answer, .pblock .pb-note { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .pblock .pb-answer .stage-report { color: var(--color-warning); font-weight: 600; }
 .pblock .pb-unreviewed { margin: 0; font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
+/* #2187 §6: a completed lane's merge. The word rides after "done" in its ink;
+   the note sits on its own line under the chain, muted. */
+.pblock .pb-merge { color: var(--color-muted); white-space: nowrap; }
+.pblock .pb-merge[data-merge-state="merged"] { color: var(--color-success); font-weight: 600; }
+.pblock .pb-merge[data-merge-state="stopped"] { color: var(--color-warning); font-weight: 600; }
+.pblock .pb-merge-note { margin: 0; font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
+.pblock .pb-merge-note[data-merge-note="merged"] { color: var(--color-success); }
+.pblock .pb-answer .stage-report[data-merge-stop] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 /* The one line on why a lane stopped on a review (#2187 §3.4) is a sentence, and wraps whole. */
 .pblock .pb-answer .stage-report[data-review-stop] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 /* The buttons share a line when they fit and wrap when they do not; their

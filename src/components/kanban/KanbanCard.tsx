@@ -13,7 +13,7 @@ import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
-import type { PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
+import { laneMergeUnsettled, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
 import { clearedLine, needLabel } from "@/components/attention/decision";
 import type { NeedReason } from "@/components/attention/needReason";
 
@@ -432,9 +432,12 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const editingDetails = editing?.field === "details";
   const detailsShown = detailsOpen || editingDetails;
-  const livePipelines = card.pipelines.filter((summary) => !ENDED_PIPELINE_STATES.has(summary.pipeline.state));
+  /* A completed lane whose merge still moves or stopped on the operator is
+     not folded with the finished ones (#2187 §6). */
+  const folds = (summary: KanbanPipeline) => ENDED_PIPELINE_STATES.has(summary.pipeline.state) && !laneMergeUnsettled(summary.pipeline);
+  const livePipelines = card.pipelines.filter((summary) => !folds(summary));
   const endedPipelines = card.pipelines
-    .filter((summary) => ENDED_PIPELINE_STATES.has(summary.pipeline.state))
+    .filter(folds)
     .sort((a, b) => pipelineEndedAtMs(b.pipeline) - pipelineEndedAtMs(a.pipeline));
   const foldCompleted = card.pipelines.length > PIPELINE_ROWS_BEFORE_FOLD && endedPipelines.length > 0;
   const shownPipelines = foldCompleted ? livePipelines : [...livePipelines, ...endedPipelines];

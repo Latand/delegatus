@@ -814,6 +814,26 @@ test("a finished lane whose last fix was never re-reviewed says so on its open p
     .toBe("pull request #1289 left open by a lane that finished; last fix not re-reviewed");
 });
 
+/* #2187 §4.6: a pull request the merge runner is working on is the runner's;
+   one whose merge stopped comes back to the seat with the reason. */
+test("a pull request the merge runner holds is left out, and a stopped merge names its reason", async () => {
+  const merge = (state: string, reason: string | null) => ({
+    state, by: null, repository: "acme/widgets", prNumber: 1289, policyChangedAt: "2026-08-27T09:00:00.000Z", reviewedHead: "a".repeat(40),
+    chain: ["a".repeat(40)], updates: [], seenChecks: [], head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null,
+    requestedAt: "2026-08-27T10:00:00.000Z", mergedHead: null, mergeCommit: null, method: null, mergedAt: null, attempts: 0,
+    reason, blockedAt: reason ? "2026-08-27T11:00:00.000Z" : null, updatedAt: "2026-08-27T11:00:00.000Z",
+  });
+  for (const state of ["queued", "checking", "waiting-checks", "updating", "merging"]) {
+    const held = await gather({ pipelines: [finishedLane({ merge: merge(state, null) } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+    expect(held.pullRequests).toEqual([]);
+  }
+  const input = await gather({ pipelines: [finishedLane({ merge: merge("blocked", "conflict with the base branch") } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, mergeBlocked: "conflict with the base branch" })]);
+  const verdict = seatTickDecision(input).verdict;
+  expect(verdict.kind === "wake" && verdict.reasons[0]!.detail)
+    .toBe("pull request #1289 left open by a lane that finished; merge stopped: conflict with the base branch");
+});
+
 test("a pull request no finished lane produced is not this seat's obligation", async () => {
   const input = await gather(
     { pipelines: [finishedLane()], openPullRequests: [openPullRequest({ headRefName: "someone-elses-branch" })] },

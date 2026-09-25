@@ -546,7 +546,9 @@ test("⋯ draws no rule next to a group with nothing in it", async () => {
   const menu = openMore(host);
   expect(menu.querySelector('[role="separator"]')).toBeNull();
   const project = menu.querySelector('[data-bar-menu-group="project"]') as HTMLElement;
-  expect(project.childNodes).toHaveLength(0);
+  /* #2187 §6: the project's merge setting stays in its group when Archive and
+     Delete stand down. */
+  expect(Array.from(project.children).map((child) => child.hasAttribute("data-merge-on-review"))).toEqual([true]);
 });
 
 test("the view switch keeps its place when the view changes: Conversations reserves the create group", async () => {

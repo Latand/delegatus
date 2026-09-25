@@ -9271,3 +9271,194 @@ describe("#2187 a lane parked on a review says why in one line and answers in pl
     if (STAMP === "after" && failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("#2187 a completed lane's automatic merge, and the project's merge setting", () => {
+  /*
+   * docs/design/merge-policy-and-task-finishing.md §4.6, §6: a completed lane
+   * in each merge state (`?scenario=merge-states`) on the desktop board at
+   * 1440, en and uk: the word after "done" in its ink, the line under the
+   * chain, and a stopped merge's reason with "Leave the PR open" and "Try the
+   * merge again". No label is cut, no text meets another text or a control,
+   * and nothing paints outside its card. The board's ⋯ carries the "Merge
+   * when the review passes" row, drawn on and then off by its own switch. The
+   * phone at 390 is the phone driver's case of the same issue.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 MERGE_STATES_PNG_DIR=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#2187 a completed lane"
+   *
+   * PNGs go to `MERGE_STATES_PNG_DIR`, or `.artifacts/merge-states/`, never committed.
+   */
+  const OUT = path.resolve(process.env.MERGE_STATES_PNG_DIR ?? ".artifacts/merge-states");
+  const EVIDENCE = path.resolve("evidence/merge-states");
+  const LANES = [
+    { task: "t-merge-wait", word: "waiting", note: "waiting" },
+    { task: "t-merge-update", word: "updating", note: "waiting" },
+    { task: "t-merge-stop", word: "stopped", note: null },
+    { task: "t-merge-done", word: "merged", note: "merged" },
+  ] as const;
+  type MergeReading = {
+    task: string; word: string | null; wordText: string | null; wordColor: string | null; note: string | null; noteText: string | null;
+    reason: string | null; answers: Array<[string, string]>; clipped: string[]; overlaps: string[]; escapes: string[];
+  };
+  const READ = (tasks: string[]) => tasks.map((task) => {
+    type Box = { top: number; left: number; right: number; bottom: number };
+    const box = (el: Element): Box => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a: Box, b: Box): Box => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = (r: Box) => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const union = (a: Box, b: Box): Box => ({ top: Math.min(a.top, b.top), left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) });
+    const cardElement = document.querySelector(`[data-kanban-board] .card[data-id="task:${task}"]`);
+    const block = cardElement?.querySelector(".pblock");
+    const out: MergeReading = { task, word: null, wordText: null, wordColor: null, note: null, noteText: null, reason: null, answers: [], clipped: [], overlaps: [], escapes: [] };
+    if (!cardElement || !block) return out;
+    const word = block.querySelector(".pb-merge");
+    out.word = word?.getAttribute("data-merge-state") ?? null;
+    out.wordText = word?.textContent?.trim() ?? null;
+    out.wordColor = word ? getComputedStyle(word).color : null;
+    const note = block.querySelector("[data-merge-note]");
+    out.note = note?.getAttribute("data-merge-note") ?? null;
+    out.noteText = note?.textContent?.trim() ?? null;
+    out.reason = block.querySelector("[data-merge-stop]")?.textContent?.trim() ?? null;
+    const buttons = [...block.querySelectorAll<HTMLElement>("[data-answer-action]")];
+    out.answers = buttons.map((button) => [button.getAttribute("data-answer-action") ?? "", (button.textContent ?? "").trim()]);
+    for (const button of buttons) if (button.scrollWidth > button.clientWidth + 1) out.clipped.push(`${button.textContent?.trim()} overflows its button by ${button.scrollWidth - button.clientWidth}px`);
+    /* The ink of the merge's own words, and of everything else in the lane row they could meet. */
+    const ink: Array<{ el: Element; rect: Box; text: string; own: boolean }> = [];
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.nodeValue?.trim() || !node.parentElement) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter((r) => r.width * r.height > 0.5).map((r) => ({ top: r.top, left: r.left, right: r.right, bottom: r.bottom }));
+      if (!rects.length) continue;
+      let rect = rects.reduce(union);
+      const own = Boolean(node.parentElement.closest(".pb-merge, [data-merge-note], .pb-answer"));
+      /* Ink is what shows: a text its overflow box clips (the lane title's
+         ellipsis) is measured inside that box. The merge's own words may not
+         be clipped at all. */
+      for (let up: Element | null = node.parentElement; up && up !== cardElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+        const visible = intersect(rect, box(up));
+        if (own && area(visible) + 1 < area(rect)) { out.clipped.push(`${node.nodeValue.trim().slice(0, 40)} cut by ${up.tagName.toLowerCase()}.${up.className}`); break; }
+        rect = visible;
+      }
+      if (area(rect) > 0.5) ink.push({ el: node.parentElement, rect, text: node.nodeValue.trim().slice(0, 40), own });
+    }
+    const frame = box(cardElement);
+    for (let i = 0; i < ink.length; i++) {
+      const a = ink[i]!;
+      if (a.own && (a.rect.left < frame.left - 1 || a.rect.right > frame.right + 1 || a.rect.bottom > frame.bottom + 1)) out.escapes.push(a.text);
+      for (let j = i + 1; j < ink.length; j++) {
+        const b = ink[j]!;
+        if ((a.own || b.own) && !a.el.contains(b.el) && !b.el.contains(a.el) && area(intersect(a.rect, b.rect)) > 0.5) out.overlaps.push(`text/text: ${a.text} | ${b.text}`);
+      }
+      if (a.own) for (const button of buttons) if (!button.contains(a.el) && area(intersect(a.rect, box(button))) > 0.5) out.overlaps.push(`text/control: ${a.text} | ${button.textContent?.trim()}`);
+    }
+    return out;
+  });
+
+  browserTest("each merge state says its words at 1440, en and uk, and the ⋯ carries the setting row on and off", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/merge-states-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const label = `1440-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=merge-states`, { width: 1440, height: 900 }, scheme, lang);
+          try {
+            await page.waitForSelector(`${card("t-merge-stop")} [data-merge-stop]`, { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+            for (const lane of LANES) {
+              const element = page.locator(card(lane.task));
+              await element.scrollIntoViewIfNeeded();
+              await element.screenshot({ path: path.join(OUT, `card-${lane.word}-${label}.png`) });
+            }
+            await page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
+            const reading = await page.evaluate(READ, LANES.map((lane) => lane.task)) as MergeReading[];
+            for (const lane of LANES) {
+              const got = reading.find((entry) => entry.task === lane.task)!;
+              const fail = (text: string) => failures.push(`${label} ${lane.word}: ${text}`);
+              if (got.word !== lane.word) fail(`merge word drawn as ${got.word}`);
+              if (lane.word === "waiting") {
+                const [head] = t("pipelineBlock.merge.waiting", { age: "\u0000" }).split("\u0000");
+                if (!got.wordText?.startsWith(head!) || got.wordText === head) fail(`word ${JSON.stringify(got.wordText)}`);
+              } else if (got.wordText !== t(`pipelineBlock.merge.${lane.word}`)) fail(`word ${JSON.stringify(got.wordText)}`);
+              if (got.note !== lane.note) fail(`note ${got.note}`);
+              if (lane.note === "waiting" && got.noteText !== t("pipelineBlock.merge.waitingHint")) fail(`note ${JSON.stringify(got.noteText)}`);
+              if (lane.note === "merged" && got.noteText !== t("pipelineBlock.merge.byDelegatus")) fail(`note ${JSON.stringify(got.noteText)}`);
+              if (lane.word === "stopped") {
+                const want = t("pipelineBlock.merge.reason", { reason: t("pipelineBlock.mergeReason.check", { name: "privacy-publication" }) });
+                if (got.reason !== want) fail(`reason ${JSON.stringify(got.reason)}, expected ${JSON.stringify(want)}`);
+                const answers = [["dismiss", t("pipelineBlock.answer.leaveOpen")], ["retry-merge", t("pipelineBlock.answer.retryMerge")]];
+                if (JSON.stringify(got.answers) !== JSON.stringify(answers)) fail(`answers ${JSON.stringify(got.answers)}`);
+              } else if (got.answers.length) fail(`answers ${JSON.stringify(got.answers)} on a merge that asks nothing`);
+              for (const entry of [...got.clipped, ...got.overlaps]) fail(entry);
+              for (const entry of got.escapes) fail(`paints outside its card: ${entry}`);
+            }
+            /* The ⋯ menu: the setting row on, its switch, and the row off. */
+            const more = page.locator('[data-bar-group="more"] button').first();
+            await more.click();
+            const row = page.locator("[data-merge-on-review]");
+            await row.waitFor({ timeout: 10_000 });
+            await page.waitForFunction(() => !document.querySelector("[data-merge-on-review-switch]")?.hasAttribute("disabled"), undefined, { timeout: 10_000 });
+            const menuBox = page.locator('[data-bar-menu-group="project"]').locator("xpath=..");
+            await menuBox.screenshot({ path: path.join(OUT, `menu-setting-on-${label}.png`) });
+            const readRow = () => page.evaluate(() => {
+              const element = document.querySelector("[data-merge-on-review]")!;
+              const toggle = element.querySelector<HTMLElement>("[data-merge-on-review-switch]")!;
+              const label = element.querySelector("span.flex-1")!;
+              const hint = element.querySelector('[role="status"]')!;
+              const a = label.getBoundingClientRect();
+              const b = toggle.getBoundingClientRect();
+              const menu = element.closest('[role="menu"], [data-bar-menu-group]')!.getBoundingClientRect();
+              const h = hint.getBoundingClientRect();
+              return {
+                state: element.getAttribute("data-merge-on-review"), checked: toggle.getAttribute("aria-checked"),
+                label: label.textContent?.trim() ?? "", hint: hint.textContent?.trim() ?? "",
+                labelMeetsSwitch: Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5,
+                labelCut: label.scrollWidth > label.clientWidth + 1,
+                inside: h.right <= menu.right + 1 && b.right <= menu.right + 1,
+                switchHeight: Math.round(b.height),
+              };
+            });
+            const on = await readRow();
+            if (on.state !== "on" || on.checked !== "true") failures.push(`${label} menu: the row reads ${JSON.stringify(on)}`);
+            if (on.label !== t("projectSettings.mergeOnReview") || on.hint !== t("projectSettings.mergeOnReview.on")) failures.push(`${label} menu on: ${JSON.stringify(on)}`);
+            await page.locator("[data-merge-on-review-switch]").click();
+            await page.waitForFunction(() => document.querySelector("[data-merge-on-review]")?.getAttribute("data-merge-on-review") === "off", undefined, { timeout: 10_000 });
+            await page.waitForFunction(() => !document.querySelector("[data-merge-on-review-switch]")?.hasAttribute("disabled"), undefined, { timeout: 10_000 });
+            await menuBox.screenshot({ path: path.join(OUT, `menu-setting-off-${label}.png`) });
+            const off = await readRow();
+            if (off.hint !== t("projectSettings.mergeOnReview.off")) failures.push(`${label} menu off: ${JSON.stringify(off)}`);
+            const writes = await page.evaluate(() => (window as unknown as { evidence?: { settingWrites: unknown[] } }).evidence?.settingWrites ?? null);
+            for (const entry of [on, off]) if (entry.labelMeetsSwitch || entry.labelCut || !entry.inside) failures.push(`${label} menu geometry: ${JSON.stringify(entry)}`);
+            await page.keyboard.press("Escape");
+            /* Try the merge again sends retry-merge for the stopped lane. */
+            if (scheme === "light") {
+              await page.locator(`${card("t-merge-stop")} [data-answer-action="retry-merge"]`).click();
+              await page.waitForTimeout(1_200);
+            }
+            const patches = await page.evaluate(() => (window as unknown as { evidence?: { pipelinePatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence?.pipelinePatches ?? null);
+            if (scheme === "light" && !patches?.some((entry) => entry.id === "p-merge-stop" && entry.body.action === "retry-merge")) failures.push(`${label}: Try the merge again sent ${JSON.stringify(patches)}`);
+            readings[label] = { lanes: reading, menu: { on, off, writes }, patches };
+            const sideways = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+            if (sideways > 0) failures.push(`${label}: the page scrolls sideways by ${sideways}px`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});

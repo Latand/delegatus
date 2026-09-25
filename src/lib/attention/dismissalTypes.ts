@@ -18,8 +18,9 @@ export type DismissedBy =
 /** The reasons a conversation can need the operator for (§4). */
 export type ConversationReasonKind = "decision" | "question" | "plan" | "permission" | "delivery";
 
-/** The two reasons a lane can need the operator for. */
-export type LaneReasonKind = "lane-decision" | "lane-review";
+/** The reasons a lane can need the operator for: a decision, a spent review
+    budget, and a completed lane's merge that stopped (#2187 §4.6). */
+export type LaneReasonKind = "lane-decision" | "lane-review" | "lane-merge";
 
 /** A conversation's dismissal as `/api/files` projects it onto the entry. */
 export interface AttentionDismissalMark {

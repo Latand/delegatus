@@ -4,7 +4,7 @@ import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { pipelineHiddenFromBoard } from "@/components/mobile/mobileBoardModel";
-import { pipelineNeedsYou } from "@/components/pipelines/pipelineBlockModel";
+import { mergeNeedsYou, pipelineNeedsYou } from "@/components/pipelines/pipelineBlockModel";
 
 import { attentionReason, type ConversationReason } from "../attention";
 
@@ -74,6 +74,8 @@ function laneSince(pipeline: Pipeline): number {
 
 /** A lane's reason, flagged or cleared, or null when it asks nothing. */
 export function laneNeed(pipeline: Pipeline): { need: NeedReason; cleared: ClearedNeed | null } | null {
+  const merge = laneMergeNeed(pipeline);
+  if (merge) return merge;
   if (!pipelineNeedsYou(pipeline)) return null;
   const need: NeedReason = {
     subject: "pipeline",
@@ -84,6 +86,27 @@ export function laneNeed(pipeline: Pipeline): { need: NeedReason; cleared: Clear
     since: laneSince(pipeline),
   };
   if (!pipelineHiddenFromBoard(pipeline)) return { need, cleared: null };
+  return { need, cleared: { need, at: Date.parse(pipeline.dismissedAt!) / 1000, by: pipeline.dismissedBy ?? LEGACY_DISMISSAL } };
+}
+
+/**
+ * A completed lane whose automatic merge stopped (#2187 §4.6), keyed apart
+ * from the lane's own key. "Leave the PR open" is a dismissal made after the
+ * merge stopped: it clears the need and the record stays blocked.
+ */
+function laneMergeNeed(pipeline: Pipeline): { need: NeedReason; cleared: ClearedNeed | null } | null {
+  const merge = pipeline.merge;
+  if (pipeline.state !== "completed" || merge?.state !== "blocked") return null;
+  const blockedAt = Date.parse(merge.blockedAt ?? merge.updatedAt);
+  const need: NeedReason = {
+    subject: "pipeline",
+    kind: "lane-merge",
+    key: `pipeline:${pipeline.id}:merge`,
+    pipeline,
+    stageId: null,
+    since: Number.isFinite(blockedAt) ? blockedAt / 1000 : laneSince(pipeline),
+  };
+  if (mergeNeedsYou(pipeline)) return { need, cleared: null };
   return { need, cleared: { need, at: Date.parse(pipeline.dismissedAt!) / 1000, by: pipeline.dismissedBy ?? LEGACY_DISMISSAL } };
 }
 

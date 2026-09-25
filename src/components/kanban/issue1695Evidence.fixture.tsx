@@ -118,6 +118,12 @@ const REVIEW_SPENT = SCENARIO === "issue1938" || FLAT;
    fixing, a reviewer that failed again after its last fix round, and an older
    review loop at its round limit — with the words at their longest. */
 const REVIEW_STOPS = SCENARIO === "review-stops";
+/* #2187 §4.6, §6: a completed lane in each state of its automatic merge —
+   waiting for checks, updating from main, merge stopped with its two answers,
+   merged by Delegatus — and the project's merge setting in the board's ⋯,
+   on by default and off with `&merge=off`. */
+const MERGE_STATES = SCENARIO === "merge-states";
+const MERGE_SETTING = { enabled: new URLSearchParams(location.search).get("merge") !== "off" };
 /* The seat's header at its fullest: a mandate a version behind the default,
    so the stale chip draws, a designated incumbent with its effort, account and
    a context past the rotation line, twenty previous seats and a running host
@@ -455,6 +461,34 @@ const reviewStopPipelines: Pipeline[] = REVIEW_STOPS ? (() => {
   ];
 })() : [];
 
+const mergeStatePipelines: Pipeline[] = MERGE_STATES ? (() => {
+  const readOnly = { ...role("reviewer", "codex"), access: "read-only" };
+  const pass = { status: "pass", findings: [] };
+  const conv = (id: string, title: string, ago: number) => add(conversation(id, title, { mtime: now - ago }));
+  const HEAD = "7c1e4b2a9d3f6e5c8b0a1d2e3f4a5b6c7d8e9f0a";
+  const merge = (state: string, requestedAgo: number, over: Record<string, unknown> = {}) => ({
+    state, by: null, repository: "acme/atlas", prNumber: 2240, policyChangedAt: iso(24 * 60 * MIN), reviewedHead: HEAD, chain: [HEAD], updates: [],
+    seenChecks: ["privacy-publication", "privacy-tracker-audit", "bun-runtime"], head: HEAD, headSeenAt: iso(requestedAgo), lastChecks: [],
+    readAt: iso(MIN), nextReadAt: null, readFailures: 0, requestedAt: iso(requestedAgo), mergedHead: null, mergeCommit: null, method: null,
+    mergedAt: null, attempts: 0, reason: null, blockedAt: null, updatedAt: iso(MIN), ...over,
+  });
+  const lane = (key: string, title: string, taskId: string, from: number, mergeRecord: Record<string, unknown>) => pipeline(`p-merge-${key}`, title, taskId, "completed",
+    [stage("build", "builder", "review"), stage("review", "reviewer", null, { kind: "run", onFail: { to: "build", maxRounds: 2 }, effectiveRole: readOnly })],
+    [
+      { stageId: "build", attempts: [attempt(1, "passed", conv(`merge-${key}-build`, "Build pass 1", from + 20 * MIN), { startedAt: iso(from + 40 * MIN), completedAt: iso(from + 20 * MIN), verdict: pass })] },
+      { stageId: "review", attempts: [attempt(1, "passed", conv(`merge-${key}-review`, "Review pass 1", from), { effectiveRole: readOnly, startedAt: iso(from + 18 * MIN), completedAt: iso(from), verdict: pass, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } })] },
+    ], null, { lastPassedCommit: HEAD, closedAt: iso(from), stateDetail: "completed", merge: mergeRecord });
+  return [
+    lane("wait", L("Deploy failure notifies the seat and the phone", "Невдалий деплой сповіщає сесію і телефон"), "t-merge-wait", 12 * MIN, merge("waiting-checks", 12 * MIN)),
+    lane("update", L("Composer model pills: one width at 390", "Кнопки моделі в композері: одна ширина на 390"), "t-merge-update", 20 * MIN,
+      merge("updating", 20 * MIN, { updates: [{ requestedAt: iso(2 * MIN), head: null }] })),
+    lane("stop", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "t-merge-stop", 45 * MIN,
+      merge("blocked", 45 * MIN, { reason: 'check "privacy-publication" failed', blockedAt: iso(30 * MIN) })),
+    lane("done", L("Conversation: wider agent replies", "Розмова: ширші відповіді агентів"), "t-merge-done", 90 * MIN,
+      merge("merged", 90 * MIN, { by: "auto-merge", mergedHead: HEAD, mergeCommit: "e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a6f7e8d9", method: "squash", mergedAt: iso(70 * MIN) })),
+  ];
+})() : [];
+
 const arcPipelines: Pipeline[] = ARCS ? (() => {
   const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
   const restFix = conv("arc-rest-fix", "Draft the empty-state copy", { mtime: now - 70 * MIN });
@@ -732,6 +766,7 @@ const pipelines: Pipeline[] = [
   ...flatPipelines,
   ...reviewSpentPipelines,
   ...reviewStopPipelines,
+  ...mergeStatePipelines,
   ...balancePipelines,
   ...arcPipelines,
   ...labelPipelines,
@@ -1001,6 +1036,12 @@ const tasks: BoardTask[] = [
     task("t-stop-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 170 * MIN),
     task("t-stop-legacy", "assigned", L("Screenshot catalog: one capture command for every feature", "Каталог скриншотів: одна команда зйомки для кожної фічі"), "", 2 * MIN),
   ] : []),
+  ...(MERGE_STATES ? [
+    task("t-merge-wait", "assigned", L("Deploy failure notifies the seat and the phone", "Сповіщення, коли деплой падає"), "", 12 * MIN),
+    task("t-merge-update", "assigned", L("Composer model pills: one width at 390", "Кнопки моделі в композері однієї ширини"), "", 20 * MIN),
+    task("t-merge-stop", "assigned", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "", 30 * MIN),
+    task("t-merge-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 70 * MIN),
+  ] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
@@ -1221,6 +1262,8 @@ let board = {
 
 const evidence = {
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
+  /* #2187: what the board's merge-setting row wrote. */
+  settingWrites: [] as Array<Record<string, unknown>>,
   presence: [] as Array<{ mode: string; visiblePaths: string[]; focusedPath: string | null }>,
   assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
   /* The focus handoff this page's Viewer runs, for driving an attention
@@ -1539,6 +1582,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths, focusedPath: body.focusedPath ?? null });
     return json({ ok: true });
   }
+  /* #2187 §6: the project's merge setting, as the settings route answers it. */
+  if (url.pathname === "/api/projects/settings") {
+    if (method === "PUT") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown };
+      evidence.settingWrites.push(body);
+      MERGE_SETTING.enabled = body.mergeOnReview === true;
+    }
+    return json({ ok: true, project: PROJECT, mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" }, github: "acme/atlas" });
+  }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY ? [] : tasks });
   if (url.pathname === "/api/tasks" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -1712,6 +1764,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       } else if (body.action === "retry-stage" || body.action === "skip-stage") {
         if (record.state !== "needs_decision") return json({ error: "pipeline does not have a stage awaiting a decision" }, 409);
         record.state = "running";
+      } else if (body.action === "retry-merge") {
+        if (record.state !== "completed" || record.merge?.state !== "blocked") return json({ error: "only a stopped merge can be tried again" }, 409);
+        record.merge = { ...record.merge, state: "queued", attempts: record.merge.attempts + 1, reason: null, blockedAt: null };
+      } else if (body.action === "dismiss") {
+        record.dismissedAt = new Date().toISOString();
+        record.dismissedBy = { kind: "operator" };
       } else if (body.action === "close") {
         record.state = "closed";
       } else {
