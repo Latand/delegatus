@@ -24,7 +24,7 @@ const HOME = os.homedir();
  * install (#2169).
  */
 export function claudeTasksRootFor(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Readonly<Record<string, string | undefined>> = process.env,
   tmpdir: string = os.tmpdir(),
   uid: number = process.getuid?.() ?? 0,
 ): string {
