@@ -14,6 +14,14 @@ scaffold changes judged by the rule that doc fixed in advance, and this report.
   WRONG-PREMISE δ is inside 10 points for every role, so the disproval
   condition fails too. The doc left this case open. The committed rule reports
   it as its own outcome, and I did not pick a side after seeing the numbers.
+- **This verdict depends on how "δ exceeds 10 points" is read.** The
+  pre-registered reading, fixed in `decide()` before the first run, is "δ
+  exceeds 10 points on every rate outcome of every changed role", and under it
+  neither condition holds. The no-verdict δ (12.8, 15.9 and 18.8 points) does
+  exceed 10 points, so under the other reading, "δ exceeds 10 points on any
+  rate outcome", the same tables give **value disproved**. The rule stays as
+  committed. The consequences in the paragraph after this list hold under
+  either reading.
 - **The noise band is wide where it matters most.** Week to week, under an
   unchanged scaffold and model, the no-verdict rate moves by 12.8 points
   (reviewer, n 1,376 attempts), 15.9 (builder, n 1,592) and 18.8 (architect,

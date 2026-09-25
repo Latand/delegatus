@@ -18,7 +18,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { APP_DIR_NAMES } from "../bin/appDir.mjs";
 import { failEdgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
+import { STAGING_STATE_DIRNAME } from "@/lib/staging";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 
 // ---------------------------------------------------------------------------
@@ -195,7 +197,8 @@ export function transcriptTokens(transcriptPath: string): { total: number; outpu
       try {
         const usage = JSON.parse(line)?.payload?.info?.total_token_usage;
         if (usage && typeof usage.total_tokens === "number") {
-          codex = { total: usage.total_tokens, output: (usage.output_tokens ?? 0) + (usage.reasoning_output_tokens ?? 0) };
+          // Codex counts reasoning inside output_tokens already.
+          codex = { total: usage.total_tokens, output: usage.output_tokens ?? 0 };
         }
       } catch { /* a torn line */ }
     } else if (line.includes('"usage"') && line.includes('"assistant"')) {
@@ -714,7 +717,9 @@ export function scaffoldProvenance(repo: string, texts: Map<string, { role: stri
 // ---------------------------------------------------------------------------
 // Input
 
-const LIVE_STATE_PATH = /[\\/]agent-log-viewer[\\/]state([\\/]|$)/;
+/** A live state directory under any name the app dir has had, including the
+    staging sibling. */
+const LIVE_STATE_PATH = new RegExp(`[\\\\/](?:${APP_DIR_NAMES.join("|")})[\\\\/](?:state|${STAGING_STATE_DIRNAME})(?:[\\\\/]|$)`);
 /** Files only a running Viewer or runtime host keeps beside its database. */
 export const LIVE_WRITER_MARKERS = ["runtime-host.sock", "runtime-host.sock.lock", "hot-state-authority.json", "viewer-release.json", "runtime-host-release.json"];
 /** A write-ahead log touched this recently means a writer holds the file. */
@@ -736,9 +741,10 @@ function realPath(target: string): string {
 }
 
 /** Refuse anything that looks like a live state directory, after following
-    symlinks: a path inside an `agent-log-viewer/state` directory, a directory
-    holding a live writer's socket, lock or release files, or a database whose
-    write-ahead log was touched in the last few seconds. Nothing is resolved
+    symlinks: a path inside a `state` or `state-staging` directory under any
+    name the app dir has had, a directory holding a live writer's socket, lock
+    or release files, or a database whose write-ahead log was touched in the
+    last few seconds. Nothing is resolved
     from the environment. Returns the real path to open. */
 export function assertNotLiveState(dbPath: string, now = Date.now()): string {
   const resolved = path.resolve(dbPath);

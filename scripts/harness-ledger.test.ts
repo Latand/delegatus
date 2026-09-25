@@ -172,9 +172,10 @@ describe("parsing", () => {
       ].join("\n"));
       expect(transcriptTokens(claude)).toEqual({ total: 125, output: 9 });
       const codex = path.join(dir, "codex.jsonl");
-      const count = (total: number) => JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: total, output_tokens: 3, reasoning_output_tokens: 1 } } } });
+      const count = (total: number) => JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: total, output_tokens: 3, reasoning_output_tokens: 2 } } } });
       fs.writeFileSync(codex, [count(50), count(80)].join("\n"));
-      expect(transcriptTokens(codex)).toEqual({ total: 80, output: 4 });
+      // Reasoning is already inside output_tokens.
+      expect(transcriptTokens(codex)).toEqual({ total: 80, output: 3 });
       expect(transcriptTokens(path.join(dir, "missing.jsonl"))).toBeNull();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -200,6 +201,25 @@ describe("parsing", () => {
     }
     expect(() => assertNotLiveState("/srv/someone/.config/agent-log-viewer/state/state.sqlite")).toThrow(/live state/);
     expect(() => assertNotLiveState("/var/tmp/scratch/state.sqlite")).not.toThrow();
+  });
+
+  test("the live-state guard refuses every app dir name and the staging sibling, with no marker files", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-ledger-home-"));
+    try {
+      for (const [name, stateDir] of [["delegatus", "state"], ["delegatus", "state-staging"], ["agent-log-viewer", "state-staging"], ["live-log-viewer", "state"]]) {
+        const directory = path.join(home, ".config", name, stateDir);
+        fs.mkdirSync(directory, { recursive: true });
+        const db = path.join(directory, "state.sqlite");
+        fs.writeFileSync(db, "");
+        expect(() => assertNotLiveState(db)).toThrow(/live state directory/);
+      }
+      const scratch = path.join(home, ".config", "delegatus", "state-copy");
+      fs.mkdirSync(scratch, { recursive: true });
+      fs.writeFileSync(path.join(scratch, "state.sqlite"), "");
+      expect(() => assertNotLiveState(path.join(scratch, "state.sqlite"))).not.toThrow();
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("the live-state guard follows symlinks and refuses a directory a live writer holds", () => {
