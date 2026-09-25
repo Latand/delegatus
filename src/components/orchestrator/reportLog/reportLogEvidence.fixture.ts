@@ -13,6 +13,8 @@ import type { BridgeReportClass } from "@/lib/bridge/types";
 const MIN = 60_000;
 
 const BODIES: Array<[BridgeReportClass, string]> = [
+  ["status", "Where the release stands: search is merged and deployed (#2149), upload is in review round 2 with one P2 left (the progress bar does not reach 100% on a slow link), favicon waits behind the builder cap, and the passkey fallback is parked on your answer about the domain. Production runs 91be3d07 and answers 200 on every route. Nothing else is waiting on you; I check the upload lane again when its reviewer settles and report only if it fails or needs a decision."],
+  ["blocked", "The upload lane cannot finish until the storage question is settled: the builder measured 38 MB for a five-minute recording, which is over the 25 MB attachment limit, and the reviewer refuses a silent truncation. Either raise the limit for recordings to 100 MB (one config line and a migration note), or keep 25 MB and have the composer refuse longer recordings with a clear message. I keep p-upload parked and the other two lanes running until you pick one."],
   ["completed", "Deployed main 7c41e09a to production: the report log beside the orchestrator chat (#2146) and the Bridge reports switch. Health 200, both routes answer, the seat reads bridgeReports:true."],
   ["review_verdict", "Review round 2 on #2151: APPROVE. The fix for the stuck composer holds on the phone at 390; one P3 left as issue #2160 (a hint line that wraps on uk)."],
   ["question", "The upload card t-upload wants a size limit before it can ship. 25 MB like the attachments, or 100 MB for recordings? I keep the lane parked until you answer."],
