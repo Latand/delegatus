@@ -689,6 +689,13 @@ function laneMovedAt(pipeline: Pipeline): string | null {
  * records the transcript that created it, so a lane the operator or another
  * agent opened settles onto their board and never onto this seat's wake.
  */
+/** How many other open pipelines a finished marked lane's task waits on
+    (#2187 §5.3), the most over its tasks; absent when none waits. */
+export function taskWaitField(pipeline: Pipeline): { taskWaits?: number } {
+  const open = Math.max(0, ...(pipeline.taskFinishWaits ?? []).map((wait) => wait.open.length));
+  return open > 0 ? { taskWaits: open } : {};
+}
+
 function ownSettledLanes(
   project: string,
   seat: SeatTickSeatInput | null,
@@ -721,6 +728,7 @@ function ownSettledLanes(
         ? { detail: redactBounded(pipeline.stateDetail ?? "", OWN_LANE_DETAIL_LIMIT) || null }
         : {}),
       ...(settled === "needs_review" && pipelineReviewSummary(pipeline) ? { review: pipelineReviewSummary(pipeline)! } : {}),
+      ...taskWaitField(pipeline),
     });
   }
   const at = (lane: SeatTickOwnLaneInput) => (lane.updatedAt ? Date.parse(lane.updatedAt) : Number.NaN);
@@ -1425,6 +1433,7 @@ async function unmergedPullRequests(context: {
       updatedAt: pullRequest.updatedAt,
       ...(pipelineCompletedUnreviewed(lane) ? { lastFixUnreviewed: true as const } : {}),
       ...(lane.merge?.state === "blocked" && lane.merge.reason ? { mergeBlocked: redactBounded(lane.merge.reason, PULL_REQUEST_TITLE_LIMIT) } : {}),
+      ...taskWaitField(lane),
     });
   }
   /* An answer, so the run of failures is over: the source spoke, whatever it

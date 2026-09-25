@@ -80,7 +80,7 @@ const BALANCE = SCENARIO === "balance";
    a merged fix, so the card aggregates seven links behind "+N"; the longest
    Inbox title carries an attached draft, so chips are read under the longest
    titles in the narrowest column. */
-const WORK_LINKS = SCENARIO === "work-links" || FLAT;
+const WORK_LINKS = SCENARIO === "work-links" || FLAT || SCENARIO === "task-finish";
 const MANY = SCENARIO === "issue1765" || BALANCE || WORK_LINKS;
 /* #1743: one task whose pipelines exercise the whole identity/edge vocabulary —
    a fail edge fired twice of three, one whose budget is spent, mixed engines,
@@ -123,6 +123,10 @@ const REVIEW_STOPS = SCENARIO === "review-stops";
    merged by Delegatus — and the project's merge setting in the board's ⋯,
    on by default and off with `&merge=off`. */
 const MERGE_STATES = SCENARIO === "merge-states";
+/* #2187 §5.3, §6 (mockup D4): a lane marked as finishing its task, running;
+   a task whose marked lane merged while a second lane still runs, so its move
+   to Done waits; and a Done task its marked lane finished. */
+const TASK_FINISH = SCENARIO === "task-finish";
 const MERGE_SETTING = { enabled: new URLSearchParams(location.search).get("merge") !== "off" };
 /* The seat's header at its fullest: a mandate a version behind the default,
    so the stale chip draws, a designated incumbent with its effort, account and
@@ -489,6 +493,39 @@ const mergeStatePipelines: Pipeline[] = MERGE_STATES ? (() => {
   ];
 })() : [];
 
+const taskFinishPipelines: Pipeline[] = TASK_FINISH ? (() => {
+  const readOnly = { ...role("reviewer", "codex"), access: "read-only" };
+  const pass = { status: "pass", findings: [] };
+  const conv = (id: string, title: string, ago: number) => add(conversation(id, title, { mtime: now - ago }));
+  const HEAD = "5b2c9e1d7a3f4b6c8d0e2f4a6b8c0d2e4f6a8b0c";
+  const stages = () => [stage("build", "builder", "review"), stage("review", "reviewer", null, { kind: "run", onFail: { to: "build", maxRounds: 2 }, effectiveRole: readOnly })];
+  const finished = (key: string, from: number) => [
+    { stageId: "build", attempts: [attempt(1, "passed", conv(`finish-${key}-build`, "Build pass 1", from + 20 * MIN), { startedAt: iso(from + 40 * MIN), completedAt: iso(from + 20 * MIN), verdict: pass })] },
+    { stageId: "review", attempts: [attempt(1, "passed", conv(`finish-${key}-review`, "Review pass 1", from), { effectiveRole: readOnly, startedAt: iso(from + 18 * MIN), completedAt: iso(from), verdict: pass, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } })] },
+  ];
+  const merged = (from: number) => ({
+    state: "merged", by: "auto-merge", repository: "acme/atlas", prNumber: 2240, policyChangedAt: iso(24 * 60 * MIN), reviewedHead: HEAD, chain: [HEAD], updates: [],
+    seenChecks: ["privacy-publication"], head: HEAD, headSeenAt: iso(from), lastChecks: [], readAt: iso(MIN), nextReadAt: null, readFailures: 0, requestedAt: iso(from),
+    mergedHead: HEAD, mergeCommit: "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567", method: "squash", mergedAt: iso(from - 10 * MIN), attempts: 0, reason: null, blockedAt: null, updatedAt: iso(MIN),
+  });
+  const running = (key: string, from: number) => [
+    { stageId: "build", attempts: [attempt(1, "running", conv(`finish-${key}-build`, "Build pass 1", from), { startedAt: iso(from) })] },
+    { stageId: "review", attempts: [] },
+  ];
+  const cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+  return [
+    pipeline("p-finish-marked", L("Slice 4: the pipeline that finishes its task", "Зріз 4: пайплайн, що завершує задачу"), "t-finish-marked", "running", stages(), running("marked", 25 * MIN), cursor,
+      { finishesTaskIds: ["t-finish-marked"] }),
+    pipeline("p-finish-hold", L("Slice 3: merge runner and the setting", "Зріз 3: мердж і налаштування"), "t-finish-hold", "completed", stages(), finished("hold", 60 * MIN), null,
+      { lastPassedCommit: HEAD, closedAt: iso(60 * MIN), stateDetail: "completed", merge: merged(60 * MIN), finishesTaskIds: ["t-finish-hold"],
+        taskFinishWaits: [{ taskId: "t-finish-hold", since: iso(50 * MIN), open: ["p-finish-other"] }] }),
+    pipeline("p-finish-other", L("Docs for the merge setting", "Документація налаштування мерджу"), "t-finish-hold", "running", stages(), running("other", 15 * MIN), cursor),
+    pipeline("p-finish-done", L("Conversation: wider agent replies", "Розмова: ширші відповіді агентів"), "t-finish-done", "completed", stages(), finished("done", 90 * MIN), null,
+      { lastPassedCommit: HEAD, closedAt: iso(90 * MIN), stateDetail: "completed", merge: { ...merged(90 * MIN), prNumber: 2236 }, finishesTaskIds: ["t-finish-done"],
+        taskFinishes: [{ taskId: "t-finish-done", at: iso(75 * MIN), outcome: "moved" }] }),
+  ];
+})() : [];
+
 const arcPipelines: Pipeline[] = ARCS ? (() => {
   const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
   const restFix = conv("arc-rest-fix", "Draft the empty-state copy", { mtime: now - 70 * MIN });
@@ -767,6 +804,7 @@ const pipelines: Pipeline[] = [
   ...reviewSpentPipelines,
   ...reviewStopPipelines,
   ...mergeStatePipelines,
+  ...taskFinishPipelines,
   ...balancePipelines,
   ...arcPipelines,
   ...labelPipelines,
@@ -1041,6 +1079,11 @@ const tasks: BoardTask[] = [
     task("t-merge-update", "assigned", L("Composer model pills: one width at 390", "Кнопки моделі в композері однієї ширини"), "", 20 * MIN),
     task("t-merge-stop", "assigned", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "", 30 * MIN),
     task("t-merge-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 70 * MIN),
+  ] : []),
+  ...(TASK_FINISH ? [
+    task("t-finish-marked", "assigned", L("Pipelines that finish their task", "Пайплайни, що завершують задачу"), "", 25 * MIN),
+    task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
+    task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
@@ -1480,6 +1523,10 @@ function fixtureWorkLinks(): FilesWorkLinks {
     pr(2204, "pipeline/p-many-drawers", "draft"),
     pr(2207, "pipeline/p-upload", "open", [2061]),
     pr(2212, "pipeline/p-many-loop", "open"),
+    pr(2231, "pipeline/p-finish-marked", "open"),
+    pr(2240, "pipeline/p-finish-hold", "merged"),
+    pr(2242, "pipeline/p-finish-other", "open"),
+    pr(2236, "pipeline/p-finish-done", "merged"),
   ];
   const view: ForgeRepositoryView = {
     canonical: repository,
@@ -1767,6 +1814,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       } else if (body.action === "retry-merge") {
         if (record.state !== "completed" || record.merge?.state !== "blocked") return json({ error: "only a stopped merge can be tried again" }, 409);
         record.merge = { ...record.merge, state: "queued", attempts: record.merge.attempts + 1, reason: null, blockedAt: null };
+      } else if (body.action === "link-task") {
+        /* #2187 §5.1: an upsert; `finishes` sets or clears the flag. */
+        const taskId = String(body.taskId ?? "");
+        if (!record.taskIds.includes(taskId)) record.taskIds = [...record.taskIds, taskId];
+        if (body.finishes !== undefined) {
+          const others = (record.finishesTaskIds ?? []).filter((entry) => entry !== taskId);
+          record.finishesTaskIds = body.finishes === true ? [...others, taskId] : others;
+        }
       } else if (body.action === "dismiss") {
         record.dismissedAt = new Date().toISOString();
         record.dismissedBy = { kind: "operator" };

@@ -822,6 +822,31 @@ export type Pipeline = {
       was queued to merge under its project's "merge when the review passes"
       setting, or once its PR was seen merged by anyone. */
   merge?: PipelineMerge;
+  /** The linked tasks this pipeline finishes (#2187 §5.1), a subset of
+      `taskIds`. When the lane is finished (§5.2) each moves to Done, once no
+      other started pipeline on it is still open. Absent reads as none. */
+  finishesTaskIds?: string[];
+  /** Each task this pipeline moved to Done, or found there already, once
+      (§5.3): a task the operator reopens afterwards is left open. */
+  taskFinishes?: PipelineTaskFinish[];
+  /** A finished marked pipeline's tasks whose move waits on other open
+      pipelines on the same task, with their ids. Cleared by the move. */
+  taskFinishWaits?: PipelineTaskFinishWait[];
+};
+
+export type PipelineTaskFinish = {
+  taskId: string;
+  at: string;
+  /** `moved`: this pipeline moved the task to Done; `already-done`: the task
+      was there when the pipeline finished, and only the finish is recorded. */
+  outcome: "moved" | "already-done";
+};
+
+export type PipelineTaskFinishWait = {
+  taskId: string;
+  since: string;
+  /** The other open pipelines the move waits on. */
+  open: string[];
 };
 
 /** Where an automatic merge stands (#2187 §4.4). `queued`, `checking`,
@@ -881,6 +906,10 @@ export type CreatePipelineRequest = {
   delivery?: { branch: string; remote?: string; pr?: number; rejectedHead?: string; comparison?: boolean };
   task: string;
   taskIds?: string[];
+  /** #2187 §5.1: `true` marks every linked task as one this pipeline
+      finishes, a list marks those ids; an id outside `taskIds` is dropped
+      and named in the answer. */
+  finishesTask?: boolean | string[];
   spec?: string;
   repoDir: string;
   /** Merge target branch; defaults to main when the pipeline starts. */
@@ -955,6 +984,10 @@ export type PatchPipelineRequest = {
   action: PipelineAction;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
+  /** for link-task (#2187 §5.1): whether this pipeline finishes the task.
+      On a task already linked it only sets or clears the flag; absent leaves
+      the flag as it is. */
+  finishes?: boolean;
   /** for attach-link and detach-link (#2059): a PR or issue as `#123`, `123`,
       `PR 123`, `owner/repo#123` or a github.com URL, or a list of them. */
   link?: string | number | Array<string | number>;

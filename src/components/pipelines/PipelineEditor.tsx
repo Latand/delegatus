@@ -1,9 +1,11 @@
 "use client";
 
-import { LayoutGrid, Pause, Play, X } from "lucide-react";
-import { useState } from "react";
+import { Flag, LayoutGrid, Pause, Play, X } from "lucide-react";
+import { useEffect, useState } from "react";
 
+import { readSetting } from "@/components/MergeOnReviewRow";
 import { useLocale } from "@/lib/i18n";
+import { finishesTask } from "@/lib/pipelines/taskFinish";
 import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
 import { MAX_FAIL_EDGE_ROUNDS, MIN_STARTED_PIPELINE_STAGES } from "@/lib/pipelines/limits";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -82,6 +84,7 @@ export function PipelineEditor({ pipeline, onClose, label = pipeline.task }: { p
           <span>{t("groupOverride.editStagesOnCanvas")}</span>
         </div>
       ) : null}
+      {closed ? null : <FinishesTaskField pipeline={pipeline} />}
       {closed ? null : <LegacyReviewConversion pipeline={pipeline} />}
       {parked ? (
         <div className="flex items-center gap-1.5">
@@ -99,6 +102,62 @@ export function PipelineEditor({ pipeline, onClose, label = pipeline.task }: { p
         )}
         <button className="inline-flex flex-1 items-center justify-center gap-1 rounded-full border border-border bg-canvas px-3 py-1 text-[11px] font-bold text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40" disabled={busy} onClick={() => void run(t(draft ? "pipelineStrip.discard" : "pipelineStrip.close"), () => patchPipeline(pipeline.id, draft ? "delete" : "close"))}><X className="h-3 w-3" aria-hidden /> {t(draft ? "pipelineStrip.discard" : "pipelineStrip.close")}</button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * "Finishes the task" (#2187 §6): one checkbox per linked task, and a muted
+ * line naming the project's merge setting, which decides when the task moves
+ * to Done, and where it changes.
+ */
+function FinishesTaskField({ pipeline }: { pipeline: Pipeline }) {
+  const { t } = useLocale();
+  const [merge, setMerge] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /* The record the server answered, until the board's own copy catches up. */
+  const [local, setLocal] = useState<Pipeline | null>(null);
+  const current = local && local.id === pipeline.id ? local : pipeline;
+  const tasks = current.taskIds ?? [];
+  /* Read only where there is a task to mark: a pipeline on no task shows nothing. */
+  const linked = tasks.length > 0;
+  useEffect(() => {
+    if (!linked) return;
+    let live = true;
+    void readSetting(pipeline.project).then((read) => { if (live) setMerge(read?.enabled ?? false); });
+    return () => { live = false; };
+  }, [pipeline.project, linked]);
+  if (!tasks.length) return null;
+  const toggle = async (taskId: string) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/pipelines/${encodeURIComponent(pipeline.id)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "link-task", taskId, finishes: !finishesTask(current, taskId) }),
+      });
+      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; error?: string } | null;
+      if (response.ok && json?.pipeline) setLocal(json.pipeline);
+      else setError(json?.error ?? t("pipelineModel.failed", { status: response.status }));
+    } catch {
+      setError(t("common.serverUnavailable"));
+    }
+    setBusy(false);
+  };
+  return (
+    <div data-finishes-task-field={pipeline.id} className="flex flex-col gap-1 rounded-[9px] border border-border bg-sunken px-2 py-1.5">
+      {tasks.map((taskId, index) => (
+        <label key={taskId} className="flex min-h-7 items-center gap-1.5 text-[11.5px] font-semibold text-primary">
+          <input type="checkbox" className="h-3.5 w-3.5 accent-[var(--color-accent)]" checked={finishesTask(current, taskId)} disabled={busy} data-finishes-task={taskId} onChange={() => void toggle(taskId)} />
+          <Flag className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+          <span className="min-w-0 flex-1">{tasks.length > 1 ? `${t("pipelineBlock.finish.menu")} · ${index + 1}` : t("pipelineBlock.finish.menu")}</span>
+        </label>
+      ))}
+      {merge === null ? null : <span data-finishes-task-merge={merge ? "on" : "off"} className="text-[10.5px] font-semibold leading-snug text-muted">{t(merge ? "pipelineBlock.finish.mergeOn" : "pipelineBlock.finish.mergeOff")}</span>}
+      {error ? <span role="alert" className="text-[10.5px] font-semibold text-danger">{error}</span> : null}
     </div>
   );
 }

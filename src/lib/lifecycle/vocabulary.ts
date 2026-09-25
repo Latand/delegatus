@@ -56,6 +56,9 @@ export const LIFECYCLE_EVENT_TYPES = [
   /** A completed lane's pull request merged (#2187 §4.5): by the merge
       runner, or by anyone while the runner held the lane. */
   "pipeline_merged",
+  /** A pipeline marked as finishing its task moved that task to Done
+      (#2187 §5.3), attributed to the pipeline. */
+  "task_finished",
 ] as const;
 
 export type LifecycleEventType = typeof LIFECYCLE_EVENT_TYPES[number];
@@ -82,6 +85,7 @@ export const LIFECYCLE_STATE_FOR_EVENT: Record<LifecycleEventType, LifecycleStat
   agent_resumed: "running",
   project_moved: "completed",
   pipeline_merged: "completed",
+  task_finished: "completed",
 };
 
 /**
@@ -100,6 +104,7 @@ export const TERMINAL_HIGH_SIGNAL_EVENT_TYPES: ReadonlySet<LifecycleEventType> =
   "delivery_held",
   "delivery_expired",
   "pipeline_merged",
+  "task_finished",
 ]);
 
 export function isTerminalHighSignalEvent(type: LifecycleEventType): boolean {

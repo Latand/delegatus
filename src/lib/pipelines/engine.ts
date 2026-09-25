@@ -5614,6 +5614,29 @@ function normalizeStages(
 
 /** The part of an answer that names what became of the review-loop stages a
     request added (#2187 §3.2); empty lists are left out. */
+/** Sets or clears whether the pipeline finishes one linked task. Clearing it
+    also drops the task's wait; a recorded finish stays history. */
+function setFinishesTask(pipeline: Pipeline, taskId: string, finishes: boolean): void {
+  const others = (pipeline.finishesTaskIds ?? []).filter((candidate) => candidate !== taskId);
+  const next = finishes ? [...others, taskId] : others;
+  if (next.length) pipeline.finishesTaskIds = next;
+  else delete pipeline.finishesTaskIds;
+  if (finishes) return;
+  const waits = (pipeline.taskFinishWaits ?? []).filter((wait) => wait.taskId !== taskId);
+  if (waits.length) pipeline.taskFinishWaits = waits;
+  else delete pipeline.taskFinishWaits;
+}
+
+/** #2187 §5.1: which linked tasks a create marks as finished by the lane.
+    `true` is every linked task; a list keeps the ids the pipeline links and
+    names the rest as dropped. */
+export function finishesTaskSelection(value: boolean | string[] | undefined, taskIds: readonly string[]): { ids: string[]; dropped: string[] } {
+  if (value === true) return { ids: [...taskIds], dropped: [] };
+  if (!Array.isArray(value)) return { ids: [], dropped: [] };
+  const requested = [...new Set(value.map((taskId) => taskId.trim()).filter(Boolean))];
+  return { ids: requested.filter((taskId) => taskIds.includes(taskId)), dropped: requested.filter((taskId) => !taskIds.includes(taskId)) };
+}
+
 function newLegacyReviewAnswer(outcome: legacyReview.NewLegacyReviewOutcome | undefined): Pick<PipelineMutationResult, "convertedStages" | "legacyReview"> {
   return {
     ...(outcome?.convertedStages.length ? { convertedStages: outcome.convertedStages } : {}),
@@ -5907,6 +5930,9 @@ export type PipelineMutationResult = {
       sent, with the conversion preview's refusals. It still stops at its
       round limit without a last fix. */
   legacyReview?: legacyReview.NewLegacyReviewOutcome["legacyReview"];
+  /** #2187 §5.1: `finishesTask` ids the create dropped because the pipeline
+      does not link them (clamp over reject). */
+  finishesTaskDropped?: string[];
 };
 
 type PipelineCreatorLineage = {
@@ -6054,6 +6080,10 @@ export async function createPipelineFromRequest(
   if (req.taskIds !== undefined && (!Array.isArray(req.taskIds) || req.taskIds.some((taskId) => typeof taskId !== "string" || !taskId.trim()))) {
     violations.push({ field: "taskIds", message: "taskIds must be an array of non-empty strings", expected: "array of board task ids" });
   }
+  if (req.finishesTask !== undefined && typeof req.finishesTask !== "boolean"
+    && (!Array.isArray(req.finishesTask) || req.finishesTask.some((taskId) => typeof taskId !== "string"))) {
+    violations.push({ field: "finishesTask", message: "finishesTask must be a boolean or an array of task ids", expected: "true (every linked task), false, or a list of ids from taskIds" });
+  }
   const taskSpawn = options.ensureTask && options.spawnParams && isTaskSpawnPipelineParams(options.spawnParams)
     ? { task: options.ensureTask, params: options.spawnParams }
     : null;
@@ -6093,7 +6123,11 @@ export async function createPipelineFromRequest(
   if (violations.length || !normalized.stages || !creator.lineage) {
     return { error: pipelineValidationError(violations), violations, status: 400 };
   }
-  const legacyAnswer = newLegacyReviewAnswer(normalized.legacyReview);
+  const finishes = finishesTaskSelection(req.finishesTask, taskIds);
+  const legacyAnswer = {
+    ...newLegacyReviewAnswer(normalized.legacyReview),
+    ...(finishes.dropped.length ? { finishesTaskDropped: finishes.dropped } : {}),
+  };
   const admission = ports.preflightRepo(requestedRepoDir);
   if (!admission.ok) return preflightFailure(admission);
   const repoDir = admission.repoDir;
@@ -6136,6 +6170,7 @@ export async function createPipelineFromRequest(
     state: req.autoStart === false ? "draft" : "provisioning",
     ...(req.publication === "internal" || req.publication === "remote-branch" ? { publication: req.publication } : {}),
   });
+  if (finishes.ids.length) pipeline.finishesTaskIds = finishes.ids;
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
     pipeline.baseRef = base.baseRef;
@@ -7302,11 +7337,16 @@ export async function patchPipeline(
       if (!taskId) return { error: "taskId is required", status: 400 };
       const taskLinkError = pipelineTaskLinkError(pipeline, [taskId], loadTasks());
       if (taskLinkError) return { error: taskLinkError, status: 400 };
+      if (req.finishes !== undefined && typeof req.finishes !== "boolean") return { error: "finishes must be a boolean", status: 400 };
       if (!pipeline.taskIds.includes(taskId)) pipeline.taskIds.push(taskId);
+      /* An upsert (#2187 §5.1): on a task already linked it only sets or
+         clears the flag. */
+      if (req.finishes !== undefined) setFinishesTask(pipeline, taskId, req.finishes);
     } else if (req.action === "unlink-task") {
       const taskId = typeof req.taskId === "string" ? req.taskId.trim() : "";
       if (!taskId) return { error: "taskId is required", status: 400 };
       pipeline.taskIds = pipeline.taskIds.filter((candidate) => candidate !== taskId);
+      setFinishesTask(pipeline, taskId, false);
     } else if (req.action === "start") {
       if (pipeline.state !== "draft") return { error: "pipeline is not a draft", status: 409 };
       /* Start enforces the 1-stage floor (#353): the minimum graph is a single

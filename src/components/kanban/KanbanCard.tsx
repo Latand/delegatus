@@ -1,9 +1,11 @@
 "use client";
 
+import { Flag } from "lucide-react";
 import { memo, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
 import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
@@ -454,6 +456,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       density="task"
       nowMs={nowMs}
       taskTitle={card.titlePending ? null : card.title}
+      taskId={card.task?.id ?? null}
       graphOpen={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? false}
       selected={selectedStages(summary.pipeline, readerKeys, panels)}
       acting={acting.get(summary.pipeline.id) ?? null}
@@ -623,6 +626,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
       ) : null}
+      {collapsed ? null : <FinishWaitLine taskId={card.task?.id ?? null} pipelines={card.pipelines} />}
 
       {/* The agent's context, folded away: one row while closed, the whole text
           scrolling inside itself while open, and nothing at all when the task
@@ -823,3 +827,17 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
     </article>
   );
 });
+
+/** #2187 §5.3: the task's move to Done waits on other open pipelines, said
+    once, muted, under the description. */
+function FinishWaitLine({ taskId, pipelines }: { taskId: string | null; pipelines: readonly KanbanPipeline[] }) {
+  const { t } = useLocale();
+  const open = taskId ? taskFinishWaitCount(pipelines.map((summary) => summary.pipeline), taskId) : 0;
+  if (!open) return null;
+  return (
+    <p className="finish-wait" data-task-finish-wait={open}>
+      <Flag className="finish-wait-icon" aria-hidden />
+      {t("pipelineBlock.finish.cardWaits", { count: open })}
+    </p>
+  );
+}

@@ -834,6 +834,20 @@ test("a pull request the merge runner holds is left out, and a stopped merge nam
     .toBe("pull request #1289 left open by a lane that finished; merge stopped: conflict with the base branch");
 });
 
+/* #2187 §5.3: a finished lane marked as finishing its task, whose move to
+   Done waits on another open pipeline, says so in the wake, so a seat that
+   marked the wrong lane sees it. */
+test("a finished lane whose task waits on other open pipelines says so on its pull request", async () => {
+  const waiting = finishedLane({ finishesTaskIds: ["task_big"], taskIds: ["task_big"], taskFinishWaits: [{ taskId: "task_big", since: "2026-08-27T11:00:00.000Z", open: ["pipeline_other"] }] } as never);
+  const input = await gather({ pipelines: [waiting], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, taskWaits: 1 })]);
+  const verdict = seatTickDecision(input).verdict;
+  const item = verdict.kind === "wake" ? verdict.items.find((entry) => entry.kind === "pull-request") : null;
+  expect(item?.label).toEndWith("unmerged since that lane finished; task waits for 1 open pipeline");
+  const quiet = await gather({ pipelines: [finishedLane()], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(quiet.pullRequests[0]).not.toHaveProperty("taskWaits");
+});
+
 test("a pull request no finished lane produced is not this seat's obligation", async () => {
   const input = await gather(
     { pipelines: [finishedLane()], openPullRequests: [openPullRequest({ headRefName: "someone-elses-branch" })] },

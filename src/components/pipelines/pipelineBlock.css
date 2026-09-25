@@ -117,6 +117,9 @@
 }
 
 .pblock .pb-chain { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+/* #2187 §6: a chain row carrying the finish flag wraps rather than squeeze
+   its pills under it; the flag, the PR chip and the tail move on together. */
+.pblock .pb-chain.has-finish { flex-wrap: wrap; row-gap: 4px; }
 .pblock .pb-chain > .pb-pills { flex: 1 1 auto; }
 /* The chips end the chain line; they wrap under each other rather than
    squeeze the pills, and never take more than half the row. */
@@ -148,6 +151,14 @@
 .pblock .pb-merge[data-merge-state="merged"] { color: var(--color-success); font-weight: 600; }
 .pblock .pb-merge[data-merge-state="stopped"] { color: var(--color-warning); font-weight: 600; }
 .pblock .pb-merge-note { margin: 0; font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
+/* #2187 §6: the lane that finishes its task. The flag rides at the end of
+   the chain row, before the PR chip, muted, and in success ink once it has;
+   a finished lane whose task's move waits says so on its own line. */
+.pblock .pb-finish { display: inline-flex; align-items: center; gap: 3px; flex: none; font-size: var(--text-label); font-weight: 600; color: var(--color-muted); white-space: nowrap; }
+.pblock .pb-finish[data-pipeline-finish="finished"] { color: var(--color-success); }
+.pblock .pb-finish-icon { width: 12px; height: 12px; flex: none; }
+.pblock .pb-finish-wait { margin: 0; display: flex; align-items: flex-start; gap: 4px; font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
+.pblock .pb-finish-wait .pb-finish-icon { margin-top: 2px; }
 .pblock .pb-merge-note[data-merge-note="merged"] { color: var(--color-success); }
 .pblock .pb-answer .stage-report[data-merge-stop] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 /* The one line on why a lane stopped on a review (#2187 §3.4) is a sentence, and wraps whole. */

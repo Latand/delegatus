@@ -111,6 +111,18 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
         summary: `pull request #${merge.prNumber} merged${merge.by === "auto-merge" ? " by Delegatus" : ""}`,
       });
     }
+    for (const finish of pipeline.taskFinishes ?? []) {
+      if (finish.outcome !== "moved") continue;
+      events.push({
+        key: `pipeline:${pipeline.id}:finished-task:${finish.taskId}`,
+        type: "task_finished",
+        at: finish.at,
+        project: pipeline.project,
+        pipelineId: pipeline.id,
+        stageId: null,
+        summary: `task ${finish.taskId} moved to Done by pipeline:${pipeline.id}`,
+      });
+    }
     /* A repair is ready as soon as the fail edge is traversed — visible on the
        pending cursor before the repair agent exists, and on the attempt once it
        does. Both build the same key, so it is journaled exactly once. */
