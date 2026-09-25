@@ -27,6 +27,7 @@ import {
   withoutWakatimeCredential,
 } from "@/lib/wakatime/credential";
 import { wakatimeIntegrationEnabled } from "@/lib/wakatime/activation";
+import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 
 /*
  * The Viewer's node-side startup runtime. This module (and everything it pulls
@@ -476,6 +477,9 @@ export async function initializeOperatorSpawnCapabilityAtStartup(
 
      What remains is the AGENT capability on disk, ensured above: it identifies
      workers, and identifying a worker is the one distinction still made. */
+  /* Under the CLI launcher its own banner names the URL, with the key when
+     one gates this start. */
+  if (startupDiagnosticsQuiet(env)) return;
   const port = env.PORT?.trim() || "8898";
   log(`[viewer] Open http://127.0.0.1:${port}.`);
 }
