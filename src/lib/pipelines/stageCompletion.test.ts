@@ -12,6 +12,7 @@ process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-com
 const { createPipelineFromRequest, reportStageCompletion, tickPipelines } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines } = await import("./store");
+const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
 type PipelinePorts = import("./engine").PipelinePorts;
 type StageCompletionRequest = import("./engine").StageCompletionRequest;
 type Pipeline = import("./types").Pipeline;
@@ -131,6 +132,9 @@ async function started(ports: PipelinePorts, stages: unknown[]): Promise<string>
   savePipelines([]);
   const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
+  /* A review-loop here stands for a lane stored before #2187, which still
+     reviews through its embedded flow; creation now converts new ones. */
+  if (created.convertedStages?.length) savePipelines([asStoredLegacyReviewLane(created.pipeline, created.convertedStages)]);
   await tickPipelines([], ports); // provision
   await tickPipelines([], ports); // spawn the entry stage
   return created.pipeline.id;

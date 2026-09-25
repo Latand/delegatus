@@ -15,7 +15,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
 import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid, MAX_LEGACY_REVIEW_CONVERSIONS } from "./legacyReviewDefinition";
 import { normalizeStageOutputPath } from "./stageAccess";
-import { MAX_DECISION_ANSWER_CHARS } from "./types";
+import { MAX_DECISION_ANSWER_CHARS, PIPELINE_FAIL_EDGE_EXHAUSTIONS } from "./types";
 import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
 
@@ -339,7 +339,7 @@ function isFailEdge(value: unknown): boolean {
     Number.isInteger(edge.maxRounds) &&
     (edge.maxRounds as number) >= 1 &&
     (edge.maxRounds as number) <= MAX_FAIL_EDGE_ROUNDS &&
-    (edge.onExhausted === undefined || edge.onExhausted === "advance" || edge.onExhausted === "park")
+    (edge.onExhausted === undefined || (PIPELINE_FAIL_EDGE_EXHAUSTIONS as readonly unknown[]).includes(edge.onExhausted))
   );
 }
 
@@ -481,8 +481,8 @@ export function pipelineGraphError(
     if (onFail && (!Number.isInteger(onFail.maxRounds) || onFail.maxRounds < 1 || onFail.maxRounds > MAX_FAIL_EDGE_ROUNDS)) {
       return `stage ${stage.id} onFail maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`;
     }
-    if (onFail?.onExhausted !== undefined && onFail.onExhausted !== "advance" && onFail.onExhausted !== "park") {
-      return `stage ${stage.id} onFail onExhausted must be advance or park`;
+    if (onFail?.onExhausted !== undefined && !PIPELINE_FAIL_EDGE_EXHAUSTIONS.includes(onFail.onExhausted)) {
+      return `stage ${stage.id} onFail onExhausted must be advance, stop-after-fix or park`;
     }
   }
   /* Out-degree-1 pass graph: walking `next` from any stage must terminate

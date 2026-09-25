@@ -96,7 +96,7 @@ import { projectSuccessionFor } from "@/lib/projects/succession";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
+import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
@@ -1523,6 +1523,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
       queuedBecause: result.queued.reason,
       note: PIPELINE_CREATION_QUEUED_NOTE,
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+      ...newLegacyReviewFields(result),
     });
   }
   /* #1845: an acknowledgement, never the record. The record echoed the spec,
@@ -1532,7 +1533,18 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
     ...pipelineAcknowledgement(result.pipeline),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+    ...newLegacyReviewFields(result),
   });
+}
+
+/** What became of the review-loop stages a create or an add-stage brought in
+    (#2187 §3.2): the reviewer and fix stage each was stored as, and the
+    refusals of any stored as sent. */
+function newLegacyReviewFields(result: Pick<PipelineMutationResult, "convertedStages" | "legacyReview">) {
+  return {
+    ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}),
+    ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}),
+  };
 }
 
 /** A close report as counts (#2030). Each list keeps its name, so a caller
@@ -1616,6 +1628,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     ...(action === "attach-link" || action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline), ...(result.unchanged ? { unchanged: true } : {}) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
+    ...newLegacyReviewFields(result),
     ...(result.decisionAnswer ? { decisionAnswer: {
       clientRequestId: result.decisionAnswer.clientRequestId,
       stageId: result.decisionAnswer.stageId,

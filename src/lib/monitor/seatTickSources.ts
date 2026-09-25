@@ -22,7 +22,7 @@ import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRec
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
-import { pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
+import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -1420,6 +1420,7 @@ async function unmergedPullRequests(context: {
       pipelineId: lane.id,
       pipelineTitle: redactBounded(lane.task.split("\n")[0] ?? "", PULL_REQUEST_TITLE_LIMIT),
       updatedAt: pullRequest.updatedAt,
+      ...(pipelineCompletedUnreviewed(lane) ? { lastFixUnreviewed: true as const } : {}),
     });
   }
   /* An answer, so the run of failures is over: the source spoke, whatever it

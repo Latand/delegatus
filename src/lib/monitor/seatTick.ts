@@ -1229,9 +1229,11 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     if (input.pullRequests.length > 0) {
       const first = input.pullRequests[0]!;
       const more = input.pullRequests.length > 1 ? ` and ${input.pullRequests.length - 1} more` : "";
+      /* #2187 §3.5: a lane can now complete on a spent review budget with a
+         head no reviewer saw, and the seat that merges it reads that here. */
       candidates.push({
         kind: "unmerged-pr",
-        detail: `pull request #${first.number}${more} left open by a lane that finished`,
+        detail: `pull request #${first.number}${more} left open by a lane that finished${first.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}`,
       });
     }
     if (persistedStalls.length > 0 || persistedChildStalls.length > 0) {
@@ -1480,7 +1482,7 @@ function wakeItems(context: {
     items.push({
       kind: "pull-request",
       id: `#${pullRequest.number}`,
-      label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished`,
+      label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished${pullRequest.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}`,
       ...(lane ? { laneAnnouncement: `${lane.id}:${lane.settled}` } : {}),
     });
   }

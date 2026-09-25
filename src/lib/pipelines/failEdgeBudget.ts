@@ -88,3 +88,53 @@ export function pipelineReviewSummary(pipeline: Pick<Pipeline, "reviewPending" |
     findings: pending.findings,
   };
 }
+
+/** What a completed lane names when its last fix was never reviewed (#2187
+    §3.5, #1938 kept): the review stage whose spent budget handed its findings
+    on, the head that review judged, the head the lane completed on, and how
+    many findings went unreviewed. */
+export type PipelineCompletedUnreviewed = {
+  stageId: string;
+  reviewedHead: string | null;
+  currentHead: string;
+  findings: number;
+};
+
+/**
+ * Read from the record alone: a completed lane whose review stage's latest own
+ * attempt handed its findings along a spent fail edge (`budgetSpent`), and
+ * whose fix of those findings passed. A reviewer that ran again after the
+ * handoff (a `continue-review` grant) judged the newer head itself, so its
+ * latest attempt is no handoff and the lane counts as reviewed. When several
+ * review stages handed on, the one whose fix passed last is named.
+ */
+export function pipelineCompletedUnreviewed(pipeline: Pick<Pipeline, "state" | "stages" | "runs" | "lastPassedCommit">): PipelineCompletedUnreviewed | null {
+  if (pipeline.state !== "completed") return null;
+  let latest: { summary: PipelineCompletedUnreviewed; order: string } | null = null;
+  for (const stage of pipeline.stages) {
+    if (!stage.onFail) continue;
+    const review = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((attempt) => !attempt.historical).at(-1);
+    if (!review?.budgetSpent) continue;
+    const fix = pipeline.runs
+      .find((run) => run.stageId === stage.onFail!.to)
+      ?.attempts.find((attempt) => !attempt.historical
+        && attempt.state === "passed"
+        && attempt.activatedBy?.edge === "fail"
+        && attempt.activatedBy.budgetSpent === true
+        && attempt.activatedBy.stageId === stage.id
+        && attempt.activatedBy.attempt === review.n);
+    if (!fix) continue;
+    const order = fix.completedAt ?? "";
+    if (latest && latest.order > order) continue;
+    latest = {
+      order,
+      summary: {
+        stageId: stage.id,
+        reviewedHead: review.reviewedHead ?? null,
+        currentHead: pipeline.lastPassedCommit,
+        findings: review.verdict?.findings?.length ?? 0,
+      },
+    };
+  }
+  return latest?.summary ?? null;
+}

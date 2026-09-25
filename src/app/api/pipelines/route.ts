@@ -149,6 +149,8 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
       pipeline: result.pipeline,
       ...(result.queued ? { queued: result.queued } : {}),
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+      ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}),
+      ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}),
     }, { status: result.queued ? 202 : 201 });
   } catch (error) {
     /* #1766: the registry lock was never taken, so no pipeline was created.

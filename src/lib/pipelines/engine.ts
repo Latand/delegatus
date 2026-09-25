@@ -2217,11 +2217,19 @@ function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication">): boolean
 function advancePipeline(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts, attempt?: PipelineStageAttempt | null): void {
   const successor = passSuccessor(pipeline, stage, attempt);
   const detail = successor.handoff ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
-  /* #1938: a fix that took a spent budget's last findings and wrote a new head
-     leaves a head nobody reviewed. The lane stops in needs_review instead of
-     completing or taking the reviewer's pass edge; a fix that wrote nothing
-     new keeps the #1868 advance. */
-  if (successor.handoff && attempt && successor.handoff.attempt?.reviewedHead !== pipeline.lastPassedCommit) {
+  /* #1938, #2187: a fix that took a spent budget's last findings and wrote a
+     new head leaves a head nobody reviewed. Under the default `advance` the
+     lane still completes or takes the reviewer's pass edge, and the record and
+     the next stage's input say the findings went unreviewed. Only an edge that
+     asked for `stop-after-fix` stops in needs_review for the operator; a fix
+     that wrote nothing new moves on under either. */
+  if (
+    successor.handoff
+    && attempt
+    && successor.handoff.source.onFail
+    && failEdgeExhaustion(successor.handoff.source.onFail) === "stop-after-fix"
+    && successor.handoff.attempt?.reviewedHead !== pipeline.lastPassedCommit
+  ) {
     parkForReview(pipeline, stage, attempt, successor.handoff, ports);
     return;
   }
@@ -2417,9 +2425,10 @@ function routeFailedAttempt(
   const used = failEdgeRoundsUsed(pipeline, stage);
   /* Under the default `advance` (#1868) `maxRounds` is also how many reviews
      the source gets: the fail of its last one is the handoff below, so the
-     reviewer runs N times and the fix stage N+1. `park` keeps today's count,
-     which reviews once more and then stops. */
-  const advancesWhenSpent = reviewed && failEdgeExhaustion(stage.onFail) === "advance";
+     reviewer runs N times and the fix stage N+1. `stop-after-fix` counts and
+     hands off the same way and differs only after that fix (#2187). `park`
+     keeps today's count, which reviews once more and then stops. */
+  const advancesWhenSpent = reviewed && failEdgeExhaustion(stage.onFail) !== "park";
   const maxRounds = failEdgeMaxRounds(pipeline, stage);
   const loopRounds = advancesWhenSpent ? maxRounds - 1 : maxRounds;
   if (targetStage && used < loopRounds) {
@@ -2434,10 +2443,11 @@ function routeFailedAttempt(
     pipeline.pausedState = null;
     return true;
   }
-  /* The budget is spent (#1868). Under the default the last findings go to
-     the fix stage one more time, and that fix's pass follows this stage's pass
-     edge; `park` keeps the stop for the operator. The handoff happens once per
-     stage, so a later fail of the same stage parks. */
+  /* The budget is spent (#1868). Under `advance` and `stop-after-fix` the last
+     findings go to the fix stage one more time, and that fix's pass follows
+     this stage's pass edge (or, under `stop-after-fix` with a new head, stops
+     in needs_review); `park` keeps the stop for the operator. The handoff
+     happens once per stage, so a later fail of the same stage parks. */
   if (targetStage && advancesWhenSpent && !failEdgeBudgetSpent(pipeline, stage)) {
     attempt.budgetSpent = true;
     /* #1938: the head this review judged, so the fix's pass can tell whether
@@ -2586,7 +2596,10 @@ function settleStageVerdict(
        findings or without a fail edge, it parks exactly as it always did.
 
        A spent budget (#1868) hands the findings to the target once more under
-       the edge's default `onExhausted: "advance"`, and parks under `park`. */
+       the edge's default `onExhausted: "advance"` and under `stop-after-fix`,
+       and parks under `park`. After that last fix `advance` moves on or
+       completes, and `stop-after-fix` waits in needs_review when the fix wrote
+       a new head (#2187). */
     const routesAsFail = verdictRoutesAsFail(parsed);
     const decisionRoutedAsFail = routesAsFail && parsed.verdict.status === "needs_decision";
     if (
@@ -5333,7 +5346,7 @@ const STAGE_SANDBOX_SHAPE = '"full" | "restricted" (default "full")';
 const STAGE_OUTPUTS_SHAPE = `array of 1–${MAX_STAGE_OUTPUTS} repository-relative paths, each at most ${MAX_STAGE_OUTPUT_PATH_LENGTH} characters`;
 const STAGE_NEXT_SHAPE = "id of another stage, or null to terminate the pass chain";
 const STAGE_ACCOUNT_SHAPE = "id of an account the pipeline's project allows, or null to let the project's own selection choose";
-const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}, onExhausted?: "advance" | "park"} — run stages only`;
+const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}, onExhausted?: "advance" | "stop-after-fix" | "park"} — run stages only`;
 const PIPELINE_PUBLICATION_SHAPE = '"internal" (default: the Viewer\'s own attempt, verdict and exact local revision decide every stage; nothing is pushed or read from a remote while the pipeline runs, and creation or start without baseRef leaves the base to the controller, fetched time-bounded after the call is answered) | "remote-branch" (push every accepted revision to origin/<branch>, launch and settle reviews only on the published head, and complete only once the final revision is remotely durable)';
 const STAGE_GRAPH_SHAPE = "acyclic next chains over existing stage ids, with every review-loop reachable from a run stage";
 
@@ -5362,7 +5375,7 @@ function normalizeStages(
      acyclic pass edges, valid fail edges, review-loop reachability — apply
      either way. */
   minStages: number = MIN_STARTED_PIPELINE_STAGES,
-): { stages?: PipelineStage[]; error?: string; violations?: PipelineValidationViolation[] } {
+): { stages?: PipelineStage[]; error?: string; violations?: PipelineValidationViolation[]; legacyReview?: legacyReview.NewLegacyReviewOutcome } {
   if (!Array.isArray(value) || value.length < minStages || value.length > MAX_PIPELINE_STAGES) {
     return stageViolations([{
       field: "stages",
@@ -5426,8 +5439,8 @@ function normalizeStages(
         if (edge.onExhausted !== undefined && !(PIPELINE_FAIL_EDGE_EXHAUSTIONS as readonly unknown[]).includes(edge.onExhausted)) {
           violations.push({
             field: at("onFail.onExhausted"),
-            message: `stage ${id} onFail onExhausted must be advance or park`,
-            expected: '"advance" (default: after the last round, hand the findings to the fix stage once more and follow this stage\'s pass edge) | "park" (stop for the operator)',
+            message: `stage ${id} onFail onExhausted must be advance, stop-after-fix or park`,
+            expected: '"advance" (default: after the last round, hand the findings to the fix stage once more, then follow this stage\'s pass edge or complete) | "stop-after-fix" (the same last fix, then wait for the operator in needs_review) | "park" (stop for the operator before the fix)',
           });
           onFailValid = false;
         }
@@ -5579,7 +5592,24 @@ function normalizeStages(
   const graphError = graphViewComplete ? pipelineGraphError(graphView) : null;
   if (graphError) violations.push({ field: "stages[].next", message: graphError, expected: STAGE_GRAPH_SHAPE });
   if (violations.length) return stageViolations(violations);
-  return { stages };
+  /* #2187 §3.2: creation and every add-stage come through here, so this is
+     the one place a new review-loop stage becomes a reviewer, a fix stage and
+     an `advance` fail edge. Stages already in the plan are preserved as they
+     are, and a conversion that would need a guess stores the stage as sent. */
+  const converted = legacyReview.convertNewLegacyReviewStages(stages, preservedStages, (candidate) => pipelineGraphError(candidate));
+  return {
+    stages: converted.stages,
+    legacyReview: { convertedStages: converted.convertedStages, legacyReview: converted.legacyReview },
+  };
+}
+
+/** The part of an answer that names what became of the review-loop stages a
+    request added (#2187 §3.2); empty lists are left out. */
+function newLegacyReviewAnswer(outcome: legacyReview.NewLegacyReviewOutcome | undefined): Pick<PipelineMutationResult, "convertedStages" | "legacyReview"> {
+  return {
+    ...(outcome?.convertedStages.length ? { convertedStages: outcome.convertedStages } : {}),
+    ...(outcome?.legacyReview.length ? { legacyReview: outcome.legacyReview } : {}),
+  };
 }
 
 /** Snapshots the draft's stages as editable inputs, preserving each stage's
@@ -5608,7 +5638,7 @@ function replaceDraftStages(
   pipeline: Pipeline,
   inputs: PipelineStageInput[],
   lookup?: PipelineRoleLookup | null,
-): { error?: string; violations?: PipelineValidationViolation[] } {
+): { error?: string; violations?: PipelineValidationViolation[]; legacyReview?: legacyReview.NewLegacyReviewOutcome } {
   /* Custom edges survive structural edits (#353): each kept stage's intentional
      pass and fail edge is preserved as-is, and the add/remove handlers rewire
      only the edit's own seam. This safety net clears an edge whose target left
@@ -5640,7 +5670,7 @@ function replaceDraftStages(
   pipeline.cursor = normalized.stages.length
     ? { stageId: normalized.stages[0]!.id, state: "pending", input: null, activatedBy: null }
     : null;
-  return {};
+  return { legacyReview: normalized.legacyReview };
 }
 
 const GRAPH_EDIT_ACTIONS: ReadonlySet<string> = new Set<PipelineGraphEditAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
@@ -5751,7 +5781,7 @@ function replaceStartedStages(
   pipeline: Pipeline,
   inputs: PipelineStageInput[],
   lookup?: PipelineRoleLookup | null,
-): { error?: string; violations?: PipelineValidationViolation[] } {
+): { error?: string; violations?: PipelineValidationViolation[]; legacyReview?: legacyReview.NewLegacyReviewOutcome } {
   const keptIds = new Set(inputs.map((stage) => stage.id));
   const relinked = inputs.map((stage) => ({
     ...stage,
@@ -5767,7 +5797,7 @@ function replaceStartedStages(
   const runs = new Map(pipeline.runs.map((run) => [run.stageId, run]));
   pipeline.stages = normalized.stages;
   pipeline.runs = normalized.stages.map((stage) => runs.get(stage.id) ?? { stageId: stage.id, attempts: [] });
-  return {};
+  return { legacyReview: normalized.legacyReview };
 }
 
 /**
@@ -5861,6 +5891,13 @@ export type PipelineMutationResult = {
       and the serving release's controller stores `pipeline` on its next pass
       (#1835). */
   queued?: { reason: string; queuedAt: string };
+  /** #2187 §3.2: each review-loop stage the request added that was stored as
+      a read-only reviewer and a fix stage, by their ids. */
+  convertedStages?: legacyReview.NewLegacyReviewOutcome["convertedStages"];
+  /** #2187 §3.2: each review-loop stage the request added that was stored as
+      sent, with the conversion preview's refusals. It still stops at its
+      round limit without a last fix. */
+  legacyReview?: legacyReview.NewLegacyReviewOutcome["legacyReview"];
 };
 
 type PipelineCreatorLineage = {
@@ -6047,6 +6084,7 @@ export async function createPipelineFromRequest(
   if (violations.length || !normalized.stages || !creator.lineage) {
     return { error: pipelineValidationError(violations), violations, status: 400 };
   }
+  const legacyAnswer = newLegacyReviewAnswer(normalized.legacyReview);
   const admission = ports.preflightRepo(requestedRepoDir);
   if (!admission.ok) return preflightFailure(admission);
   const repoDir = admission.repoDir;
@@ -6132,9 +6170,9 @@ export async function createPipelineFromRequest(
     } catch (error) {
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
-      return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}) };
+      return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer };
     }
-    return engineWarnings.length ? { pipeline: created, warnings: engineWarnings } : { pipeline: created };
+    return { pipeline: created, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer };
   }
   return withPipelineMutation((pipelines, persist) => {
     if (options.ensureTask && options.spawnParams) {
@@ -6158,7 +6196,7 @@ export async function createPipelineFromRequest(
     assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     persist();
-    return engineWarnings.length ? { pipeline, warnings: engineWarnings } : { pipeline };
+    return { pipeline, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer };
   });
 }
 
@@ -7159,6 +7197,7 @@ export async function patchPipeline(
     const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
     const flow = req.action !== "close" && attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
     let graphEdit: PipelineGraphEdit | null = null;
+    let legacyAnswer: Pick<PipelineMutationResult, "convertedStages" | "legacyReview"> = {};
 
     if (req.action === "set-src") {
       if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") {
@@ -7303,12 +7342,14 @@ export async function patchPipeline(
          post-mutation refusal in this function does. */
       const addedAccountRefusal = stageAccountRefusal(pipeline.stages, pipeline.project, ports);
       if (addedAccountRefusal) return addedAccountRefusal;
+      legacyAnswer = newLegacyReviewAnswer(replaced.legacyReview);
+      const fixer = legacyAnswer.convertedStages?.[0]?.fixer;
       graphEdit = recordGraphEdit(pipeline, ports, actor, {
         action: "add-stage",
         stageId: inserted.id,
         effect: "applied",
         appliesFromAttempt: 1,
-        summary: `added stage ${inserted.id} at position ${index + 1}${predecessor ? `, after ${predecessor.id}` : ""}${seamNext ? `, before ${seamNext}` : ""}`,
+        summary: `added stage ${inserted.id} at position ${index + 1}${predecessor ? `, after ${predecessor.id}` : ""}${seamNext ? `, before ${seamNext}` : ""}${fixer ? `, as a reviewer with fix stage ${fixer}` : ""}`,
       });
     } else if (req.action === "remove-stage") {
       if (pipeline.state !== "draft") return { error: "pipeline is not a draft", status: 409 };
@@ -7426,7 +7467,7 @@ export async function patchPipeline(
             return { error: `maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`, status: 400 };
           }
           if (req.onExhausted !== undefined && !PIPELINE_FAIL_EDGE_EXHAUSTIONS.includes(req.onExhausted)) {
-            return { error: "onExhausted must be advance or park", status: 400 };
+            return { error: "onExhausted must be advance, stop-after-fix or park", status: 400 };
           }
           const onFail: PipelineFailEdge = { to: req.to, maxRounds, ...(req.onExhausted !== undefined ? { onExhausted: req.onExhausted } : {}) };
           const candidate = pipeline.stages.map((item) => (item.id === from.id ? { ...item, onFail } : item));
@@ -7435,7 +7476,7 @@ export async function patchPipeline(
           from.onFail = onFail;
           graphEdit = recordGraphEdit(pipeline, ports, actor, {
             action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null,
-            summary: `set the fail edge of ${from.id} to ${req.to}, at most ${maxRounds} round${maxRounds === 1 ? "" : "s"}${failEdgeExhaustion(onFail) === "park" ? ", then park" : ""}`,
+            summary: `set the fail edge of ${from.id} to ${req.to}, at most ${maxRounds} round${maxRounds === 1 ? "" : "s"}${failEdgeExhaustion(onFail) === "park" ? ", then park" : failEdgeExhaustion(onFail) === "stop-after-fix" ? ", then stop after the last fix" : ""}`,
           });
         }
       }
@@ -7842,7 +7883,7 @@ export async function patchPipeline(
       return { error: "unknown pipeline action", status: 400 };
     }
     persist();
-    return graphEdit ? { pipeline, graphEdit } : { pipeline };
+    return graphEdit ? { pipeline, graphEdit, ...legacyAnswer } : { pipeline };
   });
   if (req.action !== "close" && req.action !== "delete" && req.action !== "resolve-decision" && req.action !== "continue-review"
     && patched.pipeline?.delivery?.operation?.state === "pending") {

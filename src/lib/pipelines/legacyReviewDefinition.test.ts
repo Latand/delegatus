@@ -163,6 +163,8 @@ describe("preview", () => {
     /* The counters differ: advance runs the reviewer maxRounds times, park once more. */
     expect(reviewerActivationsForLimit(4, "advance")).toBe(4);
     expect(reviewerActivationsForLimit(4, "park")).toBe(5);
+    /* #2187: stop-after-fix counts reviews as advance does and differs only after the last fix. */
+    expect(reviewerActivationsForLimit(4, "stop-after-fix")).toBe(4);
   });
 
   test("unlimited, zero and over-bound limits are refused with a recommended finite limit", () => {

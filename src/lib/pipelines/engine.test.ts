@@ -30,6 +30,7 @@ const { loadPipelines, savePipelines, pipelineIdentity, pipelineRevision } = awa
 const { durableStageTurnEvidence } = await import("./durableEvidence");
 const { edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed } = await import("./failEdgeBudget");
 const { saveTasks } = await import("@/lib/tasks/store");
+const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
 const { interruptionObligationDirectory, interruptionObligationStore } = await import("@/lib/runtime/interruptionObligations");
 type PipelinePorts = import("./engine").PipelinePorts;
 type Pipeline = import("./types").Pipeline;
@@ -627,11 +628,18 @@ test("a terminal failing verdict releases ownership and explicit takeover acknow
   expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).pipeline?.delivery?.active).toBe(true);
 });
 
+/** A review-loop stage in these fixtures stands for a lane stored before
+    #2187 converted new ones at creation: that lane still reviews through its
+    embedded flow, which is what those tests exercise, so it is stored as the
+    older engine stored it. */
 async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch" } = {}) {
   savePipelines([]);
   const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages, src: "/codex/creator.jsonl", ...request }, ports);
   if (!result.pipeline) throw new Error(result.error);
-  return result.pipeline;
+  if (!result.convertedStages?.length) return result.pipeline;
+  const lane = asStoredLegacyReviewLane(result.pipeline, result.convertedStages);
+  savePipelines([lane]);
+  return lane;
 }
 
 test.each([
@@ -1646,6 +1654,9 @@ test("review-loop onFail edges are rejected during creation and graph editing", 
     ],
   }, h.ports);
   if (!valid.pipeline) throw new Error(valid.error);
+  /* A new review-loop is converted at creation (#2187); the edit is refused
+     on a stored legacy draft, which still carries one. */
+  savePipelines([asStoredLegacyReviewLane(valid.pipeline, valid.convertedStages)]);
 
   const edited = await patchPipeline(valid.pipeline.id, {
     action: "set-edge",
@@ -8554,6 +8565,8 @@ test("draft edits that would orphan a review-loop are rejected (#136)", async ()
     autoStart: false,
   }, ports);
   const id = created.pipeline!.id;
+  /* A stored legacy draft: a new review-loop is converted at creation (#2187). */
+  savePipelines([asStoredLegacyReviewLane(created.pipeline!, created.convertedStages)]);
   /* Moving the review loop ahead of its only run stage — the API must refuse. */
   const reordered = await patchPipeline(id, { action: "reorder-stage", stageIds: ["review", "build"] }, ports);
   expect(reordered.pipeline).toBeUndefined();
@@ -9076,10 +9089,13 @@ test("onExhausted is validated and edited with the fail edge, and freezes with i
   expect(loadPipelines()[0]!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 1, onExhausted: "advance" });
 });
 
-/* A spent review budget whose last fix wrote a NEW head (#1938): the lane ends
-   in needs_review, never completed, and never takes the reviewer's pass edge
-   for a head nobody reviewed. continue-review grants explicit extra rounds and
-   reviews the current head in the same pipeline. */
+/* A spent review budget whose last fix wrote a NEW head, on an edge that asked
+   for `stop-after-fix` (#1938, #2187): the lane ends in needs_review, never
+   completed, and never takes the reviewer's pass edge for a head nobody
+   reviewed. continue-review grants explicit extra rounds and reviews the
+   current head in the same pipeline. Under the default the lane completes
+   instead (below). */
+const STOP_AFTER_FIX = { onExhausted: "stop-after-fix" } as const;
 const REVIEW_HEADS = ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40), "5".repeat(40), "6".repeat(40)];
 
 /** The harness with a worktree HEAD the test moves: each build round `n`
@@ -9122,10 +9138,10 @@ function continueReview(pipeline: Pipeline, clientRequestId: string, addRounds: 
 }
 let movingHeadPorts: PipelinePorts | null = null;
 
-test("maxRounds 1: a final fix that writes a new head ends in needs_review with both heads and the last verdict, never completed (#1938)", async () => {
+test("stop-after-fix, maxRounds 1: a final fix that writes a new head ends in needs_review with both heads and the last verdict, never completed (#1938)", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }, null) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 1, h.beforeBuildPass);
 
@@ -9163,26 +9179,28 @@ test("maxRounds 1: a final fix that writes a new head ends in needs_review with 
   expect(resumed.pipeline?.stateDetail).toBe(current.stateDetail);
 });
 
-test("a spent budget whose final fix wrote no new head keeps the #1868 behaviour (#1938)", async () => {
-  /* Round 1 writes H1 and the handoff fix leaves the tree at H1. */
-  const h = movingHeadHarness(() => REVIEW_HEADS[0]!);
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
-  await tickPipelines([], h.ports);
-  await failEveryCritique(h, 1, h.beforeBuildPass);
+test("a spent budget whose final fix wrote no new head completes under the default and under stop-after-fix alike (#1938, #2187)", async () => {
+  for (const edge of [{}, STOP_AFTER_FIX]) {
+    /* Round 1 writes H1 and the handoff fix leaves the tree at H1. */
+    const h = movingHeadHarness(() => REVIEW_HEADS[0]!);
+    await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...edge }, null) as never);
+    await tickPipelines([], h.ports);
+    await failEveryCritique(h, 1, h.beforeBuildPass);
 
-  const current = loadPipelines()[0]!;
-  expect(current.state).toBe("completed");
-  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
-  expect(current.reviewPending).toBeUndefined();
+    const current = loadPipelines()[0]!;
+    expect({ edge, state: current.state }).toEqual({ edge, state: "completed" });
+    expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+    expect(current.reviewPending).toBeUndefined();
+  }
 });
 
-test("a budget handoff recorded before reviewed heads existed is judged against the head its fix started from (#1938)", async () => {
+test("stop-after-fix: a budget handoff recorded before reviewed heads existed is judged against the head its fix started from (#1938)", async () => {
   for (const [label, heads, expected] of [
     ["unchanged", () => REVIEW_HEADS[0]!, "completed"],
     ["moved", (round: number) => REVIEW_HEADS[round - 1]!, "needs_review"],
   ] as const) {
     const h = movingHeadHarness(heads);
-    await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+    await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }, null) as never);
     await tickPipelines([], h.ports);
     await buildRound(h, "built v1");
     await critiqueRound(h, "fail", "round 1");
@@ -9202,7 +9220,7 @@ test("a budget handoff recorded before reviewed heads existed is judged against 
 test("continue-review resumes review of the current head with an explicit added budget, replays by clientRequestId and refuses a competing continuation (#1938)", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...STOP_AFTER_FIX }, null) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 1, h.beforeBuildPass);
   const parked = loadPipelines()[0]!;
@@ -9263,10 +9281,10 @@ test("continue-review resumes review of the current head with an explicit added 
   expect(current.lastPassedCommit).toBe(REVIEW_HEADS[1]);
 });
 
-test("maxRounds 2: added rounds run bounded fix loops, park again in needs_review on a new unreviewed head, and the review activation count stays exact across a retry (#1938)", async () => {
+test("stop-after-fix, maxRounds 2: added rounds run bounded fix loops, park again in needs_review on a new unreviewed head, and the review activation count stays exact across a retry (#1938)", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
-  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2 }) as never);
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2, ...STOP_AFTER_FIX }) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 2, h.beforeBuildPass);
 
@@ -9332,6 +9350,268 @@ test("maxRounds 2: added rounds run bounded fix loops, park again in needs_revie
   expect(current.cursor).toMatchObject({ stageId: "ship", activatedBy: { stageId: "critique", attempt: 6, edge: "pass" } });
   expect(current.reviewGrants?.map((grant) => grant.rounds)).toEqual([2, 1]);
   expect(reviewActivations()).toBe(5);
+});
+
+/* #2187 S1: after the last review the builder fixes, and the lane completes.
+   These run the production controller (`FlowPipelineController`, the loop the
+   Viewer runs) over the production engine tick. The test only plays the
+   stage agents: it answers each attempt the controller launched, and every
+   routing, handoff and completion decision is the engine's own. */
+const { FlowPipelineController } = await import("./controller");
+const { pipelineCompletedUnreviewed } = await import("./failEdgeBudget");
+
+/** Runs the controller until the lane leaves running, answering each launched
+    attempt: a stage in `failing` fails with one numbered finding, every other
+    stage passes, and a read-write pass moves the worktree head first. */
+async function driveWithController(
+  h: ReturnType<typeof movingHeadHarness>,
+  failing: ReadonlySet<string> = new Set(["critique"]),
+): Promise<{ pipeline: Pipeline; reviews: number }> {
+  const answered: FileEntry[] = [];
+  const controller = new FlowPipelineController({
+    scan: async () => ({ files: [...answered], complete: true }),
+    tickPipelines: (entries) => tickPipelines(entries, h.ports),
+    tickFlows: async () => ({ changed: false }),
+    /* A clock at zero keeps the hourly archive sweep from moving the lane. */
+    now: () => 0,
+    publishHeartbeat: () => {},
+    sweepForgeLinks: () => {},
+    log: () => {},
+  });
+  const seen = new Set<string>();
+  let reviews = 0;
+  for (let cycle = 0; cycle < 120; cycle += 1) {
+    await controller.tick("test");
+    const pipeline = loadPipelines()[0]!;
+    if (pipeline.state !== "running" && pipeline.state !== "provisioning") return { pipeline, reviews };
+    const stageId = pipeline.cursor?.stageId;
+    const attempt = stageId ? pipeline.runs.find((run) => run.stageId === stageId)?.attempts.at(-1) : undefined;
+    if (!stageId || !attempt?.agentPath || seen.has(attempt.agentPath)) continue;
+    seen.add(attempt.agentPath);
+    if (failing.has(stageId)) {
+      reviews += 1;
+      h.messages.set(attempt.agentPath, {
+        text: `round ${reviews} findings\n\n\`\`\`json\n{"status":"fail","findings":["P2 evidence gap ${reviews}"]}\n\`\`\``,
+        ts: Date.now() + 100_000_000,
+      });
+    } else {
+      if (attempt.effectiveRole.access === "read-write") h.beforeBuildPass();
+      h.messages.set(attempt.agentPath, { text: `${stageId} done ${seen.size}\n\n\`\`\`json\n{"status":"pass"}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    }
+    answered.push(entry(attempt.agentPath));
+  }
+  throw new Error(`the controller left the lane ${loadPipelines()[0]!.state}`);
+}
+
+test.each([
+  { reviews: 1, newHead: true },
+  { reviews: 3, newHead: true },
+  { reviews: 3, newHead: false },
+])("under the default the controller drives $reviews failed review(s): the fixer runs one more time and the lane completes with the unreviewed findings recorded (new head: $newHead) (#2187)", async ({ reviews, newHead }) => {
+  const h = movingHeadHarness(newHead ? undefined : () => REVIEW_HEADS[0]!);
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: reviews }, null) as never);
+  const { pipeline } = await driveWithController(h);
+
+  const builds = pipeline.runs.find((run) => run.stageId === "build")!.attempts;
+  const critiques = pipeline.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(builds).toHaveLength(reviews + 1);
+  expect(critiques).toHaveLength(reviews);
+  expect(builds.every((attempt) => attempt.state === "passed")).toBe(true);
+  expect(critiques.every((attempt) => attempt.state === "failed")).toBe(true);
+  /* The last fix took the last review's findings. */
+  expect(builds[reviews]!.activatedBy).toEqual({ stageId: "critique", attempt: reviews, edge: "fail", budgetSpent: true });
+  expect(builds[reviews]!.input).toContain(`P2 evidence gap ${reviews}`);
+  /* The lane completed; nothing parked and nothing waits for review. */
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.cursor).toBeNull();
+  expect(pipeline.reviewPending).toBeUndefined();
+  expect(pipeline.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  /* The unreviewed findings stay on the record, and the record names the heads. */
+  expect(critiques[reviews - 1]).toMatchObject({ budgetSpent: true, reviewedHead: newHead ? REVIEW_HEADS[reviews - 1] : REVIEW_HEADS[0], verdict: { status: "fail", findings: [`P2 evidence gap ${reviews}`] } });
+  const currentHead = newHead ? REVIEW_HEADS[reviews]! : REVIEW_HEADS[0]!;
+  expect(pipeline.lastPassedCommit).toBe(currentHead);
+  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({
+    stageId: "critique",
+    reviewedHead: newHead ? REVIEW_HEADS[reviews - 1]! : REVIEW_HEADS[0]!,
+    currentHead,
+    findings: 1,
+  });
+});
+
+test("under the default a last fix with a new head takes the reviewer's pass edge, and the next stage reads the unreviewed findings (#2187)", async () => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2 }) as never);
+  const { pipeline } = await driveWithController(h);
+
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(3);
+  const ship = pipeline.runs.find((run) => run.stageId === "ship")!.attempts;
+  expect(ship).toHaveLength(1);
+  expect(ship[0]!.activatedBy).toEqual({ stageId: "build", attempt: 3, edge: "pass" });
+  expect(ship[0]!.input).toContain(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(ship[0]!.input).toContain("P2 evidence gap 2");
+  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({ stageId: "critique", reviewedHead: REVIEW_HEADS[1], currentHead: REVIEW_HEADS[3], findings: 1 });
+});
+
+test("the controller stops stop-after-fix in needs_review after the last fix, and parks park before it (#2187)", async () => {
+  const stop = movingHeadHarness();
+  await create(stop.ports, BUDGET_STAGES({ to: "build", maxRounds: 2, onExhausted: "stop-after-fix" }, null) as never);
+  const stopped = (await driveWithController(stop)).pipeline;
+  expect(stopped.state).toBe("needs_review");
+  expect(stopped.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(3);
+  expect(stopped.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(2);
+  expect(stopped.reviewPending).toMatchObject({ stageId: "critique", attempt: 2, fixStageId: "build", fixAttempt: 3, reviewedHead: REVIEW_HEADS[1], currentHead: REVIEW_HEADS[2] });
+  expect(pipelineCompletedUnreviewed(stopped)).toBeNull();
+
+  const park = movingHeadHarness();
+  await create(park.ports, BUDGET_STAGES({ to: "build", maxRounds: 2, onExhausted: "park" }, null) as never);
+  const parked = (await driveWithController(park)).pipeline;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain("fail-edge budget exhausted after 2 round(s)");
+  expect(parked.cursor?.stageId).toBe("critique");
+  expect(parked.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(3);
+  expect(parked.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
+});
+
+test("stop-after-fix is accepted wherever a fail edge takes its option (#2187)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({
+    task: "Stop after the fix",
+    repoDir: "/repo",
+    stages: BUDGET_STAGES({ to: "build", maxRounds: 2, onExhausted: "stop-after-fix" }) as never,
+    autoStart: false,
+  }, h.ports);
+  expect(created.pipeline?.stages[1]?.onFail).toEqual({ to: "build", maxRounds: 2, onExhausted: "stop-after-fix" });
+  const id = created.pipeline!.id;
+  const edited = await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds: 3, onExhausted: "stop-after-fix" }, h.ports);
+  expect(edited.pipeline?.stages[1]?.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "stop-after-fix" });
+  expect(edited.graphEdit?.summary).toContain("then stop after the last fix");
+  /* The store reads it back. */
+  expect(loadPipelines()[0]!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "stop-after-fix" });
+});
+
+/* #2187 §3.2: every new review-loop stage is converted where it enters the
+   plan, so none of them reaches the embedded flow that parks at its round
+   limit without a last fix. */
+const CONVERTED_REVIEWER_EDGE = { to: "review-fix", maxRounds: 5, onExhausted: "advance" };
+
+function expectConvertedReview(pipeline: Pipeline, implementer: string, reviewNext: string | null) {
+  const review = pipeline.stages.find((stage) => stage.id === "review")!;
+  const fix = pipeline.stages.find((stage) => stage.id === "review-fix")!;
+  const source = pipeline.stages.find((stage) => stage.id === implementer)!;
+  expect(review).toMatchObject({ kind: "run", next: reviewNext, onFail: CONVERTED_REVIEWER_EDGE, effectiveRole: { access: "read-only" } });
+  expect(fix).toMatchObject({ kind: "run", next: "review", onFail: null, effectiveRole: source.effectiveRole });
+  expect(pipeline.stages.some((stage) => stage.kind === "review-loop")).toBe(false);
+  expect(pipeline.runs.some((run) => run.stageId === "review-fix")).toBe(true);
+}
+
+const REVIEW_LOOP_STAGE = { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}" };
+const BUILD_ONLY = [{ id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null }];
+
+test("create_pipeline stores a review-loop as a read-only reviewer, a fix stage and an advance fail edge (#2187)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({
+    task: "Reviewed build",
+    repoDir: "/repo",
+    stages: [{ ...BUILD_ONLY[0], next: "review" }, { ...REVIEW_LOOP_STAGE, next: null }] as never,
+    autoStart: false,
+  }, h.ports);
+  expect(created.error).toBeUndefined();
+  expect(created.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
+  expect(created.legacyReview).toBeUndefined();
+  expectConvertedReview(loadPipelines()[0]!, "build", null);
+  expect(loadPipelines()[0]!.stages.map((stage) => stage.id)).toEqual(["build", "review", "review-fix"]);
+});
+
+test("add-stage on a draft converts a review-loop, and that draft started and failed on every round completes after a last fix (#2187)", async () => {
+  const h = movingHeadHarness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({ task: "Draft with review", repoDir: "/repo", stages: BUILD_ONLY as never, autoStart: false }, h.ports);
+  const id = created.pipeline!.id;
+  const added = await patchPipeline(id, { action: "add-stage", stage: REVIEW_LOOP_STAGE as never }, h.ports);
+  expect(added.error).toBeUndefined();
+  expect(added.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
+  expect(added.graphEdit?.summary).toContain("as a reviewer with fix stage review-fix");
+  expectConvertedReview(loadPipelines()[0]!, "build", null);
+
+  expect((await patchPipeline(id, { action: "start" }, h.ports)).error).toBeUndefined();
+  const { pipeline, reviews } = await driveWithController(h, new Set(["review"]));
+  expect(reviews).toBe(5);
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  const fixes = pipeline.runs.find((run) => run.stageId === "review-fix")!.attempts;
+  expect(fixes).toHaveLength(5);
+  expect(fixes.at(-1)!.activatedBy).toEqual({ stageId: "review", attempt: 5, edge: "fail", budgetSpent: true });
+  expect(fixes.at(-1)!.input).toContain("P2 evidence gap 5");
+  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({ stageId: "review", reviewedHead: REVIEW_HEADS[4], currentHead: REVIEW_HEADS[5], findings: 1 });
+  expect(h.calls.some((call) => call.startsWith("flow:"))).toBe(false);
+});
+
+test("add-stage on a started lane converts a review-loop and keeps every run's history (#2187)", async () => {
+  const h = harness();
+  await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1] }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const started = loadPipelines()[0]!;
+  expect(started.state).toBe("running");
+  expect(started.cursor?.stageId).toBe("plan");
+  const planAttempts = structuredClone(started.runs.find((run) => run.stageId === "plan")!.attempts);
+  expect(planAttempts).toHaveLength(1);
+
+  const added = await patchPipeline(started.id, { action: "add-stage", index: 2, stage: REVIEW_LOOP_STAGE as never }, h.ports);
+  expect(added.error).toBeUndefined();
+  expect(added.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
+  const lane = loadPipelines()[0]!;
+  expectConvertedReview(lane, "build", null);
+  expect(lane.stages.find((stage) => stage.id === "build")!.next).toBe("review");
+  expect(lane.runs.find((run) => run.stageId === "plan")!.attempts).toEqual(planAttempts);
+  expect(lane.cursor?.stageId).toBe("plan");
+});
+
+test("a review-loop the conversion cannot build without a guess is stored as sent, and the answer carries the refusals (#2187)", async () => {
+  const h = harness();
+  savePipelines([]);
+  /* Only a read-only stage passes into the review: no fix stage can copy it. */
+  const readOnly = await createPipelineFromRequest({
+    task: "Review a plan",
+    repoDir: "/repo",
+    stages: [{ ...RUN_STAGES[0], next: "review" }, { ...REVIEW_LOOP_STAGE, next: null }] as never,
+    autoStart: false,
+  }, h.ports);
+  expect(readOnly.error).toBeUndefined();
+  expect(readOnly.convertedStages).toBeUndefined();
+  expect(readOnly.legacyReview).toEqual([{ stageId: "review", refusals: [expect.objectContaining({ code: "implementer-read-only" })] }]);
+  expect(readOnly.pipeline!.stages.find((stage) => stage.id === "review")).toMatchObject({ kind: "review-loop", onFail: null });
+  expect(readOnly.pipeline!.stages).toHaveLength(2);
+
+  /* A full plan has no slot for the fix stage, on add-stage as at creation. */
+  const seven = Array.from({ length: 7 }, (_, index) => ({ ...BUILD_ONLY[0], id: `build${index}`, next: index < 6 ? `build${index + 1}` : null }));
+  const full = await createPipelineFromRequest({ task: "Seven builds", repoDir: "/repo", stages: seven as never, autoStart: false }, h.ports);
+  const added = await patchPipeline(full.pipeline!.id, { action: "add-stage", stage: REVIEW_LOOP_STAGE as never }, h.ports);
+  expect(added.error).toBeUndefined();
+  expect(added.convertedStages).toBeUndefined();
+  expect(added.legacyReview).toEqual([{ stageId: "review", refusals: [expect.objectContaining({ code: "stage-count" })] }]);
+  const stored = loadPipelines().find((pipeline) => pipeline.id === full.pipeline!.id)!;
+  expect(stored.stages).toHaveLength(8);
+  expect(stored.stages.at(-1)).toMatchObject({ id: "review", kind: "review-loop" });
+});
+
+test("graph edits on a stored legacy lane never convert its review-loop (#2187)", async () => {
+  const h = harness();
+  const lane = await create(h.ports, [
+    { ...BUILD_ONLY[0], next: "review" },
+    { ...REVIEW_LOOP_STAGE, next: null },
+    { ...BUILD_ONLY[0], id: "docs", prompt: "Docs", next: null },
+  ] as never);
+  expect(lane.stages.map((stage) => [stage.id, stage.kind])).toEqual([["build", "run"], ["review", "review-loop"], ["docs", "run"]]);
+  const reordered = await patchPipeline(lane.id, { action: "reorder-stage", stageIds: ["build", "docs", "review"] }, h.ports);
+  expect(reordered.error).toBeUndefined();
+  expect(reordered.convertedStages).toBeUndefined();
+  const stored = loadPipelines()[0]!;
+  expect(stored.stages.map((stage) => [stage.id, stage.kind])).toEqual([["build", "run"], ["docs", "run"], ["review", "review-loop"]]);
+  expect(stored.stages.find((stage) => stage.id === "review")!.onFail).toBeNull();
 });
 
 /* A needs_decision that carries findings routes along the fail edge (#1785);
@@ -9455,6 +9735,8 @@ test("a review-loop binds its implementer through the activation graph across a 
     ] as never,
   }, ports);
   expect(created.pipeline).toBeDefined();
+  /* A lane stored before #2187, whose review-loop runs as an embedded flow. */
+  savePipelines([asStoredLegacyReviewLane(created.pipeline!, created.convertedStages)]);
   await tickPipelines([], ports); // provision
   await tickPipelines([], ports); // spawn seed
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "seeded")], ports); // seed → buildB
@@ -9537,6 +9819,8 @@ test("consecutive reviews cross a migration boundary and resume positional imple
     ] as never,
   }, ports);
   expect(created.pipeline).toBeDefined();
+  /* A lane stored before #2187, whose review-loop runs as an embedded flow. */
+  savePipelines([asStoredLegacyReviewLane(created.pipeline!, created.convertedStages)]);
   await tickPipelines([], ports); // provision
   await tickPipelines([], ports); // spawn build
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "built")], ports); // build → review1
