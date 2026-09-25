@@ -85,8 +85,6 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
       steps: [
         { user: "Take the open harbor-api work: idempotent refunds first, then the webhook retries and the key rotation. The ledger move waits for finance." },
         { say: "On it. I opened a pipeline for **Idempotent refunds** (Build, Review, Verify) and started the webhook retries and the key rotation beside it. The ledger task stays in Blocked until finance answers.\n\nI'll report each stage as it lands, and bring you any decision the spec leaves open." },
-        { user: "Retries: stop after 72 hours, an endpoint can be down over a weekend." },
-        { say: "Noted. I'm passing 72 hours to the Build stage and retrying it, and the review will check the attempt count against it." },
       ],
     },
     {
@@ -657,11 +655,11 @@ export async function seedDemoOrchestrator(layout: DemoLayout & { files: Record<
     key: `readme-demo:${key}`, class: kind, at: iso(now - minutesAgo * 60_000), project, targetSeatConversationId: conversationId, body,
   });
   appendBridgeReports([
+    report("charges-review", 193, "review_verdict", "Paginate GET /charges passed review with no findings: pages of 50, the cap of 200 holds, and next_cursor stops on the last page."),
     report("charges", 190, "completed", "Paginate GET /charges is done: cursor pages of 50, capped at 200, 7 tests pass. The PR is merged and the task moved to Done."),
-    report("started", 47, "status", "Idempotent refunds is running as a pipeline: Build, Review, Verify. Webhook retries and key rotation started beside it."),
     report("build", 6, "completed", "Idempotent refunds: Build passed. A repeated Idempotency-Key now answers from the stored response, and 4 tests pass."),
     report("retries", 3, "status", "Back off webhook retries stopped on a decision the spec leaves open: stop retrying after 24 or 72 hours. It waits on the card."),
-    report("review", 1, "review_verdict", "Idempotent refunds is in Review: the reviewer is checking two requests with the same key arriving together."),
+    report("review", 1, "status", "Idempotent refunds is in Review: the reviewer is checking two requests with the same key arriving together."),
   ]);
 }
 

@@ -41,7 +41,7 @@ import type { Browser, Page } from "playwright-core";
 
 import { createCaptureDirectory } from "./capture-directory";
 import { inspectPaths, sensitiveClasses } from "./privacy-publication-gate";
-import { seedDemoAccounts, seedDemoHome, seedDemoOrchestrator, WORKING_CONVERSATIONS, type DemoProject } from "./readme-demo-state";
+import { ORCHESTRATOR_CONVERSATION, seedDemoAccounts, seedDemoHome, seedDemoOrchestrator, WORKING_CONVERSATIONS, type DemoProject } from "./readme-demo-state";
 
 export const README_MEDIA_DIR = "docs/media/readme";
 /** Runs are allocated under this root; LLV_README_CAPTURE_ROOT may name an
@@ -94,7 +94,8 @@ export const SHOTS: ReadmeShot[] = [
     target: { kind: "project", project: "harbor-api" },
     viewport: DESKTOP,
     requiredText: ["Orchestrator", "Reports", "Take the open harbor-api work", "Paginate GET /charges is done", "review verdict"],
-    absentText: ["tmux", "Untitled task", "has not reported anything yet"],
+    /* A seat nothing hosts reads as finished, with the resume banner. */
+    absentText: ["tmux", "Untitled task", "has not reported anything yet", "finished", "has finished its run"],
     description: "A project's orchestrator on top of its board: its chat with the operator, and beside it the log of the reports it filed.",
   },
   {
@@ -566,6 +567,12 @@ async function main(): Promise<void> {
   const env = buildCaptureEnvironment(captureRoot);
   const now = Date.now();
   const layout = await materialize(env, now);
+  /* With no runtime plane in the capture, the scanner decides whether the
+     seat's conversation is hosted, and it calls a transcript running only
+     while a process holds it open for writing. This process holds the
+     orchestrator's for the run, so the seat reads attached and waiting, the
+     way a seat reads between turns, and not finished. */
+  const seatHold = fs.openSync(layout.files[ORCHESTRATOR_CONVERSATION]!.path, "a");
 
   const port = await freePort();
   const server = spawn(
@@ -595,6 +602,7 @@ async function main(): Promise<void> {
     }
     await captureShots(repoRoot, baseUrl, layout, captureRoot);
   } finally {
+    fs.closeSync(seatHold);
     stop();
     await new Promise((resolve) => setTimeout(resolve, 800));
     if (serverPid !== undefined && server.exitCode === null) process.kill(serverPid, "SIGKILL");
