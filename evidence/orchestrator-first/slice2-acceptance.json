@@ -1,0 +1,43 @@
+{
+  "issue": 2166,
+  "slice": 2,
+  "run": "fresh isolated install: scratch HOME, TMPDIR and XDG_CONFIG_HOME under /var/tmp, OS-assigned port, started with bin/cli.mjs from this checkout's build; src/lib/runtime/fixtures/packagedProvider.py on PATH as claude and codex; no network",
+  "engine": "codex (Claude's spawn health reads the provider usage API, which a stub cannot answer offline)",
+  "steps": [
+    "Engines: Continue",
+    "Project: Open another folder, created todo-cli",
+    "Orchestrator: Create the orchestrator (one press)"
+  ],
+  "requests": {
+    "guide": {
+      "requests": 57,
+      "taskCreates": 0,
+      "seatDesignations": 0
+    },
+    "create": {
+      "requests": 80,
+      "taskCreates": 0,
+      "seatDesignations": 1
+    }
+  },
+  "seat": {
+    "state": "active",
+    "exists": true,
+    "promptVersion": 27,
+    "lastFailure": null
+  },
+  "status": {
+    "designated": true,
+    "engine": "codex",
+    "model": "gpt-6-astra",
+    "effort": "high",
+    "accountId": "default"
+  },
+  "cwdIsCreatedProjectRoot": true,
+  "provider": {
+    "deliveries": 1,
+    "engine": "codex",
+    "mandateV27Delivered": true,
+    "chars": 24590
+  }
+}

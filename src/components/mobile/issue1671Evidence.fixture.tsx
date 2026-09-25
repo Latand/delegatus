@@ -157,6 +157,14 @@ catalog.splice(5, 0, conversation("/repo/superseded-round.jsonl", "Superseded re
   mtime: now - 95_000,
   supersededBy: { conversationId: "conversation_history-5", path: "/repo/history-5.jsonl", at: iso(94_000), reason: "stage-retry" },
 }));
+/* #2166 (`?seatless=…`): a project before its orchestrator exists, and just
+   after. `empty` is a project created a moment ago, with nothing stored;
+   `loose` has conversations and no seat; `donly` has no seat and one finished
+   task, so its Inbox is empty; `seatonly` is the board right after the seat
+   was created, whose one conversation is the seat's. With the Overview
+   (`&overview=1`), no project has a seat, so the Overview leads with its band. */
+const SEATLESS = new URLSearchParams(location.search).get("seatless");
+if (SEATLESS === "empty") catalog.length = 0;
 
 /* #1795 asks for the surface the operator hit: a review round opened from the
    board, whose pane the round deck mounts on a perspective stage. It is added
@@ -675,7 +683,17 @@ if (ICONS_SCENE) {
   };
   for (const row of kanbanTasks as Array<Record<string, unknown>>) Object.assign(row, dress[row.id as string] ?? {});
 }
+if (SEATLESS) {
+  kanbanTasks.length = 0;
+  kanbanPipelines.length = 0;
+  const keep = SEATLESS === "seatonly" ? kanbanFiles.filter((entry) => entry.title === "Orchestrator")
+    : SEATLESS === "loose" ? kanbanFiles.filter((entry) => entry.title !== "Orchestrator") : [];
+  kanbanFiles.length = 0;
+  kanbanFiles.push(...keep);
+  if (SEATLESS === "donly") kanbanTasks.push(kanbanTask("t-done-only", "done", "Add a --version flag", { updatedAt: iso(86_400) }));
+}
 const SEAT_PATH = kanbanFiles.find((entry) => entry.title === "Orchestrator")?.path ?? null;
+const WALK_MARKER = new URLSearchParams(location.search).has("walk");
 
 /* The Overview's projects: keys the way a repository resolves (opaque, read by
    nobody; assembled so no hex run sits in the source), and the names the rail
@@ -812,6 +830,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json(reportLogFixturePage(url, { project: PROJECT, github: "example/atlas", enabled: bridgeSetting.enabled, knownCards: known }));
   }
   if (KANBAN && url.pathname === "/api/tasks" && method === "GET") return json({ tasks: kanbanTasks });
+  /* #2166 §3.8 (`&walk=1`): an install whose onboarding marker has never run
+     the interface walk. What the walk writes is kept in sessionStorage, so a
+     reload reads it back as the server would. */
+  if (WALK_MARKER && url.pathname === "/api/onboarding") {
+    const stored = sessionStorage.getItem("evidence-walk");
+    const marker = { schemaVersion: 1, completedAt: iso(120), dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: stored === "done" || stored === "skipped" ? stored : null };
+    if (method === "PUT") {
+      const patch = JSON.parse(String(init?.body ?? "{}")) as { walk?: string };
+      if (patch.walk) sessionStorage.setItem("evidence-walk", patch.walk);
+      return json({ marker: { ...marker, walk: patch.walk ?? marker.walk } });
+    }
+    return json({ marker, seatTickCheckMinutes: 10 });
+  }
   if (url.pathname === "/api/files" && OVERVIEW_SCENE) {
     return json({
       files: kanbanFiles, projectCatalog: Object.values(OVERVIEW_KEYS).map((project) => ({ project, conversations: kanbanFiles.filter((entry) => entry.project === project).length, smt: now - 20 })),
@@ -902,7 +933,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.catalogRequests.push(url.search);
     const offset = Number(url.searchParams.get("cursor") ?? 0);
     const limit = Number(url.searchParams.get("limit") ?? 20);
-    return json({ items: catalog.slice(offset, offset + limit), total: 4_595, nextCursor: offset + limit < catalog.length ? String(offset + limit) : null });
+    return json({ items: catalog.slice(offset, offset + limit), total: catalog.length ? 4_595 : 0, nextCursor: offset + limit < catalog.length ? String(offset + limit) : null });
   }
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.

@@ -274,7 +274,14 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], ex
 
 
 const bar = (host: HTMLElement) => host.querySelector("header.bar, [data-project-bar]") as HTMLElement;
-const text = (element: Element | null) => (element?.textContent ?? "").replace(/\s+/g, " ");
+/* What the page SAYS: a textarea's text is a field's value (the orchestrator
+   draft's folded mandate, which the seat reads), so it is left out. */
+const text = (element: Element | null) => {
+  if (!element) return "";
+  const copy = element.cloneNode(true) as Element;
+  copy.querySelectorAll("textarea").forEach((field) => field.remove());
+  return (copy.textContent ?? "").replace(/\s+/g, " ");
+};
 function click(element: Element | null) {
   expect(element).toBeTruthy();
   flushSync(() => element!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
@@ -547,8 +554,10 @@ test("⋯ draws no rule next to a group with nothing in it", async () => {
   expect(menu.querySelector('[role="separator"]')).toBeNull();
   const project = menu.querySelector('[data-bar-menu-group="project"]') as HTMLElement;
   /* #2187 §6: the project's merge setting stays in its group when Archive and
-     Delete stand down. */
-  expect(Array.from(project.children).map((child) => child.hasAttribute("data-merge-on-review"))).toEqual([true]);
+     Delete stand down, and its Bridge reports setting (#2146) beside it. */
+  expect(Array.from(project.children).map((child) =>
+    child.hasAttribute("data-merge-on-review") ? "merge" : child.querySelector("[data-bridge-reports-switch]") ? "bridge" : child.tagName,
+  )).toEqual(["merge", "bridge"]);
 });
 
 test("the view switch keeps its place when the view changes: Conversations reserves the create group", async () => {

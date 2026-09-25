@@ -26,6 +26,7 @@ import type { Workflow } from "@/lib/workflows/types";
 
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
+import { onOrchestratorDraftRequest, takePendingBoardView } from "./orchestrator/draftPrefill";
 import { deriveOrchestratorPanelState, resolveSeatFile, retiredSeatPaths, seatRefsOf } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
 import { DesktopConversations } from "./DesktopConversations";
@@ -1335,6 +1336,18 @@ function ProjectDashboardView({
     board.setDesktopBoard("kanban", "scheme");
   };
 
+  /* The setup guide opens this project on its Board (#2166 §3.3), whatever
+     view was saved for it: the orchestrator's draft sits above the columns. */
+  const chooseDesktopViewRef = useRef(chooseDesktopView);
+  chooseDesktopViewRef.current = chooseDesktopView;
+  useEffect(() => {
+    if (isMobile) return;
+    if (takePendingBoardView(project)) chooseDesktopViewRef.current("kanban");
+    return onOrchestratorDraftRequest((request) => {
+      if (request.project === project && takePendingBoardView(project)) chooseDesktopViewRef.current("kanban");
+    });
+  }, [isMobile, project]);
+
   /* A card's link to Conversations (#1695): the list for one look, written nowhere. It ends a standing landing,
      which would otherwise keep the Board it opened in front of the list the operator just asked for. */
   const openConversationsForOneLook = () => {
@@ -1751,9 +1764,13 @@ function ProjectDashboardView({
   /* The desktop Board is a view even before the project has a card (#1695 K9a): chosen over Conversations,
      it draws its empty columns with + Task and + Agent, so a project whose catalog is known and whose board is
      empty still reaches creation. The phone keeps its own resolution. */
-  const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable && board.prefs.viewMode === "scheme";
+  /* A desktop project nobody chose a view for opens on its Board (#2166 §3.4),
+     where its orchestrator's draft sits above the columns: a project created a
+     moment ago used to land on an empty conversation list instead. */
+  const preferredView = isMobile ? board.prefs.viewMode : board.prefs.viewMode ?? "scheme";
+  const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable && preferredView === "scheme";
   const projectView = landedOnConversation ? "scheme" : transientFace ?? (desktopEmptyBoard ? "scheme" : resolveProjectView({
-    preferredView: board.prefs.viewMode,
+    preferredView,
     hasNodes,
     hasArchiveNodes,
     hasHistoryRows: listAvailable,

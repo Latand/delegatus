@@ -276,6 +276,32 @@ test("a Codex row that is not signed in opens the device sign-in, shows its code
   }
 });
 
+test("#2166: Codex Main signs in directly, with no label and no second account, and its sign-in has Cancel", async () => {
+  const calls: { url: string; body: unknown }[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: { body?: string }) => {
+    calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null });
+    return new Response(JSON.stringify({ account: { id: "default" }, deviceAuth: { url: "https://example.invalid/device", code: "WXYZ-1234" }, cancelled: true }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+  try {
+    const main = account({ id: "default", label: "Main", kind: "legacy", authPresent: false, authHealth: "signed_out" } as Partial<AccountOption> & { id: string; label: string });
+    const { host } = await mount([engineState("codex", [main], "default")]);
+    const row = host.querySelector('[data-mobile2-account-signin="default"]')!;
+    expect(text(row)).toContain("sign in");
+    await click(row);
+    expect(calls).toEqual([{ url: "/api/accounts/codex", body: { action: "retry", id: "default" } }]);
+    const challenge = host.querySelector("[data-mobile2-account-device-signin]")!;
+    expect(text(challenge)).toContain("WXYZ-1234");
+    await click(host.querySelector('[data-mobile2-account-signin-cancel="default"]'));
+    expect(calls.at(-1)).toEqual({ url: "/api/accounts/codex", body: { action: "cancel", id: "default" } });
+    expect(host.querySelector("[data-mobile2-account-device-signin]")).toBeNull();
+    /* Nothing asked for a label: the add row stays closed. */
+    expect(host.querySelector("[data-mobile2-account-add-form]")).toBeNull();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("a Claude row that is not signed in restarts its login in place and stays inactive", async () => {
   const retried: string[] = [];
   const selected: string[] = [];

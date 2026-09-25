@@ -52,6 +52,7 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
       <div
         data-attention-island
         data-attention-zero
+        data-walk-anchor="needs"
         role="status"
         aria-label={t("attention.badge", { count: 0 })}
         className="flex items-center rounded-full border border-border bg-card/95 px-3 py-1 text-[12px] font-bold text-muted shadow-1"
@@ -64,7 +65,7 @@ export function AttentionIsland({ count, queueOpen, filterActive, onToggleQueue,
   }
 
   return (
-    <div data-attention-island className="flex items-center overflow-hidden rounded-full border border-warning/45 bg-warning-soft shadow-1">
+    <div data-attention-island data-walk-anchor="needs" className="flex items-center overflow-hidden rounded-full border border-warning/45 bg-warning-soft shadow-1">
       <button
         type="button"
         data-attention-count

@@ -12,10 +12,7 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligibility";
 
 import { getMobileNav } from "./mobile/mobileNav";
-import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
-import type { MobileShellHost } from "./mobile/MobileShell";
-import { OverviewBoard } from "./OverviewBoard";
-import { CREATE_PROJECT_FORM_EVENT, ProjectRail } from "./ProjectRail";
+import { ProjectRail } from "./ProjectRail";
 
 /*
  * Issue #1162, the empty rail. With no projects at all the FolderPlus button is
@@ -209,78 +206,6 @@ test("«Nothing found» answers a filter query, never an installation with no pr
   expect(host.textContent).toContain(en["common.nothingFound"]);
 });
 
-test("the first-run overview's own button opens the form on the rail beside it", () => {
-  /* Both surfaces, exactly as Viewer mounts them side by side on the desktop. */
-  const host = renderRail({}, <OverviewBoard
-    files={[]}
-    projectCatalog={[]}
-    pipelines={[]}
-    workflows={[]}
-    archivedProjects={new Set()}
-    now={2_000}
-    onSelectProject={() => {}}
-  />);
-  expect(form(host)).toBeNull();
-  const overviewCreate = host.querySelector('[data-testid="overview-create-project"]') as unknown as HTMLElement;
-  expect(overviewCreate).not.toBeNull();
-  click(overviewCreate);
-  expect(form(host)).not.toBeNull();
-});
-
-test("on a phone one tap on the overview's button reaches the open form", () => {
-  /* Exactly how Viewer mounts these on a phone (mobile v2 lane 1): the rail
-     is gone; the overview's shell opens the project switcher sheet the Viewer
-     renders, and that sheet arrives with its create form already open on a
-     first run. */
-  viewportWidth = 390;
-  const container = dom.document.createElement("div");
-  dom.document.body.appendChild(container);
-  root = createRoot(container as unknown as Element);
-  const host: MobileShellHost = {
-    attentionCount: 0,
-    arrival: null,
-    renderSheet: (name, close) => name === "projects" ? (
-      <MobileProjectSheet
-        files={[]}
-        projectCatalog={[]}
-        pipelines={[]}
-        workflows={[]}
-        archivedProjects={new Set()}
-        selected="__overview__"
-        loaded
-        now={2_000}
-        onSelect={() => {}}
-        onCreateProject={createProject}
-        onClose={close}
-      />
-    ) : null,
-  };
-  act(() => root!.render(
-    <OverviewBoard
-      files={[]}
-      projectCatalog={[]}
-      pipelines={[]}
-      workflows={[]}
-      archivedProjects={new Set()}
-      now={2_000}
-      onSelectProject={() => {}}
-      mobileShell={host}
-    />,
-  ));
-  const page = container as unknown as HTMLElement;
-  expect(page.querySelector("[data-mobile2-project-form]")).toBeNull();
-
-  click(page.querySelector('[data-testid="overview-create-project"]') as unknown as HTMLElement);
-
-  /* One tap: the sheet is open AND its create form is on screen. */
-  expect(page.querySelector('[data-mobile2-sheet="projects"]')).not.toBeNull();
-  expect(page.querySelector("[data-mobile2-project-form]")).not.toBeNull();
-  /* The labelled row still owns it — a second tap collapses the form. */
-  click(page.querySelector('[data-mobile2-project-create="open"]') as unknown as HTMLElement);
-  expect(page.querySelector("[data-mobile2-project-form]")).toBeNull();
-  act(() => getMobileNav().home());
-});
-
 test("a desktop rail does not open the form until it is asked", () => {
   /* The phone's auto-open is scoped to the drawer it lives in: an always-on
      desktop rail must not expand a form nobody asked for — not at mount, and
@@ -324,11 +249,8 @@ test("a phone rail whose catalog answers with projects opens no form", () => {
   expect(form(host)).toBeNull();
 });
 
-test("a rail with no create handler stays out of the request entirely", () => {
+test("a rail with no create handler offers no create button", () => {
   const host = renderRail({ onCreateProject: undefined });
-  act(() => {
-    dom.dispatchEvent(new dom.Event(CREATE_PROJECT_FORM_EVENT));
-  });
   expect(form(host)).toBeNull();
   expect(create(host)).toBeNull();
 });

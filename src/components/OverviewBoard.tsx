@@ -1,6 +1,6 @@
 "use client";
 
-import { EyeOff } from "lucide-react";
+import { Bot, EyeOff } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -21,12 +21,13 @@ import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet"
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { openOnboarding } from "./onboarding/useOnboarding";
+import { StartSchematic } from "./onboarding/TourSchematics";
+import { useSeatConversations } from "./orchestrator/useOrchestratorSeat";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { OverviewKanban, type OverviewPhoneDoors } from "./OverviewKanban";
 import { SoundToggle } from "./SoundToggle";
 import { buildProjectSummaries } from "./projectModel";
-import { CREATE_PROJECT_FORM_EVENT } from "./ProjectRail";
 
 const noop = () => {};
 
@@ -157,6 +158,18 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
     [isMobile, mobileNav, onOpenConversation],
   );
 
+  /* Before any orchestrator exists on this install, the Overview leads with
+     one (#2166 §3.5). "Exists" is the seat record's whole history, every
+     project's active, pending and revoked seats: the band goes away for good
+     with the first seat, as the phone's invitation does, and a read that has
+     not answered (or failed) shows no band. */
+  const seatRefs = useSeatConversations(projects.length > 0);
+  const retired = seatRefs?.previous;
+  const noSeatEver = seatRefs != null && retired != null
+    && seatRefs.conversationIds.length === 0
+    && seatRefs.paths.length === 0
+    && retired.conversationIds.length === 0;
+
   const grid = (
     <div data-testid="overview-body" className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Issue #696: a failed fetch and a genuinely empty installation must
@@ -166,6 +179,9 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
       {degraded && !(reconnecting && projects.length) ? (
         <CatalogFailureNotice failures={catalogFailures} className={`shrink-0 px-3 ${projects.length ? "pt-2" : "mt-[12vh]"}`} />
       ) : null}
+      {/* The phone's band sits above the tabs; the desktop's rides the board's
+          own slot above its columns, where a project draws its seat. */}
+      {isMobile && projects.length > 0 && noSeatEver ? <OrchestratorBand phone /> : null}
       {projects.length ? (
         <OverviewKanban
           projects={projects}
@@ -179,6 +195,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           onSelectProject={onSelectProject}
           onOpenConversations={onOpenSearch ?? noop}
           phone={phoneDoors}
+          lead={!isMobile && noSeatEver ? <OrchestratorBand phone={false} /> : null}
         />
       ) : degraded || allSummaries.length ? null : !loaded ? (
         /* Not answered yet (#2071): the shape of the board, never the first
@@ -203,14 +220,9 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
             type="button"
             data-testid="overview-create-project"
             className="inline-flex min-h-11 items-center gap-1.5 rounded-[10px] border border-accent/45 bg-card px-4 text-[13px] font-bold text-accent shadow-1 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => {
-              /* Desktop: the rail is mounted beside the board, so it hears
-                 this and opens the create form it already owns. Phone: the
-                 project switcher sheet opens with its create form already
-                 open on a first run (mobile v2 lane 1). One tap either way. */
-              if (isMobile) mobileNav.openSheet("projects");
-              else window.dispatchEvent(new Event(CREATE_PROJECT_FORM_EVENT));
-            }}
+            /* The setup guide on its Project step (#2166 §3.5), whose form is
+               the rail's own: the path goes on to the project's orchestrator. */
+            onClick={() => openOnboarding("guide", "project")}
           >
             <FolderPlus className="h-4 w-4" aria-hidden /> {t("overview.firstRunCreate")}
           </button>
@@ -341,5 +353,49 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
       </div>
       {grid}
     </div>
+  );
+}
+
+/**
+ * The Overview's first-run band (#2166 §3.5), built from the setup guide's
+ * "Start here" band: its schematic, one heading, the one sentence, and the one
+ * filled button, which opens the guide on its orchestrator step. It has no
+ * dismiss; it leaves when the first seat exists.
+ *
+ * One inset for the whole band (#2185): 12 px on every side, the schematic, the
+ * text and the button 12 px apart. On the desktop it stands on the board's own
+ * edges, the columns' left and right and the board's stack gap above it, and
+ * `kb-lead` keeps the board's button reset off its button, as `.seat` does; on
+ * the phone it sits above the tabs, the button under the text at full width
+ * and 44 px tall.
+ */
+function OrchestratorBand({ phone }: { phone: boolean }) {
+  const { t } = useLocale();
+  return (
+    <section
+      data-overview-orchestrator-band=""
+      aria-labelledby="overview-orchestrator-band-title"
+      className={`flex shrink-0 gap-3 rounded-[12px] border border-accent/35 bg-accent-soft/40 p-3 ${phone ? "mx-3 mt-2 flex-col" : "kb-lead mx-[var(--kb-edge)] mt-[var(--kb-stack)] items-center"}`}
+    >
+      {phone ? null : (
+        <div className="h-[60px] w-24 shrink-0 overflow-hidden rounded-[8px] bg-sunken">
+          <StartSchematic />
+        </div>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <h2 id="overview-orchestrator-band-title" className="text-ui font-semibold text-primary">{t("overview.bandTitle")}</h2>
+        <p className="text-ui leading-[1.45] text-secondary">{t("orchPanel.intro")}</p>
+      </div>
+      <button
+        type="button"
+        data-overview-orchestrator-create=""
+        /* The guide at the first of Engines, Project and Orchestrator that
+           is not done (#2166 §3.5): it ends on this orchestrator. */
+        onClick={() => openOnboarding("guide")}
+        className={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-[8px] bg-brand px-4 text-ui font-semibold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${phone ? "h-11" : "h-9"}`}
+      >
+        <Bot className="h-4 w-4" aria-hidden /> {t("overview.bandCreate")}
+      </button>
+    </section>
   );
 }

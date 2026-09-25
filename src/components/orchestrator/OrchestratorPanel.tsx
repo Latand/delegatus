@@ -30,11 +30,12 @@ import { decisionLine } from "../attention/decision";
 import { FeedSkeleton } from "../skeletons";
 import { RoleFrameMark } from "../RoleFrameMark";
 import { ProcessStatusControls } from "../TaskHeader";
-import { useOrchestratorDraftPrefill, useOrchestratorDraftReveal } from "./draftPrefill";
+import { seatDraftReadiness, useOrchestratorDraftPrefill, useOrchestratorDraftReveal, usePendingSeatConfirm } from "./draftPrefill";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { OrchestratorConversation } from "./OrchestratorConversation";
 import { PreviousSeatsControl } from "./PreviousSeats";
+import { RunsOnRow } from "./RunsOnRow";
 import {
   deriveOrchestratorPanelState,
   deriveRotateDraftState,
@@ -446,6 +447,10 @@ export function OrchestratorPanel({
     }, replayRequestId);
   };
 
+  /* The setup guide's Create (#2166 §2.2): once this draft is ready, its own
+     Confirm is pressed for the operator, once. */
+  usePendingSeatConfirm(project, launch, seatDraftReadiness(state.kind), () => confirmCreate());
+
   /**
    * Open the rotate draft — on the incumbent's OWN parameters.
    *
@@ -779,7 +784,6 @@ export function OrchestratorPanel({
           projectName={projectName}
           cwd={projectCwd}
           launch={launch}
-          viewerMcpRegistered={status?.viewerMcpRegistered === true}
           onMandate={setMandate}
           onRestore={() => setMandate(ORCHESTRATOR_SYSTEM_PROMPT)}
           onConfirm={() => confirmCreate()}
@@ -899,7 +903,6 @@ function RotateDraft({
       projectName={projectName}
       cwd={cwd}
       launch={launch}
-      viewerMcpRegistered={status?.viewerMcpRegistered === true}
       onMandate={setMandate}
       onRestore={() => setMandate(base)}
       onKeepIncumbent={() => setMandate(seat.mandate)}
@@ -928,7 +931,6 @@ function OrchestratorDraft({
   projectName,
   cwd,
   launch,
-  viewerMcpRegistered,
   onMandate,
   onRestore,
   onKeepIncumbent,
@@ -951,7 +953,6 @@ function OrchestratorDraft({
   projectName: string;
   cwd?: string;
   launch: ReturnType<typeof useAgentLaunchDraft>;
-  viewerMcpRegistered: boolean;
   onMandate: (value: string) => void;
   onRestore: () => void;
   onKeepIncumbent?: () => void;
@@ -976,23 +977,17 @@ function OrchestratorDraft({
      changes, and 58 lines of them ahead of the pickers is what made this draft
      unreadable (#1163).
      The disclosure keeps its OWN open state — the operator's toggle is theirs
-     to keep — and this only ever nudges it open, when there is something in
+     to keep — and this only ever nudges it open when there is something in
      there to read: a mandate already edited (typed here, or restored from a
-     previous visit), or a designation that failed on text about to be fixed.
-     The two reasons are watched SEPARATELY, on their own arrival. Folded into
-     one `edited || errored` boolean they hide each other: after an edit has
-     opened the disclosure and the operator has folded it back, the boolean is
-     already true when the designation fails, the effect never re-runs, and the
-     text the error is about stays behind a click. */
+     previous visit). A failed designation no longer opens it (#2166): the
+     error block says what went wrong above, and a newcomer's first failure
+     buried the button under sixty lines of rules they never wrote. */
   const rules = useRef<HTMLDetailsElement>(null);
   const launchChoices = useRef<HTMLDivElement>(null);
   useOrchestratorDraftReveal(project ?? "", launchChoices);
   useEffect(() => {
     if (edited && rules.current) rules.current.open = true;
   }, [edited]);
-  useEffect(() => {
-    if (errored && rules.current) rules.current.open = true;
-  }, [errored]);
   return (
     <form
       className="flex min-h-0 flex-1 flex-col"
@@ -1003,7 +998,10 @@ function OrchestratorDraft({
         else onConfirm();
       }}
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+      {/* One inset for the whole draft, the seat's own 12 px (#2185): the
+          heading, the text, the Runs on row, the rules and the footer start on
+          the edge the seat head's avatar starts on. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
         {errored ? (
           <div
             className="shrink-0 rounded-surface border border-danger/40 bg-danger-soft px-3 py-2.5"
@@ -1032,7 +1030,7 @@ function OrchestratorDraft({
         ) : (
           <div className="shrink-0">
             <h2 className="text-title font-semibold text-primary">
-              {t(rotate ? "orchPanel.rotateHeading" : "orchPanel.draftTitle")}
+              {rotate ? t("orchPanel.rotateHeading") : t("orchPanel.draftTitle", { project: projectName })}
             </h2>
             {rotate ? (
               <p className="mt-1 text-ui leading-4 text-muted">{t("orchPanel.rotateHint")}</p>
@@ -1042,29 +1040,24 @@ function OrchestratorDraft({
           </div>
         )}
 
-        {/* What this thing IS, in plain sentences, before any picker: you talk
-            to it the way you would talk to a colleague, it runs the work, and it
-            acts on its own unless the rules below say otherwise (#1163). A
-            rotation is not an introduction — that operator already has one. */}
+        {/* What this thing IS, in one plain sentence, and what you would write
+            to it, before anything to choose (#1163, #2166): no issue numbers,
+            no review jargon, no promise about merges or releases. A rotation
+            is not an introduction — that operator already has one. */}
         {rotate ? null : (
-          <p className="shrink-0 text-ui leading-5 text-secondary" data-orchestrator-intro>
-            {t("orchPanel.introTalk")}{" "}
-            {t("orchPanel.introRuns")}{" "}
-            {t("orchPanel.introReports")}
-          </p>
+          <div className="shrink-0">
+            <p className="max-w-[760px] text-body leading-[1.45] text-secondary" data-orchestrator-intro>{t("orchPanel.intro")}</p>
+            <p className="mt-1 max-w-[760px] text-ui leading-[1.45] text-muted" data-orchestrator-example>{t("orchPanel.example")}</p>
+          </div>
         )}
 
-        <p
-          className="shrink-0 rounded-control border border-border bg-canvas px-3 py-2 font-mono text-caption text-secondary"
-          data-viewer-mcp-status={viewerMcpRegistered ? "registered" : "missing"}
-          role="status"
-        >
-          {t(viewerMcpRegistered ? "orchPanel.viewerMcpRegistered" : "orchPanel.viewerMcpMissing")}
-        </p>
-
-        <div ref={launchChoices} className="shrink-0" data-orchestrator-launch-choices>
-          <AgentLaunchControls draft={launch} disabled={submitting} stacked />
-        </div>
+        {rotate ? (
+          <div ref={launchChoices} className="shrink-0" data-orchestrator-launch-choices>
+            <AgentLaunchControls draft={launch} disabled={submitting} stacked />
+          </div>
+        ) : (
+          <RunsOnRow draft={launch} disabled={submitting} cwd={cwd} revealRef={launchChoices} />
+        )}
 
         {/* Said above the folded rules, where it is read: the incumbent's
             mandate is behind the default, and its text is the one alternative
@@ -1130,22 +1123,16 @@ function OrchestratorDraft({
         </details>
 
         {/* The directory is a fact about the LAUNCH, not about the rules, so it
-            stays visible while they are folded away. */}
-        {cwd ? (
+            stays visible while they are folded away: on the Runs on row for a
+            create, under the rules for a rotation. */}
+        {rotate && cwd ? (
           <p className="shrink-0 truncate font-mono text-caption text-muted" title={cwd}>
-            {t(rotate ? "orchPanel.cwdInherited" : "orchPanel.cwd", { cwd })}
+            {t("orchPanel.cwdInherited", { cwd })}
           </p>
         ) : null}
       </div>
 
-      <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-sunken px-4 py-3">
-        {/* Words, and only words (#1163): one task is better served by one agent
-            the operator talks to directly, and this pays off when several things
-            run at once while they are elsewhere. Nothing here counts anything,
-            and nothing here stands between them and the button. */}
-        {rotate || errored ? null : (
-          <p className="text-ui leading-4 text-muted" data-orchestrator-one-task>{t("orchPanel.oneTask")}</p>
-        )}
+      <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-sunken p-3">
         {formError ? (
           <p className="text-ui font-semibold text-danger" role="alert">{formError}</p>
         ) : null}
@@ -1186,6 +1173,12 @@ function OrchestratorDraft({
             </span>
           </button>
         </div>
+        {/* Words, and only words (#1163, #2166): the manual way is still there
+            and says where, under the button, quieter than it. Nothing here
+            stands between the operator and the button. */}
+        {rotate || errored ? null : (
+          <p className="text-ui leading-4 text-muted" data-orchestrator-by-hand>{t("orchPanel.byHand")}</p>
+        )}
       </div>
     </form>
   );

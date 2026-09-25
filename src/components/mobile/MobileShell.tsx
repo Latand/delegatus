@@ -9,6 +9,7 @@ import { useRuntimeBusState } from "@/hooks/useRuntime";
 import { useLocale } from "@/lib/i18n";
 
 import { MobileAccountsPanel } from "../AccountsPanel";
+import { useWalkStop } from "../onboarding/walkStop";
 import { TelegramFooterRow } from "../TelegramConnect";
 import { ReportLog } from "../orchestrator/reportLog/ReportLog";
 import { MobileReceipt } from "./MobileReceipt";
@@ -239,6 +240,9 @@ export function MobileShell({
   const attentionCount = effectiveHost?.attentionCount ?? 0;
   const noticeDot = effectiveHost?.noticeDot === true;
   const attention = attentionCount > 0 || noticeDot;
+  /* The interface walk's third stop points at the badge, which is hidden at
+     zero: while it shows, the slot is drawn empty-outlined (#2166 §3.8). */
+  const walkSlot = useWalkStop() === 3 && !attention && screen === "board";
   const showSearch = Boolean(onOpenSearch);
   const sheet = !claimed && state.sheet
     ? (renderSheet?.(state.sheet, close) ?? outer?.renderSheet?.(state.sheet, close) ?? effectiveHost?.renderSheet(state.sheet, close) ?? null)
@@ -297,6 +301,7 @@ export function MobileShell({
               type="button"
               data-mobile2-open="attention"
               data-mobile2-attention-count={attentionCount}
+              data-walk-anchor="needs"
               data-mobile2-notice={noticeDot ? "" : undefined}
               aria-label={[attentionCount ? t("mobile2.bar.attention", { count: attentionCount }) : null, noticeDot ? t("notices.dot") : null].filter(Boolean).join(", ")}
               aria-haspopup="dialog"
@@ -314,6 +319,10 @@ export function MobileShell({
                 <span data-mobile2-notice-dot aria-hidden className="h-2.5 w-2.5 rounded-full bg-accent" />
               )}
             </button>
+          ) : walkSlot ? (
+            <span data-walk-anchor="needs" className="flex h-11 min-w-11 shrink-0 items-center justify-center px-[3px]">
+              <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-dashed border-strong px-2 text-ui font-bold tabular-nums text-muted">0</span>
+            </span>
           ) : null}
           {barAction}
           {showSearch ? (

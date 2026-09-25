@@ -50,7 +50,6 @@ export interface SeatPanel {
   file: FileEntry;
   incumbent: OrchestratorIncumbent | null;
   pendingMandate: string;
-  viewerMcpRegistered: boolean;
   rotate: SeatRotateFlow;
   onRecheck: () => void;
 }
@@ -161,7 +160,6 @@ export function useSeatPanel(input: {
     file,
     incumbent,
     pendingMandate: status?.pending?.mandate ?? "",
-    viewerMcpRegistered: status?.viewerMcpRegistered === true,
     rotate: rotateFlow,
     onRecheck: () => {
       void refresh();

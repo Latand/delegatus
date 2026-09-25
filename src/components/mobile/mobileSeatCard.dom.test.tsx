@@ -299,7 +299,7 @@ test("the invitation opens the create draft — the rotate sheet in create mode 
   const panel = sheet(host)!;
   expect(panel.getAttribute("data-mobile2-sheet")).toBe("rotate");
   expect(panel.getAttribute("data-orchestrator-sheet-mode")).toBe("create");
-  expect(panel.querySelector("[data-orchestrator-confirm]")!.textContent).toContain("Create orchestrator");
+  expect(panel.querySelector("[data-orchestrator-confirm]")!.textContent).toContain("Create the orchestrator");
   /* Cancel sits in the draft, beside the primary, and takes the sheet down
      without creating anything. */
   const cancel = panel.querySelector("[data-orchestrator-draft-cancel]") as HTMLButtonElement;
@@ -337,6 +337,12 @@ test("on a signed-out account the create draft says so, and its primary opens th
   }
 });
 
+/** The create draft's rules start folded to one row (#2166); a tap opens them. */
+function unfold(panel: HTMLElement): void {
+  const fold = panel.querySelector("[data-orchestrator-mandate-fold]") as HTMLButtonElement | null;
+  if (fold) flushSync(() => fold.click());
+}
+
 test("tapping the create row opens the fullscreen sheet with the prefilled mandate and the launch pickers", async () => {
   const { host, root } = await mount([conversation({})]);
   flushSync(() => openButton(host).click());
@@ -349,10 +355,18 @@ test("tapping the create row opens the fullscreen sheet with the prefilled manda
   /* Fullscreen, in this codebase's own sheet pattern. */
   expect(panel!.parentElement!.className).toContain("fixed inset-0");
 
+  /* The rules folded to one row and the runtime in one card (#2166): each
+     opens in place. */
+  expect(panel!.querySelector("[data-orchestrator-mandate]")).toBeNull();
+  expect(panel!.querySelector('[role="radio"]')).toBeNull();
+  unfold(panel!);
   const mandate = panel!.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
   expect(mandate.value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
   /* The SHARED launch module, not a mobile lookalike: engine radios, and the
      44px floor applied from outside it. */
+  const change = panel!.querySelector("[data-orchestrator-runs-on-change]") as HTMLButtonElement;
+  expect(change.className).toContain("min-h-11");
+  flushSync(() => change.click());
   const engines = [...panel!.querySelectorAll('[role="radio"]')].map((node) => node.textContent);
   expect(engines).toEqual(["Claude", "Codex"]);
   const launchControls = panel!.querySelector('[role="radiogroup"]')!.closest("[class*='min-h-11']");
@@ -366,6 +380,7 @@ test("confirm posts the draft to the seat route — never to raw spawn — and c
   await settle(root, view([conversation({})]), 2);
 
   const panel = sheet(host)!;
+  unfold(panel);
   const mandate = panel.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
   type(mandate, "You own the Atlas board. Talk to me here.");
   flushSync(() => confirmButton(host).click());
@@ -756,6 +771,7 @@ test("the keyboard opening on the focused mandate brings the field into the scro
     flushSync(() => openButton(host).click());
     await settle(root, view(files), 2);
 
+    unfold(sheet(host)!);
     const field = sheet(host)!.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
     /* The block that carries the label, not the bare textarea: happy-dom does
        no layout, so what is asserted is WHICH element is revealed and how

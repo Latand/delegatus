@@ -380,6 +380,7 @@ export function MobileBoardDock({ onTell, create = false, unresolved = false }: 
     <button
       type="button"
       data-mobile2-board-dock
+      data-walk-anchor="seat"
       data-mobile2-go="chat"
       aria-label={t("mobile2.board.tellOrchestratorLabel")}
       className="flex min-h-11 w-full items-center gap-2 rounded-full border border-border bg-sunken pl-2 pr-1.5 text-left text-body text-muted active:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"

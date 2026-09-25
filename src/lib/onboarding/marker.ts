@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 
-import { ONBOARDING_STEP_IDS, type OnboardingStepId, type OnboardingStepState } from "./steps";
+import { ONBOARDING_STEP_IDS, type OnboardingStepId, type OnboardingStepState, type OnboardingWalkState } from "./steps";
 
 /**
  * Whether this install has been through the setup guide (#1876, design §6).
@@ -17,7 +17,7 @@ import { ONBOARDING_STEP_IDS, type OnboardingStepId, type OnboardingStepState } 
  * reach someone who ran `claude` before they ever opened the Viewer.
  */
 
-export { ONBOARDING_STEP_IDS, type OnboardingStepId, type OnboardingStepState } from "./steps";
+export { ONBOARDING_STEP_IDS, type OnboardingStepId, type OnboardingStepState, type OnboardingWalkState } from "./steps";
 
 /** The last health check this install ran (#1876, design §6), written by the
     check itself. Design §6 gives a failed one a `warning` dot on the "Setup
@@ -33,6 +33,9 @@ export type OnboardingMarker = {
   reason: "existing-install" | null;
   steps: Record<OnboardingStepId, OnboardingStepState>;
   lastHealth: OnboardingLastHealth | null;
+  /** The interface walk (#2166 §3.8): null until it ran once and was
+      finished or skipped. A marker written before the field reads null. */
+  walk: OnboardingWalkState;
 };
 
 const markerFile = () => statePath("onboarding.json");
@@ -68,6 +71,7 @@ function parseMarker(raw: unknown): OnboardingMarker | null {
     reason: record.reason === "existing-install" ? "existing-install" : null,
     steps,
     lastHealth: parseLastHealth(record.lastHealth),
+    walk: record.walk === "done" || record.walk === "skipped" ? record.walk : null,
   };
 }
 
@@ -96,7 +100,7 @@ export function writeOnboardingMarker(marker: OnboardingMarker, file = markerFil
 }
 
 export function freshMarker(): OnboardingMarker {
-  return { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: emptySteps(), lastHealth: null };
+  return { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: emptySteps(), lastHealth: null, walk: null };
 }
 
 /** Whether the install already holds state the Viewer wrote: a seat (active,
@@ -125,16 +129,20 @@ export function resolveOnboardingMarker(evidence: ExistingInstallEvidence, now =
   return marker;
 }
 
+/** Step ids an older guide wrote (the Tour, retired by #2166). */
+const RETIRED_STEP_IDS: ReadonlySet<string> = new Set(["tour"]);
+
 export type OnboardingPatch = {
   completed?: true;
   dismissed?: true;
   steps?: Partial<Record<OnboardingStepId, OnboardingStepState>>;
+  walk?: Exclude<OnboardingWalkState, null>;
 };
 
 export function parseOnboardingPatch(raw: unknown): OnboardingPatch | string {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "request body must be an object";
   const record = raw as Record<string, unknown>;
-  const allowed = new Set(["completed", "dismissed", "steps"]);
+  const allowed = new Set(["completed", "dismissed", "steps", "walk"]);
   const unknown = Object.keys(record).filter((key) => !allowed.has(key));
   if (unknown.length) return `unknown field: ${unknown.join(", ")}`;
   const patch: OnboardingPatch = {};
@@ -143,10 +151,17 @@ export function parseOnboardingPatch(raw: unknown): OnboardingPatch | string {
     if (record[flag] !== true) return `${flag} must be true`;
     patch[flag] = true;
   }
+  if (record.walk !== undefined) {
+    if (record.walk !== "done" && record.walk !== "skipped") return "walk must be done or skipped";
+    patch.walk = record.walk;
+  }
   if (record.steps !== undefined) {
     if (!record.steps || typeof record.steps !== "object" || Array.isArray(record.steps)) return "steps must be an object";
     patch.steps = {};
     for (const [id, value] of Object.entries(record.steps as Record<string, unknown>)) {
+      /* A tab still running the six-step guide may send the Tour's id: it is
+         dropped, the way the reader drops it. */
+      if (RETIRED_STEP_IDS.has(id)) continue;
       if (!(ONBOARDING_STEP_IDS as readonly string[]).includes(id)) return `unknown step: ${id}`;
       if (value !== "done" && value !== "skipped" && value !== null) return `steps.${id} must be done, skipped or null`;
       patch.steps[id as OnboardingStepId] = value;
@@ -162,6 +177,7 @@ export function applyOnboardingPatch(current: OnboardingMarker | null, patch: On
   if (patch.steps) Object.assign(next.steps, patch.steps);
   if (patch.dismissed) next.dismissedAt = now;
   if (patch.completed) next.completedAt = now;
+  if (patch.walk) next.walk = patch.walk;
   return next;
 }
 

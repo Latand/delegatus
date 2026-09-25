@@ -280,3 +280,23 @@ test("a board stored on the scheme face before the kanban became the desktop boa
   /* Nothing stored is rewritten to get there. */
   expect(boards[PROJECT]!.prefs).toMatchObject({ viewMode: "scheme", desktopBoard: "scheme" });
 });
+
+/* #2166 §3.4: a project created a moment ago (from the rail, or the setup
+   guide) has nothing in it and no view anyone chose. It opens on its Board,
+   where its orchestrator's draft sits above the columns. A view the operator did choose still wins. */
+test("a desktop project nobody chose a view for opens on its Board, even with nothing in it yet", async () => {
+  const host = mount([]);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  expect(host.querySelector("[data-desktop-conversations-scroll]")).toBeNull();
+  /* Nothing is written to get there: no view is stored for the project. */
+  expect(boards[PROJECT]?.prefs.viewMode ?? null).toBeNull();
+});
+
+test("a project whose operator chose Conversations still opens on Conversations", async () => {
+  boards = { [PROJECT]: { ...emptyBoard(), revision: 1, prefs: { ...emptyBoard().prefs, viewMode: "list" } } };
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
+  await settle();
+  expect(host.querySelector("[data-kanban-board]")).toBeNull();
+});

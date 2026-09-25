@@ -64,12 +64,32 @@ test("a created project asks the files feed to refresh at once", async () => {
     let outcome: unknown = null;
     await act(async () => { outcome = await mounted.curation().createProject("Atlas", "/work/atlas"); });
 
-    expect(outcome).toEqual({ ok: true, project: "dir-atlas" });
+    expect(outcome).toEqual({ ok: true, project: "dir-atlas", root: "/work/atlas" });
     expect(refreshes).toBe(1);
     expect(mounted.curation().createdCatalog).toEqual([expect.objectContaining({ project: "dir-atlas", projectRoot: "/work/atlas" })]);
   } finally {
     mounted.unmount();
     dom.removeEventListener(FILES_CHANGED_EVENT, onRefresh);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+/* The guide's "Open another folder" reads the created folder from the outcome;
+   an answer that names none leaves the key out rather than inventing one. */
+test("a created project whose answer names no folder carries no root", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    ok: true, project: "dir-atlas", displayName: "Atlas", createdAt: 1_700_000_000,
+  }), { headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  const mounted = await mountCuration();
+  try {
+    let outcome: unknown = null;
+    await act(async () => { outcome = await mounted.curation().createProject("Atlas", "/work/atlas"); });
+
+    expect(outcome).toEqual({ ok: true, project: "dir-atlas" });
+    expect(Object.hasOwn(outcome as object, "root")).toBe(false);
+  } finally {
+    mounted.unmount();
     globalThis.fetch = originalFetch;
   }
 });
