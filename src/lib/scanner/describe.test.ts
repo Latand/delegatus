@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -17,6 +18,7 @@ import {
   projectInfoFromCwd,
   projectFromSlug,
   projectRootForCwd,
+  recordWorktreeResolution,
   searchTextForTranscript,
 } from "./describe";
 
@@ -617,6 +619,48 @@ test("a deleted worktree of a renamed repository still groups under the one proj
     expect(canonicalProject(projectForCwd(cwd)!)).toBe(renamed.project);
   }
   expect(canonicalProject(old.project)).toBe(renamed.project);
+});
+
+test("a deleted worktree still groups under its parent repo: a pipeline sibling the worktree sweep removed", () => {
+  /* The worktree sweep (#2202) records the checkout's resolution and then runs
+     `git worktree remove`, which deletes the directory and git's own record of
+     it. Nothing about `widgets-pipeline-<id>` names the repository, so the
+     recorded map is all that is left; a session that ran in a subdirectory
+     resolves through the checkout's record. */
+  const base = path.join(SANDBOX, "swept-pipeline-sibling");
+  const state = path.join(base, "state");
+  process.env.LLV_STATE_DIR = state;
+  fs.mkdirSync(state, { recursive: true });
+  resetProjectAliasesForTests();
+  const repo = path.join(base, "widgets");
+  const sibling = path.join(base, "widgets-pipeline-5ca1ab1e");
+  const run = (args: string[], cwd: string) => {
+    const result = spawnSync("git", ["-c", "user.name=Sweep Test", "-c", "user.email=sweep@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  };
+  fs.mkdirSync(repo, { recursive: true });
+  run(["init", "-q", "-b", "main"], repo);
+  run(["remote", "add", "origin", "https://github.com/acme/widgets.git"], repo);
+  run(["commit", "-q", "--allow-empty", "-m", "initial"], repo);
+  run(["worktree", "add", "-q", "-b", "pipeline/5ca1ab1e", sibling, "main"], repo);
+  const parent = projectForCwd(repo);
+  expect(parent).toBeTruthy();
+
+  expect(recordWorktreeResolution(sibling)).toEqual({ repo: fs.realpathSync(repo), worktree: "widgets-pipeline-5ca1ab1e" });
+  run(["worktree", "remove", sibling], repo);
+  expect(fs.existsSync(sibling)).toBe(false);
+
+  /* Rebind to another state directory and back, so the map is read from disk. */
+  globalCache("worktree-git").clear();
+  globalCache("project-info-cwd-v2").clear();
+  const other = path.join(base, "other-state");
+  fs.mkdirSync(other, { recursive: true });
+  process.env.LLV_STATE_DIR = other;
+  projectForCwd(sibling);
+  process.env.LLV_STATE_DIR = state;
+  globalCache("project-info-cwd-v2").clear();
+  expect(projectForCwd(sibling)).toBe(parent);
+  expect(projectForCwd(path.join(sibling, "src", "lib"))).toBe(parent);
 });
 
 test("a pre-change slug follows its repository alias", () => {

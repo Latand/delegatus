@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { stateDir } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import { readStateCollectionsRows } from "@/lib/state/sqliteStateStore";
 import {
   directoryProjectId,
@@ -421,9 +422,22 @@ function rememberWorktree(cwd: string, info: { repo: string; worktree: string })
 }
 
 /** Remembered resolution of a now-deleted `git worktree add` checkout — the
-    fallback that survives the checkout being removed from disk. */
+    fallback that survives the checkout being removed from disk. A session
+    that ran in a subdirectory of the checkout resolves through the checkout's
+    own record: the worktree sweep records the checkout root before it removes
+    it (#2202), not every directory a session happened to start in. */
 function worktreeFromMemory(cwd: string): { repo: string; worktree: string } | null {
-  return worktreeMap().get(cwd) ?? null;
+  const map = worktreeMap();
+  for (let current = cwd, parent = path.dirname(cwd); ; current = parent, parent = path.dirname(parent)) {
+    const found = map.get(current);
+    if (found) return found;
+    if (parent === current) return null;
+  }
+}
+
+function writeWorktreeMap(memory: { dir: string; map: Map<string, { repo: string; worktree: string }> }): void {
+  fs.mkdirSync(memory.dir, { recursive: true });
+  writeJsonDurably(path.join(memory.dir, WORKTREE_MAP_FILE), Object.fromEntries(memory.map), { space: 0 });
 }
 
 /** Flush freshly-learned worktree resolutions to disk. Called once per scan
@@ -432,14 +446,34 @@ export function persistWorktreeMap(): void {
   if (!worktreeMemoryDirty || !worktreeMemory) return;
   worktreeMemoryDirty = false;
   try {
-    fs.mkdirSync(worktreeMemory.dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(worktreeMemory.dir, WORKTREE_MAP_FILE),
-      JSON.stringify(Object.fromEntries(worktreeMemory.map)),
-    );
+    writeWorktreeMap(worktreeMemory);
   } catch {
     /* best-effort: a lost map only re-fragments deleted worktrees */
   }
+}
+
+/** Reads a live linked checkout's `.git` pointer and writes its resolution to
+    the worktree map before the checkout is removed (#2202), so every session
+    that ran there keeps grouping under the parent repo afterwards. Returns the
+    resolution on disk, or null when the checkout is not a linked worktree or
+    the map could not be written: the caller must not remove it then. */
+export function recordWorktreeResolution(cwd: string): { repo: string; worktree: string } | null {
+  let info: { repo: string; worktree: string } | null = null;
+  try {
+    const gitPath = path.join(cwd, ".git");
+    if (fs.lstatSync(gitPath).isFile()) info = parseWorktreeGitdir(cwd, fs.readFileSync(gitPath, "utf8"));
+  } catch {
+    return null;
+  }
+  if (!info) return null;
+  rememberWorktree(cwd, info);
+  try {
+    writeWorktreeMap(worktreeMemory!);
+    worktreeMemoryDirty = false;
+  } catch {
+    return null;
+  }
+  return info;
 }
 
 /** Linked git worktrees created anywhere (`git worktree add ../foo`), not
