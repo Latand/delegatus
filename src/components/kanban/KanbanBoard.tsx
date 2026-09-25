@@ -2601,6 +2601,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
       <div className={`kb-body${seatSide ? " seat-side" : ""}`}>
       {seatSide && seatView}
+      {/* The board's pane: its page, and under it the receipts, in a strip of their own centred on the pane. */}
+      <div className="kb-pane">
       <div className="kb-page">
       {seatSide ? null : seatView}
       <div className={`board-frame${railShown ? " with-rail" : ""}`} id={boardId} tabIndex={-1} aria-label={t("kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
@@ -2667,6 +2669,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
         </div>
       )}
       </div>
+      </div>
+      <KanbanReceipts receipts={receipts} onDismiss={dismiss} />
       </div>
       {props.aside ? <div ref={asideRef} className="kb-aside">{props.aside}</div> : null}
       </div>
@@ -2788,7 +2792,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
       ) : null}
       {dragHint ? <div className="drag-hint">{t("kanban.dragHint")}</div> : null}
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
-      <KanbanReceipts receipts={receipts} onDismiss={dismiss} />
     </div>
     </KanbanDraftContext.Provider>
     </AccountChoiceContext.Provider>

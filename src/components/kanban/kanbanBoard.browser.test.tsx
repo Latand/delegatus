@@ -10834,7 +10834,11 @@ describe("#1856 undo and redo on the desktop board", () => {
    *   - an undo after an agent wrote the task where the page cannot see it
    *     (`agentWritesDescriptionQuietly`) sends one PATCH, meets the 409,
    *     leaves the card where the store has it, and says so in an error
-   *     receipt with no action whose text stays within two lines at 560 px.
+   *     receipt with no action whose text stays within two lines at 560 px;
+   *   - an undo whose write fails offers Retry, in a word the Redo beside it
+   *     does not use, on one line;
+   *   - in every frame the receipts stand in their strip under the board's
+   *     page, centred on the pane beside the open project rail, over no card.
    *
    * Measurements go to `evidence/issue-1856/undo-redo.json`; frames to
    * `.artifacts/issue-1856/`, which is not committed.
@@ -10844,6 +10848,7 @@ describe("#1856 undo and redo on the desktop board", () => {
   const EVIDENCE = path.resolve("evidence/issue-1856");
   type Evidence = {
     agentWritesDescriptionQuietly: (id: string, description: string) => void;
+    refuseNextTaskPatch: boolean;
     taskPatches: Array<{ id: string; body: Record<string, unknown> }>;
     taskWrites: Array<{ id: string; startedAt: number; answeredAt: number }>;
     storedTask: (id: string) => Record<string, unknown> | null;
@@ -10862,6 +10867,33 @@ describe("#1856 undo and redo on the desktop board", () => {
       clipped: message.scrollHeight > message.clientHeight + 1,
     };
   }));
+  /* Where the receipts stand: their centre against the pane's, the page's
+     foot against the stack's top, and the cards whose visible part lies under
+     a receipt. */
+  const placement = (page: Page) => page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>(".kb-pane")!.getBoundingClientRect();
+    const pageBox = document.querySelector<HTMLElement>(".kb-page")!.getBoundingClientRect();
+    const stack = document.querySelector<HTMLElement>(".kb .receipts")!.getBoundingClientRect();
+    const boxes = [...document.querySelectorAll<HTMLElement>("[data-kanban-receipt]")].map((receipt) => receipt.getBoundingClientRect());
+    const covered = [...document.querySelectorAll<HTMLElement>(".kb-page .card")].flatMap((node) => {
+      const box = node.getBoundingClientRect();
+      const top = Math.max(box.top, pageBox.top), bottom = Math.min(box.bottom, pageBox.bottom);
+      return boxes.some((r) => top < bottom && r.left < box.right && box.left < r.right && r.top < bottom && top < r.bottom) ? [node.dataset.id ?? "?"] : [];
+    });
+    return {
+      paneCentre: Math.round(pane.left + pane.width / 2),
+      stackCentre: Math.round(stack.left + stack.width / 2),
+      receiptCentres: boxes.map((r) => Math.round(r.left + r.width / 2)),
+      pageBottom: Math.round(pageBox.bottom),
+      stackTop: Math.round(stack.top),
+      covered,
+    };
+  });
+  const placed = (lang: string, frame: string, where: Awaited<ReturnType<typeof placement>>, failures: string[]) => {
+    if (where.receiptCentres.some((x) => Math.abs(x - where.paneCentre) > 1)) failures.push(`${lang} ${frame}: receipts centred at ${where.receiptCentres.join(", ")}, the pane at ${where.paneCentre}`);
+    if (where.pageBottom > where.stackTop) failures.push(`${lang} ${frame}: the page ends at ${where.pageBottom}, under the receipts from ${where.stackTop}`);
+    if (where.covered.length) failures.push(`${lang} ${frame}: receipts over ${where.covered.join(", ")}`);
+  };
   const patches = (page: Page) => page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.taskPatches);
   const writesSettled = (page: Page, count: number) => page.waitForFunction((expected) => {
     const writes = (window as unknown as { evidence: Evidence }).evidence.taskWrites;
@@ -10895,7 +10927,9 @@ describe("#1856 undo and redo on the desktop board", () => {
           await page.waitForTimeout(300);
           const moved = await receipts(page);
           await page.screenshot({ path: path.join(OUT, `move-${lang}.png`) });
-          frames.move = { column: await columnOf(page, "t-export"), receipts: moved };
+          let where = await placement(page);
+          frames.move = { column: await columnOf(page, "t-export"), receipts: moved, placement: where };
+          placed(lang, "move", where, failures);
           const movedText = tr("kanban.moved", { title: short(title), status: tr("kanban.status.blocked" as never) });
           if (await columnOf(page, "t-export") !== "blocked") failures.push(`${lang} move: t-export in ${await columnOf(page, "t-export")}`);
           if (JSON.stringify(moved.map((receipt) => [receipt.text, receipt.action])) !== JSON.stringify([[movedText, tr("kanban.undo")]])) failures.push(`${lang} move: receipts ${JSON.stringify(moved)}`);
@@ -10908,7 +10942,9 @@ describe("#1856 undo and redo on the desktop board", () => {
           const undone = await receipts(page);
           await page.screenshot({ path: path.join(OUT, `undo-${lang}.png`) });
           const sent = await patches(page);
-          frames.undo = { column: await columnOf(page, "t-export"), receipts: undone, patch: sent[1] ?? null, fence: afterMove };
+          where = await placement(page);
+          frames.undo = { column: await columnOf(page, "t-export"), receipts: undone, patch: sent[1] ?? null, fence: afterMove, placement: where };
+          placed(lang, "undo", where, failures);
           const backText = tr("kanban.movedBack", { title: short(title), status: tr("kanban.status.assigned" as never) });
           if (await columnOf(page, "t-export") !== "assigned") failures.push(`${lang} undo: t-export in ${await columnOf(page, "t-export")}`);
           if (JSON.stringify(undone.map((receipt) => [receipt.text, receipt.action])) !== JSON.stringify([[backText, tr("kanban.redo")]])) failures.push(`${lang} undo: receipts ${JSON.stringify(undone)}`);
@@ -10927,7 +10963,9 @@ describe("#1856 undo and redo on the desktop board", () => {
           const refused = await receipts(page);
           await page.screenshot({ path: path.join(OUT, `refusal-${lang}.png`) });
           const all = await patches(page);
-          frames.refusal = { column: await columnOf(page, "t-search"), receipts: refused, patches: all.slice(2) };
+          where = await placement(page);
+          frames.refusal = { column: await columnOf(page, "t-search"), receipts: refused, patches: all.slice(2), placement: where };
+          placed(lang, "refusal", where, failures);
           const refusedText = tr("kanban.undoRefused", { title: short(searchTitle) });
           const refusal = refused.find((receipt) => receipt.text === refusedText);
           if (all.length !== 4) failures.push(`${lang} refusal: ${all.length} patches`);
@@ -10935,6 +10973,27 @@ describe("#1856 undo and redo on the desktop board", () => {
           if (!refusal || !refusal.error || refusal.action !== null) failures.push(`${lang} refusal: receipts ${JSON.stringify(refused)}`);
           else if (refusal.lines > 2 || refusal.clipped || refusal.width > 560) failures.push(`${lang} refusal: ${refusal.lines} lines, clipped ${refusal.clipped}, ${refusal.width} px`);
           if (refused.some((receipt) => receipt.text === tr("kanban.movedBack", { title: short(searchTitle), status: tr("kanban.status.assigned" as never) }))) failures.push(`${lang} refusal: the undo's own receipt stayed`);
+
+          /* t-export moves again and its undo's write fails: the receipt offers Retry. */
+          while (await page.locator("[data-kanban-receipt]").count()) await page.locator("[data-kanban-receipt] .close").first().click();
+          await page.locator(card("t-export")).focus();
+          await page.keyboard.press("]");
+          await writesSettled(page, 5);
+          await page.waitForTimeout(300);
+          await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.refuseNextTaskPatch = true; });
+          await page.keyboard.press("Control+z");
+          await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
+          await page.waitForTimeout(600);
+          const failed = await receipts(page);
+          await page.screenshot({ path: path.join(OUT, `failure-${lang}.png`) });
+          where = await placement(page);
+          frames.failure = { column: await columnOf(page, "t-export"), receipts: failed, placement: where };
+          placed(lang, "failure", where, failures);
+          const failedText = tr("kanban.undoFailed", { error: "refused by the evidence fixture" });
+          const failure = failed.find((receipt) => receipt.text === failedText);
+          if (!failure || !failure.error || failure.action !== tr("kanban.retry")) failures.push(`${lang} failure: receipts ${JSON.stringify(failed)}`);
+          else if (failure.lines !== 1 || failure.clipped) failures.push(`${lang} failure: ${failure.lines} lines, clipped ${failure.clipped}`);
+          if (tr("kanban.retry") === tr("kanban.redo")) failures.push(`${lang}: Retry and Redo are both «${tr("kanban.redo")}»`);
           if (opened.pageErrors.length) failures.push(`${lang}: page errors ${opened.pageErrors.join(" | ")}`);
           record[lang] = frames;
         } catch (error) {

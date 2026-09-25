@@ -16,7 +16,17 @@
             "lines": 1,
             "clipped": false
           }
-        ]
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "stackCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "pageBottom": 834,
+          "stackTop": 834,
+          "covered": []
+        }
       },
       "undo": {
         "column": "assigned",
@@ -38,7 +48,17 @@
             "expectedRevision": "revision 21"
           }
         },
-        "fence": "revision 21"
+        "fence": "revision 21",
+        "placement": {
+          "paneCentre": 844,
+          "stackCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "pageBottom": 834,
+          "stackTop": 834,
+          "covered": []
+        }
       },
       "refusal": {
         "column": "blocked",
@@ -52,7 +72,7 @@
             "clipped": false
           },
           {
-            "text": "«Restore search results after the index rebuild» was changed elsewhere, so nothing was undone",
+            "text": "Someone else changed «Restore search results after the index rebuild» in the meantime, so nothing was undone",
             "action": null,
             "error": true,
             "width": 560,
@@ -77,7 +97,41 @@
               "expectedRevision": "revision 23"
             }
           }
-        ]
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "stackCentre": 844,
+          "receiptCentres": [
+            844,
+            844
+          ],
+          "pageBottom": 772,
+          "stackTop": 772,
+          "covered": []
+        }
+      },
+      "failure": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "Couldn't undo: refused by the evidence fixture",
+            "action": "Retry",
+            "error": true,
+            "width": 391,
+            "lines": 1,
+            "clipped": false
+          }
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "stackCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "pageBottom": 834,
+          "stackTop": 834,
+          "covered": []
+        }
       }
     },
     "uk": {
@@ -92,7 +146,17 @@
             "lines": 2,
             "clipped": false
           }
-        ]
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "stackCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "pageBottom": 826,
+          "stackTop": 826,
+          "covered": []
+        }
       },
       "undo": {
         "column": "assigned",
@@ -114,7 +178,17 @@
             "expectedRevision": "revision 21"
           }
         },
-        "fence": "revision 21"
+        "fence": "revision 21",
+        "placement": {
+          "paneCentre": 844,
+          "stackCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "pageBottom": 834,
+          "stackTop": 834,
+          "covered": []
+        }
       },
       "refusal": {
         "column": "blocked",
@@ -128,7 +202,7 @@
             "clipped": false
           },
           {
-            "text": "«Повернути результати пошуку після перебудови і…» змінили деінде, тому нічого не скасовано",
+            "text": "Хтось інший тим часом змінив «Повернути результати пошуку після перебудови і…», тому нічого не скасовано",
             "action": null,
             "error": true,
             "width": 560,
@@ -153,7 +227,41 @@
               "expectedRevision": "revision 23"
             }
           }
-        ]
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "stackCentre": 844,
+          "receiptCentres": [
+            844,
+            844
+          ],
+          "pageBottom": 772,
+          "stackTop": 772,
+          "covered": []
+        }
+      },
+      "failure": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "Не вдалося скасувати: refused by the evidence fixture",
+            "action": "Спробувати ще раз",
+            "error": true,
+            "width": 521,
+            "lines": 1,
+            "clipped": false
+          }
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "stackCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "pageBottom": 834,
+          "stackTop": 834,
+          "covered": []
+        }
       }
     }
   },

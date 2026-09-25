@@ -549,8 +549,12 @@
 .kb .menu .st[data-status="done"] { background: var(--color-success); }
 .kb .menu .kbd { margin-left: auto; font-size: var(--text-caption); color: var(--color-muted); border: 1px solid var(--border-default); border-radius: 4px; padding: 0 5px; line-height: 16px; }
 
-/* ── Receipts (bottom-centre) ─────────────────────────────────────────────── */
-.kb .receipts { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 80; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+/* ── Receipts (bottom-centre of the board's pane) ─────────────────────────── */
+/* A strip under the page, so a receipt is centred on the board beside an open
+   project rail and covers no card: while one shows, the page gives up its
+   height and the columns end above it. Empty, it takes no room. */
+.kb .receipts { position: relative; z-index: 80; flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; align-items: center; padding: 4px 16px 16px; pointer-events: none; }
+.kb .receipts:empty { padding: 0; }
 .kb .receipt {
   position: relative; pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: min(560px, calc(100vw - 32px));
   padding: 8px 8px 8px 14px; border-radius: var(--radius-surface); background: var(--color-primary); color: var(--surface-card);
@@ -657,6 +661,7 @@
 /* The board's page and, beside it, the project's Tasks panel: both under the one bar (#1801). */
 .kb .kb-body { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
 .kb .kb-aside { display: flex; min-height: 0; flex-shrink: 0; }
+.kb .kb-pane { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
 .kb .kb-page { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; container-type: size; }
 .kb .board-frame { flex: 0 0 auto; height: max(440px, 100cqh); min-height: 0; display: flex; flex-direction: column; outline: none; }
 /* The board's scrollers scroll on the compositor. At a device pixel ratio

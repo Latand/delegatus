@@ -229,10 +229,15 @@ nothing offers to force it.
 
 ### 5. Toast design
 
-The receipt is the toast. Nothing about `KanbanReceipts` geometry, timing or
-cap changes: bottom-centre, 20 px above the bottom edge, at most three, 7 s
-for an action receipt, 12 s for an error, paused under the pointer,
-560 px wide at most, 30 px action button. `useReceipts` gains nothing; the
+The receipt is the toast. Its timing and cap do not change: at most three,
+7 s for an action receipt, 12 s for an error, paused under the pointer,
+560 px wide at most, 30 px action button. Its place does: the design review
+found the viewport-centred stack left of the board beside an open project
+rail and over the cards at a column's foot, and undo makes a receipt and a
+refusal under it an ordinary pair. The stack now stands in a strip of its
+own under the board's page (`.kb-pane` in `KanbanBoard.tsx`), centred on
+the pane; while a receipt shows, the page gives up that height and the
+columns end above it, and an empty stack takes no room. `useReceipts` gains nothing; the
 board dismisses the receipt it answers before showing the next, so a run of
 Ctrl+Z shows one pill that changes, never three stacked. An action receipt
 and an error receipt can coexist (an undo that refused while another move's
@@ -250,9 +255,10 @@ Copy, with the existing `kanban.undo` reused as the Undo label:
 | `kanban.edited` (new) | Edited «{title}» | «{title}» змінено | Undo |
 | `kanban.textRestored` (new) | Restored the previous text of «{title}» | Попередній текст «{title}» відновлено | Redo |
 | `kanban.redo` (new) | Redo | Повторити | — |
-| `kanban.undoRefused` (new, error) | «{title}» was changed elsewhere, so nothing was undone | «{title}» змінили деінде, тому нічого не скасовано | none |
-| `kanban.redoRefused` (new, error) | «{title}» was changed elsewhere, so nothing was redone | «{title}» змінили деінде, тому нічого не повторено | none |
-| `kanban.undoRefusedMany` (new, error, plural) | {count} tasks were changed elsewhere and stay as they are | {count} задач змінили деінде, вони лишаються як є | none |
+| `kanban.undoRefused` (new, error) | Someone else changed «{title}» in the meantime, so nothing was undone | Хтось інший тим часом змінив «{title}», тому нічого не скасовано | none |
+| `kanban.redoRefused` (new, error) | Someone else changed «{title}» in the meantime, so nothing was redone | Хтось інший тим часом змінив «{title}», тому нічого не повторено | none |
+| `kanban.undoRefusedMany` (new, error, plural) | Someone else changed {count} tasks in the meantime, so they stay as they are | Хтось інший тим часом змінив {count} задач, тому вони лишаються як є | none |
+| `kanban.retry` (exists, reworded in uk) | Retry | Спробувати ще раз (was «Повторити», which is now Redo) | — |
 | `kanban.undoFailed` (new, error) | Couldn't undo: {error} | Не вдалося скасувати: {error} | Retry |
 | `kanban.redoFailed` (new, error) | Couldn't redo: {error} | Не вдалося повторити: {error} | Retry |
 

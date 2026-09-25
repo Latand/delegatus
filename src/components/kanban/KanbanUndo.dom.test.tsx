@@ -34,6 +34,7 @@ Object.assign(globalThis, {
 const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
 const { KanbanBoard } = await import("./KanbanBoard");
+const { translate } = await import("@/lib/i18n");
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -290,7 +291,7 @@ test("an undo of a task someone else changed meanwhile is refused: one write, no
   /* The undo's own receipt is replaced by the refusal; b's move still counts down. */
   expect(receipts(view.host)).toEqual([
     { text: "Moved «Repair old links» to Assigned", action: "Undo", error: false },
-    { text: "«Write the release notes» was changed elsewhere, so nothing was undone", action: null, error: true },
+    { text: "Someone else changed «Write the release notes» in the meantime, so nothing was undone", action: null, error: true },
   ]);
 
   /* The refused task leaves the history; the next Ctrl+Z undoes b's move. */
@@ -316,7 +317,14 @@ test("a text undo meeting an agent's newer text is refused and the card keeps th
   expect(view.store.patches).toHaveLength(2);
   expect(view.store.rows()[0]!.text).toBe("Repair every old link\nAn agent rewrote the description");
   expect(cardEl(view.host, "a")?.textContent).toContain("An agent rewrote the description");
-  expect(receipts(view.host)).toEqual([{ text: "«Repair every old link» was changed elsewhere, so nothing was undone", action: null, error: true }]);
+  expect(receipts(view.host)).toEqual([{ text: "Someone else changed «Repair every old link» in the meantime, so nothing was undone", action: null, error: true }]);
+});
+
+test("Undo, Redo and Retry are three different words on the board's receipts in each language", () => {
+  for (const lang of ["en", "uk"] as const) {
+    const labels = (["kanban.undo", "kanban.redo", "kanban.retry"] as const).map((key) => translate(lang, key));
+    expect(new Set(labels).size).toBe(3);
+  }
 });
 
 test("the keys do nothing in a text field, the composer, a dialog or an open menu", async () => {
