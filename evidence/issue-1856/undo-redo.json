@@ -134,15 +134,15 @@
         "lastCardBottoms": {
           "before": {
             "inbox": 554,
-            "assigned": 747,
-            "blocked": 747,
-            "done": 747
+            "assigned": 799,
+            "blocked": 799,
+            "done": 799
           },
           "after": {
             "inbox": 554,
-            "assigned": 747,
-            "blocked": 747,
-            "done": 747
+            "assigned": 799,
+            "blocked": 799,
+            "done": 799
           }
         },
         "placement": {
@@ -330,15 +330,15 @@
         "lastCardBottoms": {
           "before": {
             "inbox": 554,
-            "assigned": 747,
-            "blocked": 747,
-            "done": 747
+            "assigned": 799,
+            "blocked": 799,
+            "done": 799
           },
           "after": {
             "inbox": 554,
-            "assigned": 747,
-            "blocked": 747,
-            "done": 747
+            "assigned": 799,
+            "blocked": 799,
+            "done": 799
           }
         },
         "placement": {

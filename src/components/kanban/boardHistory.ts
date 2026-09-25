@@ -37,6 +37,8 @@ export class BoardHistory {
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
   private records = 0;
+  /** Per entry on the undo stack, the epoch it was placed there at. */
+  private placed = new WeakMap<HistoryEntry, number>();
 
   constructor(private readonly limit = HISTORY_LIMIT) {}
 
@@ -65,9 +67,14 @@ export class BoardHistory {
     });
   }
 
-  /** An entry that was just redone, or an undo that failed to reach the server. */
-  pushUndo(entry: HistoryEntry): void {
-    this.undoStack.push(entry);
+  /** An entry that was just redone, or an undo that failed to reach the
+      server. An undo sent at an older `since` epoch goes back below the edits
+      recorded after it, so the next undo still takes the newest edit first. */
+  pushUndo(entry: HistoryEntry, since = this.records): void {
+    this.placed.set(entry, since);
+    let at = this.undoStack.length;
+    while (at > 0 && (this.placed.get(this.undoStack[at - 1]!) ?? 0) > since) at -= 1;
+    this.undoStack.splice(at, 0, entry);
     if (this.undoStack.length > this.limit) this.undoStack.splice(0, this.undoStack.length - this.limit);
   }
 
@@ -83,6 +90,16 @@ export class BoardHistory {
 
   takeRedo(): HistoryEntry | null {
     return this.redoStack.pop() ?? null;
+  }
+
+  /** Take `entry` off the stack a step in `direction` takes from; false when
+      it is not there, as a redo is not once a new edit cleared its stack. */
+  withdraw(entry: HistoryEntry, direction: "undo" | "redo"): boolean {
+    const stack = direction === "undo" ? this.undoStack : this.redoStack;
+    const at = stack.indexOf(entry);
+    if (at < 0) return false;
+    stack.splice(at, 1);
+    return true;
   }
 
   discard(entry: HistoryEntry): void {

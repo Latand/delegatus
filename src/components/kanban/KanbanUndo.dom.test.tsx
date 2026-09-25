@@ -65,9 +65,21 @@ function fencedStore(initial: BoardTask[]) {
   const rows = new Map(initial.map((row) => [row.id, row] as const));
   const patches: Array<{ id: string; body: PatchBody }> = [];
   let revision = 10;
+  /* The next PATCH waits for `answer`, and `true` answers it 500. */
+  let gate: Promise<boolean> | null = null;
+  let answer: (fail: boolean) => void = () => {};
+  const holdNext = () => {
+    gate = new Promise((resolve) => { answer = resolve; });
+  };
+  let failNext = false;
   const ports: TaskMutationPorts = {
     patch: async (id, body) => {
       patches.push({ id, body });
+      const held = gate;
+      gate = null;
+      const fail = held ? await held : failNext;
+      failNext = false;
+      if (fail) return { ok: false, status: 500, error: "server error" };
       const row = rows.get(id);
       if (!row) return { ok: false, status: 404, error: "task not found" };
       if (body.expectedRevision !== (row as BoardTask & { revision?: string }).revision) return { ok: false, status: 409, error: "expectedRevision is stale", code: "TASK_REVISION_MISMATCH" };
@@ -88,7 +100,15 @@ function fencedStore(initial: BoardTask[]) {
   const elsewhere = (id: string, change: Partial<BoardTask>) => {
     rows.set(id, { ...rows.get(id)!, ...change, revision: REV((revision += 1)) } as BoardTask);
   };
-  return { ports, patches, rows: () => [...rows.values()], elsewhere };
+  return {
+    ports,
+    patches,
+    rows: () => [...rows.values()],
+    elsewhere,
+    holdNext,
+    answer: (fail: boolean) => answer(fail),
+    failNext: () => { failNext = true; },
+  };
 }
 
 const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -384,6 +404,105 @@ test("a new edit made while an undo is still being written leaves nothing to red
   expect(ctrlShiftZ().defaultPrevented).toBe(false);
   await tick();
   expect(view.store.patches.length).toBe(before);
+  expect(columnOf(view.host, "a")).toBe("inbox");
+});
+
+test("after a new edit, the Redo on an earlier undo's receipt does nothing", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes"), task("b", "inbox", "Repair old links")]);
+  await shiftRight(view.host, "a");
+  ctrlZ();
+  await tick();
+  await shiftRight(view.host, "b");
+  expect(ctrlShiftZ().defaultPrevented).toBe(false);
+  const before = view.store.patches.length;
+  click(receiptAction(view.host, "«Write the release notes» is back in Inbox"));
+  await tick();
+  await tick();
+  expect(view.store.patches.length).toBe(before);
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  /* The next Ctrl+Z undoes b's move, and nothing of a is left above it. */
+  ctrlZ();
+  await tick();
+  expect(view.store.patches.at(-1)?.id).toBe("b");
+  expect(columnOf(view.host, "b")).toBe("inbox");
+  expect(columnOf(view.host, "a")).toBe("inbox");
+});
+
+test("after a new edit, the Retry of a redo that failed does nothing", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes"), task("b", "inbox", "Repair old links")]);
+  await shiftRight(view.host, "a");
+  ctrlZ();
+  await tick();
+  view.store.failNext();
+  ctrlShiftZ();
+  await tick();
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  expect(receipts(view.host)).toContainEqual({ text: "Couldn't redo: server error", action: "Retry", error: true });
+  await shiftRight(view.host, "b");
+  const before = view.store.patches.length;
+  click(receiptAction(view.host, "Couldn't redo: server error"));
+  await tick();
+  await tick();
+  expect(view.store.patches.length).toBe(before);
+  expect(columnOf(view.host, "a")).toBe("inbox");
+});
+
+test("a redo that fails after a new edit was made while it was out offers no Retry", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes"), task("b", "inbox", "Repair old links")]);
+  await shiftRight(view.host, "a");
+  ctrlZ();
+  await tick();
+  view.store.holdNext();
+  ctrlShiftZ();
+  await tick();
+  await shiftRight(view.host, "b");
+  view.store.answer(true);
+  await tick();
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  expect(receipts(view.host)).toContainEqual({ text: "Couldn't redo: server error", action: null, error: true });
+  expect(ctrlShiftZ().defaultPrevented).toBe(false);
+  await tick();
+  expect(view.store.patches.filter((patch) => patch.id === "a")).toHaveLength(3);
+});
+
+test("an undo that fails after a new edit goes back below that edit: Ctrl+Z undoes the newer edit first", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes"), task("b", "inbox", "Repair old links")]);
+  await shiftRight(view.host, "a");
+  view.store.holdNext();
+  ctrlZ();
+  await tick();
+  await shiftRight(view.host, "b");
+  view.store.answer(true);
+  await tick();
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("assigned");
+  expect(columnOf(view.host, "b")).toBe("assigned");
+
+  ctrlZ();
+  await tick();
+  expect(view.store.patches.at(-1)).toMatchObject({ id: "b", body: { status: "inbox" } });
+  expect(columnOf(view.host, "b")).toBe("inbox");
+  /* Then the failed undo of a, taken again. */
+  ctrlZ();
+  await tick();
+  expect(view.store.patches.at(-1)).toMatchObject({ id: "a", body: { status: "inbox" } });
+  expect(columnOf(view.host, "a")).toBe("inbox");
+});
+
+test("the Retry of a failed undo takes it again", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes")]);
+  await shiftRight(view.host, "a");
+  view.store.failNext();
+  ctrlZ();
+  await tick();
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("assigned");
+  click(receiptAction(view.host, "Couldn't undo: server error"));
+  await tick();
+  await tick();
+  expect(view.store.patches).toHaveLength(3);
   expect(columnOf(view.host, "a")).toBe("inbox");
 });
 

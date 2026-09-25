@@ -680,7 +680,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
      applied again leaves the stacks to the newer one. */
   const entryRuns = useRef(new WeakMap<HistoryEntry, number>());
   const stepRef = useRef<(direction: HistoryDirection, chosen?: HistoryEntry) => boolean>(() => false);
-  /** Undo or redo `chosen`, or the top of its stack. False when there is nothing to take. */
+  /** Undo or redo `chosen`, or the top of its stack. False when there is nothing to take, or `chosen` is not on that stack. */
   const step = useCallback((direction: HistoryDirection, chosen?: HistoryEntry) => stepRef.current(direction, chosen), []);
   const applyEntry = (entry: HistoryEntry, direction: HistoryDirection) => {
     const stacks = historyRef.current;
@@ -753,17 +753,22 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (failed.length) {
         /* What did not reach the server goes back where it came from, and Retry takes it again. */
         const rest: HistoryEntry = entry.kind !== "hide" ? entry : saved.length ? { ...entry, tasks: failed.map((result) => result.target) } : Object.assign(entry, { tasks: failed.map((result) => result.target) });
-        if ((current || rest !== entry) && (undoing || stacks.epoch === epoch)) {
-          if (undoing) stacks.pushUndo(rest);
+        /* A redo whose stack a new edit cleared has nothing to go back to and no Retry. */
+        const kept = (current || rest !== entry) && (undoing || stacks.epoch === epoch);
+        if (kept) {
+          if (undoing) stacks.pushUndo(rest, epoch);
           else stacks.pushRedo(rest);
         }
-        entryReceipts.current.set(rest, show(t(undoing ? "kanban.undoFailed" : "kanban.redoFailed", { error: failed[0]!.error }), { label: t("kanban.retry"), run: () => void step(direction, rest) }, { error: true }));
+        entryReceipts.current.set(rest, show(t(undoing ? "kanban.undoFailed" : "kanban.redoFailed", { error: failed[0]!.error }), kept ? { label: t("kanban.retry"), run: () => void step(direction, rest) } : undefined, { error: true }));
       }
     });
   };
   stepRef.current = (direction, chosen) => {
     const stacks = historyRef.current;
-    if (chosen) stacks.discard(chosen);
+    /* A receipt acts only while its entry is on the stack it would take from:
+       the Redo of an undo, or the Retry of a failed redo, is gone once a new
+       edit cleared the redo stack. */
+    if (chosen && !stacks.withdraw(chosen, direction)) return false;
     const entry = chosen ?? (direction === "undo" ? stacks.takeUndo() : stacks.takeRedo());
     if (!entry) return false;
     /* An edit still being written is undone once its write has answered; one

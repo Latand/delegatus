@@ -228,9 +228,14 @@ Undo flow, in `history.undo()` on the board:
    stale.
 6. On `failed` (network, 5xx, 404): replace the receipt with the failure
    receipt whose Retry runs the same undo again; the entry goes back onto
-   `undo`.
+   `undo`, below any edit recorded while it was out, so the next Ctrl+Z
+   still takes the newest edit first.
 
-Redo mirrors it with the stacks swapped. Bulk hide undoes one task at a time
+Redo mirrors it with the stacks swapped, except that a redo which fails
+after a new edit cleared `redo` has nowhere to go back to and its receipt
+offers no Retry. A receipt's Undo, Redo or Retry acts only while its entry
+is on the stack it would take from, so the Redo left on an undo's receipt
+does nothing once a new edit has cleared `redo`. Bulk hide undoes one task at a time
 through the chain; a per-task conflict counts, the rest go through, and the
 refusal receipt carries the count.
 
@@ -252,11 +257,10 @@ refusal under it an ordinary pair. The stack now stands over the foot of
 the board's pane (`.kb-pane` in `KanbanBoard.tsx`), centred on the pane, and
 changes the size of no column: a first round that gave the stack a strip of
 its own shrank every column by the stack's height whenever a receipt came
-and grew them back when it went. While the stack shows, its height pads the
-foot of every card list (`--kb-receipts-inset`, set by `KanbanReceipts`), so
-a list scrolled to its end brings its last card above the stack; a list
-scrolled into that inset keeps the padding after the stack shrinks until the
-reader scrolls out of it, so its cards do not jump when a receipt leaves.
+and grew them back when it went. Every card list keeps a fixed bottom
+padding the height of one two-line receipt and the stack's foot, so a list
+scrolled to its end brings its last card above a receipt, and nothing moves
+when a receipt comes or goes.
 `useReceipts` gains nothing; the
 board dismisses the receipt it answers before showing the next, so a run of
 Ctrl+Z shows one pill that changes, never three stacked. An action receipt
@@ -365,7 +369,11 @@ phone surface records entries.
   `.artifacts` output (gitignored); the builder copies them to
   `~/Pictures/delegatus-review/board-undo-redo/`.
 
-No route, store, CSS or phone file changes.
+- `src/components/kanban/KanbanReceipts.tsx`,
+  `src/components/kanban/kanbanBoard.css` — the receipt stack over the foot
+  of the board's pane (`.kb-pane`), and the card lists' bottom padding, §5.
+
+No route, store or phone file changes.
 
 ## Validation against the requirement
 

@@ -10842,9 +10842,9 @@ describe("#1856 undo and redo on the desktop board", () => {
    *     the pane beside the open project rail, and every column well ends on
    *     the pixel row it ended on before the first receipt, after a close and
    *     after the timer too;
-   *   - no receipt covers a card of a list scrolled to its end, and a list
-   *     scrolled to its end keeps its cards where they are when the receipts
-   *     leave.
+   *   - the bottom receipt covers no card of a list scrolled to its end (the
+   *     lists' padding clears one receipt), and a list scrolled to its end
+   *     keeps its cards where they are when the receipts leave.
    *
    * Measurements go to `evidence/issue-1856/undo-redo.json`; frames to
    * `.artifacts/issue-1856/`, which is not committed.
@@ -10875,9 +10875,9 @@ describe("#1856 undo and redo on the desktop board", () => {
   }));
   /* Where the receipts stand: their centre against the pane's, the bottom of
      every column well on the board's page (the page scrolls under a seat, so
-     it is read in the page's own coordinates), and the cards a receipt covers
-     once the page and each card list are scrolled to their ends (all are put
-     back where they were). */
+     it is read in the page's own coordinates), and the cards the bottom
+     receipt covers once the page and each card list are scrolled to their
+     ends (all are put back where they were). */
   const placement = (page: Page) => page.evaluate(() => {
     const pane = document.querySelector<HTMLElement>(".kb-pane")!.getBoundingClientRect();
     const scroller = document.querySelector<HTMLElement>(".kb-page")!;
@@ -10888,7 +10888,7 @@ describe("#1856 undo and redo on the desktop board", () => {
     const kept = { page: scroller.scrollTop, lists: lists.map((list) => list.scrollTop) };
     scroller.scrollTop = scroller.scrollHeight;
     lists.forEach((list) => { list.scrollTop = list.scrollHeight; });
-    const atEnd = boxes();
+    const atEnd = boxes().sort((a, b) => b.bottom - a.bottom).slice(0, 1);
     const coveredAtEnd = lists.flatMap((list) => {
       const view = list.getBoundingClientRect();
       return [...list.querySelectorAll<HTMLElement>(".card")].flatMap((node) => {

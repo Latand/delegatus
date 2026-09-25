@@ -67,3 +67,30 @@ test("the epoch moves with every recorded edit and with nothing else", () => {
   history.dropTask("a");
   expect(history.epoch).toBe(start + 1);
 });
+
+test("an undo put back at an older epoch goes below the edits recorded since", () => {
+  const history = new BoardHistory();
+  const a = move("a");
+  const b = move("b");
+  history.record(a);
+  const since = history.epoch;
+  expect(history.takeUndo()).toBe(a);
+  history.record(b);
+  history.pushUndo(a, since);
+  expect(history.entries().undo).toEqual([a, b]);
+  /* At the current epoch it goes on top. */
+  expect(history.takeUndo()).toBe(b);
+  history.pushUndo(b);
+  expect(history.takeUndo()).toBe(b);
+});
+
+test("withdraw takes an entry only from the stack it names", () => {
+  const history = new BoardHistory();
+  const a = move("a");
+  history.record(a);
+  expect(history.withdraw(a, "redo")).toBe(false);
+  expect(history.withdraw(a, "undo")).toBe(true);
+  history.pushRedo(a);
+  history.record(move("b"));
+  expect(history.withdraw(a, "redo")).toBe(false);
+});

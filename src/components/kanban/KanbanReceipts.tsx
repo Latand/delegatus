@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useLocale } from "@/lib/i18n";
 
@@ -88,59 +88,9 @@ function ReceiptView({ receipt, onDismiss }: { receipt: Receipt; onDismiss: (id:
   );
 }
 
-/* The stack stands over the columns and moves none of them. While it shows,
-   its height is the pane's `--kb-receipts-inset`, which every column's card
-   list adds to its bottom padding, so a list scrolled to its end brings its
-   last card above the stack. When the stack shrinks, a list scrolled into the
-   inset it loses keeps that padding until the reader scrolls back out of it,
-   so no card jumps when a receipt leaves. */
-function useColumnInset(stackRef: RefObject<HTMLDivElement | null>) {
-  useEffect(() => {
-    const stack = stackRef.current;
-    const pane = stack?.parentElement;
-    if (!stack || !pane || typeof ResizeObserver === "undefined") return;
-    let inset = 0;
-    /* Each held list, with the inset its padding was held at. */
-    const held = new Map<HTMLElement, { from: number; stop: () => void }>();
-    const release = (list: HTMLElement) => {
-      held.get(list)?.stop();
-      held.delete(list);
-      list.style.paddingBottom = "";
-    };
-    const hold = (list: HTMLElement, from: number, to: number) => {
-      if (held.has(list) || list.scrollTop + list.clientHeight <= list.scrollHeight - (from - to) + 0.5) return;
-      list.style.paddingBottom = getComputedStyle(list).paddingBottom;
-      const onScroll = () => {
-        if (list.scrollTop + list.clientHeight <= list.scrollHeight - Math.max(0, from - inset) + 0.5) release(list);
-      };
-      list.addEventListener("scroll", onScroll, { passive: true });
-      held.set(list, { from, stop: () => list.removeEventListener("scroll", onScroll) });
-    };
-    const measure = () => {
-      const next = stack.childElementCount ? Math.ceil(stack.getBoundingClientRect().height) : 0;
-      if (next === inset) return;
-      if (next < inset) pane.querySelectorAll<HTMLElement>(".col-body").forEach((list) => hold(list, inset, next));
-      else [...held].forEach(([list, { from }]) => { if (from <= next) release(list); });
-      inset = next;
-      if (next) pane.style.setProperty("--kb-receipts-inset", `${next}px`);
-      else pane.style.removeProperty("--kb-receipts-inset");
-    };
-    const observer = new ResizeObserver(measure);
-    observer.observe(stack);
-    measure();
-    return () => {
-      observer.disconnect();
-      [...held.keys()].forEach(release);
-      pane.style.removeProperty("--kb-receipts-inset");
-    };
-  }, [stackRef]);
-}
-
 export function KanbanReceipts({ receipts, onDismiss }: { receipts: readonly Receipt[]; onDismiss: (id: number) => void }) {
-  const stackRef = useRef<HTMLDivElement>(null);
-  useColumnInset(stackRef);
   return (
-    <div ref={stackRef} className="receipts" aria-live="polite" role="status">
+    <div className="receipts" aria-live="polite" role="status">
       {receipts.map((receipt) => <ReceiptView key={receipt.id} receipt={receipt} onDismiss={onDismiss} />)}
     </div>
   );
