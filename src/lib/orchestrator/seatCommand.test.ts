@@ -1351,12 +1351,114 @@ test("spawn mode without a cwd fails closed instead of inheriting the server pro
     const result = await executeOrchestratorSeatRequest(request, deps);
     expect(result.status).toBe(400);
     expect(result.body.code).toBe("cwd_unresolved");
+    /* A newcomer reads this in the panel; an environment variable of the
+       server process is not something they can set (#2167). */
+    expect(String(result.body.error)).not.toContain("LLV_ORCHESTRATOR_CWD");
+    expect(String(result.body.error)).toContain("folder");
     expect(recorded.spawns).toHaveLength(0);
     expect(orchestratorSeatFor("proj-a").active).toBeNull();
   } finally {
     if (previous === undefined) delete process.env.LLV_ORCHESTRATOR_CWD;
     else process.env.LLV_ORCHESTRATOR_CWD = previous;
   }
+});
+
+/* #2167: "Create orchestrator" pressed right after "Create project" reached the
+   seat with no cwd (the panel's files feed had not caught up) and nothing on
+   the server knew the folder, because a new project has no conversation yet.
+   The root "Create project" recorded is that folder. */
+test("a project created seconds ago designates in the folder Create project recorded (#2167)", async () => {
+  const previous = process.env.LLV_ORCHESTRATOR_CWD;
+  delete process.env.LLV_ORCHESTRATOR_CWD;
+  try {
+    const { createManualProject } = await import("@/lib/projects/curation");
+    const folder = path.join(sandbox, "Projects", "atlas");
+    fs.mkdirSync(folder, { recursive: true });
+    const created = createManualProject("Atlas", folder, new Set(), { allowedRoots: [path.join(sandbox, "Projects")] });
+    if (!created.ok) throw new Error(`project was not created: ${created.code}`);
+    const { deps, recorded } = dependencies({ projectRoot: productionSeatCommandDependencies.projectRoot });
+
+    const result = await executeOrchestratorSeatRequest({
+      project: created.entry.project,
+      mandate: "own the board",
+      clientRequestId: "req_00002167",
+      engine: "claude",
+      model: "opus",
+    }, deps);
+
+    expect(result.status).toBe(200);
+    expect(recorded.spawns).toHaveLength(1);
+    expect(recorded.spawns[0]).toMatchObject({ cwd: fs.realpathSync(folder), project: created.entry.project });
+  } finally {
+    if (previous === undefined) delete process.env.LLV_ORCHESTRATOR_CWD;
+    else process.env.LLV_ORCHESTRATOR_CWD = previous;
+  }
+});
+
+test("a recorded root that no longer exists is not a cwd: the designation still fails closed", async () => {
+  const previous = process.env.LLV_ORCHESTRATOR_CWD;
+  delete process.env.LLV_ORCHESTRATOR_CWD;
+  try {
+    const { createManualProject } = await import("@/lib/projects/curation");
+    const folder = path.join(sandbox, "Projects", "gone");
+    fs.mkdirSync(folder, { recursive: true });
+    const created = createManualProject("Gone", folder, new Set(), { allowedRoots: [path.join(sandbox, "Projects")] });
+    if (!created.ok) throw new Error(`project was not created: ${created.code}`);
+    fs.rmSync(folder, { recursive: true, force: true });
+    const { deps, recorded } = dependencies({ projectRoot: productionSeatCommandDependencies.projectRoot });
+
+    const result = await executeOrchestratorSeatRequest({
+      project: created.entry.project,
+      mandate: "own the board",
+      clientRequestId: "req_00002168",
+      engine: "claude",
+      model: "opus",
+    }, deps);
+
+    expect(result.status).toBe(400);
+    expect(result.body.code).toBe("cwd_unresolved");
+    expect(recorded.spawns).toHaveLength(0);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_ORCHESTRATOR_CWD;
+    else process.env.LLV_ORCHESTRATOR_CWD = previous;
+  }
+});
+
+/* #2167 (B7): with nobody signed in and no folder known, the newcomer was told
+   about the folder first and learned about the sign-in only on a later try. */
+test("a signed-out engine is reported before an unresolvable cwd, and nothing is spawned", async () => {
+  const previous = process.env.LLV_ORCHESTRATOR_CWD;
+  delete process.env.LLV_ORCHESTRATOR_CWD;
+  try {
+    const asked: string[] = [];
+    const { deps, recorded } = dependencies({
+      engineReadiness: (engine, project) => { asked.push(`${engine}:${project}`); return "signed-out"; },
+      projectRoot: () => null,
+    });
+    const request: Record<string, unknown> = { ...spawnRequest("req_00002169") };
+    delete request.cwd;
+
+    const result = await executeOrchestratorSeatRequest(request, deps);
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ code: "ENGINE_NOT_CONNECTED", details: { engine: "claude", role: "orchestrator", reason: "signed-out" } });
+    expect(String(result.body.error)).toContain("no Claude account is signed in");
+    expect(asked).toEqual(["claude:proj-a"]);
+    expect(recorded.spawns).toHaveLength(0);
+    // The terminal intent the panel reads back carries the same words.
+    expect((result.body.seat as OrchestratorSeat | null)?.intent.error).toBe(String(result.body.error));
+    expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null });
+  } finally {
+    if (previous === undefined) delete process.env.LLV_ORCHESTRATOR_CWD;
+    else process.env.LLV_ORCHESTRATOR_CWD = previous;
+  }
+});
+
+test("a connected engine goes on to the launch with the cwd it was given", async () => {
+  const { deps, recorded } = dependencies({ engineReadiness: () => "connected" });
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_00002170"), deps);
+  expect(result.status).toBe(200);
+  expect(recorded.spawns[0]).toMatchObject({ cwd: "/tmp" });
 });
 
 test("spawn mode without a cwd honors the operator override", async () => {

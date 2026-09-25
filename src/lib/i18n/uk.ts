@@ -379,6 +379,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "accounts.claudeLogin.err.input_failed": "Не вдалося надіслати код.",
   "accounts.claudeLogin.err.login_busy": "Інший вхід уже триває.",
   "accounts.claudeLogin.err.generic": "Не вдалося почати вхід. Спробуй ще раз.",
+  "accounts.claudeLogin.err.genericWithCode": "Не вдалося почати вхід ({code}). Спробуй ще раз.",
   "accounts.claudeLogin.announceCodeReady": "Посилання для входу {label} готове. Відкрий його і встав код.",
   "accounts.claudeLogin.announceDone": "{label}: вхід виконано.",
   "migrate.confirmTitle": "Перемкнути {engine} на «{label}»?",

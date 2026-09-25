@@ -5,7 +5,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 
 import {
   accountNoticeText,
-  claudeLoginErrKey,
+  claudeLoginErrorText,
   NONTERMINAL_CLAUDE_LOGIN_PHASES,
   useEngineAccounts,
   type AccountOperation,
@@ -650,7 +650,7 @@ function ClaudeLoginRow({ account, state, loginBusy }: { account: AccountOption;
   if (login && login.result?.status === "failure") {
     return (
       <div ref={rowRef} tabIndex={-1} role="alert" className="flex items-center gap-2 px-3 pb-2 pl-[26px] focus-visible:outline-none">
-        <span className="min-w-0 flex-1 text-[10.5px] font-semibold text-danger">{t(claudeLoginErrKey(login.result.code))}</span>
+        <span className="min-w-0 flex-1 text-[10.5px] font-semibold text-danger">{claudeLoginErrorText(t, login.result.code)}</span>
         <button
           type="button"
           onClick={() => activate(() => void state.retryLogin(account.id))}

@@ -382,6 +382,7 @@ export const en = {
   "accounts.claudeLogin.err.input_failed": "The code could not be submitted.",
   "accounts.claudeLogin.err.login_busy": "Another sign-in is already in progress.",
   "accounts.claudeLogin.err.generic": "Sign-in could not start. Try again.",
+  "accounts.claudeLogin.err.genericWithCode": "Sign-in could not start ({code}). Try again.",
   "accounts.claudeLogin.announceCodeReady": "Sign-in link ready for {label}. Open it and paste the code.",
   "accounts.claudeLogin.announceDone": "{label} signed in.",
   "migrate.confirmTitle": "Switch {engine} to «{label}»?",
