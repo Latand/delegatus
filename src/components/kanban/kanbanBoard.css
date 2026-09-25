@@ -641,6 +641,14 @@
 .kb .kb-aside { display: flex; min-height: 0; flex-shrink: 0; }
 .kb .kb-page { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; container-type: size; }
 .kb .board-frame { flex: 0 0 auto; height: max(440px, 100cqh); min-height: 0; display: flex; flex-direction: column; outline: none; }
+/* The board's scrollers scroll on the compositor. At a device pixel ratio
+   under 1.5 Chromium keeps a scroller whose background is not opaque on the
+   main thread, to keep LCD text in it, and none of these has one of its own:
+   every scroll frame of the populated board then waited for a repaint and a
+   re-layerize of the whole page, the board moved on half of its frames, and a
+   catalog update landing mid-scroll stopped it outright. Promoting them does
+   not change their layout, stacking or clipping. */
+.kb .kb-page, .kb .col-body, .kb .board.scroll, .kb .board.reading { will-change: scroll-position; }
 /* ── The open agents, in a strip at the board's side (OpenAgentsRail.tsx) ── */
 /* A strip of its own beside the columns, below a seat on top, so it covers
    nothing on them and leaves the seat its width. Its width is
