@@ -193,6 +193,7 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
   const { t } = useLocale();
   const title = cleanTitle(item.file.title, 90);
   const decision = decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
+  const headline = item.reason.kind === "permission" && Boolean(item.file.pendingPermission);
   const row = (
     <button
       type="button"
@@ -208,10 +209,19 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
       <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
+        {/* A permission headline (tool, command, reason) runs to hundreds of
+            characters, so it gets a line of its own that ends in an ellipsis
+            and the meta line keeps the age in view: the request is denied
+            at ten minutes (#2215). */}
+        {headline ? <span data-attention-decision className="min-w-0 truncate text-label font-medium text-muted">{decision}</span> : null}
         <span className={META}>
-          <span data-attention-decision className="shrink-0">{decision}</span>
-          {SEP}
-          <span className="shrink-0">{humanizeDuration(Math.max(0, now - item.since))}</span>
+          {headline ? null : (
+            <>
+              <span data-attention-decision className="shrink-0">{decision}</span>
+              {SEP}
+            </>
+          )}
+          <span data-attention-age className="shrink-0">{humanizeDuration(Math.max(0, now - item.since))}</span>
           {item.file.model ? (
             <>
               {SEP}
@@ -225,7 +235,7 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
     </button>
   );
   /* A structured permission request is answered right here (#2215). */
-  if (item.reason.kind !== "permission" || !item.file.pendingPermission) return row;
+  if (!headline) return row;
   return (
     <div className="min-w-0">
       {row}

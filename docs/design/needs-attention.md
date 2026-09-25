@@ -510,7 +510,13 @@ by someone:
   seats — raise a `permission` reason in `attentionReason`, named by tool,
   command and reason, with Allow once and Deny on the Needs-you row and in the
   conversation's card. A request nobody answers in ten minutes is denied the
-  same way as an unattended one, with `mode: "timeout"`.
+  same way as an unattended one, with `mode: "timeout"`. The headline runs to
+  hundreds of characters, so on the phone sheet it takes a line of its own that
+  ends in an ellipsis and the meta line under it keeps the age and the model;
+  the desktop popover row already truncates its decision line. The rendered
+  readings (390 and 430 px phone, 1280 px desktop, light and dark) are in
+  `evidence/needs-attention/permission-row.json`, from the "permission row"
+  case of the phone driver.
 - **Answering from outside the browser**: `conversation_action` has a
   `permission` action with `decision: "allow" | "deny"` and an optional
   `requestId` (the oldest pending request by default). `dialog-key` stays the

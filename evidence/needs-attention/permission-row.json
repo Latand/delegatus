@@ -1,0 +1,557 @@
+{
+  "results": [
+    {
+      "key": "phone-390-light",
+      "reading": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "surface": {
+          "x": 0,
+          "y": 141,
+          "width": 390,
+          "height": 704,
+          "right": 390,
+          "bottom": 844
+        },
+        "row": {
+          "x": 0,
+          "y": 203,
+          "width": 390,
+          "height": 65,
+          "right": 390,
+          "bottom": 268
+        },
+        "decision": {
+          "text": "permission: Bash: rm -rf $R/home $R/*.json — Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)",
+          "box": {
+            "x": 36,
+            "y": 227,
+            "width": 308,
+            "height": 17,
+            "right": 344,
+            "bottom": 243
+          },
+          "scrollWidth": 929,
+          "clientWidth": 308,
+          "textOverflow": "ellipsis",
+          "whiteSpace": "nowrap",
+          "insideRow": true
+        },
+        "age": {
+          "text": "3m 1s",
+          "box": {
+            "x": 36,
+            "y": 245,
+            "width": 29,
+            "height": 17,
+            "right": 65,
+            "bottom": 262
+          },
+          "insideRow": true,
+          "insideLine": true,
+          "crossesDecision": false
+        },
+        "allow": {
+          "text": "Allow once",
+          "box": {
+            "x": 16,
+            "y": 268,
+            "width": 106,
+            "height": 44,
+            "right": 122,
+            "bottom": 312
+          }
+        },
+        "deny": {
+          "text": "Deny",
+          "box": {
+            "x": 128,
+            "y": 268,
+            "width": 74,
+            "height": 44,
+            "right": 202,
+            "bottom": 312
+          }
+        },
+        "buttonsInsideSurface": true,
+        "buttonsCrossEachOther": false,
+        "buttonsCrossRow": false,
+        "buttonsInViewport": true
+      },
+      "answers": [
+        {
+          "conversationId": "conversation_scratch-reset",
+          "path": "/repo/scratch-reset.jsonl",
+          "action": "permission",
+          "decision": "deny",
+          "requestId": "request-safety-1",
+          "operationId": "permission:request-safety-1:deny"
+        }
+      ],
+      "failures": []
+    },
+    {
+      "key": "phone-430-light",
+      "reading": {
+        "viewport": {
+          "width": 430,
+          "height": 932
+        },
+        "surface": {
+          "x": 0,
+          "y": 229,
+          "width": 430,
+          "height": 704,
+          "right": 430,
+          "bottom": 932
+        },
+        "row": {
+          "x": 0,
+          "y": 291,
+          "width": 430,
+          "height": 65,
+          "right": 430,
+          "bottom": 356
+        },
+        "decision": {
+          "text": "permission: Bash: rm -rf $R/home $R/*.json — Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)",
+          "box": {
+            "x": 36,
+            "y": 315,
+            "width": 348,
+            "height": 17,
+            "right": 384,
+            "bottom": 331
+          },
+          "scrollWidth": 929,
+          "clientWidth": 348,
+          "textOverflow": "ellipsis",
+          "whiteSpace": "nowrap",
+          "insideRow": true
+        },
+        "age": {
+          "text": "3m",
+          "box": {
+            "x": 36,
+            "y": 333,
+            "width": 15,
+            "height": 17,
+            "right": 51,
+            "bottom": 350
+          },
+          "insideRow": true,
+          "insideLine": true,
+          "crossesDecision": false
+        },
+        "allow": {
+          "text": "Allow once",
+          "box": {
+            "x": 16,
+            "y": 356,
+            "width": 106,
+            "height": 44,
+            "right": 122,
+            "bottom": 400
+          }
+        },
+        "deny": {
+          "text": "Deny",
+          "box": {
+            "x": 128,
+            "y": 356,
+            "width": 74,
+            "height": 44,
+            "right": 202,
+            "bottom": 400
+          }
+        },
+        "buttonsInsideSurface": true,
+        "buttonsCrossEachOther": false,
+        "buttonsCrossRow": false,
+        "buttonsInViewport": true
+      },
+      "answers": [
+        {
+          "conversationId": "conversation_scratch-reset",
+          "path": "/repo/scratch-reset.jsonl",
+          "action": "permission",
+          "decision": "deny",
+          "requestId": "request-safety-1",
+          "operationId": "permission:request-safety-1:deny"
+        }
+      ],
+      "failures": []
+    },
+    {
+      "key": "desktop-1280-light",
+      "reading": {
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "surface": {
+          "x": 924,
+          "y": 44,
+          "width": 340,
+          "height": 540,
+          "right": 1264,
+          "bottom": 584
+        },
+        "row": {
+          "x": 931,
+          "y": 78,
+          "width": 326,
+          "height": 53,
+          "right": 1257,
+          "bottom": 130
+        },
+        "decision": {
+          "text": "permission: Bash: rm -rf $R/home $R/*.json — Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)",
+          "box": {
+            "x": 941,
+            "y": 106,
+            "width": 306,
+            "height": 17,
+            "right": 1247,
+            "bottom": 122
+          },
+          "scrollWidth": 929,
+          "clientWidth": 306,
+          "textOverflow": "ellipsis",
+          "whiteSpace": "nowrap",
+          "insideRow": true
+        },
+        "age": {
+          "text": "3m ago",
+          "box": {
+            "x": 1212,
+            "y": 87,
+            "width": 35,
+            "height": 16,
+            "right": 1247,
+            "bottom": 102
+          },
+          "insideRow": true,
+          "insideLine": true,
+          "crossesDecision": false
+        },
+        "allow": {
+          "text": "Allow once",
+          "box": {
+            "x": 941,
+            "y": 130,
+            "width": 91,
+            "height": 21,
+            "right": 1032,
+            "bottom": 151
+          }
+        },
+        "deny": {
+          "text": "Deny",
+          "box": {
+            "x": 1038,
+            "y": 130,
+            "width": 61,
+            "height": 21,
+            "right": 1099,
+            "bottom": 151
+          }
+        },
+        "buttonsInsideSurface": true,
+        "buttonsCrossEachOther": false,
+        "buttonsCrossRow": false,
+        "buttonsInViewport": true
+      },
+      "answers": [
+        {
+          "conversationId": "conversation_scratch-reset",
+          "path": "/repo/scratch-reset.jsonl",
+          "action": "permission",
+          "decision": "allow",
+          "requestId": "request-safety-1",
+          "operationId": "permission:request-safety-1:allow"
+        }
+      ],
+      "failures": []
+    },
+    {
+      "key": "phone-390-dark",
+      "reading": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "surface": {
+          "x": 0,
+          "y": 141,
+          "width": 390,
+          "height": 704,
+          "right": 390,
+          "bottom": 844
+        },
+        "row": {
+          "x": 0,
+          "y": 203,
+          "width": 390,
+          "height": 65,
+          "right": 390,
+          "bottom": 268
+        },
+        "decision": {
+          "text": "permission: Bash: rm -rf $R/home $R/*.json — Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)",
+          "box": {
+            "x": 36,
+            "y": 227,
+            "width": 308,
+            "height": 17,
+            "right": 344,
+            "bottom": 243
+          },
+          "scrollWidth": 929,
+          "clientWidth": 308,
+          "textOverflow": "ellipsis",
+          "whiteSpace": "nowrap",
+          "insideRow": true
+        },
+        "age": {
+          "text": "3m",
+          "box": {
+            "x": 36,
+            "y": 245,
+            "width": 15,
+            "height": 17,
+            "right": 51,
+            "bottom": 262
+          },
+          "insideRow": true,
+          "insideLine": true,
+          "crossesDecision": false
+        },
+        "allow": {
+          "text": "Allow once",
+          "box": {
+            "x": 16,
+            "y": 268,
+            "width": 106,
+            "height": 44,
+            "right": 122,
+            "bottom": 312
+          }
+        },
+        "deny": {
+          "text": "Deny",
+          "box": {
+            "x": 128,
+            "y": 268,
+            "width": 74,
+            "height": 44,
+            "right": 202,
+            "bottom": 312
+          }
+        },
+        "buttonsInsideSurface": true,
+        "buttonsCrossEachOther": false,
+        "buttonsCrossRow": false,
+        "buttonsInViewport": true
+      },
+      "answers": [
+        {
+          "conversationId": "conversation_scratch-reset",
+          "path": "/repo/scratch-reset.jsonl",
+          "action": "permission",
+          "decision": "deny",
+          "requestId": "request-safety-1",
+          "operationId": "permission:request-safety-1:deny"
+        }
+      ],
+      "failures": []
+    },
+    {
+      "key": "phone-430-dark",
+      "reading": {
+        "viewport": {
+          "width": 430,
+          "height": 932
+        },
+        "surface": {
+          "x": 0,
+          "y": 229,
+          "width": 430,
+          "height": 704,
+          "right": 430,
+          "bottom": 932
+        },
+        "row": {
+          "x": 0,
+          "y": 291,
+          "width": 430,
+          "height": 65,
+          "right": 430,
+          "bottom": 356
+        },
+        "decision": {
+          "text": "permission: Bash: rm -rf $R/home $R/*.json — Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)",
+          "box": {
+            "x": 36,
+            "y": 315,
+            "width": 348,
+            "height": 17,
+            "right": 384,
+            "bottom": 331
+          },
+          "scrollWidth": 929,
+          "clientWidth": 348,
+          "textOverflow": "ellipsis",
+          "whiteSpace": "nowrap",
+          "insideRow": true
+        },
+        "age": {
+          "text": "3m",
+          "box": {
+            "x": 36,
+            "y": 333,
+            "width": 15,
+            "height": 17,
+            "right": 51,
+            "bottom": 350
+          },
+          "insideRow": true,
+          "insideLine": true,
+          "crossesDecision": false
+        },
+        "allow": {
+          "text": "Allow once",
+          "box": {
+            "x": 16,
+            "y": 356,
+            "width": 106,
+            "height": 44,
+            "right": 122,
+            "bottom": 400
+          }
+        },
+        "deny": {
+          "text": "Deny",
+          "box": {
+            "x": 128,
+            "y": 356,
+            "width": 74,
+            "height": 44,
+            "right": 202,
+            "bottom": 400
+          }
+        },
+        "buttonsInsideSurface": true,
+        "buttonsCrossEachOther": false,
+        "buttonsCrossRow": false,
+        "buttonsInViewport": true
+      },
+      "answers": [
+        {
+          "conversationId": "conversation_scratch-reset",
+          "path": "/repo/scratch-reset.jsonl",
+          "action": "permission",
+          "decision": "deny",
+          "requestId": "request-safety-1",
+          "operationId": "permission:request-safety-1:deny"
+        }
+      ],
+      "failures": []
+    },
+    {
+      "key": "desktop-1280-dark",
+      "reading": {
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "surface": {
+          "x": 924,
+          "y": 44,
+          "width": 340,
+          "height": 540,
+          "right": 1264,
+          "bottom": 584
+        },
+        "row": {
+          "x": 931,
+          "y": 78,
+          "width": 326,
+          "height": 53,
+          "right": 1257,
+          "bottom": 130
+        },
+        "decision": {
+          "text": "permission: Bash: rm -rf $R/home $R/*.json — Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)",
+          "box": {
+            "x": 941,
+            "y": 106,
+            "width": 306,
+            "height": 17,
+            "right": 1247,
+            "bottom": 122
+          },
+          "scrollWidth": 929,
+          "clientWidth": 306,
+          "textOverflow": "ellipsis",
+          "whiteSpace": "nowrap",
+          "insideRow": true
+        },
+        "age": {
+          "text": "3m ago",
+          "box": {
+            "x": 1212,
+            "y": 87,
+            "width": 35,
+            "height": 16,
+            "right": 1247,
+            "bottom": 102
+          },
+          "insideRow": true,
+          "insideLine": true,
+          "crossesDecision": false
+        },
+        "allow": {
+          "text": "Allow once",
+          "box": {
+            "x": 941,
+            "y": 130,
+            "width": 91,
+            "height": 21,
+            "right": 1032,
+            "bottom": 151
+          }
+        },
+        "deny": {
+          "text": "Deny",
+          "box": {
+            "x": 1038,
+            "y": 130,
+            "width": 61,
+            "height": 21,
+            "right": 1099,
+            "bottom": 151
+          }
+        },
+        "buttonsInsideSurface": true,
+        "buttonsCrossEachOther": false,
+        "buttonsCrossRow": false,
+        "buttonsInViewport": true
+      },
+      "answers": [
+        {
+          "conversationId": "conversation_scratch-reset",
+          "path": "/repo/scratch-reset.jsonl",
+          "action": "permission",
+          "decision": "allow",
+          "requestId": "request-safety-1",
+          "operationId": "permission:request-safety-1:allow"
+        }
+      ],
+      "failures": []
+    }
+  ],
+  "failures": []
+}

@@ -138,7 +138,7 @@ export function AttentionQueueRow({ item, onOpen }: { item: AttentionItem; onOpe
         <span className="shrink-0 rounded-full border border-border bg-canvas px-1.5 text-[10px] font-semibold text-muted" title={item.project}>
           {projectDisplayName(item.project, item.file.projectName)}
         </span>
-        <span className="shrink-0 text-[10.5px] text-muted">{fmtAge(item.since)}</span>
+        <span data-attention-age className="shrink-0 text-[10.5px] text-muted">{fmtAge(item.since)}</span>
       </span>
       <span
         data-attention-decision
