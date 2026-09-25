@@ -142,7 +142,7 @@ const click = (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   flushSync(() => (element as HTMLElement).click());
 };
-const press = (element: Element | null | undefined, key: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean } = {}) => {
+const press = (element: Element | null | undefined, key: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; code?: string } = {}) => {
   expect(element).toBeTruthy();
   const event = new dom.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...modifiers });
   flushSync(() => element!.dispatchEvent(event as unknown as Event));
@@ -318,6 +318,91 @@ test("a text undo meeting an agent's newer text is refused and the card keeps th
   expect(view.store.rows()[0]!.text).toBe("Repair every old link\nAn agent rewrote the description");
   expect(cardEl(view.host, "a")?.textContent).toContain("An agent rewrote the description");
   expect(receipts(view.host)).toEqual([{ text: "Someone else changed «Repair every old link» in the meantime, so nothing was undone", action: null, error: true }]);
+});
+
+test("an older undo is refused once a later move of the board saved over an agent's text: no text PATCH, and their text stays", async () => {
+  const view = mount([task("a", "assigned", "Repair old links\nKeep the anchors stable")]);
+  click(cardEl(view.host, "a")?.querySelector("[data-rename]"));
+  type(editor(view.host, "a")!, "Repair every old link");
+  press(editor(view.host, "a"), "Enter");
+  await tick();
+  /* An agent rewrites the description; the poll brings it, and the operator
+     then moves the card, which saves on top of the agent's revision. */
+  view.store.elsewhere("a", { text: "Repair every old link\nAn agent rewrote the description" });
+  view.render({ poll: true });
+  await shiftRight(view.host, "a");
+  expect(columnOf(view.host, "a")).toBe("blocked");
+
+  /* The move's undo is the board's own and goes through. */
+  ctrlZ();
+  await tick();
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("assigned");
+  const before = view.store.patches.length;
+  /* The rename's undo would overwrite the agent's text: refused, no PATCH. */
+  ctrlZ();
+  await tick();
+  await tick();
+  expect(view.store.patches.length).toBe(before);
+  expect(view.store.patches.filter((patch) => "text" in patch.body)).toHaveLength(1);
+  expect(view.store.rows()[0]!.text).toBe("Repair every old link\nAn agent rewrote the description");
+  expect(cardEl(view.host, "a")?.textContent).toContain("An agent rewrote the description");
+  expect(receipts(view.host)).toContainEqual({ text: "Someone else changed «Repair every old link» in the meantime, so nothing was undone", action: null, error: true });
+});
+
+test("a chain made only of the board's own writes stays undoable to its start", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes")]);
+  click(cardEl(view.host, "a")?.querySelector("[data-rename]"));
+  type(editor(view.host, "a")!, "Write the 2.0 release notes");
+  press(editor(view.host, "a"), "Enter");
+  await tick();
+  await shiftRight(view.host, "a");
+  await shiftRight(view.host, "a");
+  for (let index = 0; index < 3; index += 1) {
+    expect(ctrlZ().defaultPrevented).toBe(true);
+    await tick();
+    await tick();
+  }
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  expect(view.store.rows()[0]).toMatchObject({ status: "inbox", text: "Write the release notes" });
+  expect(view.store.patches).toHaveLength(6);
+});
+
+test("a new edit made while an undo is still being written leaves nothing to redo", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes"), task("b", "inbox", "Repair old links")]);
+  await shiftRight(view.host, "a");
+  ctrlZ();
+  /* Before the undo lands, b moves. */
+  const card = cardEl(view.host, "b")!;
+  card.focus();
+  press(card, "]");
+  await tick();
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  expect(columnOf(view.host, "b")).toBe("assigned");
+  const before = view.store.patches.length;
+  expect(ctrlShiftZ().defaultPrevented).toBe(false);
+  await tick();
+  expect(view.store.patches.length).toBe(before);
+  expect(columnOf(view.host, "a")).toBe("inbox");
+});
+
+test("the chord follows the physical key on a layout without Latin letters", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes")]);
+  await shiftRight(view.host, "a");
+  expect(press(document.body, "я", { ctrlKey: true, code: "KeyZ" }).defaultPrevented).toBe(true);
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  expect(press(document.body, "н", { ctrlKey: true, code: "KeyY" }).defaultPrevented).toBe(true);
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("assigned");
+  expect(press(document.body, "Я", { ctrlKey: true, shiftKey: true, code: "KeyZ" }).defaultPrevented).toBe(false);
+  /* A field keeps the chord for itself on any layout. */
+  const field = document.createElement("input");
+  view.host.appendChild(field);
+  expect(press(field, "я", { ctrlKey: true, code: "KeyZ" }).defaultPrevented).toBe(false);
+  await tick();
+  expect(view.store.patches).toHaveLength(3);
 });
 
 test("Undo, Redo and Retry are three different words on the board's receipts in each language", () => {

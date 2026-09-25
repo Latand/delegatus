@@ -139,7 +139,10 @@ resolved true on `saved` and false otherwise. Recording happens when the
 action is sent, so Ctrl+Z pressed while a write is still out queues behind
 it through the existing per-task chain. A write that ends `failed`,
 `conflict` or `settled` removes its entry; only what this board actually
-wrote is undoable. Recording a new action clears `redo`.
+wrote is undoable. Recording a new action clears `redo`, and counts in the
+history's `epoch`: an undo or a redo still being written when a new action
+is recorded does not push its entry back onto either stack when it lands,
+so the cleared `redo` stays empty and Ctrl+Shift+Z does nothing.
 
 ### 2. How each edit records its inverse
 
@@ -175,6 +178,17 @@ map `own: Map<taskId, revision>`, written in `saved` (`:499`) and
 write from this board, including colour and priority and an undo itself,
 refreshes it, so a chain of the operator's own actions keeps every entry for
 that task valid, and an undo after a redo is fenced on the redo's revision.
+
+The fence alone misses one case. A write of this board that is not fenced (a
+move or a colour change guarded by a revision the poll brought, or sent again
+after a 409) can save on top of someone else's revision, and then `own` moves
+past their change. So the controller also keeps a per-task `lineage`: a save
+of this board whose guard was not `own` starts a new one, and every `saved`
+answer names the lineage it belongs to. An entry keeps the lineage of each of
+its tasks' saves, and its undo or redo passes it as `lineage`. A fenced write
+from an older lineage is refused the way a missing fence is: nothing is
+PATCHed, the stored row is read, and the answer is `conflict`. A chain made
+only of the operator's own writes never leaves its lineage.
 
 `move` and `edit` gain one option, `fenced: true`. The fence is read from
 `own` when the write leaves the per-task queue, never when the key is
@@ -290,7 +304,9 @@ placed before the early return on chords (`:1590`):
 
 - Undo: `Ctrl+Z` or `Cmd+Z` without Shift. Redo: `Ctrl+Shift+Z`,
   `Cmd+Shift+Z`, or `Ctrl+Y` (Ctrl only; `Cmd+Y` is the browser's history).
-  Alt never matches.
+  Alt never matches. The letter is `event.key`; when that is not a Latin
+  letter (the Ukrainian layout reports «я» and «н» on some platforms) it is
+  the physical key, `event.code` `KeyZ` or `KeyY`, as the J/K chord reads it.
 - The chord is left alone, no `preventDefault`, when `event.target` is inside
   `input, textarea, select, [contenteditable='true'], [role='dialog'],
   [role='menu']`, which covers the inline editors (`CardInlineText.tsx:93-95`

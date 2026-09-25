@@ -16,6 +16,9 @@ interface Settles {
   settled: Promise<boolean>;
   /** What `settled` resolved to, once it has. */
   saved?: boolean;
+  /** Per task, the lineage its saved write answered with; the undo and the
+      redo of the entry are fenced on it (useTaskMutations.ts). */
+  lineages?: Map<string, number>;
 }
 
 export type HistoryEntry = Settles & (
@@ -33,6 +36,7 @@ export const HISTORY_LIMIT = 50;
 export class BoardHistory {
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
+  private records = 0;
 
   constructor(private readonly limit = HISTORY_LIMIT) {}
 
@@ -44,8 +48,15 @@ export class BoardHistory {
     return this.redoStack.length > 0;
   }
 
+  /** Counts `record` calls: an undo or a redo still being written when a new
+      edit is recorded must not refill the redo stack that edit cleared. */
+  get epoch(): number {
+    return this.records;
+  }
+
   /** A new edit: it becomes the next undo, and nothing is left to redo. */
   record(entry: HistoryEntry): void {
+    this.records += 1;
     this.redoStack = [];
     this.pushUndo(entry);
     void entry.settled.then((saved) => {

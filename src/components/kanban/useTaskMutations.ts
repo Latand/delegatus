@@ -51,11 +51,20 @@ import { taskPriority, type BoardTask, type TaskColor, type TaskPriority, type T
  * the fence is final: the stored row is read once, the board shows it, and the
  * answer is `conflict`. Nothing is retried or rebased, because a task someone
  * else changed since is theirs to keep.
+ *
+ * The fence alone cannot see a change made elsewhere once a later write of
+ * this board has saved over it: a move guarded by a poll's newer revision, or
+ * retried after a 409, lands on someone else's revision and moves `own` past
+ * it. Such a save starts a new `lineage` of the task, and every save answers
+ * with the lineage it belongs to. A fenced write names the lineage of the
+ * write it undoes or redoes, and one from an older lineage is refused without
+ * a PATCH, as a stale fence would be.
  */
 
 export type StatusMoveOutcome =
   | { kind: "noop" }
-  | { kind: "saved"; task: BoardTask; from: TaskStatus; to: TaskStatus }
+  /* `lineage`: see the header; a fenced write that undoes this one names it. */
+  | { kind: "saved"; task: BoardTask; from: TaskStatus; to: TaskStatus; lineage: number }
   | { kind: "settled"; task: BoardTask; from: TaskStatus; to: TaskStatus }
   | { kind: "conflict"; task: BoardTask; from: TaskStatus; to: TaskStatus; serverStatus: TaskStatus }
   | { kind: "failed"; from: TaskStatus; to: TaskStatus; error: string; status: number };
@@ -87,7 +96,8 @@ export type TaskField = TaskFieldChange["field"];
     a settle, the previous one after a refusal. */
 export type FieldEditOutcome =
   | { kind: "noop"; field: TaskField }
-  | { kind: "saved" | "settled"; field: TaskField; task: BoardTask }
+  | { kind: "saved"; field: TaskField; task: BoardTask; lineage: number }
+  | { kind: "settled"; field: TaskField; task: BoardTask }
   | { kind: "conflict"; field: TaskField; task: BoardTask; serverValue: unknown }
   | { kind: "failed"; field: TaskField; error: string; status: number; code?: string };
 
@@ -210,8 +220,9 @@ export function revisionOf(task: BoardTask): string | null {
   return typeof revision === "string" ? revision : null;
 }
 
-/* A fenced write this controller has no revision of its own for cannot prove
-   nobody else changed the task: it is refused as the fence would be. */
+/* A fenced write this controller has no revision of its own for, or one from
+   an older lineage, cannot prove nobody else changed the task: it is refused
+   as the fence would be. */
 const NO_FENCE: PatchResult = { ok: false, status: 409, error: "no write of this board to fence on", code: "TASK_REVISION_MISMATCH" };
 
 export class TaskStatusMutations {
@@ -229,6 +240,9 @@ export class TaskStatusMutations {
   /** The revision this controller's own latest saved write produced, per task:
       the fence an undo or a redo of this board's edits is written against. */
   private readonly own = new Map<string, string>();
+  /** Per task, how many of this controller's saves landed on a revision it
+      did not produce itself (see the header). */
+  private readonly lineages = new Map<string, number>();
 
   constructor(private readonly ports: TaskMutationPorts) {}
 
@@ -311,7 +325,7 @@ export class TaskStatusMutations {
       that promise to settle, so a bulk edit reaches the server one task at a
       time while every card already shows it. A `fenced` write is guarded by
       this controller's own last revision and a 409 is final (see the header). */
-  edit(task: BoardTask, change: TaskFieldChange, options: { after?: Promise<unknown>; fenced?: boolean } = {}): Promise<FieldEditOutcome> {
+  edit(task: BoardTask, change: TaskFieldChange, options: { after?: Promise<unknown>; fenced?: boolean; lineage?: number } = {}): Promise<FieldEditOutcome> {
     const id = task.id;
     const fields = this.fieldOverrides.get(id) ?? new Map<TaskField, FieldOverride>();
     const current = fields.get(change.field);
@@ -327,7 +341,7 @@ export class TaskStatusMutations {
     this.emit();
 
     const settled = (promise: Promise<unknown> | undefined) => (promise ?? Promise.resolve()).then(() => undefined, () => undefined);
-    const run = Promise.all([settled(this.chains.get(id)), settled(options.after)]).then(() => this.writeField(task, change, from, options.fenced === true));
+    const run = Promise.all([settled(this.chains.get(id)), settled(options.after)]).then(() => this.writeField(task, change, from, options.fenced === true, options.lineage));
     this.chains.set(id, run);
     void run.finally(() => {
       if (this.chains.get(id) === run) this.chains.delete(id);
@@ -365,7 +379,7 @@ export class TaskStatusMutations {
     return { ...fence, text: change.value };
   }
 
-  private async writeField(task: BoardTask, change: TaskFieldChange, from: unknown, fenced: boolean): Promise<FieldEditOutcome> {
+  private async writeField(task: BoardTask, change: TaskFieldChange, from: unknown, fenced: boolean, lineage?: number): Promise<FieldEditOutcome> {
     const id = task.id;
     const field = change.field;
     /* A refused edit returns the field to where it started. When an earlier
@@ -377,7 +391,7 @@ export class TaskStatusMutations {
       this.settleField(id, field, from, confirmed, confirmed !== null, changeOf(field, from));
       return { kind: "failed", field, error, status, ...(code ? { code } : {}) };
     };
-    let guard = fenced ? this.fenceFor(task) : this.guardFor(task);
+    let guard = fenced ? this.fenceFor(task, lineage) : this.guardFor(task);
     if (!guard && !fenced) {
       const stored = await this.readSafely(id);
       if (!stored) return failed(404, "task not found");
@@ -389,7 +403,7 @@ export class TaskStatusMutations {
       this.remember(saved, replacing, true);
       this.settleField(id, field, value, revisionOf(saved), true);
       this.ports.changed();
-      return { kind: "saved", field, task: saved };
+      return { kind: "saved", field, task: saved, lineage: this.lineages.get(id) ?? 0 };
     };
     if (first.ok) return savedField(first.task, guard!.revision);
     if (first.status !== 409 || (first.code && first.code !== "TASK_REVISION_MISMATCH" && first.code !== "TASK_PROJECT_MISMATCH")) {
@@ -436,7 +450,7 @@ export class TaskStatusMutations {
 
   /** Move `task` to `to`. Resolves once the server has answered. A `fenced`
       move is guarded by this controller's own last revision and a 409 is final. */
-  move(task: BoardTask, to: TaskStatus, options: { fenced?: boolean } = {}): Promise<StatusMoveOutcome> {
+  move(task: BoardTask, to: TaskStatus, options: { fenced?: boolean; lineage?: number } = {}): Promise<StatusMoveOutcome> {
     const id = task.id;
     const current = this.overrides.get(id);
     const from = current?.status ?? task.status;
@@ -448,7 +462,8 @@ export class TaskStatusMutations {
     this.emit();
 
     const previous = this.chains.get(id) ?? Promise.resolve();
-    const run = previous.then(() => this.write(task, from, to, options.fenced === true), () => this.write(task, from, to, options.fenced === true));
+    const write = () => this.write(task, from, to, options.fenced === true, options.lineage);
+    const run = previous.then(write, write);
     this.chains.set(id, run);
     void run.finally(() => {
       if (this.chains.get(id) === run) this.chains.delete(id);
@@ -456,11 +471,16 @@ export class TaskStatusMutations {
     return run;
   }
 
-  /** `mine`: the row is what this controller's own write returned. */
+  /** `mine`: the row is what this controller's own write returned, and
+      `replacing` the revision that write was guarded by. */
   private remember(task: BoardTask, replacing: string | null = null, mine = false): void {
     const revision = revisionOf(task);
     if (!revision) return;
-    if (mine) this.own.set(task.id, revision);
+    if (mine) {
+      const previous = this.own.get(task.id);
+      if (previous !== undefined && replacing !== previous) this.lineages.set(task.id, (this.lineages.get(task.id) ?? 0) + 1);
+      this.own.set(task.id, revision);
+    }
     if (replacing && replacing !== revision) {
       const set = this.replaced.get(task.id) ?? new Set<string>();
       set.add(replacing);
@@ -472,9 +492,11 @@ export class TaskStatusMutations {
 
   /** The guard of a fenced write: this controller's own last revision, with
       the stored project as this device knows it (a poll row's project may be
-      display-remapped). None when this controller never wrote the task. */
-  private fenceFor(task: BoardTask): { project: string; revision: string } | null {
+      display-remapped). None when this controller never wrote the task, or
+      when `lineage` names one a later save of this controller left behind. */
+  private fenceFor(task: BoardTask, lineage?: number): { project: string; revision: string } | null {
     const revision = this.own.get(task.id);
+    if (lineage !== undefined && lineage !== (this.lineages.get(task.id) ?? 0)) return null;
     return revision ? { project: this.known.get(task.id)?.project ?? task.project, revision } : null;
   }
 
@@ -500,9 +522,9 @@ export class TaskStatusMutations {
     this.emit();
   }
 
-  private async write(task: BoardTask, from: TaskStatus, to: TaskStatus, fenced: boolean): Promise<StatusMoveOutcome> {
+  private async write(task: BoardTask, from: TaskStatus, to: TaskStatus, fenced: boolean, lineage?: number): Promise<StatusMoveOutcome> {
     const id = task.id;
-    let guard = fenced ? this.fenceFor(task) : this.guardFor(task);
+    let guard = fenced ? this.fenceFor(task, lineage) : this.guardFor(task);
     if (!guard && !fenced) {
       const stored = await this.readSafely(id);
       if (!stored) return this.fail(id, from, to, 404, "task not found");
@@ -540,7 +562,7 @@ export class TaskStatusMutations {
     this.remember(task, replacing, true);
     this.settle(task.id, to, revisionOf(task), true);
     this.ports.changed();
-    return { kind: "saved", task, from, to };
+    return { kind: "saved", task, from, to, lineage: this.lineages.get(task.id) ?? 0 };
   }
 
   private fail(id: string, from: TaskStatus, to: TaskStatus, status: number, error: string): StatusMoveOutcome {

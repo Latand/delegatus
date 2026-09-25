@@ -684,6 +684,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const step = useCallback((direction: HistoryDirection, chosen?: HistoryEntry) => stepRef.current(direction, chosen), []);
   const applyEntry = (entry: HistoryEntry, direction: HistoryDirection) => {
     const stacks = historyRef.current;
+    /* A new edit recorded while this write is out cleared the redo stack; the
+       entry must not come back onto it, or onto the undo stack above that edit. */
+    const epoch = stacks.epoch;
     const undoing = direction === "undo";
     const run = (entryRuns.current.get(entry) ?? 0) + 1;
     entryRuns.current.set(entry, run);
@@ -710,13 +713,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
       /* A task that left the board was changed elsewhere, too. */
       if (!raw) return { target, kind: "conflict" as const, error: "" };
       let outcome: StatusMoveOutcome | FieldEditOutcome;
-      if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, { fenced: true });
-      else if (entry.kind === "text") outcome = await controller.edit(raw, { field: "text", value: undoing ? entry.before : entry.after }, { fenced: true });
+      const fence = { fenced: true, lineage: entry.lineages?.get(target.taskId) };
+      if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, fence);
+      else if (entry.kind === "text") outcome = await controller.edit(raw, { field: "text", value: undoing ? entry.before : entry.after }, fence);
       else {
-        const write = controller.edit(raw, undoing ? { field: "hide", value: false } : { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { fenced: true, after: chain });
+        const write = controller.edit(raw, undoing ? { field: "hide", value: false } : { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { ...fence, after: chain });
         chain = write;
         outcome = await write;
       }
+      if (outcome.kind === "saved") (entry.lineages ??= new Map()).set(target.taskId, outcome.lineage);
       return { target, kind: outcome.kind, error: outcome.kind === "failed" ? outcome.error : "" };
     });
     void Promise.all(writes).then((results) => {
@@ -729,7 +734,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         stacks.dropTask(target.taskId);
       }
       if (entry.kind === "hide") entry.tasks = saved;
-      if (saved.length && current) {
+      if (saved.length && current && stacks.epoch === epoch) {
         if (undoing) stacks.pushRedo(entry);
         else stacks.pushUndo(entry);
       }
@@ -748,7 +753,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (failed.length) {
         /* What did not reach the server goes back where it came from, and Retry takes it again. */
         const rest: HistoryEntry = entry.kind !== "hide" ? entry : saved.length ? { ...entry, tasks: failed.map((result) => result.target) } : Object.assign(entry, { tasks: failed.map((result) => result.target) });
-        if (current || rest !== entry) {
+        if ((current || rest !== entry) && (undoing || stacks.epoch === epoch)) {
           if (undoing) stacks.pushUndo(rest);
           else stacks.pushRedo(rest);
         }
@@ -786,6 +791,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     entryReceipts.current.set(entry, receiptId);
     if (options.focus) focusMoved(card.id, to);
     void controller.move(task, to).then((outcome: StatusMoveOutcome) => {
+      if (outcome.kind === "saved") entry.lineages = new Map([[task.id, outcome.lineage]]);
       written.resolve(outcome.kind === "saved");
       /* The server already held the status: nothing of this board's is left to undo. */
       if (outcome.kind === "settled") dismiss(receiptId);
@@ -925,6 +931,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       entry.before = withField(outcome.task.text, field, found);
       entry.after = outcome.task.text;
     }
+    if (outcome.kind === "saved") entry.lineages = new Map([[raw.id, outcome.lineage]]);
     written.resolve(outcome.kind === "saved");
     if (outcome.kind !== "saved") dismiss(receiptId);
     if (outcome.kind === "failed") {
@@ -1113,6 +1120,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const receiptId = show(text, { label: t("kanban.undo"), run: () => void step("undo", entry) });
     entryReceipts.current.set(entry, receiptId);
     void controller.edit(raw, { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }).then((outcome) => {
+      if (outcome.kind === "saved") entry.lineages = new Map([[raw.id, outcome.lineage]]);
       written.resolve(outcome.kind === "saved");
       if (outcome.kind !== "failed") return;
       dismiss(receiptId);
@@ -1175,7 +1183,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const receiptId = show(text, { label: t("kanban.undo"), run: () => void step("undo", entry) });
     entryReceipts.current.set(entry, receiptId);
     void Promise.all(targets.map(({ card, raw }, index) => outcomes[index]!.then((outcome) => {
-      if (outcome.kind === "saved") return true;
+      if (outcome.kind === "saved") {
+        (entry.lineages ??= new Map()).set(raw.id, outcome.lineage);
+        return true;
+      }
       if (entry.kind === "hide") entry.tasks = entry.tasks.filter((target) => target.taskId !== raw.id);
       if (outcome.kind === "failed") hideFailedReceipt(card, outcome, null);
       return false;
@@ -1700,7 +1711,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       /* Ctrl/Cmd+Z undoes the operator's last edit, Ctrl/Cmd+Shift+Z and
          Ctrl+Y redo it (#1856). A field, the composer, a dialog or a menu keeps
          the chord for itself, and an empty stack leaves it to the browser. */
-      const chord = (event.ctrlKey || event.metaKey) && !event.altKey ? event.key.toLowerCase() : "";
+      /* A layout without Latin letters (Ukrainian gives «я» and «н» on some
+         platforms) names the chord by its physical key, as J/K does. */
+      const key = event.key.toLowerCase();
+      const letter = /^[a-z]$/.test(key) ? key : event.code === "KeyZ" ? "z" : event.code === "KeyY" ? "y" : "";
+      const chord = (event.ctrlKey || event.metaKey) && !event.altKey ? letter : "";
       const direction = chord === "z" ? (event.shiftKey ? "redo" : "undo") : chord === "y" && event.ctrlKey && !event.metaKey && !event.shiftKey ? "redo" : null;
       if (direction) {
         if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='menu']")) return;

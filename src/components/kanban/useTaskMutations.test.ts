@@ -652,3 +652,51 @@ test("a fenced write that saves moves the fence, so the next undo or redo is gua
   expect((await redo).kind).toBe("saved");
   expect(mutations.ownRevision("a")).toBe(REV(4));
 });
+
+test("a save of this board over someone else's revision starts a new lineage, and a fenced write of the older one sends nothing", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const rename = mutations.edit({ ...task("a", "assigned", 1), text: "Old" }, { field: "text", value: "New" });
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: { ...task("a", "assigned", 2), text: "New" } });
+  const renamed = await rename;
+  expect(renamed).toMatchObject({ kind: "saved", lineage: 0 });
+  /* An agent writes the text; the poll brings it, and a colour change of this
+     board saves on top of it. */
+  mutations.reconcile([{ ...task("a", "assigned", 3), text: "New, by an agent" }]);
+  const colour = mutations.edit(task("a", "assigned", 3), { field: "color", value: "sky" });
+  await flush();
+  expect(server.patches[1]!.body.expectedRevision).toBe(REV(3));
+  server.patches[1]!.answer.resolve({ ok: true, task: { ...task("a", "assigned", 4), text: "New, by an agent" } });
+  expect(await colour).toMatchObject({ kind: "saved", lineage: 1 });
+  expect(mutations.ownRevision("a")).toBe(REV(4));
+
+  /* The rename's undo is from lineage 0: refused on a read, with no PATCH. */
+  const undo = mutations.edit({ ...task("a", "assigned", 4), text: "New, by an agent" }, { field: "text", value: "Old" }, { fenced: true, lineage: (renamed as { lineage: number }).lineage });
+  await flush();
+  expect(server.patches).toHaveLength(2);
+  server.reads[0]!.answer.resolve({ ...task("a", "assigned", 4), text: "New, by an agent" });
+  expect(await undo).toMatchObject({ kind: "conflict", serverValue: "New, by an agent" });
+  expect(server.patches).toHaveLength(2);
+
+  /* A write of lineage 1 is still fenced on the board's own revision. */
+  const recolour = mutations.edit(task("a", "assigned", 4), { field: "color", value: null }, { fenced: true, lineage: 1 });
+  await flush();
+  expect(server.patches[2]!.body.expectedRevision).toBe(REV(4));
+  server.patches[2]!.answer.resolve({ ok: true, task: task("a", "assigned", 5) });
+  expect(await recolour).toMatchObject({ kind: "saved", lineage: 1 });
+});
+
+test("a chain of this board's own writes stays in one lineage", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const first = mutations.move(task("a", "inbox", 1), "assigned");
+  const second = mutations.move(task("a", "inbox", 1), "done");
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: task("a", "assigned", 2) });
+  await flush();
+  expect(server.patches[1]!.body.expectedRevision).toBe(REV(2));
+  server.patches[1]!.answer.resolve({ ok: true, task: task("a", "done", 3) });
+  expect(await first).toMatchObject({ kind: "saved", lineage: 0 });
+  expect(await second).toMatchObject({ kind: "saved", lineage: 0 });
+});

@@ -53,3 +53,17 @@ test("a refused task leaves both stacks, and a bulk hide keeps its other tasks",
   history.dropTask("b");
   expect(history.canUndo).toBe(false);
 });
+
+test("the epoch moves with every recorded edit and with nothing else", () => {
+  const history = new BoardHistory();
+  const a = move("a");
+  const start = history.epoch;
+  history.record(a);
+  expect(history.epoch).toBe(start + 1);
+  history.takeUndo();
+  history.pushRedo(a);
+  history.takeRedo();
+  history.pushUndo(a);
+  history.dropTask("a");
+  expect(history.epoch).toBe(start + 1);
+});
