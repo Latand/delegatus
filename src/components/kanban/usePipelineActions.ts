@@ -21,10 +21,11 @@ import { actionObserved, pipelineActionOptions, type PipelineActionKind } from "
  * from a fresh read and never resends. `stageId` keeps its own meaning on
  * `retry-stage` (a launch-receipt retry) and is not sent.
  *
- * One more review round (`continue-review`, #1938) always reads the pipeline
- * first: the engine takes it only against the revision the operator saw, so
- * the read's revision travels as `expectedRevision`, with one request id per
- * intent so that a replay can never grant a second round.
+ * One more review round (`continue-review`, #1938) and Accept as is
+ * (`accept-head`, #2187) always read the pipeline first: the engine takes
+ * them only against the revision the operator saw, so the read's revision
+ * travels as `expectedRevision`, with one request id per intent so that a
+ * replay can never grant a second round or accept twice.
  *
  * Skip and Close from a lane row can be HELD (#2072, phone-kanban §3.13): the
  * engine keeps no way back from either, so the receipt is the window. The
@@ -48,7 +49,7 @@ export interface PipelineActionIntent {
   stageName: string | null;
   /** Retry and skip: the `n` of that stage's latest own attempt as the pipeline showed it, `0` for none yet. */
   expectedAttempt: number | null;
-  /** One more round: the request's idempotency key, minted once per intent. */
+  /** One more round and Accept as is: the request's idempotency key, minted once per intent. */
   requestId?: string;
 }
 
@@ -62,6 +63,8 @@ const mintRequestId = (): string => (typeof crypto !== "undefined" && typeof cry
 type Show = (text: string, action?: ReceiptAction, options?: { error?: boolean; ttl?: number }) => number;
 
 const STAGE_BOUND: ReadonlySet<PipelineActionKind> = new Set(["retry-stage", "skip-stage"]);
+/** Acts the engine takes only against the revision the operator saw. */
+const REVISION_BOUND: ReadonlySet<PipelineActionKind> = new Set(["continue-review", "accept-head"]);
 
 export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunction) {
   const [acting, setActing] = useState<ReadonlyMap<string, PipelineActionKind>>(() => new Map());
@@ -92,7 +95,8 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
       const stageName = intent.stageName;
       const stageBound = STAGE_BOUND.has(action);
       let revision: string | null = null;
-      if (action === "continue-review" || (!stageBound && recheck)) {
+      const revisionBound = REVISION_BOUND.has(action);
+      if (revisionBound || (!stageBound && recheck)) {
         const current = await ports.read(pipelineId);
         if (!current) {
           busy(pipelineId, null);
@@ -106,7 +110,7 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
           return;
         }
         revision = current.revision ?? null;
-        if (action === "continue-review" && !revision) {
+        if (revisionBound && !revision) {
           busy(pipelineId, null);
           show(t("kanban.pipelineAct.unread", { action: label(stageName) }), { label: t("kanban.retry"), run: () => send.current(intent, true) }, { error: true });
           return;
@@ -116,7 +120,9 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
         ? { action, expectedStageId: intent.stageId ?? "", ...(intent.expectedAttempt !== null ? { expectedAttempt: intent.expectedAttempt } : {}) }
         : action === "continue-review"
           ? { action, addRounds: 1, expectedRevision: revision ?? "", clientRequestId: intent.requestId ?? mintRequestId() }
-          : { action });
+          : action === "accept-head"
+            ? { action, expectedRevision: revision ?? "", clientRequestId: intent.requestId ?? mintRequestId() }
+            : { action });
       busy(pipelineId, null);
       if (result.ok) {
         /* For retry and skip the engine checked this stage and attempt before acting. */
@@ -167,7 +173,7 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
   }, [busy]);
 
   const start = useCallback((intent: PipelineActionIntent, options: { hold?: boolean } = {}) => {
-    const minted = intent.action === "continue-review" && !intent.requestId ? { ...intent, requestId: mintRequestId() } : intent;
+    const minted = REVISION_BOUND.has(intent.action) && !intent.requestId ? { ...intent, requestId: mintRequestId() } : intent;
     if (!options.hold || !HOLDABLE.has(minted.action)) {
       send.current(minted, false);
       return;

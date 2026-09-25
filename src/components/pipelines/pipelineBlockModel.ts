@@ -1,10 +1,10 @@
 import type { TFunction } from "@/lib/i18n";
-import { pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
+import { failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineStage, StageFinding } from "@/lib/pipelines/types";
 
 import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { pipelineActionOptions } from "@/components/kanban/stagesModel";
-import { latestAttempt, type StageChipState } from "./pipelineModel";
+import { latestAttempt, stageAccess, type StageChipState } from "./pipelineModel";
 
 /*
  * What the one pipeline block (#2072 slice 3, docs/design/phone-kanban.md
@@ -146,7 +146,7 @@ export function stageFindings(pipeline: Pipeline, stageId: string): StageFinding
 }
 
 /** An answer the block gives in place, through the board's pipeline actions. */
-export type PipelineAnswerAction = "skip-stage" | "retry-stage" | "close" | "continue-review";
+export type PipelineAnswerAction = "skip-stage" | "retry-stage" | "close" | "continue-review" | "accept-head";
 
 export interface PipelineAnswer {
   action: PipelineAnswerAction;
@@ -157,19 +157,82 @@ export interface PipelineAnswer {
   expectedAttempt: number | null;
 }
 
+/**
+ * Why a lane stopped on a review (#2187 §3.4), one of the table's four rows:
+ * - `stop-after-fix`: needs_review, the last fix landed and the pipeline asked
+ *   to wait before anyone reviews it;
+ * - `park`: a read-only reviewer's spent fail edge that stops before the fix;
+ * - `once`: a reviewer that already handed its last findings on and failed
+ *   again after another edge looped back through it;
+ * - `legacy`: an older `review-loop` flow that ended at its round limit.
+ * Any other stop is no review stop, and keeps Skip and Retry on the stage.
+ */
+export type ReviewStopKind = "stop-after-fix" | "park" | "once" | "legacy";
+
+export interface ReviewStop {
+  kind: ReviewStopKind;
+  stage: PipelineStage;
+  /** `park`: how many review rounds ran, the last of them failed. */
+  rounds: number;
+  /** `legacy`: the flow's own state detail stored as the first finding, which
+      the reason line now says in words, so the list skips it. */
+  hiddenFinding: string | null;
+}
+
+/** What a legacy review flow stores as its first finding when it ends at its
+    round limit (`flows/engine.ts` `markNeedsDecision`). */
+const LEGACY_ROUND_LIMIT = /^(flow review )?round limit reached$/;
+/** The engine's park detail for a spent fail edge (`routeFailedAttempt`). */
+const BUDGET_EXHAUSTED = "fail-edge budget exhausted";
+
+export function reviewStop(pipeline: Pipeline): ReviewStop | null {
+  if (pipeline.state === "needs_review") {
+    const review = pipelineReviewSummary(pipeline);
+    const stage = review ? pipeline.stages.find((entry) => entry.id === review.stageId) ?? null : null;
+    return stage ? { kind: "stop-after-fix", stage, rounds: 0, hiddenFinding: null } : null;
+  }
+  if (pipeline.state !== "needs_decision") return null;
+  const stage = parkedStage(pipeline);
+  if (!stage) return null;
+  const attempt = latestAttempt(pipeline, stage.id);
+  const detail = [pipeline.stateDetail, attempt?.error].filter((text): text is string => Boolean(text));
+  if (stage.kind === "review-loop") {
+    const first = stageFindings(pipeline, stage.id)[0]?.text.trim() ?? "";
+    const hidden = LEGACY_ROUND_LIMIT.test(first) ? first : null;
+    if (!hidden && !detail.some((text) => /round limit reached/.test(text))) return null;
+    return { kind: "legacy", stage, rounds: 0, hiddenFinding: hidden };
+  }
+  if (stage.kind !== "run" || !stage.onFail || stageAccess(pipeline, stage) !== "read-only") return null;
+  if (!detail.some((text) => text.startsWith(BUDGET_EXHAUSTED))) return null;
+  if (failEdgeExhaustion(stage.onFail) === "park") return { kind: "park", stage, rounds: failEdgeRoundsUsed(pipeline, stage) + 1, hiddenFinding: null };
+  /* Under the other modes a spent edge parks only once the stage has handed
+     its last findings on; a failure with no verdict to hand on parks without
+     a fix round, and says so in today's words. */
+  return failEdgeBudgetSpent(pipeline, stage) ? { kind: "once", stage, rounds: 0, hiddenFinding: null } : null;
+}
+
+/** The findings a stop's answer lists: the stage's own, less the one its
+    reason line already says. */
+export function reviewStopFindings(pipeline: Pipeline, stop: ReviewStop): StageFinding[] {
+  const findings = stageFindings(pipeline, stop.stage.id);
+  return stop.hiddenFinding !== null && findings[0]?.text.trim() === stop.hiddenFinding ? findings.slice(1) : findings;
+}
+
 export interface PipelineAnswers {
   kind: "decision" | "review";
   /** The stage the answer is about: the parked stage, or the review stage. */
   stage: PipelineStage | null;
   /** The quiet answer first, then the primary one. */
   choices: [PipelineAnswer, PipelineAnswer];
+  /** A stop on a review (§3.4): its reason line and its plain labels. */
+  stop: ReviewStop | null;
 }
 
 /**
  * What a lane that needs the operator can be answered with, from the same
  * options the board's ⋯ menu reads: a decision is skipped or retried on the
- * stage the pipeline waits on, and a spent review budget (#1938) is closed or
- * given one more round.
+ * stage the pipeline waits on, and a lane that stopped after its last fix
+ * (#1938, #2187) is accepted as is or reviewed again. Close stays in the ⋯.
  */
 export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStage) => string): PipelineAnswers | null {
   if (pipeline.state === "needs_decision") {
@@ -178,15 +241,34 @@ export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStag
     const stage = pipeline.stages.find((entry) => entry.id === retry.stageId) ?? null;
     const stageName = stage ? nameOf(stage) : retry.stageId;
     const base = { stageId: retry.stageId, stageName, expectedAttempt: retry.attempt };
-    return { kind: "decision", stage, choices: [{ action: "skip-stage", ...base }, { action: "retry-stage", ...base }] };
+    return { kind: "decision", stage, choices: [{ action: "skip-stage", ...base }, { action: "retry-stage", ...base }], stop: reviewStop(pipeline) };
   }
   if (pipeline.state === "needs_review") {
-    const review = pipelineReviewSummary(pipeline);
-    const stage = review ? pipeline.stages.find((entry) => entry.id === review.stageId) ?? null : null;
+    const stop = reviewStop(pipeline);
     const none = { stageId: null, stageName: null, expectedAttempt: null };
-    return { kind: "review", stage, choices: [{ action: "close", ...none }, { action: "continue-review", ...none }] };
+    return { kind: "review", stage: stop?.stage ?? null, choices: [{ action: "accept-head", ...none }, { action: "continue-review", ...none }], stop };
   }
   return null;
+}
+
+/** The words on an answer's button. A review stop says what each one does in
+    plain words, on the desktop and the phone alike (§3.4); any other decision
+    keeps "Skip {stage}" / "Retry {stage}", or the phone's shorter words. */
+export function answerLabel(t: TFunction, answers: PipelineAnswers, answer: PipelineAnswer, large: boolean): string {
+  if (answer.action === "accept-head") return t("pipelineBlock.answer.acceptAsIs");
+  if (answer.action === "continue-review") return t("pipelineBlock.answer.reviewAgain");
+  if (answers.stop && answer.action === "skip-stage") return t("pipelineBlock.answer.acceptWithoutReview");
+  if (answers.stop && answer.action === "retry-stage") return t("pipelineBlock.answer.reviewAgain");
+  if (large) return t(answer.action === "skip-stage" ? "mobile2.pipeline.skip" : answer.action === "retry-stage" ? "mobile2.pipeline.retry" : "mobile2.pipeline.archive");
+  return t(`kanban.pipelineAct.label.${answer.action}`, { stage: answer.stageName ?? "" });
+}
+
+/** The one line on why a lane stopped on a review, in warning ink (§3.4). */
+export function reviewStopReason(t: TFunction, stop: ReviewStop, nameOf: (stage: PipelineStage) => string): string {
+  if (stop.kind === "stop-after-fix") return t("pipelineBlock.stop.afterFix");
+  if (stop.kind === "park") return t("pipelineBlock.stop.park", { count: stop.rounds });
+  if (stop.kind === "once") return t("pipelineBlock.stop.once", { stage: nameOf(stop.stage) });
+  return t("pipelineBlock.stop.legacy");
 }
 
 /** The stage a lane that needs the operator stands on: the one its answer is about. */
@@ -212,10 +294,12 @@ export function screenCurrentStageId(summary: KanbanPipeline): string | null {
 
 /**
  * The card's reason line for a lane that needs the operator, in warning ink:
- * "Implement failed · 1 finding" for a decision, "head 9b2e7d4c unreviewed ·
- * no rounds left" for a spent review budget. The caller adds the age.
+ * a stop on a review says why in one sentence (§3.4), any other decision
+ * "Implement failed · 1 finding". The caller adds the age.
  */
 export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage: PipelineStage) => string): string | null {
+  const stop = reviewStop(pipeline);
+  if (stop) return reviewStopReason(t, stop, nameOf);
   if (pipeline.state === "needs_review") {
     const review = pipelineReviewSummary(pipeline);
     if (!review) return null;

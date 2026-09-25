@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { roleNameById } from "@/components/builderCopy";
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineGraphEdit, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
 import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
 
@@ -202,6 +203,16 @@ export function loopArcs(summary: KanbanPipeline): LoopArc[] {
   });
 }
 
+/** What a spent fail edge costs the lane, by what its creator asked a spent
+    budget to do (#2011, #2187 §3.6): the fix stage takes the last findings and
+    the lane moves on, the same and the lane waits for the operator, or another
+    failure parks it. */
+export function spentEdgeSentence(t: TFunction, arc: LoopArc, from: string, to: string): string {
+  const mode = arc.loop.from.onFail ? failEdgeExhaustion(arc.loop.from.onFail) : "advance";
+  if (mode === "park") return t("kanban.loopParked", { from });
+  return t(mode === "stop-after-fix" ? "kanban.loopSpentWait" : "kanban.loopSpentAdvance", { from, to });
+}
+
 /** The sentence the arc keeps: at rest what the edge WOULD do, once it has
     fired what it did, and when the budget is gone what that costs the lane. */
 export function arcTitle(t: TFunction, arc: LoopArc, from: string, to: string): string {
@@ -215,7 +226,7 @@ export function arcTitle(t: TFunction, arc: LoopArc, from: string, to: string): 
   return [
     stopped ? t("kanban.loopParkedHere", { from }) : null,
     t("kanban.loopTitle", { from, to, fired, max }),
-    arc.state === "exhausted" && !stopped ? t("kanban.loopParked", { from }) : null,
+    arc.state === "exhausted" && !stopped ? spentEdgeSentence(t, arc, from, to) : null,
     arc.live ? t("kanban.loopLive", { from, to }) : null,
   ].filter(Boolean).join(" · ");
 }

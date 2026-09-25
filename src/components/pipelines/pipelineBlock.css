@@ -141,6 +141,9 @@
 /* The answer in place: what stopped the lane, and the two ways on. */
 .pblock .pb-answer, .pblock .pb-note { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .pblock .pb-answer .stage-report { color: var(--color-warning); font-weight: 600; }
+.pblock .pb-unreviewed { margin: 0; font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
+/* The one line on why a lane stopped on a review (#2187 §3.4) is a sentence, and wraps whole. */
+.pblock .pb-answer .stage-report[data-review-stop] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 /* The buttons share a line when they fit and wrap when they do not; their
    words are never cut. */
 .pblock .pb-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }

@@ -29,7 +29,7 @@ import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplateP
 import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
 import { StageCompletedCard } from "@/components/pipelines/StageCompletedCard";
 import { StageStatusRow } from "@/components/pipelines/StageStatusRow";
-import { STAGE_TONES, attemptStateLabel, attemptNavTarget, canSourcePipeline, createDraftPipeline, optimisticAddStage, patchPipeline, pipelineStagePosition, pipelineStateLabel, renderableFlowIds, resolveStageNavFile, reviewLoopChainValid, stageAttemptPlace, stageCardLabel, stageChipState, stageLabelTitle, pipelineStageByAgentPath, stagePaneTitleOf, type PipelineStagePane } from "@/components/pipelines/pipelineModel";
+import { STAGE_TONES, attemptStateLabel, attemptNavTarget, canSourcePipeline, canAddReviewAfter, createDraftPipeline, optimisticAddReview, optimisticAddStage, patchPipeline, pipelineStagePosition, pipelineStateLabel, renderableFlowIds, resolveStageNavFile, stageAttemptPlace, stageCardLabel, stageChipState, stageLabelTitle, pipelineStageByAgentPath, stagePaneTitleOf, type PipelineStagePane } from "@/components/pipelines/pipelineModel";
 import { pushTaskToast } from "@/components/tasks/taskToast";
 import type { TaskRelation } from "@/components/tasks/taskRelations";
 import { MAX_PIPELINE_STAGES } from "@/lib/pipelines/limits";
@@ -1573,14 +1573,9 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
   }
   const draft = pipeline.state === "draft";
   const last = slot.index === slot.total - 1;
-  const kinds = pipeline.stages.map((item) => item.kind);
-  const kindsWithInsert = (kind: "run" | "review-loop") => {
-    const next = [...kinds];
-    next.splice(slot.index + 1, 0, kind);
-    return next;
-  };
   const canAdd = draft && !lite && pipeline.stages.length < MAX_PIPELINE_STAGES;
-  const canAddReview = canAdd && reviewLoopChainValid(kindsWithInsert("review-loop"));
+  /* Add review stores a reviewer and its fix stage (#2187 §3.2), so it needs two free slots. */
+  const canAddReview = canAdd && canAddReviewAfter(pipeline, slot.index);
   const addAfter = (kind: "run" | "review-loop") => {
     if (busy) return;
     setBusy(true);
@@ -1589,7 +1584,8 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
     while (ids.has(`stage-${n}`)) n += 1;
     const index = slot.index + 1;
     const stage = { id: `stage-${n}`, kind, prompt: index > 0 ? "{{prev.output}}" : "{{task}}", next: null };
-    void patchPipeline(pipeline.id, "add-stage", { index, stage }, optimisticAddStage(pipeline, stage, index)).then((fail) => {
+    const optimistic = kind === "review-loop" ? optimisticAddReview(pipeline, stage, index) : optimisticAddStage(pipeline, stage, index);
+    void patchPipeline(pipeline.id, "add-stage", { index, stage }, optimistic).then((fail) => {
       if (fail) pushTaskToast("err", fail);
       setBusy(false);
     });

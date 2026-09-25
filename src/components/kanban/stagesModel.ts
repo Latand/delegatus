@@ -117,7 +117,7 @@ export function draftOutcome(pipeline: Pipeline, stageId: string, draft: { text:
   return "undelivered";
 }
 
-export type PipelineActionKind = "pause" | "resume" | "retry-stage" | "skip-stage" | "close" | "continue-review";
+export type PipelineActionKind = "pause" | "resume" | "retry-stage" | "skip-stage" | "close" | "continue-review" | "accept-head";
 
 export interface PipelineActionOption {
   action: PipelineActionKind;
@@ -134,7 +134,8 @@ export interface PipelineActionOption {
  * own preconditions would give (`patchPipeline`): a draft is only started or
  * edited elsewhere, an ended pipeline takes nothing, pause and resume swap,
  * retry and skip apply to the stage a `needs_decision` pipeline waits on, and
- * one more review round (`continue-review`, #1938) to a `needs_review` one.
+ * one more review round (`continue-review`, #1938) and taking the head as it
+ * is (`accept-head`, #2187) to a `needs_review` one.
  */
 export function pipelineActionOptions(pipeline: Pipeline): PipelineActionOption[] {
   const ended = pipelineEnded(pipeline);
@@ -150,6 +151,7 @@ export function pipelineActionOptions(pipeline: Pipeline): PipelineActionOption[
     { action: "skip-stage", refusal: general ?? (decisionStage ? null : "no-decision"), stageId: decisionStage, attempt },
     { action: "close", refusal: general, stageId: null, attempt: null },
     { action: "continue-review", refusal: general ?? (pipeline.state === "needs_review" ? null : "no-review"), stageId: null, attempt: null },
+    { action: "accept-head", refusal: general ?? (pipeline.state === "needs_review" ? null : "no-review"), stageId: null, attempt: null },
   ];
 }
 
@@ -163,6 +165,6 @@ export function actionObserved(action: PipelineActionKind, stageId: string | nul
   if (action === "pause") return now.state === "paused";
   if (action === "resume") return now.state !== "paused" && !pipelineEnded(now);
   if (action === "close") return now.state === "closed";
-  if (action === "continue-review") return now.state !== "needs_review";
+  if (action === "continue-review" || action === "accept-head") return now.state !== "needs_review";
   return now.state !== "needs_decision" || now.cursor?.stageId !== stageId;
 }

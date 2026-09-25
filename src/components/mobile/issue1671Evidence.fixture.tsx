@@ -299,7 +299,7 @@ function kanbanConversation(title: string, state: "working" | "settled" | "askin
   kanbanFiles.push(conversation(path, title, { ...byState[state], ...over }));
   return path;
 }
-interface KanbanStage { id: string; state?: "passed" | "running" | "failed" | "needs_decision"; ago?: number; role?: string; onFail?: { to: string; maxRounds: number }; attempts?: unknown[] }
+interface KanbanStage { id: string; state?: "passed" | "running" | "failed" | "needs_decision"; ago?: number; role?: string; onFail?: { to: string; maxRounds: number; onExhausted?: string }; attempts?: unknown[] }
 function kanbanLane(id: string, title: string, taskIds: string[], state: Pipeline["state"], stages: KanbanStage[], over: Record<string, unknown> = {}): Pipeline {
   const runs: unknown[] = [];
   let cursor: unknown = null;
@@ -476,6 +476,56 @@ if (KANBAN) {
     Object.assign(kanbanFiles.find((entry) => entry.path === walled)!, { rateLimit: { source: "account", accountId: "main", window: "session", resetAt: now + 40 * 60 } });
     /* The conversation the operator reads when the request arrives. */
     kanbanFiles.push({ ...files[0]! } as FileEntry);
+  }
+  /* #2187 §3.4 (`?review-stops=1`): one task per row of the table, each with
+     one lane parked on a review, so the task screen's 44 px answers and the
+     reason line above them are read at their longest, en and uk. */
+  if (new URLSearchParams(location.search).has("review-stops")) {
+    const uk = localStorage.getItem("llv_lang") === "uk";
+    const L = (en: string, ua: string) => (uk ? ua : en);
+    const reviewerRole = kanbanRole("reviewer");
+    const pill = L("P2 — The Model pill cuts its name at 360 px when two accounts are on.", "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти.");
+    const capture = L("P2 — capture --stage does not take the stage address from the project config.", "P2 — capture --stage не бере адресу стейджу з конфігу проєкту.");
+    const run = (key: string, stageId: string, n: number, state: string, ago: number, over: Record<string, unknown> = {}) => {
+      const path = kanbanConversation(`${key} · ${stageId} ${n}`, "settled", ago);
+      return { n, state, startedAt: iso(ago + 600), completedAt: iso(ago), agentPath: path, conversationId: idOf(path), activatedBy: null,
+        effectiveRole: stageId === "build" ? kanbanRole("builder") : reviewerRole, verdict: state === "passed" ? { status: "pass", findings: [] } : { status: "fail", findings: [over.finding ?? pill] }, ...over };
+    };
+    const head = (digit: string) => digit.repeat(40);
+    const parkDetail = `fail-edge budget exhausted after 2 round(s) (onExhausted: park): ${capture}`;
+    const onceDetail = `fail-edge budget exhausted after 1 round(s) (onExhausted: advance): ${pill}`;
+    const lanes: Array<[string, string, Pipeline]> = [
+      ["t-stop-fix", L("Composer model pills: one width at 390", "Кнопки моделі в композері однієї ширини"), kanbanLane("lane-stop-fix", "Composer model pills: one width at 390", ["t-stop-fix"], "needs_review", [
+        { id: "build", attempts: [run("fix", "build", 1, "passed", 7_200), run("fix", "build", 2, "passed", 5_400, { activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }), run("fix", "build", 3, "passed", 720, { activatedBy: { stageId: "review", attempt: 2, edge: "fail", budgetSpent: true } })] },
+        { id: "review", role: "reviewer", onFail: { to: "build", maxRounds: 2, onExhausted: "stop-after-fix" }, attempts: [run("fix", "review", 1, "failed", 6_000), run("fix", "review", 2, "failed", 3_600, { budgetSpent: true, reviewedHead: head("4") })] },
+      ], { lastPassedCommit: head("9"), reviewPending: { stageId: "review", attempt: 2, fixStageId: "build", fixAttempt: 3, reviewedHead: head("4"), currentHead: head("9"), verdict: "fail", findings: 1, at: iso(720) } })],
+      ["t-stop-park", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), kanbanLane("lane-stop-park", "Per-feature screenshot catalog and one capture command", ["t-stop-park"], "needs_decision", [
+        { id: "build", attempts: [
+          run("park", "build", 1, "passed", 9_000),
+          run("park", "build", 2, "passed", 7_000, { activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+          run("park", "build", 3, "passed", 5_000, { activatedBy: { stageId: "review", attempt: 2, edge: "fail" } }),
+        ] },
+        { id: "review", role: "reviewer", onFail: { to: "build", maxRounds: 2, onExhausted: "park" }, attempts: [
+          run("park", "review", 1, "failed", 8_000, { finding: capture }), run("park", "review", 2, "failed", 6_000, { finding: capture }), run("park", "review", 3, "failed", 1_200, { finding: capture, error: parkDetail }),
+        ] },
+      ], { cursor: { stageId: "review", state: "running", input: null, activatedBy: null }, stateDetail: parkDetail })],
+      ["t-stop-once", L("Deploy failure notifies the seat and the phone", "Сповіщення, коли деплой падає"), kanbanLane("lane-stop-once", "Deploy failure notifies the seat and the phone", ["t-stop-once"], "needs_decision", [
+        { id: "build", attempts: [run("once", "build", 1, "passed", 9_000), run("once", "build", 2, "passed", 7_000, { activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true } }), run("once", "build", 3, "passed", 4_000, { activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } })] },
+        { id: "review", role: "reviewer", onFail: { to: "build", maxRounds: 1 }, attempts: [run("once", "review", 1, "failed", 8_000, { budgetSpent: true }), run("once", "review", 2, "failed", 1_500, { error: onceDetail })] },
+        { id: "verify", onFail: { to: "build", maxRounds: 1 }, attempts: [run("once", "verify", 1, "failed", 5_000)] },
+      ], { cursor: { stageId: "review", state: "running", input: null, activatedBy: null }, stateDetail: onceDetail })],
+      ["t-stop-legacy", L("Screenshot catalog: one capture command for every feature", "Каталог скриншотів: одна команда зйомки для кожної фічі"), kanbanLane("lane-stop-legacy", "Screenshot catalog: one capture command for every feature", ["t-stop-legacy"], "needs_decision", [
+        { id: "build", attempts: [run("legacy", "build", 1, "passed", 9_000)] },
+        { id: "review", role: "reviewer", attempts: [run("legacy", "review", 1, "failed", 900, { verdict: { status: "fail", findings: ["round limit reached", capture] }, error: "review loop ended in needs_decision: round limit reached" })] },
+      ], { cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null }, stateDetail: "review loop ended in needs_decision: round limit reached" })],
+    ];
+    for (const [taskId, title, lane] of lanes) {
+      /* The legacy lane's review is the older flow-backed kind. */
+      if (taskId === "t-stop-legacy") lane.stages[1] = { ...lane.stages[1]!, kind: "review-loop" };
+      kanbanPipelines.push(lane);
+      kanbanLinks.pipelines[lane.id] = { links: [], noPr: true };
+      kanbanTasks.push(kanbanTask(taskId, "assigned", title, { updatedAt: iso(300) }));
+    }
   }
   kanbanPipelines.push(kanbanLane("lane-flake", "Nightly: rerun the flake campaign on a quiet machine", [], "running", [
     { id: "measure", state: "running", ago: 1_500 }, { id: "report", role: "reviewer" },

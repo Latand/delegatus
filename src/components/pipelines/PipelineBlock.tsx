@@ -4,6 +4,7 @@ import { Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fmtAge } from "@/components/utils";
@@ -14,7 +15,7 @@ import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanban
 import { ChevronDown, ChevronRight, MoreGlyph, svgProps } from "@/components/kanban/kanbanGlyphs";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 import {
-  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, StageReportLine,
+  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine,
   type LoopArc,
 } from "@/components/kanban/PipelineSection";
 import { stageIdentity } from "@/components/kanban/stageIdentity";
@@ -25,8 +26,8 @@ import {
   type StageChipState,
 } from "./pipelineModel";
 import {
-  blockAgeSeconds, cardChain, cardChainLevels, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
-  type ChainItem, type PipelineAnswer, type PipelineAnswers, type PipelineBlockDensity,
+  answerLabel, blockAgeSeconds, cardChain, cardChainLevels, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
+  type ChainItem, type PipelineAnswer, type PipelineAnswers, type PipelineBlockDensity, type ReviewStop,
 } from "./pipelineBlockModel";
 
 /*
@@ -292,8 +293,26 @@ function DecisionReport({ pipeline, stage, names, nameOf }: {
   );
 }
 
-/** What the lane stopped on: the review heads of a spent review budget, or
-    the parked stage's report. */
+/** A lane stopped on a review (#2187 §3.4): one line on why, in warning ink,
+    then the review's findings as the stage reported them. A stop after the
+    last fix keeps the two heads in the line's tooltip. */
+function ReviewStopReport({ pipeline, stop, nameOf }: {
+  pipeline: Pipeline;
+  stop: ReviewStop;
+  nameOf: (stage: PipelineStage) => string;
+}) {
+  const { t } = useLocale();
+  const heads = stop.kind === "stop-after-fix" ? pipelineReviewHeads(t, pipeline) : null;
+  return (
+    <>
+      <p className="stage-report" data-review-stop={stop.kind} title={heads ?? undefined}>{reviewStopReason(t, stop, nameOf)}</p>
+      <FindingList findings={reviewStopFindings(pipeline, stop)} shown={ANSWER_FINDINGS} />
+    </>
+  );
+}
+
+/** What the lane stopped on: why it stopped on a review, the review heads of
+    a spent review budget, or the parked stage's report. */
 function AnswerReport({ pipeline, answers, names, nameOf }: {
   pipeline: Pipeline;
   answers: PipelineAnswers;
@@ -301,9 +320,20 @@ function AnswerReport({ pipeline, answers, names, nameOf }: {
   nameOf: (stage: PipelineStage) => string;
 }) {
   const { t } = useLocale();
+  if (answers.stop) return <ReviewStopReport pipeline={pipeline} stop={answers.stop} nameOf={nameOf} />;
   return answers.kind === "review"
     ? <p className="review-heads" data-review-heads={pipeline.id}>{pipelineReviewHeads(t, pipeline)}</p>
     : <DecisionReport pipeline={pipeline} stage={answers.stage} names={names} nameOf={nameOf} />;
+}
+
+/** A completed lane whose last fix no reviewer saw says so, muted, on a line
+    of its own under the chain (#1938 kept, #2187 §3.5): in the head the words
+    cut the lane's title. */
+function UnreviewedNote({ pipeline }: { pipeline: Pipeline }) {
+  const { t } = useLocale();
+  const unreviewed = pipelineCompletedUnreviewed(pipeline);
+  if (!unreviewed) return null;
+  return <p className="pb-unreviewed" data-pipeline-unreviewed={pipeline.id}>{t("pipelineBlock.unreviewedFix", { count: unreviewed.findings })}</p>;
 }
 
 /** The two ways on, the quiet one first. */
@@ -316,11 +346,7 @@ function AnswerButtons({ pipeline, answers, acting, large, onAnswer }: {
   onAnswer: (pipeline: Pipeline, answer: PipelineAnswer) => void;
 }) {
   const { t } = useLocale();
-  const label = (answer: PipelineAnswer): string => {
-    if (answer.action === "continue-review") return t("pipelineBlock.oneMoreRound");
-    if (large) return t(answer.action === "skip-stage" ? "mobile2.pipeline.skip" : answer.action === "retry-stage" ? "mobile2.pipeline.retry" : "mobile2.pipeline.archive");
-    return t(`kanban.pipelineAct.label.${answer.action}`, { stage: answer.stageName ?? "" });
-  };
+  const label = (answer: PipelineAnswer): string => answerLabel(t, answers, answer, large);
   return (
     <div className={`pb-actions${large ? " large" : ""}`}>
       {answers.choices.map((answer, index) => (
@@ -589,6 +615,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
             : <DecisionReport pipeline={pipeline} stage={parkedStage(pipeline)} names={names} nameOf={nameOf} />}
         </div>
       ) : null}
+      <UnreviewedNote pipeline={pipeline} />
       {report ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={report} names={names} /></div> : null}
       {pipeline.graphEdits?.length ? <GraphEditLine edit={pipeline.graphEdits.at(-1)!} /> : null}
     </div>
@@ -675,7 +702,7 @@ function ScreenBlock(props: PipelineBlockProps & {
     if (arc.parked) return [{ id: arc.id, text: t("kanban.loopParkedHere", { from }) }];
     return [{
       id: arc.id,
-      text: [t("kanban.loopNames", { from, to }), t("kanban.loopUsed", { fired: arc.loop.fired, max: arc.loop.max }), arc.state === "exhausted" ? t("kanban.graph.noneLeft") : null].filter(Boolean).join(" · "),
+      text: [t("kanban.loopNames", { from, to }), t("kanban.loopUsed", { fired: arc.loop.fired, max: arc.loop.max }), arc.state === "exhausted" ? spentEdgeSentence(t, arc, from, to) : null].filter(Boolean).join(" · "),
     }];
   });
 
@@ -722,9 +749,11 @@ function ScreenBlock(props: PipelineBlockProps & {
     const identity = stage.effectiveRole ? stageIdentity(pipeline, stage) : null;
     const who = whoRuns(t, pipeline, stage);
     const place = stageLatestAttemptPlace(pipeline, stage.id);
+    const aside = stageRoleAside(t, stage);
     const words = [
-      stageRoleAside(t, stage),
-      stage.kind === "review-loop" ? t("mobile2.pipeline.review") : null,
+      aside,
+      /* A role-less review loop's aside already names it: say it once. */
+      stage.kind === "review-loop" && aside !== t("pipelineStrip.reviewStage") ? t("mobile2.pipeline.review") : null,
       place.attempt !== null && (place.attempts > 1 || isCurrent) ? t("pipelineBlock.attempt", { n: place.attempt }) : null,
     ].filter(Boolean).join(" · ");
     const aria = [t("kanban.stageAria", { stage: name, state }), who, suffix?.title].filter(Boolean).join(". ");
@@ -780,7 +809,7 @@ function ScreenBlock(props: PipelineBlockProps & {
               <div className="pb-answer" data-answer={answers.kind}>
                 <AnswerReport pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} />
                 {edges.map((edge) => <p key={edge.id} className="pb-edge" data-stage-edge={edge.id}>{`↺ ${edge.text}`}</p>)}
-                {answers.kind === "review" && answers.stage ? <FindingList findings={stageFindings(pipeline, answers.stage.id)} shown={ANSWER_FINDINGS} /> : null}
+                {answers.kind === "review" && answers.stage && !answers.stop ? <FindingList findings={stageFindings(pipeline, answers.stage.id)} shown={ANSWER_FINDINGS} /> : null}
                 {props.onAnswer ? <AnswerButtons pipeline={pipeline} answers={answers} acting={props.acting ?? null} large onAnswer={props.onAnswer} /> : null}
               </div>
             ) : (
@@ -815,6 +844,7 @@ function ScreenBlock(props: PipelineBlockProps & {
           <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} />
         </div>
       ) : null}
+      <UnreviewedNote pipeline={pipeline} />
       {lastReport ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={lastReport} names={names} shown={ANSWER_FINDINGS} /></div> : null}
       {props.embedded ? (
         <div className="pb-section-row">

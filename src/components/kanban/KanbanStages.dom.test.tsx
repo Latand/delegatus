@@ -981,7 +981,7 @@ test("Skip on the card waits out its receipt before anything is sent, and its Un
   expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
 });
 
-test("a spent review budget offers Close and One more round; One more round reads the revision and grants exactly one round", async () => {
+test("a lane stopped after its last fix offers Accept as is and Review again; each reads the revision and sends one request (#1938, #2187)", async () => {
   const spent = searchPipeline({
     state: "needs_review",
     cursor: null,
@@ -989,9 +989,13 @@ test("a spent review budget offers Close and One more round; One more round read
   } as Partial<Pipeline>);
   const { host, route } = mount(spent);
   await tick();
-  expect(card(host).querySelector(".pb-answer [data-review-heads]")?.textContent).toBe("last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed");
-  expect(answer(host, "close")?.textContent).toBe("Close the pipeline");
-  expect(answer(host, "continue-review")?.textContent).toBe("One more round");
+  /* One line on why (§3.4); the two heads stay in its tooltip. */
+  const reason = card(host).querySelector(".pb-answer [data-review-stop]");
+  expect(reason?.textContent).toBe("Stopped after the last fix, as this pipeline asked: the fix is not reviewed.");
+  expect(reason?.getAttribute("title")).toBe("last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed");
+  expect(answer(host, "close")).toBeNull();
+  expect(answer(host, "accept-head")?.textContent).toBe("Accept as is");
+  expect(answer(host, "continue-review")?.textContent).toBe("Review again");
   /* The lane's state word is the warning one, not the grey of an idle lane (#2080). */
   expect(card(host).querySelector('.pb-head .pstate-word[data-pstate="needs_review"]')?.textContent).toBe("needs review");
   click(answer(host, "continue-review"));
@@ -1002,10 +1006,12 @@ test("a spent review budget offers Close and One more round; One more round read
   expect({ ...body, clientRequestId: body.clientRequestId.startsWith("board-") }).toEqual({ action: "continue-review", addRounds: 1, expectedRevision: REVISION, clientRequestId: true });
   expect(receiptTexts(host).at(-1)).toBe("One more review round for «Restore search results after the index rebuild»");
 
-  /* Close is one of the two acts the engine cannot take back: it waits too. */
-  click(answer(host, "close"));
-  await tick();
-  expect(route.patches).toHaveLength(1);
-  expect(receiptTexts(host).at(-1)).toBe("Closing «Restore search results after the index rebuild»");
+  click(answer(host, "accept-head"));
+  await tick(20);
+  expect(route.reads).toEqual(["p-search", "p-search"]);
+  expect(route.patches).toHaveLength(2);
+  const accept = route.patches[1]!.body as PatchPipelineRequest & { clientRequestId: string };
+  expect({ ...accept, clientRequestId: accept.clientRequestId.startsWith("board-") }).toEqual({ action: "accept-head", expectedRevision: REVISION, clientRequestId: true });
+  expect(receiptTexts(host).at(-1)).toBe("Accepted «Restore search results after the index rebuild» as is");
 });
 

@@ -1,0 +1,413 @@
+{
+  "readings": {
+    "1440-en-light": [
+      {
+        "task": "t-stop-fix",
+        "kind": "stop-after-fix",
+        "reason": "Stopped after the last fix, as this pipeline asked: the fix is not reviewed.",
+        "answers": [
+          [
+            "accept-head",
+            "Accept as is"
+          ],
+          [
+            "continue-review",
+            "Review again"
+          ]
+        ],
+        "findings": [
+          "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-park",
+        "kind": "park",
+        "reason": "Stopped: the last of 3 review rounds failed, and this pipeline stops before fixing.",
+        "answers": [
+          [
+            "skip-stage",
+            "Accept without review"
+          ],
+          [
+            "retry-stage",
+            "Review again"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage does not take the stage address from the project config."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-once",
+        "kind": "once",
+        "reason": "Stopped: Review failed again after its last fix round.",
+        "answers": [
+          [
+            "skip-stage",
+            "Accept without review"
+          ],
+          [
+            "retry-stage",
+            "Review again"
+          ]
+        ],
+        "findings": [
+          "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-legacy",
+        "kind": "legacy",
+        "reason": "Stopped: the older review loop ends at its round limit without a last fix.",
+        "answers": [
+          [
+            "skip-stage",
+            "Accept without review"
+          ],
+          [
+            "retry-stage",
+            "Review again"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage does not take the stage address from the project config."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      }
+    ],
+    "1440-en-dark": [
+      {
+        "task": "t-stop-fix",
+        "kind": "stop-after-fix",
+        "reason": "Stopped after the last fix, as this pipeline asked: the fix is not reviewed.",
+        "answers": [
+          [
+            "accept-head",
+            "Accept as is"
+          ],
+          [
+            "continue-review",
+            "Review again"
+          ]
+        ],
+        "findings": [
+          "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-park",
+        "kind": "park",
+        "reason": "Stopped: the last of 3 review rounds failed, and this pipeline stops before fixing.",
+        "answers": [
+          [
+            "skip-stage",
+            "Accept without review"
+          ],
+          [
+            "retry-stage",
+            "Review again"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage does not take the stage address from the project config."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-once",
+        "kind": "once",
+        "reason": "Stopped: Review failed again after its last fix round.",
+        "answers": [
+          [
+            "skip-stage",
+            "Accept without review"
+          ],
+          [
+            "retry-stage",
+            "Review again"
+          ]
+        ],
+        "findings": [
+          "P2 — The Model pill cuts its name at 360 px when two accounts are on."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-legacy",
+        "kind": "legacy",
+        "reason": "Stopped: the older review loop ends at its round limit without a last fix.",
+        "answers": [
+          [
+            "skip-stage",
+            "Accept without review"
+          ],
+          [
+            "retry-stage",
+            "Review again"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage does not take the stage address from the project config."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      }
+    ],
+    "1440-uk-light": [
+      {
+        "task": "t-stop-fix",
+        "kind": "stop-after-fix",
+        "reason": "Зупинено після останнього виправлення, як просив цей пайплайн: виправлення не перевірене.",
+        "answers": [
+          [
+            "accept-head",
+            "Прийняти як є"
+          ],
+          [
+            "continue-review",
+            "Ще одне ревʼю"
+          ]
+        ],
+        "findings": [
+          "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-park",
+        "kind": "park",
+        "reason": "Зупинено: останній із 3 раундів ревʼю провалено, і цей пайплайн зупиняється до виправлення.",
+        "answers": [
+          [
+            "skip-stage",
+            "Прийняти без ревʼю"
+          ],
+          [
+            "retry-stage",
+            "Ще одне ревʼю"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-once",
+        "kind": "once",
+        "reason": "Зупинено: Review знову провалено після останнього раунду виправлень.",
+        "answers": [
+          [
+            "skip-stage",
+            "Прийняти без ревʼю"
+          ],
+          [
+            "retry-stage",
+            "Ще одне ревʼю"
+          ]
+        ],
+        "findings": [
+          "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-legacy",
+        "kind": "legacy",
+        "reason": "Зупинено: старий цикл ревʼю закінчується на ліміті раундів без останнього виправлення.",
+        "answers": [
+          [
+            "skip-stage",
+            "Прийняти без ревʼю"
+          ],
+          [
+            "retry-stage",
+            "Ще одне ревʼю"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      }
+    ],
+    "1440-uk-dark": [
+      {
+        "task": "t-stop-fix",
+        "kind": "stop-after-fix",
+        "reason": "Зупинено після останнього виправлення, як просив цей пайплайн: виправлення не перевірене.",
+        "answers": [
+          [
+            "accept-head",
+            "Прийняти як є"
+          ],
+          [
+            "continue-review",
+            "Ще одне ревʼю"
+          ]
+        ],
+        "findings": [
+          "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-park",
+        "kind": "park",
+        "reason": "Зупинено: останній із 3 раундів ревʼю провалено, і цей пайплайн зупиняється до виправлення.",
+        "answers": [
+          [
+            "skip-stage",
+            "Прийняти без ревʼю"
+          ],
+          [
+            "retry-stage",
+            "Ще одне ревʼю"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-once",
+        "kind": "once",
+        "reason": "Зупинено: Review знову провалено після останнього раунду виправлень.",
+        "answers": [
+          [
+            "skip-stage",
+            "Прийняти без ревʼю"
+          ],
+          [
+            "retry-stage",
+            "Ще одне ревʼю"
+          ]
+        ],
+        "findings": [
+          "P2 — Кнопка «Модель» обрізає назву на 360 px, коли увімкнено два акаунти."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      },
+      {
+        "task": "t-stop-legacy",
+        "kind": "legacy",
+        "reason": "Зупинено: старий цикл ревʼю закінчується на ліміті раундів без останнього виправлення.",
+        "answers": [
+          [
+            "skip-stage",
+            "Прийняти без ревʼю"
+          ],
+          [
+            "retry-stage",
+            "Ще одне ревʼю"
+          ]
+        ],
+        "findings": [
+          "P2 — capture --stage не бере адресу стейджу з конфігу проєкту."
+        ],
+        "clipped": [],
+        "overlaps": [],
+        "escapes": [],
+        "buttonHeights": [
+          28,
+          28
+        ]
+      }
+    ]
+  },
+  "failures": []
+}

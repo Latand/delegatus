@@ -207,9 +207,9 @@ import {
 } from "./selectedContextTarget";
 import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
-const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review"]);
+const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head"]);
 /* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
-const PIPELINE_RECEIPT_ACTIONS = new Set<PipelineAction>(["resolve-decision", "continue-review", "convert-legacy-review", "revert-legacy-review"]);
+const PIPELINE_RECEIPT_ACTIONS = new Set<PipelineAction>(["resolve-decision", "continue-review", "accept-head", "convert-legacy-review", "revert-legacy-review"]);
 const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
 
 interface LinkTaskToPipelineDependencies {
@@ -5424,7 +5424,7 @@ export function viewerMcpBindings(
           ? domainDependencies.readPipelineRecord(id)
           : domainDependencies.getPipelines?.().pipelines.find((item) => item.id === id);
         if (!pipeline) throw new Error("pipeline not found");
-        const refusal = args.action === "continue-review"
+        const refusal = args.action === "continue-review" || args.action === "accept-head"
           ? continueReviewActorRefusal(pipeline, pauseResumeActorOf(domainDependencies))
           : args.action === "convert-legacy-review" || args.action === "revert-legacy-review"
             ? legacyReviewActorRefusal(pipeline, pauseResumeActorOf(domainDependencies))

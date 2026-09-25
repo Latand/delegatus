@@ -559,6 +559,20 @@ function isReviewGrant(value: unknown): boolean {
     && isActor(grant.actor) && typeof grant.at === "string";
 }
 
+function isReviewAcceptance(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const acceptance = value as Record<string, unknown>;
+  return typeof acceptance.clientRequestId === "string" && acceptance.clientRequestId.length > 0 && acceptance.clientRequestId.length <= 200
+    && typeof acceptance.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(acceptance.expectedRevision)
+    && typeof acceptance.stageId === "string" && acceptance.stageId.length > 0
+    && Number.isSafeInteger(acceptance.attempt) && (acceptance.attempt as number) >= 0
+    && typeof acceptance.fixStageId === "string" && acceptance.fixStageId.length > 0
+    && Number.isSafeInteger(acceptance.fixAttempt) && (acceptance.fixAttempt as number) > 0
+    && isNullableString(acceptance.reviewedHead)
+    && typeof acceptance.currentHead === "string"
+    && isActor(acceptance.actor) && typeof acceptance.at === "string";
+}
+
 /** An explicit legacy review-loop conversion and the definition it replaced. */
 function isLegacyReviewConversion(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -642,6 +656,7 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
     (pipeline.reviewPending === undefined || isReviewPending(pipeline.reviewPending)) &&
     (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
+    (pipeline.reviewAcceptances === undefined || (Array.isArray(pipeline.reviewAcceptances) && pipeline.reviewAcceptances.every(isReviewAcceptance))) &&
     (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
       && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&

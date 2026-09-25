@@ -9108,3 +9108,166 @@ describe("#2179 #2185 agent replies wider than the operator's bubble, a seat dra
     if (STAMP === "after" && failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("#2187 a lane parked on a review says why in one line and answers in plain words", () => {
+  /*
+   * docs/design/merge-policy-and-task-finishing.md §3.4: one lane for each row
+   * of the table (`?scenario=review-stops`) on the desktop board at 1440, in
+   * en and uk. Each lane row draws its reason line in the table's words and
+   * the two answers in theirs; no answer cuts its label, and no text of the
+   * answer meets another text or a control, all inside its card. The phone's
+   * task screen at 390 is the phone driver's case of the same issue.
+   *
+   *   REVIEW_STOPS_STAMP=after REVIEW_STOPS_PNG_DIR=… CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#2187"
+   *
+   * `REVIEW_STOPS_STAMP=before` only records (it is how the merge base was
+   * drawn); PNGs go to `REVIEW_STOPS_PNG_DIR`, or `.artifacts/review-stops/`,
+   * never committed.
+   */
+  const STAMP = process.env.REVIEW_STOPS_STAMP === "before" ? "before" : "after";
+  const OUT = path.resolve(process.env.REVIEW_STOPS_PNG_DIR ?? ".artifacts/review-stops");
+  const EVIDENCE = path.resolve("evidence/review-stops");
+  const LANES = [
+    { task: "t-stop-fix", kind: "stop-after-fix", reason: "pipelineBlock.stop.afterFix", answers: [["accept-head", "pipelineBlock.answer.acceptAsIs"], ["continue-review", "pipelineBlock.answer.reviewAgain"]] },
+    { task: "t-stop-park", kind: "park", reason: "pipelineBlock.stop.park", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
+    { task: "t-stop-once", kind: "once", reason: "pipelineBlock.stop.once", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
+    { task: "t-stop-legacy", kind: "legacy", reason: "pipelineBlock.stop.legacy", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
+  ] as const;
+  type LaneReading = {
+    task: string; kind: string | null; reason: string | null; answers: Array<[string, string]>; findings: string[];
+    clipped: string[]; overlaps: string[]; escapes: string[]; buttonHeights: number[];
+  };
+  /* Each lane's answer as drawn: the reason line, the answers' labels, the
+     findings it lists, and the ink of every text in it against every other
+     text and control, clipped by what clips it. */
+  const READ = (tasks: string[]) => tasks.map((task) => {
+    const box = (el: Element) => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    type Box = ReturnType<typeof box>;
+    const intersect = (a: Box, b: Box): Box => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = (r: Box) => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const union = (a: Box, b: Box): Box => ({ top: Math.min(a.top, b.top), left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) });
+    const card = document.querySelector(`[data-kanban-board] .card[data-id="task:${task}"]`);
+    const answer = card?.querySelector(".pb-answer");
+    const out: LaneReading = { task, kind: null, reason: null, answers: [], findings: [], clipped: [], overlaps: [], escapes: [], buttonHeights: [] };
+    if (!card || !answer) return out;
+    const reason = answer.querySelector("[data-review-stop]");
+    out.kind = reason?.getAttribute("data-review-stop") ?? null;
+    out.reason = (reason ?? answer.querySelector(".stage-report, .review-heads"))?.textContent?.trim() ?? null;
+    const buttons = [...answer.querySelectorAll<HTMLElement>("[data-answer-action]")];
+    out.answers = buttons.map((button) => [button.getAttribute("data-answer-action") ?? "", (button.textContent ?? "").trim()]);
+    out.buttonHeights = buttons.map((button) => Math.round(button.getBoundingClientRect().height));
+    out.findings = [...answer.querySelectorAll(".stage-findings li .text")].map((item) => (item.textContent ?? "").trim());
+    const ink: Array<{ el: Element; rect: Box; text: string }> = [];
+    const walker = document.createTreeWalker(answer, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.nodeValue?.trim() || !node.parentElement) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter((r) => r.width * r.height > 0.5).map((r) => ({ top: r.top, left: r.left, right: r.right, bottom: r.bottom }));
+      if (!rects.length) continue;
+      const rect = rects.reduce(union);
+      ink.push({ el: node.parentElement, rect, text: node.nodeValue.trim().slice(0, 40) });
+      /* A label cut by its own button, or by any box that clips it. */
+      for (let up: Element | null = node.parentElement; up && up !== card; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        const clipping = style.overflowX !== "visible" || style.overflowY !== "visible";
+        const visible = clipping ? intersect(rect, box(up)) : rect;
+        if (clipping && area(visible) + 1 < area(rect)) { out.clipped.push(`${node.nodeValue.trim().slice(0, 40)} cut by ${up.tagName.toLowerCase()}`); break; }
+      }
+    }
+    for (const button of buttons) {
+      if (button.scrollWidth > button.clientWidth + 1) out.clipped.push(`${button.textContent?.trim()} overflows its button by ${button.scrollWidth - button.clientWidth}px`);
+    }
+    const frame = box(card);
+    for (let i = 0; i < ink.length; i++) {
+      const a = ink[i]!;
+      if (a.rect.left < frame.left - 1 || a.rect.right > frame.right + 1 || a.rect.bottom > frame.bottom + 1) out.escapes.push(a.text);
+      for (let j = i + 1; j < ink.length; j++) {
+        const b = ink[j]!;
+        if (!a.el.contains(b.el) && !b.el.contains(a.el) && area(intersect(a.rect, b.rect)) > 0.5) out.overlaps.push(`text/text: ${a.text} | ${b.text}`);
+      }
+      for (const button of buttons) {
+        if (!button.contains(a.el) && area(intersect(a.rect, box(button))) > 0.5) out.overlaps.push(`text/control: ${a.text} | ${button.textContent?.trim()}`);
+      }
+    }
+    for (let i = 0; i < buttons.length; i++) for (let j = i + 1; j < buttons.length; j++) {
+      if (area(intersect(box(buttons[i]!), box(buttons[j]!))) > 0.5) out.overlaps.push(`control/control: ${buttons[i]!.textContent?.trim()} | ${buttons[j]!.textContent?.trim()}`);
+    }
+    return out;
+  });
+
+  browserTest("each row of §3.4's table draws its reason line and its plain answers at 1440, en and uk, with no cut label and no overlap", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/review-stops-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, LaneReading[]> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const label = `1440-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=review-stops`, { width: 1440, height: 900 }, scheme, lang);
+          try {
+            await page.waitForSelector(`${card("t-stop-legacy")} [data-pipeline]`, { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            for (const lane of LANES) {
+              const element = page.locator(card(lane.task));
+              await element.scrollIntoViewIfNeeded();
+              await element.screenshot({ path: path.join(OUT, `${STAMP}-card-${lane.kind}-${label}.png`) });
+            }
+            await page.screenshot({ path: path.join(OUT, `${STAMP}-board-${label}.png`) });
+            const reading = await page.evaluate(READ, LANES.map((lane) => lane.task)) as LaneReading[];
+            readings[label] = reading;
+            const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+            for (const lane of LANES) {
+              const got = reading.find((entry) => entry.task === lane.task)!;
+              const fail = (text: string) => failures.push(`${label} ${lane.kind}: ${text}`);
+              if (got.kind !== lane.kind) fail(`drawn as ${got.kind}`);
+              if (lane.kind === "once") {
+                const [head, tail] = t(lane.reason, { stage: "\u0000" }).split("\u0000");
+                if (!got.reason?.startsWith(head!) || !got.reason.endsWith(tail!)) fail(`reason ${JSON.stringify(got.reason)}`);
+              } else if (got.reason !== t(lane.reason, lane.kind === "park" ? { count: 3 } : undefined)) fail(`reason ${JSON.stringify(got.reason)}`);
+              const want = lane.answers.map(([action, key]) => [action, t(key)]);
+              if (JSON.stringify(got.answers) !== JSON.stringify(want)) fail(`answers ${JSON.stringify(got.answers)}, expected ${JSON.stringify(want)}`);
+              if (lane.kind === "legacy" && got.findings.some((text) => /round limit reached/.test(text))) fail(`the flow's own detail is still listed as a finding: ${JSON.stringify(got.findings)}`);
+              if (!got.findings.length) fail("no finding listed under the reason");
+              for (const entry of [...got.clipped, ...got.overlaps]) fail(entry);
+              for (const entry of got.escapes) fail(`paints outside its card: ${entry}`);
+            }
+            /* §3.5: the completed lane whose last fix nobody reviewed says so on a line of its own, inside its card. */
+            const done = page.locator(card("t-stop-done"));
+            await done.scrollIntoViewIfNeeded();
+            await done.screenshot({ path: path.join(OUT, `${STAMP}-card-unreviewed-${label}.png`) });
+            const note = await page.evaluate((selector) => {
+              const cardElement = document.querySelector(selector);
+              const line = cardElement?.querySelector("[data-pipeline-unreviewed]");
+              if (!cardElement || !line) return null;
+              const a = line.getBoundingClientRect();
+              const frame = cardElement.getBoundingClientRect();
+              const crossed = [...cardElement.querySelectorAll(".pb-head, .pb-chain, .pb-note")].filter((other) => {
+                const b = other.getBoundingClientRect();
+                return Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+              }).length;
+              return { text: (line.textContent ?? "").trim(), inside: a.left >= frame.left - 1 && a.right <= frame.right + 1, crossed };
+            }, card("t-stop-done"));
+            const wantNote = translate(lang, "pipelineBlock.unreviewedFix" as never, { count: 1 });
+            if (note?.text !== wantNote) failures.push(`${label} unreviewed: ${JSON.stringify(note)}, expected ${JSON.stringify(wantNote)}`);
+            else if (!note.inside || note.crossed) failures.push(`${label} unreviewed: ${JSON.stringify(note)}`);
+            const sideways = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+            if (sideways > 0) failures.push(`${label}: the page scrolls sideways by ${sideways}px`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, `desktop-${STAMP}.json`), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (STAMP === "after" && failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
