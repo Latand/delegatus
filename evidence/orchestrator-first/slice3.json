@@ -5,14 +5,14 @@
       "anchor": {
         "left": 325,
         "top": 643,
-        "right": 1363,
+        "right": 1010.1,
         "bottom": 734
       },
       "anchorIsComposer": true,
       "spotlight": {
         "left": 321,
         "top": 639,
-        "right": 1367,
+        "right": 1014.1,
         "bottom": 738
       },
       "pane": {
@@ -23,9 +23,9 @@
       },
       "railRight": 248,
       "popover": {
-        "left": 674,
+        "left": 498,
         "top": 433,
-        "right": 1014,
+        "right": 838,
         "bottom": 626.8
       },
       "viewport": {
@@ -137,14 +137,14 @@
       "anchor": {
         "left": 265,
         "top": 568,
-        "right": 1263,
+        "right": 923.7,
         "bottom": 659
       },
       "anchorIsComposer": true,
       "spotlight": {
         "left": 261,
         "top": 564,
-        "right": 1267,
+        "right": 927.7,
         "bottom": 663
       },
       "pane": {
@@ -155,9 +155,9 @@
       },
       "railRight": 248,
       "popover": {
-        "left": 594,
+        "left": 424,
         "top": 358,
-        "right": 934,
+        "right": 764,
         "bottom": 551.8
       },
       "viewport": {
@@ -269,14 +269,14 @@
       "anchor": {
         "left": 265,
         "top": 568,
-        "right": 1263,
+        "right": 923.7,
         "bottom": 659
       },
       "anchorIsComposer": true,
       "spotlight": {
         "left": 261,
         "top": 564,
-        "right": 1267,
+        "right": 927.7,
         "bottom": 663
       },
       "pane": {
@@ -287,9 +287,9 @@
       },
       "railRight": 248,
       "popover": {
-        "left": 594,
+        "left": 424,
         "top": 358,
-        "right": 934,
+        "right": 764,
         "bottom": 551.8
       },
       "viewport": {

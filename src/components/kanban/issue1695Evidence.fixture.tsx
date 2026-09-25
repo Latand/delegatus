@@ -1678,7 +1678,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...tasks.map((task) => [task.id, "task"] as const),
       ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
     ]);
-    return json(reportLogFixturePage(url, { project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY }));
+    /* A seat created a moment ago (the walk's scene) has filed nothing yet. */
+    return json(reportLogFixturePage(url, { project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY || ORCH_WALK }));
   }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST || ORCH_WALK ? [] : tasks });
   if (ORCH_WALK && url.pathname === "/api/onboarding") {
