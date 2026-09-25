@@ -238,7 +238,7 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
       {scale.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
     </select>
   );
-  const engineControl = <EngineSegments value={config.engine} label={label} statuses={statuses} onChange={(engine) => onChange(equivalentConfig(config, engine))} />;
+  const engineControl = <EngineSegments value={config.engine} label={label} statuses={statuses} onChange={(engine) => onChange(equivalentConfig(config, engine, row))} />;
   /* The state sits on its own line under the name, so the longest Ukrainian
      names («Розробник, виправлення», «Аудитор продакшену») keep the whole
      column when a row is changed. */
@@ -373,7 +373,7 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
   const moveAll = () => {
     if (!missing || !connected) return;
     const moves = blockedRows.map((row) => ({ row, from: configOf(roles, row)!, shipped: shippedOf(roles, row) }));
-    const changes = moves.map(({ row, from }) => ({ row, config: equivalentConfig(from, connected) }));
+    const changes = moves.map(({ row, from }) => ({ row, config: equivalentConfig(from, connected, row) }));
     /* The undo writes back what each row was: a row that was on its shipped
        value resets, a row the install had changed gets that change back. */
     const undo = moves.map(({ row, from, shipped }) => ({ row, config: same(from, shipped) ? null : from }));

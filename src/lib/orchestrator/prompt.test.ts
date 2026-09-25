@@ -474,7 +474,7 @@ test("the delivered mandate renders the role table from the registry it is hande
   expect(rows).toHaveLength(ROLE_DEFAULTS.length);
   expect(rows.find((row) => row.startsWith("| prod-auditor |"))).toStartWith("| prod-auditor | claude | sonnet | low | read-only |");
   expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6-astra | medium | read-write |");
-  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6-astra | xhigh | read-only |");
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6-astra | high | read-only |");
 });
 
 test("the role table carries the runtime guidance beside it", () => {
@@ -485,6 +485,12 @@ test("the role table carries the runtime guidance beside it", () => {
   expect(section).toMatch(/low or medium/);
   expect(section).toContain("NEXT attempt");
   expect(section).toContain("create_pipeline");
+  /* The standing model rules (model landscape 2026-09) ride in the role rows. */
+  expect(section).toContain("Frontend xhigh only per lane, for the hardest UI");
+  expect(section).toContain("never raise GPT-6 Sol to xhigh by hand");
+  expect(section).toContain("Default Sol high vs Astra medium: decided at 30 Sol first reviews");
+  expect(section).toContain("High per lane for risky backend diffs.");
+  expect(section).toContain("claude/fable/high per lane for the largest cross-cutting designs");
 });
 
 test("the manager table uses resolved saved builder variants and keeps registry provenance", () => {

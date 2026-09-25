@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { resolveRole } from "./registry";
 
-import { applyRoleMappingPatch, loadRoleDefinitions, loadRoleOverrides, saveRoleOverrides } from "./store";
+import { applyRoleMappingPatch, loadRoleDefinitions, loadRoleOverrides, mergeRoleDefinitions, saveRoleOverrides } from "./store";
 
 test("role overrides persist with a schema version and merge only the selected role", () => {
   const previous = process.env.LLV_STATE_DIR;
@@ -156,4 +156,36 @@ test("a mapping patch drops rows equal to the shipped value and keeps scaffold o
     },
   );
   expect(next).toEqual({ reviewer: { promptScaffold: "mine" } });
+});
+
+/* The request the orchestrator sends to apply the model-landscape proposals
+   (2026-09) to a live mapping shaped like this one: the frontend builder and
+   the prod-auditor move to their new runtime and nothing else changes. */
+test("the model-landscape mapping patch changes the frontend builder and the prod-auditor only", () => {
+  const live: Parameters<typeof applyRoleMappingPatch>[0] = {
+    builder: {
+      config: { engine: "codex", model: "gpt-6-sol", effort: "high" },
+      variants: { frontend: { engine: "claude", model: "opus", effort: "xhigh" }, "apply-fixes": { engine: "codex", model: "gpt-6-luna", effort: "high" } },
+    },
+    reviewer: { config: { engine: "codex", model: "gpt-6-astra", effort: "medium" } },
+    orchestrator: { config: { engine: "claude", model: "opus", effort: "high" } },
+    architect: { config: { engine: "claude", model: "opus", effort: "high" } },
+    "prod-auditor": { config: { engine: "codex", model: "gpt-6-sol", effort: "xhigh" } },
+    deployer: { config: { engine: "codex", model: "gpt-6-sol", effort: "medium" } },
+    cleaner: { config: { engine: "codex", model: "gpt-6-luna", effort: "medium" } },
+  };
+  const next = applyRoleMappingPatch(live, {
+    builder: { variants: { frontend: { engine: "claude", model: "opus", effort: "high" } } },
+    "prod-auditor": { config: { engine: "codex", model: "gpt-6-astra", effort: "high" } },
+  });
+  const before = new Map(mergeRoleDefinitions(live).map((role) => [role.id, role]));
+  const after = new Map(mergeRoleDefinitions(next).map((role) => [role.id, role]));
+
+  expect(after.get("builder")!.variants!.frontend).toEqual({ engine: "claude", model: "opus", effort: "high" });
+  expect(after.get("prod-auditor")!.config).toEqual({ engine: "codex", model: "gpt-6-astra", effort: "high" });
+  expect(after.get("builder")!.config).toEqual(before.get("builder")!.config);
+  expect(after.get("builder")!.variants!["apply-fixes"]).toEqual(before.get("builder")!.variants!["apply-fixes"]);
+  for (const id of ["orchestrator", "reviewer", "verifier", "architect", "cleaner", "deployer"] as const) {
+    expect({ id, config: after.get(id)!.config }).toEqual({ id, config: before.get(id)!.config });
+  }
 });

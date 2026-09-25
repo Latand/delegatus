@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
-import { claudeLoginErrKey, createEngineAccountsStore, NONTERMINAL_CLAUDE_LOGIN_PHASES, parseAccountLimits, parseClaudeLogin, parseResetCredits, type AccountRefusalReason, type ClaudeLoginPhase } from "./useEngineAccounts";
+import { translate } from "@/lib/i18n";
+import { claudeLoginErrKey, claudeLoginErrorText, createEngineAccountsStore, NONTERMINAL_CLAUDE_LOGIN_PHASES, parseAccountLimits, parseClaudeLogin, parseResetCredits, type AccountRefusalReason, type ClaudeLoginPhase } from "./useEngineAccounts";
 
 const advance = async () => {
   for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
@@ -512,6 +513,90 @@ test("a stale device hydrates the active login after login_busy and starts fast 
     expect(store.notice?.messageKey).toBe("accounts.claudeLogin.err.login_busy");
     unsub();
   } finally { timers.restore(); }
+});
+
+/* ---- Sign-in state after a reload, and the reason a start failed (#2167) ---- */
+
+const failedLogin = (operationId: string, code: string) => loginView({
+  operationId, phase: "failed", loginUrl: null, acceptsCode: false,
+  result: { status: "failure", code, message: "Claude login process could not be verified" },
+});
+
+test("a finished sign-in left over from before a reload is not the row's state", async () => {
+  const { fetcher } = scripted((url) => {
+    if (url === "/api/accounts") return { claude: { active: "acc", accounts: [claudeAcct({ login: failedLogin("op-before-reload", "launch_unfenced") })] } };
+    return new Response(null, { status: 204 });
+  });
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+
+  // A fresh tab sees the account as it is now: signed out, with its sign-in.
+  expect(store.accounts.find((account) => account.id === "acc")?.login).toBeNull();
+  expect(store.notice).toBeNull();
+  unsub();
+});
+
+test("a sign-in this tab watched run keeps its failure on the row when it ends", async () => {
+  let login: unknown = loginView({ operationId: "op-watched", phase: "awaiting_browser", loginUrl: null, acceptsCode: false });
+  const { fetcher } = scripted((url) => {
+    if (url === "/api/accounts") return { claude: { active: "acc", accounts: [claudeAcct({ login })] } };
+    return new Response(null, { status: 204 });
+  });
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+  login = failedLogin("op-watched", "timed_out");
+  await store.refresh();
+
+  expect(store.accounts.find((account) => account.id === "acc")?.login).toEqual(expect.objectContaining({ operationId: "op-watched", phase: "failed" }));
+  unsub();
+});
+
+test("a sign-in refused at start shows once, on the row, with the reason code", async () => {
+  let login: unknown = failedLogin("op-before-reload", "launch_unfenced");
+  const { fetcher } = scripted((url, body) => {
+    if (url === "/api/accounts") return { claude: { active: "acc", accounts: [claudeAcct({ login })] } };
+    if (url === "/api/accounts/claude" && (body as { action?: string }).action === "retry") {
+      login = failedLogin("op-this-press", "launch_unfenced");
+      return new Response(JSON.stringify({ error: "Claude login process could not be verified", code: "launch_unfenced" }), { status: 503 });
+    }
+    return new Response(null, { status: 204 });
+  });
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+  expect(store.accounts.find((account) => account.id === "acc")?.login).toBeNull();
+
+  const ok = await store.retryLogin("acc");
+
+  expect(ok).toBeFalse();
+  // The press produced a new result, and the row shows it — no second copy in a notice.
+  expect(store.accounts.find((account) => account.id === "acc")?.login).toEqual(expect.objectContaining({ operationId: "op-this-press", phase: "failed" }));
+  expect(store.notice).toBeNull();
+  const t = (key: string, params?: Record<string, string | number>) => translate("en", key as never, params);
+  expect(claudeLoginErrorText(t, "launch_unfenced")).toBe("Sign-in could not start (launch_unfenced). Try again.");
+  expect(claudeLoginErrorText(t, "timed_out")).toBe("Sign-in timed out.");
+  expect(claudeLoginErrorText(t, null)).toBe("Sign-in could not start. Try again.");
+  unsub();
+});
+
+test("a sign-in refused before any attempt existed names the route's code on the notice", async () => {
+  const { fetcher } = scripted((url, body) => {
+    if (url === "/api/accounts") return { claude: { active: "acc", accounts: [claudeAcct()] } };
+    if (url === "/api/accounts/claude" && (body as { action?: string }).action === "retry") {
+      return new Response(JSON.stringify({ error: "Claude login is temporarily unavailable", code: "login_unavailable" }), { status: 503 });
+    }
+    return new Response(null, { status: 204 });
+  });
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+
+  expect(await store.retryLogin("acc")).toBeFalse();
+
+  expect(store.notice).toMatchObject({ messageKey: "accounts.claudeLogin.err.generic", detail: "login_unavailable", action: { kind: "loginRetry", accountId: "acc" } });
+  unsub();
 });
 
 test("a non-202 claude add keeps the add retry action with the draft label (C12g)", async () => {
