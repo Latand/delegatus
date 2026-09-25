@@ -28,6 +28,7 @@ import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
+import { useColumnDwell } from "./useColumnDwell";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
@@ -339,6 +340,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
      between the rail and them (#1841): one choice per browser. */
   const seatFrame = useKanbanSeat(project);
   const wideColumns = useKanbanWide();
+  /* One column holds the wide share (#1841): Assigned, or the shelf the
+     operator widened. Tabs already show one column at full width, and the
+     cross-project Overview keeps its fixed shares and reads no pin. */
+  const widthControls = mode !== "tabs" && !props.overview;
+  const widthControlsRef = useRef(widthControls);
+  widthControlsRef.current = widthControls;
+  const widenIfNarrowRef = useRef(wideColumns.widenIfNarrow);
+  widenIfNarrowRef.current = wideColumns.widenIfNarrow;
   const workInAssignedRef = useRef(wideColumns.workInAssigned);
   workInAssignedRef.current = wideColumns.workInAssigned;
   /* A wide shelf gives the space back when the operator goes back to work in
@@ -2020,6 +2029,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const jumpToAgent = useCallback((key: string) => {
     const view = readerViewsRef.current.find((candidate) => candidate.readerKey === key);
     if (!view) return;
+    /* The agent's column widens as its Widen button would widen it, unless it
+       is already wide or a pin holds the wide share. */
+    const cardId = ownersRef.current.get(key)?.cardId;
+    const status = cardId ? cardsByIdRef.current.get(cardId)?.status : undefined;
+    if (status && widthControlsRef.current) widenIfNarrowRef.current(status);
     setFullReader((current) => (current && current !== key ? null : current));
     openReaderFor(view.file);
   }, [openReaderFor]);
@@ -2225,13 +2239,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (card.drafts.length && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
   }
   if (composingTask) readingStatuses.add("inbox");
-  /* One column holds the wide share (#1841): Assigned, or the shelf the
-     operator widened. Tabs already show one column at full width, and the
-     cross-project Overview keeps its fixed shares and reads no pin. */
-  const widthControls = mode !== "tabs" && !props.overview;
   const wideShelf = widthControls ? wideColumns.wide : null;
   const columnTracks = kanbanColumnTracks(mode, { overview: Boolean(props.overview), wide: wideShelf, reading: readingStatuses });
   const boardStyle = columnTracks ? (columnTracks as CSSProperties) : undefined;
+  /* The mouse resting in a narrow column widens it, never over a pin and never
+     while a drag, a menu or the Stages sheet has the pointer. */
+  useColumnDwell(rootRef, {
+    enabled: widthControls,
+    canWiden: (status) => !wideColumns.pinned && (wideShelf ? wideShelf !== status : status !== "assigned"),
+    busy: () => menuOpenRef.current || sheetOpen.current || dragHint,
+    widen: wideColumns.widenIfNarrow,
+  });
 
   /* ── K9a: + Task, + Agent and the drafts cards hold ─────────────────── */
   const openNewTask = () => {

@@ -193,6 +193,24 @@
 .kb .board.scroll .column.wide { flex-basis: 480px; }
 .kb .board.scroll .column[data-status="assigned"].shelf { flex-basis: 280px; }
 .kb .col-head .icon-btn.col-pin[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
+/* The mouse resting in a narrow column is about to widen it
+   (`useColumnDwell`): the column's frame and its Widen button take the accent,
+   and a line sweeps under the head for what is left of the dwell. Under
+   reduced motion the frame and the button light and nothing moves. */
+.kb .column[data-dwell] { border-color: color-mix(in srgb, var(--color-accent) 45%, transparent); }
+.kb .column[data-dwell] .col-head .icon-btn.col-width { background: var(--color-accent-soft); color: var(--color-accent); }
+@media (prefers-reduced-motion: no-preference) {
+  .kb .column { transition: border-color var(--motion-base) var(--ease-standard); }
+  .kb .column[data-dwell] > .col-head::after {
+    content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; border-radius: 1px;
+    background: var(--color-accent); transform-origin: left center; pointer-events: none;
+    animation: kb-dwell var(--kb-dwell) linear forwards;
+  }
+}
+@keyframes kb-dwell {
+  from { transform: scaleX(0); opacity: 0.4; }
+  to { transform: scaleX(1); opacity: 1; }
+}
 
 /* The head is one line from a 220 px shelf up: the title, its count and the
    buttons keep their size, and the «working» and «waiting on you» counters

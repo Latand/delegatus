@@ -10651,3 +10651,169 @@ describe("the board scrolls on the compositor at a device pixel ratio of 1", () 
     if (failures.length) throw new Error(failures.join("\n"));
   }, 300_000);
 });
+
+describe("a column widens itself: the agent focused from the rail, the mouse resting on it", () => {
+  /*
+   * The `stages` scenario at 1440×900 with five of its conversations open,
+   * one of them on an Inbox card, beside the Viewer's sidebar (the board
+   * scrolls its columns) and with the sidebar put away (the columns share a
+   * grid). The mouse comes to rest over a card in the rightmost narrow shelf
+   * the window shows whole: the frames are that column mid-countdown, with its
+   * cue, and the board after the dwell, with the column holding the wide
+   * share; in both schemes, and under reduced motion. A fresh board then takes
+   * the rail's segment for the Inbox agent: the frame is Inbox widened with
+   * the reader focused in it. What is gated: the cue shows before the
+   * threshold and sweeps (still under reduced motion), and both the dwell and
+   * the rail leave every column exactly as wide as a press of the same
+   * column's Widen button does on a fresh board. Frames and readings go to
+   * COLUMN_AUTOEXPAND_PNG_DIR.
+   *
+   *   CHROME_BIN=/usr/bin/google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "widens itself"
+   */
+  const OPEN = ["search-ver-2", "rounds-review", "pending-worker", "upload-plan", "export-impl"] as const;
+  const SHELF_AGENT = "conversation_pending-worker";
+  const seedReaders = `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(OPEN.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
+  const readColumns = (page: Page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => {
+    const head = column.querySelector(".col-head");
+    const sweep = head ? getComputedStyle(head, "::after") : null;
+    return [column.dataset.status!, {
+      width: Math.round(column.getBoundingClientRect().width),
+      wide: column.dataset.wide === "1",
+      cue: column.hasAttribute("data-dwell"),
+      sweep: sweep && sweep.content !== "none" ? sweep.animationName : null,
+      frame: getComputedStyle(column).borderTopColor,
+    }];
+  })));
+
+  browserTest("the cue mid-countdown, the widened column and the rail's agent, at 1440×900", async () => {
+    const pngDir = process.env.COLUMN_AUTOEXPAND_PNG_DIR ?? "/var/tmp/llv-column-autoexpand";
+    const out = path.resolve(".artifacts/column-autoexpand");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const open = async (sidebar: boolean, scheme: Scheme, motion: "no-preference" | "reduce" = "no-preference") => {
+      const opened = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, scheme, "en", motion);
+      await opened.context.addInitScript(seedReaders);
+      await opened.page.reload();
+      await opened.page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
+      await opened.page.waitForFunction((count) => document.querySelectorAll("[data-kanban-reader]").length >= count, OPEN.length, { timeout: 30_000 });
+      if (!sidebar) await opened.page.click("[data-rail-hide]");
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      if (await opened.page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await opened.page.keyboard.press("o");
+      /* The pointer starts on the bar, over no column. */
+      await opened.page.mouse.move(700, 10);
+      await opened.page.waitForTimeout(700);
+      return opened;
+    };
+    /* The columns a press of `status`'s Widen button leaves, on a fresh board. */
+    const viaButton = async (sidebar: boolean, status: string, before?: (page: Page) => Promise<void>) => {
+      const { context, page } = await open(sidebar, "light");
+      try {
+        await before?.(page);
+        const box = await page.locator(`[data-col-width="${status}"]`).boundingBox();
+        if (!box) return null;
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.move(700, 10);
+        await page.waitForTimeout(700);
+        return await readColumns(page);
+      } finally {
+        await context.close();
+      }
+    };
+    const sameAs = (label: string, got: Awaited<ReturnType<typeof readColumns>>, want: Awaited<ReturnType<typeof readColumns>> | null) => {
+      if (!want) return failures.push(`${label}: the Widen button was not on screen`);
+      for (const [status, column] of Object.entries(want)) {
+        const mine = got[status];
+        if (!mine || mine.wide !== column.wide || Math.abs(mine.width - column.width) > 1) failures.push(`${label}: ${status} is ${JSON.stringify(mine)}, the Widen button leaves ${JSON.stringify(column)}`);
+      }
+    };
+    const cases = [
+      { sidebar: true, scheme: "light", motion: "no-preference" },
+      { sidebar: false, scheme: "light", motion: "no-preference" },
+      { sidebar: false, scheme: "dark", motion: "no-preference" },
+      { sidebar: false, scheme: "light", motion: "reduce" },
+    ] as const;
+    try {
+      for (const { sidebar, scheme, motion } of cases) {
+        const label = `${sidebar ? "sidebar" : "no-sidebar"}-${scheme}${motion === "reduce" ? "-reduced-motion" : ""}`;
+        const { context, page, pageErrors } = await open(sidebar, scheme, motion);
+        try {
+          const before = await readColumns(page);
+          /* Over a card in the rightmost narrow shelf the window shows whole, clear of its buttons. */
+          const target = await page.evaluate(() => {
+            const shown = [...document.querySelectorAll<HTMLElement>('[data-kanban-board] .column[data-wide="0"]')].filter((column) => {
+              const box = column.getBoundingClientRect();
+              return box.left >= 0 && box.right <= innerWidth;
+            });
+            const column = shown.at(-1);
+            if (!column) return null;
+            const body = column.querySelector<HTMLElement>(".col-body")!.getBoundingClientRect();
+            return { status: column.dataset.status!, x: Math.round(body.left + body.width / 2), y: Math.round(body.top + 90), mode: document.querySelector<HTMLElement>("[data-kanban-board]")?.dataset.mode ?? null };
+          });
+          if (!target) {
+            failures.push(`${label}: no narrow column is whole in the window`);
+            continue;
+          }
+          await page.mouse.move(target.x - 40, target.y - 30);
+          await page.mouse.move(target.x, target.y, { steps: 6 });
+          await page.waitForTimeout(800);
+          const mid = await readColumns(page);
+          await page.screenshot({ path: path.join(pngDir, `${label}-cue-mid-countdown.png`) });
+          await page.waitForTimeout(1_000);
+          const after = await readColumns(page);
+          await page.screenshot({ path: path.join(pngDir, `${label}-widened.png`) });
+          const button = scheme === "light" && motion === "no-preference" ? await viaButton(sidebar, target.status) : null;
+          readings[label] = { target, before, mid, after, button, pageErrors };
+          const cue = mid[target.status];
+          if (!cue?.cue) failures.push(`${label}: no cue on ${target.status} 800 ms into the dwell`);
+          if (motion === "reduce" ? cue?.sweep : cue?.sweep !== "kb-dwell") failures.push(`${label}: the sweep reads ${cue?.sweep}`);
+          if (!after[target.status]?.wide || before[target.status]?.wide) failures.push(`${label}: ${target.status} did not widen`);
+          if (button) sameAs(label, after, button);
+          if (after[target.status]?.cue) failures.push(`${label}: the cue stayed after the widening`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+      for (const sidebar of [true, false]) {
+        const label = `${sidebar ? "sidebar" : "no-sidebar"}-light-rail-focus`;
+        const { context, page, pageErrors } = await open(sidebar, "light");
+        try {
+          const status = await page.evaluate((key) => document.querySelector(`[data-kanban-reader="${key}"]`)?.closest<HTMLElement>(".column")?.dataset.status ?? null, SHELF_AGENT);
+          /* Another agent first, so the rail's jump is a move across the board. */
+          const first = async (on: Page) => {
+            await on.locator(`[data-open-agent-jump="conversation_${OPEN[0]}"]`).click();
+            await on.waitForTimeout(500);
+          };
+          await first(page);
+          const before = await readColumns(page);
+          await page.screenshot({ path: path.join(pngDir, `${label}-before.png`) });
+          await page.locator(`[data-open-agent-jump="${SHELF_AGENT}"]`).click();
+          await page.waitForTimeout(700);
+          const after = await readColumns(page);
+          const focused = await page.evaluate(() => document.activeElement?.closest<HTMLElement>("[data-kanban-reader]")?.dataset.kanbanReader ?? null);
+          await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+          const button = await viaButton(sidebar, "inbox", first);
+          readings[label] = { status, before, after, button, focused, pageErrors };
+          if (status !== "inbox") failures.push(`${label}: the shelf agent's reader sits in ${status}`);
+          else if (!after.inbox?.wide || before.inbox?.wide) failures.push(`${label}: Inbox did not widen`);
+          sameAs(label, after, button);
+          if (focused !== SHELF_AGENT) failures.push(`${label}: the operator is in ${focused}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(pngDir, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});

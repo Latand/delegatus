@@ -74,6 +74,11 @@ export interface KanbanWideState {
   togglePin(): void;
   /** Work in Assigned narrows an unpinned wide shelf. */
   workInAssigned(): void;
+  /** Widen a narrow column on the board's own initiative (an agent focused
+      from the rail, the pointer resting on the column): the same as its Widen
+      button, except that a column already wide stays as it is and a pin is
+      never overridden. */
+  widenIfNarrow(status: TaskStatus): void;
 }
 
 export function useKanbanWide(): KanbanWideState {
@@ -106,5 +111,11 @@ export function useKanbanWide(): KanbanWideState {
   const workInAssigned = useCallback(() => {
     if (!readPinned()) setTransient(null);
   }, []);
-  return { wide, pinned, widen, narrow, togglePin, workInAssigned };
+  const widenIfNarrow = useCallback((status: TaskStatus) => {
+    if (readPinned()) return;
+    const current = transientRef.current;
+    if (current ? current === status : status === "assigned") return;
+    widen(status);
+  }, [widen]);
+  return { wide, pinned, widen, narrow, togglePin, workInAssigned, widenIfNarrow };
 }

@@ -274,6 +274,50 @@ test("a segment moves the board to its agent's conversation and focuses it, unfo
   expect(jump(host, "conversation_verify-2")?.getAttribute("aria-current")).toBe("true");
 });
 
+test("focusing an agent from the rail widens its narrow column as Widen would, and leaves a wide or pinned one alone", async () => {
+  const wide = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.column[data-wide="1"]')].map((node) => node.dataset.status);
+  seed([verify2, plain]);
+  const { host } = mount();
+  await tick();
+  /* The export agent's card sits in Inbox, a narrow shelf. */
+  expect(wide(host)).toEqual(["assigned"]);
+  click(jump(host, "conversation_plain-1"));
+  await tick();
+  expect(wide(host)).toEqual(["inbox"]);
+  expect(host.querySelector('[data-col-width="inbox"]')?.getAttribute("data-col-width-action")).toBe("narrow");
+  /* The same agent again: its column is wide already and stays so. */
+  click(jump(host, "conversation_plain-1"));
+  await tick();
+  expect(wide(host)).toEqual(["inbox"]);
+  expect(localStorage.getItem("llv:kanban-wide:v1")).toBeNull();
+
+  /* A pinned shelf keeps the wide share: the rail never unpins it. */
+  for (const root of roots.splice(0)) flushSync(() => root.unmount());
+  document.body.replaceChildren();
+  localStorage.setItem("llv:kanban-wide:v1", "blocked");
+  seed([verify2, plain]);
+  const pinned = mount();
+  await tick();
+  expect(wide(pinned.host)).toEqual(["blocked"]);
+  click(jump(pinned.host, "conversation_plain-1"));
+  await tick();
+  expect(wide(pinned.host)).toEqual(["blocked"]);
+  expect(localStorage.getItem("llv:kanban-wide:v1")).toBe("blocked");
+  expect(isFocused(readerOf(pinned.host, "conversation_plain-1"))).toBe(true);
+
+  /* Assigned is the wide column by default: focusing its agent changes nothing. */
+  localStorage.removeItem("llv:kanban-wide:v1");
+  for (const root of roots.splice(0)) flushSync(() => root.unmount());
+  document.body.replaceChildren();
+  seed([verify2, plain]);
+  const plainBoard = mount();
+  await tick();
+  click(jump(plainBoard.host, "conversation_verify-2"));
+  await tick();
+  expect(wide(plainBoard.host)).toEqual(["assigned"]);
+  expect(isFocused(readerOf(plainBoard.host, "conversation_verify-2"))).toBe(true);
+});
+
 test("opening, closing and finishing update the rail live, and its × and «Close all» close the readers", async () => {
   const { host, render } = mount();
   await tick();
