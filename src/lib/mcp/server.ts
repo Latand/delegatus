@@ -31,7 +31,8 @@ import { procBackend } from "@/lib/proc";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
-import { TASK_COLORS } from "@/lib/tasks/types";
+import { renderTaskPriorityRule } from "@/lib/tasks/priority";
+import { TASK_COLORS, TASK_PRIORITIES } from "@/lib/tasks/types";
 import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
 import {
   MAX_REPLY_LABEL_CHARS, MAX_REPLY_SUGGESTIONS, MAX_REPLY_TEXT_BYTES, MIN_REPLY_SUGGESTIONS,
@@ -2963,6 +2964,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
     "Pass `icon` (a lucide icon name) and `color` on every task you create, both picked by the rule below, so the card reads at a glance.",
     renderTaskColorRule(),
+    renderTaskPriorityRule(),
   ].join(" "),
   update_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
@@ -2971,6 +2973,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`refine` writes only the human part, as it always has.",
     "To change one line of `details`, send `replaceLine`, `removeLine` or `appendLine` instead of the whole field; the answer carries detailsLength and the revision, never the field.",
     "`icon` and `color` set the card's lucide icon and colour; give both to a task you touch that lacks them, picked by the colour and icon rule in create_task's description.",
+    renderTaskPriorityRule(),
   ].join(" "),
   create_pipeline: [
     "Create a Delegatus pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
@@ -3312,6 +3315,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     /* Unknown too, so an unknown colour is clamped with a note like an icon. */
     color: z.unknown().optional()
       .describe(`Colour label for the card: none, ${TASK_COLORS.join(", ")}, picked by the rule in this tool's description. A value that is no colour is stored as no colour and the answer carries a note.`),
+    priority: z.unknown().optional()
+      .describe(`${TASK_PRIORITIES.join(", ")}; omitted is normal. Picked by the rule in this tool's description. A value that is no priority creates a normal task and the answer carries a note.`),
   }).passthrough(),
   update_task: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3344,6 +3349,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Board membership of this task's band (#1614). hidden takes the band off the board and shown puts it back; the task itself is never removed, keeps its row in the task list and every assignment, and either direction is one write. It governs EMPTY tasks only — a task holding a durable agent association draws its band whatever this says."),
     color: z.enum(["none", ...TASK_COLORS]).optional()
       .describe("Colour label shown on the task's kanban card (#1695). none clears it."),
+    priority: z.enum(TASK_PRIORITIES).optional()
+      .describe("How soon to take the task, picked by the rule in this tool's description; normal clears a high or low. Leaves updatedAt unchanged."),
     icon: z.unknown().optional()
       .describe("A lucide icon name for the card (#2102), read like create_task's icon; none, null or an empty string clears it. Leaves updatedAt unchanged."),
     attachLinks: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
@@ -3598,6 +3605,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     openOnly: z.unknown().optional().describe("true excludes done tasks."),
     compact: z.unknown().optional().describe("Compact by default. false restores the previous projection with truncated details; full:true includes all details."),
     placement: z.unknown().optional().describe("pinned or unplaced; unknown values are ignored."),
+    priority: z.unknown().optional().describe("One priority or an array: high, normal, low. Unknown values are ignored. Compact rows carry priority only when it is not normal."),
     limit: boundedNumericInput("list_tasks", "limit"),
     cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters and a fresh clientRequestId. Invalid cursors restart with cursorReset:true."),
     ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string). Unknown ids match no records."),

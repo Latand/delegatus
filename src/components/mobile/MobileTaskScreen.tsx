@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Palette, Pause, Pencil, Play, Plus, ScrollText, UserRoundCheck } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
@@ -25,7 +25,7 @@ import { formatConversationHash } from "@/lib/accounts/identity";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import { TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
+import { TASK_COLORS, TASK_PRIORITIES, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
@@ -589,6 +589,13 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
       if (outcome.kind === "failed") showReceipt(t("kanban.colorFailed", { title: receiptTitle, error: outcome.error }), null, { error: true });
     });
   };
+  const setPriority = (priority: TaskPriority): void => {
+    const raw = stored.current.get(taskId);
+    if (!raw) return;
+    void controller.edit(raw, { field: "priority", value: priority }).then((outcome) => {
+      if (outcome.kind === "failed") showReceipt(t("kanban.priorityFailed", { title: receiptTitle, error: outcome.error }), null, { error: true });
+    });
+  };
   const hidden = Boolean(task?.groupHidden);
   const setHidden = (hide: boolean, receipt = true): void => {
     const raw = stored.current.get(taskId);
@@ -626,7 +633,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   };
   const [laneFor, setLaneFor] = useState<string | null>(null);
   const [linksFor, setLinksFor] = useState<WorkLinkTarget | null>(null);
-  const [menuFace, setMenuFace] = useState<"task" | "colour" | "board">("task");
+  const [menuFace, setMenuFace] = useState<"task" | "colour" | "priority" | "board">("task");
   useEffect(() => {
     if (navState.sheet !== "menu") setMenuFace("task");
   }, [navState.sheet]);
@@ -852,6 +859,34 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         </MobileSheet>
       );
     }
+    if (name === "menu" && menuFace === "priority" && task) {
+      const current = taskPriority(task);
+      const glyph = { high: ArrowUp, normal: Minus, low: ArrowDown } as const;
+      return (
+        <MobileSheet name="menu" title={t("kanban.priority")} onClose={close}>
+          <div role="menu" aria-label={t("kanban.priority")} className="flex flex-col py-1" data-phone-task-priorities="">
+            {TASK_PRIORITIES.map((priority) => {
+              const Icon = glyph[priority];
+              return (
+                <MobileSheetRow
+                  key={priority}
+                  icon={<Icon className="h-[18px] w-[18px]" aria-hidden />}
+                  label={t(`kanban.priority.${priority}`)}
+                  checked={current === priority}
+                  selected={current === priority}
+                  trailing={current === priority ? <Check className="h-4 w-4 text-accent" aria-hidden /> : undefined}
+                  onSelect={() => {
+                    close();
+                    setPriority(priority);
+                  }}
+                  attrs={{ "data-phone-task-priority": priority }}
+                />
+              );
+            })}
+          </div>
+        </MobileSheet>
+      );
+    }
     if (name === "menu" && menuFace === "task" && task) {
       const row = (key: string, icon: ReactNode, label: string, run: () => void, trailing?: ReactNode) => (
         <MobileSheetRow key={key} icon={icon} label={label} trailing={trailing} onSelect={run} attrs={{ "data-phone-task-menu": key }} />
@@ -860,6 +895,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         <MobileSheet name="menu" title={cleanTitle(title, 90)} onClose={close}>
           <div role="menu" aria-label={cleanTitle(title, 90)} className="flex flex-col py-1" data-phone-task-menu-sheet={taskId}>
             {row("rename", <Pencil className="h-[18px] w-[18px]" aria-hidden />, t("kanban.rename"), () => { close(); startEdit("title"); })}
+            {row("priority", <ArrowUpDown className="h-[18px] w-[18px]" aria-hidden />, t("kanban.priority"), () => setMenuFace("priority"), <ChevronRight className="h-4 w-4" aria-hidden />)}
             {row("colour", <Palette className="h-[18px] w-[18px]" aria-hidden />, t("kanban.colour"), () => setMenuFace("colour"), <ChevronRight className="h-4 w-4" aria-hidden />)}
             {row("details", <ScrollText className="h-[18px] w-[18px]" aria-hidden />, t("kanban.details"), () => { close(); startEdit("details"); })}
             {row("links", <Link2 className="h-[18px] w-[18px]" aria-hidden />, t("workLinks.attach"), () => openLinks({ kind: "task", id: taskId }))}

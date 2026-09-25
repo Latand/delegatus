@@ -482,3 +482,23 @@ test("a task card leads its title with the task's icon in the task's colour, the
   expect(row("bare").firstElementChild?.hasAttribute("data-phone-card-title")).toBe(true);
   resetTaskIconLoaderForTests();
 });
+
+test("the Inbox tab lists high first and low last, marks those two in the card and in its label, and draws nothing for normal", () => {
+  const at = (iso: string) => ({ updatedAt: iso });
+  const tasks = [
+    { ...task("low", "inbox", [], "Tidy the helpers"), priority: "low", ...at("2026-09-14T12:00:00.000Z") },
+    { ...task("normal-new", "inbox", [], "Write the notes"), ...at("2026-09-14T11:00:00.000Z") },
+    { ...task("high", "inbox", [], "Fix the broken deploy"), priority: "high", ...at("2026-09-14T08:00:00.000Z") },
+    { ...task("normal-old", "inbox", [], "Rename the setting"), ...at("2026-09-14T09:00:00.000Z") },
+  ] as BoardTask[];
+  const { host } = mount({ files: [], tasks });
+  expect(cardsIn(host, "inbox")).toEqual(["task:high", "task:normal-new", "task:normal-old", "task:low"]);
+  const mark = (id: string) => q(host, `[data-phone-card="task:${id}"] [data-phone-card-priority]`);
+  expect(mark("high")?.getAttribute("data-phone-card-priority")).toBe("high");
+  expect(mark("low")?.getAttribute("data-phone-card-priority")).toBe("low");
+  expect(mark("normal-new")).toBeNull();
+  /* After the title, before any badge; the card's label says it. */
+  expect(mark("high")?.previousElementSibling?.hasAttribute("data-phone-card-title")).toBe(true);
+  expect(q(host, '[data-phone-card="task:high"]')!.getAttribute("aria-label")).toContain(en("kanban.priorityMark.high"));
+  expect(q(host, '[data-phone-card="task:normal-new"]')!.getAttribute("aria-label")).not.toContain("priority");
+});

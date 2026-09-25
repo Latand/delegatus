@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, jest, test } from "bun:test";
 import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -7,6 +7,7 @@ import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
 import { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { DWELL_MS } from "./useColumnDwell";
 
 /* The board rendered by React against invented tasks and scripted task ports.
    No route, no store, no state directory is touched. */
@@ -351,6 +352,68 @@ test("a shelf takes the wide share, one at a time, and gives it back when work r
   expect(localStorage.getItem("llv:kanban-wide:v1")).toBeNull();
   expect(wideColumns(again.host)).toEqual(["assigned"]);
   localStorage.clear();
+}));
+
+test("the mouse resting in a narrow column widens it after the dwell, with the cue on the way; a menu or a pin holds it", () => atDesktopWidth(() => {
+  localStorage.clear();
+  jest.useFakeTimers();
+  try {
+    const tasks = [task("a", "assigned", "Repair old links"), task("d", "done", "Merge the approved queue adapter"), task("b", "blocked", "Waiting on a review")];
+    const { host } = mount(tasks, NO_PORTS);
+    const rest = (status: TaskStatus, x: number) => flushSync(() => column(host, status).querySelector(".card")!.dispatchEvent(new dom.PointerEvent("pointermove", { bubbles: true, clientX: x, clientY: 300, pointerType: "mouse" }) as unknown as Event));
+    const wait = (ms: number) => flushSync(() => jest.advanceTimersByTime(ms));
+
+    /* The wide column never counts. */
+    rest("assigned", 500);
+    wait(DWELL_MS * 2);
+    expect(column(host, "assigned").hasAttribute("data-dwell")).toBe(false);
+    expect(wideColumns(host)).toEqual(["assigned"]);
+
+    rest("done", 1200);
+    wait(DWELL_MS / 2);
+    expect(column(host, "done").hasAttribute("data-dwell")).toBe(true);
+    wait(DWELL_MS / 2);
+    expect(wideColumns(host)).toEqual(["done"]);
+    expect(column(host, "done").hasAttribute("data-dwell")).toBe(false);
+    /* Exactly the Widen button's result: not pinned, and the button now narrows. */
+    expect(localStorage.getItem("llv:kanban-wide:v1")).toBeNull();
+    expect(widthButton(host, "done")?.getAttribute("data-col-width-action")).toBe("narrow");
+
+    /* A column menu open over the board: Blocked stays narrow under the resting pointer. */
+    click(host.querySelector('[data-colmenu="inbox"]'));
+    expect(host.querySelector(".menu")).toBeTruthy();
+    rest("blocked", 900);
+    wait(DWELL_MS * 2);
+    expect(wideColumns(host)).toEqual(["done"]);
+    flushSync(() => document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
+    expect(host.querySelector(".menu")).toBeNull();
+
+    /* A reader composer's menu (model, mic, account) portals to the body, outside
+       the board's own menu state: Blocked still stays narrow while it is open. */
+    const composerMenu = document.createElement("div");
+    composerMenu.setAttribute("role", "menu");
+    composerMenu.setAttribute("data-runtime-popover", "");
+    document.body.appendChild(composerMenu);
+    rest("blocked", 940);
+    wait(DWELL_MS / 2);
+    expect(column(host, "blocked").hasAttribute("data-dwell")).toBe(false);
+    wait(DWELL_MS * 2);
+    expect(wideColumns(host)).toEqual(["done"]);
+    composerMenu.remove();
+
+    /* Pinned, the wide shelf keeps its share against any dwell. */
+    click(host.querySelector('[data-col-pin="done"]'));
+    rest("blocked", 910);
+    wait(DWELL_MS / 2);
+    expect(column(host, "blocked").hasAttribute("data-dwell")).toBe(false);
+    wait(DWELL_MS * 2);
+    expect(wideColumns(host)).toEqual(["done"]);
+    expect(localStorage.getItem("llv:kanban-wide:v1")).toBe("done");
+  } finally {
+    jest.advanceTimersByTime(50);
+    jest.useRealTimers();
+    localStorage.clear();
+  }
 }));
 
 test("the Overview keeps its fixed shares: no width control and no read of a project's pin", () => atDesktopWidth(() => {

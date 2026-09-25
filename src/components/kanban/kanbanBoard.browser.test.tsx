@@ -8,6 +8,8 @@ import { translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
 import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 
+import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
+
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 
@@ -8057,6 +8059,155 @@ describe("board order: working cards first, then recently worked, then idle", ()
   }, 600_000);
 });
 
+describe("task priority: the Inbox takes high first and low last, the other columns keep their order", () => {
+  /* The `task-priority` scenario: an Inbox of two high, two normal and two
+     low tasks (one low task with a working agent, which still sits under
+     every normal one), and an Assigned column whose high and low tasks keep
+     the most recent agent work on top. On the desktop at 1440×900 the board,
+     the Inbox and the card's ⋯ with its Priority group; on the phone at
+     390×844 the Inbox tab and the task sheet's Priority face; en and uk.
+     Frames go to PRIORITY_PNG_DIR, or `.artifacts/task-priority/`, never
+     committed; the readings go to `evidence/task-priority/readings.json`.
+
+       CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 PRIORITY_PNG_DIR=… \
+         bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "task priority" */
+  const INBOX = ["t-prio-deploy", "t-prio-limits", "t-prio-notes", "t-prio-export", "t-prio-cleanup", "t-prio-idea"];
+  const ASSIGNED = ["t-prio-banner", "t-prio-search", "t-prio-docs"];
+  const MARKS: Record<string, string> = { "t-prio-deploy": "high", "t-prio-limits": "high", "t-prio-cleanup": "low", "t-prio-idea": "low", "t-prio-banner": "low", "t-prio-search": "high" };
+
+  browserTest("the Inbox sorts by priority with a quiet mark on high and low, on the desktop and the phone, en and uk", async () => {
+    const pngDir = path.resolve(process.env.PRIORITY_PNG_DIR ?? ".artifacts/task-priority");
+    const out = path.resolve(".artifacts/task-priority-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=task-priority`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const t = (key: string) => translate(lang, key as never);
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, "light", lang);
+          try {
+            await page.waitForSelector(card("t-prio-deploy"), { timeout: 30_000 });
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(800);
+            await page.screenshot({ path: path.join(pngDir, `${label}-board.png`) });
+            await page.locator('[data-kanban-board] .column[data-status="inbox"]').screenshot({ path: path.join(pngDir, `${label}-inbox.png`) });
+            const read = await page.evaluate(() => {
+              const column = (status: string) => [...document.querySelectorAll(`[data-kanban-board] .column[data-status="${status}"] .card`)]
+                .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, ""));
+              const marks = Object.fromEntries([...document.querySelectorAll("[data-kanban-board] .card")].flatMap((element) => {
+                const mark = element.querySelector(".prio-mark");
+                return mark ? [[(element.getAttribute("data-id") ?? "").replace(/^task:/, ""), [mark.getAttribute("data-priority"), mark.getAttribute("aria-label")]]] : [];
+              }));
+              /* The mark takes no room from the title: in one column a marked
+                 card's title is as wide as an unmarked card's. */
+              const squeezed = ["inbox", "assigned"].flatMap((status) => {
+                const widths = [...document.querySelectorAll(`[data-kanban-board] .column[data-status="${status}"] .card`)]
+                  .map((element) => Math.round(element.querySelector(".head > .title")?.getBoundingClientRect().width ?? 0));
+                return Math.max(...widths) - Math.min(...widths) > 1 ? [`${status} ${JSON.stringify(widths)}`] : [];
+              });
+              /* And it leads the foot line, in the foot's own row. */
+              const misplaced = [...document.querySelectorAll("[data-kanban-board] .card .prio-mark")].flatMap((mark) =>
+                mark.parentElement?.classList.contains("foot") && mark.parentElement.firstElementChild === mark ? [] : [(mark.closest(".card")?.getAttribute("data-id") ?? "")]);
+              return { inbox: column("inbox"), assigned: column("assigned"), marks, squeezed, misplaced };
+            });
+            readings[label] = read;
+            if (JSON.stringify(read.inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(read.inbox)}`);
+            if (JSON.stringify(read.assigned) !== JSON.stringify(ASSIGNED)) failures.push(`${label}: Assigned reads ${JSON.stringify(read.assigned)}`);
+            for (const [id, level] of Object.entries(MARKS)) {
+              const got = (read.marks as Record<string, [string, string]>)[id];
+              if (!got || got[0] !== level || got[1] !== t(`kanban.priorityMark.${level}`)) failures.push(`${label}: ${id} mark ${JSON.stringify(got)}`);
+            }
+            const extra = Object.keys(read.marks).filter((id) => !(id in MARKS));
+            if (extra.length) failures.push(`${label}: normal tasks carry a mark: ${extra.join(", ")}`);
+            if (read.squeezed.length) failures.push(`${label}: title widths differ: ${read.squeezed.join(", ")}`);
+            if (read.misplaced.length) failures.push(`${label}: mark not leading the foot: ${read.misplaced.join(", ")}`);
+            /* The card's ⋯: the Priority group under Move to, the current level checked. */
+            await page.locator(`${card("t-prio-notes")} [data-menu]`).click();
+            await page.waitForSelector(".menu", { timeout: 10_000 });
+            await page.waitForTimeout(300);
+            await page.locator(".menu").screenshot({ path: path.join(pngDir, `${label}-menu.png`) });
+            const menu = await page.evaluate(() => ({
+              heads: [...document.querySelectorAll(".menu .head")].map((head) => head.textContent?.trim()),
+              checked: [...document.querySelectorAll('.menu [role="menuitemradio"][aria-checked="true"]')].map((item) => item.querySelector(".lbl")?.firstChild?.textContent?.trim() ?? item.textContent?.trim()),
+            }));
+            readings[`${label}-menu`] = menu;
+            if (menu.heads[1] !== t("kanban.priority")) failures.push(`${label}: menu heads ${JSON.stringify(menu.heads)}`);
+            if (!menu.checked.includes(t("kanban.priority.normal"))) failures.push(`${label}: checked ${JSON.stringify(menu.checked)}`);
+            /* Raise it to high: it moves above the normal tasks at once. */
+            await page.locator('.menu [role="menuitemradio"]').filter({ hasText: t("kanban.priority.high") }).first().click();
+            await page.waitForTimeout(1500);
+            const raised = await page.evaluate(() => [...document.querySelectorAll('[data-kanban-board] .column[data-status="inbox"] .card')]
+              .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, "")));
+            readings[`${label}-raised`] = raised;
+            /* The newest edit leads its level, as it did among the normal ones. */
+            const RAISED = ["t-prio-notes", "t-prio-deploy", "t-prio-limits", "t-prio-export", "t-prio-cleanup", "t-prio-idea"];
+            if (JSON.stringify(raised) !== JSON.stringify(RAISED)) failures.push(`${label}: after High the Inbox reads ${JSON.stringify(raised)}`);
+            await page.mouse.move(0, 0);
+            await page.locator('[data-kanban-board] .column[data-status="inbox"]').screenshot({ path: path.join(pngDir, `${label}-inbox-raised.png`) });
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            await page.locator('[data-phone-kanban-tab="inbox"]').first().click();
+            await page.waitForSelector('[data-phone-kanban-column="inbox"] [data-phone-card="task:t-prio-deploy"]', { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            await page.screenshot({ path: path.join(pngDir, `${label}-inbox.png`) });
+            const read = await page.evaluate(() => ({
+              inbox: [...document.querySelectorAll('[data-phone-kanban-column="inbox"] [data-phone-card^="task:"]')].map((element) => (element.getAttribute("data-phone-card") ?? "").replace(/^task:/, "")),
+              marks: Object.fromEntries([...document.querySelectorAll('[data-phone-kanban-column="inbox"] [data-phone-card]')].flatMap((element) => {
+                const mark = element.querySelector("[data-phone-card-priority]");
+                return mark ? [[(element.getAttribute("data-phone-card") ?? "").replace(/^task:/, ""), mark.getAttribute("data-phone-card-priority")]] : [];
+              })),
+              overflowX: document.scrollingElement ? document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth : 0,
+            }));
+            readings[label] = read;
+            if (JSON.stringify(read.inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(read.inbox)}`);
+            for (const id of INBOX) if ((read.marks as Record<string, string>)[id] !== MARKS[id]) failures.push(`${label}: ${id} mark ${(read.marks as Record<string, string>)[id]}`);
+            if (read.overflowX > 0.5) failures.push(`${label}: overflows sideways by ${read.overflowX}px`);
+            /* The task sheet's Priority face. */
+            await page.locator('[data-phone-card="task:t-prio-notes"]').click();
+            await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 10_000 });
+            await page.locator('[data-mobile2-open="menu"]').first().click();
+            await page.locator('[data-phone-task-menu="priority"]').click();
+            await page.waitForSelector("[data-phone-task-priorities]", { timeout: 10_000 });
+            await page.waitForTimeout(500);
+            await page.screenshot({ path: path.join(pngDir, `${label}-sheet.png`) });
+            const sheet = await page.evaluate(() => [...document.querySelectorAll("[data-phone-task-priority]")].map((row) => [row.getAttribute("data-phone-task-priority"), row.textContent?.trim(), row.getAttribute("aria-checked"), Math.round(row.getBoundingClientRect().height)]));
+            readings[`${label}-sheet`] = sheet;
+            const want = (["high", "normal", "low"] as const).map((level) => [level, t(`kanban.priority.${level}`), level === "normal" ? "true" : "false"]);
+            if (JSON.stringify(sheet.map((row) => row.slice(0, 3))) !== JSON.stringify(want)) failures.push(`${label}: sheet ${JSON.stringify(sheet)}`);
+            if (sheet.some((row) => (row[3] as number) < 44)) failures.push(`${label}: sheet rows under 44px ${JSON.stringify(sheet)}`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/task-priority", { recursive: true });
+    fs.writeFileSync("evidence/task-priority/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
 describe("interface polish round 2: press and open/close motion, the status menu at the card's ⋯, quiet card tools, the narrow sheet head", () => {
   /*
    * What only a browser settles for the round-2 interface polish (#2148), over
@@ -10278,6 +10429,135 @@ describe("#2146 the orchestrator's report log beside its chat, and the Bridge re
   }, 900_000);
 });
 
+describe("the report log opens beside the seat's chat only where the chat keeps its width", () => {
+  /*
+   * The seat's report log (#2146) opened beside the chat from a 720 px seat as
+   * a 300 px column, leaving the chat 420 px. It now opens only where the chat
+   * keeps REPORT_LOG_CHAT_MIN_WIDTH (1.5 times that) beside a column of at
+   * least REPORT_LOG_MIN_WIDTH; narrower, it stays closed until the header
+   * toggle shows it in the transcript's place. At 1280, 1440, 1728 and 1920,
+   * the seat at its default width and widened across the board, en and uk,
+   * over the fixture's reports and a long draft in the composer; and a seat
+   * dragged to 900 px at 1440, where the log used to open and no longer does.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     REPORT_PANEL_STAMP=after REPORT_PANEL_PNG_DIR=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "keeps its width"
+   *
+   * `REPORT_PANEL_STAMP=before` draws the same frames over a checkout without
+   * the change and gates nothing. PNGs go to `REPORT_PANEL_PNG_DIR`, or
+   * `.artifacts/report-panel-width/`, never committed.
+   */
+  const STAMP = process.env.REPORT_PANEL_STAMP === "before" ? "before" : "after";
+  const OUT = path.resolve(process.env.REPORT_PANEL_PNG_DIR ?? ".artifacts/report-panel-width");
+  const EVIDENCE = path.resolve("evidence/orchestrator-report-log");
+  const SEAT = "[data-kanban-seat]";
+  const DRAFTS = {
+    en: "Before the release goes out tonight, take the search lane off review and merge it once the checks are green, then rebuild the candidate and run verify-candidate against it. If the runtime host fails to take the fence again, do not retry more than once: file an issue with the host log attached and leave production on the current build. Also move the favicon lane behind the upload one, and tell me in one line what is still waiting on me when you are done.\n\nOne more thing about the reports: write them more often, especially while I am away, so that when I come back I can read what happened without asking. Keep each one short but say what changed, what it cost and what is waiting on me, in the language the interface is set to. If a lane has been quiet for an hour, say so and say why, even if nothing is wrong.",
+    uk: "Перед сьогоднішнім релізом зніміть лінію пошуку з рев'ю і змерджте її, щойно перевірки стануть зеленими, потім перезберіть кандидата і проженіть verify-candidate. Якщо runtime host знову не візьме fence, повторіть лише один раз: заведіть issue з логом хоста і залиште продакшн на поточній збірці. Також поставте лінію фавікона за лінією завантаження і напишіть одним рядком, що ще чекає на мене, коли закінчите.\n\nІ ще про звіти: пишіть їх частіше, особливо поки мене немає, щоб, повернувшись, я міг прочитати, що сталося, нічого не питаючи. Кожен звіт короткий, але в ньому сказано, що змінилося, чого це коштувало і що чекає на мене, мовою, вибраною в інтерфейсі. Якщо лінія мовчить понад годину, скажіть про це і чому, навіть коли все гаразд.",
+  } as const;
+  const seatRecord = (topWidth: number | null) => `try { localStorage.setItem("llv:kanban-seat:v2", ${JSON.stringify(JSON.stringify({
+    height: null, collapsed: {}, placement: "top", width: null, topWidths: topWidth === null ? {} : { atlas: topWidth }, sideWidths: {}, heightV: 2,
+  }))}); } catch {}`;
+  const READ = () => {
+    const box = (element: Element | null | undefined) => (element ? Math.round(element.getBoundingClientRect().width) : null);
+    const seat = document.querySelector("[data-kanban-seat]");
+    const log = seat?.querySelector("[data-report-log]") ?? null;
+    const layout = seat?.querySelector("[data-report-log-layout]")?.getAttribute("data-report-log-layout") ?? null;
+    return {
+      seat: box(seat),
+      panel: box(seat?.querySelector("[data-orchestrator-panel]")),
+      layout,
+      conversation: box(seat?.querySelector("[data-orchestrator-conversation]")),
+      log: box(log),
+      /* Beside the chat, the log's column, its left border included. */
+      column: layout === "beside" ? box(log?.parentElement) : null,
+      toggle: seat?.querySelector("[data-report-log-toggle]")?.getAttribute("data-report-log-toggle") ?? null,
+      entries: log?.querySelectorAll("[data-report-entry]").length ?? 0,
+      draft: (seat?.querySelector("[data-orchestrator-conversation] textarea") as HTMLTextAreaElement | null)?.value.length ?? 0,
+      sideways: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  };
+
+  browserTest("the log opens beside the chat only where the chat keeps 1.5 times its old minimum, and the toggle shows it narrower", async () => {
+    const dir = path.join(OUT, STAMP);
+    fs.mkdirSync(dir, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/report-panel-width-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const frames: Array<{ width: number; seat: "normal" | "maximised" | "dragged-900"; topWidth: number | null }> = [
+      ...[1280, 1440, 1728, 1920].flatMap((width) => [
+        { width, seat: "normal" as const, topWidth: null },
+        { width, seat: "maximised" as const, topWidth: 4_000 },
+      ]),
+      { width: 1440, seat: "dragged-900", topWidth: 900 },
+    ];
+    try {
+      for (const frame of frames) {
+        for (const lang of ["en", "uk"] as const) {
+          const label = `${frame.width}-${frame.seat}-${lang}`;
+          const fail = (text: string) => failures.push(`${label}: ${text}`);
+          const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width: frame.width, height: 900 }, "light", lang);
+          try {
+            await context.addInitScript(seatRecord(frame.topWidth));
+            await page.goto(server.base);
+            await page.waitForSelector(`${SEAT} [data-orchestrator-conversation] textarea`, { timeout: 30_000 });
+            await page.waitForSelector(`${SEAT} [data-report-log-toggle]`, { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            await page.locator("[data-attention-toast-dismiss]").click().catch(() => {});
+            await page.locator(`${SEAT} [data-orchestrator-conversation] textarea`).fill(DRAFTS[lang]);
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(800);
+            const opened = await page.evaluate(READ);
+            await page.locator(SEAT).screenshot({ path: path.join(dir, `${label}.png`) });
+            const reading: Record<string, unknown> = { opened };
+            if (opened.draft !== DRAFTS[lang].length) fail(`the composer holds ${opened.draft} characters of the draft`);
+            if (opened.sideways > 0) fail(`the page scrolls sideways by ${opened.sideways}px`);
+            const wide = (opened.panel ?? 0) >= REPORT_LOG_SPLIT_WIDTH;
+            if (STAMP === "after") {
+              if (wide) {
+                if (opened.layout !== "beside" || opened.toggle !== "open") fail(`a ${opened.panel}px seat did not open the log beside the chat: ${JSON.stringify(opened)}`);
+                if ((opened.conversation ?? 0) < REPORT_LOG_CHAT_MIN_WIDTH) fail(`the chat beside the log is ${opened.conversation}px`);
+                if ((opened.column ?? 0) < REPORT_LOG_MIN_WIDTH || (opened.column ?? 0) > REPORT_LOG_MAX_WIDTH) fail(`the log column is ${opened.column}px`);
+              } else if (opened.layout !== null || opened.log !== null || opened.toggle !== "closed") {
+                fail(`a ${opened.panel}px seat opened the log by itself: ${JSON.stringify(opened)}`);
+              }
+            }
+            if (!wide || STAMP === "before") {
+              /* The header toggle: beside where it fits, in the transcript's place where it does not. */
+              if (opened.toggle === "closed") {
+                await page.locator(`${SEAT} [data-report-log-toggle]`).click();
+                await page.waitForSelector(`${SEAT} [data-report-log] [data-report-entry]`, { timeout: 10_000 });
+                await page.mouse.move(0, 0);
+                await page.waitForTimeout(400);
+                const toggled = await page.evaluate(READ);
+                reading.toggled = toggled;
+                await page.locator(SEAT).screenshot({ path: path.join(dir, `${label}-toggled.png`) });
+                if (STAMP === "after" && (toggled.layout !== null || toggled.log === null || toggled.toggle !== "open")) fail(`the toggle did not show the log in place: ${JSON.stringify(toggled)}`);
+              }
+            }
+            readings[label] = reading;
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (STAMP === "after") {
+      fs.mkdirSync(EVIDENCE, { recursive: true });
+      fs.writeFileSync(path.join(EVIDENCE, "width.json"), `${JSON.stringify({ rule: { chatMin: REPORT_LOG_CHAT_MIN_WIDTH, logMin: REPORT_LOG_MIN_WIDTH, logMax: REPORT_LOG_MAX_WIDTH, split: REPORT_LOG_SPLIT_WIDTH }, readings, failures }, null, 2)}\n`);
+    } else {
+      fs.writeFileSync(path.join(dir, "readings.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+});
+
 describe("the board scrolls on the compositor at a device pixel ratio of 1", () => {
   /*
    * At a device pixel ratio under 1.5 Chromium keeps a scroller with no
@@ -10370,4 +10650,170 @@ describe("the board scrolls on the compositor at a device pixel ratio of 1", () 
     }
     if (failures.length) throw new Error(failures.join("\n"));
   }, 300_000);
+});
+
+describe("a column widens itself: the agent focused from the rail, the mouse resting on it", () => {
+  /*
+   * The `stages` scenario at 1440×900 with five of its conversations open,
+   * one of them on an Inbox card, beside the Viewer's sidebar (the board
+   * scrolls its columns) and with the sidebar put away (the columns share a
+   * grid). The mouse comes to rest over a card in the rightmost narrow shelf
+   * the window shows whole: the frames are that column mid-countdown, with its
+   * cue, and the board after the dwell, with the column holding the wide
+   * share; in both schemes, and under reduced motion. A fresh board then takes
+   * the rail's segment for the Inbox agent: the frame is Inbox widened with
+   * the reader focused in it. What is gated: the cue shows before the
+   * threshold and sweeps (still under reduced motion), and both the dwell and
+   * the rail leave every column exactly as wide as a press of the same
+   * column's Widen button does on a fresh board. Frames and readings go to
+   * COLUMN_AUTOEXPAND_PNG_DIR.
+   *
+   *   CHROME_BIN=/usr/bin/google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "widens itself"
+   */
+  const OPEN = ["search-ver-2", "rounds-review", "pending-worker", "upload-plan", "export-impl"] as const;
+  const SHELF_AGENT = "conversation_pending-worker";
+  const seedReaders = `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(OPEN.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
+  const readColumns = (page: Page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => {
+    const head = column.querySelector(".col-head");
+    const sweep = head ? getComputedStyle(head, "::after") : null;
+    return [column.dataset.status!, {
+      width: Math.round(column.getBoundingClientRect().width),
+      wide: column.dataset.wide === "1",
+      cue: column.hasAttribute("data-dwell"),
+      sweep: sweep && sweep.content !== "none" ? sweep.animationName : null,
+      frame: getComputedStyle(column).borderTopColor,
+    }];
+  })));
+
+  browserTest("the cue mid-countdown, the widened column and the rail's agent, at 1440×900", async () => {
+    const pngDir = process.env.COLUMN_AUTOEXPAND_PNG_DIR ?? "/var/tmp/llv-column-autoexpand";
+    const out = path.resolve(".artifacts/column-autoexpand");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const open = async (sidebar: boolean, scheme: Scheme, motion: "no-preference" | "reduce" = "no-preference") => {
+      const opened = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, scheme, "en", motion);
+      await opened.context.addInitScript(seedReaders);
+      await opened.page.reload();
+      await opened.page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
+      await opened.page.waitForFunction((count) => document.querySelectorAll("[data-kanban-reader]").length >= count, OPEN.length, { timeout: 30_000 });
+      if (!sidebar) await opened.page.click("[data-rail-hide]");
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      if (await opened.page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await opened.page.keyboard.press("o");
+      /* The pointer starts on the bar, over no column. */
+      await opened.page.mouse.move(700, 10);
+      await opened.page.waitForTimeout(700);
+      return opened;
+    };
+    /* The columns a press of `status`'s Widen button leaves, on a fresh board. */
+    const viaButton = async (sidebar: boolean, status: string, before?: (page: Page) => Promise<void>) => {
+      const { context, page } = await open(sidebar, "light");
+      try {
+        await before?.(page);
+        const box = await page.locator(`[data-col-width="${status}"]`).boundingBox();
+        if (!box) return null;
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.move(700, 10);
+        await page.waitForTimeout(700);
+        return await readColumns(page);
+      } finally {
+        await context.close();
+      }
+    };
+    const sameAs = (label: string, got: Awaited<ReturnType<typeof readColumns>>, want: Awaited<ReturnType<typeof readColumns>> | null) => {
+      if (!want) return failures.push(`${label}: the Widen button was not on screen`);
+      for (const [status, column] of Object.entries(want)) {
+        const mine = got[status];
+        if (!mine || mine.wide !== column.wide || Math.abs(mine.width - column.width) > 1) failures.push(`${label}: ${status} is ${JSON.stringify(mine)}, the Widen button leaves ${JSON.stringify(column)}`);
+      }
+    };
+    const cases = [
+      { sidebar: true, scheme: "light", motion: "no-preference" },
+      { sidebar: false, scheme: "light", motion: "no-preference" },
+      { sidebar: false, scheme: "dark", motion: "no-preference" },
+      { sidebar: false, scheme: "light", motion: "reduce" },
+    ] as const;
+    try {
+      for (const { sidebar, scheme, motion } of cases) {
+        const label = `${sidebar ? "sidebar" : "no-sidebar"}-${scheme}${motion === "reduce" ? "-reduced-motion" : ""}`;
+        const { context, page, pageErrors } = await open(sidebar, scheme, motion);
+        try {
+          const before = await readColumns(page);
+          /* Over a card in the rightmost narrow shelf the window shows whole, clear of its buttons. */
+          const target = await page.evaluate(() => {
+            const shown = [...document.querySelectorAll<HTMLElement>('[data-kanban-board] .column[data-wide="0"]')].filter((column) => {
+              const box = column.getBoundingClientRect();
+              return box.left >= 0 && box.right <= innerWidth;
+            });
+            const column = shown.at(-1);
+            if (!column) return null;
+            const body = column.querySelector<HTMLElement>(".col-body")!.getBoundingClientRect();
+            return { status: column.dataset.status!, x: Math.round(body.left + body.width / 2), y: Math.round(body.top + 90), mode: document.querySelector<HTMLElement>("[data-kanban-board]")?.dataset.mode ?? null };
+          });
+          if (!target) {
+            failures.push(`${label}: no narrow column is whole in the window`);
+            continue;
+          }
+          await page.mouse.move(target.x - 40, target.y - 30);
+          await page.mouse.move(target.x, target.y, { steps: 6 });
+          await page.waitForTimeout(800);
+          const mid = await readColumns(page);
+          await page.screenshot({ path: path.join(pngDir, `${label}-cue-mid-countdown.png`) });
+          await page.waitForTimeout(1_000);
+          const after = await readColumns(page);
+          await page.screenshot({ path: path.join(pngDir, `${label}-widened.png`) });
+          const button = scheme === "light" && motion === "no-preference" ? await viaButton(sidebar, target.status) : null;
+          readings[label] = { target, before, mid, after, button, pageErrors };
+          const cue = mid[target.status];
+          if (!cue?.cue) failures.push(`${label}: no cue on ${target.status} 800 ms into the dwell`);
+          if (motion === "reduce" ? cue?.sweep : cue?.sweep !== "kb-dwell") failures.push(`${label}: the sweep reads ${cue?.sweep}`);
+          if (!after[target.status]?.wide || before[target.status]?.wide) failures.push(`${label}: ${target.status} did not widen`);
+          if (button) sameAs(label, after, button);
+          if (after[target.status]?.cue) failures.push(`${label}: the cue stayed after the widening`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+      for (const sidebar of [true, false]) {
+        const label = `${sidebar ? "sidebar" : "no-sidebar"}-light-rail-focus`;
+        const { context, page, pageErrors } = await open(sidebar, "light");
+        try {
+          const status = await page.evaluate((key) => document.querySelector(`[data-kanban-reader="${key}"]`)?.closest<HTMLElement>(".column")?.dataset.status ?? null, SHELF_AGENT);
+          /* Another agent first, so the rail's jump is a move across the board. */
+          const first = async (on: Page) => {
+            await on.locator(`[data-open-agent-jump="conversation_${OPEN[0]}"]`).click();
+            await on.waitForTimeout(500);
+          };
+          await first(page);
+          const before = await readColumns(page);
+          await page.screenshot({ path: path.join(pngDir, `${label}-before.png`) });
+          await page.locator(`[data-open-agent-jump="${SHELF_AGENT}"]`).click();
+          await page.waitForTimeout(700);
+          const after = await readColumns(page);
+          const focused = await page.evaluate(() => document.activeElement?.closest<HTMLElement>("[data-kanban-reader]")?.dataset.kanbanReader ?? null);
+          await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+          const button = await viaButton(sidebar, "inbox", first);
+          readings[label] = { status, before, after, button, focused, pageErrors };
+          if (status !== "inbox") failures.push(`${label}: the shelf agent's reader sits in ${status}`);
+          else if (!after.inbox?.wide || before.inbox?.wide) failures.push(`${label}: Inbox did not widen`);
+          sameAs(label, after, button);
+          if (focused !== SHELF_AGENT) failures.push(`${label}: the operator is in ${focused}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(pngDir, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
 });

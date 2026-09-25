@@ -682,3 +682,55 @@ test("an Undo the server refuses takes back its success receipt and offers Retry
   expect(receiptTexts(view.host)).not.toContain("«Merge the approved queue adapter» is back on the board");
   expect(receiptAction(view.host, "Couldn't show «Merge the approved queue adapter»: disk full")?.textContent).toBe("Retry");
 });
+
+const inboxOrder = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.column[data-status="inbox"] .card')].map((card) => card.getAttribute("data-id")!.replace("task:", ""));
+const prioMark = (host: HTMLElement, id: string) => cardEl(host, id)?.querySelector<HTMLElement>(".prio-mark") ?? null;
+
+test("the Inbox draws high first and low last with a quiet mark on those two only, while Assigned keeps its order", () => {
+  const view = mount([
+    task("low", "inbox", "Tidy the helpers", { priority: "low", updatedAt: "2026-09-14T12:00:00.000Z" }),
+    task("normal-new", "inbox", "Write the notes", { updatedAt: "2026-09-14T11:00:00.000Z" }),
+    task("high", "inbox", "Fix the broken deploy", { priority: "high", updatedAt: "2026-09-14T08:00:00.000Z" }),
+    task("normal-old", "inbox", "Rename the setting", { updatedAt: "2026-09-14T09:00:00.000Z" }),
+    task("a-high", "assigned", "Assigned and high", { priority: "high", updatedAt: "2026-09-14T08:00:00.000Z" }),
+    task("a-low", "assigned", "Assigned and low", { priority: "low", updatedAt: "2026-09-14T12:00:00.000Z" }),
+  ]);
+  expect(inboxOrder(view.host)).toEqual(["high", "normal-new", "normal-old", "low"]);
+  const assigned = [...view.host.querySelectorAll<HTMLElement>('.column[data-status="assigned"] .card')].map((card) => card.getAttribute("data-id"));
+  expect(assigned).toEqual(["task:a-low", "task:a-high"]);
+  expect([prioMark(view.host, "high")?.dataset.priority, prioMark(view.host, "high")?.getAttribute("aria-label")]).toEqual(["high", "High priority"]);
+  expect([prioMark(view.host, "low")?.dataset.priority, prioMark(view.host, "low")?.getAttribute("aria-label")]).toEqual(["low", "Low priority"]);
+  expect(prioMark(view.host, "normal-new")).toBeNull();
+  /* The mark shows in every column, not only where it sorts. */
+  expect(prioMark(view.host, "a-high")?.dataset.priority).toBe("high");
+});
+
+test("priority comes from the card menu: three levels with the current one checked; a choice moves the card at once and is written on its own", async () => {
+  const view = mount([
+    task("a", "inbox", "Write the release notes", { updatedAt: "2026-09-14T12:00:00.000Z" }),
+    task("b", "inbox", "Fix the broken deploy", { updatedAt: "2026-09-14T08:00:00.000Z" }),
+  ]);
+  expect(inboxOrder(view.host)).toEqual(["a", "b"]);
+  click(cardEl(view.host, "b")?.querySelector("[data-menu]"));
+  const heads = [...view.host.querySelectorAll(".menu .head")].map((head) => head.textContent);
+  expect(heads.slice(0, 3)).toEqual(["Move to", "Priority", "Colour"]);
+  const levels = ["High", "Normal", "Low"].map((label) => menuItem(view.host, label));
+  expect(levels.map((item) => [item?.getAttribute("role"), item?.getAttribute("aria-checked")])).toEqual([
+    ["menuitemradio", "false"], ["menuitemradio", "true"], ["menuitemradio", "false"],
+  ]);
+  expect(levels[0]?.textContent).toContain("Top of the Inbox");
+  click(levels[0]);
+  expect(inboxOrder(view.host)).toEqual(["b", "a"]);
+  expect(prioMark(view.host, "b")?.dataset.priority).toBe("high");
+  await tick();
+  expect(view.server.patches.map((patch) => patch.body)).toEqual([{ priority: "high", expectedProject: "fixture", expectedRevision: REV(1) }]);
+
+  /* Normal clears the mark and returns the card to its place. */
+  click(cardEl(view.host, "b")?.querySelector("[data-menu]"));
+  expect(menuItem(view.host, "High")?.getAttribute("aria-checked")).toBe("true");
+  click(menuItem(view.host, "Normal"));
+  expect(inboxOrder(view.host)).toEqual(["a", "b"]);
+  expect(prioMark(view.host, "b")).toBeNull();
+  await tick();
+  expect((view.server.patches[1]!.body as { priority: string }).priority).toBe("normal");
+});
