@@ -1,9 +1,28 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+
+import { afterAll } from "bun:test";
+
+import { claimProcessTempRoot, TEST_RUN_TEMP_PREFIX } from "./src/lib/tempDirs";
 
 // Bun preserves an ambient NODE_ENV. Pin the test runtime before JSX modules load.
 Object.assign(process.env, { NODE_ENV: "test" });
+
+/*
+ * One temp root for the whole test process, removed when the run ends (#1957).
+ *
+ * Every temp directory a test makes afterwards goes inside it, whatever its
+ * prefix and however it imported `mkdtemp` (see `src/lib/tempDirs.ts`), so a
+ * suite that forgets its own cleanup no longer leaves anything behind. Before
+ * this, 1050 `llv-test-state-*` roots and some 5000 other test directories
+ * filled the workstation's disk.
+ *
+ * The removal is a global `afterAll`, because Bun's test runner exits without
+ * emitting `exit` or `beforeExit`. A run that is killed leaves its root, named
+ * with an owned prefix, and the Viewer's sweeper removes it once it is stale.
+ */
+const run = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
+afterAll(() => run.release());
 
 /*
  * Test-suite guard: force an isolated LLV_STATE_DIR before ANY module loads.
@@ -20,5 +39,5 @@ Object.assign(process.env, { NODE_ENV: "test" });
  * still overrides this value itself.
  */
 if (!process.env.LLV_STATE_DIR) {
-  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-test-state-"));
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(run.root, "llv-test-state-"));
 }

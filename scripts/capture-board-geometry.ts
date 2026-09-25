@@ -134,6 +134,7 @@ import path from "node:path";
 
 import { chromium, type Browser, type Page } from "playwright-core";
 
+import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 import { createCaptureDirectory } from "./capture-directory";
@@ -144,6 +145,10 @@ const repoRoot = path.resolve(import.meta.dir, "..");
 const captureCommit = () => process.env.BOARD_CAPTURE_COMMIT?.trim()
   || Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim();
 const BASE = createCaptureDirectory({ envName: "BOARD_CAPTURE_DIR", prefix: "llv-issue-1641", raw: process.env.BOARD_CAPTURE_DIR, repoRoot });
+/* Playwright makes its browser profile and artifacts under the temp root at launch and removes
+   them on close. A run killed before it closes leaves them, so they are made inside this run's
+   directory, which the Viewer's sweeper removes once it is stale (#1957). */
+nestProcessTempUnder(BASE);
 const HOME = path.join(BASE, "home");
 const OUT_DIR = path.join(BASE, "out");
 const STATE_DIR = path.join(HOME, ".config", "agent-log-viewer", "state");

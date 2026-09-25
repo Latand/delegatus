@@ -44,13 +44,18 @@ test.each([
         directory,
       );
       expect(materialized.codex).toEqual({ sandbox: codexSandbox });
-      expect(materialized.scratchDirectory === null).toBe(sandbox === "full");
-      if (sandbox === "restricted") {
-        expect(materialized.env.TMPDIR).toBe(path.join(materialized.scratchDirectory!, "tmp"));
-      } else {
-        expect(materialized.env.TMPDIR).toBe(sourceEnv.TMPDIR);
+      /* Every pipeline stage gets its own scratch TMPDIR, and it goes with the
+         host (#1957). */
+      expect(path.dirname(materialized.scratchDirectory!)).toBe(directory);
+      expect(materialized.env.TMPDIR).toBe(path.join(materialized.scratchDirectory!, "tmp"));
+      expect(materialized.host.releaseCleanup).toBe(materialized.cleanup);
+      if (sandbox === "full") {
+        /* Claude's background-task root stays where the Viewer scans it. */
+        expect(materialized.env.CLAUDE_CODE_TMPDIR).toBe(sourceEnv.TMPDIR);
       }
+      fs.writeFileSync(path.join(materialized.env.TMPDIR!, "export.tar"), "reviewed head");
       materialized.cleanup();
+      expect(fs.existsSync(materialized.scratchDirectory!)).toBeFalse();
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }

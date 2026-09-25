@@ -100,6 +100,8 @@ interface CurrentReleaseControllerLoaders {
   loadStructuredHostRetirement?: () => Promise<{ startStructuredHostRetirement: () => void }>;
   /** Optional for the same reason. */
   loadSeatTick?: () => Promise<{ startSeatTick: () => boolean }>;
+  /** Optional for the same reason. */
+  loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -386,6 +388,7 @@ export async function startCurrentReleaseControllers(
     loadTelegramConnectorBoot: () => import("@/lib/telegram/connectorBoot"),
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
+    loadTempSweep: () => import("@/lib/tempSweep"),
   },
 ): Promise<void> {
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
@@ -454,6 +457,17 @@ export async function startCurrentReleaseControllers(
     seatTick?.startSeatTick();
   } catch (error) {
     console.error("[seat tick] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* The stale temp directory sweep (#1957): a killed test run, capture or
+     stage host leaves its directory behind, and those filled the disk once.
+     One clock is enough, so it runs here with the others; a second release
+     sweeping the same roots would only find nothing left to remove.
+     `LLV_TEMP_SWEEP_MAX_AGE_HOURS=0` turns it off. */
+  try {
+    const tempSweep = await loaders.loadTempSweep?.();
+    tempSweep?.startTempSweep();
+  } catch (error) {
+    console.error("[temp sweep] start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();

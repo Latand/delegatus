@@ -248,6 +248,10 @@ const CHILD_ENV_ALLOWLIST = [
   "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
   "DBUS_SESSION_BUS_ADDRESS", "SSL_CERT_FILE", "SSL_CERT_DIR",
   "LLV_SPAWN_CAPABILITY",
+  /* Where Claude Code writes background-task output. A pipeline stage runs
+     with TMPDIR in its scratch directory and this pinned to the temp root the
+     Viewer scans for those tasks (#1957). */
+  "CLAUDE_CODE_TMPDIR",
   /* The re-hosted Viewer MCP launcher resolves the current release and the
      runtime host's stable listener from these non-secret inputs. */
   "LLV_STATE_DIR", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT",
