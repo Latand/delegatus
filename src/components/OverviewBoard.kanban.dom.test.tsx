@@ -460,7 +460,7 @@ test("with no seat on the install the Overview leads with the orchestrator band,
     G.CustomEvent = savedCustomEvent;
     dom.removeEventListener("llv:open-onboarding", listen as never);
   }
-  expect(opened).toEqual([{ mode: "guide", step: "tour" }]);
+  expect(opened).toEqual([{ mode: "guide", step: null }]);
 });
 
 test("a seat anywhere on the install, even a retired one, keeps the band away", async () => {

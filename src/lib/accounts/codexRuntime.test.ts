@@ -226,6 +226,40 @@ test("Codex completion write failures log with backoff and eventually persist", 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("#2166: Main, the legacy home, signs in with the same device login and can cancel it", async () => {
+  const homes: string[] = [];
+  const children: FakeChild[] = [];
+  const runtime = new ManagedCodexRuntime({
+    startClient: async (home) => {
+      homes.push(home);
+      const child = new FakeChild();
+      children.push(child);
+      return CodexAppServerClient.start({ home, spawn: () => child as never });
+    },
+    now: () => 456,
+  });
+  const main: CodexAccount = { id: "default", label: "Main", kind: "legacy", home: "/accounts/legacy-main", sessionsDir: "/accounts/legacy-main/sessions", authPresent: false, loginPane: null, createdAt: 0 };
+  /* Without an attempt of its own Main reads its credential file, as before. */
+  expect(runtime.peekLogin(main)).toEqual({ state: "idle", attemptState: null, deviceAuth: null });
+
+  const attempt = await runtime.retryLogin(main);
+  expect(attempt).toMatchObject({ accountId: "default", verificationUrl: "https://auth.openai.com/device", userCode: "ABCD-1234" });
+  expect(homes).toEqual(["/accounts/legacy-main"]);
+  expect(runtime.peekLogin(main)).toEqual({ state: "pending", attemptState: "pending", deviceAuth: { url: "https://auth.openai.com/device", code: "ABCD-1234" } });
+
+  await expect(runtime.cancelLogin("default")).resolves.toBe(true);
+  expect(children[0]!.methods).toContain("account/login/cancel");
+  expect(children[0]!.kills).toBe(1);
+  expect(runtime.peekLogin(main)).toMatchObject({ state: "cancelled", deviceAuth: null });
+
+  /* A second sign-in completes into Main's own home. */
+  await runtime.retryLogin(main);
+  children[1]!.completed("login-3");
+  await expect(runtime.loginSnapshot(main)).resolves.toEqual({ state: "completed", attemptState: "completed", deviceAuth: null });
+  /* Every child, the snapshot's own account read included, ran in Main's home. */
+  expect(new Set(homes)).toEqual(new Set(["/accounts/legacy-main"]));
+});
+
 test("cancellation and independent homes never share a managed app-server child", async () => {
   const homes: string[] = [];
   const children: FakeChild[] = [];

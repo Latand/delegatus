@@ -29,7 +29,7 @@ test("a guide in progress is never re-decided, and a damaged marker reads as dis
   const file = path.join(sandbox, "progress.json");
   writeOnboardingMarker(applyOnboardingPatch(null, { steps: { engines: "done" } }, NOW), file);
   const marker = resolveOnboardingMarker(() => true, () => NOW, file);
-  expect(marker).toMatchObject({ dismissedAt: null, reason: null, steps: { engines: "done", agents: null } });
+  expect(marker).toMatchObject({ dismissedAt: null, reason: null, steps: { engines: "done", project: null, agents: null } });
   fs.writeFileSync(file, "{");
   expect(readOnboardingMarker(file)?.dismissedAt).not.toBeNull();
 });
@@ -72,14 +72,32 @@ test("patches are validated and applied", () => {
   expect(applyOnboardingPatch(null, { dismissed: true }, NOW)).toMatchObject({ dismissedAt: NOW, completedAt: null });
 });
 
-test("slice 3: the six step ids round-trip, and a marker written with three reads the new ids as not visited", () => {
-  const file = path.join(sandbox, "six-steps.json");
-  const patch = parseOnboardingPatch({ steps: { engines: "done", agents: "done", phone: "skipped", voice: "done", tour: "done", check: null } });
+test("#2166: the guide's seven step ids round-trip, a six-step marker reads the new ids as not visited and drops the Tour", () => {
+  const file = path.join(sandbox, "seven-steps.json");
+  const patch = parseOnboardingPatch({ steps: { engines: "done", project: "done", orchestrator: null, agents: "done", phone: "skipped", voice: "done", check: null } });
   expect(typeof patch).toBe("object");
   writeOnboardingMarker(applyOnboardingPatch(null, patch as Exclude<typeof patch, string>, NOW), file);
-  expect(readOnboardingMarker(file)?.steps).toEqual({ engines: "done", agents: "done", phone: "skipped", voice: "done", tour: "done", check: null });
+  expect(readOnboardingMarker(file)?.steps).toEqual({ engines: "done", project: "done", orchestrator: null, agents: "done", phone: "skipped", voice: "done", check: null });
 
-  const old = path.join(sandbox, "three-steps.json");
-  fs.writeFileSync(old, JSON.stringify({ schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: { engines: "done", agents: "done", check: null }, lastHealth: null }));
-  expect(readOnboardingMarker(old)?.steps).toEqual({ engines: "done", agents: "done", phone: null, voice: null, tour: null, check: null });
+  const old = path.join(sandbox, "six-steps.json");
+  fs.writeFileSync(old, JSON.stringify({ schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: { engines: "done", agents: "done", phone: "skipped", voice: null, tour: "done", check: null }, lastHealth: null }));
+  const read = readOnboardingMarker(old);
+  expect(read?.steps).toEqual({ engines: "done", project: null, orchestrator: null, agents: "done", phone: "skipped", voice: null, check: null });
+  expect(read?.walk).toBeNull();
+
+  /* A tab still on the six-step guide may send the Tour's id; it is dropped. */
+  expect(parseOnboardingPatch({ steps: { tour: "done", engines: "done" } })).toEqual({ steps: { engines: "done" } });
+});
+
+test("#2166: the walk field is validated, written once finished or skipped, and survives other patches", () => {
+  expect(parseOnboardingPatch({ walk: "skipped" })).toEqual({ walk: "skipped" });
+  expect(parseOnboardingPatch({ walk: null })).toBe("walk must be done or skipped");
+  expect(parseOnboardingPatch({ walk: "started" })).toBe("walk must be done or skipped");
+  const file = path.join(sandbox, "walk.json");
+  writeOnboardingMarker(applyOnboardingPatch(null, { walk: "done" }, NOW), file);
+  expect(readOnboardingMarker(file)?.walk).toBe("done");
+  writeOnboardingMarker(applyOnboardingPatch(readOnboardingMarker(file), { steps: { project: "done" } }, NOW), file);
+  expect(readOnboardingMarker(file)).toMatchObject({ walk: "done", steps: { project: "done" } });
+  fs.writeFileSync(file, JSON.stringify({ ...readOnboardingMarker(file), walk: "sometimes" }));
+  expect(readOnboardingMarker(file)?.walk).toBeNull();
 });

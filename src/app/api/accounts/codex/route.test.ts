@@ -75,6 +75,32 @@ test("existing managed accounts expose retry and cancel without tmux", async () 
   expect(children.every((child) => child.kills > 0)).toBe(true);
 });
 
+test("#2166: Main signs in and cancels from the route without a label or a second account", async () => {
+  const homes: string[] = [];
+  const children: FakeChild[] = [];
+  setManagedCodexRuntimeForTests(new ManagedCodexRuntime({
+    startClient: async (home) => {
+      homes.push(home);
+      const child = new FakeChild(); children.push(child);
+      return CodexAppServerClient.start({ home, spawn: () => child as never });
+    },
+  }));
+  const post = (body: unknown) => POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify(body),
+  }));
+  const signIn = await post({ action: "retry", id: "default" });
+  expect(signIn.status).toBe(200);
+  await expect(signIn.json()).resolves.toMatchObject({ account: { id: "default", kind: "legacy", loginPending: true }, deviceAuth: { url: "https://auth.openai.com/device", code: "ABCD-1234" } });
+  expect(homes).toEqual([path.join(SANDBOX, "legacy")]);
+  const cancelled = await post({ action: "cancel", id: "default" });
+  await expect(cancelled.json()).resolves.toEqual({ account: { id: "default" }, cancelled: true });
+  expect(children[0]!.kills).toBeGreaterThan(0);
+  /* Nothing was added: Main is still the only account the list holds besides
+     any a test before this one created. */
+  const { listCodexAccounts } = await import("@/lib/accounts/codex");
+  expect(listCodexAccounts().filter((account) => account.kind === "legacy").map((account) => account.label)).toEqual(["Main"]);
+});
+
 test("managed account creation returns an app-server challenge without the tmux compatibility adapter", async () => {
   const children: FakeChild[] = [];
   setManagedCodexRuntimeForTests(new ManagedCodexRuntime({

@@ -53,7 +53,7 @@ import { getMobileNav, readMobileNavEntry, screenKey, standsOnOwnUrl, topScreen,
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import { overviewLiftProject, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
-import { onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
+import { dropPendingSeatConfirmOutside, onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
 import { OverviewBoard } from "./OverviewBoard";
 import { BarIslandProvider } from "./ProjectBar";
@@ -331,13 +331,19 @@ function ViewerApp() {
   useAgentChimes(files, requestScope, scopeCertified);
   const { archivedProjects, archiveProject, unarchiveProject } = useArchivedProjects(files, projectAliases);
   const catalogProjects = useMemo(() => new Set(projectCatalog.map((entry) => entry.project)), [projectCatalog]);
-  /* The setup guide's tour offers the projects the rail lists, the most
-     recently active first; archived ones are left out (#1876 slice 3). */
-  const tourProjects = useMemo(() => projectCatalog
+  /* The setup guide's Project step offers the projects the rail lists, the
+     most recently active first, with the folder each one's orchestrator would
+     work in; archived ones are left out (#1876 slice 3, #2166 §3.2). */
+  const guideProjects = useMemo(() => projectCatalog
     .filter((entry) => !archivedProjects.has(entry.project))
     .sort((a, b) => b.smt - a.smt)
-    .map((entry) => ({ project: entry.project, name: projectDisplayName(entry.project, projectDisplayNames[entry.project] ?? entry.displayName) })),
-  [projectCatalog, archivedProjects, projectDisplayNames]);
+    .map((entry) => ({
+      project: entry.project,
+      name: projectDisplayName(entry.project, projectDisplayNames[entry.project] ?? entry.displayName),
+      cwd: projectCwds[entry.project] ?? entry.projectRoot ?? null,
+      conversations: entry.conversations,
+    })),
+  [projectCatalog, archivedProjects, projectDisplayNames, projectCwds]);
   const catalogConversationCounts = useMemo(
     () => new Map(projectCatalog.map((entry) => [entry.project, entry.conversations])),
     [projectCatalog],
@@ -602,9 +608,10 @@ function ViewerApp() {
     });
   }, [project]);
 
-  /* The setup guide's tour hands the operator to a project's orchestrator
-     draft (#1876 slice 3): open the project and its seat. The draft itself
-     takes the prefill; the phone's seat card opens its own sheet. */
+  /* The setup guide hands the operator to a project's orchestrator draft
+     (#1876 slice 3, #2166 §3.3): open the project on its Board with its seat
+     expanded. The draft itself takes the prefill and the pending confirm; the
+     dashboard takes the Board; the phone's seat card opens its own sheet. */
   useEffect(() => onOrchestratorDraftRequest((request) => {
     selectProject(request.project);
     if (isMobile) return;
@@ -613,6 +620,9 @@ function ViewerApp() {
     setOrchestratorOpenProject(request.project);
     setOrchestratorOpen(true);
   }), [isMobile, selectProject]);
+  /* A confirm the guide asked for belongs to the project it named: moving to
+     another one drops it, so a later visit designates nothing by itself. */
+  useEffect(() => dropPendingSeatConfirmOutside(project), [project]);
 
   /* The whole rail goes away behind one control (issue #1819): while a stream
      is watching, no project name, count, limit or account name may be on the
@@ -1634,7 +1644,7 @@ function ViewerApp() {
       <ArtifactPreviewHost mobile={isMobile} />
       {/* #1876: the setup guide. Opens by itself on a first run and from the
           menus' "Setup guide" and "Agent mapping" rows. */}
-      <OnboardingHost projects={tourProjects} currentProject={project === OVERVIEW ? null : project} />
+      <OnboardingHost projects={guideProjects} currentProject={project === OVERVIEW ? null : project} onCreateProject={createProject} />
       {/* #2007: the Update surface, opened from the menus' "Update" row. */}
       <SelfUpdateHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock

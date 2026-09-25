@@ -11,7 +11,7 @@ import type { OnboardingMarker, OnboardingPatch, OnboardingStepId } from "@/lib/
  * window event; the dialog is mounted once, in the Viewer.
  */
 
-/** `mapping` and `voice` open step 2 or step 4 alone, for the menu rows. */
+/** `mapping` and `voice` open the Agents table or the Voice step alone, for the menu rows. */
 export type OnboardingMode = "guide" | "mapping" | "voice";
 
 type OpenRequest = { mode: OnboardingMode; step: OnboardingStepId | null };
@@ -51,9 +51,9 @@ export function useOnboarding(): {
   /** Counts openings, so every open starts the dialog afresh. */
   opening: number;
   marker: OnboardingMarker | null;
-  /** The seat tick's check interval, which the tour's seat card names. */
+  /** The seat tick's check interval, which the orchestrator step names. */
   checkMinutes: number | null;
-  close: (outcome: "dismissed" | "completed") => void;
+  close: (outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"]) => void;
 } {
   const [mode, setMode] = useState<OnboardingMode | null>(null);
   const [step, setStep] = useState<OnboardingStepId | null>(null);
@@ -93,11 +93,11 @@ export function useOnboarding(): {
     };
   }, []);
 
-  const close = useCallback((outcome: "dismissed" | "completed") => {
+  const close = useCallback((outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"]) => {
     setMode(null);
     /* Each step wrote its own state as it was left; completing adds only the
-       fact of completion. */
-    void putOnboarding(outcome === "completed" ? { completed: true } : { dismissed: true })
+       fact of completion, and whatever the closing step itself decided. */
+    void putOnboarding({ ...(outcome === "completed" ? { completed: true as const } : { dismissed: true as const }), ...(steps ? { steps } : {}) })
       .then((written) => { if (written) setMarker(written); });
   }, []);
 

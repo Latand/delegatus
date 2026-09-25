@@ -28,7 +28,6 @@ import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from
 import { OverviewKanban, type OverviewPhoneDoors } from "./OverviewKanban";
 import { SoundToggle } from "./SoundToggle";
 import { buildProjectSummaries } from "./projectModel";
-import { CREATE_PROJECT_FORM_EVENT } from "./ProjectRail";
 
 const noop = () => {};
 
@@ -221,14 +220,9 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
             type="button"
             data-testid="overview-create-project"
             className="inline-flex min-h-11 items-center gap-1.5 rounded-[10px] border border-accent/45 bg-card px-4 text-[13px] font-bold text-accent shadow-1 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => {
-              /* Desktop: the rail is mounted beside the board, so it hears
-                 this and opens the create form it already owns. Phone: the
-                 project switcher sheet opens with its create form already
-                 open on a first run (mobile v2 lane 1). One tap either way. */
-              if (isMobile) mobileNav.openSheet("projects");
-              else window.dispatchEvent(new Event(CREATE_PROJECT_FORM_EVENT));
-            }}
+            /* The setup guide on its Project step (#2166 §3.5), whose form is
+               the rail's own: the path goes on to the project's orchestrator. */
+            onClick={() => openOnboarding("guide", "project")}
           >
             <FolderPlus className="h-4 w-4" aria-hidden /> {t("overview.firstRunCreate")}
           </button>
@@ -395,9 +389,9 @@ function OrchestratorBand({ phone }: { phone: boolean }) {
       <button
         type="button"
         data-overview-orchestrator-create=""
-        /* The guide's orchestrator step (today the Tour's "Start here"),
-           which picks the project and hands off to its draft. */
-        onClick={() => openOnboarding("guide", "tour")}
+        /* The guide at the first of Engines, Project and Orchestrator that
+           is not done (#2166 §3.5): it ends on this orchestrator. */
+        onClick={() => openOnboarding("guide")}
         className={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-[8px] bg-brand px-4 text-ui font-semibold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${phone ? "h-11" : "h-9"}`}
       >
         <Bot className="h-4 w-4" aria-hidden /> {t("overview.bandCreate")}

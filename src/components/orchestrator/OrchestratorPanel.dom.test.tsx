@@ -94,6 +94,7 @@ mock.module("@/hooks/useLogTail", () => ({
 }));
 
 const { OrchestratorPanel, UNBOUND_STATUS_RETRY_MS } = await import("./OrchestratorPanel");
+const { SEAT_CONFIRM_TTL_MS, requestOrchestratorDraft } = await import("./draftPrefill");
 const { SEAT_BIND_TIMEOUT_MS } = await import("./seatState");
 const { resetMessageProvenanceCacheForTests } = await import("../feed/messageProvenance");
 const { SEAT_POLL_MS, resetOrchestratorSeatCacheForTests } = await import("./useOrchestratorSeat");
@@ -498,6 +499,61 @@ test("a draft on a signed-out account says so and its primary opens that account
   } finally {
     window.removeEventListener("llv:open-accounts", listen);
     accounts.claude = saved;
+  }
+});
+
+/* #2166 §2.2: the setup guide's Create is one press. The guide closes over the
+   Overview and asks for a confirm before this draft exists; the draft mounts
+   afterwards, waits for its seat read and its account options, and presses
+   its own Confirm exactly once, on the account the guide chose. */
+test("a confirm the guide asked for before the draft mounted designates once, on the requested account", async () => {
+  requestOrchestratorDraft({ project: "atlas", launch: { engine: "claude", model: "opus", effort: "high", account: "spare" }, confirm: true });
+  const host = mount();
+  expect(seatPosts).toEqual([]);
+  await settle();
+  flushSync(() => undefined);
+  await settle();
+
+  expect(seatPosts).toHaveLength(1);
+  expect(seatPosts[0]).toMatchObject({ project: "atlas", engine: "claude", model: "opus", effort: "high", accountId: "spare", mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
+  /* Taken once: a remount, a later render or the same project's next visit sends nothing more. */
+  remount();
+  await settle();
+  flushSync(() => undefined);
+  await settle();
+  expect(seatPosts).toHaveLength(1);
+  void host;
+});
+
+test("a requested account that turns out signed out sends no designation and shows its sign-in", async () => {
+  const saved = accounts.claude;
+  accounts.claude = { active: "primary", accounts: [{ id: "primary", label: "primary", authPresent: true }, { id: "spare", label: "Spare", authPresent: false }] };
+  try {
+    requestOrchestratorDraft({ project: "atlas", launch: { engine: "claude", model: "opus", effort: "high", account: "spare" }, confirm: true });
+    const host = mount();
+    await settle();
+    flushSync(() => undefined);
+    await settle();
+    expect(seatPosts).toEqual([]);
+    expect(confirmButton(host).textContent).toBe("Sign in to Claude first");
+  } finally {
+    accounts.claude = saved;
+  }
+});
+
+test("a confirm older than its window sends nothing", async () => {
+  const realNow = Date.now;
+  requestOrchestratorDraft({ project: "atlas", launch: { engine: "claude", model: "opus", effort: "high", account: "primary" }, confirm: true });
+  Date.now = () => realNow() + SEAT_CONFIRM_TTL_MS + 1_000;
+  try {
+    const host = mount();
+    await settle();
+    flushSync(() => undefined);
+    await settle();
+    expect(panelState(host)).toBe("draft");
+    expect(seatPosts).toEqual([]);
+  } finally {
+    Date.now = realNow;
   }
 });
 

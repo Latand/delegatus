@@ -30,7 +30,7 @@ import { decisionLine } from "../attention/decision";
 import { FeedSkeleton } from "../skeletons";
 import { RoleFrameMark } from "../RoleFrameMark";
 import { ProcessStatusControls } from "../TaskHeader";
-import { useOrchestratorDraftPrefill, useOrchestratorDraftReveal } from "./draftPrefill";
+import { seatDraftReadiness, useOrchestratorDraftPrefill, useOrchestratorDraftReveal, usePendingSeatConfirm } from "./draftPrefill";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { OrchestratorConversation } from "./OrchestratorConversation";
@@ -394,6 +394,10 @@ export function OrchestratorPanel({
       launch: { draft: launch, cwd: projectCwd ?? "", firstMessage: mandate },
     }, replayRequestId);
   };
+
+  /* The setup guide's Create (#2166 §2.2): once this draft is ready, its own
+     Confirm is pressed for the operator, once. */
+  usePendingSeatConfirm(project, launch, seatDraftReadiness(state.kind), () => confirmCreate());
 
   /**
    * Open the rotate draft — on the incumbent's OWN parameters.

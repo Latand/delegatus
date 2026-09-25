@@ -26,6 +26,7 @@ import type { Workflow } from "@/lib/workflows/types";
 
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
+import { onOrchestratorDraftRequest, takePendingBoardView } from "./orchestrator/draftPrefill";
 import { deriveOrchestratorPanelState, resolveSeatFile, retiredSeatPaths, seatRefsOf } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
 import { DesktopConversations } from "./DesktopConversations";
@@ -1333,6 +1334,18 @@ function ProjectDashboardView({
     setTransientView(null);
     board.setDesktopBoard("kanban", "scheme");
   };
+
+  /* The setup guide opens this project on its Board (#2166 §3.3), whatever
+     view was saved for it: the orchestrator's draft sits above the columns. */
+  const chooseDesktopViewRef = useRef(chooseDesktopView);
+  chooseDesktopViewRef.current = chooseDesktopView;
+  useEffect(() => {
+    if (isMobile) return;
+    if (takePendingBoardView(project)) chooseDesktopViewRef.current("kanban");
+    return onOrchestratorDraftRequest((request) => {
+      if (request.project === project && takePendingBoardView(project)) chooseDesktopViewRef.current("kanban");
+    });
+  }, [isMobile, project]);
 
   /* A card's link to Conversations (#1695): the list for one look, written nowhere. It ends a standing landing,
      which would otherwise keep the Board it opened in front of the list the operator just asked for. */

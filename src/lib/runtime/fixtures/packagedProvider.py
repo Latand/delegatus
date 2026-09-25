@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Local protocol-only providers for the packaged startup rehearsal. No network."""
-import json, os, sys
+import json, os, sys, uuid
 from pathlib import Path
 
 def emit(value):
@@ -44,7 +44,8 @@ for line in sys.stdin:
     elif method == "config/read":
         result = {"config": {"mcp_servers": {}}}
     elif method in ("thread/resume", "thread/start", "thread/read"):
-        thread = params.get("threadId", thread)
+        # A fresh start names no thread; the app-server mints one, as a real one does.
+        thread = params.get("threadId") or (str(uuid.uuid4()) if method == "thread/start" else thread)
         result = {"thread": {"id": thread, "path": str(Path(os.environ["LLV_STATE_DIR"]) / (thread + ".jsonl")), "turns": [], "status": {"type": "idle", "activeFlags": []}}}
     elif method == "thread/turns/list":
         result = {"data": [], "nextCursor": None, "backwardsCursor": None}

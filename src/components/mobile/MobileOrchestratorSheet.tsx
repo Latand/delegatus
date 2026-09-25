@@ -19,7 +19,7 @@ import { useModalLayer } from "@/components/modalLayer";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
-import { useOrchestratorDraftPrefill } from "@/components/orchestrator/draftPrefill";
+import { seatDraftReadiness, useOrchestratorDraftPrefill, usePendingSeatConfirm } from "@/components/orchestrator/draftPrefill";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SPAWN_CONFIG, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
@@ -496,6 +496,10 @@ function SeatDraftSheet({
       mandate: text,
     });
   };
+
+  /* The setup guide's Create (#2166 §2.2): once this draft is ready, its own
+     Confirm is pressed for the operator, once. A rotation is never a draft. */
+  usePendingSeatConfirm(project, launch, rotating ? "not-a-draft" : seatDraftReadiness(state.kind), submitDraft);
 
   /* The create draft's own primary, parked at the thumb. The rotate draft
      brings its own footer — two ways out, keep or rotate — so it takes the

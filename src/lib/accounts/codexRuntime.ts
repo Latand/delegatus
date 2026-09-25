@@ -170,8 +170,11 @@ export class ManagedCodexRuntime {
     return this.beginLogin(account, true);
   }
 
+  /* Main, the legacy home, signs in the same way (#2166, newcomer audit F19):
+     a device login into its own CODEX_HOME. Before, its only path was a
+     terminal, and a newcomer could reach sign-in only by adding a second,
+     labelled account. */
   private beginLogin(account: CodexAccount, replace: boolean): Promise<ManagedLoginAttempt> {
-    if (account.kind !== "managed") return Promise.reject(new Error("only managed Codex accounts can start an app-server login"));
     this.records = readStoredAttempts(this.stateFile);
     const home = canonicalHome(account.home);
     const existing = this.active.get(home);
@@ -282,7 +285,7 @@ export class ManagedCodexRuntime {
     const home = canonicalHome(snapshot.account.home);
     const activeBefore = this.active.get(home);
     const storedBefore = readStoredAttempts(this.stateFile).get(home);
-    if (snapshot.account.kind !== "managed") return { state: snapshot.account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
+    if (snapshot.account.kind !== "managed" && !activeBefore && !storedBefore) return { state: snapshot.account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
     const status = await this.readAccount(activeBefore?.client ?? null, snapshot.account.home)
       .then((value) => ({ value, failed: false as const }), () => ({ value: null, failed: true as const }));
     return await withAccountMutationLockAsync(() => {
@@ -336,10 +339,11 @@ export class ManagedCodexRuntime {
   }
 
   private peekLoginFrom(account: CodexAccount, storedAttempts: Map<string, PersistedAttempt>): ManagedLoginSnapshot {
-    if (account.kind !== "managed") return { state: account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
     const home = canonicalHome(account.home);
     const active = this.active.get(home);
     const stored = storedAttempts.get(home);
+    /* Main without a device login of its own reads its credential file, as it always has. */
+    if (account.kind !== "managed" && !active && !stored) return { state: account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
     if (stored?.state === "pending" && active?.state === "pending" && active.verificationUrl && active.userCode) {
       return { state: "pending", attemptState: "pending", deviceAuth: { url: active.verificationUrl, code: active.userCode } };
     }
