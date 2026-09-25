@@ -109,6 +109,7 @@
       "screen": "chat",
       "sheet": false
     },
+    "menuRowOnScreen": true,
     "written": "skipped"
   },
   "failures": []

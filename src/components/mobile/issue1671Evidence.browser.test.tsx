@@ -3839,7 +3839,14 @@ browserTest("#2166 slice 3: the phone's interface walk at 390", async () => {
     await page.screenshot({ path: path.join(out, "walk-before-390.png") });
     await page.locator('[data-mobile2-open="menu"]').first().click();
     await page.waitForSelector('[data-testid="menu-interface-walk"]', { state: "visible", timeout: 5_000 });
+    /* The sheet opens at its top, below the fold of the onboarding rows; the render shows the new row. */
+    await page.locator('[data-testid="menu-interface-walk"]').evaluate((row) => row.scrollIntoView({ block: "center" }));
     await pause(page, 400);
+    readings.menuRowOnScreen = await page.locator('[data-testid="menu-interface-walk"]').evaluate((row) => {
+      const box = row.getBoundingClientRect();
+      return box.top >= 0 && box.bottom <= window.innerHeight;
+    });
+    if (!readings.menuRowOnScreen) failures.push("the Interface walk row is off screen in the menu render");
     await page.screenshot({ path: path.join(out, "menu-walk-390-after.png") });
     await page.locator('[data-testid="menu-interface-walk"]').click();
     await page.waitForSelector('[data-walk-popover="1"]', { state: "visible", timeout: 10_000 });
