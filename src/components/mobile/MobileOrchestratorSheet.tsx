@@ -25,6 +25,7 @@ import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
 import { boardContext } from "../orchestrator/IncumbentHeader";
+import { RunsOnRow } from "../orchestrator/RunsOnRow";
 import { MobilePreviousSeatsRow, MobilePreviousSeatsScreen } from "../orchestrator/PreviousSeats";
 import type { OrchestratorIncumbent } from "../orchestrator/incumbent";
 import {
@@ -205,7 +206,6 @@ interface SeatSheetProps {
   /** The pending intent's own mandate, replayed verbatim when a stuck
       designation is resumed. */
   pendingMandate: string;
-  viewerMcpRegistered: boolean;
   submitting: boolean;
   /** Epoch seconds, the card's own clock: «holding the seat for 2h» ages on the
       same tick the card's badge does. */
@@ -448,7 +448,6 @@ function SeatDraftSheet({
   status,
   file,
   incumbent,
-  viewerMcpRegistered,
   submitting,
   rotate,
   onConfirm,
@@ -549,7 +548,7 @@ function SeatDraftSheet({
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate text-body font-semibold text-primary">
-              {rotating ? t("orchPanel.rotateHeading") : t("orchPanel.draftTitle")}
+              {rotating ? t("orchPanel.rotateHeading") : t("orchPanel.draftTitle", { project: projectName })}
             </span>
             <span className="truncate text-caption text-muted" title={projectName}>{projectName}</span>
           </span>
@@ -574,7 +573,6 @@ function SeatDraftSheet({
             projectCwd={projectCwd}
             catalog={launch.catalog}
             status={status}
-            viewerMcpRegistered={viewerMcpRegistered}
             submitting={rotate.submitting}
             failure={rotate.failure}
             onConfirm={rotate.onConfirm}
@@ -600,26 +598,19 @@ function SeatDraftSheet({
                 </p>
               ) : null}
 
-              {/* The dock's own intro, word for word (#1163): the phone meets
-                  this draft in the same three sentences, so what an orchestrator
-                  is never depends on which surface you created it from. */}
-              <p className="shrink-0 text-ui leading-5 text-secondary" data-orchestrator-intro>
-                {t("orchPanel.introTalk")}{" "}
-                {t("orchPanel.introRuns")}{" "}
-                {t("orchPanel.introReports")}
-              </p>
+              {/* The dock's own intro, word for word (#1163, #2166): the phone
+                  meets this draft in the same sentence and the same example,
+                  so what an orchestrator is never depends on which surface
+                  you created it from. */}
+              <p className="shrink-0 text-body leading-5 text-secondary" data-orchestrator-intro>{t("orchPanel.intro")}</p>
+              <p className="shrink-0 text-ui leading-[1.45] text-muted" data-orchestrator-example>{t("orchPanel.example")}</p>
 
-              <ViewerMcpStatus registered={viewerMcpRegistered} />
-
-              {/* The shared launch module, in the phone's own layout: the same
-                  fields and the same invariants the dock has, lifted to 44px
-                  touch targets from OUTSIDE the module — its own recipe
-                  documents that the surrounding row owns the hit area. */}
-              <div className="shrink-0 [&_button]:min-h-11 [&_select]:min-h-11">
-                <AgentLaunchControls draft={launch} disabled={submitting} stacked />
-              </div>
+              {/* The runtime in one card, the shared launch module behind its
+                  Change, at the phone's 44px targets (#2166). */}
+              <RunsOnRow draft={launch} disabled={submitting} phone />
 
               <MandateField
+                folded
                 id="mobile-orchestrator-mandate"
                 value={mandate}
                 disabled={submitting}
@@ -630,10 +621,14 @@ function SeatDraftSheet({
                 onRestore={() => setMandate(ORCHESTRATOR_SYSTEM_PROMPT)}
                 cwdLine={projectCwd ? t("orchPanel.cwd", { cwd: projectCwd }) : null}
               />
+
+              {state.kind === "intent-error" ? null : (
+                <p className="shrink-0 text-ui leading-[1.45] text-muted" data-orchestrator-by-hand>{t("orchPanel.byHandPhone")}</p>
+              )}
             </div>
 
             {primary ? (
-              <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-sunken px-3 py-2.5">
+              <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-sunken p-3">
                 {formError ? <p className="text-ui font-semibold text-danger" role="alert">{formError}</p> : null}
                 {signInFirst ? (
                   <p className="text-ui font-semibold text-warning" role="status" data-orchestrator-sign-in-first>
@@ -698,7 +693,6 @@ function RotateDraft({
   projectCwd,
   catalog,
   status,
-  viewerMcpRegistered,
   submitting,
   failure,
   onConfirm,
@@ -712,7 +706,6 @@ function RotateDraft({
   projectCwd?: string;
   catalog: LaunchAccountCatalog | null;
   status: OrchestratorSeatStatus | null;
-  viewerMcpRegistered: boolean;
   submitting: boolean;
   failure: SeatSubmitFailure | null;
   onConfirm: SeatRotateFlow["onConfirm"];
@@ -796,8 +789,6 @@ function RotateDraft({
           <p className="shrink-0 text-ui leading-4 text-muted">{t("orchPanel.rotateHint")}</p>
         )}
 
-        <ViewerMcpStatus registered={viewerMcpRegistered} />
-
         {/* The seat's settings — engine, account, model and reasoning — as the
             same shared module the create draft mounts, at the phone's 44px
             targets. What the operator adjusts here is what the successor runs
@@ -822,7 +813,7 @@ function RotateDraft({
         />
       </div>
 
-      <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-sunken px-3 py-2.5">
+      <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-sunken p-3">
         {formError ? <p className="text-ui font-semibold text-danger" role="alert">{formError}</p> : null}
         <div className="flex items-center gap-2">
           {/* Cancel, in the picture's own word (README §4.5: «the footer Cancel
@@ -877,6 +868,7 @@ function RotateDraft({
  */
 function MandateField({
   id,
+  folded = false,
   value,
   disabled,
   edited,
@@ -888,6 +880,10 @@ function MandateField({
   cwdLine,
 }: {
   id: string;
+  /** The create draft's rules start folded to one row (#2166 §3.7), as the
+      dock's do, and open by themselves only for a mandate already edited. A
+      failed designation leaves them folded: the error says what went wrong. */
+  folded?: boolean;
   value: string;
   disabled: boolean;
   edited: boolean;
@@ -907,6 +903,10 @@ function MandateField({
   const blockRef = useRef<HTMLDivElement>(null);
   const revealedRef = useRef(false);
   const [focused, setFocused] = useState(false);
+  const [open, setOpen] = useState(() => !folded || edited);
+  useEffect(() => {
+    if (edited) setOpen(true);
+  }, [edited]);
   useEffect(() => {
     if (!focused || kbInset <= 0) {
       revealedRef.current = false;
@@ -916,6 +916,28 @@ function MandateField({
     revealedRef.current = true;
     blockRef.current?.scrollIntoView({ block: "start" });
   }, [focused, kbInset]);
+
+  if (!open) {
+    return (
+      <div className="flex shrink-0 flex-col gap-3">
+        <button
+          type="button"
+          data-orchestrator-mandate-fold
+          aria-expanded={false}
+          onClick={() => setOpen(true)}
+          className="flex min-h-11 w-full items-center gap-2 rounded-control border border-border bg-card/60 px-3 text-left text-label font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+          <span className="min-w-0">{t(caption.key, caption.params)} {t("orchPanel.mandateEdit")}</span>
+        </button>
+        {cwdLine ? (
+          <p className="truncate font-mono text-caption text-muted" title={cwdLine}>
+            {cwdLine}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div ref={blockRef} className="flex min-h-[180px] flex-1 flex-col gap-1">
@@ -1271,19 +1293,6 @@ function IntentError({ error, retry, rotate }: { error: string; retry: "fresh" |
           : rotate ? "orchPanel.rotateErrorHint" : "orchPanel.errorHint")}
       </p>
     </div>
-  );
-}
-
-function ViewerMcpStatus({ registered }: { registered: boolean }) {
-  const { t } = useLocale();
-  return (
-    <p
-      className="shrink-0 rounded-control border border-border bg-card px-3 py-2 font-mono text-caption text-secondary"
-      data-viewer-mcp-status={registered ? "registered" : "missing"}
-      role="status"
-    >
-      {t(registered ? "orchPanel.viewerMcpRegistered" : "orchPanel.viewerMcpMissing")}
-    </p>
   );
 }
 

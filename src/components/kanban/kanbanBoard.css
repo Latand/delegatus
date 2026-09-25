@@ -52,9 +52,9 @@
 /* The board's own controls start from nothing. The conversations and the
    orchestrator mounted inside it are the Viewer's components, styled by their
    own utilities, so none of these element rules reach into them. */
-.kb :where(button, input):not(:where(.reader-host *, .seat *, .bar-slot *, .kb-aside *)) { font: inherit; color: inherit; }
-.kb button:not(:where(.reader-host *, .seat *, .bar-slot *, .kb-aside *)) { background: none; border: 0; padding: 0; }
-.kb :focus-visible:not(:where(.reader-host *, .seat *, .bar-slot *, .kb-aside *)) { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
+.kb :where(button, input):not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, .kb-aside *)) { font: inherit; color: inherit; }
+.kb button:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, .kb-aside *)) { background: none; border: 0; padding: 0; }
+.kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, .kb-aside *)) { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
 .kb :where(.seat-head, .conv-head) :where(.icon-btn), .kb :where(.rlatest) { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
 .kb .num { font-variant-numeric: tabular-nums; }
 
@@ -726,6 +726,11 @@
 .kb .seat { overflow-anchor: none; }
 .kb .seat > [data-orchestrator-panel] { border-radius: inherit; overflow: hidden; background: var(--surface-card); }
 .kb .seat.folded { height: auto; }
+/* A seat still on its create draft is as tall as the draft (#2166 §3.6): the
+   draft is a few lines and a button, and the seat's conversation height left
+   it floating in empty space with the columns pushed below the window. The
+   seat's own height stays the cap, so rules opened for editing scroll inside. */
+.kb .seat:not(.side):not(.folded):has([data-orchestrator-draft="create"]) { height: auto; max-height: var(--seat-h, var(--seat-default-h)); }
 /* The seat's rows are the transcript, the control strip and the composer. Who holds the
    seat and its host control ride the header; the turn's status row and the
    live-tail marker repeat the header's state and are left out (the "back to

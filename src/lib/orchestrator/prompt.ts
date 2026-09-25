@@ -51,7 +51,10 @@
  * from the live role registry, so a seat that omits a runtime knows the
  * engine, model and effort it is choosing. v21 (#2030) states the seat tick
  * contract every wake used to repeat at its foot, in the clock section, and
- * the wake names that section instead. */
+ * the wake names that section instead. v27 (#2166) speaks to a newcomer: its
+ * opening line names no issue numbers, the greeting says what happens in plain
+ * words, and a project's own release step runs only when the operator turned
+ * releases on for that project. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "@/lib/roles/paramConfig";
@@ -63,7 +66,9 @@ import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 export const ORCHESTRATOR_SPAWN_CONFIG = {
   engine: "claude",
   model: "opus",
-  effort: "low",
+  /* The orchestrator role's own default (`ROLE_DEFAULTS`): the draft opens on
+     what the role runs when nobody chooses (#2166). */
+  effort: "high",
   role: "orchestrator",
   roleParams: { mode: "standard" },
 } as const;
@@ -76,7 +81,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 26;
+export const ORCHESTRATOR_PROMPT_VERSION = 27;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -85,16 +90,20 @@ export function orchestratorMandateStale(promptVersion: number | null | undefine
   return typeof promptVersion === "number" && promptVersion < ORCHESTRATOR_PROMPT_VERSION;
 }
 
-/** The greeting's second line. Up to v25 it promised to "merge on APPROVE";
-    since #2187 (D1 = A) the project's merge setting decides every merge, the
-    seat's included. */
-const ORCHESTRATOR_GREETING_OFFER = "Tell me what to ship — I open lanes, spawn implementers and reviewers, and bring each PR to ready; merges follow this project's merge setting. Nothing starts until you ask.";
+/** The greeting's second line, in the words a newcomer reads first (#2166).
+    Up to v25 it promised to "merge on APPROVE"; v26 (#2187) put merges under
+    the project's merge setting, in the same jargon. It promises no merge at
+    all now: the merge bar below says who merges. */
+const ORCHESTRATOR_GREETING_OFFER = "Tell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, and report back. Nothing starts until you ask.";
 
-/** The same line as it shipped up to v25. Delivery replaces it by exact match
-    (the way the clock section is replaced): the directive below is recognized
-    by its whole text, so a stored mandate carrying the old line would
-    otherwise get the new directive appended beside it and greet twice. */
-const SHIPPED_GREETING_OFFER = "Tell me what to ship — I open lanes, spawn implementers and reviewers, and merge on APPROVE. Nothing starts until you ask.";
+/** The same line as it shipped before, newest last. Delivery replaces each by
+    exact match (the way the clock section is replaced): the directive below is
+    recognized by its whole text, so a stored mandate carrying an old line
+    would otherwise get the new directive appended beside it and greet twice. */
+const SHIPPED_GREETING_OFFERS: readonly string[] = [
+  "Tell me what to ship — I open lanes, spawn implementers and reviewers, and merge on APPROVE. Nothing starts until you ask.",
+  "Tell me what to ship — I open lanes, spawn implementers and reviewers, and bring each PR to ready; merges follow this project's merge setting. Nothing starts until you ask.",
+];
 
 /** Appended to bespoke and stale mandates at delivery time; the current
     versioned default already contains it. */
@@ -294,7 +303,7 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
 3. Call deploy_exact_sha with revision=<sha>. Deployments serialize (a busy receipt means one is already running); a retry reuses the same clientRequestId and replays the original receipt.
 4. Report the outcome as a bridge report (completed/failed) — a statement of fact, never a question. The deployment ledger is the durable audit of what shipped and when.`;
 
-export const ORCHESTRATOR_SYSTEM_PROMPT = `You are Delegatus's built-in Manager (issues #182, #691) — the agent that owns the board and runs the whole conveyor through Delegatus's own HTTP API and MCP tools (the MCP server is registered under the key \`viewer\`). You never act outside them.
+export const ORCHESTRATOR_SYSTEM_PROMPT = `You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's own HTTP API and MCP tools (the MCP server is registered under the key \`viewer\`). You never act outside them.
 
 ${ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE}
 
@@ -339,7 +348,7 @@ Decide yourself whatever the code, the running system or one cheap observation c
 ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 
 ## Conveyor rules
-Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> this project's own release step, where it has one -> cleanup.
+Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> this project's own release step, only when the operator has turned releases on for this project (in their message or as a standing line in your monitor note) -> cleanup.
 - One lane (worktree + branch) per issue; one owner per file across active worktrees.
 - Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table at the end of this mandate; workers end with "REVIEW_READY: <PR url>".
 - Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>, taskId) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
@@ -459,10 +468,12 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
 export function orchestratorMandateWithRoleTable(mandate: string, roleTable: string | null): string {
   const withoutShipped = SHIPPED_CLOCK_SECTIONS.reduce(
     (text, shipped) => text.split(shipped).join(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE),
-    mandate
-      .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
-      .split(SHIPPED_DEPLOYS_SECTION).join("")
-      .split(SHIPPED_GREETING_OFFER).join(ORCHESTRATOR_GREETING_OFFER),
+    SHIPPED_GREETING_OFFERS.reduce(
+      (text, shipped) => text.split(shipped).join(ORCHESTRATOR_GREETING_OFFER),
+      mandate
+        .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
+        .split(SHIPPED_DEPLOYS_SECTION).join(""),
+    ),
   );
   const withDirectives = DELIVERED_DIRECTIVES.reduce(
     (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),

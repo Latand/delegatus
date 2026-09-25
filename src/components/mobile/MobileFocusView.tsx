@@ -735,7 +735,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           file={seatPanel.file}
           incumbent={seatPanel.incumbent}
           pendingMandate={seatPanel.pendingMandate}
-          viewerMcpRegistered={seatPanel.viewerMcpRegistered}
           submitting={false}
           rotate={{ ...seatPanel.rotate, onConfirm: (input) => { setSeatHandoff(true); seatPanel.rotate.onConfirm(input); } }}
           tick={{ onOpen: () => setTickSheetOpen(true), onClose: () => setTickSheetOpen(false) }}

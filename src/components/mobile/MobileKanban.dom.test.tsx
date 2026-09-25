@@ -118,7 +118,7 @@ function Receipt() {
 
 interface Opened { tasks: string[]; conversations: string[]; pipelines: string[]; shown: string[][] }
 
-function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void; nav?: MobileNav }) {
+function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void; nav?: MobileNav; onNewTask?: () => void; onTellOrchestrator?: () => void }) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -147,6 +147,8 @@ function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipe
         onOpenPipeline={(entry) => opened.pipelines.push(entry.id)}
         onShown={(paths) => opened.shown.push([...paths])}
         onHiddenCount={input.onHiddenCount}
+        onNewTask={input.onNewTask}
+        onTellOrchestrator={input.onTellOrchestrator}
       />
       <Receipt />
     </MobileNavContext.Provider>,
@@ -316,6 +318,38 @@ test("an empty column says so in the desktop's words and points to the nearest c
   expect(nearest.textContent).toContain(en("mobile2.kanban.tasks", { count: 2 }));
   click(nearest);
   expect(q(host, "[data-phone-kanban]")!.getAttribute("data-phone-kanban-active")).toBe("assigned");
+});
+
+/* #2166 §3.6: on a seatless project board the orchestrator is the way in, so
+   the empty Inbox's "New task" is the quieter, bordered button with the icon as
+   its one plus, and the empty Assigned's "Tell the orchestrator" keeps the
+   fill. The empty texts name who fills the columns. */
+test("an empty Inbox offers New task bordered with one plus, while Tell the orchestrator stays filled", () => {
+  const files = [file(1)];
+  const tasks = [task("d1", "done", [files[0]!.path])];
+  let newTasks = 0;
+  let tells = 0;
+  const { host } = mount({ files, tasks, onNewTask: () => { newTasks += 1; }, onTellOrchestrator: () => { tells += 1; } });
+
+  const inbox = q(host, "[data-phone-kanban-empty=inbox]")!;
+  expect(inbox.textContent).toContain("No tasks yet");
+  expect(inbox.textContent).toContain("The orchestrator adds a task here for each thing you ask.");
+  const newTask = q(host, '[data-phone-kanban-empty-action="inbox"]')!;
+  expect(newTask.className.split(/\s+/)).not.toContain("bg-accent");
+  expect(newTask.className.split(/\s+/)).toContain("border-border");
+  expect(newTask.textContent).toBe("New task");
+  expect((newTask.textContent ?? "").split("+").length - 1).toBe(0);
+  expect(newTask.querySelectorAll("svg")).toHaveLength(1);
+  click(newTask);
+  expect(newTasks).toBe(1);
+
+  const assigned = q(host, "[data-phone-kanban-empty=assigned]")!;
+  expect(assigned.textContent).toContain("A task moves here when the orchestrator starts an agent on it.");
+  const tell = q(host, '[data-phone-kanban-empty-action="assigned"]')!;
+  expect(tell.className.split(/\s+/)).toContain("bg-accent");
+  expect(tell.textContent).toBe(en("mobile2.kanban.tellOrchestrator"));
+  click(tell);
+  expect(tells).toBe(1);
 });
 
 test("Done opens twenty cards at a time and counts them all", () => {

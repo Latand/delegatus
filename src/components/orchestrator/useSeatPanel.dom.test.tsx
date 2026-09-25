@@ -75,7 +75,7 @@ function Consumer() {
   if (!open || !panel) return null;
   return <MobileOrchestratorSheet project={project} projectName="Atlas" sheet="seat" now={1_800_000_000}
     state={panel.state} status={panel.status} file={panel.file} incumbent={panel.incumbent}
-    pendingMandate={panel.pendingMandate} viewerMcpRegistered={panel.viewerMcpRegistered}
+    pendingMandate={panel.pendingMandate}
     rotate={panel.rotate} tick={{ onOpen: () => {}, onClose: () => {} }} submitting={false} onRecheck={panel.onRecheck}
     onConfirm={() => { throw new Error("unexpected mutation"); }} onOpenConversation={() => {}}
     onClose={() => { open = false; render(); }} />;

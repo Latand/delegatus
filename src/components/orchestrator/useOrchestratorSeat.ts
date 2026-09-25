@@ -171,6 +171,14 @@ export function resetOrchestratorSeatCacheForTests(): void {
   polls.clear();
   answers.clear();
   seatConversations = null;
+  seatConversationsListeners.clear();
+  if (seatConversationsPoll) {
+    clearInterval(seatConversationsPoll.timer);
+    document.removeEventListener("visibilitychange", seatConversationsPoll.onVisibility);
+    seatConversationsPoll.controller.abort();
+    seatConversationsPoll = null;
+  }
+  seatConversationsPending = false;
 }
 
 export async function fetchOrchestratorSeat(project: string, cwd?: string, signal?: AbortSignal): Promise<OrchestratorSeatStatus> {
@@ -243,34 +251,62 @@ export function useSeatConversations(enabled: boolean): SeatRefs | null {
   const [refs, setRefs] = useState<SeatRefs | null>(() => seatConversations);
   useEffect(() => {
     if (!enabled) return;
-    const controller = new AbortController();
-    const load = () => {
-      void fetchSeatConversations(controller.signal)
-        .then((answer) => {
-          seatConversations = answer;
-          setRefs(answer);
-        })
-        .catch(() => {
-          /* Keep the last good answer: a dropped poll is not evidence that the
-             seats moved, and blanking it would flash every seat task back into
-             the rows it was kept out of. */
-        });
-    };
-    load();
-    const timer = setInterval(() => {
-      if (!documentHidden()) load();
-    }, SEAT_POLL_MS);
-    const onVisibility = () => {
-      if (!documentHidden()) load();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-      controller.abort();
-    };
+    return joinSeatConversationsPoll(setRefs);
   }, [enabled]);
   return refs;
+}
+
+/* The cross-project read is shared the way the per-project one is: the
+   Overview's board and its first-run band (#2166) both read it, and a
+   `setInterval` per mount would ask for the same document twice. The first
+   mount starts the poll, later ones join it (each revalidating once), and it
+   stops when the last one leaves. */
+const seatConversationsListeners = new Set<(refs: SeatRefs | null) => void>();
+let seatConversationsPoll: { timer: ReturnType<typeof setInterval>; controller: AbortController; onVisibility: () => void } | null = null;
+let seatConversationsPending = false;
+
+function loadSeatConversations(): void {
+  const poll = seatConversationsPoll;
+  if (!poll || seatConversationsPending) return;
+  seatConversationsPending = true;
+  void fetchSeatConversations(poll.controller.signal)
+    .then((answer) => {
+      seatConversations = answer;
+      for (const listener of seatConversationsListeners) listener(answer);
+    })
+    .catch(() => {
+      /* Keep the last good answer: a dropped poll is not evidence that the
+         seats moved, and blanking it would flash every seat task back into
+         the rows it was kept out of. */
+    })
+    .finally(() => { seatConversationsPending = false; });
+}
+
+function joinSeatConversationsPoll(listener: (refs: SeatRefs | null) => void): () => void {
+  seatConversationsListeners.add(listener);
+  if (!seatConversationsPoll) {
+    const onVisibility = () => {
+      if (!documentHidden()) loadSeatConversations();
+    };
+    seatConversationsPoll = {
+      timer: setInterval(() => {
+        if (!documentHidden()) loadSeatConversations();
+      }, SEAT_POLL_MS),
+      controller: new AbortController(),
+      onVisibility,
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+  }
+  loadSeatConversations();
+  return () => {
+    seatConversationsListeners.delete(listener);
+    if (seatConversationsListeners.size || !seatConversationsPoll) return;
+    clearInterval(seatConversationsPoll.timer);
+    document.removeEventListener("visibilitychange", seatConversationsPoll.onVisibility);
+    seatConversationsPoll.controller.abort();
+    seatConversationsPoll = null;
+    seatConversationsPending = false;
+  };
 }
 
 export async function fetchSeatConversations(signal?: AbortSignal): Promise<SeatRefs | null> {

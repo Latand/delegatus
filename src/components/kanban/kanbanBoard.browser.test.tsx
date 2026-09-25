@@ -9646,3 +9646,242 @@ describe("#2187 a pipeline that finishes its task, and the wait for the task's o
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("#2166 the desktop leads with the orchestrator", () => {
+  /*
+   * Slice 1 of docs/design/orchestrator-first-onboarding.md §6: the real
+   * Viewer over `issue1695Evidence.fixture.tsx`, in Chromium, at 1440 × 900
+   * and 1280 × 800, English and Ukrainian:
+   *
+   *   - `?scenario=orchestrator-first` — a project created a moment ago, with
+   *     no seat, no task and no view chosen. It opens on its Board, the seat's
+   *     create draft above the columns in plain words (no issue number, no
+   *     "MCP", "deploy", "APPROVE" or "lanes"), its rules folded, its runtime
+   *     on one Runs on row, and the four columns on screen under it. The empty
+   *     Inbox and Assigned name the orchestrator.
+   *   - `?scenario=orchestrator-first-overview` — the quiet Overview of an
+   *     install with no seat anywhere, which leads with one band.
+   *
+   * Every container is measured by ink against #2185's scale: one inset on
+   * every side, the heading, the text, the Runs on row, the rules and the
+   * footer on the seat head's avatar edge, equal padding above and below, and
+   * the band on the columns' own left edge. `LLV_2166_BEFORE=1` records the
+   * same readings from a checkout without the change and gates nothing.
+   *
+   * Readings go to `evidence/orchestrator-first/slice1.json` (or
+   * `slice1-before.json`); frames to `LLV_2166_OUT`, outside the repository.
+   */
+  const BEFORE = process.env.LLV_2166_BEFORE === "1";
+  const OUT = path.resolve(process.env.LLV_2166_OUT ?? ".artifacts/orchestrator-first");
+  const EVIDENCE = path.resolve("evidence/orchestrator-first");
+  const TAG = BEFORE ? "before" : "after";
+  const FRAMES = [
+    { label: "1440", width: 1440, height: 900, lang: "en" },
+    { label: "1280", width: 1280, height: 800, lang: "en" },
+    { label: "1280-uk", width: 1280, height: 800, lang: "uk" },
+  ] as const;
+  const JARGON = ["MCP", "deploy", "APPROVE", "lanes"] as const;
+
+  /* The left edge of what a node draws: its text's first glyph, or its box
+     when it holds no text. */
+  const readDraft = (page: Page) => page.evaluate(() => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const ink = (node: Element | null) => {
+      if (!node) return null;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+      if (!rects.length) return null;
+      return { left: Math.min(...rects.map((rect) => rect.left)), top: Math.min(...rects.map((rect) => rect.top)), right: Math.max(...rects.map((rect) => rect.right)), bottom: Math.max(...rects.map((rect) => rect.bottom)) };
+    };
+    const seat = document.querySelector<HTMLElement>("[data-kanban-seat]");
+    const form = document.querySelector<HTMLElement>('[data-orchestrator-draft="create"]');
+    if (!seat || !form) return null;
+    const box = seat.getBoundingClientRect();
+    const body = form.firstElementChild as HTMLElement;
+    const footer = form.lastElementChild as HTMLElement;
+    const bodyBox = body.getBoundingClientRect();
+    const footerBox = footer.getBoundingClientRect();
+    const avatar = seat.querySelector(".seat-head .av")?.getBoundingClientRect() ?? null;
+    const fold = seat.querySelector(".seat-fold")?.getBoundingClientRect() ?? null;
+    const heading = ink(form.querySelector("h2"));
+    const intro = ink(form.querySelector("[data-orchestrator-intro]"));
+    const example = ink(form.querySelector("[data-orchestrator-example]"));
+    const runsOn = form.querySelector<HTMLElement>("[data-orchestrator-runs-on]")?.getBoundingClientRect() ?? null;
+    const runsOnLabel = ink(form.querySelector("[data-orchestrator-runs-on] .text-label"));
+    const rules = form.querySelector<HTMLElement>("[data-orchestrator-mandate-details]");
+    const rulesBox = rules?.getBoundingClientRect() ?? null;
+    const confirm = form.querySelector<HTMLElement>("[data-orchestrator-confirm]")?.getBoundingClientRect() ?? null;
+    const byHand = ink(form.querySelector("[data-orchestrator-by-hand]"));
+    const lastInBody = (body.lastElementChild as HTMLElement | null)?.getBoundingClientRect() ?? null;
+    const copy = form.cloneNode(true) as HTMLElement;
+    copy.querySelectorAll("textarea").forEach((field) => field.remove());
+    const columns = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] section.column")].map((column) => {
+      const rect = column.getBoundingClientRect();
+      const empty = column.querySelector<HTMLElement>(".empty");
+      return { status: column.dataset.status ?? "", top: round(rect.top), left: round(rect.left), emptyBottom: empty ? round(empty.getBoundingClientRect().bottom) : null, empty: empty?.textContent?.trim() ?? "" };
+    });
+    const clipped = [...form.querySelectorAll<HTMLElement>("h2, p, span, summary, button")]
+      .filter((node) => node.offsetParent && node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible" && !node.closest("[data-orchestrator-cwd]"))
+      .map((node) => node.textContent?.trim().slice(0, 40) ?? "");
+    const at = (value: number | undefined | null) => (value == null ? null : round(value - box.left));
+    return {
+      words: copy.textContent ?? "",
+      rulesOpen: rules?.hasAttribute("open") ?? null,
+      radios: form.querySelectorAll('[role="radio"]').length,
+      runsOnValue: form.querySelector("[data-orchestrator-runs-on-value]")?.textContent ?? null,
+      confirmText: form.querySelector("[data-orchestrator-confirm]")?.textContent ?? null,
+      seat: { left: round(box.left), width: round(box.width), top: round(box.top), bottom: round(box.bottom) },
+      /* From the seat's left border edge. */
+      edges: {
+        avatar: at(avatar?.left), heading: at(heading?.left), intro: at(intro?.left), example: at(example?.left),
+        runsOn: at(runsOn?.left), rules: at(rulesBox?.left), confirm: at(confirm?.left), byHand: at(byHand?.left),
+      },
+      insets: {
+        foldFromRight: fold ? round(box.right - fold.right) : null,
+        runsOnLabel: runsOn && runsOnLabel ? round(runsOnLabel.left - runsOn.left) : null,
+        bodyTop: heading ? round(heading.top - bodyBox.top) : null,
+        bodyBottom: lastInBody ? round(bodyBox.bottom - lastInBody.bottom) : null,
+        footerTop: confirm ? round(confirm.top - footerBox.top) : null,
+        footerBottom: byHand ? round(footerBox.bottom - byHand.bottom) : null,
+        gapHeadingIntro: heading && intro ? round(intro.top - heading.bottom) : null,
+        gapRunsOnRules: runsOn && rulesBox ? round(rulesBox.top - runsOn.bottom) : null,
+        gapConfirmByHand: confirm && byHand ? round(byHand.top - confirm.bottom) : null,
+      },
+      draftHeight: round(box.height),
+      columns,
+      clipped,
+      viewportHeight: innerHeight,
+      conversationsView: Boolean(document.querySelector("[data-desktop-conversations-scroll]")),
+    };
+  });
+
+  const readBand = (page: Page) => page.evaluate(() => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const band = document.querySelector<HTMLElement>("[data-overview-orchestrator-band]");
+    if (!band) return null;
+    const box = band.getBoundingClientRect();
+    const range = (node: Element | null) => {
+      if (!node) return null;
+      const r = document.createRange();
+      r.selectNodeContents(node);
+      const rects = [...r.getClientRects()].filter((rect) => rect.width > 0);
+      return rects.length ? { left: Math.min(...rects.map((rect) => rect.left)), top: Math.min(...rects.map((rect) => rect.top)), bottom: Math.max(...rects.map((rect) => rect.bottom)) } : null;
+    };
+    const picture = (band.firstElementChild as HTMLElement).getBoundingClientRect();
+    const title = range(band.querySelector("h2"));
+    const text = range(band.querySelector("p"));
+    const button = band.querySelector<HTMLElement>("[data-overview-orchestrator-create]")!.getBoundingClientRect();
+    const firstColumn = document.querySelector<HTMLElement>("[data-kanban-board] section.column")?.getBoundingClientRect() ?? null;
+    const page = band.parentElement!.getBoundingClientRect();
+    return {
+      band: { left: round(box.left), right: round(box.right), top: round(box.top), height: round(box.height) },
+      columnLeft: firstColumn ? round(firstColumn.left) : null,
+      /* The page the band and the columns stand in: the band keeps the same
+         edge on both sides of it. */
+      pageLeft: round(page.left),
+      pageRight: round(page.right),
+      insets: {
+        pictureLeft: round(picture.left - box.left),
+        pictureTop: round(picture.top - box.top),
+        pictureBottom: round(box.bottom - picture.bottom),
+        buttonRight: round(box.right - button.right),
+        pictureToText: title ? round(title.left - picture.right) : null,
+        titleLeft: title ? round(title.left - box.left) : null,
+        textLeft: text ? round(text.left - box.left) : null,
+        titleToText: title && text ? round(text.top - title.bottom) : null,
+      },
+      text: band.textContent ?? "",
+      buttonFill: getComputedStyle(band.querySelector("[data-overview-orchestrator-create]")!).backgroundColor,
+      overflow: box.right > innerWidth + 1,
+    };
+  });
+
+  browserTest("#2166 slice 1: the plain draft on a new project's Board and the Overview's band, measured", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "llv-2166-")));
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const near = (a: number | null | undefined, b: number | null | undefined, tolerance = 1) => a != null && b != null && Math.abs(a - b) <= tolerance;
+    try {
+      for (const frame of FRAMES) {
+        const viewport = { width: frame.width, height: frame.height };
+        const label = `board-draft-${frame.label}`;
+        const opened = await openFixture(browser, `${server.base}?scenario=orchestrator-first`, viewport, "light", frame.lang);
+        try {
+          await opened.page.waitForSelector('[data-orchestrator-draft="create"]', { state: "visible", timeout: 30_000 });
+          await opened.page.waitForTimeout(800);
+          const reading = await readDraft(opened.page);
+          await opened.page.screenshot({ path: path.join(OUT, `${label}-${TAG}.png`) });
+          readings[label] = reading;
+          if (!BEFORE) {
+            if (!reading) throw new Error("no draft on the seat");
+            if (reading.conversationsView) failures.push(`${label}: a project with no view chosen opened on Conversations`);
+            if (reading.rulesOpen !== false) failures.push(`${label}: the rules are not folded`);
+            if (reading.radios) failures.push(`${label}: the pickers stand open`);
+            if (/#\d/.test(reading.words)) failures.push(`${label}: the draft names an issue number`);
+            for (const word of JARGON) if (reading.words.includes(word)) failures.push(`${label}: the draft says «${word}»`);
+            if (reading.clipped.length) failures.push(`${label}: text cut off: ${JSON.stringify(reading.clipped)}`);
+            const { edges, insets } = reading;
+            for (const [name, left] of Object.entries(edges)) {
+              if (!near(left, edges.avatar)) failures.push(`${label}: ${name} starts at ${left}, the avatar at ${edges.avatar}`);
+            }
+            if (!near(insets.foldFromRight, edges.avatar)) failures.push(`${label}: Fold ends ${insets.foldFromRight} from the right, the avatar starts ${edges.avatar} from the left`);
+            if (!near(insets.footerTop, 12)) failures.push(`${label}: the footer's top padding is ${insets.footerTop}`);
+            /* The four columns, and what their empty states say, are on
+               screen under the draft (design §3.6: about 330 px of draft). */
+            for (const column of reading.columns) {
+              if (column.emptyBottom === null || column.emptyBottom > reading.viewportHeight) failures.push(`${label}: the ${column.status} column's empty state ends at ${column.emptyBottom}, off a ${reading.viewportHeight} px window`);
+            }
+            const inbox = reading.columns.find((column) => column.status === "inbox")?.empty ?? "";
+            if (frame.lang === "en" && !inbox.includes("The orchestrator adds a task here for each thing you ask.")) failures.push(`${label}: the empty Inbox reads ${JSON.stringify(inbox)}`);
+          }
+          if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+
+      for (const frame of FRAMES) {
+        const viewport = { width: frame.width, height: frame.height };
+        const label = `overview-band-${frame.label}`;
+        const opened = await openFixture(browser, `${server.base}?scenario=orchestrator-first-overview`, viewport, "light", frame.lang);
+        try {
+          await opened.page.waitForSelector("[data-kanban-board] section.column", { state: "attached", timeout: 30_000 });
+          if (!BEFORE) await opened.page.waitForSelector("[data-overview-orchestrator-band]", { state: "visible", timeout: 15_000 });
+          await opened.page.waitForTimeout(700);
+          const reading = await readBand(opened.page);
+          await opened.page.screenshot({ path: path.join(OUT, `${label}-${TAG}.png`) });
+          readings[label] = reading;
+          if (!BEFORE) {
+            if (!reading) throw new Error("no band on an install with no seat");
+            if (!near(reading.band.left, reading.columnLeft)) failures.push(`${label}: the band starts at ${reading.band.left}, the columns at ${reading.columnLeft}`);
+            if (!near(reading.band.left - reading.pageLeft, reading.pageRight - reading.band.right)) failures.push(`${label}: the band's edges differ, ${reading.band.left - reading.pageLeft} left and ${reading.pageRight - reading.band.right} right`);
+            const { insets } = reading;
+            if (!near(insets.pictureLeft, 12) || !near(insets.buttonRight, 12)) failures.push(`${label}: side insets ${insets.pictureLeft} / ${insets.buttonRight}`);
+            if (!near(insets.pictureTop, insets.pictureBottom)) failures.push(`${label}: top ${insets.pictureTop} and bottom ${insets.pictureBottom} differ`);
+            if (!near(insets.pictureToText, 12)) failures.push(`${label}: picture to text ${insets.pictureToText}`);
+            if (!near(insets.titleLeft, insets.textLeft)) failures.push(`${label}: title at ${insets.titleLeft}, text at ${insets.textLeft}`);
+            if (reading.overflow) failures.push(`${label}: the band runs past the window`);
+            /* The one filled button: the board's own button reset stays off it. */
+            if (/rgba\(0, 0, 0, 0\)|transparent/.test(reading.buttonFill)) failures.push(`${label}: the band's button has no fill`);
+          }
+          if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, BEFORE ? "slice1-before.json" : "slice1.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length && !BEFORE) throw new Error(failures.join("\n"));
+  }, 600_000);
+});

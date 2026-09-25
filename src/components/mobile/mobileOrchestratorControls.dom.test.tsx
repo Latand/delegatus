@@ -392,7 +392,7 @@ test("Rotate opens the seat's configuration prefilled from the incumbent, and th
      server composes the handoff either way. */
   const mandate = panel.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
   expect(mandate.value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
-  expect(panel.querySelector("[data-orchestrator-mandate-kind]")!.textContent).toBe(`Built-in default mandate v${ORCHESTRATOR_PROMPT_VERSION}`);
+  expect(panel.querySelector("[data-orchestrator-mandate-kind]")!.textContent).toBe(`Its instructions (v${ORCHESTRATOR_PROMPT_VERSION})`);
   expect(panel.querySelector("[data-orchestrator-mandate-stale]")!.textContent).toContain(`based on v3; the current default is v${ORCHESTRATOR_PROMPT_VERSION}`);
   const keep = panel.querySelector("[data-orchestrator-keep-incumbent]") as HTMLButtonElement;
   expect(keep.className).toContain("min-h-11");

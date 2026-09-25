@@ -510,10 +510,13 @@ function EmptyColumn({ column, columns, copy, onJump, onNewTask, onTellOrchestra
   const nearest = nearestWithWork(columns, column.status);
   const target = nearest ? columns[nearest] : null;
   const said = copy?.(column.status, target !== null) ?? null;
+  /* The orchestrator is the board's way in; a task by hand is the quieter
+     one (#2166 §3.6): bordered, like the nearest-column chip under it, while
+     "Tell the orchestrator" keeps the fill. */
   const action = column.status === "inbox" && onNewTask
-    ? { label: t("mobile2.kanban.newTask"), run: onNewTask, icon: <Plus className="h-4 w-4" aria-hidden /> }
+    ? { label: t("mobile2.kanban.newTask"), run: onNewTask, icon: <Plus className="h-4 w-4" aria-hidden />, filled: false }
     : column.status === "assigned" && onTellOrchestrator
-      ? { label: t("mobile2.kanban.tellOrchestrator"), run: onTellOrchestrator, icon: <MessageSquare className="h-4 w-4" aria-hidden /> }
+      ? { label: t("mobile2.kanban.tellOrchestrator"), run: onTellOrchestrator, icon: <MessageSquare className="h-4 w-4" aria-hidden />, filled: true }
       : null;
   return (
     <div data-phone-kanban-empty={column.status} className="flex min-h-full flex-col items-center justify-center gap-2 px-6 py-8 text-center">
@@ -526,7 +529,9 @@ function EmptyColumn({ column, columns, copy, onJump, onNewTask, onTellOrchestra
         <button
           type="button"
           data-phone-kanban-empty-action={column.status}
-          className="mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-full bg-accent px-4 text-ui font-semibold text-white active:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2"
+          className={action.filled
+            ? "mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-full bg-accent px-4 text-ui font-semibold text-white active:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2"
+            : "mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-full border border-border bg-card px-4 text-ui font-semibold text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
           onClick={action.run}
         >
           {action.icon}

@@ -274,7 +274,14 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], ex
 
 
 const bar = (host: HTMLElement) => host.querySelector("header.bar, [data-project-bar]") as HTMLElement;
-const text = (element: Element | null) => (element?.textContent ?? "").replace(/\s+/g, " ");
+/* What the page SAYS: a textarea's text is a field's value (the orchestrator
+   draft's folded mandate, which the seat reads), so it is left out. */
+const text = (element: Element | null) => {
+  if (!element) return "";
+  const copy = element.cloneNode(true) as Element;
+  copy.querySelectorAll("textarea").forEach((field) => field.remove());
+  return (copy.textContent ?? "").replace(/\s+/g, " ");
+};
 function click(element: Element | null) {
   expect(element).toBeTruthy();
   flushSync(() => element!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));

@@ -99,7 +99,15 @@ const LABELS = SCENARIO === "issue1865";
 /* `issue1820-quiet` is the same installation with nobody working in it: the
    Overview's most common state, where the board is narrowed to nothing by its
    own permanent filter and no search was ever typed. */
-const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet";
+/* #2166: the install before any orchestrator exists. `orchestrator-first` is a
+   project created a moment ago (nothing stored, no task, no view chosen), whose
+   Board carries the create draft above empty columns; `orchestrator-first-
+   overview` is the quiet Overview, which leads with its band. No project has a
+   seat in either. */
+const ORCH_FIRST = SCENARIO === "orchestrator-first";
+const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
+const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW;
+const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet" || ORCH_FIRST_OVERVIEW;
 const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
 const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
 const LEDGER = "acme-ledger";
@@ -1582,6 +1590,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : files;
     const scoped = OVERVIEW_EMPTY
       ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
+      : ORCH_FIRST
+      ? { files: [], projectCatalog: [{ project: PROJECT, conversations: 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].map((project) => {
@@ -1638,7 +1648,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json({ ok: true, project: PROJECT, mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" }, github: "acme/atlas" });
   }
-  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY ? [] : tasks });
+  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST ? [] : tasks });
   if (url.pathname === "/api/tasks" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     evidence.taskCreates.push(body);
@@ -1899,6 +1909,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
+  if (url.pathname === "/api/orchestrator/seat" && NO_SEAT) {
+    evidence.seatReads += 1;
+    const all = { conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } };
+    if (url.searchParams.get("scope") === "all") return json({ all });
+    return json({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTask: null, all });
+  }
   if (url.pathname === "/api/orchestrator/seat") {
     evidence.seatReads += 1;
     return json({

@@ -3543,3 +3543,178 @@ browserTest("#2187: a pipeline that finishes its task says so on the phone at 39
   fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * #2166 slice 1 (docs/design/orchestrator-first-onboarding.md §3.5–3.7) on the
+ * phone at 390 × 844, en and uk, over the fixture's `?seatless=` scenes:
+ *
+ *   - a seatless board whose Inbox is empty (`donly`) and the board right after
+ *     its seat was created (`seatonly`): the empty Inbox's New task is bordered
+ *     with one plus, and names the orchestrator in its text;
+ *   - the create draft the seat invitation opens: the plain sentence, one Runs
+ *     on card, the rules folded, the manual way last, none of the runbook
+ *     words, on the sheet's one 12 px inset;
+ *   - the Overview of an install with no seat (`&overview=1`), which leads with
+ *     its band above the tabs.
+ *
+ * `LLV_2166_BEFORE=1` records the same frames from a checkout without the
+ * change and gates nothing. Frames go to `LLV_2166_OUT`, outside the repository;
+ * readings to `evidence/orchestrator-first/slice1-phone(-before).json`.
+ */
+browserTest("#2166 slice 1: the phone's seatless board, its create draft and the Overview's band at 390", async () => {
+  const BEFORE = process.env.LLV_2166_BEFORE === "1";
+  const out = path.resolve(process.env.LLV_2166_OUT ?? ".artifacts/orchestrator-first");
+  const tag = BEFORE ? "before" : "after";
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync("evidence/orchestrator-first", { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const readings: Record<string, unknown> = {};
+  const failures: string[] = [];
+  const near = (a: number | null | undefined, b: number, tolerance = 1) => a != null && Math.abs(a - b) <= tolerance;
+  const open = async (lang: "en" | "uk", query: string) => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "light" });
+    await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`${base}/${query}`);
+    return { context, page, errors };
+  };
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      const suffix = lang === "uk" ? "-uk" : "";
+      /* The two boards, on their Inbox. */
+      for (const [scene, name] of [["donly", "seatless-empty-inbox"], ["seatonly", "seat-just-created"]] as const) {
+        const label = `phone-board-${name}-390${suffix}`;
+        const { context, page, errors } = await open(lang, `?kanban=1&seatless=${scene}#p=atlas`);
+        try {
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 20_000 });
+          await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          await pagerAtRest(page);
+          await pause(page, 500);
+          const reading = await page.evaluate(() => {
+            const inbox = document.querySelector<HTMLElement>('[data-phone-kanban-empty-action="inbox"]');
+            return {
+              inboxText: document.querySelector<HTMLElement>('[data-phone-kanban-empty="inbox"]')?.innerText ?? null,
+              newTask: inbox ? { text: inbox.innerText, fill: getComputedStyle(inbox).backgroundColor, border: getComputedStyle(inbox).borderTopWidth, icons: inbox.querySelectorAll("svg").length } : null,
+              seat: document.querySelector("[data-mobile2-seat-card]")?.getAttribute("data-mobile2-seat-state") ?? null,
+            };
+          });
+          await page.screenshot({ path: path.join(out, `${label}-${tag}.png`) });
+          readings[label] = reading;
+          if (!BEFORE) {
+            if (!reading.newTask) failures.push(`${label}: no New task on the empty Inbox`);
+            else {
+              if (reading.newTask.text.includes("+")) failures.push(`${label}: New task reads ${JSON.stringify(reading.newTask.text)}`);
+              if (reading.newTask.border === "0px") failures.push(`${label}: New task is not bordered`);
+              if (reading.newTask.icons !== 1) failures.push(`${label}: New task draws ${reading.newTask.icons} icons`);
+            }
+            if (lang === "en" && !reading.inboxText?.includes("The orchestrator adds a task here for each thing you ask.")) failures.push(`${label}: the empty Inbox reads ${JSON.stringify(reading.inboxText)}`);
+          }
+          if (errors.length) failures.push(`${label}: page errors ${errors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* The create draft the seat invitation opens. */
+      {
+        const label = `board-draft-390${suffix}`;
+        const { context, page, errors } = await open(lang, "?kanban=1&seatless=donly#p=atlas");
+        try {
+          await page.waitForSelector("[data-mobile2-seat-open]", { timeout: 20_000 });
+          await page.locator("[data-mobile2-seat-open]").first().click();
+          await page.waitForSelector('[data-orchestrator-sheet-mode="create"]', { timeout: 10_000 });
+          await pause(page, 600);
+          const reading = await page.evaluate(() => {
+            const sheet = document.querySelector<HTMLElement>('[data-testid="mobile-orchestrator-sheet"]')!;
+            const body = sheet.querySelector<HTMLElement>("header + div")!;
+            const bodyBox = body.getBoundingClientRect();
+            const style = getComputedStyle(body);
+            const copy = sheet.cloneNode(true) as HTMLElement;
+            copy.querySelectorAll("textarea").forEach((field) => field.remove());
+            const lefts = [...body.children].map((child) => Math.round(child.getBoundingClientRect().left - bodyBox.left));
+            const footer = sheet.lastElementChild as HTMLElement;
+            const footerStyle = getComputedStyle(footer);
+            return {
+              words: copy.textContent ?? "",
+              padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft],
+              childLefts: lefts,
+              footerPadding: [footerStyle.paddingTop, footerStyle.paddingRight, footerStyle.paddingBottom, footerStyle.paddingLeft],
+              folded: Boolean(sheet.querySelector("[data-orchestrator-mandate-fold]")),
+              mandateShown: Boolean(sheet.querySelector("[data-orchestrator-mandate]")),
+              radios: sheet.querySelectorAll('[role="radio"]').length,
+              runsOn: sheet.querySelector("[data-orchestrator-runs-on-value]")?.textContent ?? null,
+              clipped: [...sheet.querySelectorAll<HTMLElement>("p, span, button")].filter((node) => node.offsetParent && node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible" && !node.closest("header")).map((node) => node.textContent?.slice(0, 40) ?? ""),
+            };
+          });
+          await page.screenshot({ path: path.join(out, `${label}-${tag}.png`) });
+          readings[label] = reading;
+          if (!BEFORE) {
+            if (/#\d/.test(reading.words)) failures.push(`${label}: the draft names an issue number`);
+            for (const word of ["MCP", "deploy", "APPROVE", "lanes"]) if (reading.words.includes(word)) failures.push(`${label}: the draft says «${word}»`);
+            if (!reading.folded || reading.mandateShown) failures.push(`${label}: the rules are not folded`);
+            if (reading.radios) failures.push(`${label}: the pickers stand open`);
+            if (!reading.padding.every((value) => value === "12px")) failures.push(`${label}: body padding ${reading.padding.join(" ")}`);
+            if (!reading.footerPadding.every((value) => value === "12px")) failures.push(`${label}: footer padding ${reading.footerPadding.join(" ")}`);
+            if (new Set(reading.childLefts.map((left) => (left <= 12 ? 12 : left))).size !== 1) failures.push(`${label}: the body's rows start on ${JSON.stringify(reading.childLefts)}`);
+            if (reading.clipped.length) failures.push(`${label}: text cut off: ${JSON.stringify(reading.clipped)}`);
+          }
+          if (errors.length) failures.push(`${label}: page errors ${errors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* The Overview of an install with no seat. */
+      {
+        const label = `overview-band-390${suffix}`;
+        const { context, page, errors } = await open(lang, "?overview=1&seatless=donly");
+        try {
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 20_000 });
+          if (!BEFORE) await page.waitForSelector("[data-overview-orchestrator-band]", { timeout: 15_000 });
+          await pause(page, 600);
+          const reading = await page.evaluate(() => {
+            const band = document.querySelector<HTMLElement>("[data-overview-orchestrator-band]");
+            if (!band) return null;
+            const box = band.getBoundingClientRect();
+            const button = band.querySelector<HTMLElement>("[data-overview-orchestrator-create]")!.getBoundingClientRect();
+            const tabs = document.querySelector<HTMLElement>("[data-phone-kanban-tab]")?.getBoundingClientRect() ?? null;
+            const style = getComputedStyle(band);
+            return {
+              left: box.left, right: innerWidth - box.right, top: box.top,
+              padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft],
+              button: { left: button.left - box.left, right: box.right - button.right, height: button.height, bottomGap: box.bottom - button.bottom },
+              aboveTabs: tabs ? tabs.top >= box.bottom - 1 : null,
+            };
+          });
+          await page.screenshot({ path: path.join(out, `${label}-${tag}.png`) });
+          readings[label] = reading;
+          if (!BEFORE) {
+            if (!reading) throw new Error("no band on an install with no seat");
+            if (!reading.padding.every((value) => value === "12px")) failures.push(`${label}: band padding ${reading.padding.join(" ")}`);
+            if (!near(reading.left, reading.right)) failures.push(`${label}: the band sits ${reading.left} from the left and ${reading.right} from the right`);
+            if (!near(reading.button.left, 12) || !near(reading.button.right, 12) || !near(reading.button.bottomGap, 12)) failures.push(`${label}: the button's insets ${JSON.stringify(reading.button)}`);
+            if (reading.button.height < 44) failures.push(`${label}: the button is ${reading.button.height} px tall`);
+            if (reading.aboveTabs !== true) failures.push(`${label}: the band is not above the tabs`);
+          }
+          if (errors.length) failures.push(`${label}: page errors ${errors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join("evidence/orchestrator-first", BEFORE ? "slice1-phone-before.json" : "slice1-phone.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+  if (failures.length && !BEFORE) throw new Error(failures.join("\n"));
+}, 300_000);

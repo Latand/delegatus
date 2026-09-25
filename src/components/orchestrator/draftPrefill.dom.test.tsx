@@ -52,6 +52,9 @@ async function mount(project: string): Promise<string[]> {
 test("a draft on screen takes Opus and the tour's effort, and only for its own project", async () => {
   writeSeatDraftField("repo-alpha", "engine", "codex");
   writeSeatDraftField("repo-alpha", "model", "gpt-6-astra");
+  /* Stored, so the request's effort is a change: the draft's own default is
+     the orchestrator role's, high (#2166). */
+  writeSeatDraftField("repo-alpha", "effort", "low");
   const seen = await mount("repo-alpha");
   expect(seen.at(-1)).toBe("codex/gpt-6-astra/low");
   await act(async () => requestOrchestratorDraft({ project: "repo-other", launch: { engine: "claude", model: "opus", effort: "high" } }));
