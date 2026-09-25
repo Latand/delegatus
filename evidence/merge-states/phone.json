@@ -1,0 +1,697 @@
+{
+  "results": [
+    {
+      "key": "waiting-390-en-dark",
+      "words": [
+        [
+          "waiting",
+          "waiting for checks · 12m"
+        ]
+      ],
+      "note": "waiting",
+      "noteText": "Merges when every check is green.",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-wait"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "updating-390-en-dark",
+      "words": [
+        [
+          "updating",
+          "updating from main"
+        ]
+      ],
+      "note": "waiting",
+      "noteText": "Merges when every check is green.",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-update"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stopped-390-en-dark",
+      "words": [
+        [
+          "stopped",
+          "merge stopped"
+        ]
+      ],
+      "note": null,
+      "noteText": null,
+      "reason": "Merge stopped: check privacy-publication failed.",
+      "answers": [
+        [
+          "dismiss",
+          "Leave the PR open"
+        ],
+        [
+          "retry-merge",
+          "Try the merge again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-stop"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "merged-390-en-dark",
+      "words": [
+        [
+          "merged",
+          "merged"
+        ]
+      ],
+      "note": "merged",
+      "noteText": "Delegatus merged it",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-done"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "menu-390-en-dark",
+      "on": {
+        "state": "on",
+        "label": "Merge when the review passes",
+        "hint": "Green checks only; a conflict waits for you.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "labelMeetsSwitch": false,
+        "inside": true
+      },
+      "off": {
+        "state": "off",
+        "label": "Merge when the review passes",
+        "hint": "Pipelines end with an open PR.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "labelMeetsSwitch": false,
+        "inside": true
+      }
+    },
+    {
+      "key": "waiting-390-en-light",
+      "words": [
+        [
+          "waiting",
+          "waiting for checks · 12m"
+        ]
+      ],
+      "note": "waiting",
+      "noteText": "Merges when every check is green.",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-wait"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "updating-390-en-light",
+      "words": [
+        [
+          "updating",
+          "updating from main"
+        ]
+      ],
+      "note": "waiting",
+      "noteText": "Merges when every check is green.",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-update"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stopped-390-en-light",
+      "words": [
+        [
+          "stopped",
+          "merge stopped"
+        ]
+      ],
+      "note": null,
+      "noteText": null,
+      "reason": "Merge stopped: check privacy-publication failed.",
+      "answers": [
+        [
+          "dismiss",
+          "Leave the PR open"
+        ],
+        [
+          "retry-merge",
+          "Try the merge again"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-stop"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "merged-390-en-light",
+      "words": [
+        [
+          "merged",
+          "merged"
+        ]
+      ],
+      "note": "merged",
+      "noteText": "Delegatus merged it",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-done"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "menu-390-en-light",
+      "on": {
+        "state": "on",
+        "label": "Merge when the review passes",
+        "hint": "Green checks only; a conflict waits for you.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "labelMeetsSwitch": false,
+        "inside": true
+      },
+      "off": {
+        "state": "off",
+        "label": "Merge when the review passes",
+        "hint": "Pipelines end with an open PR.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "labelMeetsSwitch": false,
+        "inside": true
+      }
+    },
+    {
+      "key": "waiting-390-uk-dark",
+      "words": [
+        [
+          "waiting",
+          "чекає перевірок · 12 хв"
+        ]
+      ],
+      "note": "waiting",
+      "noteText": "Змерджиться, коли всі перевірки стануть зеленими.",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-wait"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "updating-390-uk-dark",
+      "words": [
+        [
+          "updating",
+          "оновлюється з main"
+        ]
+      ],
+      "note": "waiting",
+      "noteText": "Змерджиться, коли всі перевірки стануть зеленими.",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-update"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stopped-390-uk-dark",
+      "words": [
+        [
+          "stopped",
+          "мердж зупинено"
+        ]
+      ],
+      "note": null,
+      "noteText": null,
+      "reason": "Мердж зупинено: перевірка privacy-publication провалилась.",
+      "answers": [
+        [
+          "dismiss",
+          "Залишити PR відкритим"
+        ],
+        [
+          "retry-merge",
+          "Спробувати мердж ще раз"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-stop"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "merged-390-uk-dark",
+      "words": [
+        [
+          "merged",
+          "змерджено"
+        ]
+      ],
+      "note": "merged",
+      "noteText": "Delegatus змерджив",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-done"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "menu-390-uk-dark",
+      "on": {
+        "state": "on",
+        "label": "Мерджити, коли ревʼю пройдено",
+        "hint": "Лише із зеленими перевірками; конфлікт чекає на вас.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "labelMeetsSwitch": false,
+        "inside": true
+      },
+      "off": {
+        "state": "off",
+        "label": "Мерджити, коли ревʼю пройдено",
+        "hint": "Пайплайни закінчуються відкритим PR.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "labelMeetsSwitch": false,
+        "inside": true
+      }
+    },
+    {
+      "key": "waiting-390-uk-light",
+      "words": [
+        [
+          "waiting",
+          "чекає перевірок · 12 хв"
+        ]
+      ],
+      "note": "waiting",
+      "noteText": "Змерджиться, коли всі перевірки стануть зеленими.",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-wait"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "updating-390-uk-light",
+      "words": [
+        [
+          "updating",
+          "оновлюється з main"
+        ]
+      ],
+      "note": "waiting",
+      "noteText": "Змерджиться, коли всі перевірки стануть зеленими.",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-update"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "stopped-390-uk-light",
+      "words": [
+        [
+          "stopped",
+          "мердж зупинено"
+        ]
+      ],
+      "note": null,
+      "noteText": null,
+      "reason": "Мердж зупинено: перевірка privacy-publication провалилась.",
+      "answers": [
+        [
+          "dismiss",
+          "Залишити PR відкритим"
+        ],
+        [
+          "retry-merge",
+          "Спробувати мердж ще раз"
+        ]
+      ],
+      "heights": [
+        44,
+        44
+      ],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-stop"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "merged-390-uk-light",
+      "words": [
+        [
+          "merged",
+          "змерджено"
+        ]
+      ],
+      "note": "merged",
+      "noteText": "Delegatus змерджив",
+      "reason": null,
+      "answers": [],
+      "heights": [],
+      "cut": [],
+      "screen": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 787,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-merge-done"
+        ],
+        "scrollHeight": 690,
+        "clientHeight": 690
+      }
+    },
+    {
+      "key": "menu-390-uk-light",
+      "on": {
+        "state": "on",
+        "label": "Мерджити, коли ревʼю пройдено",
+        "hint": "Лише із зеленими перевірками; конфлікт чекає на вас.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "labelMeetsSwitch": false,
+        "inside": true
+      },
+      "off": {
+        "state": "off",
+        "label": "Мерджити, коли ревʼю пройдено",
+        "hint": "Пайплайни закінчуються відкритим PR.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "labelMeetsSwitch": false,
+        "inside": true
+      }
+    }
+  ],
+  "failures": []
+}

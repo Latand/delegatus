@@ -104,7 +104,7 @@ import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup } from "@/lib/pipelines/store";
-import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport } from "@/lib/pipelines/types";
+import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport, PipelineMergeState } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import { listFiles } from "@/lib/scanner";
@@ -149,6 +149,7 @@ import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
+import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -207,7 +208,7 @@ import {
 } from "./selectedContextTarget";
 import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
-const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head"]);
+const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 /* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
 const PIPELINE_RECEIPT_ACTIONS = new Set<PipelineAction>(["resolve-decision", "continue-review", "accept-head", "convert-legacy-review", "revert-legacy-review"]);
 const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
@@ -2821,6 +2822,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
   const base = full ? {
     project,
+    mergeOnReview: mergeOnReviewEnabled(project),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: pending,
     /* Terminalized pending intents (#878), oldest first: what was attempted
@@ -2839,6 +2841,8 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     })),
   } : {
     project,
+    /* #2187 §4.1: whether finished lanes here merge on their own. */
+    mergeOnReview: mergeOnReviewEnabled(project),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: compactOrchestratorSeat(pending),
     intentHistoryCount: history.length,
@@ -3443,6 +3447,23 @@ function compactPullRequest(pipeline: Pipeline): { pr?: string } {
   return pr ? { pr } : {};
 }
 
+/** The compact row says it only when there is something to say: the setting
+    when it is on, and the lane's merge when the runner took it. */
+function compactMergeFields(pipeline: Pipeline): { mergeOnReview?: true; merge?: ReturnType<typeof mergeFields>["merge"] } {
+  const { mergeOnReview, merge } = mergeFields(pipeline);
+  return { ...(mergeOnReview ? { mergeOnReview: true as const } : {}), ...(merge ? { merge } : {}) };
+}
+
+/** #2187 §4.1: whether the lane's project merges when the review passes, and
+    where the lane's own merge stands when the runner took it. */
+function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number } } {
+  const merge = pipeline.merge;
+  return {
+    mergeOnReview: mergeOnReviewEnabled(pipeline.project),
+    ...(merge ? { merge: { state: merge.state, reason: merge.reason, by: merge.by, pr: merge.prNumber } } : {}),
+  };
+}
+
 async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const pipeline = getPipelineRecord(pipelineId);
@@ -3620,9 +3641,9 @@ async function listPipelines(
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (pipeline: Pipeline) => {
-    if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline) };
-    if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline) };
-    return { ...pipelineCompactRow(pipeline), ...compactPullRequest(pipeline) };
+    if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline), mergeOnReview: mergeOnReviewEnabled(pipeline.project) };
+    if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline), ...mergeFields(pipeline) };
+    return { ...pipelineCompactRow(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)

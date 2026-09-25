@@ -13,7 +13,7 @@ import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pi
 import { textField, withField } from "@/components/kanban/taskText";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
-import { blockAgeSeconds, pipelineEnded, pipelineNeedsYou, screenCurrentStageId } from "@/components/pipelines/pipelineBlockModel";
+import { blockAgeSeconds, laneMergeUnsettled, pipelineEnded, pipelineNeedsYou, screenCurrentStageId } from "@/components/pipelines/pipelineBlockModel";
 import { attemptNavTarget, latestAttempt, resolveStageNavFile, stageNames } from "@/components/pipelines/pipelineModel";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
@@ -459,8 +459,11 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     .map((summary, index) => ({ summary, index }))
     .sort((a, b) => LANE_RANK[a.summary.pipeline.state] - LANE_RANK[b.summary.pipeline.state] || a.index - b.index)
     .map((entry) => entry.summary), [lanes]);
-  const live = ordered.filter((summary) => !pipelineEnded(summary.pipeline));
-  const ended = ordered.filter((summary) => pipelineEnded(summary.pipeline));
+  /* A completed lane whose merge still moves or stopped on the operator stays
+     out of the fold (#2187 §6). */
+  const folds = (summary: KanbanPipeline) => pipelineEnded(summary.pipeline) && !laneMergeUnsettled(summary.pipeline);
+  const live = ordered.filter((summary) => !folds(summary));
+  const ended = ordered.filter(folds);
   /* The finished lanes stay open or folded as the operator left them when
      Back returns here (#2105). */
   const [endedOpen, setEndedOpen] = useMobileScreenState({ kind: "task", id: taskId }, "ended", false);

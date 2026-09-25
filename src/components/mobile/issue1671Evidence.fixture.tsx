@@ -527,6 +527,43 @@ if (KANBAN) {
       kanbanTasks.push(kanbanTask(taskId, "assigned", title, { updatedAt: iso(300) }));
     }
   }
+  /* #2187 §4.6, §6 (`?merge-states=1`): one task per state of a completed
+     lane's automatic merge — waiting for checks, updating from main, merge
+     stopped with its two answers, merged by Delegatus — read on the task
+     screen at 390, en and uk. The ⋯ sheet carries the merge setting row. */
+  if (new URLSearchParams(location.search).has("merge-states")) {
+    const uk = localStorage.getItem("llv_lang") === "uk";
+    const L = (en: string, ua: string) => (uk ? ua : en);
+    const reviewerRole = { ...kanbanRole("reviewer"), access: "read-only" };
+    const HEAD = "7c1e4b2a9d3f6e5c8b0a1d2e3f4a5b6c7d8e9f0a";
+    const run = (key: string, stageId: string, ago: number) => {
+      const path = kanbanConversation(`${key} · ${stageId}`, "settled", ago);
+      return { n: 1, state: "passed", startedAt: iso(ago + 600), completedAt: iso(ago), agentPath: path, conversationId: idOf(path), activatedBy: null,
+        effectiveRole: stageId === "build" ? kanbanRole("builder") : reviewerRole, verdict: { status: "pass", findings: [] } };
+    };
+    const merge = (state: string, requestedAgo: number, over: Record<string, unknown> = {}) => ({
+      state, by: null, repository: "example/atlas", prNumber: 2240, policyChangedAt: iso(86_400), reviewedHead: HEAD, chain: [HEAD], updates: [],
+      seenChecks: ["privacy-publication", "bun-runtime"], head: HEAD, headSeenAt: iso(requestedAgo), lastChecks: [], readAt: iso(60), nextReadAt: null,
+      readFailures: 0, requestedAt: iso(requestedAgo), mergedHead: null, mergeCommit: null, method: null, mergedAt: null, attempts: 0, reason: null,
+      blockedAt: null, updatedAt: iso(60), ...over,
+    });
+    const lanes: Array<[string, string, string, Record<string, unknown>, number]> = [
+      ["t-merge-wait", "assigned", L("Deploy failure notifies the seat and the phone", "Сповіщення, коли деплой падає"), merge("waiting-checks", 720), 720],
+      ["t-merge-update", "assigned", L("Composer model pills: one width at 390", "Кнопки моделі в композері однієї ширини"), merge("updating", 1_200, { updates: [{ requestedAt: iso(120), head: null }] }), 1_200],
+      ["t-merge-stop", "assigned", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), merge("blocked", 2_700, { reason: 'check "privacy-publication" failed', blockedAt: iso(1_800) }), 2_700],
+      ["t-merge-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), merge("merged", 5_400, { by: "auto-merge", mergedHead: HEAD, method: "squash", mergedAt: iso(4_200) }), 5_400],
+    ];
+    for (const [taskId, status, title, mergeRecord, ago] of lanes) {
+      const id = taskId.replace("t-", "lane-");
+      const lane = kanbanLane(id, title, [taskId], "completed", [
+        { id: "build", attempts: [run(taskId, "build", ago + 1_200)] },
+        { id: "review", role: "reviewer", onFail: { to: "build", maxRounds: 2 }, attempts: [run(taskId, "review", ago)] },
+      ], { lastPassedCommit: HEAD, closedAt: iso(ago), merge: mergeRecord });
+      kanbanPipelines.push(lane);
+      kanbanLinks.pipelines[lane.id] = prLinks(2240, mergeRecord.state === "merged" ? "merged" : "open");
+      kanbanTasks.push(kanbanTask(taskId, status, title, { updatedAt: iso(ago) }));
+    }
+  }
   kanbanPipelines.push(kanbanLane("lane-flake", "Nightly: rerun the flake campaign on a quiet machine", [], "running", [
     { id: "measure", state: "running", ago: 1_500 }, { id: "report", role: "reviewer" },
   ]));
@@ -657,6 +694,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
+const mergeSetting = { enabled: true };
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
@@ -679,6 +717,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     row.revision = `${String(row.revision).replace(/-\d+$/, "")}-${Number(String(row.revision).split("-").pop()) + 1}`;
     row.updatedAt = new Date().toISOString();
     return json({ task: row });
+  }
+  /* #2187 §6: the project's merge setting, as the settings route answers it. */
+  if (url.pathname === "/api/projects/settings") {
+    if (method === "PUT") mergeSetting.enabled = (JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown }).mergeOnReview === true;
+    return json({ ok: true, project: PROJECT, mergeOnReview: { enabled: mergeSetting.enabled, changedAt: iso(86_400), changedBy: "operator" }, github: "example/atlas" });
   }
   if (KANBAN && url.pathname === "/api/tasks" && method === "GET") return json({ tasks: kanbanTasks });
   if (url.pathname === "/api/files" && OVERVIEW_SCENE) {

@@ -26,7 +26,7 @@ import {
   type StageChipState,
 } from "./pipelineModel";
 import {
-  answerLabel, blockAgeSeconds, cardChain, cardChainLevels, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
+  answerLabel, blockAgeSeconds, cardChain, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
   type ChainItem, type PipelineAnswer, type PipelineAnswers, type PipelineBlockDensity, type ReviewStop,
 } from "./pipelineBlockModel";
 
@@ -320,6 +320,7 @@ function AnswerReport({ pipeline, answers, names, nameOf }: {
   nameOf: (stage: PipelineStage) => string;
 }) {
   const { t } = useLocale();
+  if (answers.kind === "merge") return <p className="stage-report" data-merge-stop={pipeline.id}>{t("pipelineBlock.merge.reason", { reason: mergeReasonText(t, pipeline.merge?.reason ?? null) })}</p>;
   if (answers.stop) return <ReviewStopReport pipeline={pipeline} stop={answers.stop} nameOf={nameOf} />;
   return answers.kind === "review"
     ? <p className="review-heads" data-review-heads={pipeline.id}>{pipelineReviewHeads(t, pipeline)}</p>
@@ -334,6 +335,44 @@ function UnreviewedNote({ pipeline }: { pipeline: Pipeline }) {
   const unreviewed = pipelineCompletedUnreviewed(pipeline);
   if (!unreviewed) return null;
   return <p className="pb-unreviewed" data-pipeline-unreviewed={pipeline.id}>{t("pipelineBlock.unreviewedFix", { count: unreviewed.findings })}</p>;
+}
+
+/** What a completed lane's merge adds after "done" (#2187 §6), in its ink:
+    waiting for checks with how long, updating from main, merging, merge
+    stopped, merged. Null when the lane has no merge to speak of. */
+export function laneMergeText(t: TFunction, pipeline: Pipeline, nowMs: number): string | null {
+  const word = laneMergeWord(pipeline);
+  if (!word) return null;
+  if (word !== "waiting") return t(`pipelineBlock.merge.${word}`);
+  const since = Date.parse(pipeline.merge?.requestedAt ?? "");
+  const age = Number.isFinite(since) ? humanizeDuration(blockAgeSeconds((nowMs - since) / 1000)) : "";
+  return t("pipelineBlock.merge.waiting", { age }).replace(/ · $/, "");
+}
+
+function MergeWord({ pipeline, nowMs }: { pipeline: Pipeline; nowMs: number }) {
+  const { t } = useLocale();
+  const text = laneMergeText(t, pipeline, nowMs);
+  if (!text) return null;
+  return (
+    <>
+      <span className="pb-sep" aria-hidden="true">·</span>
+      <span className="pb-merge" data-merge-state={laneMergeWord(pipeline)!}>{text}</span>
+    </>
+  );
+}
+
+/** The line under a completed lane's chain about its merge (#2187 §6): the
+    waiting hint, who merged it, or a stopped merge someone already answered
+    with "Leave the PR open", in muted ink. A stop still asking is the answer
+    panel's. */
+function MergeNote({ pipeline }: { pipeline: Pipeline }) {
+  const { t } = useLocale();
+  const word = laneMergeWord(pipeline);
+  if (!word || mergeNeedsYou(pipeline)) return null;
+  if (word === "waiting" || word === "updating") return <p className="pb-merge-note" data-merge-note="waiting">{t("pipelineBlock.merge.waitingHint")}</p>;
+  if (word === "merged" && pipeline.merge?.by === "auto-merge") return <p className="pb-merge-note" data-merge-note="merged">{t("pipelineBlock.merge.byDelegatus")}</p>;
+  if (word === "stopped") return <p className="pb-merge-note" data-merge-note="stopped">{t("pipelineBlock.merge.reason", { reason: mergeReasonText(t, pipeline.merge?.reason ?? null) })}</p>;
+  return null;
 }
 
 /** The two ways on, the quiet one first. */
@@ -492,7 +531,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
           <span className="pb-line ended">
             <span className="pb-ended">
               <StageToneMark state="passed" />
-              {[pipelineStateLabel(t, pipeline.state), age].filter(Boolean).join(" · ")}
+              {[pipelineStateLabel(t, pipeline.state), laneMergeText(t, pipeline, nowMs), age].filter(Boolean).join(" · ")}
             </span>
             <span className="pb-grow" />
             {text}
@@ -525,7 +564,9 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const showTitle = !sameTitle(title, props.taskTitle);
   /* Running is implied by the live pill; every other state is a word in its tone. */
   const word = pipeline.state === "running" ? null : pipelineStateLabel(t, pipeline.state);
-  const age = moved === null ? null : fmtAge(moved / 1000);
+  /* A completed lane's merge word stands in for its age (#2187 §6): the two
+     side by side cut the lane's title at 1440 in uk. */
+  const age = moved === null || laneMergeWord(pipeline) ? null : fmtAge(moved / 1000);
   const graphOpen = Boolean(props.graphOpen && props.onToggleGraph && props.onOpenStage);
   const report = !needs && pipeline.stageReports?.length ? pipeline.stageReports.at(-1)! : null;
   const opener = (
@@ -541,6 +582,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
       {showTitle ? <span className="pb-title" data-pipeline-title={pipeline.id}>{title}</span> : null}
       <span className="pb-meta">
         {word ? <span className="pstate-word" data-pstate={pipeline.state}>{word}</span> : null}
+        <MergeWord pipeline={pipeline} nowMs={nowMs} />
         {word && age ? <span className="pb-sep" aria-hidden="true">·</span> : null}
         {age ? <span className="pb-when">{age}</span> : null}
       </span>
@@ -616,6 +658,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
         </div>
       ) : null}
       <UnreviewedNote pipeline={pipeline} />
+      <MergeNote pipeline={pipeline} />
       {report ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={report} names={names} /></div> : null}
       {pipeline.graphEdits?.length ? <GraphEditLine edit={pipeline.graphEdits.at(-1)!} /> : null}
     </div>
@@ -641,6 +684,7 @@ export function PipelineStateLine({ summary, nowMs }: { summary: KanbanPipeline;
   return (
     <span className="pb-stateline" data-pipeline-stateline={pipeline.id}>
       <span className="pstate-word" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
+      <MergeWord pipeline={pipeline} nowMs={nowMs} />
       {parts.map((part, index) => (
         <span key={index} className="pb-statepart">
           <span className="pb-sep" aria-hidden="true">·</span>
@@ -845,6 +889,10 @@ function ScreenBlock(props: PipelineBlockProps & {
         </div>
       ) : null}
       <UnreviewedNote pipeline={pipeline} />
+      <MergeNote pipeline={pipeline} />
+      {props.answers?.kind === "merge" ? (
+        <AnswerPanel pipeline={pipeline} answers={props.answers} names={names} nameOf={nameOf} acting={props.acting ?? null} large onAnswer={props.onAnswer} />
+      ) : null}
       {lastReport ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={lastReport} names={names} shown={ANSWER_FINDINGS} /></div> : null}
       {props.embedded ? (
         <div className="pb-section-row">

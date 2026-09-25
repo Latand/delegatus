@@ -818,6 +818,63 @@ export type Pipeline = {
   /** Accepted stage completion calls, oldest first, at most
       MAX_PIPELINE_STAGE_REPORTS (graph slice 2). */
   stageReports?: PipelineStageReportEntry[];
+  /** The merge runner's record (#2187 §4.4), present once a completed lane
+      was queued to merge under its project's "merge when the review passes"
+      setting, or once its PR was seen merged by anyone. */
+  merge?: PipelineMerge;
+};
+
+/** Where an automatic merge stands (#2187 §4.4). `queued`, `checking`,
+    `waiting-checks`, `updating` and `merging` belong to the runner; `merged`
+    is final; `blocked` waits for `retry-merge`; `cancelled` means the setting
+    was turned off while the merge only waited. */
+export type PipelineMergeState = "queued" | "checking" | "waiting-checks" | "updating" | "merging" | "merged" | "blocked" | "cancelled";
+
+export const PIPELINE_MERGE_LIVE_STATES: ReadonlySet<PipelineMergeState> = new Set(["queued", "checking", "waiting-checks", "updating", "merging"]);
+
+export type PipelineMergeMethod = "squash" | "merge" | "rebase";
+
+export type PipelineMerge = {
+  state: PipelineMergeState;
+  /** Who merged it: the runner, or anyone else (the PR was seen merged). */
+  by: "auto-merge" | "outside" | null;
+  /** `<owner>/<repo>`, lower-cased, and the pull request's number. */
+  repository: string;
+  prNumber: number;
+  /** The setting's `changedAt` the lane was queued under. */
+  policyChangedAt: string;
+  /** The head the lane finished on (its `lastPassedCommit`). */
+  reviewedHead: string;
+  /** `reviewedHead`, then each head the runner's own updates produced. The PR
+      head must be in it. */
+  chain: string[];
+  /** One entry per `update-branch`; `head` stays null until the update's
+      commit is seen on the PR and admitted to the chain. */
+  updates: Array<{ requestedAt: string; head: string | null }>;
+  /** Every check name seen on any head of this PR, a union. */
+  seenChecks: string[];
+  /** The head the check clock runs for, when it was first seen, and the check
+      names of the previous read of that head. */
+  head: string | null;
+  headSeenAt: string | null;
+  lastChecks: string[] | null;
+  /** When the runner last read the PR, and the earliest it reads again. */
+  readAt: string | null;
+  nextReadAt: string | null;
+  /** Reads in a row that `gh` could not answer. */
+  readFailures?: number;
+  /** When the lane entered the queue: its completion. Orders the queue. */
+  requestedAt: string;
+  mergedHead: string | null;
+  mergeCommit: string | null;
+  method: PipelineMergeMethod | null;
+  mergedAt: string | null;
+  /** Accepted `retry-merge` answers. */
+  attempts: number;
+  /** Plain sentence while `blocked` or `cancelled`, or what the runner waits on. */
+  reason: string | null;
+  blockedAt: string | null;
+  updatedAt: string;
 };
 
 export type CreatePipelineRequest = {
@@ -871,6 +928,7 @@ export const PIPELINE_ACTIONS = [
   "undismiss",
   "attach-link",
   "detach-link",
+  "retry-merge",
 ] as const;
 
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];

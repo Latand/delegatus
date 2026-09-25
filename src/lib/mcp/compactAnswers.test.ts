@@ -267,6 +267,7 @@ test("list_pipelines state open and compact answer small rows for the lanes that
   const expected = corpus.filter((pipeline) => pipeline.state !== "closed" && pipeline.state !== "completed");
   expect(open.pipelines.map((row) => row.id)).toEqual(expected.map((pipeline) => pipeline.id));
   expect(new Set(open.pipelines.map((row) => row.state))).toEqual(new Set(["running", "needs_decision"]));
+  /* #2187 §4.1: a compact row names the merge setting only when it is on. */
   expect(Object.keys(open.pipelines[0]!).sort()).toEqual(["cursor", "id", "stages", "state", "stateDetail", "task"]);
   expect(open.pipelines[0]!.stages).toEqual([
     { id: "build", latestAttempt: { n: 6, state: "passed", verdict: "pass" } },
