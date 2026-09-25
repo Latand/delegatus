@@ -8,7 +8,8 @@
  * Read-only. It opens the one database file it is handed, read-only, and never
  * resolves a state directory: pass a COPY (`sqlite3 <live> ".backup <copy>"`)
  * made into a scratch directory. A path inside an `agent-log-viewer/state`
- * directory is refused. Besides the copy it reads `git log` and, for tokens,
+ * directory is refused after symlinks are followed, and so is a database a
+ * live writer visibly holds (`assertNotLiveState`). Besides the copy it reads `git log` and, for tokens,
  * the transcript each attempt names when that file is still on disk.
  */
 import { Database } from "bun:sqlite";
@@ -41,7 +42,8 @@ export type LedgerRow = {
   split: ProjectSplit;
   week: string;
   startedAt: string | null;
-  /** A settled attempt that carries no verdict is `none`, counted as a failure. */
+  /** A settled attempt that carries no verdict is `none`, counted as a
+      failure; so is an attempt cut when its pipeline finished. */
   verdict: LedgerVerdict;
   findings: SeverityCounts;
   wrongPremise: number;
@@ -59,8 +61,10 @@ export type LedgerRow = {
   tokens: { total: number; output: number } | null;
 };
 
-/** Attempt states that settled. In-flight attempts are left out, and so are
-    skipped ones, which never ran. */
+/** Attempt states that settled. Skipped attempts never ran and are left out.
+    An attempt still pending or in flight when its pipeline finished was cut:
+    it reads as settled with no verdict. In a live pipeline it is still in
+    flight and is left out. */
 const SETTLED = new Set(["passed", "failed", "needs_decision"]);
 const TERMINAL_PIPELINE = new Set(["completed", "closed"]);
 
@@ -138,9 +142,11 @@ export function ledgerRows(
     const split: ProjectSplit = isThisProject(pipeline) ? "this" : "other";
     for (const run of pipeline.runs ?? []) {
       for (const attempt of run.attempts ?? []) {
-        if (attempt.historical || attempt.legacyReview || !SETTLED.has(attempt.state)) continue;
+        if (attempt.historical || attempt.legacyReview || attempt.state === "skipped") continue;
+        const cut = !SETTLED.has(attempt.state);
+        if (cut && !TERMINAL_PIPELINE.has(pipeline.state)) continue;
         const role = attempt.effectiveRole;
-        const { counts, texts } = countFindings(attempt.verdict);
+        const { counts, texts } = countFindings(cut ? null : attempt.verdict);
         const startedAt = attempt.startedAt ?? null;
         rows.push({
           pipelineId: pipeline.id,
@@ -154,7 +160,7 @@ export function ledgerRows(
           split,
           week: isoWeek(startedAt ?? pipeline.createdAt),
           startedAt,
-          verdict: attempt.verdict?.status ?? "none",
+          verdict: cut ? "none" : attempt.verdict?.status ?? "none",
           findings: counts,
           wrongPremise: texts.filter((text) => WRONG_PREMISE.test(text)).length,
           overBuilt: texts.filter((text) => OVER_BUILT.test(text)).length,
@@ -708,18 +714,54 @@ export function scaffoldProvenance(repo: string, texts: Map<string, { role: stri
 // ---------------------------------------------------------------------------
 // Input
 
-/** Refuse anything that looks like a live state directory. A string check on
-    the path handed in; nothing is resolved. */
-export function assertNotLiveState(dbPath: string): void {
-  const resolved = path.resolve(dbPath);
-  if (/[\\/]agent-log-viewer[\\/]state[\\/]/.test(resolved) || /[\\/]agent-log-viewer[\\/]state$/.test(path.dirname(resolved))) {
-    throw new Error(`refusing ${resolved}: that is a live state directory. Copy it first: sqlite3 <live> ".backup <scratch>/state.sqlite"`);
+const LIVE_STATE_PATH = /[\\/]agent-log-viewer[\\/]state([\\/]|$)/;
+/** Files only a running Viewer or runtime host keeps beside its database. */
+export const LIVE_WRITER_MARKERS = ["runtime-host.sock", "runtime-host.sock.lock", "hot-state-authority.json", "viewer-release.json", "runtime-host-release.json"];
+/** A write-ahead log touched this recently means a writer holds the file. */
+export const LIVE_WAL_WINDOW_MS = 5_000;
+
+/** The path with every symlink followed; a missing file resolves through its
+    directory. */
+function realPath(target: string): string {
+  const resolved = path.resolve(target);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    try {
+      return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+    } catch {
+      return resolved;
+    }
   }
 }
 
+/** Refuse anything that looks like a live state directory, after following
+    symlinks: a path inside an `agent-log-viewer/state` directory, a directory
+    holding a live writer's socket, lock or release files, or a database whose
+    write-ahead log was touched in the last few seconds. Nothing is resolved
+    from the environment. Returns the real path to open. */
+export function assertNotLiveState(dbPath: string, now = Date.now()): string {
+  const resolved = path.resolve(dbPath);
+  const real = realPath(dbPath);
+  const refuse = (why: string) => new Error(`refusing ${resolved}${real === resolved ? "" : ` (→ ${real})`}: ${why}. Copy it first: sqlite3 <live> ".backup <scratch>/state.sqlite"`);
+  for (const candidate of [resolved, real]) {
+    if (LIVE_STATE_PATH.test(path.dirname(candidate))) throw refuse("that is a live state directory");
+  }
+  const directory = path.dirname(real);
+  const marker = LIVE_WRITER_MARKERS.find((name) => fs.existsSync(path.join(directory, name)));
+  if (marker) throw refuse(`its directory holds ${marker}, which a running Viewer or runtime host keeps`);
+  try {
+    const wal = fs.statSync(`${real}-wal`);
+    if (now - wal.mtimeMs < LIVE_WAL_WINDOW_MS) throw refuse("its write-ahead log was written in the last few seconds, so a writer holds it");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return real;
+}
+
 export function readPipelines(dbPath: string): Pipeline[] {
-  assertNotLiveState(dbPath);
-  const db = new Database(dbPath, { readonly: true });
+  const real = assertNotLiveState(dbPath);
+  const db = new Database(real, { readonly: true });
   try {
     const rows = db.query("SELECT collection, value_json FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive')").all() as Array<{ collection: string; value_json: string }>;
     const byId = new Map<string, Pipeline>();
@@ -775,6 +817,17 @@ export function buildReport(rows: LedgerRow[], provenance: Map<string, Provenanc
   const splitCount = (split: ProjectSplit) => rows.filter((row) => row.split === split).length;
   const verdicts = (["pass", "fail", "needs_decision", "none"] as const).map((verdict) => `${verdict} ${rows.filter((row) => row.verdict === verdict).length}`).join(", ");
   out.push("## Ledger", "", `${rows.length} settled stage attempts in ${new Set(rows.map((row) => row.pipelineId)).size} pipelines (this repository ${splitCount("this")}, other repositories ${splitCount("other")}); verdicts: ${verdicts}. ${rows.filter((row) => row.tokens).length} attempts have token counts from a transcript still on disk.`, "");
+  const pipelineFacts = [...new Map(rows.map((row) => [row.pipelineId, row])).values()];
+  const finished = (facts: LedgerRow[]) => facts.filter((row) => TERMINAL_PIPELINE.has(row.pipelineState));
+  const splitFacts = (["this", "other"] as const).map((split) => {
+    const own = pipelineFacts.filter((row) => row.split === split);
+    const withEdge = own.filter((row) => row.pipelineHasFailEdge);
+    return `${split === "this" ? "this repository" : "other repositories"} ${own.length} pipelines, ${finished(own).length} finished, ${withEdge.length} with a fail edge, ${withEdge.filter((row) => row.pipelinePassed).length} of those passed`;
+  });
+  const marked = new Set(rows.filter((row) => row.wrongPremise > 0).map((row) => row.pipelineId));
+  const finishedAll = finished(pipelineFacts);
+  const markedFinished = finishedAll.filter((row) => marked.has(row.pipelineId)).length;
+  out.push(`Pipelines: ${splitFacts.join("; ")}. ${markedFinished} of ${finishedAll.length} finished pipelines (${finishedAll.length ? ((markedFinished / finishedAll.length) * 100).toFixed(1) : "–"} %) carry a WRONG-PREMISE finding.`, "");
 
   // Noise band: every attempt-level rate for every role, then the three outcomes.
   out.push("## Noise band", "");

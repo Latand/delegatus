@@ -106,8 +106,8 @@ describe("parsing", () => {
   });
 
   test("one row per settled attempt; a missing verdict is none; rounds match the engine's count", () => {
-    const rows = ledgerRows([fixturePipeline("p1")], () => true, null);
-    // 3 builder attempts (historical dropped) + 3 reviewer attempts (running dropped).
+    const rows = ledgerRows([fixturePipeline("p1", { state: "running" })], () => true, null);
+    // 3 builder attempts (historical dropped) + 3 reviewer attempts (in flight in a live pipeline: dropped).
     expect(rows).toHaveLength(6);
     const review = rows.filter((row) => row.role === "reviewer");
     expect(review.map((row) => row.verdict)).toEqual(["fail", "none", "pass"]);
@@ -118,6 +118,24 @@ describe("parsing", () => {
     // Two fix attempts carry one activation: one round, as edgeRoundsUsed counts it.
     expect(rows.every((row) => row.pipelineFailEdgeRounds === 1 && row.pipelineHasFailEdge)).toBe(true);
     expect(rows[0].week).toBe("2026-W36");
+  });
+
+  test("an attempt cut when its pipeline finished reads as no verdict; a skipped one never ran", () => {
+    for (const state of ["closed", "completed"]) {
+      const pipeline = fixturePipeline(`cut-${state}`, { state });
+      pipeline.runs[1].attempts.push(
+        { ...pipeline.runs[1].attempts[3], n: 5, state: "reviewing", verdict: { status: "pass", findings: ["P1 — WRONG-PREMISE: never recorded"] } },
+        { ...pipeline.runs[1].attempts[3], n: 6, state: "pending", startedAt: null },
+        { ...pipeline.runs[1].attempts[3], n: 7, state: "skipped" },
+      );
+      const review = ledgerRows([pipeline], () => true, null).filter((row) => row.role === "reviewer");
+      expect(review.map((row) => [row.attempt, row.verdict])).toEqual([[1, "fail"], [2, "none"], [3, "pass"], [4, "none"], [5, "none"], [6, "none"]]);
+      // A verdict the cut attempt never settled is not read, nor are its findings.
+      expect(review[4].wrongPremise).toBe(0);
+      expect(review[4].findings).toEqual({ P0: 0, P1: 0, P2: 0, P3: 0, unranked: 0 });
+      expect(review[5].week).toBe(isoWeek(pipeline.createdAt));
+      expect(outcomeObservations(ledgerRows([pipeline], () => true, null), "reviewer").noVerdict.reduce((sum, entry) => sum + entry.sum, 0)).toBe(4);
+    }
   });
 
   test("a lane closed after its final stage passed counts as passed; a cut final stage does not", () => {
@@ -182,6 +200,42 @@ describe("parsing", () => {
     }
     expect(() => assertNotLiveState("/srv/someone/.config/agent-log-viewer/state/state.sqlite")).toThrow(/live state/);
     expect(() => assertNotLiveState("/var/tmp/scratch/state.sqlite")).not.toThrow();
+  });
+
+  test("the live-state guard follows symlinks and refuses a directory a live writer holds", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-ledger-guard-"));
+    try {
+      const liveDir = path.join(dir, "home", ".config", "agent-log-viewer", "state");
+      fs.mkdirSync(liveDir, { recursive: true });
+      fs.writeFileSync(path.join(liveDir, "state.sqlite"), "");
+      const scratch = path.join(dir, "scratch");
+      fs.mkdirSync(scratch);
+      // A link to the live file, and a link to the live directory.
+      fs.symlinkSync(path.join(liveDir, "state.sqlite"), path.join(scratch, "state.sqlite"));
+      fs.symlinkSync(liveDir, path.join(scratch, "linked-state"));
+      expect(() => assertNotLiveState(path.join(scratch, "state.sqlite"))).toThrow(/live state directory/);
+      expect(() => readPipelines(path.join(scratch, "state.sqlite"))).toThrow(/live state directory/);
+      expect(() => assertNotLiveState(path.join(scratch, "linked-state", "missing.sqlite"))).toThrow(/live state directory/);
+
+      // A live directory under another name: the writer's own files give it away.
+      const renamed = path.join(dir, "custom-state");
+      fs.mkdirSync(renamed);
+      fs.writeFileSync(path.join(renamed, "state.sqlite"), "");
+      expect(() => assertNotLiveState(path.join(renamed, "state.sqlite"))).not.toThrow();
+      fs.writeFileSync(path.join(renamed, "runtime-host.sock.lock"), "");
+      expect(() => assertNotLiveState(path.join(renamed, "state.sqlite"))).toThrow(/runtime-host\.sock\.lock/);
+
+      // A write-ahead log touched seconds ago: a writer holds the file.
+      const copy = path.join(dir, "copy");
+      fs.mkdirSync(copy);
+      fs.writeFileSync(path.join(copy, "state.sqlite"), "");
+      fs.writeFileSync(path.join(copy, "state.sqlite-wal"), "");
+      const walTime = fs.statSync(path.join(copy, "state.sqlite-wal")).mtimeMs;
+      expect(() => assertNotLiveState(path.join(copy, "state.sqlite"), walTime + 1_000)).toThrow(/write-ahead log/);
+      expect(assertNotLiveState(path.join(copy, "state.sqlite"), walTime + 60_000)).toBe(fs.realpathSync(path.join(copy, "state.sqlite")));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a searchable chunk skips quotes, escapes and template syntax", () => {
@@ -275,8 +329,8 @@ describe("noise band", () => {
     expect(observations.roundsToPass.map((entry) => [entry.pipelineId, entry.sum])).toEqual([["p1", 1]]);
     // WRONG-PREMISE: every finished pipeline.
     expect(observations.wrongPremise.map((entry) => entry.sum)).toEqual([1, 1]);
-    // No verdict: one of three settled review attempts per pipeline.
-    expect(observations.noVerdict.map((entry) => [entry.sum, entry.n])).toEqual([[1, 3], [1, 3]]);
+    // No verdict: the needs_decision attempt with none, and the attempt cut when the pipeline finished.
+    expect(observations.noVerdict.map((entry) => [entry.sum, entry.n])).toEqual([[2, 4], [2, 4]]);
     expect(observations.noVerdict[0].version).toBe(scaffoldHash(REVIEWER_OLD));
   });
 });
@@ -328,9 +382,12 @@ test("the report renders every section from a synthetic ledger", () => {
     fixturePipeline("p1", { createdAt: "2026-08-24T10:00:00Z" }),
     fixturePipeline("p2", { createdAt: "2026-09-10T10:00:00Z", reviewScaffold: REVIEWER_NEW }),
     fixturePipeline("p3", { createdAt: "2026-09-10T10:00:00Z", project: "repo-other", repoDir: "/work/elsewhere" }),
+    fixturePipeline("p4", { createdAt: "2026-09-10T10:00:00Z", project: "repo-other", repoDir: "/work/elsewhere", state: "running" }),
   ];
   const rows: LedgerRow[] = ledgerRows(pipelines, thisProjectMatcher(pipelines, "/work/main"), null);
   const report = buildReport(rows, null, { iterations: 50, seed: 1, minVersionN: 1 });
+  // The split and marker counts the prose cites come from the generated section.
+  expect(report.markdown).toContain("Pipelines: this repository 2 pipelines, 2 finished, 2 with a fail edge, 2 of those passed; other repositories 2 pipelines, 1 finished, 2 with a fail edge, 1 of those passed. 3 of 3 finished pipelines (100.0 %) carry a WRONG-PREMISE finding.");
   expect(report.markdown).toContain("## Noise band");
   expect(report.markdown).toContain("## The pre-registered replay");
   expect(report.markdown).toContain("## Harness versions");
