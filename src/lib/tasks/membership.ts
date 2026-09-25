@@ -277,6 +277,62 @@ export function recordLaunchIdentity(existing: readonly BoardTask[], taskIds: re
   return { tasks, changed };
 }
 
+/** A fresh launch whose receipt failed before it wrote a transcript. */
+export interface FailedLaunchIdentity {
+  launchId: string;
+  conversationId: string | null;
+  clientAttemptId: string | null;
+  error: string | null;
+}
+
+const LIVE_ASSIGNMENT_STATES: ReadonlySet<TaskAssignment["state"]> = new Set(["delivered", "spawning", "handoff", "linked"]);
+
+/**
+ * A launch that fails leaves its task where it was (#2170). Admission linked
+ * the launch before anything ran, and linking moved an Inbox task to Assigned;
+ * nothing ever ran, so the launch's row is marked failed with the launch's own
+ * error and a task with nothing else live on it goes back to Inbox — the rule
+ * {@link applyAssignmentPatches} already applies to a send. The failed row
+ * stays on the task, so its card keeps the failed launch and its Retry.
+ *
+ * Only the row this launch created is touched: a `linked` row naming this
+ * launch id and, when it names one, this launch's conversation. The task a
+ * launch minted for itself (its own placeholder, keyed by the launch) had no
+ * place to be before, and is left as it is.
+ */
+export function failUnstartedLaunchMembership(
+  existing: readonly BoardTask[],
+  launch: FailedLaunchIdentity,
+  now = isoNow(),
+): { tasks: BoardTask[]; changed: boolean } {
+  const launchKey = launch.clientAttemptId ?? launch.launchId;
+  let changed = false;
+  const tasks = existing.map((task) => {
+    if (task.origin?.kind === "launch" && (task.origin.key === launchKey || task.origin.key === launch.launchId)) return task;
+    let matched = false;
+    const assignments = task.assignments.map((assignment) => {
+      if (assignment.state !== "linked" || assignment.launchId !== launch.launchId) return assignment;
+      if (launch.conversationId && assignment.conversationId && assignment.conversationId !== launch.conversationId) return assignment;
+      matched = true;
+      return { ...assignment, state: "failed" as const, error: launch.error?.trim() || "launch failed", at: now };
+    });
+    if (!matched) return task;
+    changed = true;
+    const live = assignments.some((assignment) => LIVE_ASSIGNMENT_STATES.has(assignment.state));
+    const status = task.status === "assigned" && !live ? "inbox" as const : task.status;
+    return { ...task, status, assignments, updatedAt: now };
+  });
+  return { tasks: changed ? tasks : existing.slice(), changed };
+}
+
+/** {@link failUnstartedLaunchMembership} against the task store. */
+export function commitFailedLaunchMembership(launch: FailedLaunchIdentity, filePath?: string): boolean {
+  return mutateTasks((tasks) => {
+    const result = failUnstartedLaunchMembership(tasks, launch);
+    return { tasks: result.changed ? result.tasks : undefined, result: result.changed };
+  }, filePath);
+}
+
 /* ------------------------------------------------------------------------- */
 /* Import of scanned conversations                                            */
 /* ------------------------------------------------------------------------- */

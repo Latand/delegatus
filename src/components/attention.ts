@@ -126,6 +126,22 @@ export function openBridgeAsk(file: FileEntry, now: number): BridgeAsk | null {
 }
 
 /**
+ * When a launch the operator started failed before anything ran (#2170), in
+ * epoch seconds, or null. The failure is final — its receipt says so — and
+ * the only way forward is the operator's: sign in, pick another account, or
+ * retry. A launch placeholder carries it; a delegated launch (an agent's
+ * child, a pipeline stage, a review round) is its container's to answer and
+ * never raises it here.
+ */
+export function failedOperatorLaunch(file: FileEntry): number | null {
+  if (!file.path.startsWith("spawn:") || file.spawn?.state !== "failed") return null;
+  const lineage = file.durableLineage;
+  if (lineage && ((lineage.depth ?? 0) > 0 || lineage.memberships.length > 0)) return null;
+  const admitted = file.spawn.admittedAt;
+  return typeof admitted === "number" && Number.isFinite(admitted) ? admitted / 1000 : file.mtime;
+}
+
+/**
  * Epoch seconds at which the queue changes on its own, with nothing polled
  * moving: an orchestrator ask crossing its TTL, an owed message crossing the
  * half hour. `/api/files` keeps the array identity while its body is
@@ -186,8 +202,9 @@ export function dismissalCovers(reason: Pick<ConversationReason, "id" | "raisedA
 /**
  * The one reason a conversation needs the operator, by signal precedence: an
  * orchestrator's open bridge ask, then a structured question or plan, the
- * screen-scrape permission fallback, and an owed message delivery. Null when
- * none of them holds. A dismissed reason is still returned, with its
+ * screen-scrape permission fallback, an owed message delivery, and a launch
+ * that failed before it ran (#2170). Null when none of them holds. A
+ * dismissed reason is still returned, with its
  * `dismissal`, so a card can say who cleared it; `attentionId` is what counts.
  *
  * The ids stay byte-identical to the historical inline derivations, so the
@@ -244,6 +261,19 @@ function undismissedReason(file: FileEntry, now: number): ConversationReason | n
       raisedAt,
       clocked: true,
       header: null,
+      dismissal: null,
+    };
+  }
+  const launchFailedAt = failedOperatorLaunch(file);
+  if (launchFailedAt !== null) {
+    return {
+      kind: "launch",
+      id: `${file.path}:launch-failed`,
+      since: launchFailedAt,
+      raisedAt: launchFailedAt,
+      clocked: true,
+      /* The receipt's own error: what failed, and on which account. */
+      header: file.spawn?.error?.trim().split("\n", 1)[0] || null,
       dismissal: null,
     };
   }

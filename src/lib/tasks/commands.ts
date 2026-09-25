@@ -706,7 +706,9 @@ export function dismissUnstartedLaunch(existing: BoardTask[], id: string, ref: A
   const task = existing[index]!;
   let matched = false;
   const assignments = task.assignments.map((assignment) => {
-    if (assignment.state === "failed" || !assignmentMatchesRef(assignment, ref)) return assignment;
+    /* A launch that failed on its own is already a failed row carrying its
+       error (#2170); dismissing it still records the dismissal. */
+    if ((assignment.state === "failed" && assignment.error === LAUNCH_NOT_STARTED_ERROR) || !assignmentMatchesRef(assignment, ref)) return assignment;
     matched = true;
     return { ...assignment, state: "failed" as const, error: LAUNCH_NOT_STARTED_ERROR, at: now };
   });

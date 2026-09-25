@@ -93,7 +93,7 @@ import type { ResumePaneRecord } from "@/lib/resumePanesFile";
 import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
-import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
+import { admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
 
@@ -6177,7 +6177,10 @@ export class AgentRegistry {
   }
 
   failSpawn(launchId: string, error: string): boolean {
-    return this.mutate((file) => {
+    /* A fresh launch that failed here leaves its task where it was (#2170). */
+    const failed: { receipt: SpawnReceipt | null } = { receipt: null };
+    const result = this.mutate((file) => {
+      failed.receipt = null;
       const receipt = file.receipts[launchId];
       if (!receipt || receipt.state === "completed" || receipt.state === "conflicted") return false;
       if (receipt.state === "failed") return true;
@@ -6199,8 +6202,11 @@ export class AgentRegistry {
          held or assigned attempts-zero initial delivery. Converge it in the
          same transaction instead of waiting for the reaper. */
       terminalizeFailedSpawnDeliveriesInFile(file);
+      if (receipt.state === "failed") failed.receipt = clone(receipt);
       return receipt.state === "failed";
     });
+    if (failed.receipt) settleFailedLaunch(failed.receipt);
+    return result;
   }
 
   /** Durably reconcile terminal launches and attempts-zero initial deliveries
@@ -6233,6 +6239,16 @@ export class AgentRegistry {
     launchId: string,
     error: string,
     options: { retainRegisteredHost?: boolean } = {},
+  ): StructuredSpawnFailureClaim {
+    const claim = this.failStructuredSpawnInFile(launchId, error, options);
+    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
+    return claim;
+  }
+
+  private failStructuredSpawnInFile(
+    launchId: string,
+    error: string,
+    options: { retainRegisteredHost?: boolean },
   ): StructuredSpawnFailureClaim {
     return this.mutate((file) => {
       const receipt = file.receipts[launchId];

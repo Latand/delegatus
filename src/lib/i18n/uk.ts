@@ -2202,6 +2202,8 @@ export const uk: Record<keyof typeof en, Message> = {
 
   "launch.account": "Обліковий запис",
   "launch.reasoning": "Міркування",
+  "launch.signInFirst": "Спершу увійдіть у {engine}",
+  "launch.accountSignedOut": "{label}: потрібен вхід у {engine}.",
 
   "orchPanel.title": "Оркестратор",
   "orchPanel.toggleAria": "Панель оркестратора",
@@ -2411,7 +2413,10 @@ export const uk: Record<keyof typeof en, Message> = {
   "attention.decisionPlan": "затвердження плану",
   "attention.decisionPermission": "запит дозволу",
   "attention.decisionDelivery": "доставка повідомлення",
+  "attention.decisionLaunch": "запуск не вдався",
+  "attention.decisionLaunchReason": "запуск не вдався: {reason}",
   "needs.delivery": "повідомлення не доставлено",
+  "needs.launch": "запуск не вдався",
   "needs.laneDecision": "потрібне рішення",
   "needs.laneMerge": "мердж зупинено",
   "needs.laneDecisionStage": "потрібне рішення · {stage}",

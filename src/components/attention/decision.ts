@@ -80,6 +80,10 @@ function decisionText(t: TFunction, reason: ConversationReason): string {
       return t("attention.decisionPermission");
     case "delivery":
       return t("attention.decisionDelivery");
+    /* The launch's own error is the decision: it names the account to sign
+       back in on (#2170). */
+    case "launch":
+      return reason.header ? t("attention.decisionLaunchReason", { reason: reason.header }) : t("attention.decisionLaunch");
   }
 }
 
@@ -132,6 +136,8 @@ export function conversationNeedText(t: TFunction, reason: Pick<ConversationReas
       return t("attention.decisionPermission");
     case "delivery":
       return t("needs.delivery");
+    case "launch":
+      return t("needs.launch");
   }
 }
 

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ReasoningControls, type SpeedChoice } from "@/components/ReasoningControls";
 import { Select } from "@/components/ui/Select";
 import { engineTintOf } from "@/components/utils";
+import { requestAccountPanel } from "@/lib/accounts/openPanel";
 import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
 import { defaultModelFor } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
@@ -42,6 +43,9 @@ export interface LaunchAccountOption {
   id: string;
   label: string;
   authPresent: boolean;
+  /** No credential, or one the provider refused: a launch on it cannot start
+      until the account signs in again (#2170). */
+  signedOut: boolean;
 }
 
 export type LaunchAccountCatalog = Record<LaunchEngine, { active: string; accounts: LaunchAccountOption[] }>;
@@ -69,9 +73,17 @@ export function launchAccountSection(raw: unknown): LaunchAccountCatalog[LaunchE
   const section = raw as { active?: unknown; accounts?: unknown } | null;
   const accounts = Array.isArray(section?.accounts)
     ? section.accounts.flatMap((entry): LaunchAccountOption[] => {
-        const account = entry as { id?: unknown; label?: unknown; authPresent?: unknown };
+        const account = entry as { id?: unknown; label?: unknown; authPresent?: unknown; auth?: { state?: unknown } | null };
         return typeof account.id === "string" && typeof account.label === "string"
-          ? [{ id: account.id, label: account.label, authPresent: account.authPresent !== false }]
+          ? [{
+              id: account.id,
+              label: account.label,
+              authPresent: account.authPresent !== false,
+              /* The account's reconciled auth state decides when the body carries
+                 one: a credential store that cannot be read reports no
+                 credential present, and that is not a signed-out account. */
+              signedOut: typeof account.auth?.state === "string" ? account.auth.state === "signed_out" : account.authPresent === false,
+            }]
           : [];
       })
     : [];
@@ -99,6 +111,9 @@ export function resolveLaunchAccountId(
   return section.accounts.some((account) => account.id === accountId) ? accountId : section.active;
 }
 
+/** Asks every mounted catalog to read `/api/accounts` again. */
+const CATALOG_REFRESH_EVENT = "llv:launch-accounts-refresh";
+
 /** The stored-account catalog for both engines; null until `/api/accounts`
     answers, and null forever if it never does (the selector simply stays out
     of the way, exactly as the board draft has always behaved). */
@@ -106,17 +121,69 @@ export function useLaunchAccountCatalog(): LaunchAccountCatalog | null {
   const [catalog, setCatalog] = useState<LaunchAccountCatalog | null>(null);
   useEffect(() => {
     let cancelled = false;
-    void fetch("/api/accounts")
-      .then(async (res) => {
-        if (!res.ok || cancelled) return;
-        setCatalog(launchAccountCatalogOf(await res.json()));
-      })
-      .catch(() => {});
+    const read = () => {
+      void fetch("/api/accounts")
+        .then(async (res) => {
+          if (!res.ok || cancelled) return;
+          setCatalog(launchAccountCatalogOf(await res.json()));
+        })
+        .catch(() => {});
+    };
+    read();
+    window.addEventListener(CATALOG_REFRESH_EVENT, read);
     return () => {
       cancelled = true;
+      window.removeEventListener(CATALOG_REFRESH_EVENT, read);
     };
   }, []);
   return catalog;
+}
+
+/**
+ * Whether a launch on the draft's account can start (#2170): the ONE engine
+ * readiness preflight the agent launcher and the orchestrator draft share.
+ * A signed-out account is the one answer that stops a launch here — anything
+ * the catalog cannot see (no catalog yet, an account it does not list) is left
+ * to the server, which refuses what really cannot run.
+ */
+export type LaunchReadiness =
+  | { kind: "ready" }
+  | { kind: "signed-out"; engine: LaunchEngine; accountId: string; label: string };
+
+export function launchReadiness(draft: Pick<AgentLaunchDraft, "engine" | "catalog" | "launchAccountId">): LaunchReadiness {
+  const account = draft.catalog?.[draft.engine]?.accounts.find((entry) => entry.id === draft.launchAccountId);
+  if (!account?.signedOut) return { kind: "ready" };
+  return { kind: "signed-out", engine: draft.engine, accountId: account.id, label: account.label };
+}
+
+/** The preflight's own action: that account's sign-in, in the Accounts panel. */
+export function openLaunchSignIn(readiness: Extract<LaunchReadiness, { kind: "signed-out" }>): void {
+  requestAccountPanel(readiness.engine, readiness.accountId);
+}
+
+/** How often a blocked draft re-reads the catalog, so a sign-in finished in
+    the Accounts panel (or anywhere else) lifts the block without a reload. */
+const SIGNED_OUT_RECHECK_MS = 4_000;
+
+/**
+ * {@link launchReadiness} for a mounted draft, kept current: while the chosen
+ * account is signed out, the catalog is read again on focus and on a short
+ * cadence, and only then — a draft on a ready account polls nothing.
+ */
+export function useLaunchReadiness(draft: AgentLaunchDraft): LaunchReadiness {
+  const readiness = launchReadiness(draft);
+  const blocked = readiness.kind === "signed-out";
+  useEffect(() => {
+    if (!blocked) return;
+    const refresh = () => window.dispatchEvent(new Event(CATALOG_REFRESH_EVENT));
+    const timer = window.setInterval(refresh, SIGNED_OUT_RECHECK_MS);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [blocked]);
+  return readiness;
 }
 
 /** Where a host keeps the draft between mounts. Absent: memory only. */
@@ -308,13 +375,15 @@ export function LaunchAccountSelect({
       {draft.accounts.map((account) => (
         /* The engine's active account is the default for future launches; a
            signed-out profile stays listed (history preserved) but can't be
-           picked until it signs back in via Accounts. */
+           picked until it signs back in via Accounts. It says so even when it
+           is the active one: «Main · active» on an account that cannot launch
+           is what sent a newcomer's first launch into a failure (#2170). */
         <option key={account.id} value={account.id} disabled={!account.authPresent}>
-          {account.id === draft.activeAccountId
-            ? t("draft.accountDefault", { label: account.label })
-            : account.authPresent
-              ? account.label
-              : t("draft.accountNeedsLogin", { label: account.label })}
+          {account.signedOut
+            ? t("draft.accountNeedsLogin", { label: account.label })
+            : account.id === draft.activeAccountId
+              ? t("draft.accountDefault", { label: account.label })
+              : account.label}
         </option>
       ))}
     </Select>

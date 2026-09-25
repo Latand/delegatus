@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { NextRequest, NextResponse } from "next/server";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { dismissAttention } from "@/lib/attention/dismissals";
 import { headCwd } from "@/lib/agent/transcript";
 import { ensureTaskPipelineForAssignment } from "@/lib/pipelines/engine";
 import { loadPipelinesForProjection } from "@/lib/pipelines/store";
@@ -134,6 +135,24 @@ interface DismissRouteDependencies {
   /** Whether the launch's conversation has a transcript on disk after all. */
   transcriptExists(ref: { launchId?: string | null; conversationId?: string | null }): boolean;
   linkedPipeline(taskId: string): boolean;
+  /** Clears the Needs-you item a failed launch raised (#2170): dismissing the
+      launch on its card answers it there too. */
+  clearAttention?(ref: { launchId?: string | null; conversationId?: string | null }): Promise<void>;
+}
+
+async function clearLaunchAttention(ref: { launchId?: string | null; conversationId?: string | null }): Promise<void> {
+  try {
+    await dismissAttention({
+      kind: "conversation",
+      ...(ref.conversationId ? { conversationId: ref.conversationId } : {}),
+      /* The launch's placeholder path, for a conversation the registry never
+         recorded: the overlay reads a record by that path too. */
+      ...(ref.launchId ? { path: `spawn:${ref.launchId}` } : {}),
+    }, { kind: "operator" });
+  } catch {
+    /* The launch is dismissed on its task either way; a Needs-you record this
+       write could not reach is cleared from the queue by hand. */
+  }
 }
 
 function launchTranscriptExists(ref: { launchId?: string | null; conversationId?: string | null }): boolean {
@@ -154,6 +173,7 @@ function launchTranscriptExists(ref: { launchId?: string | null; conversationId?
 const dismissDependencies: DismissRouteDependencies = {
   mutateTasks,
   transcriptExists: launchTranscriptExists,
+  clearAttention: clearLaunchAttention,
   linkedPipeline: (taskId) => {
     try {
       return loadPipelinesForProjection().some((pipeline) => pipeline.taskIds.includes(taskId));
@@ -195,6 +215,7 @@ async function patchAssignment(
     return { tasks: outcome.ok && outcome.tasks !== tasks ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+  await dependencies.clearAttention?.(ref);
   return NextResponse.json({ ok: true, task: result.task });
 }
 

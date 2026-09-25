@@ -20,7 +20,7 @@ import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
-import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
@@ -406,6 +406,9 @@ export async function withdrawRuntimeWake(
 
 export interface SeatTickSources {
   seatFor: typeof orchestratorSeatFor;
+  /** Whether an orchestrator ever held the project (#2170). Absent: assumed,
+      so a missing seat is reported as it always was. */
+  seatEverHeld?: (project: string) => boolean;
   /** Projects that currently hold an active seat. */
   activeSeats: () => string[];
   pipelines: () => readonly Pipeline[];
@@ -519,6 +522,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
     seatFor: (project) => orchestratorSeatForCurrentProject(project),
+    seatEverHeld: (project) => orchestratorSeatEverHeld(project),
     activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
     pipelines: () => loadPipelinesForList(),
     archivedPipelines: () => loadArchivedPipelines(),
@@ -1979,6 +1983,7 @@ export async function gatherSeatTickInput(
     project: canonical,
     now,
     seat,
+    ...(seat ? {} : { seatEverHeld: sources.seatEverHeld?.(canonical) ?? true }),
     pipelines,
     tasks,
     events,

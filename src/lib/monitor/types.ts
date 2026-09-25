@@ -1099,6 +1099,10 @@ export interface SeatTickCheckInput {
   project: string;
   now: number;
   seat: SeatTickSeatInput | null;
+  /** Read only while {@link seat} is null: whether an orchestrator ever held
+      the project (#2170). False for a project whose seat was never designated,
+      which raises no «no active seat» card. Absent reads as true. */
+  seatEverHeld?: boolean;
   pipelines: readonly SeatTickPipelineInput[];
   tasks: readonly SeatTickTaskInput[];
   /** Events after {@link SeatTickProjectState.eventsThrough}, oldest first. */

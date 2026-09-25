@@ -2264,6 +2264,10 @@ export const en = {
 
   "launch.account": "Account",
   "launch.reasoning": "Reasoning",
+  /* The engine readiness preflight (#2170): a launch on a signed-out account
+     opens that account's sign-in instead of starting. */
+  "launch.signInFirst": "Sign in to {engine} first",
+  "launch.accountSignedOut": "{label} is signed out of {engine}.",
 
   "orchPanel.title": "Orchestrator",
   "orchPanel.toggleAria": "Orchestrator panel",
@@ -2487,9 +2491,12 @@ export const en = {
   "attention.decisionPlan": "plan approval",
   "attention.decisionPermission": "permission prompt",
   "attention.decisionDelivery": "message delivery",
+  "attention.decisionLaunch": "launch failed",
+  "attention.decisionLaunchReason": "launch failed: {reason}",
   /* Why a card needs the operator, and its Dismiss (docs/design/needs-attention.md
      §4, §5). Lower-case like the badges they sit beside. */
   "needs.delivery": "message not delivered",
+  "needs.launch": "launch failed",
   "needs.laneDecision": "needs a decision",
   "needs.laneMerge": "merge stopped",
   "needs.laneDecisionStage": "needs a decision · {stage}",

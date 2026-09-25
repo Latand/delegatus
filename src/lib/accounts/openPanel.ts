@@ -10,8 +10,10 @@
  * late-mounting block on mount.
  */
 
+export type AccountPanelEngine = "claude" | "codex" | "copilot";
+
 export interface AccountPanelRequest {
-  engine: "claude" | "codex";
+  engine: AccountPanelEngine;
   accountId: string;
 }
 
@@ -22,7 +24,7 @@ const PENDING_TTL_MS = 5_000;
 let pending: (AccountPanelRequest & { at: number }) | null = null;
 
 /** Ask `engine`'s accounts surface to open, focused on `accountId`. */
-export function requestAccountPanel(engine: "claude" | "codex", accountId: string): void {
+export function requestAccountPanel(engine: AccountPanelEngine, accountId: string): void {
   pending = { engine, accountId, at: Date.now() };
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent<AccountPanelRequest>(EVENT, { detail: { engine, accountId } }));
@@ -31,7 +33,7 @@ export function requestAccountPanel(engine: "claude" | "codex", accountId: strin
 
 /** Claim a request dispatched just before this engine's block mounted (mobile
     drawer). Returns and clears it only while fresh and engine-matched. */
-export function consumePendingAccountPanel(engine: "claude" | "codex"): AccountPanelRequest | null {
+export function consumePendingAccountPanel(engine: AccountPanelEngine): AccountPanelRequest | null {
   if (!pending || pending.engine !== engine) return null;
   if (Date.now() - pending.at > PENDING_TTL_MS) {
     pending = null;

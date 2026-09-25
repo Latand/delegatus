@@ -130,6 +130,9 @@ export interface ComposerBarProps {
       action beside the inline reason (e.g. force a runtime snapshot refresh
       while the host is unresolved/offline). */
   onSendBlockedRecover?: () => void;
+  /** The recovery action's words, when it is not Re-check — the launch
+      preflight's «Sign in to Claude first» (#2170). */
+  sendBlockedRecoverLabel?: string;
   /** A caller-owned immutable generation can supply the payload while the
       editable textarea and image tray are empty. */
   sendPayloadAvailable?: boolean;
@@ -282,6 +285,7 @@ export function ComposerBar({
   imageDisabledReason,
   sendDisabledReason,
   onSendBlockedRecover,
+  sendBlockedRecoverLabel,
   sendPayloadAvailable = false,
   receipts,
   deliveries,
@@ -776,9 +780,9 @@ export function ComposerBar({
             >
               {isMobile ? (
                 <span className="inline-flex h-8 items-center rounded-control border border-border bg-card px-2 group-hover:border-accent/45">
-                  {t("deadHost.recheck")}
+                  {sendBlockedRecoverLabel ?? t("deadHost.recheck")}
                 </span>
-              ) : t("deadHost.recheck")}
+              ) : sendBlockedRecoverLabel ?? t("deadHost.recheck")}
             </button>
           ) : null}
         </span>

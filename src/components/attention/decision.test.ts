@@ -320,3 +320,24 @@ describe("a card's reason is named in its own words", () => {
     expect(clearedByText(tUk, { kind: "operator" })).toBe("ви");
   });
 });
+
+describe("a launch that failed before it ran (#2170)", () => {
+  const failed = (error: string | null) => file({
+    path: "spawn:launch-1",
+    conversationId: "conversation_1",
+    spawn: { launchId: "launch-1", clientAttemptId: null, accountId: "default", state: "failed", initialMessage: "failed", retrySafe: true, error, admittedAt: (NOW - 30) * 1000 },
+  });
+
+  test("the line carries the launch's own reason, naming the account as the Accounts panel does", () => {
+    expect(line(failed("No healthy Claude account is available. Re-login Main in Accounts and retry.")))
+      .toBe("launch failed: No healthy Claude account is available. Re-login Main in Accounts and retry.");
+    expect(line(failed(null))).toBe("launch failed");
+    expect(decisionLine(tUk, failed(null), NOW)).toBe("запуск не вдався");
+  });
+
+  test("the card's short label stays short", () => {
+    const entry = failed("No healthy Claude account is available.");
+    const reason = attentionReason(entry, NOW)!;
+    expect(needLabel(t, { subject: "conversation", file: entry, reason } as NeedReason)).toBe("launch failed");
+  });
+});

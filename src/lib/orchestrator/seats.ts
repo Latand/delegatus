@@ -526,6 +526,28 @@ export function orchestratorSeatIn(file: OrchestratorSeatFile | null, project: s
   };
 }
 
+/**
+ * Whether an orchestrator ever held this project (#2170): it holds it now, or
+ * a seat that held it was revoked since. A designation that never took — no
+ * record at all, or a stillborn seat rolled back into `history` as a terminal
+ * error — is not a seat the operator had, so its absence is nothing to report.
+ * An unreadable record answers true: it cannot show the project never had one.
+ */
+export function orchestratorSeatEverHeld(project: string): boolean {
+  return orchestratorSeatEverHeldIn(readOrchestratorSeatFileOrNull(), project);
+}
+
+export function orchestratorSeatEverHeldIn(file: OrchestratorSeatFile | null, project: string): boolean {
+  if (!file) return true;
+  const canonical = canonicalOrchestratorProject(project);
+  if (file.seats[canonical]) return true;
+  const stillborn = new Set(file.history
+    .filter((entry) => entry.seat.project === canonical && entry.reason === "terminal_error")
+    .map((entry) => `${entry.seat.conversationId}\0${entry.seat.seatEpoch}`));
+  return file.revocations.some((revocation) => revocation.project === canonical
+    && !stillborn.has(`${revocation.conversationId}\0${revocation.seatEpoch}`));
+}
+
 /** How many previous seats a project's status read carries. */
 export const PREVIOUS_SEATS_LIMIT = 20;
 

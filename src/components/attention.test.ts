@@ -470,3 +470,49 @@ describe("advanceAttentionCycle", () => {
     expect(pointer.current).toBe(global[0]!.id);
   });
 });
+
+describe("a launch that failed before it ran (#2170)", () => {
+  const failedLaunch = (overrides: Partial<FileEntry> = {}) => entry({
+    path: "spawn:launch-1",
+    conversationId: "conversation_1",
+    spawn: {
+      launchId: "launch-1",
+      clientAttemptId: "attempt-1",
+      accountId: "default",
+      state: "failed",
+      initialMessage: "failed",
+      retrySafe: true,
+      error: "No healthy Claude account is available. Re-login Main in Accounts and retry.",
+      admittedAt: (NOW - 30) * 1000,
+    },
+    ...overrides,
+  });
+
+  test("the operator's own failed launch needs them, from the moment it was admitted", () => {
+    const reason = attentionReason(failedLaunch(), NOW);
+    expect(reason).toMatchObject({
+      kind: "launch",
+      id: "spawn:launch-1:launch-failed",
+      since: NOW - 30,
+      clocked: true,
+      header: "No healthy Claude account is available. Re-login Main in Accounts and retry.",
+      dismissal: null,
+    });
+    expect(buildAttentionQueue([failedLaunch()], NOW).map((item) => item.id)).toEqual(["spawn:launch-1:launch-failed"]);
+  });
+
+  test("a launch still starting, one that succeeded, and a delegated one ask nothing", () => {
+    const starting = failedLaunch();
+    starting.spawn = { ...starting.spawn!, state: "starting" };
+    expect(attentionReason(starting, NOW)).toBeNull();
+    const stage = failedLaunch({ durableLineage: { kind: "spawn", role: "builder", depth: 0, parentConversationId: null, reviewsConversationId: null, memberships: [{ kind: "pipeline", containerId: "pipe-1", role: "builder", slot: "s", stageId: "build", stageOrder: 0, round: null, parentConversationId: null }] } });
+    expect(attentionReason(stage, NOW)).toBeNull();
+    const child = failedLaunch({ durableLineage: { kind: "spawn", role: null, depth: 1, parentConversationId: "conversation_parent", reviewsConversationId: null, memberships: [] } });
+    expect(attentionReason(child, NOW)).toBeNull();
+  });
+
+  test("a dismissal made after the failure clears it", () => {
+    const dismissed = failedLaunch({ attentionDismissal: { at: new Date(NOW * 1000).toISOString(), by: { kind: "operator" } } });
+    expect(attentionId(dismissed, NOW)).toBeNull();
+  });
+});

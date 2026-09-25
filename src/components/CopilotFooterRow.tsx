@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { useLocale } from "@/lib/i18n";
 import type { EngineLimits, LimitsProvenance } from "@/lib/types";
 
@@ -59,6 +60,17 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onC
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  /* A launch preflight on a signed-out Copilot account (#2170) opens this
+     row's switcher, where the account's Sign in is. */
+  useEffect(() => {
+    if (consumePendingAccountPanel("copilot")) setOpen(true);
+    return onAccountPanelRequest((request) => {
+      if (request.engine !== "copilot") return;
+      setOpen(true);
+      void load();
+    });
+  }, [load]);
 
   useEffect(() => {
     if (!open || !body?.accounts.some((account) => account.login && ["starting", "awaiting_browser", "awaiting_storage_choice", "verifying", "canceling"].includes(account.login.phase))) return;

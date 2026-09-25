@@ -12,14 +12,15 @@ import {
   admitScannedConversations,
   commitTaskMembership,
   ensureTaskMembership,
+  failUnstartedLaunchMembership,
   planAdmissions,
   recordLaunchIdentity,
   refineTask,
   UNTITLED_TASK_TEXT,
 } from "./membership";
-import { patchTask } from "./commands";
+import { dismissUnstartedLaunch, patchTask } from "./commands";
 import { loadTasks, saveTasks } from "./store";
-import type { BoardTask } from "./types";
+import { LAUNCH_NOT_STARTED_ERROR, type BoardTask, type TaskAssignment } from "./types";
 
 const now = "2026-09-09T10:00:00.000Z";
 let serial = 0;
@@ -424,4 +425,41 @@ test("a conversation that has already ended is admitted under its own title; a l
   expect(byTitle.get("Old investigation of the cache")).toBe("titled");
   expect(byTitle.get("Fresh launch")).toBe("pending");
   expect(byTitle.get("Long build")).toBe("pending");
+});
+
+function linked(launchId: string, conversationId: string, extra: Partial<TaskAssignment> = {}): TaskAssignment {
+  return { launchId, clientAttemptId: `attempt-${launchId}`, conversationId, path: null, panePid: null, state: "linked", error: null, at: now, ...extra };
+}
+
+test("a failed launch's own row turns failed and its task goes back to Inbox; the task keeps the row", () => {
+  const failure = { launchId: "launch-1", conversationId: "conversation_1", clientAttemptId: "attempt-launch-1", error: "No healthy Claude account is available. Re-login Main in Accounts and retry." };
+  const result = failUnstartedLaunchMembership([task("t1", "p", { status: "assigned", assignments: [linked("launch-1", "conversation_1")] })], failure, now);
+  expect(result.changed).toBe(true);
+  expect(result.tasks[0]).toMatchObject({ status: "inbox", assignments: [{ launchId: "launch-1", state: "failed", error: failure.error }] });
+});
+
+test("settling a failed launch leaves every other state of the task alone", () => {
+  const failure = { launchId: "launch-1", conversationId: "conversation_1", clientAttemptId: "attempt-launch-1", error: "boom" };
+  /* Something else is live on it: it stays Assigned. */
+  const busy = failUnstartedLaunchMembership([task("t1", "p", { status: "assigned", assignments: [linked("launch-1", "conversation_1"), linked("launch-0", "conversation_0", { state: "delivered" })] })], failure, now);
+  expect(busy.tasks[0]).toMatchObject({ status: "assigned", assignments: [{ state: "failed" }, { state: "delivered" }] });
+  /* Blocked stays Blocked. */
+  expect(failUnstartedLaunchMembership([task("t1", "p", { status: "blocked", assignments: [linked("launch-1", "conversation_1")] })], failure, now).tasks[0]!.status).toBe("blocked");
+  /* A row the launch did not create — another conversation that gained this
+     launch id, or a delivered row — is not this launch's to fail. */
+  const foreign = failUnstartedLaunchMembership([task("t1", "p", { status: "assigned", assignments: [linked("launch-1", "conversation_other"), linked("launch-1", "conversation_1", { state: "delivered" })] })], failure, now);
+  expect(foreign.changed).toBe(false);
+  /* The placeholder the launch minted for itself had nowhere to be before. */
+  const own = failUnstartedLaunchMembership([task("t1", "p", { status: "assigned", origin: { kind: "launch", key: "attempt-launch-1", refinement: "pending" }, assignments: [linked("launch-1", "conversation_1")] })], failure, now);
+  expect(own.changed).toBe(false);
+});
+
+test("a launch its own failure marked failed can still be dismissed on the card", () => {
+  const failed = task("t1", "p", { assignments: [linked("launch-1", "conversation_1", { state: "failed", error: "No healthy Claude account is available." })] });
+  const result = dismissUnstartedLaunch([failed], "t1", { launchId: "launch-1", conversationId: "conversation_1" }, now);
+  if (!result.ok) throw new Error(result.error);
+  expect(result.task.assignments[0]).toMatchObject({ state: "failed", error: LAUNCH_NOT_STARTED_ERROR });
+  /* A second dismissal changes nothing. */
+  const again = dismissUnstartedLaunch(result.tasks, "t1", { launchId: "launch-1", conversationId: "conversation_1" }, now);
+  expect(again.ok && again.tasks).toBe(result.tasks);
 });

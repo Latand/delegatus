@@ -194,3 +194,28 @@ test.each([
   expect(draft().effort).toBe(expected);
   expect(store.get("effort")).toBe(expected || undefined);
 });
+
+/* #2170: what the engine readiness preflight reads out of `/api/accounts`. */
+test("an account is signed out by its reconciled auth state, and an unreadable credential store is not signed out", async () => {
+  const { launchAccountSection, launchReadiness } = await import("./AgentLaunchControls");
+  const section = launchAccountSection({
+    active: "default",
+    accounts: [
+      { id: "default", label: "Main", authPresent: false, auth: { state: "signed_out" } },
+      { id: "locked", label: "Locked", authPresent: false, auth: { state: "unknown" } },
+      { id: "expired", label: "Expired", authPresent: true, auth: { state: "signed_out" } },
+      { id: "copilot-shape", label: "Copilot", authPresent: false },
+    ],
+  });
+  expect(section.accounts.map((account) => [account.id, account.signedOut])).toEqual([
+    ["default", true],
+    ["locked", false],
+    ["expired", true],
+    ["copilot-shape", true],
+  ]);
+  const catalog = { claude: section, codex: { active: "", accounts: [] }, copilot: { active: "", accounts: [] } };
+  expect(launchReadiness({ engine: "claude", catalog, launchAccountId: "default" })).toEqual({ kind: "signed-out", engine: "claude", accountId: "default", label: "Main" });
+  expect(launchReadiness({ engine: "claude", catalog, launchAccountId: "locked" })).toEqual({ kind: "ready" });
+  /* No catalog yet: nothing is known, so nothing is stopped here. */
+  expect(launchReadiness({ engine: "claude", catalog: null, launchAccountId: "" })).toEqual({ kind: "ready" });
+});

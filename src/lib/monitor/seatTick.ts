@@ -1021,6 +1021,16 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const unchanged = { ...input.state, lastCheckAt: at };
 
   if (!input.seat) {
+    /* A project nobody ever designated an orchestrator for (#2170) is not
+       missing one: the operator never asked for a seat, so an alert card about
+       it in their Inbox reports an internal condition they cannot act on. */
+    if (input.seatEverHeld === false) {
+      return {
+        verdict: { kind: "no-seat", detail: "the project has open work and has never had an orchestrator seat" },
+        state: { ...unchanged, seatEpoch: null },
+        cards: [],
+      };
+    }
     return {
       verdict: { kind: "no-seat", detail: "the project has open work and no active orchestrator seat" },
       state: { ...unchanged, seatEpoch: null },
