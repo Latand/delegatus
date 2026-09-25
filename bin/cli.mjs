@@ -468,7 +468,6 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
     env: buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment, launch.extraEnv),
     stdio: ["ignore", "pipe", "pipe"],
   }));
-  child.stdout.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
 
   const state = {
     sawAddressInUse: false,
@@ -476,7 +475,18 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
     restarting: launch.restarting === true,
   };
 
-  child.stderr.on("data", (chunk) => {
+  /* Attached first, so a failed spawn is always reported by it (#2178). */
+  child.on("error", (error) => {
+    state.stopping = true;
+    void Promise.all([
+      tailscaleProcessRef?.current ? stopChild(tailscaleProcessRef.current) : Promise.resolve(),
+      runtimeHostSupervisor.stop(),
+    ]).finally(() => fail(m.serverStartFail(error.message)));
+  });
+
+  /* A child that could not be spawned may have no stdio streams at all. */
+  child.stdout?.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
+  child.stderr?.on("data", (chunk) => {
     const text = chunk.toString("utf8");
     if (text.includes("EADDRINUSE")) {
       state.sawAddressInUse = true;
@@ -488,14 +498,6 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
     }
 
     startupOutput.write(process.stderr, chunk);
-  });
-
-  child.on("error", (error) => {
-    state.stopping = true;
-    void Promise.all([
-      tailscaleProcessRef?.current ? stopChild(tailscaleProcessRef.current) : Promise.resolve(),
-      runtimeHostSupervisor.stop(),
-    ]).finally(() => fail(m.serverStartFail(error.message)));
   });
 
   child.on("exit", async (code, signal) => {
@@ -648,17 +650,21 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
       stderrTail: "",
       stopping: false,
     };
+    /* Before anything else touches the child: a missing Bun is reported as an
+       `error` event, and nothing here may throw ahead of the listener that
+       turns it into the prerequisite message (#2178). */
+    child.once("error", (error) => {
+      state.spawnError = error;
+    });
     const processHandle = { child, state };
     current = processHandle;
     currentRelease = release;
     hooks.onStarted?.(child, release);
-    child.stdout.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
-    child.stderr.on("data", (chunk) => {
+    /* A child that could not be spawned may have no stdio streams at all. */
+    child.stdout?.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
+    child.stderr?.on("data", (chunk) => {
       state.stderrTail = `${state.stderrTail}${chunk}`.slice(-8_192);
       startupOutput.write(process.stderr, chunk);
-    });
-    child.once("error", (error) => {
-      state.spawnError = error;
     });
     child.once("exit", () => {
       if (current !== processHandle || stopping || state.stopping || state.readyAt === null) return;

@@ -237,7 +237,9 @@ test("the CLI rejects a ready runtime socket owned by another process", async ()
   }
 }, SPAWN_BUDGET_MS);
 
-for (const missingExitEvent of [false, true]) test(`the CLI names a missing Bun prerequisite before starting the Viewer (missing exit event: ${missingExitEvent})`, async () => {
+/* The debug switch only decides which startup lines are held back; a missing
+   prerequisite is named either way (#2178). */
+for (const debug of [false, true]) for (const missingExitEvent of [false, true]) test(`the CLI names a missing Bun prerequisite before starting the Viewer (missing exit event: ${missingExitEvent}, debug: ${debug})`, async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-missing-bun-"));
   const nodeSearchPath = (process.env.PATH ?? "")
     .split(path.delimiter)
@@ -255,6 +257,9 @@ for (const missingExitEvent of [false, true]) test(`the CLI names a missing Bun 
     LLV_BUN_EXECUTABLE: path.join(sandbox, "missing-bun"),
   };
   delete environment.LLV_RUNTIME_HOST_SOCKET;
+  delete environment.LLV_DEBUG;
+  if (debug) environment.DELEGATUS_DEBUG = "1";
+  else delete environment.DELEGATUS_DEBUG;
   const preload = path.join(sandbox, "failed-spawn.cjs");
   if (missingExitEvent) fs.writeFileSync(preload, `
     const cp = require('node:child_process');
