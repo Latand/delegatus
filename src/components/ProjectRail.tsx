@@ -176,7 +176,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
     <aside className="flex w-[248px] shrink-0 flex-col border-r border-border bg-card">
       <header
         className={`flex shrink-0 items-center gap-2 border-b border-border text-[13.5px] font-bold ${
-          isMobile ? "min-h-[52px] gap-1.5 px-2 py-1.5" : "h-10 px-4"
+          isMobile ? "min-h-[52px] gap-1.5 px-2 py-1.5" : "h-10 px-2"
         }`}
       >
         {isMobile ? (
@@ -232,7 +232,10 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           </>
         )}
       </header>
-      <div className="flex gap-1.5 px-2.5 pb-1 pt-2.5">
+      {/* On the desktop the header, this row and the project rows share one
+          8 px inset, and the field sits 8 px from the header above and from
+          the first row below (#2185). */}
+      <div className={`flex gap-1.5 pb-1 ${isMobile ? "px-2.5 pt-2.5" : "px-2 pt-2"}`}>
         <input
           className={`w-full min-w-0 flex-1 rounded-[9px] border border-border bg-canvas px-2.5 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
             isMobile ? "min-h-11" : "py-1.5"
@@ -256,7 +259,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
                 ? "border-accent/45 px-2.5 text-[12px] font-semibold text-accent hover:bg-accent/10"
                 : [
                   "border-border text-muted hover:text-primary",
-                  isMobile ? "min-w-11" : "w-7",
+                  isMobile ? "min-w-11" : "w-8",
                   createOpen ? "text-primary" : "",
                 ].join(" "),
             ].join(" ")}

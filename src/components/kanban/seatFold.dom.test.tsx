@@ -75,7 +75,7 @@ mock.module("@/hooks/useLogTail", () => ({
 }));
 
 const { KanbanSeat } = await import("./KanbanSeat");
-const { SEAT_HEIGHT_VERSION, SEAT_STORAGE_KEY, SEAT_STORAGE_KEY_V1 } = await import("./kanbanSeatStore");
+const { SEAT_HEIGHT_VERSION, SEAT_STORAGE_KEY, SEAT_STORAGE_KEY_V1, SEAT_TOP_MIN_WIDTH } = await import("./kanbanSeatStore");
 const { popoverLeft } = await import("./kanbanMenus");
 const { MobilePreviousSeatsRow, MobilePreviousSeatsScreen } = await import("@/components/orchestrator/PreviousSeats");
 
@@ -332,6 +332,64 @@ test("the v1 seat record carries its collapsed flags into v2 once; its old-defau
   await settle();
   expect(section(host).getAttribute("data-collapsed")).toBe("1");
   expect(JSON.parse(dom.localStorage.getItem(SEAT_STORAGE_KEY) ?? "{}")).toEqual({ height: null, collapsed: { [PROJECT]: true }, placement: "top", width: null });
+});
+
+/* ── #2179: the seat on top is dragged wider or narrower, per project ──── */
+
+const keyOn = (element: HTMLElement, key: string) => flushSync(() => element.dispatchEvent(new dom.KeyboardEvent("keydown", { key, bubbles: true }) as unknown as Event));
+const stored = () => JSON.parse(dom.localStorage.getItem(SEAT_STORAGE_KEY) ?? "{}");
+
+test("the seat on top has a width grip: the arrows store this project's width, a double-click puts the default back", async () => {
+  dom.localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify({ height: null, collapsed: {}, placement: "top", width: null, topWidths: { "other-project": 900 } }));
+  const host = mountSeat();
+  await settle();
+  const grip = host.querySelector('[data-seat-grip="top-width"]') as HTMLElement;
+  expect(grip).not.toBeNull();
+  expect(grip.getAttribute("role")).toBe("separator");
+  expect(grip.getAttribute("aria-orientation")).toBe("vertical");
+  expect(grip.getAttribute("tabindex")).toBe("0");
+  expect(grip.getAttribute("aria-label")).toBe(translate("en", "kanban.seatResizeWidth"));
+  expect(grip.getAttribute("aria-valuemin")).toBe(String(SEAT_TOP_MIN_WIDTH));
+  /* Another project's width is not this one's: the default draws. */
+  expect(section(host).className).not.toContain("sized");
+  expect(section(host).style.getPropertyValue("--seat-top-w")).toBe("");
+
+  /* happy-dom lays nothing out, so the step lands on the minimum. */
+  keyOn(grip, "ArrowRight");
+  await settle();
+  expect(stored().topWidths).toEqual({ "other-project": 900, [PROJECT]: SEAT_TOP_MIN_WIDTH });
+  expect(section(host).className).toContain("sized");
+  expect(section(host).style.getPropertyValue("--seat-top-w")).toBe(`${SEAT_TOP_MIN_WIDTH}px`);
+
+  flushSync(() => grip.dispatchEvent(new dom.MouseEvent("dblclick", { bubbles: true }) as unknown as Event));
+  await settle();
+  expect(stored().topWidths).toEqual({ "other-project": 900 });
+  expect(section(host).className).not.toContain("sized");
+
+  /* Folded, the strip takes no width and no grip. */
+  click(foldButton(host));
+  expect(host.querySelector('[data-seat-grip="top-width"]')).toBeNull();
+});
+
+test("a width stored for the seat on top draws on the next mount; at the side the width is the project's too", async () => {
+  dom.localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify({ height: null, collapsed: {}, placement: "top", width: 440, topWidths: { [PROJECT]: 1200 }, heightV: SEAT_HEIGHT_VERSION }));
+  const top = mountSeat();
+  await settle();
+  expect(section(top).style.getPropertyValue("--seat-top-w")).toBe("1200px");
+  expect(top.querySelector('[data-seat-grip="width"]')).toBeNull();
+
+  dom.localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify({ height: null, collapsed: {}, placement: "side", width: 440, topWidths: { [PROJECT]: 1200 }, heightV: SEAT_HEIGHT_VERSION }));
+  const side = mountSeat();
+  await settle();
+  /* The width stored for every project is where a project with none of its own starts. */
+  expect(section(side).style.getPropertyValue("--seat-w")).toBe("440px");
+  expect(side.querySelector('[data-seat-grip="top-width"]')).toBeNull();
+  const grip = side.querySelector('[data-seat-grip="width"]') as HTMLElement;
+  keyOn(grip, "ArrowRight");
+  await settle();
+  expect(stored().sideWidths).toEqual({ [PROJECT]: 480 });
+  expect(stored().width).toBe(440);
+  expect(section(side).style.getPropertyValue("--seat-w")).toBe("480px");
 });
 
 test("a height dragged before the taller default is dropped; one dragged since is kept", async () => {
