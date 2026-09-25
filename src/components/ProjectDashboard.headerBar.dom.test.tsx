@@ -554,8 +554,10 @@ test("⋯ draws no rule next to a group with nothing in it", async () => {
   expect(menu.querySelector('[role="separator"]')).toBeNull();
   const project = menu.querySelector('[data-bar-menu-group="project"]') as HTMLElement;
   /* #2187 §6: the project's merge setting stays in its group when Archive and
-     Delete stand down. */
-  expect(Array.from(project.children).map((child) => child.hasAttribute("data-merge-on-review"))).toEqual([true]);
+     Delete stand down, and its Bridge reports setting (#2146) beside it. */
+  expect(Array.from(project.children).map((child) =>
+    child.hasAttribute("data-merge-on-review") ? "merge" : child.querySelector("[data-bridge-reports-switch]") ? "bridge" : child.tagName,
+  )).toEqual(["merge", "bridge"]);
 });
 
 test("the view switch keeps its place when the view changes: Conversations reserves the create group", async () => {
