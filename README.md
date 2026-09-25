@@ -20,7 +20,8 @@ steer it from a local board, in the browser or on your phone.
 2. Install at least one agent CLI: Claude Code with `curl -fsSL https://claude.ai/install.sh | bash`, Codex with `bun add -g @openai/codex`, GitHub Copilot with `bun add -g @github/copilot`.
 3. Start Delegatus: `bunx delegatus-cli`
 4. Open the URL it prints, `http://127.0.0.1:8898/` by default.
-5. Connect an engine: the setup guide opens on the first visit and signs in Claude Code or Codex; Copilot signs in from the sidebar's Accounts panel.
+5. Follow the setup guide that opens on the first visit: connect Claude Code or Codex, choose a project folder, and create its orchestrator. Copilot signs in from the sidebar's Accounts panel.
+6. Tell the orchestrator what you want done. A three-stop walk shows you its chat, the board and **Needs you**.
 
 `bun add -g` installs into `~/.bun/bin` and needs no root, where
 `npm install -g` does on most systems. Orchestrators and pipelines run on
@@ -64,10 +65,10 @@ the app with hot reload; it expects a runtime host you start yourself.
 Delegatus is a local app for handing your software work to coding agents.
 Each project gets an orchestrator: an agent you tell what you want shipped.
 It keeps the project's tasks and runs a pipeline for each piece of work:
-build, review, fix. It merges what passes review, runs the project's release
-step where it has one, watches the agents it started and reports back to
-you. It asks you only when a decision is yours. You follow the work and steer it from the project's
-board, in a browser or on your phone.
+build, review, fix. It watches the agents it started, files a report as each
+piece lands, and asks you only when a decision is yours. Turn on **Merge when
+the review passes** and what passes review is merged for you. You follow the
+work and steer it from the project's board, in a browser or on your phone.
 
 The agents are Claude Code, Codex and GitHub Copilot on your own accounts,
 and every agent conversation on your machine reads as a chat.
@@ -78,10 +79,17 @@ and every agent conversation on your machine reads as a chat.
 
 ### The orchestrator
 
-Unfold the orchestrator bar at the top of a project's board and press
-**Create orchestrator** (on a phone, **Create an orchestrator**). One agent
-takes the project's seat. Its standing instructions come written for you, and
-you can edit them before you confirm.
+A new install starts here. The setup guide's three steps, Engines, Project
+and Orchestrator, end on a running orchestrator, and until you have one the
+Overview offers **Start with an orchestrator**. On any other project, unfold
+the orchestrator bar at the top of its board and press **Create the
+orchestrator** (on a phone, **Create an orchestrator**). The draft says what
+the orchestrator will run on (engine, model, effort and account), each with
+Change, and it asks you to sign in first when that account is signed out.
+One agent takes the project's seat. Its standing instructions come written
+for you, and you can read and edit them before you confirm. Once it is live,
+a short walk points at its composer, the board and **Needs you**; start it
+again from **Interface walk** in the menu.
 
 Then tell it what to ship in its chat, the way you would message a colleague:
 "take issues 12 and 14", "fix the flaky test in the scanner", "review PR 30".
@@ -93,17 +101,30 @@ your screen to the card where something landed. A decision it cannot make
 alone reaches you in its chat and on the board's **Needs you** counter.
 [docs/orchestrator.md](docs/orchestrator.md) walks through it.
 
+Beside its chat, the **Reports** log lists what the orchestrator reported,
+newest first: a stage that passed or failed, a review verdict, a lane that is
+blocked, a question. Each entry has its time and kind, and issue and PR
+numbers and board cards in it are links. New reports arrive live and are
+marked new. A toggle in the seat's head hides the log; on a phone it opens
+from the seat conversation's bar. The **Bridge reports** switch in the
+board's ⋯ menu turns reports off for a project.
+
+![A project's orchestrator on top of its board: its chat with you, and beside it the Reports log of what it filed](docs/media/readme/orchestrator.svg)
+
 ### Tasks and the board
 
 A task is a card on its project's board, in Inbox, Assigned, Blocked or
-Done. The card carries an icon, the agents working on it, and each pipeline
-on it with its stages and pull request. When something needs you, the card's
+Done. The card carries an icon and a colour, the agents working on it, and
+each pipeline on it with its stages and pull request. Cards with a working
+agent come first in each column. When something needs you, the card's
 foot says what: a question an agent asked, a plan to approve, a permission
 prompt, a message that was not delivered, or a stage waiting on your
 decision. ✓ clears it until something new asks, and **Needs you** at the top
 of the board steps through every card that is waiting. The Overview board
-collects what is running across all projects. You can add tasks and start
-agents on them yourself as well.
+collects what is running across all projects. A rail beside the columns
+lists every agent you have open in a card; one click jumps to it, and
+Alt+J / Alt+K step between them. You can add tasks and start agents on them
+yourself as well.
 
 ![A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, a card that says why it needs you, and account limits in the sidebar](docs/media/readme/board.svg)
 
@@ -121,9 +142,23 @@ a fail edge is routed like a fail, so the findings reach the stage that can
 fix them.
 
 Reviewers run read-only in a conversation of their own, a fresh one each
-round, so a review reads the whole diff without the builder's context. The
-orchestrator merges on an APPROVE verdict with green gates and holds the
-merge while a gate is red.
+round, so a review reads the whole diff without the builder's context. When
+the last round of the budget fails, the builder fixes those findings once
+more and the lane moves on, marking the fix as not re-reviewed; a pipeline
+can instead wait for you after that fix. A lane stopped on a review says why
+in one line and offers **Accept as is** or **Review again**.
+
+**Merge when the review passes**, in the board's ⋯ menu, is off by default.
+With it off, a lane ends with its pull request open and the orchestrator
+tells you it is ready. With it on, Delegatus merges each lane whose reviews
+passed, one at a time per repository, once the head's checks have all
+arrived and finished green. It updates a branch that fell behind and leaves
+a conflict to you. The lane reads "waiting for checks", "merge stopped" or
+"merged", and a stopped merge reaches **Needs you** with **Try the merge
+again**. A lane marked **Finishes the task** moves its task to Done once it
+has finished (and, with merging on, once its pull request is merged). The
+worktrees of merged lanes are removed by an hourly sweep that keeps anything
+still in use or holding work that is not merged.
 
 On its task's card a pipeline is one row: its stages as a chain, its state,
 and its pull request with the issues that pull request closes. When it waits
@@ -152,13 +187,18 @@ when it resets. Make another account active before a limit stops you, or
 change which account an agent runs on; agents launched afterwards use the
 active account.
 
+The **Activity** page, in the rail menu, shows the time you spent and the
+time your agents worked, per day and per project, and filters to one
+project.
+
 ![Claude accounts with their five-hour, weekly and per-model limits](docs/media/readme/accounts.svg)
 
 ### From your phone
 
 On a phone Delegatus opens a layout of its own. The board is the desktop's
 four columns as tabs you swipe between, with the cards that need you pinned
-first; a long press on a card moves, hides or dismisses it. The Overview is
+first and each card led by its task's icon in the task's colour; a long press
+on a card moves, hides or dismisses it. The Overview is
 the same board across every project. A task, a pipeline and a conversation
 each open full screen: a pipeline as its list of stages, with a decision
 answered inside the stage it stopped on, and a conversation with the
@@ -334,6 +374,7 @@ accepted under its earlier `LLV_` spelling; when both are set, the
 | `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` | faster-whisper model size (default `small`) and device (`cpu` or `cuda`). |
 | `DELEGATUS_TTS_BACKEND` | `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider. |
 | `DELEGATUS_HOST_RETIREMENT_IDLE_HOURS` | Hours a hosted agent's transcript must be quiet before Delegatus may stop its host (default `6`, `0` turns this off). Hosts in the middle of a turn, with a pending question or holding an orchestrator seat are never stopped. |
+| `DELEGATUS_WORKTREE_SWEEP` | `0` turns off the hourly removal of merged lanes' worktrees, `dry-run` only reports what it would remove (in `state/worktree-sweep-report.json`). |
 | `DELEGATUS_TEMP_SWEEP_MAX_AGE_HOURS` | Hours before Delegatus's hourly sweep removes one of its own temp directories (`llv-*`) that nothing is using (default `24`, `0` turns the sweep off). It covers `/tmp`, `/var/tmp` and the state's `scratch` directory, never a pipeline worktree. The last sweep is in `state/temp-sweep-report.json`. |
 | `DELEGATUS_REAPER_ENABLED` | `1` lets the agent reaper stop leaked agent processes it has verified; unset, it only reports them at `GET /api/lifecycle/reaper`. |
 | `VIEWER_PROC_BACKEND` | `linux`, `portable` or `windows`: force the process-discovery backend. |

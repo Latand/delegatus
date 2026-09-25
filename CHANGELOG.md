@@ -8,11 +8,163 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-09-25
+
+### Added
+- **A first run starts with the orchestrator.** Until an install has had an
+  orchestrator, the Overview opens on one band, "Start with an orchestrator",
+  above the columns (above the tabs on the phone). The setup guide is three
+  numbered steps that end on a running orchestrator: Engines, Project and
+  Orchestrator. Orchestrator names the project and the engine, model and
+  account it will run on, each with Change. If something is missing (no
+  project, no engine connected, or a signed-out account) it says what, and
+  otherwise Create starts the orchestrator in one press. Agents, Phone, Voice
+  and Check stay in the same dialog under "Later, any time". The
+  orchestrator's draft now reads plainly: one sentence on what it does, an
+  example of what to write to it, one "Runs on" row, and its instructions
+  folded. A new project opens on its Board ([#2212]).
+- **An interface walk.** On a new install, once its orchestrator is live, a
+  three-stop walk points at its composer, the board and «Needs you», and ends
+  on "Give it the first task". It runs once by itself. Start it again from
+  «Interface walk» in the rail menu or the phone's board menu ([#2212]).
+- **The orchestrator's report log sits beside its chat.** On the desktop
+  board the seat has a Reports column to the right of the chat, which a toggle
+  in the seat's head hides. On the phone a button in the seat conversation's
+  bar opens it. Each report shows its time, its kind (completed, failed,
+  blocked, question, review verdict, status) and its text, with issue and PR
+  numbers and board cards as links. New reports arrive live and are marked
+  new, and Show older pages back. A per-project **Bridge reports** switch in
+  the board's ⋯ menu (and the phone's ⋯ sheet) turns them off. While it is
+  off, the orchestrator files nothing and voice relays nothing, and the
+  reports already stored are kept ([#2214]).
+- **Merge when the review passes.** A per-project setting in the board's ⋯
+  menu, off by default. When it is on, Delegatus merges each lane whose
+  reviews passed, one at a time per repository. It waits until the head's
+  checks have all arrived and finished green, brings a branch that is behind
+  up to date, and never resolves a conflict. The lane reads "waiting for
+  checks · 12m", "updating from main", "merge stopped" or "merged". A stopped
+  merge reaches «Needs you» with its reason, and you can Leave the PR open or
+  Try the merge again (`retry-merge` in `pipeline_action`). The orchestrator
+  follows the same setting: with it off, it reports "PR ready" and merges only
+  when you ask ([#2206], [#2208]).
+- **A pipeline can finish its task.** Mark a lane "Finishes the task" from its
+  ⋯ menu, the draft editor or `create_pipeline` (`finishesTask`), and the task
+  moves to Done once that lane has finished: when it completes, or, with the
+  merge setting on and a PR on the lane, once that PR is merged. While another
+  pipeline on the task is still open the card says "Done waits for N more
+  pipelines", and a task you reopen stays open ([#2208]).
+- **Worktrees of merged lanes are removed automatically.** An hourly sweep
+  removes a linked worktree once a merged pull request has its branch, and
+  the local branch with it. It keeps any checkout that is still in use, has
+  uncommitted or unmerged work, or holds ignored files a build cannot
+  recreate, and records each reason in `state/worktree-sweep-report.json`.
+  Conversations from a removed worktree still group under their repository.
+  `DELEGATUS_WORKTREE_SWEEP=0` turns it off, `dry-run` only reports
+  ([#2205]).
+- **Temp directories stop filling the disk.** Test runs and pipeline stages
+  remove the temp directories they make, and an hourly sweep removes
+  Delegatus's own stale `llv-*` directories that nothing uses from `/tmp`,
+  `/var/tmp` and the state's `scratch` directory, never a pipeline worktree.
+  `DELEGATUS_TEMP_SWEEP_MAX_AGE_HOURS` sets the age (default 24, `0` turns it
+  off) ([#2197]).
+- **A rail of the open agents on the desktop board.** A strip beside the
+  columns lists every agent opened in a card, with its role's emblem and
+  colour, a short name and a live dot. One click jumps to that agent, × closes
+  it, and Alt+J / Alt+K step between them. When space is short it shrinks to a
+  count that opens the same list ([#2181]).
+- **Activity: your time and your agents' time.** The Activity page (rail
+  menu) shows the hours you spent and the time your agents worked, per day and
+  per project, over Today, 7 days or 30 days. It records itself as
+  transcripts are indexed and pulls other hosts over ssh. Filter the whole
+  page to one project from its row or the Project picker. Agent time from a
+  host that was not read shows as a lower bound, and your time there as
+  Unknown ([#2126], [#2159], [#2164]).
+- **The image viewer walks a conversation's pictures.** With a picture open,
+  ←/→ or the edge buttons step through every picture in that conversation
+  with its position shown (`12 / 26`), and a click on the dimmed area closes
+  it ([#2149]).
+- **Every new task gets an icon and a colour.** `create_task` takes `color`,
+  and the orchestrator picks both by one shared rule. On the phone, task cards
+  now lead their title with the task's icon in its colour ([#2155],
+  [#2192]).
+- **A permission request you can answer.** When Claude asks for a tool in
+  your own conversation or an orchestrator's, «Needs you» names the tool, the
+  command and the reason, with Allow once and Deny. An unanswered request is
+  denied after 10 minutes. Agents answer with `conversation_action`
+  `permission` ([#2216]).
+- The orchestrator seat on top of the board has a width grip: drag it, use
+  ←/→, or double-click for the default. The width is kept per project
+  ([#2191]).
+- `update_task` edits one line of a task's details (`replaceLine`,
+  `removeLine`, `appendLine`), `GET /api/tasks?project=` returns one project's
+  tasks, and `pipeline_action` `retry-stage` works with the stage name alone
+  ([#2145]).
+
+### Changed
+- **After the last review round the builder fixes once more and the lane
+  completes.** A lane used to stop and wait for you whenever that fix changed
+  code. The findings nobody re-reviewed stay on the lane, which shows "Last
+  fix not re-reviewed". "When the rounds are spent" offers *Fix, then
+  continue* (the default) or *Fix, then wait for me*. A new `review-loop`
+  stage is stored as a reviewer and its fix stage ([#2199], [#2200]).
+- **A lane parked on a review says why in one line** and answers in plain
+  words: Accept as is (`accept-head`) or Review again, and for a stage that
+  stopped before fixing, Accept without review or Review again. Close moved to
+  the lane's ⋯ menu ([#2200]).
+- **Interface polish.** Agent answers read at a comfortable line length, and
+  replies are wider than your own bubble. The Stages sheet draws each stage
+  once. A board card's lane actions live in the card's one ⋯ menu, and the
+  card drops its status pill because its column already says it. On the
+  phone, messages, the composer, Bash cards and the task screen are tidier.
+  Presses and folds animate, except under reduced motion ([#2160],
+  [#2191]).
+- **Board order.** In every column, cards with a working agent come first,
+  then the most recently worked, then the rest ([#2156]).
+- **Launches check sign-in first.** On a signed-out account the launcher and
+  the orchestrator draft say so and offer "Sign in to Claude first", which
+  opens the account's Sign in, and they launch nothing ([#2211]).
+- **A quiet CLI.** `bunx delegatus-cli` prints its banner and URL first and
+  nothing else. Set `DELEGATUS_DEBUG=1` for the startup diagnostics. The
+  README opens with a five-step Quick start, and `docker compose` no longer
+  needs a `service.env` ([#2178]).
+- Role defaults: the prod-auditor runs at high effort, and switching a role
+  between Claude and Codex maps it to the GPT-6 models ([#2174]).
+- The README leads with what Delegatus is for, and its screenshots render on
+  GitHub the way they look in the app ([#2138]).
+
 ### Fixed
+- **Unanswered permission requests no longer wedge a stage.** Claude asks for
+  a tool even with permissions bypassed when its safety check flags a command,
+  and nothing answered, so the turn waited forever and read as
+  "provider_throttled". In a pipeline stage or a delegated agent the request
+  is now denied at once with the reason, and the turn goes on. "Throttled" now
+  shows only when the provider itself retried ([#2216]).
+- **A failed launch stays visible and leaves the task where it was.** The
+  task goes back to Inbox, the failed row stays on the card with Open and
+  Dismiss, and «Needs you» shows the launch's own error ([#2211]).
+- **Newcomer blockers.** Claude sign-in starts for a Claude Code installed
+  from npm, a reload shows the current sign-in state, and Create
+  orchestrator right after Create project works ([#2186]).
+- A fresh install no longer lists another setup's Claude background tasks
+  under an "Unresolved project" ([#2180]).
+- The desktop «Needs you» counter counts lanes waiting on a decision, as the
+  cards and the phone badge already did ([#2133]).
+- A card lists a launch as "did not start" only when it really did not start,
+  and two or more fold behind one row with Dismiss all ([#2142]).
+- After a deploy, a stage the release cut keeps going: a builder's attempt
+  stays open, a cut review re-runs on the same head, and a launch caught by
+  the handover is relaunched ([#2147]).
+- Idle Codex hosts are stopped again after their idle hours ([#2141]).
+- The note Delegatus sends to resume an interrupted conversation after a
+  restart no longer counts as your input ([#2131]).
 - **The Update page's changelog reads as formatted text.** Bold, code and
   links render instead of raw Markdown, PR references open their pull
   requests in a new tab, and each entry shows its lead with the rest behind
   More, never cut inside a span ([#2158]).
+
+### Security
+- Dependencies with published advisories were upgraded, and the audit passes
+  with an empty allowlist ([#2195]).
 
 ## [1.4.0] — 2026-09-24
 
@@ -953,7 +1105,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Latand/delegatus/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Latand/delegatus/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Latand/delegatus/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.1...v1.2.2
@@ -1006,3 +1159,35 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2122]: https://github.com/Latand/delegatus/pull/2122
 [#2125]: https://github.com/Latand/delegatus/pull/2125
 [#2158]: https://github.com/Latand/delegatus/pull/2158
+[#2126]: https://github.com/Latand/delegatus/pull/2126
+[#2131]: https://github.com/Latand/delegatus/pull/2131
+[#2133]: https://github.com/Latand/delegatus/pull/2133
+[#2138]: https://github.com/Latand/delegatus/pull/2138
+[#2141]: https://github.com/Latand/delegatus/pull/2141
+[#2142]: https://github.com/Latand/delegatus/pull/2142
+[#2145]: https://github.com/Latand/delegatus/pull/2145
+[#2147]: https://github.com/Latand/delegatus/pull/2147
+[#2149]: https://github.com/Latand/delegatus/pull/2149
+[#2155]: https://github.com/Latand/delegatus/pull/2155
+[#2156]: https://github.com/Latand/delegatus/pull/2156
+[#2159]: https://github.com/Latand/delegatus/pull/2159
+[#2160]: https://github.com/Latand/delegatus/pull/2160
+[#2164]: https://github.com/Latand/delegatus/pull/2164
+[#2174]: https://github.com/Latand/delegatus/pull/2174
+[#2178]: https://github.com/Latand/delegatus/pull/2178
+[#2180]: https://github.com/Latand/delegatus/pull/2180
+[#2181]: https://github.com/Latand/delegatus/pull/2181
+[#2186]: https://github.com/Latand/delegatus/pull/2186
+[#2191]: https://github.com/Latand/delegatus/pull/2191
+[#2192]: https://github.com/Latand/delegatus/pull/2192
+[#2195]: https://github.com/Latand/delegatus/pull/2195
+[#2197]: https://github.com/Latand/delegatus/pull/2197
+[#2199]: https://github.com/Latand/delegatus/pull/2199
+[#2200]: https://github.com/Latand/delegatus/pull/2200
+[#2205]: https://github.com/Latand/delegatus/pull/2205
+[#2206]: https://github.com/Latand/delegatus/pull/2206
+[#2208]: https://github.com/Latand/delegatus/pull/2208
+[#2211]: https://github.com/Latand/delegatus/pull/2211
+[#2212]: https://github.com/Latand/delegatus/pull/2212
+[#2214]: https://github.com/Latand/delegatus/pull/2214
+[#2216]: https://github.com/Latand/delegatus/pull/2216
