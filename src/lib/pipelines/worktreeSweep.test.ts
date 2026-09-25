@@ -10,13 +10,18 @@ import { projectForCwd, recordWorktreeResolution } from "@/lib/scanner/describe"
 import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { FileEntry, RootKey } from "@/lib/types";
 
-import type { ForgeCacheFile } from "@/lib/forge/cache";
+import { readForgeCache, resetForgeCacheForTests, type ForgeCacheFile } from "@/lib/forge/cache";
+import { sweepForgeLinks } from "@/lib/forge/sweep";
+import type { GithubRunner } from "@/lib/monitor/githubEvidence";
+import type { Pipeline } from "@/lib/pipelines/types";
 
 import {
   classifyStatus,
   forgeCacheMergedPullRequests,
+  ghMergedPullRequests,
   liveOrWaitingConversationCwds,
   parseWorktreeList,
+  productionMergedPullRequests,
   realGit,
   runWorktreeSweep,
   startWorktreeSweep,
@@ -288,6 +293,101 @@ test("a nested worktree that stays keeps the checkout holding it", async () => {
     [outer.dir]: "holds-worktree",
   });
   expect(fs.existsSync(outer.dir)).toBe(true);
+});
+
+/* A `gh` as old as the Docker image's 2.23: it lists pull requests with the
+   fields it knows and fails the whole command on one it does not, the way the
+   forge sweep's `closingIssuesReferences` fails there. */
+type GhRow = { number: number; headRefName: string; headRefOid: string; state: "MERGED" | "OPEN" | "CLOSED" };
+function oldGh(rows: readonly GhRow[], calls: string[][] = []): GithubRunner {
+  const known = new Set(["number", "url", "headRefName", "headRefOid", "state", "isDraft", "createdAt", "updatedAt"]);
+  return async (args) => {
+    calls.push(args);
+    const fields = (args[args.indexOf("--json") + 1] ?? "").split(",");
+    const unknown = fields.find((field) => !known.has(field));
+    if (unknown) throw Object.assign(new Error("Command failed: gh pr list"), { code: 1, stderr: `Unknown JSON field: "${unknown}"` });
+    const state = args[args.indexOf("--state") + 1];
+    return JSON.stringify(rows
+      .filter((row) => state === "all" || row.state.toLowerCase() === state)
+      .map((row) => ({
+        ...row,
+        url: `https://github.com/${REPOSITORY}/pull/${row.number}`,
+        isDraft: false,
+        createdAt: "2026-09-24T00:00:00Z",
+        updatedAt: "2026-09-24T00:00:00Z",
+      })));
+  };
+}
+
+const emptyCache = () => forgeCacheMergedPullRequests(() => ({ schemaVersion: 1, repositories: {} }));
+
+test("under a gh that rejects closingIssuesReferences the forge cache stays empty, and gh still yields merged PRs with head commits", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-gggg"), "pipeline/gggg");
+  const rows: GhRow[] = [
+    { number: 81, headRefName: "pipeline/gggg", headRefOid: tip, state: "MERGED" },
+    { number: 82, headRefName: "feature/open", headRefOid: "b".repeat(40), state: "OPEN" },
+  ];
+  const forgeFile = path.join(caseDir, "forge-links.json");
+  resetForgeCacheForTests();
+  const lanePipeline = { id: "pipe-gggg", project: "repo-fixture", state: "completed", branch: "pipeline/gggg", delivery: { target: { remote: `https://github.com/${REPOSITORY}.git`, pr: 81 } } } as unknown as Pipeline;
+  const logged: string[] = [];
+  await sweepForgeLinks({ now: () => Date.parse("2026-09-25T10:00:00Z"), run: oldGh(rows), loadPipelines: () => [lanePipeline], loadTasks: () => [], file: forgeFile, log: (message) => logged.push(message) });
+  expect(readForgeCache(forgeFile).data.repositories[REPOSITORY]).toMatchObject({ completeSince: null, lastError: "command-failed" });
+  expect(logged).toEqual([`[forge links] ${REPOSITORY}: command-failed`]);
+  const cache = forgeCacheMergedPullRequests(() => readForgeCache(forgeFile).data);
+  expect(cache(REPOSITORY)).toBeNull();
+
+  const calls: string[][] = [];
+  const source = productionMergedPullRequests({ cache, gh: ghMergedPullRequests(oldGh(rows, calls)) });
+  expect(await source(REPOSITORY)).toEqual([merged(81, "pipeline/gggg", tip)]);
+  expect(calls).toEqual([["pr", "list", "--repo", REPOSITORY, "--state", "merged", "--limit", "5000", "--json", "number,url,headRefName,headRefOid"]]);
+
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/gggg" })],
+    mergedPullRequests: source,
+  }));
+  expect(report.removed).toEqual([expect.objectContaining({ path: dir, pr: { number: 81, url: `https://github.com/${REPOSITORY}/pull/81` } })]);
+  expect(fs.existsSync(dir)).toBe(false);
+  /* One gh read per repository per sweep, the removal included. */
+  expect(calls.length).toBe(1);
+  resetForgeCacheForTests();
+});
+
+test("a repository registered only as a project has its merged worktree removed through the production merge source", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(root, ".claude", "worktrees", "manual"), "manual");
+  const source = productionMergedPullRequests({
+    /* No pipeline or linked task names it, so the forge sweep never reads it. */
+    cache: emptyCache(),
+    gh: ghMergedPullRequests(oldGh([{ number: 91, headRefName: "manual", headRefOid: tip, state: "MERGED" }])),
+  });
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], mergedPullRequests: source }));
+  expect(report.kept).toEqual([]);
+  expect(report.removed.map((removal) => [removal.path, removal.pr.number])).toEqual([[dir, 91]]);
+  expect(fs.existsSync(dir)).toBe(false);
+  expect(branchExists(root, "manual")).toBe(false);
+});
+
+test("the gh merge source fails closed, and a complete forge cache answers without gh", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(root, ".worktrees", "kept"), "kept");
+  const failing: GithubRunner = async () => { throw Object.assign(new Error("Command failed: gh"), { code: 1 }); };
+  const garbled = (raw: string): GithubRunner => async () => raw;
+  for (const gh of [failing, garbled("not json"), garbled("{}"), garbled(JSON.stringify([{ number: 1, url: 7, headRefName: "kept", headRefOid: tip }]))]) {
+    const report = await sweepMergedWorktrees(ports({ repositories: [root], mergedPullRequests: productionMergedPullRequests({ cache: emptyCache(), gh: ghMergedPullRequests(gh) }) }));
+    expect(report.kept.map((kept) => [kept.path, kept.reason])).toEqual([[dir, "forge-unavailable"]]);
+  }
+  /* A merged PR gh lists without a head commit proves nothing and matches nothing. */
+  const headless = await ghMergedPullRequests(garbled(JSON.stringify([{ number: 2, url: `https://github.com/${REPOSITORY}/pull/2`, headRefName: "kept", headRefOid: "" }])))(REPOSITORY);
+  expect(headless).toEqual([]);
+  expect(fs.existsSync(dir)).toBe(true);
+
+  let ghCalls = 0;
+  const cached = [merged(3, "kept", tip)];
+  const source = productionMergedPullRequests({ cache: () => cached, gh: async () => { ghCalls += 1; return null; } });
+  expect(await source(REPOSITORY)).toEqual(cached);
+  expect(ghCalls).toBe(0);
 });
 
 test("a dry run measures what it would remove and touches nothing", async () => {

@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
@@ -19,9 +21,9 @@ import { pipelineActivitySettled, type Pipeline } from "./types";
  * `/home` was at 98%. This sweep removes a linked worktree of a registered
  * repository, and the local branch it had checked out, once the pull request
  * that branch delivered is merged. The pull request's state is read from the
- * forge cache the forge sweep keeps (#2059), never from ancestry against the
- * base branch: a squash merge leaves the branch's commits outside the base for
- * ever.
+ * forge cache the forge sweep keeps (#2059), or from `gh` when that cache holds
+ * no complete read of the repository, never from ancestry against the base
+ * branch: a squash merge leaves the branch's commits outside the base for ever.
  *
  * Registered repositories are the ones a pipeline ran in and the ones the
  * operator created a project from; every linked worktree git lists for them is
@@ -56,8 +58,8 @@ import { pipelineActivitySettled, type Pipeline } from "./types";
  * - `holds-worktree` — another linked worktree that stays is nested in it.
  * - `locked`, `missing` — git marks it locked, or its directory is not
  *   reachable from here.
- * - `forge-unavailable` — the forge cache holds no complete read of the
- *   repository with head commits yet.
+ * - `forge-unavailable` — neither the forge cache nor `gh` answered with the
+ *   repository's merged pull requests and their head commits.
  * - `map-write-failed`, `remove-failed` — the removal itself could not be
  *   made safe or did not happen.
  *
@@ -156,8 +158,8 @@ export type WorktreeSweepPorts = {
   mode: WorktreeSweepMode;
   git: GitRun;
   /** Every merged pull request of a GitHub repository (`owner/name`), or null
-      when the forge has not been read completely. */
-  mergedPullRequests: (repository: string) => MergedPullRequest[] | null;
+      when the forge could not be read completely. */
+  mergedPullRequests: (repository: string) => MergedPullRequest[] | null | Promise<MergedPullRequest[] | null>;
   /** Every pipeline, archived ones included, to match lanes with their PRs. */
   pipelines: readonly SweptPipeline[];
   /** The pipelines as they are now, read again before each removal; an open
@@ -416,7 +418,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     const mainPath = resolve(main.path);
     const remote = await ports.git(["remote", "get-url", "origin"], root);
     const repository = remote.code === 0 ? githubRepositoryOfRemote(remote.stdout.trim()) : null;
-    const merged = repository ? ports.mergedPullRequests(repository) : [];
+    const merged = repository ? await ports.mergedPullRequests(repository) : [];
     const byHead = new Map<string, MergedPullRequest[]>();
     const byNumber = new Map<number, MergedPullRequest>();
     for (const pr of merged ?? []) {
@@ -447,7 +449,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         continue;
       }
       if (repository && merged === null) {
-        keep({ ...base, reason: "forge-unavailable", detail: `${repository} is not in the forge cache yet` });
+        keep({ ...base, reason: "forge-unavailable", detail: `${repository}: neither the forge cache nor gh listed its merged pull requests` });
         continue;
       }
       const candidates = pipelinePrCandidates(owners);
@@ -606,13 +608,74 @@ export function forgeCacheMergedPullRequests(read: () => ForgeCacheFile) {
   };
 }
 
+const GH_MERGED_FIELDS = "number,url,headRefName,headRefOid";
+/** Merged pull requests one `gh` read lists; an older one past it stays as
+    `no-merged-pr`, which keeps its worktree. */
+export const GH_MERGED_LIMIT = 5_000;
+const GH_TIMEOUT_MS = 60_000;
+
+/** Merged pull requests straight from `gh`, for a repository the forge cache
+    has not read completely: the forge sweep reads only the repositories a
+    pipeline or a linked task names, and its field list needs a newer `gh` than
+    some installs carry. Asks only for fields every `gh` since 2.0 knows.
+    Fails closed: a failed command or one malformed row answers null. */
+export function ghMergedPullRequests(run: GithubRunner, limit = GH_MERGED_LIMIT) {
+  return async (repository: string): Promise<MergedPullRequest[] | null> => {
+    let raw: string;
+    try {
+      raw = await run(["pr", "list", "--repo", repository, "--state", "merged", "--limit", String(limit), "--json", GH_MERGED_FIELDS]);
+    } catch {
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(parsed)) return null;
+    const rows: MergedPullRequest[] = [];
+    for (const entry of parsed) {
+      const row = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
+      if (!Number.isSafeInteger(row.number) || typeof row.url !== "string" || typeof row.headRefName !== "string") return null;
+      /* A head commit is what containment is proven against; without one the
+         PR matches nothing, and its worktree stays. */
+      if (typeof row.headRefOid !== "string" || !/^[0-9a-f]{40}$/i.test(row.headRefOid)) continue;
+      rows.push({ number: row.number as number, url: row.url, headRefName: row.headRefName, headRefOid: row.headRefOid });
+    }
+    return rows;
+  };
+}
+
+/** The production merge source: the forge cache when it holds a complete read
+    of the repository, `gh` otherwise, each repository asked once per sweep. */
+export function productionMergedPullRequests(sources: {
+  cache: (repository: string) => MergedPullRequest[] | null;
+  gh: (repository: string) => Promise<MergedPullRequest[] | null>;
+}) {
+  const answers = new Map<string, Promise<MergedPullRequest[] | null>>();
+  return (repository: string): Promise<MergedPullRequest[] | null> => {
+    const key = repository.toLowerCase();
+    let answer = answers.get(key);
+    if (!answer) {
+      const cached = sources.cache(repository);
+      answers.set(key, answer = cached ? Promise.resolve(cached) : sources.gh(repository));
+    }
+    return answer;
+  };
+}
+
 function withArchived(hot: readonly Pipeline[], archived: readonly Pipeline[]): Pipeline[] {
   const ids = new Set(hot.map((pipeline) => pipeline.id));
   return [...hot, ...archived.filter((pipeline) => !ids.has(pipeline.id))];
 }
 
-/** The ports as the Viewer runs them, over its own state. */
-export async function productionWorktreeSweepPorts(mode: WorktreeSweepMode): Promise<WorktreeSweepPorts> {
+/** The ports as the Viewer runs them, over its own state. `run` is the `gh`
+    seam, replaceable to run the image's `gh` from outside it. */
+export async function productionWorktreeSweepPorts(
+  mode: WorktreeSweepMode,
+  run: GithubRunner = githubRunner(os.tmpdir(), GH_TIMEOUT_MS),
+): Promise<WorktreeSweepPorts> {
   const [{ loadArchivedPipelines, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/projects/curation"),
@@ -623,7 +686,10 @@ export async function productionWorktreeSweepPorts(mode: WorktreeSweepMode): Pro
   return {
     mode,
     git: realGit,
-    mergedPullRequests: forgeCacheMergedPullRequests(() => readForgeCache().data),
+    mergedPullRequests: productionMergedPullRequests({
+      cache: forgeCacheMergedPullRequests(() => readForgeCache().data),
+      gh: ghMergedPullRequests(run),
+    }),
     /* Settled lanes move to the archive after a while; their delivered PR
        numbers are what find a PR whose head is not the lane branch. */
     pipelines: withArchived(loadPipelinesForList(), loadArchivedPipelines()),
