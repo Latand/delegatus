@@ -11,6 +11,7 @@ import { useLocale } from "@/lib/i18n";
 import { MobileAccountsPanel } from "../AccountsPanel";
 import { useWalkStop } from "../onboarding/walkStop";
 import { TelegramFooterRow } from "../TelegramConnect";
+import { ReportLog } from "../orchestrator/reportLog/ReportLog";
 import { MobileReceipt } from "./MobileReceipt";
 import { screenKey, topScreen, useMobileNav, useMobileNavStore, type MobileScreenKind, type MobileSheetName } from "./mobileNav";
 
@@ -179,6 +180,7 @@ export function MobileShell({
   back = false,
   host,
   onOpenSearch,
+  barAction,
   searchTestId,
   menu = true,
   renderSheet,
@@ -200,6 +202,9 @@ export function MobileShell({
   host?: MobileShellHost | null;
   /** The search target (issue #1054) — the board bar only; absent, no target. */
   onOpenSearch?: () => void;
+  /** One more control in the bar, before search: the orchestrator
+      conversation's report log (#2146). */
+  barAction?: ReactNode;
   searchTestId?: string;
   /** The ⋯ target: every screen opens the board menu over itself. */
   menu?: boolean;
@@ -319,6 +324,7 @@ export function MobileShell({
               <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-dashed border-strong px-2 text-ui font-bold tabular-nums text-muted">0</span>
             </span>
           ) : null}
+          {barAction}
           {showSearch ? (
             <button type="button" data-testid={searchTestId} data-mobile2-open="search" aria-label={t("mobile2.bar.search")} className={ICON_BUTTON} onClick={onOpenSearch}>
               <Search className="h-5 w-5" aria-hidden />
@@ -392,6 +398,16 @@ export function MobileBarTitle({ children, meta }: { children: ReactNode; meta?:
 /** The accounts screen the board menu pushes (README §3.1, §4.8): the shell's
     bar with ‹ over the phone's accounts layout (lane 9, `AccountsPanel.tsx`);
     the screen and its route are the shell's. */
+/** The orchestrator's report log on the phone (#2146), over its conversation. */
+export function MobileReportsScreen({ project, host, renderSheet }: { project: string; host?: MobileShellHost | null; renderSheet?: SheetRenderer }) {
+  const { t } = useLocale();
+  return (
+    <MobileShell screen="reports" back title={<MobileBarTitle>{t("reportLog.title")}</MobileBarTitle>} host={host} renderSheet={renderSheet}>
+      <ReportLog key={project} project={project} variant="screen" />
+    </MobileShell>
+  );
+}
+
 export function MobileAccountsScreen({ host, renderSheet }: { host?: MobileShellHost | null; renderSheet?: SheetRenderer }) {
   const { t } = useLocale();
   return (

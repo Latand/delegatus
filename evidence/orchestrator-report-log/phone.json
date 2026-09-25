@@ -1,0 +1,289 @@
+{
+  "results": [
+    {
+      "key": "390-en-dark",
+      "button": {
+        "x": 296,
+        "y": 3.5,
+        "width": 44,
+        "height": 44
+      },
+      "log": {
+        "pageSideways": 0,
+        "overlaps": [],
+        "screen": "reports",
+        "entries": 30,
+        "classes": [
+          "completed",
+          "review_verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "fresh": 3,
+        "github": 14,
+        "cards": 2,
+        "olderHeight": 44,
+        "sideways": 0,
+        "off": null,
+        "offSwitch": null
+      },
+      "end": {
+        "olderHeight": 44
+      },
+      "menu": {
+        "on": {
+          "state": "on",
+          "label": "Bridge reports",
+          "hint": "The orchestrator logs what it did; the voice relay reads it out.",
+          "switchSize": [
+            48,
+            44
+          ],
+          "labelMeetsSwitch": false,
+          "inside": true
+        },
+        "off": {
+          "state": "off",
+          "label": "Bridge reports",
+          "hint": "The orchestrator files no reports; the voice relay stays silent.",
+          "switchSize": [
+            48,
+            44
+          ],
+          "labelMeetsSwitch": false,
+          "inside": true
+        }
+      },
+      "offLog": {
+        "pageSideways": 0,
+        "overlaps": [],
+        "screen": "reports",
+        "entries": 0,
+        "classes": [],
+        "fresh": 0,
+        "github": 0,
+        "cards": 0,
+        "olderHeight": null,
+        "sideways": 0,
+        "off": "Bridge reports are off",
+        "offSwitch": "false"
+      }
+    },
+    {
+      "key": "390-en-light",
+      "button": {
+        "x": 296,
+        "y": 3.5,
+        "width": 44,
+        "height": 44
+      },
+      "log": {
+        "pageSideways": 0,
+        "overlaps": [],
+        "screen": "reports",
+        "entries": 30,
+        "classes": [
+          "completed",
+          "review_verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "fresh": 3,
+        "github": 14,
+        "cards": 2,
+        "olderHeight": 44,
+        "sideways": 0,
+        "off": null,
+        "offSwitch": null
+      },
+      "end": {
+        "olderHeight": 44
+      },
+      "menu": {
+        "on": {
+          "state": "on",
+          "label": "Bridge reports",
+          "hint": "The orchestrator logs what it did; the voice relay reads it out.",
+          "switchSize": [
+            48,
+            44
+          ],
+          "labelMeetsSwitch": false,
+          "inside": true
+        },
+        "off": {
+          "state": "off",
+          "label": "Bridge reports",
+          "hint": "The orchestrator files no reports; the voice relay stays silent.",
+          "switchSize": [
+            48,
+            44
+          ],
+          "labelMeetsSwitch": false,
+          "inside": true
+        }
+      },
+      "offLog": {
+        "pageSideways": 0,
+        "overlaps": [],
+        "screen": "reports",
+        "entries": 0,
+        "classes": [],
+        "fresh": 0,
+        "github": 0,
+        "cards": 0,
+        "olderHeight": null,
+        "sideways": 0,
+        "off": "Bridge reports are off",
+        "offSwitch": "false"
+      }
+    },
+    {
+      "key": "390-uk-dark",
+      "button": {
+        "x": 296,
+        "y": 3.5,
+        "width": 44,
+        "height": 44
+      },
+      "log": {
+        "pageSideways": 0,
+        "overlaps": [],
+        "screen": "reports",
+        "entries": 30,
+        "classes": [
+          "completed",
+          "review_verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "fresh": 3,
+        "github": 14,
+        "cards": 2,
+        "olderHeight": 44,
+        "sideways": 0,
+        "off": null,
+        "offSwitch": null
+      },
+      "end": {
+        "olderHeight": 44
+      },
+      "menu": {
+        "on": {
+          "state": "on",
+          "label": "Звіти оркестратора",
+          "hint": "Оркестратор записує, що зробив; голосовий канал це озвучує.",
+          "switchSize": [
+            48,
+            44
+          ],
+          "labelMeetsSwitch": false,
+          "inside": true
+        },
+        "off": {
+          "state": "off",
+          "label": "Звіти оркестратора",
+          "hint": "Оркестратор не пише звітів; голосовий канал мовчить.",
+          "switchSize": [
+            48,
+            44
+          ],
+          "labelMeetsSwitch": false,
+          "inside": true
+        }
+      },
+      "offLog": {
+        "pageSideways": 0,
+        "overlaps": [],
+        "screen": "reports",
+        "entries": 0,
+        "classes": [],
+        "fresh": 0,
+        "github": 0,
+        "cards": 0,
+        "olderHeight": null,
+        "sideways": 0,
+        "off": "Звіти оркестратора вимкнено",
+        "offSwitch": "false"
+      }
+    },
+    {
+      "key": "390-uk-light",
+      "button": {
+        "x": 296,
+        "y": 3.5,
+        "width": 44,
+        "height": 44
+      },
+      "log": {
+        "pageSideways": 0,
+        "overlaps": [],
+        "screen": "reports",
+        "entries": 30,
+        "classes": [
+          "completed",
+          "review_verdict",
+          "question",
+          "blocked",
+          "failed",
+          "status"
+        ],
+        "fresh": 3,
+        "github": 14,
+        "cards": 2,
+        "olderHeight": 44,
+        "sideways": 0,
+        "off": null,
+        "offSwitch": null
+      },
+      "end": {
+        "olderHeight": 44
+      },
+      "menu": {
+        "on": {
+          "state": "on",
+          "label": "Звіти оркестратора",
+          "hint": "Оркестратор записує, що зробив; голосовий канал це озвучує.",
+          "switchSize": [
+            48,
+            44
+          ],
+          "labelMeetsSwitch": false,
+          "inside": true
+        },
+        "off": {
+          "state": "off",
+          "label": "Звіти оркестратора",
+          "hint": "Оркестратор не пише звітів; голосовий канал мовчить.",
+          "switchSize": [
+            48,
+            44
+          ],
+          "labelMeetsSwitch": false,
+          "inside": true
+        }
+      },
+      "offLog": {
+        "pageSideways": 0,
+        "overlaps": [],
+        "screen": "reports",
+        "entries": 0,
+        "classes": [],
+        "fresh": 0,
+        "github": 0,
+        "cards": 0,
+        "olderHeight": null,
+        "sideways": 0,
+        "off": "Звіти оркестратора вимкнено",
+        "offSwitch": "false"
+      }
+    }
+  ],
+  "failures": []
+}

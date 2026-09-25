@@ -10090,3 +10090,190 @@ describe("#2166 the interface walk", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("#2146 the orchestrator's report log beside its chat, and the Bridge reports switch", () => {
+  /*
+   * On the desktop board at 1440, en and uk, light and dark: the seat's report
+   * log is a column right of its chat — this project's bridge reports, newest
+   * first, each a local time, a class word and the body as written, `#123` and
+   * the board's card ids linked, a quiet «new» on what arrived since the last
+   * look, and «Show older» under the page. Nothing else is in it. The board's
+   * ⋯ carries "Bridge reports" on and then off by its own switch, and off, the
+   * log is one line with the switch that turns it back on. The empty log is
+   * one line too. The phone at 390 is the phone driver's case.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 REPORT_LOG_PNG_DIR=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#2146"
+   *
+   * PNGs go to `REPORT_LOG_PNG_DIR`, or `.artifacts/report-log/`, never committed.
+   */
+  const OUT = path.resolve(process.env.REPORT_LOG_PNG_DIR ?? ".artifacts/report-log");
+  const EVIDENCE = path.resolve("evidence/orchestrator-report-log");
+  const READ_LOG = () => {
+    const log = document.querySelector("[data-report-log]");
+    const conversation = document.querySelector("[data-kanban-seat] [data-orchestrator-conversation]");
+    if (!log) return null;
+    const scroller = log.querySelector(".overflow-y-auto") as HTMLElement | null;
+    const rows = [...log.querySelectorAll("[data-report-entry]")];
+    const cut = [...log.querySelectorAll<HTMLElement>("[data-report-entry] *")].filter((element) => element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX !== "visible").map((element) => element.textContent?.slice(0, 40) ?? "");
+    const logBox = log.getBoundingClientRect();
+    const conversationBox = conversation?.getBoundingClientRect() ?? null;
+    return {
+      layout: document.querySelector("[data-report-log-layout]")?.getAttribute("data-report-log-layout") ?? null,
+      beside: conversationBox ? logBox.left >= conversationBox.right - 1 : false,
+      width: Math.round(logBox.width),
+      entries: rows.length,
+      classes: [...new Set(rows.map((row) => row.getAttribute("data-report-class")))],
+      labels: [...new Set(rows.map((row) => row.querySelector("[data-report-class-label]")?.textContent ?? ""))],
+      fresh: rows.filter((row) => row.hasAttribute("data-report-new")).map((row) => row.getAttribute("data-report-entry")),
+      github: log.querySelectorAll("[data-report-link=github]").length,
+      cards: log.querySelectorAll("[data-report-link=card]").length,
+      older: Boolean(log.querySelector("[data-report-log-older]")),
+      sideways: scroller ? scroller.scrollWidth - scroller.clientWidth : 0,
+      cut,
+      /* The panel holds entries and nothing else. */
+      extra: [...log.querySelectorAll("section > div > *")].map((element) => element.tagName.toLowerCase()).filter((tag) => tag !== "ol" && tag !== "div"),
+      off: log.querySelector("[data-report-log-off] p")?.textContent ?? null,
+      offSwitch: log.querySelector("[data-report-log-off] [data-bridge-reports-switch]")?.getAttribute("aria-checked") ?? null,
+      empty: log.querySelector("[data-report-log-empty]")?.textContent ?? null,
+    };
+  };
+
+  browserTest("the log sits right of the seat's chat at 1440, en and uk, light and dark, and the ⋯ switch turns it off and on", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/report-log-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const label = `1440-${lang}-${scheme}`;
+          const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+          const fail = (text: string) => failures.push(`${label}: ${text}`);
+          const { context, page, pageErrors } = await openFixture(browser, server.base, VIEWPORT, scheme, lang);
+          try {
+            await page.waitForSelector("[data-report-log] [data-report-entry]", { timeout: 30_000 });
+            /* The operator last looked three reports ago. */
+            await page.evaluate(() => {
+              const newest = Number(document.querySelector("[data-report-entry]")!.getAttribute("data-report-entry"));
+              const third = [...document.querySelectorAll("[data-report-entry]")][3]!.getAttribute("data-report-entry");
+              localStorage.setItem("llvReportLogSeen:atlas", String(third ?? newest));
+            });
+            await page.reload();
+            await page.waitForSelector("[data-report-log] [data-report-entry]", { timeout: 30_000 });
+            /* The fixture's attention toast sits over the seat's head, where
+               the log's toggle is. */
+            await page.waitForTimeout(600);
+            await page.locator("[data-attention-toast-dismiss]").click().catch(() => {});
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(800);
+            const toggle = await page.evaluate(() => document.querySelector("[data-kanban-seat] [data-report-log-toggle]")?.getAttribute("data-report-log-toggle") ?? null);
+            if (toggle !== "open") fail(`the head's report log toggle reads ${toggle}`);
+            const seat = page.locator("[data-kanban-seat]");
+            await seat.screenshot({ path: path.join(OUT, `seat-${label}.png`) });
+            await page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
+            const reading = await page.evaluate(READ_LOG);
+            if (!reading) { fail("no report log"); continue; }
+            if (reading.layout !== "beside" || !reading.beside) fail(`the log is not beside the chat: ${JSON.stringify(reading)}`);
+            if (reading.entries !== 30) fail(`first page holds ${reading.entries} entries`);
+            if (reading.classes.length !== 6) fail(`classes drawn: ${reading.classes.join(", ")}`);
+            for (const word of ["completed", "failed", "blocked", "question", "review_verdict", "status"]) {
+              if (!reading.labels.includes(t(`reportLog.class.${word}`))) fail(`no ${word} label`);
+            }
+            if (reading.fresh.length !== 3) fail(`new marks on ${JSON.stringify(reading.fresh)}`);
+            if (!reading.github || !reading.cards) fail(`links: ${reading.github} GitHub, ${reading.cards} cards`);
+            if (!reading.older) fail("no Show older under the first page");
+            if (reading.sideways > 0 || reading.cut.length) fail(`cut: ${reading.sideways}px sideways, ${JSON.stringify(reading.cut)}`);
+            if (reading.extra.length) fail(`something else in the panel: ${reading.extra.join(", ")}`);
+
+            /* Older entries on request, drawn at the bottom of the column. */
+            await page.locator("[data-report-log-older]").click();
+            await page.waitForFunction(() => document.querySelectorAll("[data-report-entry]").length > 30, undefined, { timeout: 10_000 });
+            await page.evaluate(() => {
+              const scroller = document.querySelector("[data-report-log] .overflow-y-auto")!;
+              scroller.scrollTop = scroller.scrollHeight;
+            });
+            await page.waitForTimeout(300);
+            await page.locator("[data-report-log]").screenshot({ path: path.join(OUT, `log-older-${label}.png`) });
+            const older = await page.evaluate(READ_LOG);
+            if (older?.entries !== 46 || older.older) fail(`after Show older: ${older?.entries} entries, older control ${older?.older}`);
+
+            /* The ⋯ menu: the Bridge reports row on, then off by its switch. */
+            await page.locator('[data-bar-group="more"] button').first().click();
+            await page.locator("[data-bridge-reports]").waitFor({ timeout: 10_000 });
+            await page.waitForFunction(() => [...document.querySelectorAll("[data-bar-menu-group] [role=switch]")].every((toggle) => !toggle.hasAttribute("disabled")), undefined, { timeout: 10_000 });
+            const menuBox = page.locator('[data-bar-menu-group="project"]').locator("xpath=..");
+            await page.waitForTimeout(400);
+            await menuBox.screenshot({ path: path.join(OUT, `menu-bridge-on-${label}.png`) });
+            const readRow = () => page.evaluate(() => {
+              const element = document.querySelector("[data-bar-menu-group] [data-bridge-reports]")!;
+              const toggle = element.querySelector<HTMLElement>("[data-bridge-reports-switch]")!;
+              const name = element.querySelector("span.flex-1")!;
+              const hint = element.querySelector('[role="status"]')!;
+              const a = name.getBoundingClientRect();
+              const b = toggle.getBoundingClientRect();
+              const menu = element.closest("[data-bar-menu-group]")!.getBoundingClientRect();
+              return {
+                state: element.getAttribute("data-bridge-reports"), checked: toggle.getAttribute("aria-checked"),
+                label: name.textContent?.trim() ?? "", hint: hint.textContent?.trim() ?? "",
+                labelMeetsSwitch: Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5,
+                labelCut: name.scrollWidth > name.clientWidth + 1,
+                inside: hint.getBoundingClientRect().right <= menu.right + 1 && b.right <= menu.right + 1,
+              };
+            });
+            const on = await readRow();
+            if (on.state !== "on" || on.checked !== "true" || on.label !== t("projectSettings.bridgeReports") || on.hint !== t("projectSettings.bridgeReports.on")) fail(`menu on ${JSON.stringify(on)}`);
+            await page.locator("[data-bar-menu-group] [data-bridge-reports-switch]").click();
+            await page.waitForFunction(() => document.querySelector("[data-bar-menu-group] [data-bridge-reports]")?.getAttribute("data-bridge-reports") === "off", undefined, { timeout: 10_000 });
+            await page.waitForTimeout(300);
+            await menuBox.screenshot({ path: path.join(OUT, `menu-bridge-off-${label}.png`) });
+            const off = await readRow();
+            if (off.hint !== t("projectSettings.bridgeReports.off")) fail(`menu off ${JSON.stringify(off)}`);
+            for (const entry of [on, off]) if (entry.labelMeetsSwitch || entry.labelCut || !entry.inside) fail(`menu geometry ${JSON.stringify(entry)}`);
+            await page.keyboard.press("Escape");
+            if (await page.locator("[data-bar-menu-group]").count()) await page.locator('[data-bar-group="more"] button').first().click();
+            await page.waitForFunction(() => !document.querySelector("[data-bar-menu-group]"), undefined, { timeout: 10_000 });
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(300);
+
+            /* Off: the log is one line and the switch. */
+            await page.waitForSelector("[data-report-log-off]", { timeout: 10_000 });
+            await seat.screenshot({ path: path.join(OUT, `seat-off-${label}.png`) });
+            const offLog = await page.evaluate(READ_LOG);
+            if (offLog?.off !== t("reportLog.off") || offLog.offSwitch !== "false" || offLog.entries !== 0) fail(`off panel ${JSON.stringify(offLog)}`);
+            const writes = await page.evaluate(() => (window as unknown as { evidence?: { settingWrites: unknown[] } }).evidence?.settingWrites ?? null);
+            if (!JSON.stringify(writes).includes('"bridgeReports":false')) fail(`the switch wrote ${JSON.stringify(writes)}`);
+            /* The panel's own switch turns them back on. */
+            await page.locator("[data-report-log-off] [data-bridge-reports-switch]").click();
+            await page.waitForSelector("[data-report-log] [data-report-entry]", { timeout: 10_000 });
+            readings[label] = { reading, older: { entries: older?.entries }, menu: { on, off }, offLog, writes };
+            const sideways = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+            if (sideways > 0) fail(`the page scrolls sideways by ${sideways}px`);
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+      /* The empty log, one line. */
+      const { context, page } = await openFixture(browser, `${server.base}?reports=empty`, VIEWPORT, "light", "en");
+      try {
+        await page.waitForSelector("[data-report-log-empty]", { timeout: 30_000 });
+        await page.waitForTimeout(500);
+        await page.locator("[data-kanban-seat]").screenshot({ path: path.join(OUT, "seat-empty-1440-en-light.png") });
+        const empty = await page.evaluate(READ_LOG);
+        if (empty?.empty !== translate("en", "reportLog.empty")) failures.push(`empty: ${JSON.stringify(empty)}`);
+        readings.empty = empty;
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+});

@@ -10,6 +10,7 @@ import { requireOperatorAuthority, rotationActor, setCallerConversationResolverF
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { persistProjectAliases } from "@/lib/projects/aliases";
+import { setBridgeReports } from "@/lib/projects/settings";
 
 import { viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
 
@@ -106,6 +107,16 @@ test("get_orchestrator with nothing designated says so and names the current def
     intentHistoryCount: 0,
     lineageCount: 0,
   });
+});
+
+/* #2146: the seat reads its project's Bridge reports switch beside the merge
+   setting, on by default and in both the compact and the full answer. */
+test("get_orchestrator carries the project's bridge reports setting", async () => {
+  const { control } = controlStub();
+  expect(await bindingsWith(control).get_orchestrator({ clientRequestId: "get-br-1", project: "proj-a" })).toMatchObject({ mergeOnReview: false, bridgeReports: true });
+  setBridgeReports("proj-a", false, "operator");
+  expect(await bindingsWith(control).get_orchestrator({ clientRequestId: "get-br-2", project: "proj-a" })).toMatchObject({ bridgeReports: false });
+  expect(await bindingsWith(control).get_orchestrator({ clientRequestId: "get-br-3", project: "proj-a", full: true })).toMatchObject({ bridgeReports: false });
 });
 
 test("get_orchestrator reports health with labelled estimates and a recommendation-only rotation block", async () => {

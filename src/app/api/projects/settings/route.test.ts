@@ -41,3 +41,20 @@ test("the setting reads off by default, turns on through PUT, and says when the 
   expect((await put({ project: "repo-with-github", mergeOnReview: "yes" })).status).toBe(400);
   expect((await get("")).status).toBe(400);
 });
+
+/* #2146: Bridge reports read on by default, and a PUT carrying only that
+   switch leaves the merge setting as it was. */
+test("the bridge reports setting reads on by default and turns off through its own PUT", async () => {
+  const before = await (await get("repo-bridge")).json();
+  expect(before.bridgeReports).toMatchObject({ enabled: true, changedAt: null });
+  const off = await put({ project: "repo-bridge", bridgeReports: false });
+  expect(off.status).toBe(200);
+  const body = await off.json();
+  expect(body.bridgeReports).toMatchObject({ enabled: false, changedBy: "operator" });
+  expect(body.mergeOnReview.enabled).toBe(false);
+  expect((await (await get("repo-bridge")).json()).bridgeReports.enabled).toBe(false);
+  await put({ project: "repo-bridge", mergeOnReview: true });
+  expect((await (await get("repo-bridge")).json())).toMatchObject({ bridgeReports: { enabled: false }, mergeOnReview: { enabled: true } });
+  expect((await put({ project: "repo-bridge", bridgeReports: "off" })).status).toBe(400);
+  expect((await put({ project: "repo-bridge" })).status).toBe(400);
+});

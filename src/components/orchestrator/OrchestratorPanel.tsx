@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, LogIn, PanelLeft, PanelTop, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, LogIn, PanelLeft, PanelTop, RefreshCw, RotateCcw, ScrollText, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -58,6 +58,28 @@ import { useOrchestratorIncumbent } from "./useOrchestratorIncumbent";
 import { useOrchestratorSeat, type OrchestratorSeatRead } from "./useOrchestratorSeat";
 import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
 import { useSeatSurface } from "./useSeatSurface";
+import { ReportLog } from "./reportLog/ReportLog";
+
+/** The seat's width from which the report log sits beside the chat (#2146). */
+export const REPORT_LOG_SPLIT_WIDTH = 720;
+const reportLogBesideKey = (project: string) => `llvReportLogBeside:${project}`;
+
+/** Whether the log beside the chat is open for `project`: open unless hidden. */
+function readReportLogBeside(project: string): boolean {
+  try {
+    return window.localStorage.getItem(reportLogBesideKey(project)) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function rememberReportLogBeside(project: string, open: boolean): void {
+  try {
+    window.localStorage.setItem(reportLogBesideKey(project), open ? "1" : "0");
+  } catch {
+    /* private mode */
+  }
+}
 
 /**
  * How often an UNBOUND seat re-asks the status read while its attempts are
@@ -229,6 +251,36 @@ export function OrchestratorPanel({
     [files, seatConversationId, seatPath, currentPath],
   );
   const surface = useSeatSurface(file);
+
+  /* The report log (#2146): a column right of the chat while the seat sits on
+     top and is at least REPORT_LOG_SPLIT_WIDTH wide, open unless the operator
+     hid it for this project; narrower, it takes the transcript's place when
+     asked, with the composer kept under it. */
+  const panelRef = useRef<HTMLElement | null>(null);
+  const [panelWidth, setPanelWidth] = useState(0);
+  useEffect(() => {
+    const node = panelRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => setPanelWidth(entry?.contentRect.width ?? 0));
+    observer.observe(node);
+    setPanelWidth(node.getBoundingClientRect().width);
+    return () => observer.disconnect();
+  }, []);
+  const reportsSplit = variant === "seat" && placement === "top" && panelWidth >= REPORT_LOG_SPLIT_WIDTH;
+  const [beside, setBeside] = useState(() => ({ project, open: readReportLogBeside(project) }));
+  if (beside.project !== project) setBeside({ project, open: readReportLogBeside(project) });
+  const reportsBeside = beside.project === project ? beside.open : readReportLogBeside(project);
+  const [reportsInPlace, setReportsInPlace] = useState(false);
+  const reportsOpen = reportsSplit ? reportsBeside : reportsInPlace;
+  const toggleReports = () => {
+    if (!reportsSplit) {
+      setReportsInPlace((open) => !open);
+      return;
+    }
+    const next = !reportsBeside;
+    setBeside({ project, open: next });
+    rememberReportLogBeside(project, next);
+  };
   /* The folded seat's one live signal (issue #1802): a reply that landed while
      the panel was away. Expanded, the transcript IS the reading, so every
      reply the operator can see is marked seen; folded, a newer one than the
@@ -418,8 +470,26 @@ export function OrchestratorPanel({
     }
   };
 
+  const reportsAvailable = state.kind === "live" && !rotating && Boolean(file) && !collapsed;
+  const reportsToggle = reportsAvailable ? (
+    <button
+      type="button"
+      className={variant === "seat"
+        ? "icon-btn seat-dock seat-reports"
+        : `flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${reportsOpen ? "bg-accent-soft text-accent" : "bg-canvas text-muted hover:text-primary"}`}
+      data-report-log-toggle={reportsOpen ? "open" : "closed"}
+      aria-pressed={reportsOpen}
+      onClick={toggleReports}
+      aria-label={t(reportsOpen ? "reportLog.hide" : "reportLog.show")}
+      title={t(reportsOpen ? "reportLog.hide" : "reportLog.show")}
+    >
+      <ScrollText className={variant === "seat" ? undefined : "h-4 w-4"} aria-hidden />
+    </button>
+  ) : null;
+
   return (
     <section
+      ref={panelRef}
       className="flex h-full min-h-0 min-w-0 flex-col bg-card"
       data-orchestrator-panel={project}
       data-orchestrator-state={state.kind}
@@ -494,6 +564,7 @@ export function OrchestratorPanel({
               <span>{t("orchPanel.seatUnreadReply")}</span>
             </span>
           ) : null}
+          {reportsToggle}
           {onTogglePlacement ? (
             <button
               type="button"
@@ -535,6 +606,7 @@ export function OrchestratorPanel({
           <span className="truncate text-caption text-muted" title={projectName}>{projectName}</span>
         </span>
         <StateBadge state={state} file={file} />
+        {reportsToggle}
         <button
           type="button"
           onClick={onClose}
@@ -671,8 +743,20 @@ export function OrchestratorPanel({
               status={status}
               onCancel={() => setRotateFrom(null)}
             />
+          ) : file && reportsOpen && reportsSplit ? (
+            <div className="flex min-h-0 min-w-0 flex-1" data-report-log-layout="beside">
+              <OrchestratorConversation file={file} projectName={projectName} hostControls={false} />
+              <div className="flex min-h-0 w-[clamp(300px,34%,440px)] shrink-0 flex-col border-l border-border">
+                <ReportLog key={project} project={project} variant="column" />
+              </div>
+            </div>
           ) : file ? (
-            <OrchestratorConversation file={file} projectName={projectName} hostControls={variant !== "seat"} />
+            <OrchestratorConversation
+              file={file}
+              projectName={projectName}
+              hostControls={variant !== "seat"}
+              transcriptSlot={reportsOpen && reportsAvailable ? <ReportLog key={project} project={project} variant="column" /> : undefined}
+            />
           ) : (
             <Centered>
               {state.bindFailure ? (
