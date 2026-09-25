@@ -9,6 +9,58 @@
 
 **Delegate everything.**
 
+Hand your software work to Claude Code, Codex and GitHub Copilot agents and
+steer it from a local board, in the browser or on your phone.
+
+<a id="run"></a>
+
+## Quick start
+
+1. Install [Bun](https://bun.com) 1.4 or newer: `curl -fsSL https://bun.com/install | bash`
+2. Install at least one agent CLI: Claude Code with `curl -fsSL https://claude.ai/install.sh | bash`, Codex with `bun add -g @openai/codex`, GitHub Copilot with `bun add -g @github/copilot`.
+3. Start Delegatus: `bunx delegatus-cli`
+4. Open the URL it prints, `http://127.0.0.1:8898/` by default.
+5. Connect an engine: the setup guide opens on the first visit and signs in Claude Code or Codex; Copilot signs in from the sidebar's Accounts panel.
+
+`bun add -g` installs into `~/.bun/bin` and needs no root, where
+`npm install -g` does on most systems. Orchestrators and pipelines run on
+Claude Code or Codex; Copilot runs the agents you launch yourself. To keep a
+`delegatus` command around, `bun add -g delegatus-cli` (the short alias `dlg`
+starts the same command).
+
+Delegatus listens on `127.0.0.1` unless you pass `--hostname`, and opens the
+page in your browser when it can. It reads the transcripts already in `~/.claude`,
+`~/.codex` and `~/.copilot`, so existing sessions show up at once. The same
+command also starts the runtime host that launches and supervises agents.
+Stop both with Ctrl-C. Set `DELEGATUS_DEBUG=1` to see its startup
+diagnostics in the terminal. Delegatus was called Agent Log Viewer before; the
+old `agent-log-viewer` command still works and prints a one-line notice.
+
+Useful options:
+
+| Option | Description |
+| --- | --- |
+| `-p, --port <n>` | Port for the local server (default `8898`). |
+| `-H, --hostname <h>` | Bind address (default `127.0.0.1`). |
+| `--no-open` | Don't open the browser on start. |
+| `--tailscale` | Serve inside your tailnet for phone access (see below). |
+| `--new-token` | Create a fresh access key and invalidate old cookies. |
+| `--new-operator-token` | Rotate the key that authorizes launching agents. |
+| `-v, --version` / `-h, --help` | Print the version / usage. |
+
+### From a clone
+
+```bash
+bun install
+bun run build
+bun bin/cli.mjs --no-open --port 8898
+```
+
+The CLI serves the output of the last build, so build first. `bun dev` runs
+the app with hot reload; it expects a runtime host you start yourself.
+
+## What it does
+
 Delegatus is a local app for handing your software work to coding agents.
 Each project gets an orchestrator: an agent you tell what you want shipped.
 It keeps the project's tasks and runs a pipeline for each piece of work:
@@ -134,53 +186,6 @@ A card reads *working* while the agent is in the middle of a turn and
 *done* once its final answer lands, so you can tell a busy agent from one
 waiting for you. When an agent stops on a question, the question appears with
 its options and your answer goes straight back to it.
-
-<a id="run"></a>
-
-## Quick start
-
-You need [Bun](https://bun.sh) 1.4 or newer, and at least one of the Claude
-Code, Codex and GitHub Copilot CLIs installed. Claude Code and Codex use the
-login they already have; a Copilot account signs in from Delegatus's Accounts
-panel. Then:
-
-```bash
-bunx delegatus-cli
-```
-
-or install it once with `npm i -g delegatus-cli` and run `delegatus` (the
-short alias `dlg` starts the same command). Delegatus was called Agent Log
-Viewer before; the old `agent-log-viewer` command still works and prints a
-one-line notice.
-
-This serves Delegatus on `http://127.0.0.1:8898` and opens it in your
-browser. It reads the transcripts already in `~/.claude`, `~/.codex` and
-`~/.copilot`, so existing sessions show up at once. The same command also
-starts the runtime host that launches and supervises agents. Stop both with
-Ctrl-C.
-
-Useful options:
-
-| Option | Description |
-| --- | --- |
-| `-p, --port <n>` | Port for the local server (default `8898`). |
-| `-H, --hostname <h>` | Bind address (default `127.0.0.1`). |
-| `--no-open` | Don't open the browser on start. |
-| `--tailscale` | Serve inside your tailnet for phone access (see below). |
-| `--new-token` | Create a fresh access key and invalidate old cookies. |
-| `--new-operator-token` | Rotate the key that authorizes launching agents. |
-| `-v, --version` / `-h, --help` | Print the version / usage. |
-
-### From a clone
-
-```bash
-bun install
-bun run build
-bun bin/cli.mjs --no-open --port 8898
-```
-
-The CLI serves the output of the last build, so build first. `bun dev` runs
-the app with hot reload; it expects a runtime host you start yourself.
 
 ## Phone access
 
@@ -349,6 +354,10 @@ exist, so anyone who can reach Delegatus can run commands as you. The log
 APIs refuse paths outside the known transcript roots.
 
 ## Docker
+
+To try Delegatus, use the [Quick start](#quick-start)'s `bunx delegatus-cli`:
+the Docker setup is how the maintainer runs it in production, and
+[docs/docker.md](docs/docker.md) is that production runbook.
 
 For a pinned deployment the repository ships a `Dockerfile` and
 `docker-compose.yml`; a runtime host owns releases and the listener, and

@@ -14,8 +14,11 @@ x-viewer-common: &viewer-common
   group_add:
     - "${DELEGATUS_DOCKER_GID:-${LLV_DOCKER_GID:-957}}"
   working_dir: /app
+  # Optional: a fresh machine has no service.env yet, and every setting in it
+  # has a default.
   env_file:
-    - ${DELEGATUS_ENV_FILE:-${LLV_ENV_FILE:-${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}/service.env}}
+    - path: ${DELEGATUS_ENV_FILE:-${LLV_ENV_FILE:-${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}/service.env}}
+      required: false
   environment:
     HOME: ${HOME:-/home/user}
     HOSTNAME: 127.0.0.1
