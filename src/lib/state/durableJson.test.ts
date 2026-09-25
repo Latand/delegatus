@@ -26,8 +26,12 @@ test("a directory fsync is skipped on Windows, a file is flushed writable there,
     const file = path.join(SANDBOX, "record.json");
     fs.writeFileSync(file, "{}\n");
     expect(() => fsyncPath(file, "win32")).not.toThrow();
-    expect(() => fsyncPath(file, "linux")).not.toThrow();
-    expect(flags).toEqual(["r+", "r"]);
+    expect(flags).toEqual(["r+"]);
+    /* The read-only flush is EPERM on a real Windows host, which is the point. */
+    if (process.platform !== "win32") {
+      expect(() => fsyncPath(file, "linux")).not.toThrow();
+      expect(flags).toEqual(["r+", "r"]);
+    }
   } finally {
     refuseDirectories.mockRestore();
   }
