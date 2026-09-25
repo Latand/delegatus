@@ -3,7 +3,7 @@
 import { memo, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { BranchPane } from "@/components/BranchPane";
@@ -16,7 +16,7 @@ import { captureReader, restoreReader, type ReaderSnapshot } from "@/components/
 import { useProcessKill } from "@/components/TaskHeader";
 import { RoleFrameMark } from "@/components/RoleFrameMark";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
-import { conversationFrameRole } from "@/lib/roleFrames";
+import { conversationFrameRole, type FrameRole } from "@/lib/roleFrames";
 import { cleanTitle, fileModelLabel, fmtAge } from "@/components/utils";
 
 import { ConversationAccountChip } from "./AccountPicker";
@@ -206,6 +206,23 @@ export interface ReaderStop {
   reason: string;
 }
 
+/** The role a reader's frame wears: from the stage it is an attempt of and
+    the conversation's own durable lineage. The reader's ribbon and the
+    open-agents rail both read it here. */
+export function readerFrameRole(view: Pick<ReaderView, "file" | "owner">): FrameRole {
+  return conversationFrameRole({ stage: view.owner?.stage?.stage ?? null, file: view.file });
+}
+
+/** A reader in words: the stage's name the way the stage list has it, else
+    the conversation's own title; and the card it is open on. Never an id. */
+export function readerNames(t: TFunction, view: Pick<ReaderView, "file" | "owner">): { name: string; card: string | null } {
+  const { file, owner } = view;
+  const place = owner?.stage ? stageAttemptPlace(owner.stage.pipeline, owner.stage.stage.id, file) : null;
+  const name = owner?.stage && place ? stageCardLabel(t, owner.stage.stage, place) : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
+  const card = owner?.cardTitle && owner.cardTitle !== name ? owner.cardTitle : null;
+  return { name, card };
+}
+
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
@@ -254,7 +271,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
   const needs = row.dot === "warning";
   /* The role frame: which agent this is, from the stage it is an
      attempt of and its own durable lineage. */
-  const frameRole = conversationFrameRole({ stage: owner?.stage?.stage ?? null, file });
+  const frameRole = readerFrameRole({ file, owner });
   const identity = (
     <>
       {engine ? (

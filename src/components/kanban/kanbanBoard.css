@@ -598,6 +598,65 @@
 .kb .kb-aside { display: flex; min-height: 0; flex-shrink: 0; }
 .kb .kb-page { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; container-type: size; }
 .kb .board-frame { flex: 0 0 auto; height: max(440px, 100cqh); min-height: 0; display: flex; flex-direction: column; outline: none; }
+/* ── The open agents, in a strip at the board's side (OpenAgentsRail.tsx) ── */
+/* A strip of its own beside the columns, below a seat on top, so it covers
+   nothing on them and leaves the seat its width. Its width is
+   `OPEN_RAIL_WIDTH` in kanbanLayout.ts, set on the element. Each segment
+   carries `data-role`, so it reads the role palette the reader's ribbon reads
+   (src/styles/roleFrames.css). */
+.kb .board-frame.with-rail { flex-direction: row; }
+.kb .board-frame.with-rail > :not(.open-rail) { flex: 1 1 0; min-width: 0; }
+.kb .open-rail { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; padding: 16px 0 20px 12px; }
+.kb .open-rail .or-chip {
+  display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden;
+  border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
+}
+.kb .open-rail .or-head { flex-shrink: 0; padding: 8px 10px 7px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); border-bottom: 1px solid var(--border-default); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kb .or-list { list-style: none; margin: 0; padding: 0; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.kb .or-seg { position: relative; display: flex; align-items: center; }
+.kb .or-seg + .or-seg { border-top: 1px solid var(--border-default); }
+.kb .or-seg[data-current] { background: var(--surface-well); }
+.kb .or-seg[data-current]::before { content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 3px; border-radius: 0 2px 2px 0; background: var(--role); }
+.kb .or-seg .or-jump { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px; text-align: left; }
+.kb .or-seg .or-jump:hover { background: var(--surface-well); }
+.kb .or-seg .or-jump:focus-visible { outline-offset: -2px; }
+.kb .or-emblem { position: relative; flex-shrink: 0; width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: #fff; background: var(--role-fill); }
+.kb .or-emblem svg { width: 13px; height: 13px; }
+/* The reader header's dot, on the emblem's corner. */
+.kb .or-dot { position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); box-shadow: 0 0 0 2px var(--surface-card); }
+.kb .or-dot.tone-success { background: var(--color-success); }
+.kb .or-dot.tone-warning { background: var(--color-warning); }
+.kb .or-dot.tone-danger { background: var(--color-danger); }
+.kb .or-dot.tone-accent { background: var(--color-accent); }
+.kb .or-dot.live { box-shadow: 0 0 0 2px var(--surface-card), 0 0 0 4px color-mix(in srgb, var(--color-success) 30%, transparent); }
+.kb .or-names { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; line-height: 1.3; }
+.kb .or-name { font-size: var(--text-label); font-weight: 600; color: var(--color-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kb .or-card { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* × on hover or focus, over the end of the names, which are cut there anyway. */
+.kb .or-seg .or-x {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-control);
+  color: var(--color-muted); background: var(--surface-well); opacity: 0; transition: opacity var(--motion-fast);
+}
+.kb .or-seg:is(:hover, :focus-within) .or-x { opacity: 1; }
+.kb .or-seg .or-x:hover { color: var(--color-primary); background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--border-default); }
+.kb .or-seg .or-x svg { width: 13px; height: 13px; }
+.kb .or-close-all { flex-shrink: 0; width: 100%; padding: 7px 10px; text-align: left; border-top: 1px solid var(--border-default); font-size: var(--text-label); font-weight: 600; color: var(--color-muted); }
+.kb .or-close-all:hover { color: var(--color-primary); background: var(--surface-well); }
+/* Short of room: the count alone, which opens the same list. */
+.kb .open-rail[data-open-rail="compact"] { padding: 16px 0 20px 12px; }
+.kb .open-rail .or-count {
+  width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-control); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
+  font-size: var(--text-ui); font-weight: 700; color: var(--color-primary);
+}
+.kb .open-rail .or-count:is(:hover, [aria-expanded="true"]) { border-color: var(--border-strong); }
+.kb .popover.open-agents { width: 280px; padding: 4px 0 0; overflow: hidden; display: flex; flex-direction: column; }
+.kb .popover.open-agents .head { padding: 6px 10px 7px; font-size: var(--text-label); color: var(--color-secondary); border-bottom: 1px solid var(--border-default); }
+@media (pointer: coarse) {
+  .kb .or-seg .or-x { opacity: 1; width: 36px; height: 36px; }
+  .kb .or-seg .or-jump, .kb .or-close-all { min-height: 44px; }
+}
 .kb .skip-board {
   position: absolute; left: 20px; top: 8px; z-index: 6; transform: translateY(-300%);
   padding: 6px 12px; border-radius: var(--radius-control); background: var(--surface-card); border: 1px solid var(--color-accent);

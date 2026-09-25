@@ -8380,3 +8380,166 @@ describe("interface polish round 2: press and open/close motion, the status menu
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+describe("the open agents at the board's side: short names, role emblem and colour, one click to each", () => {
+  /* The `stages` scenario with 1, 3 and 7 of its conversations open as
+     readers, remembered in this browser's storage before the first render,
+     at 1440×900 and 1920×1080 in English and Ukrainian, and at 1600×900,
+     where the names would cost the columns their layout and the rail is the
+     count. What only a browser settles, and is gated here: the rail stands
+     beside the columns and overlaps none of them; it lists exactly the open
+     readers with the role their ribbon wears; a segment brings its reader
+     into the window and focuses it; Alt+J walks on from there. Frames go to
+     OPEN_AGENTS_PNG_DIR. */
+  const OPEN = {
+    1: ["search-ver-2"],
+    3: ["search-ver-2", "rounds-review", "upload-plan"],
+    7: ["search-ver-2", "rounds-review", "upload-plan", "upload-ui", "export-impl", "links-impl", "search-rev"],
+  } as const;
+  const seedReaders = (ids: readonly string[]) => `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(ids.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
+
+  interface RailReading {
+    tier: string | null;
+    segments: Array<{ key: string; role: string; readerRole: string | null; name: string; card: string | null; dot: string | null }>;
+    /** The chip, or the count alone: what the strip draws. */
+    rail: { x: number; y: number; width: number; height: number } | null;
+    overlaps: string[];
+    head: string | null;
+    pageErrors: string[];
+  }
+  const readRail = (page: Page) => page.evaluate((): Omit<RailReading, "pageErrors"> => {
+    const rail = document.querySelector<HTMLElement>("[data-open-rail]");
+    const box = rail?.getBoundingClientRect() ?? null;
+    const chip = rail?.querySelector<HTMLElement>(".or-chip, .or-count")?.getBoundingClientRect() ?? null;
+    const overlaps = box ? [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status], [data-kanban-board] .card")].filter((element) => {
+      const other = element.getBoundingClientRect();
+      return other.width > 0 && other.height > 0 && other.left < box.right - 0.5 && other.right > box.left + 0.5 && other.top < box.bottom - 0.5 && other.bottom > box.top + 0.5;
+    }).map((element) => element.dataset.status ?? element.dataset.id ?? element.className) : [];
+    return {
+      tier: rail?.dataset.openRail ?? null,
+      segments: [...document.querySelectorAll<HTMLElement>("[data-open-agent]")].map((segment) => ({
+        key: segment.dataset.openAgent!,
+        role: segment.dataset.role!,
+        readerRole: document.querySelector<HTMLElement>(`[data-kanban-reader="${segment.dataset.openAgent}"]`)?.dataset.role ?? null,
+        name: segment.querySelector(".or-name")?.textContent ?? "",
+        card: segment.querySelector(".or-card")?.textContent ?? null,
+        dot: segment.querySelector("[data-open-agent-dot]")?.getAttribute("data-open-agent-dot") ?? null,
+      })),
+      rail: chip ? { x: Math.round(chip.x), y: Math.round(chip.y), width: Math.round(chip.width), height: Math.round(chip.height) } : null,
+      overlaps,
+      head: rail?.querySelector("[data-open-rail-count]")?.textContent ?? null,
+    };
+  });
+  /* The reader the operator is in, and how much of it the window shows. */
+  const readFocus = (page: Page) => page.evaluate(() => {
+    const reader = document.activeElement?.closest<HTMLElement>("[data-kanban-reader]") ?? null;
+    const box = reader?.getBoundingClientRect();
+    return {
+      key: reader?.dataset.kanbanReader ?? null,
+      headInWindow: box ? box.top >= 0 && box.top + 40 <= window.innerHeight && box.left >= 0 && box.left + 120 <= window.innerWidth : false,
+    };
+  });
+
+  browserTest("1, 3 and 7 open agents at 1440×900 and 1920×1080, the count alone at 1600×900, in English and Ukrainian", async () => {
+    const pngDir = process.env.OPEN_AGENTS_PNG_DIR ?? "/var/tmp/llv-open-agents-evidence";
+    const out = path.resolve(".artifacts/open-agents-rail");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=stages`;
+    const open = async (viewport: { width: number; height: number }, lang: "en" | "uk", ids: readonly string[]) => {
+      const opened = await openFixture(browser, url, viewport, "light", lang);
+      await opened.context.addInitScript(seedReaders(ids));
+      await opened.page.reload();
+      await opened.page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
+      await opened.page.waitForFunction((count) => document.querySelectorAll("[data-kanban-reader]").length >= count, ids.length, { timeout: 30_000 });
+      /* The seat folded, so the board has the window; `O` is its own key, and a click could land on the attention island over its head. */
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      if (await opened.page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await opened.page.keyboard.press("o");
+      await opened.page.waitForTimeout(700);
+      return opened;
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 1080 }] as const) {
+          for (const count of [1, 3, 7] as const) {
+            const label = `${viewport.width}x${viewport.height}-${count}-${lang}`;
+            const ids = OPEN[count];
+            const { context, page, pageErrors } = await open(viewport, lang, ids);
+            try {
+              await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+              const reading = await readRail(page);
+              readings[label] = { ...reading, pageErrors };
+              if (reading.tier !== "full") failures.push(`${label}: the rail is ${reading.tier}, expected its names`);
+              if (JSON.stringify(reading.segments.map((segment) => segment.key)) !== JSON.stringify(ids.map((id) => `conversation_${id}`))) failures.push(`${label}: the rail lists ${reading.segments.map((segment) => segment.key).join(", ")}`);
+              for (const segment of reading.segments) {
+                if (segment.role !== segment.readerRole) failures.push(`${label}: ${segment.key} wears ${segment.role}, its reader ${segment.readerRole}`);
+                if (!segment.name || /conversation_|\/repo\//.test(`${segment.name} ${segment.card ?? ""}`)) failures.push(`${label}: ${segment.key} is named «${segment.name}»`);
+              }
+              if (reading.overlaps.length) failures.push(`${label}: the rail overlaps ${reading.overlaps.join(", ")}`);
+              if (!reading.rail || reading.rail.y + reading.rail.height > viewport.height + 1) failures.push(`${label}: the rail is not whole in the window (${JSON.stringify(reading.rail)})`);
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+              if (count === 7) {
+                /* One click on the last segment takes the board there; Alt+J walks on, round the end. */
+                const last = `conversation_${ids[ids.length - 1]}`;
+                await page.locator(`[data-open-agent-jump="${last}"]`).click();
+                await page.waitForTimeout(500);
+                const jumped = await readFocus(page);
+                await page.screenshot({ path: path.join(pngDir, `${label}-jumped.png`) });
+                if (jumped.key !== last || !jumped.headInWindow) failures.push(`${label}: after the click the operator is in ${JSON.stringify(jumped)}`);
+                await page.keyboard.press("Alt+KeyJ");
+                await page.waitForTimeout(500);
+                const cycled = await readFocus(page);
+                await page.screenshot({ path: path.join(pngDir, `${label}-alt-j.png`) });
+                if (cycled.key !== `conversation_${ids[0]}` || !cycled.headInWindow) failures.push(`${label}: Alt+J landed in ${JSON.stringify(cycled)}`);
+                await page.locator(`[data-open-agent="conversation_${ids[2]}"]`).hover();
+                await page.waitForTimeout(250);
+                await page.locator("[data-open-rail]").screenshot({ path: path.join(pngDir, `${label}-rail-hover.png`) });
+                (readings[label] as Record<string, unknown>).jumped = jumped;
+                (readings[label] as Record<string, unknown>).cycled = cycled;
+              }
+            } finally {
+              await context.close();
+            }
+          }
+        }
+        {
+          const label = `1600x900-7-${lang}`;
+          const { context, page, pageErrors } = await open({ width: 1600, height: 900 }, lang, OPEN[7]);
+          try {
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            const reading = await readRail(page);
+            if (reading.tier !== "compact") failures.push(`${label}: the rail is ${reading.tier}, expected the count`);
+            if (reading.head !== "7") failures.push(`${label}: the count reads «${reading.head}»`);
+            if (reading.overlaps.length) failures.push(`${label}: the rail overlaps ${reading.overlaps.join(", ")}`);
+            await page.locator("[data-open-rail-count]").click();
+            await page.waitForSelector(".popover.open-agents", { timeout: 5_000 });
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}-list.png`) });
+            const listed = await readRail(page);
+            if (listed.segments.length !== 7) failures.push(`${label}: the list holds ${listed.segments.length}`);
+            await page.locator(`.popover.open-agents [data-open-agent-jump="conversation_${OPEN[7][3]}"]`).click();
+            await page.waitForTimeout(500);
+            const jumped = await readFocus(page);
+            await page.screenshot({ path: path.join(pngDir, `${label}-jumped.png`) });
+            if (jumped.key !== `conversation_${OPEN[7][3]}` || !jumped.headInWindow) failures.push(`${label}: after the click the operator is in ${JSON.stringify(jumped)}`);
+            readings[label] = { ...reading, listed: listed.segments.length, jumped, pageErrors };
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/open-agents-rail", { recursive: true });
+    fs.writeFileSync("evidence/open-agents-rail/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
