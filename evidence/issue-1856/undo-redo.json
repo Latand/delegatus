@@ -1,0 +1,401 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "frames": {
+    "en": {
+      "before": {
+        "wells": {
+          "inbox": 1523,
+          "assigned": 1523,
+          "blocked": 1523,
+          "done": 1523
+        }
+      },
+      "move": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "Moved «Simplify the export settings sheet» to Blocked",
+            "action": "Undo",
+            "error": false,
+            "width": 439,
+            "lines": 1,
+            "clipped": false
+          }
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "undo": {
+        "column": "assigned",
+        "receipts": [
+          {
+            "text": "«Simplify the export settings sheet» is back in Assigned",
+            "action": "Redo",
+            "error": false,
+            "width": 441,
+            "lines": 1,
+            "clipped": false
+          }
+        ],
+        "patch": {
+          "id": "t-export",
+          "body": {
+            "status": "assigned",
+            "expectedProject": "atlas",
+            "expectedRevision": "revision 21"
+          }
+        },
+        "fence": "revision 21",
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "refusal": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "«Simplify the export settings sheet» is back in Assigned",
+            "action": "Redo",
+            "error": false,
+            "width": 441,
+            "lines": 1,
+            "clipped": false
+          },
+          {
+            "text": "Someone else changed «Restore search results after the index rebuild» in the meantime, so nothing was undone",
+            "action": null,
+            "error": true,
+            "width": 560,
+            "lines": 2,
+            "clipped": false
+          }
+        ],
+        "patches": [
+          {
+            "id": "t-search",
+            "body": {
+              "status": "blocked",
+              "expectedProject": "atlas",
+              "expectedRevision": "revision 1"
+            }
+          },
+          {
+            "id": "t-search",
+            "body": {
+              "status": "assigned",
+              "expectedProject": "atlas",
+              "expectedRevision": "revision 23"
+            }
+          }
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [
+            844,
+            844
+          ],
+          "stackTop": 776,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "closed": {
+        "lastCardBottoms": {
+          "before": {
+            "inbox": 554,
+            "assigned": 799,
+            "blocked": 799,
+            "done": 799
+          },
+          "after": {
+            "inbox": 554,
+            "assigned": 799,
+            "blocked": 799,
+            "done": 799
+          }
+        },
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [],
+          "stackTop": null,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "failure": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "Couldn't undo: refused by the evidence fixture",
+            "action": "Retry",
+            "error": true,
+            "width": 391,
+            "lines": 1,
+            "clipped": false
+          }
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "expired": {
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [],
+          "stackTop": null,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      }
+    },
+    "uk": {
+      "before": {
+        "wells": {
+          "inbox": 1523,
+          "assigned": 1523,
+          "blocked": 1523,
+          "done": 1523
+        }
+      },
+      "move": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "«Спростити аркуш налаштувань експорту» перенесено до «Заблоковані»",
+            "action": "Скасувати",
+            "error": false,
+            "width": 560,
+            "lines": 2,
+            "clipped": false
+          }
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "stackTop": 830,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "undo": {
+        "column": "assigned",
+        "receipts": [
+          {
+            "text": "«Спростити аркуш налаштувань експорту» знову в «Призначені»",
+            "action": "Повторити",
+            "error": false,
+            "width": 549,
+            "lines": 1,
+            "clipped": false
+          }
+        ],
+        "patch": {
+          "id": "t-export",
+          "body": {
+            "status": "assigned",
+            "expectedProject": "atlas",
+            "expectedRevision": "revision 21"
+          }
+        },
+        "fence": "revision 21",
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "refusal": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "«Спростити аркуш налаштувань експорту» знову в «Призначені»",
+            "action": "Повторити",
+            "error": false,
+            "width": 549,
+            "lines": 1,
+            "clipped": false
+          },
+          {
+            "text": "Хтось інший тим часом змінив «Повернути результати пошуку після перебудови…», тому нічого не скасовано",
+            "action": null,
+            "error": true,
+            "width": 560,
+            "lines": 2,
+            "clipped": false
+          }
+        ],
+        "patches": [
+          {
+            "id": "t-search",
+            "body": {
+              "status": "blocked",
+              "expectedProject": "atlas",
+              "expectedRevision": "revision 1"
+            }
+          },
+          {
+            "id": "t-search",
+            "body": {
+              "status": "assigned",
+              "expectedProject": "atlas",
+              "expectedRevision": "revision 23"
+            }
+          }
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [
+            844,
+            844
+          ],
+          "stackTop": 776,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "closed": {
+        "lastCardBottoms": {
+          "before": {
+            "inbox": 554,
+            "assigned": 799,
+            "blocked": 799,
+            "done": 799
+          },
+          "after": {
+            "inbox": 554,
+            "assigned": 799,
+            "blocked": 799,
+            "done": 799
+          }
+        },
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [],
+          "stackTop": null,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "failure": {
+        "column": "blocked",
+        "receipts": [
+          {
+            "text": "Не вдалося скасувати: refused by the evidence fixture",
+            "action": "Спробувати ще раз",
+            "error": true,
+            "width": 521,
+            "lines": 1,
+            "clipped": false
+          }
+        ],
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [
+            844
+          ],
+          "stackTop": 838,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      },
+      "expired": {
+        "placement": {
+          "paneCentre": 844,
+          "receiptCentres": [],
+          "stackTop": null,
+          "wells": {
+            "inbox": 1523,
+            "assigned": 1523,
+            "blocked": 1523,
+            "done": 1523
+          },
+          "coveredAtEnd": []
+        }
+      }
+    }
+  },
+  "failures": []
+}

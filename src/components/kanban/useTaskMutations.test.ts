@@ -557,3 +557,146 @@ test("a refused Undo of a saved hide keeps the group hidden on screen until a po
   await colour;
   expect(mutations.edits().has("b")).toBe(false);
 });
+
+/* ── #1856: undo and redo write fenced on this controller's own revision ── */
+
+test("a fenced move is guarded by this board's own last revision, never by one a poll adopted", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const first = mutations.move(task("a", "inbox", 1), "done");
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: task("a", "done", 2) });
+  await first;
+  expect(mutations.ownRevision("a")).toBe(REV(2));
+  /* An agent wrote the task meanwhile; the poll brings its revision. */
+  mutations.reconcile([task("a", "done", 7)]);
+  const undo = mutations.move(task("a", "done", 7), "inbox", { fenced: true });
+  expect(mutations.statuses().get("a")).toBe("inbox");
+  await flush();
+  expect(server.patches[1]!.body).toEqual({ status: "inbox", expectedProject: "fixture", expectedRevision: REV(2) });
+  server.patches[1]!.answer.resolve({ ok: false, status: 409, error: "expectedRevision is stale", code: "TASK_REVISION_MISMATCH" });
+  await flush();
+  expect(server.reads).toHaveLength(1);
+  server.reads[0]!.answer.resolve(task("a", "done", 7));
+  const outcome = await undo;
+  /* Refused with no second write, and the card shows the stored column. */
+  expect(outcome).toMatchObject({ kind: "conflict", serverStatus: "done" });
+  expect(server.patches).toHaveLength(2);
+  expect(mutations.statuses().get("a")).toBe("done");
+});
+
+test("a fenced move whose stored status still matches is refused all the same, where a fresh move would retry", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const first = mutations.move(task("a", "inbox", 1), "assigned");
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: task("a", "assigned", 2) });
+  await first;
+  const undo = mutations.move(task("a", "assigned", 2), "inbox", { fenced: true });
+  await flush();
+  server.patches[1]!.answer.resolve({ ok: false, status: 409, error: "expectedRevision is stale", code: "TASK_REVISION_MISMATCH" });
+  await flush();
+  /* Only the text moved elsewhere: the status is still where the undo starts. */
+  server.reads[0]!.answer.resolve({ ...task("a", "assigned", 5), text: "Task a, rewritten by an agent" });
+  expect((await undo).kind).toBe("conflict");
+  expect(server.patches).toHaveLength(2);
+});
+
+test("a fenced text edit is refused on 409 without a rebase, and the board shows the stored text", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const written = (text: string, revision: number): BoardTask => ({ ...task("a", "assigned", revision), text });
+  const edit = mutations.edit(written("Old title\nBody", 1), { field: "text", value: "New title\nBody" });
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: written("New title\nBody", 2) });
+  await edit;
+  const undo = mutations.edit(written("New title\nBody", 2), { field: "text", value: "Old title\nBody", rebase: () => "never used" }, { fenced: true });
+  expect(mutations.edits().get("a")?.text).toBe("Old title\nBody");
+  await flush();
+  expect(server.patches[1]!.body).toEqual({ text: "Old title\nBody", expectedProject: "fixture", expectedRevision: REV(2) });
+  server.patches[1]!.answer.resolve({ ok: false, status: 409, error: "expectedRevision is stale", code: "TASK_REVISION_MISMATCH" });
+  await flush();
+  server.reads[0]!.answer.resolve(written("New title\nBody rewritten by an agent", 4));
+  const outcome = await undo;
+  expect(outcome).toMatchObject({ kind: "conflict", field: "text", serverValue: "New title\nBody rewritten by an agent" });
+  expect(server.patches).toHaveLength(2);
+  expect(mutations.edits().get("a")?.text).toBe("New title\nBody rewritten by an agent");
+});
+
+test("a fenced write of a task this board never wrote sends nothing and is refused", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const undo = mutations.edit(task("a", "assigned", 3), { field: "hide", value: false }, { fenced: true });
+  await flush();
+  expect(server.patches).toHaveLength(0);
+  server.reads[0]!.answer.resolve(task("a", "assigned", 3));
+  expect((await undo).kind).toBe("conflict");
+  expect(server.patches).toHaveLength(0);
+});
+
+test("a fenced write that saves moves the fence, so the next undo or redo is guarded by it", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const first = mutations.move(task("a", "inbox", 1), "done");
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: task("a", "done", 2) });
+  await first;
+  const undo = mutations.move(task("a", "done", 2), "inbox", { fenced: true });
+  await flush();
+  server.patches[1]!.answer.resolve({ ok: true, task: task("a", "inbox", 3) });
+  expect((await undo).kind).toBe("saved");
+  const redo = mutations.move(task("a", "inbox", 3), "done", { fenced: true });
+  await flush();
+  expect(server.patches[2]!.body).toEqual({ status: "done", expectedProject: "fixture", expectedRevision: REV(3) });
+  server.patches[2]!.answer.resolve({ ok: true, task: task("a", "done", 4) });
+  expect((await redo).kind).toBe("saved");
+  expect(mutations.ownRevision("a")).toBe(REV(4));
+});
+
+test("a save of this board over someone else's revision starts a new lineage, and a fenced write of the older one sends nothing", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const rename = mutations.edit({ ...task("a", "assigned", 1), text: "Old" }, { field: "text", value: "New" });
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: { ...task("a", "assigned", 2), text: "New" } });
+  const renamed = await rename;
+  expect(renamed).toMatchObject({ kind: "saved", lineage: 0 });
+  /* An agent writes the text; the poll brings it, and a colour change of this
+     board saves on top of it. */
+  mutations.reconcile([{ ...task("a", "assigned", 3), text: "New, by an agent" }]);
+  const colour = mutations.edit(task("a", "assigned", 3), { field: "color", value: "sky" });
+  await flush();
+  expect(server.patches[1]!.body.expectedRevision).toBe(REV(3));
+  server.patches[1]!.answer.resolve({ ok: true, task: { ...task("a", "assigned", 4), text: "New, by an agent" } });
+  expect(await colour).toMatchObject({ kind: "saved", lineage: 1 });
+  expect(mutations.ownRevision("a")).toBe(REV(4));
+
+  /* The rename's undo is from lineage 0: refused on a read, with no PATCH. */
+  const undo = mutations.edit({ ...task("a", "assigned", 4), text: "New, by an agent" }, { field: "text", value: "Old" }, { fenced: true, lineage: (renamed as { lineage: number }).lineage });
+  await flush();
+  expect(server.patches).toHaveLength(2);
+  server.reads[0]!.answer.resolve({ ...task("a", "assigned", 4), text: "New, by an agent" });
+  expect(await undo).toMatchObject({ kind: "conflict", serverValue: "New, by an agent" });
+  expect(server.patches).toHaveLength(2);
+
+  /* A write of lineage 1 is still fenced on the board's own revision. */
+  const recolour = mutations.edit(task("a", "assigned", 4), { field: "color", value: null }, { fenced: true, lineage: 1 });
+  await flush();
+  expect(server.patches[2]!.body.expectedRevision).toBe(REV(4));
+  server.patches[2]!.answer.resolve({ ok: true, task: task("a", "assigned", 5) });
+  expect(await recolour).toMatchObject({ kind: "saved", lineage: 1 });
+});
+
+test("a chain of this board's own writes stays in one lineage", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const first = mutations.move(task("a", "inbox", 1), "assigned");
+  const second = mutations.move(task("a", "inbox", 1), "done");
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: task("a", "assigned", 2) });
+  await flush();
+  expect(server.patches[1]!.body.expectedRevision).toBe(REV(2));
+  server.patches[1]!.answer.resolve({ ok: true, task: task("a", "done", 3) });
+  expect(await first).toMatchObject({ kind: "saved", lineage: 0 });
+  expect(await second).toMatchObject({ kind: "saved", lineage: 0 });
+});

@@ -5,8 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 
 /* Receipts: the board's one place for Undo, Retry and the outcome of a write
-   (prototype `showReceipt`). Bottom-centre, at most three, a countdown bar that
-   pauses while the pointer or focus is inside. */
+   (prototype `showReceipt`). Bottom-centre of the board's pane, over the
+   columns, at most three, a countdown bar that pauses while the pointer or
+   focus is inside. */
 
 export interface ReceiptAction {
   label: string;
