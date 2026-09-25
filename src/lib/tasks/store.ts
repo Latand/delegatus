@@ -185,6 +185,9 @@ function coerceTask(value: unknown): BoardTask | null {
   if (!pinned) delete task.pos;
   /* An icon is a name or nothing; a row carrying anything else loads without one. */
   if (task.icon !== undefined && typeof task.icon !== "string") delete task.icon;
+  /* Normal is never stored; a row carrying it, or anything that is no
+     priority, loads as normal. */
+  if (task.priority !== undefined && task.priority !== "high" && task.priority !== "low") delete task.priority;
   try { Object.assign(task, { revision: taskRevision(task) }); } catch { return null; }
   return task;
 }

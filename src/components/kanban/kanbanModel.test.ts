@@ -977,3 +977,45 @@ test("a lane cleared on the phone no longer marks the desktop card, and comes ba
   expect(moved.needsYou).toBe(true);
   expect(moved.cleared).toEqual([]);
 });
+
+/* Task priority: the Inbox takes high first and low last, keeping its own
+   order inside each level; every other column ignores priority. */
+function prioritized(status: TaskStatus) {
+  const working = file(401, { activity: "live", lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 240) * 1000, mtime: NOW - 240 });
+  const recent = file(402, { activity: "recent", lastAgentWorkAt: (NOW - 60) * 1000, mtime: NOW - 60 });
+  const older = file(403, { lastAgentWorkAt: (NOW - 7200) * 1000, mtime: NOW - 7200 });
+  const tasks = [
+    task("low-working", status, [working.path], { priority: "low", updatedAt: iso(NOW - 9000) }),
+    task("normal-recent", status, [recent.path], { updatedAt: iso(NOW - 9000) }),
+    task("high-idle-old", status, [], { priority: "high", updatedAt: iso(NOW - 5000) }),
+    task("normal-idle", status, [], { updatedAt: iso(NOW - 10) }),
+    task("high-older", status, [older.path], { priority: "high", updatedAt: iso(NOW - 9000) }),
+    task("low-idle", status, [], { priority: "low", updatedAt: iso(NOW - 20) }),
+    /* A value that is no priority reads as normal. */
+    task("normal-odd", status, [], { priority: "urgent" as never, updatedAt: iso(NOW - 3000) }),
+  ];
+  return { tasks, files: [working, recent, older] };
+}
+
+test("the Inbox sorts high, normal, low, and keeps its working-then-recent-work order inside each level", () => {
+  const { tasks, files } = prioritized("inbox");
+  const cards = model(tasks, files).columns.inbox.cards;
+  expect(cards.map((card) => card.task!.id)).toEqual([
+    "high-older", "high-idle-old",
+    "normal-recent", "normal-idle", "normal-odd",
+    "low-working", "low-idle",
+  ]);
+  expect(cards.map((card) => card.priority)).toEqual(["high", "high", "normal", "normal", "normal", "low", "low"]);
+  /* Read order does not matter. */
+  expect(model([...tasks].reverse(), [...files].reverse()).columns.inbox.cards.map((card) => card.task!.id)).toEqual(cards.map((card) => card.task!.id));
+});
+
+test("every column but the Inbox keeps today's order whatever the priorities say", () => {
+  for (const status of ["assigned", "blocked", "done"] as const) {
+    const { tasks, files } = prioritized(status);
+    const order = (rows: BoardTask[]) => model(rows, files).columns[status].cards.map((card) => card.task!.id);
+    const withPriority = order(tasks);
+    expect(withPriority).toEqual(["low-working", "normal-recent", "high-older", "normal-idle", "low-idle", "normal-odd", "high-idle-old"]);
+    expect(withPriority).toEqual(order(tasks.map(({ priority: _priority, ...row }) => row as BoardTask)));
+  }
+});

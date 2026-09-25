@@ -16,6 +16,8 @@ export function compactTask(task: BoardTask & { pipelineIds?: string[] }) {
     detailsLength: task.details?.length ?? 0, textLength: task.text.length,
     ...(task.board ? { board: task.board } : {}),
     ...(task.color ? { color: task.color } : {}),
+    /* Only a priority that is not normal, so the common row stays as small. */
+    ...(task.priority === "high" || task.priority === "low" ? { priority: task.priority } : {}),
     ...(task.icon ? { icon: task.icon } : {}),
     ...(task.pos ? { pos: task.pos } : {}),
   };

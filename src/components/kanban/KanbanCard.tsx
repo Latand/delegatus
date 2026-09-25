@@ -1,6 +1,6 @@
 "use client";
 
-import { Flag } from "lucide-react";
+import { ArrowDown, ArrowUp, Flag } from "lucide-react";
 import { memo, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -808,6 +808,14 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
 
       {card.task ? (
         <div className="foot">
+          {/* High and low only, a status mark with no action, leading the
+              foot so the title keeps its width in the narrow Inbox: normal
+              draws nothing, and the ⋯ menu is where priority changes. */}
+          {card.priority !== "normal" ? (
+            <span className="prio-mark" role="img" data-priority={card.priority} aria-label={t(`kanban.priorityMark.${card.priority}`)} title={t(`kanban.priorityMark.${card.priority}`)}>
+              {card.priority === "high" ? <ArrowUp aria-hidden /> : <ArrowDown aria-hidden />}
+            </span>
+          ) : null}
           <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
           {footMeta}
           <span className="spacer" />

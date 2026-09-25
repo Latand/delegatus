@@ -29,6 +29,18 @@ export type TaskBoardVisibility = "shown" | "hidden";
 export const TASK_COLORS = ["coral", "amber", "lime", "teal", "sky", "violet", "pink", "slate"] as const;
 export type TaskColor = (typeof TASK_COLORS)[number];
 
+/** How soon a task should be taken, in the order the Inbox draws it. Absent
+    on a row is "normal", which is never stored: a task set back to normal
+    loses the field, so every task written before priority existed already
+    reads as normal. */
+export const TASK_PRIORITIES = ["high", "normal", "low"] as const;
+export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+
+/** A row's priority, "normal" for an absent or unknown value. */
+export function taskPriority(task: { priority?: unknown }): TaskPriority {
+  return task.priority === "high" || task.priority === "low" ? task.priority : "normal";
+}
+
 /** A whole task group taken off the kanban board (#1695), with who took it
     and when. Nothing about the task, its conversations or its pipelines
     changes: the board leaves the group out until something newer than `at`
@@ -172,6 +184,9 @@ export interface BoardTask {
   board?: TaskBoardVisibility;
   /** Colour label; absent means none. */
   color?: TaskColor;
+  /** How soon to take the task; absent means normal, which is never stored.
+      Presentation, like `color`: setting it leaves `updatedAt`. */
+  priority?: Exclude<TaskPriority, "normal">;
   /** A lucide icon name, kebab-case (#2102); absent means none, and the board
       then draws a suggestion from the title (`taskIconSuggest.ts`) that is
       never stored. Written only through `readTaskIconInput`. */

@@ -7,10 +7,11 @@ import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { admissionSnapshot } from "./groupHide";
 import { readTaskColorInput } from "./colorRule";
 import { readTaskIconInput } from "./taskIcon";
+import { readTaskPriorityInput } from "./priority";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { applyLineEdits, LINE_EDIT_KEYS, type LineEdits } from "@/lib/lineEdits";
 import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
-import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
+import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, TASK_DETAILS_LIMIT, TASK_PRIORITIES, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
 /* The caps live beside the type, which a client component can import without
    pulling this module's node dependencies into the browser bundle. */
@@ -75,6 +76,9 @@ export interface CreateTaskInput {
   /** A colour label, read by `readTaskColorInput`: one that is no task colour
       creates the task without one and adds a note to the answer. */
   color?: unknown;
+  /** high, normal or low, read by `readTaskPriorityInput`: one that is no
+      priority creates a normal task and adds a note to the answer. */
+  priority?: unknown;
 }
 
 export interface PatchTaskInput {
@@ -107,6 +111,9 @@ export interface PatchTaskInput {
       is no lucide icon clears it too, with a note in the answer, never a
       refusal. Presentation, like `color`: `updatedAt` stays. */
   icon?: unknown;
+  /** high, normal or low; `null` or "" is normal. Presentation, like `color`:
+      it orders the Inbox and leaves `updatedAt`. */
+  priority?: unknown;
   /** `true` hides the task's whole group from the kanban board, `false` shows
       it again. Requires the revision fence. Leaves `updatedAt` unchanged when
       it is the whole patch (with `color`). */
@@ -346,6 +353,7 @@ export function createTask(
   if (source === null) return { ok: false, error: "invalid task source", status: 400 };
   const icon = Object.hasOwn(input, "icon") ? readTaskIconInput(input.icon) : { kind: "clear" as const };
   const color = readTaskColorInput(input.color);
+  const priority = readTaskPriorityInput(input.priority);
 
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
@@ -372,6 +380,7 @@ export function createTask(
     ...(board ? { board } : {}),
     ...(icon.kind === "set" ? { icon: icon.icon } : {}),
     ...(color.kind === "set" ? { color: color.color } : {}),
+    ...(priority.kind === "set" ? { priority: priority.priority } : {}),
     assignments: [],
     createdAt: now,
     updatedAt: now,
@@ -379,12 +388,12 @@ export function createTask(
   const nextRecent = clientRequestId
     ? [...recentCreates.filter((entry) => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId: id }].slice(-RECENT_CREATES_CAP)
     : recentCreates;
-  const notes = [icon, color].flatMap((field) => field.kind === "clamped" ? [field.note] : []);
+  const notes = [icon, color, priority].flatMap((field) => field.kind === "clamped" ? [field.note] : []);
   return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(notes.length ? { notes } : {}) };
 }
 
 /** Presentation of a task, never work on it: `updatedAt` stays (see below). */
-const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "hide", "attachLinks", "detachLinks", "linkKind"]);
+const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "priority", "hide", "attachLinks", "detachLinks", "linkKind"]);
 
 function editTaskWorkLinks(
   task: BoardTask,
@@ -513,6 +522,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (!color) return { ok: false, error: `color must be one of none, ${TASK_COLORS.join(", ")}`, status: 400, code: "TASK_INVALID_FIELD", field: "color" };
     patch.color = color === "none" ? undefined : color;
   }
+  if (Object.hasOwn(input, "priority")) {
+    const priority = readTaskPriorityInput(input.priority);
+    if (priority.kind === "clamped") return { ok: false, error: `priority must be one of ${TASK_PRIORITIES.join(", ")}`, status: 400, code: "TASK_INVALID_FIELD", field: "priority" };
+    patch.priority = priority.kind === "set" ? priority.priority : undefined;
+  }
   const notes: string[] = [];
   if (Object.hasOwn(input, "icon")) {
     const icon = readTaskIconInput(input.icon);
@@ -564,7 +578,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
 
-  /* A colour label, an icon or a group hide is presentation of the task, never
+  /* A colour label, an icon, a priority or a group hide is presentation of the task, never
      work on it: `updatedAt` stays, so the board's ranking and age and the seat tick's
      reading of card movement (its quiet guard, its "assigned, nothing started
      it" window) are unchanged by them. The revision still moves, because it
@@ -583,6 +597,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (Object.hasOwn(patch, "details") && patch.details === undefined) delete updated.details;
   if (Object.hasOwn(patch, "color") && patch.color === undefined) delete updated.color;
   if (Object.hasOwn(patch, "icon") && patch.icon === undefined) delete updated.icon;
+  if (Object.hasOwn(patch, "priority") && patch.priority === undefined) delete updated.priority;
   if (Object.hasOwn(patch, "groupHidden") && patch.groupHidden === undefined) delete updated.groupHidden;
   if (Object.hasOwn(patch, "workLinks") && patch.workLinks === undefined) delete updated.workLinks;
   const tasks = existing.slice();
