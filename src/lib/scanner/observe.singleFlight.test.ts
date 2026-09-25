@@ -15,11 +15,10 @@ import path from "node:path";
  * ## Isolation, and why it needs proving rather than asserting
  *
  * The scanner resolves three roots, and only two of them follow HOME. The
- * `claude-tasks` root is `<tmpdir>/claude-<uid>`, and when that does not exist it
- * FALLS BACK to a live `/tmp/claude-<uid>` — so a fixture that set HOME and TMPDIR but
- * never created the tmpdir candidate would quietly walk the operator's real
- * background-task outputs, and the fd-holder scan would then attribute the operator's
- * live pids onto them.
+ * `claude-tasks` root is `<CLAUDE_CODE_TMPDIR or tmpdir>/claude-<uid>`, Claude Code's
+ * own rule — so a fixture that set HOME but inherited the operator's TMPDIR (or a
+ * CLAUDE_CODE_TMPDIR) would quietly walk the operator's real background-task outputs,
+ * and the fd-holder scan would then attribute the operator's live pids onto them.
  *
  * So the fixture creates every root, including that one, and the probe REPORTS the
  * roots it resolved. The test asserts each is inside the fixture, that nothing was
@@ -100,9 +99,9 @@ function fixture(): Fixture {
     files += 1;
   }
 
-  /* THE ONE THAT ESCAPES. Without this directory `claudeTasksRoot()` falls through to
-     `/tmp/claude-<uid>` — the operator's live background-task outputs. */
-  const claudeTasks = path.join(tmp, `claude-${process.getuid?.() ?? 1000}`);
+  /* THE ONE THAT ESCAPES unless TMPDIR moves it: `claudeTasksRootFor()` follows the
+     temp root, never HOME. */
+  const claudeTasks = path.join(tmp, `claude-${process.getuid?.() ?? 0}`);
   fs.mkdirSync(claudeTasks, { recursive: true });
 
   const state = path.join(home, "state");
@@ -137,12 +136,13 @@ async function runProbe(sandbox: Fixture): Promise<ProbeResult> {
     env: {
       ...process.env,
       /* Isolated on every axis the scanner, the state layer and the pane resolver
-         read. TMPDIR is what moves the `claude-tasks` root off the live one; the
-         fixture creates the directory so the fallback is never reached. */
+         read. TMPDIR is what moves the `claude-tasks` root off the live one, and an
+         inherited CLAUDE_CODE_TMPDIR would outrank it, so it is cleared. */
       HOME: sandbox.home,
       XDG_CONFIG_HOME: sandbox.config,
       LLV_STATE_DIR: sandbox.state,
       TMPDIR: sandbox.tmp,
+      CLAUDE_CODE_TMPDIR: "",
       TMUX_TMPDIR: path.join(sandbox.tmp, "tmux"),
       /* The scheme window exists to keep the BOARD bounded; here it would trim the
          production-shaped corpus this test is about, so it is opened to fit it. */
@@ -166,8 +166,8 @@ function expectFullyIsolated(result: ProbeResult, sandbox: Fixture): void {
   expect(result.roots.length).toBeGreaterThanOrEqual(3);
   for (const { root } of result.roots) expect(root.startsWith(sandbox.home + path.sep)).toBe(true);
   expect(result.claudeTasksRoot).toBe(sandbox.claudeTasks);
-  /* The live fallback, named explicitly so this fails loudly if it is ever selected. */
-  expect(result.claudeTasksRoot).not.toBe(`/tmp/claude-${process.getuid?.() ?? 1000}`);
+  /* The live root, named explicitly so this fails loudly if it is ever selected. */
+  expect(result.claudeTasksRoot).not.toBe(`/tmp/claude-${process.getuid?.() ?? 0}`);
   /* Nothing on the machine holds a fixture transcript open, so the fd-holder scan
      attributed no pid and the pane resolver was never reached. */
   expect(result.entriesWithPid).toBe(0);
