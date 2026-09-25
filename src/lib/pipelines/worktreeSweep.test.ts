@@ -465,6 +465,34 @@ test("a completed or closed pipeline whose teardown or delivery has not settled 
   expect(report.removed).toEqual([]);
 });
 
+test("a pipeline state the sweep does not know holds its checkout", async () => {
+  const root = repository();
+  const future = lane(root, path.join(caseDir, "future-state"), "future/state");
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: future.dir, branch: "future/state", state: "archiving" as unknown as SweptPipeline["state"] })],
+    prs: [merged(113, "future/state", future.tip)],
+  }));
+  expect(report.kept.map((kept) => [path.basename(kept.path), kept.reason])).toEqual([["future-state", "open-pipeline"]]);
+  expect(report.removed).toEqual([]);
+  expect(fs.existsSync(future.dir)).toBe(true);
+});
+
+test("a git status that fails keeps the worktree as uncommitted", async () => {
+  const root = repository();
+  const unreadable = lane(root, path.join(caseDir, "status-fails"), "status/fails");
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: unreadable.dir, branch: "status/fails" })],
+    git: (args, cwd) => args[0] === "status"
+      ? Promise.resolve({ code: 128, stdout: "", stderr: "fatal: index file corrupt" })
+      : realGit(args, cwd),
+    prs: [merged(114, "status/fails", unreadable.tip)],
+  }));
+  expect(report.kept).toEqual([expect.objectContaining({ path: unreadable.dir, reason: "uncommitted", detail: "git status failed: fatal: index file corrupt" })]);
+  expect(report.removed).toEqual([]);
+  expect(fs.existsSync(unreadable.dir)).toBe(true);
+  expect(branchExists(root, "status/fails")).toBe(true);
+});
+
 test("the mode knob reads on, off and dry-run", () => {
   expect(worktreeSweepMode({})).toBe("on");
   expect(worktreeSweepMode({ LLV_WORKTREE_SWEEP: "1" })).toBe("on");

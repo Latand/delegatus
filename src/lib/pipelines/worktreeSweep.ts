@@ -176,11 +176,12 @@ export type WorktreeSweepPorts = {
   maxRemovals?: number;
 };
 
-const OPEN_STATES: ReadonlySet<Pipeline["state"]> = new Set(["draft", "provisioning", "running", "needs_decision", "needs_review", "paused"]);
+/* Fails closed: a state added later holds its checkout until it is listed here. */
+const SETTLED_STATES: ReadonlySet<Pipeline["state"]> = new Set(["completed", "closed"]);
 
 /** Open, or completed and closed with a teardown or delivery still in flight. */
 function pipelineHoldsCheckout(pipeline: SweptPipeline): boolean {
-  return OPEN_STATES.has(pipeline.state) || !pipelineActivitySettled(pipeline);
+  return !SETTLED_STATES.has(pipeline.state) || !pipelineActivitySettled(pipeline);
 }
 
 /** Ignored outputs any checkout rebuilds, which a removal may take. Anything
