@@ -15,6 +15,11 @@ import { useCallback, useSyncExternalStore } from "react";
  * Version 2 (#1841) adds where the seat sits, above the columns or at their
  * left, and how wide it was dragged there. Both are one choice per browser;
  * the v1 height and collapsed flags are read once and carried over.
+ *
+ * Both widths are the project's own (#2179): the seat on top can be dragged
+ * wider or narrower on its right edge, and a project the operator never sized
+ * keeps the default. The side width once stored for every project is what a
+ * project with no side width of its own starts from.
  */
 
 export const SEAT_STORAGE_KEY = "llv:kanban-seat:v2";
@@ -25,6 +30,9 @@ export const SEAT_HEIGHT_VERSION = 2;
 export const SEAT_SIDE_DEFAULT_WIDTH = 380;
 export const SEAT_SIDE_MIN_WIDTH = 320;
 export const SEAT_SIDE_MAX_WIDTH = 560;
+/** The seat on top: never narrower than its header's one row at the 768 px
+    board, never wider than the board (the stylesheet holds that bound). */
+export const SEAT_TOP_MIN_WIDTH = 560;
 
 export type SeatPlacement = "top" | "side";
 export const SEAT_KEY_STEP = 40;
@@ -36,11 +44,22 @@ interface SeatRecord {
   height: number | null;
   collapsed: Record<string, boolean>;
   placement: SeatPlacement;
-  /** Pixel width of the side placement, or null for the default. */
+  /** Pixel width of the side placement before widths were per project, or null. */
   width: number | null;
+  /** Each project's dragged width of the seat on top. */
+  topWidths: Record<string, number>;
+  /** Each project's dragged width of the seat at the side. */
+  sideWidths: Record<string, number>;
 }
 
-const EMPTY: SeatRecord = { height: null, collapsed: {}, placement: "top", width: null };
+const EMPTY: SeatRecord = { height: null, collapsed: {}, placement: "top", width: null, topWidths: {}, sideWidths: {} };
+
+function widths(value: unknown, clamp: (width: number) => number): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!value || typeof value !== "object") return out;
+  for (const [project, width] of Object.entries(value)) if (typeof width === "number" && Number.isFinite(width)) out[project] = clamp(width);
+  return out;
+}
 
 function storage(): Storage | null {
   try {
@@ -64,7 +83,10 @@ function parse(raw: string | null): SeatRecord {
     if (value.collapsed && typeof value.collapsed === "object") {
       for (const [project, flag] of Object.entries(value.collapsed)) if (typeof flag === "boolean") collapsed[project] = flag;
     }
-    return { height, collapsed, placement: value.placement === "side" ? "side" : "top", width };
+    return {
+      height, collapsed, placement: value.placement === "side" ? "side" : "top", width,
+      topWidths: widths(value.topWidths, clampSeatTopWidth), sideWidths: widths(value.sideWidths, clampSeatWidth),
+    };
   } catch {
     return EMPTY;
   }
@@ -73,6 +95,12 @@ function parse(raw: string | null): SeatRecord {
 /** The side placement's width, inside its 320–560 px range. */
 export function clampSeatWidth(width: number): number {
   return Math.round(Math.min(SEAT_SIDE_MAX_WIDTH, Math.max(SEAT_SIDE_MIN_WIDTH, width)));
+}
+
+/** The seat on top's width: at least its minimum, and at most what the board
+    holds when the caller knows it. */
+export function clampSeatTopWidth(width: number, available = Number.POSITIVE_INFINITY): number {
+  return Math.round(Math.max(SEAT_TOP_MIN_WIDTH, Math.min(available, width)));
 }
 
 /** The tallest the seat may be dragged: three quarters of the window. */
@@ -96,7 +124,8 @@ function read(): SeatRecord {
   if (raw === null && store) {
     const legacy = store.getItem(SEAT_STORAGE_KEY_V1);
     if (legacy !== null) {
-      raw = JSON.stringify({ ...parse(legacy), placement: "top", width: null });
+      const { height, collapsed } = parse(legacy);
+      raw = JSON.stringify({ height, collapsed, placement: "top", width: null });
       try { store.setItem(SEAT_STORAGE_KEY, raw); } catch { /* read-only storage: carry it in memory */ }
     }
   }
@@ -144,9 +173,13 @@ export interface KanbanSeatState {
   placement: SeatPlacement;
   /** The side placement's width, the dragged one or the default. */
   width: number;
+  /** The seat on top's dragged width in this project, or null for the default. */
+  topWidth: number | null;
   toggle(): void;
   setHeight(height: number): void;
   setWidth(width: number): void;
+  /** Stores this project's width of the seat on top; null goes back to the default. */
+  setTopWidth(width: number | null, available?: number): void;
   togglePlacement(): void;
 }
 
@@ -171,8 +204,16 @@ export function useKanbanSeat(project: string): KanbanSeatState {
     write({ ...read(), height: clampSeatHeight(height, typeof window === "undefined" ? 900 : window.innerHeight) });
   }, []);
   const setWidth = useCallback((width: number) => {
-    write({ ...read(), width: clampSeatWidth(width) });
-  }, []);
+    const current = read();
+    write({ ...current, sideWidths: { ...current.sideWidths, [project]: clampSeatWidth(width) } });
+  }, [project]);
+  const setTopWidth = useCallback((width: number | null, available?: number) => {
+    const current = read();
+    const topWidths = { ...current.topWidths };
+    if (width === null) delete topWidths[project];
+    else topWidths[project] = clampSeatTopWidth(width, available);
+    write({ ...current, topWidths });
+  }, [project]);
   const togglePlacement = useCallback(() => {
     const current = read();
     write({ ...current, placement: current.placement === "side" ? "top" : "side" });
@@ -181,10 +222,12 @@ export function useKanbanSeat(project: string): KanbanSeatState {
     collapsed,
     height: record.height,
     placement: record.placement,
-    width: record.width ?? SEAT_SIDE_DEFAULT_WIDTH,
+    width: record.sideWidths[project] ?? record.width ?? SEAT_SIDE_DEFAULT_WIDTH,
+    topWidth: record.topWidths[project] ?? null,
     toggle,
     setHeight,
     setWidth,
+    setTopWidth,
     togglePlacement,
   };
 }

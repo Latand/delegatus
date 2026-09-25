@@ -3311,6 +3311,8 @@ export const en = {
   "kanban.dragHint": "Drop on a column to change its status · Esc cancels",
   "kanban.skipToBoard": "Skip to the board",
   "kanban.seatResize": "Resize the orchestrator chat",
+  "kanban.seatResizeWidth": "Resize the orchestrator chat’s width",
+  "kanban.seatResizeWidthHint": "Drag or use the arrow keys; double-click returns to the default width",
   "kanban.columnWiden": "Widen {column}",
   "kanban.columnNarrow": "Back to narrow",
   "kanban.columnPin": "Keep wide",
