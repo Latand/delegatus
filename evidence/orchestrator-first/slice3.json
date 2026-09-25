@@ -1,0 +1,435 @@
+{
+  "readings": {
+    "walk-1-1440": {
+      "stop": 1,
+      "anchor": {
+        "left": 325,
+        "top": 643,
+        "right": 1010.1,
+        "bottom": 734
+      },
+      "anchorIsComposer": true,
+      "spotlight": {
+        "left": 321,
+        "top": 639,
+        "right": 1014.1,
+        "bottom": 738
+      },
+      "pane": {
+        "left": 248,
+        "top": 0,
+        "right": 1440,
+        "bottom": 900
+      },
+      "railRight": 248,
+      "popover": {
+        "left": 498,
+        "top": 433,
+        "right": 838,
+        "bottom": 626.8
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16,
+        "primaryFromRight": 16
+      },
+      "seatCollapsed": "0",
+      "focused": true,
+      "text": "1 of 3\nSkip\nThis is your orchestrator\n\nWrite to it here, like to a colleague: what you want done in this project. It plans the work and answers in this conversation.\n\nNext"
+    },
+    "walk-2-1440": {
+      "stop": 2,
+      "anchor": {
+        "left": 248,
+        "top": 735,
+        "right": 1440,
+        "bottom": 1587
+      },
+      "anchorIsComposer": false,
+      "spotlight": {
+        "left": 248,
+        "top": 731,
+        "right": 1440,
+        "bottom": 900
+      },
+      "pane": {
+        "left": 248,
+        "top": 0,
+        "right": 1440,
+        "bottom": 900
+      },
+      "railRight": 248,
+      "popover": {
+        "left": 674,
+        "top": 506,
+        "right": 1014,
+        "bottom": 718.6
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16,
+        "primaryFromRight": 16
+      },
+      "seatCollapsed": "0",
+      "focused": true,
+      "text": "2 of 3\nSkip\nIts work shows up on the board\n\nEach request becomes a task card. The agents it starts, and the review of their work, appear on the card. The card moves to Done when the work is finished.\n\nNext"
+    },
+    "walk-3-1440": {
+      "stop": 3,
+      "anchor": {
+        "left": 1313.2,
+        "top": 10,
+        "right": 1424,
+        "bottom": 38
+      },
+      "anchorIsComposer": false,
+      "spotlight": {
+        "left": 1309.2,
+        "top": 6,
+        "right": 1428,
+        "bottom": 42
+      },
+      "pane": {
+        "left": 248,
+        "top": 0,
+        "right": 1440,
+        "bottom": 900
+      },
+      "railRight": 248,
+      "popover": {
+        "left": 1088,
+        "top": 54,
+        "right": 1428,
+        "bottom": 287.8
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16,
+        "primaryFromRight": 16
+      },
+      "seatCollapsed": "0",
+      "focused": true,
+      "text": "3 of 3\nSkip\n“Needs you” counts what waits on you\n\nA question, a plan to approve, a decision. Press it to jump there. Everything else runs without you: you watch and give it work.\n\nGive it the first task\n\nShow this again from the menu: Interface walk."
+    },
+    "walk-1-1280": {
+      "stop": 1,
+      "anchor": {
+        "left": 265,
+        "top": 568,
+        "right": 923.7,
+        "bottom": 659
+      },
+      "anchorIsComposer": true,
+      "spotlight": {
+        "left": 261,
+        "top": 564,
+        "right": 927.7,
+        "bottom": 663
+      },
+      "pane": {
+        "left": 248,
+        "top": 0,
+        "right": 1280,
+        "bottom": 800
+      },
+      "railRight": 248,
+      "popover": {
+        "left": 424,
+        "top": 358,
+        "right": 764,
+        "bottom": 551.8
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16,
+        "primaryFromRight": 16
+      },
+      "seatCollapsed": "0",
+      "focused": true,
+      "text": "1 of 3\nSkip\nThis is your orchestrator\n\nWrite to it here, like to a colleague: what you want done in this project. It plans the work and answers in this conversation.\n\nNext"
+    },
+    "walk-2-1280": {
+      "stop": 2,
+      "anchor": {
+        "left": 248,
+        "top": 660,
+        "right": 1280,
+        "bottom": 1412
+      },
+      "anchorIsComposer": false,
+      "spotlight": {
+        "left": 248,
+        "top": 656,
+        "right": 1280,
+        "bottom": 800
+      },
+      "pane": {
+        "left": 248,
+        "top": 0,
+        "right": 1280,
+        "bottom": 800
+      },
+      "railRight": 248,
+      "popover": {
+        "left": 594,
+        "top": 431,
+        "right": 934,
+        "bottom": 643.6
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16,
+        "primaryFromRight": 16
+      },
+      "seatCollapsed": "0",
+      "focused": true,
+      "text": "2 of 3\nSkip\nIts work shows up on the board\n\nEach request becomes a task card. The agents it starts, and the review of their work, appear on the card. The card moves to Done when the work is finished.\n\nNext"
+    },
+    "walk-3-1280": {
+      "stop": 3,
+      "anchor": {
+        "left": 1153.2,
+        "top": 10,
+        "right": 1264,
+        "bottom": 38
+      },
+      "anchorIsComposer": false,
+      "spotlight": {
+        "left": 1149.2,
+        "top": 6,
+        "right": 1268,
+        "bottom": 42
+      },
+      "pane": {
+        "left": 248,
+        "top": 0,
+        "right": 1280,
+        "bottom": 800
+      },
+      "railRight": 248,
+      "popover": {
+        "left": 928,
+        "top": 54,
+        "right": 1268,
+        "bottom": 287.8
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16,
+        "primaryFromRight": 16
+      },
+      "seatCollapsed": "0",
+      "focused": true,
+      "text": "3 of 3\nSkip\n“Needs you” counts what waits on you\n\nA question, a plan to approve, a decision. Press it to jump there. Everything else runs without you: you watch and give it work.\n\nGive it the first task\n\nShow this again from the menu: Interface walk."
+    },
+    "walk-1-1280-uk": {
+      "stop": 1,
+      "anchor": {
+        "left": 265,
+        "top": 568,
+        "right": 923.7,
+        "bottom": 659
+      },
+      "anchorIsComposer": true,
+      "spotlight": {
+        "left": 261,
+        "top": 564,
+        "right": 927.7,
+        "bottom": 663
+      },
+      "pane": {
+        "left": 248,
+        "top": 0,
+        "right": 1280,
+        "bottom": 800
+      },
+      "railRight": 248,
+      "popover": {
+        "left": 424,
+        "top": 358,
+        "right": 764,
+        "bottom": 551.8
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16,
+        "primaryFromRight": 16
+      },
+      "seatCollapsed": "0",
+      "focused": true,
+      "text": "1 з 3\nПропустити\nЦе ваш оркестратор\n\nПишіть йому тут, як колезі: що треба зробити в цьому проєкті. Він планує роботу й відповідає в цій розмові.\n\nДалі"
+    },
+    "walk-2-1280-uk": {
+      "stop": 2,
+      "anchor": {
+        "left": 248,
+        "top": 660,
+        "right": 1280,
+        "bottom": 1412
+      },
+      "anchorIsComposer": false,
+      "spotlight": {
+        "left": 248,
+        "top": 656,
+        "right": 1280,
+        "bottom": 800
+      },
+      "pane": {
+        "left": 248,
+        "top": 0,
+        "right": 1280,
+        "bottom": 800
+      },
+      "railRight": 248,
+      "popover": {
+        "left": 594,
+        "top": 431,
+        "right": 934,
+        "bottom": 643.6
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16,
+        "primaryFromRight": 16
+      },
+      "seatCollapsed": "0",
+      "focused": true,
+      "text": "2 з 3\nПропустити\nЙого робота з'являється на дошці\n\nКожен запит стає карткою задачі. Агенти, яких він запускає, і перевірка їхньої роботи з'являються на картці. Коли все готово, картка переходить у «Готові».\n\nДалі"
+    },
+    "walk-3-1280-uk": {
+      "stop": 3,
+      "anchor": {
+        "left": 1162.9,
+        "top": 10,
+        "right": 1264,
+        "bottom": 38
+      },
+      "anchorIsComposer": false,
+      "spotlight": {
+        "left": 1158.9,
+        "top": 6,
+        "right": 1268,
+        "bottom": 42
+      },
+      "pane": {
+        "left": 248,
+        "top": 0,
+        "right": 1280,
+        "bottom": 800
+      },
+      "railRight": 248,
+      "popover": {
+        "left": 928,
+        "top": 54,
+        "right": 1268,
+        "bottom": 287.8
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "insets": {
+        "mark": 16,
+        "title": 16,
+        "body": 16,
+        "dots": 16,
+        "skipFromRight": 16,
+        "primaryFromRight": 16
+      },
+      "seatCollapsed": "0",
+      "focused": true,
+      "text": "3 з 3\nПропустити\n«Чекають» рахує, що чекає на вас\n\nПитання, план на схвалення, рішення. Натисніть, щоб перейти туди. Решта працює без вас: ви спостерігаєте й даєте роботу.\n\nДати першу задачу\n\nПоказати знову: меню → Екскурсія інтерфейсом."
+    },
+    "menu-walk-1440": {
+      "rows": [
+        "EN",
+        "",
+        "",
+        "Setup guide",
+        "Interface walk",
+        "Agent mapping",
+        "Dictation",
+        "Update"
+      ],
+      "written": [
+        {
+          "walk": "skipped"
+        }
+      ]
+    },
+    "menu-walk-1280": {
+      "rows": [
+        "EN",
+        "",
+        "",
+        "Setup guide",
+        "Interface walk",
+        "Agent mapping",
+        "Dictation",
+        "Update"
+      ],
+      "written": [
+        {
+          "walk": "skipped"
+        }
+      ]
+    }
+  },
+  "failures": []
+}

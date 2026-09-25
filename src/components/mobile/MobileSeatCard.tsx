@@ -495,7 +495,6 @@ export function MobileSeatCard({
       file={file}
       incumbent={incumbent}
       pendingMandate={status?.pending?.mandate ?? ""}
-      viewerMcpRegistered={status?.viewerMcpRegistered === true}
       submitting={submitting}
       now={clock}
       rotate={rotateFlow}

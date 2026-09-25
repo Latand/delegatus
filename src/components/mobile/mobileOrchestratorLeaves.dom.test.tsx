@@ -6,6 +6,7 @@ import { flushSync } from "react-dom";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { translate } from "@/lib/i18n";
+import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import type { FileEntry } from "@/lib/types";
 
 /*
@@ -257,8 +258,19 @@ test("a project with nothing in it still offers the invitation — the leaf wher
   await settle();
   const sheet = host.querySelector('[data-testid="mobile-orchestrator-sheet"]') as unknown as HTMLElement;
   expect(sheet).not.toBeNull();
-  expect(sheet.querySelector("[data-viewer-mcp-status]")?.textContent).toContain("scripts/install-mcp.sh");
-  expect(sheet.querySelector("[data-viewer-mcp-status]")?.textContent).toContain("claude mcp add viewer");
+  /* The draft in plain words (#2166 §3.7): the one sentence, the example,
+     one Runs on card, the rules folded to one row, the manual way said last.
+     None of the operator's-runbook words, and no MCP line to act on. */
+  expect(sheet.querySelector("[data-orchestrator-intro]")?.textContent).toBe(translate("en", "orchPanel.intro"));
+  expect(sheet.querySelector("[data-orchestrator-by-hand]")?.textContent).toBe(translate("en", "orchPanel.byHandPhone"));
+  expect(sheet.querySelector("[data-viewer-mcp-status]")).toBeNull();
+  expect(sheet.querySelector("[data-orchestrator-mandate]")).toBeNull();
+  const fold = sheet.querySelector("[data-orchestrator-mandate-fold]") as unknown as HTMLButtonElement;
+  expect(fold.textContent).toContain(`Its instructions (v${ORCHESTRATOR_PROMPT_VERSION}) (edit)`);
+  const words = sheet.textContent ?? "";
+  expect(words).not.toMatch(/#\d/);
+  for (const jargon of ["MCP", "deploy", "APPROVE", "lanes"]) expect(words).not.toContain(jargon);
+  flushSync(() => fold.click());
   expect((sheet.querySelector("[data-orchestrator-mandate]") as unknown as HTMLTextAreaElement).value.length).toBeGreaterThan(0);
   flushSync(() => (sheet.querySelector("[data-orchestrator-confirm]") as unknown as HTMLButtonElement).click());
   expect(await waitFor(() => seatPosts.length === 1)).toBe(true);
@@ -284,7 +296,7 @@ test("with no seat the board's footer is the invitation's other half, and it ope
   await settle();
   const sheet = host.querySelector('[data-mobile2-sheet="rotate"]') as unknown as HTMLElement;
   expect(sheet).not.toBeNull();
-  expect((sheet.querySelector("[data-orchestrator-mandate]") as unknown as HTMLTextAreaElement).value.length).toBeGreaterThan(0);
+  expect(sheet.querySelector("[data-orchestrator-mandate-fold]")).not.toBeNull();
 });
 
 test("the board leaf carries the single pin above its column tabs, and the conversation it opens mounts no pin at all", async () => {

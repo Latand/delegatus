@@ -307,8 +307,9 @@ test("⋯ opens the board menu over the board with every former header control a
   const rows = Array.from(root.querySelectorAll("[data-mobile2-menu-row]")).map((el) => el.getAttribute("data-mobile2-menu-row"));
   /* Pipelines is a row since the columns carry each lane on its task (#2072
      slice 4), and the hidden tasks beside it since they left the board's top
-     (#2098); the setup rows are the onboarding and self-update entries. */
-  expect(rows).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "setup-guide", "agent-mapping", "dictation", "self-update", "archive"]);
+     (#2098); the setup rows are the onboarding entries, the interface walk
+     among them (#2166), and self-update. */
+  expect(rows).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "activity", "setup-guide", "interface-walk", "agent-mapping", "dictation", "self-update", "archive"]);
   expect(q(root, '[data-mobile2-menu-row="pipelines"]')!.getAttribute("data-mobile2-go")).toBe("pipelines");
   for (const row of root.querySelectorAll("[data-mobile2-menu-row]")) expect((row as unknown as HTMLElement).className).toContain("min-h-11");
   expect(q(root, '[data-mobile2-go="accounts"]')).not.toBeNull();

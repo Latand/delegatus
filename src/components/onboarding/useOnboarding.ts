@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 import type { OnboardingMarker, OnboardingPatch, OnboardingStepId } from "@/lib/onboarding/marker";
 
@@ -11,7 +11,7 @@ import type { OnboardingMarker, OnboardingPatch, OnboardingStepId } from "@/lib/
  * window event; the dialog is mounted once, in the Viewer.
  */
 
-/** `mapping` and `voice` open step 2 or step 4 alone, for the menu rows. */
+/** `mapping` and `voice` open the Agents table or the Voice step alone, for the menu rows. */
 export type OnboardingMode = "guide" | "mapping" | "voice";
 
 type OpenRequest = { mode: OnboardingMode; step: OnboardingStepId | null };
@@ -21,6 +21,36 @@ const OPEN_EVENT = "llv:open-onboarding";
 export function openOnboarding(mode: OnboardingMode = "guide", step: OnboardingStepId | null = null): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent<OpenRequest>(OPEN_EVENT, { detail: { mode, step } }));
+}
+
+/* What the interface walk (#2166 §3.8) reads of the guide: whether the marker
+   has been read, what it says, and whether the guide's dialog is open. The
+   guide's host owns the read; the walk only follows it. */
+export type OnboardingSnapshot = { loaded: boolean; marker: OnboardingMarker | null; guideOpen: boolean };
+
+let snapshot: OnboardingSnapshot = { loaded: false, marker: null, guideOpen: false };
+const snapshotListeners = new Set<() => void>();
+
+export function publishOnboarding(next: Partial<OnboardingSnapshot>): void {
+  const merged = { ...snapshot, ...next };
+  if (merged.loaded === snapshot.loaded && merged.marker === snapshot.marker && merged.guideOpen === snapshot.guideOpen) return;
+  snapshot = merged;
+  for (const listener of snapshotListeners) listener();
+}
+
+const subscribeSnapshot = (listener: () => void) => {
+  snapshotListeners.add(listener);
+  return () => { snapshotListeners.delete(listener); };
+};
+
+const SERVER_SNAPSHOT: OnboardingSnapshot = { loaded: false, marker: null, guideOpen: false };
+
+export function useOnboardingSnapshot(): OnboardingSnapshot {
+  return useSyncExternalStore(subscribeSnapshot, () => snapshot, () => SERVER_SNAPSHOT);
+}
+
+export function resetOnboardingSnapshotForTests(): void {
+  snapshot = SERVER_SNAPSHOT;
 }
 
 export async function putOnboarding(patch: OnboardingPatch): Promise<OnboardingMarker | null> {
@@ -51,15 +81,18 @@ export function useOnboarding(): {
   /** Counts openings, so every open starts the dialog afresh. */
   opening: number;
   marker: OnboardingMarker | null;
-  /** The seat tick's check interval, which the tour's seat card names. */
+  /** The seat tick's check interval, which the orchestrator step names. */
   checkMinutes: number | null;
-  close: (outcome: "dismissed" | "completed") => void;
+  close: (outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"]) => void;
 } {
   const [mode, setMode] = useState<OnboardingMode | null>(null);
   const [step, setStep] = useState<OnboardingStepId | null>(null);
   const [opening, setOpening] = useState(0);
   const [marker, setMarker] = useState<OnboardingMarker | null>(null);
   const [checkMinutes, setCheckMinutes] = useState<number | null>(null);
+
+  useEffect(() => publishOnboarding({ guideOpen: mode !== null }), [mode]);
+  useEffect(() => { if (marker) publishOnboarding({ marker }); }, [marker]);
 
   useEffect(() => {
     const onOpen = (event: Event) => {
@@ -77,6 +110,7 @@ export function useOnboarding(): {
       .then((body) => {
         if (cancelled || !body) return;
         setMarker(body.marker);
+        publishOnboarding({ loaded: true, marker: body.marker });
         if (typeof body.seatTickCheckMinutes === "number" && body.seatTickCheckMinutes > 0) setCheckMinutes(body.seatTickCheckMinutes);
         /* First run: never decided. A marker neither completed nor dismissed is
            a guide the page died in the middle of; both reopen by themselves. */
@@ -93,11 +127,11 @@ export function useOnboarding(): {
     };
   }, []);
 
-  const close = useCallback((outcome: "dismissed" | "completed") => {
+  const close = useCallback((outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"]) => {
     setMode(null);
     /* Each step wrote its own state as it was left; completing adds only the
-       fact of completion. */
-    void putOnboarding(outcome === "completed" ? { completed: true } : { dismissed: true })
+       fact of completion, and whatever the closing step itself decided. */
+    void putOnboarding({ ...(outcome === "completed" ? { completed: true as const } : { dismissed: true as const }), ...(steps ? { steps } : {}) })
       .then((written) => { if (written) setMarker(written); });
   }, []);
 

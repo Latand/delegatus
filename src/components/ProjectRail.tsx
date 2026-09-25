@@ -21,6 +21,7 @@ import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal }
 import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
 import { openOnboarding } from "./onboarding/useOnboarding";
+import { startInterfaceWalk } from "./onboarding/walkStop";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
@@ -37,7 +38,6 @@ import { Z } from "@/components/layers";
  * that button opens instead — the labelled create button is the first control
  * inside it.
  */
-export const CREATE_PROJECT_FORM_EVENT = "llv:create-project-form";
 
 interface Props {
   files: FileEntry[];
@@ -115,17 +115,6 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
     setSeenMobileFirstRun(mobileFirstRun);
     if (mobileFirstRun) setCreateOpen(true);
   }
-  /* The first-run overview's «Create a project» button steers this form
-     (issue #1162) instead of carrying a second creation path. The rail owns the
-     form, so it owns the event that opens it — the same one-window-event idiom
-     `llv:mcp-navigate` already uses between two mounted components. This is the
-     desktop half: there the rail is already mounted beside the board. */
-  useEffect(() => {
-    if (!onCreateProject) return;
-    const open = () => setCreateOpen(true);
-    window.addEventListener(CREATE_PROJECT_FORM_EVENT, open);
-    return () => window.removeEventListener(CREATE_PROJECT_FORM_EVENT, open);
-  }, [onCreateProject]);
 
   const railRow = (summary: ProjectSummary) => {
     const crowned = crownedProjects.has(summary.project);
@@ -432,7 +421,7 @@ function RailHeaderMenu() {
             <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{pushLabel}</span>
             <PushBell onStatus={onPushStatus} />
           </div>
-          {/* #1876: the setup guide, its agent mapping and dictation, reachable again. */}
+          {/* #1876: the setup guide, its agent mapping and dictation, reachable again; #2166: the interface walk. */}
           <div className="my-1 border-t border-border" />
           <button
             type="button"
@@ -441,6 +430,14 @@ function RailHeaderMenu() {
             onClick={() => { setOpen(false); openOnboarding("guide"); }}
           >
             {t("onboarding.menu.guide")}
+          </button>
+          <button
+            type="button"
+            data-rail-menu-interface-walk=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); startInterfaceWalk(); }}
+          >
+            {t("onboarding.menu.walk")}
           </button>
           <button
             type="button"
@@ -580,14 +577,24 @@ function suggestionScope(query: string): string {
   return trimmed.slice(0, trimmed.lastIndexOf("/") + 1);
 }
 
-function CreateProjectForm({
+/** The rail's create form, also the setup guide's "Open another folder"
+    (#2166 §3.2): the same form and the same `/api/projects/create`. */
+export function CreateProjectForm({
   onCreate,
   onCreated,
   onCancel,
+  className = "mx-2.5 mb-1 rounded-[10px] border border-border bg-canvas/60 p-2",
+  cancellable = true,
 }: {
   onCreate: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
-  onCreated: (project: string) => void;
+  /** The new project's key, with the name and folder it was created with. */
+  onCreated: (project: string, created: { name: string; root: string }) => void;
   onCancel: () => void;
+  /** Where the form sits and its frame: the rail insets and frames it; the
+      guide's step already frames it. */
+  className?: string;
+  /** The guide's form with nothing else to pick has no Cancel. */
+  cancellable?: boolean;
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
@@ -680,7 +687,7 @@ function CreateProjectForm({
     const outcome = await onCreate(name.trim(), target, createRoot ? { createRoot: true } : undefined);
     setBusy(false);
     if (outcome.ok) {
-      onCreated(outcome.project);
+      onCreated(outcome.project, { name: name.trim(), root: outcome.root ?? target });
       return;
     }
     if (outcome.code === "MISSING_DIRECTORY") {
@@ -704,7 +711,8 @@ function CreateProjectForm({
   };
   return (
     <form
-      className="mx-2.5 mb-1 flex flex-col gap-1.5 rounded-[10px] border border-border bg-canvas/60 p-2"
+      data-create-project-form=""
+      className={`${className} flex flex-col gap-1.5`}
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
@@ -760,15 +768,17 @@ function CreateProjectForm({
         >
           {busy ? t("rail.creating") : t("rail.create")}
         </button>
-        <button
-          type="button"
-          className={`rounded-[9px] px-2.5 text-[12px] font-semibold text-muted hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-            isMobile ? "min-h-11" : "py-1.5"
-          }`}
-          onClick={onCancel}
-        >
-          {t("common.cancel")}
-        </button>
+        {cancellable ? (
+          <button
+            type="button"
+            className={`rounded-[9px] px-2.5 text-[12px] font-semibold text-muted hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+              isMobile ? "min-h-11" : "py-1.5"
+            }`}
+            onClick={onCancel}
+          >
+            {t("common.cancel")}
+          </button>
+        ) : null}
       </div>
     </form>
   );

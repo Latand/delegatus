@@ -12,7 +12,7 @@ import { windowLabel } from "./rateLimit";
 
 /** GitHub Copilot account switcher and monthly allowance in the footer. */
 
-interface CopilotAccountRow {
+export interface CopilotAccountRow {
   id: string;
   label: string;
   kind: "legacy" | "managed";
@@ -23,7 +23,7 @@ interface CopilotAccountRow {
   login: { operationId: string; phase: string; loginUrl: string | null; userCode?: string | null; deadlineAt: string } | null;
 }
 
-interface CopilotAccountsBody {
+export interface CopilotAccountsBody {
   cli: { present: boolean; reason: string | null };
   active: string;
   accounts: CopilotAccountRow[];
@@ -35,21 +35,15 @@ function isBody(value: unknown): value is CopilotAccountsBody {
   return Boolean(body && typeof body === "object" && body.cli && Array.isArray(body.accounts));
 }
 
-export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onChanged }: {
-  limits: EngineLimits | null;
-  limitsAccountId: string | null;
-  now: number;
-  provenance: LimitsProvenance;
-  onChanged: () => void;
-}) {
-  const { t, locale } = useLocale();
+const LIVE_LOGIN_PHASES = ["starting", "awaiting_browser", "awaiting_storage_choice", "verifying", "canceling"];
+
+/** The Copilot account list and its actions, shared by the footer's switcher
+    and the setup guide's Engines step (#2166): one sign-in implementation. */
+export function useCopilotAccounts({ polling, onChanged }: { polling: boolean; onChanged?: () => void }) {
+  const { t } = useLocale();
   const [body, setBody] = useState<CopilotAccountsBody | null>(null);
-  const [open, setOpen] = useState(false);
-  const [label, setLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const tint = engineTintOf("copilot");
 
   const load = useCallback(async () => {
     try {
@@ -61,31 +55,11 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onC
 
   useEffect(() => { void load(); }, [load]);
 
-  /* A launch preflight on a signed-out Copilot account (#2170) opens this
-     row's switcher, where the account's Sign in is. */
   useEffect(() => {
-    if (consumePendingAccountPanel("copilot")) setOpen(true);
-    return onAccountPanelRequest((request) => {
-      if (request.engine !== "copilot") return;
-      setOpen(true);
-      void load();
-    });
-  }, [load]);
-
-  useEffect(() => {
-    if (!open || !body?.accounts.some((account) => account.login && ["starting", "awaiting_browser", "awaiting_storage_choice", "verifying", "canceling"].includes(account.login.phase))) return;
+    if (!polling || !body?.accounts.some((account) => account.login && LIVE_LOGIN_PHASES.includes(account.login.phase))) return;
     const timer = window.setInterval(() => void load(), 1000);
     return () => window.clearInterval(timer);
-  }, [open, body, load]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener("pointerdown", onDown);
-    return () => window.removeEventListener("pointerdown", onDown);
-  }, [open]);
+  }, [polling, body, load]);
 
   const post = async (payload: Record<string, unknown>) => {
     setError(null);
@@ -102,7 +76,7 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onC
       }
       if (isBody(next)) {
         setBody(next);
-        onChanged();
+        onChanged?.();
       }
     } catch {
       setError(t("copilot.accounts.failed"));
@@ -118,6 +92,137 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onC
       setError(t("copilot.accounts.copyFailed"));
     }
   };
+
+  return { body, error, copied, load, post, copy };
+}
+
+export type CopilotAccounts = ReturnType<typeof useCopilotAccounts>;
+
+/** Whether a Copilot account can run agents: its credential answered signed in. */
+export function copilotSignedIn(body: CopilotAccountsBody | null): CopilotAccountRow | null {
+  const signedIn = body?.accounts.filter((account) => account.auth === "signed_in") ?? [];
+  return signedIn.find((account) => account.active) ?? signedIn[0] ?? null;
+}
+
+/** Every Copilot account with its sign-in, then the add row. */
+export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) {
+  const { t } = useLocale();
+  const { body, error, copied, post, copy } = accounts;
+  const [label, setLabel] = useState("");
+  if (!body) return null;
+  return (
+    <>
+      {!body.cli.present && body.cli.reason ? <p className="text-muted">{body.cli.reason}</p> : null}
+      <p className="text-muted">{t("copilot.accounts.hint")}</p>
+      {body.accounts.map((account) => (
+        <div key={account.id} data-copilot-account={account.id} className="flex flex-col gap-1 rounded-md border border-border bg-card px-2 py-1.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate font-semibold text-primary">{account.label}</span>
+            <span className="shrink-0 text-[10px] text-muted">
+              {account.auth === "signed_in" ? t("copilot.accounts.signedIn", { user: account.user ?? "" }) : account.auth === "signed_out" ? t("copilot.accounts.signedOut") : t("copilot.accounts.unknown")}
+            </span>
+            {account.active ? (
+              <span className="shrink-0 text-[10px] font-semibold text-muted">{t("copilot.accounts.active")}</span>
+            ) : (
+              <button type="button" className="shrink-0 rounded px-1.5 text-[10.5px] font-semibold text-accent hover:bg-accent-soft" onClick={() => void post({ action: "select", id: account.id })}>
+                {t("copilot.accounts.use")}
+              </button>
+            )}
+          </div>
+          {account.kind === "managed" && account.auth !== "signed_in" && (!account.login || !LIVE_LOGIN_PHASES.includes(account.login.phase)) ? (
+            <button type="button" data-copilot-signin={account.id} className="self-start rounded px-1.5 py-0.5 text-[10.5px] font-semibold text-accent hover:bg-accent-soft" onClick={() => void post({ action: "login", id: account.id })}>
+              {t("copilot.accounts.signIn")}
+            </button>
+          ) : null}
+          {account.login?.phase === "starting" || account.login?.phase === "verifying" || account.login?.phase === "canceling" ? (
+            <div className="flex items-center gap-2 text-[10.5px] text-muted">
+              <span>{account.login.phase === "starting" ? t("copilot.accounts.login.starting") : account.login.phase === "verifying" ? t("copilot.accounts.login.verifying") : t("copilot.accounts.login.canceling")}</span>
+              {account.login.phase !== "canceling" ? <button type="button" className="rounded px-1.5 text-accent hover:bg-accent-soft" onClick={() => void post({ action: "cancel-login", operationId: account.login!.operationId })}>{t("copilot.accounts.cancel")}</button> : null}
+            </div>
+          ) : null}
+          {account.login?.phase === "awaiting_browser" ? (
+            <div className="flex flex-wrap items-center gap-2 text-[10.5px]">
+              <a href={account.login.loginUrl ?? undefined} target="_blank" rel="noreferrer noopener" className="font-semibold text-accent underline">{t("copilot.accounts.openLogin")}</a>
+              {account.login.userCode ? <><span className="text-muted">{t("copilot.accounts.codeLabel")}</span><code className="rounded bg-sunken px-1.5 py-0.5 font-mono text-primary">{account.login.userCode}</code></> : null}
+              <button type="button" className="rounded px-1.5 text-accent hover:bg-accent-soft" onClick={() => void post({ action: "cancel-login", operationId: account.login!.operationId })}>{t("copilot.accounts.cancel")}</button>
+            </div>
+          ) : null}
+          {account.login?.phase === "awaiting_storage_choice" ? (
+            <div className="flex flex-col gap-1.5 text-[10.5px]">
+              <span className="text-muted">{t("copilot.accounts.login.plaintextWarning")}</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" className="rounded px-1.5 text-accent hover:bg-accent-soft" onClick={() => void post({ action: "choose-plaintext-storage", operationId: account.login!.operationId, acceptPlaintext: true })}>{t("copilot.accounts.login.plaintextAccept")}</button>
+                <button type="button" className="rounded px-1.5 text-muted hover:bg-accent-soft" onClick={() => void post({ action: "choose-plaintext-storage", operationId: account.login!.operationId, acceptPlaintext: false })}>{t("copilot.accounts.login.plaintextDecline")}</button>
+              </div>
+            </div>
+          ) : null}
+          {account.loginCommand ? (
+            <div className="flex min-w-0 items-center gap-1.5">
+              <code className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-secondary" title={account.loginCommand}>{account.loginCommand}</code>
+              <button type="button" className="shrink-0 rounded px-1.5 text-[10.5px] font-semibold text-accent hover:bg-accent-soft" onClick={() => void copy(account)}>
+                {copied === account.id ? t("copilot.accounts.copied") : t("copilot.accounts.copyLogin")}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ))}
+      <form
+        className="flex items-center gap-1.5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!label.trim()) return;
+          void post({ label }).then(() => setLabel(""));
+        }}
+      >
+        <input
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+          placeholder={t("copilot.accounts.labelPlaceholder")}
+          aria-label={t("copilot.accounts.labelPlaceholder")}
+          className="min-w-0 flex-1 rounded-md border border-border bg-card px-2 py-1 text-[11.5px]"
+        />
+        <button type="submit" className="shrink-0 rounded-md border border-border bg-card px-2 py-1 text-[11px] font-semibold text-primary hover:bg-canvas">
+          {t("copilot.accounts.add")}
+        </button>
+      </form>
+      {error ? <p role="alert" className="text-danger">{error}</p> : null}
+    </>
+  );
+}
+
+export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onChanged }: {
+  limits: EngineLimits | null;
+  limitsAccountId: string | null;
+  now: number;
+  provenance: LimitsProvenance;
+  onChanged: () => void;
+}) {
+  const { t, locale } = useLocale();
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const tint = engineTintOf("copilot");
+  const accounts = useCopilotAccounts({ polling: open, onChanged });
+  const { body, load } = accounts;
+
+  /* A launch preflight on a signed-out Copilot account (#2170) opens this
+     row's switcher, where the account's Sign in is. */
+  useEffect(() => {
+    if (consumePendingAccountPanel("copilot")) setOpen(true);
+    return onAccountPanelRequest((request) => {
+      if (request.engine !== "copilot") return;
+      setOpen(true);
+      void load();
+    });
+  }, [load]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, [open]);
 
   if (!body || (!body.cli.present && body.accounts.length === 0)) return null;
   const active = body.accounts.find((account) => account.active) ?? null;
@@ -152,80 +257,7 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onC
       ) : null}
       {open ? (
         <div role="dialog" aria-label={t("copilot.accounts.title")} className="flex flex-col gap-2 border-t border-border bg-sunken px-3.5 py-2.5 text-[11.5px]">
-          {!body.cli.present && body.cli.reason ? <p className="text-muted">{body.cli.reason}</p> : null}
-          <p className="text-muted">{t("copilot.accounts.hint")}</p>
-          {body.accounts.map((account) => (
-            <div key={account.id} className="flex flex-col gap-1 rounded-md border border-border bg-card px-2 py-1.5">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="min-w-0 flex-1 truncate font-semibold text-primary">{account.label}</span>
-                <span className="shrink-0 text-[10px] text-muted">
-                  {account.auth === "signed_in" ? t("copilot.accounts.signedIn", { user: account.user ?? "" }) : account.auth === "signed_out" ? t("copilot.accounts.signedOut") : t("copilot.accounts.unknown")}
-                </span>
-                {account.active ? (
-                  <span className="shrink-0 text-[10px] font-semibold text-muted">{t("copilot.accounts.active")}</span>
-                ) : (
-                  <button type="button" className="shrink-0 rounded px-1.5 text-[10.5px] font-semibold text-accent hover:bg-accent-soft" onClick={() => void post({ action: "select", id: account.id })}>
-                    {t("copilot.accounts.use")}
-                  </button>
-                )}
-              </div>
-              {account.kind === "managed" && account.auth !== "signed_in" && (!account.login || !["starting", "awaiting_browser", "awaiting_storage_choice", "verifying", "canceling"].includes(account.login.phase)) ? (
-                <button type="button" className="self-start rounded px-1.5 py-0.5 text-[10.5px] font-semibold text-accent hover:bg-accent-soft" onClick={() => void post({ action: "login", id: account.id })}>
-                  {t("copilot.accounts.signIn")}
-                </button>
-              ) : null}
-              {account.login?.phase === "starting" || account.login?.phase === "verifying" || account.login?.phase === "canceling" ? (
-                <div className="flex items-center gap-2 text-[10.5px] text-muted">
-                  <span>{account.login.phase === "starting" ? t("copilot.accounts.login.starting") : account.login.phase === "verifying" ? t("copilot.accounts.login.verifying") : t("copilot.accounts.login.canceling")}</span>
-                  {account.login.phase !== "canceling" ? <button type="button" className="rounded px-1.5 text-accent hover:bg-accent-soft" onClick={() => void post({ action: "cancel-login", operationId: account.login!.operationId })}>{t("copilot.accounts.cancel")}</button> : null}
-                </div>
-              ) : null}
-              {account.login?.phase === "awaiting_browser" ? (
-                <div className="flex flex-wrap items-center gap-2 text-[10.5px]">
-                  <a href={account.login.loginUrl ?? undefined} target="_blank" rel="noreferrer noopener" className="font-semibold text-accent underline">{t("copilot.accounts.openLogin")}</a>
-                  {account.login.userCode ? <><span className="text-muted">{t("copilot.accounts.codeLabel")}</span><code className="rounded bg-sunken px-1.5 py-0.5 font-mono text-primary">{account.login.userCode}</code></> : null}
-                  <button type="button" className="rounded px-1.5 text-accent hover:bg-accent-soft" onClick={() => void post({ action: "cancel-login", operationId: account.login!.operationId })}>{t("copilot.accounts.cancel")}</button>
-                </div>
-              ) : null}
-              {account.login?.phase === "awaiting_storage_choice" ? (
-                <div className="flex flex-col gap-1.5 text-[10.5px]">
-                  <span className="text-muted">{t("copilot.accounts.login.plaintextWarning")}</span>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button type="button" className="rounded px-1.5 text-accent hover:bg-accent-soft" onClick={() => void post({ action: "choose-plaintext-storage", operationId: account.login!.operationId, acceptPlaintext: true })}>{t("copilot.accounts.login.plaintextAccept")}</button>
-                    <button type="button" className="rounded px-1.5 text-muted hover:bg-accent-soft" onClick={() => void post({ action: "choose-plaintext-storage", operationId: account.login!.operationId, acceptPlaintext: false })}>{t("copilot.accounts.login.plaintextDecline")}</button>
-                  </div>
-                </div>
-              ) : null}
-              {account.loginCommand ? (
-                <div className="flex min-w-0 items-center gap-1.5">
-                  <code className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-secondary" title={account.loginCommand}>{account.loginCommand}</code>
-                  <button type="button" className="shrink-0 rounded px-1.5 text-[10.5px] font-semibold text-accent hover:bg-accent-soft" onClick={() => void copy(account)}>
-                    {copied === account.id ? t("copilot.accounts.copied") : t("copilot.accounts.copyLogin")}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ))}
-          <form
-            className="flex items-center gap-1.5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!label.trim()) return;
-              void post({ label }).then(() => setLabel(""));
-            }}
-          >
-            <input
-              value={label}
-              onChange={(event) => setLabel(event.target.value)}
-              placeholder={t("copilot.accounts.labelPlaceholder")}
-              aria-label={t("copilot.accounts.labelPlaceholder")}
-              className="min-w-0 flex-1 rounded-md border border-border bg-card px-2 py-1 text-[11.5px]"
-            />
-            <button type="submit" className="shrink-0 rounded-md border border-border bg-card px-2 py-1 text-[11px] font-semibold text-primary hover:bg-canvas">
-              {t("copilot.accounts.add")}
-            </button>
-          </form>
-          {error ? <p role="alert" className="text-danger">{error}</p> : null}
+          <CopilotAccountList accounts={accounts} />
         </div>
       ) : null}
     </div>

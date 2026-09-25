@@ -87,6 +87,8 @@ async function reconcileAccountLogins(): Promise<void> {
       if (managedCodexRuntime().peekLogin(account).attemptState) await managedCodexRuntime().loginSnapshot(account);
       return;
     }
+    /* Main's own device login (#2166) settles the way a managed one does. */
+    if (managedCodexRuntime().peekLogin(account).attemptState) await managedCodexRuntime().loginSnapshot(account);
     if (!account.loginPane) return;
     const pane = await paneInfo(account.loginPane.paneId);
     const status = codexLoginPaneStatus(account.authPresent, account.loginPane, pane);

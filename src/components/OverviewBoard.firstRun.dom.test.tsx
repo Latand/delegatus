@@ -13,7 +13,6 @@ import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligi
 
 import { getMobileNav } from "./mobile/mobileNav";
 import { OverviewBoard } from "./OverviewBoard";
-import { CREATE_PROJECT_FORM_EVENT } from "./ProjectRail";
 
 /*
  * Issue #1162, the zero-project overview. A first run used to answer with one
@@ -143,44 +142,30 @@ test("the retired «No logs yet» copy is gone from the dictionaries and the boa
   expect(Object.keys(uk)).not.toContain("overview.empty");
 });
 
-test("the create button asks the mounted rail to open the form it already owns", () => {
-  const requests: string[] = [];
-  const listener = () => requests.push("open");
-  dom.addEventListener(CREATE_PROJECT_FORM_EVENT, listener);
-  const host = renderBoard();
-  flushSync(() => createButton(host)!.dispatchEvent(click()));
-  dom.removeEventListener(CREATE_PROJECT_FORM_EVENT, listener);
-  expect(requests).toEqual(["open"]);
-});
-
-test("on a phone the same button opens the project switcher sheet, where the create form lives", () => {
-  viewportWidth = 390;
-  const requests: string[] = [];
-  const listener = () => requests.push("open");
-  dom.addEventListener(CREATE_PROJECT_FORM_EVENT, listener);
-  const opened: string[] = [];
-  const host = renderBoard({
-    mobileShell: {
-      attentionCount: 0,
-      arrival: null,
-      renderSheet: (name) => {
-        opened.push(name);
-        return <div data-testid="projects-sheet-stub" />;
-      },
-    },
+/* #2166 §3.5: the create button opens the setup guide on its Project step,
+   whose form is the rail's own, desktop and phone alike, so the path goes on
+   to the project's orchestrator instead of stopping at a new project. */
+for (const width of [1440, 390]) {
+  test(`the create button opens the setup guide on its Project step at ${width}`, () => {
+    viewportWidth = width;
+    const opened: unknown[] = [];
+    const listener = (event: Event) => opened.push((event as CustomEvent).detail);
+    dom.addEventListener("llv:open-onboarding", listener as never);
+    /* The guide opens on a window event: this window's own CustomEvent. */
+    const G = globalThis as { CustomEvent: unknown };
+    const savedCustomEvent = G.CustomEvent;
+    G.CustomEvent = dom.CustomEvent;
+    try {
+      const host = renderBoard();
+      flushSync(() => createButton(host)!.dispatchEvent(click()));
+    } finally {
+      G.CustomEvent = savedCustomEvent;
+      dom.removeEventListener("llv:open-onboarding", listener as never);
+    }
+    expect(opened).toEqual([{ mode: "guide", step: "project" }]);
+    getMobileNav().home();
   });
-  flushSync(() => createButton(host)!.dispatchEvent(click()));
-  dom.removeEventListener(CREATE_PROJECT_FORM_EVENT, listener);
-  /* The sheet the Viewer owns opens over the board (mobile v2 lane 1); on a
-     first run it arrives with its create form open — MobileProjectSheet's own
-     rule, proven in ProjectRail.firstRun.dom.test.tsx. */
-  expect(opened).toEqual(["projects"]);
-  expect(host.querySelector('[data-testid="projects-sheet-stub"]')).not.toBeNull();
-  /* No request fires into a rail that is not mounted on a phone — nothing
-     would hear it. */
-  expect(requests).toEqual([]);
-  getMobileNav().home();
-});
+}
 
 test("a board with projects on it renders the kanban, never the first-run panel", () => {
   const host = renderBoard({ files: [fileEntry()] });

@@ -19,8 +19,12 @@ export async function POST(req: NextRequest) {
     if (body.action === "retry" || body.action === "cancel") {
       if (typeof body.id !== "string") return NextResponse.json({ error: "id must be a string" }, { status: 400 });
       const account = listCodexAccounts().find((candidate) => candidate.id === body.id);
-      if (!account || account.kind !== "managed") throw new UnknownAccountError(body.id);
-      return await withManagedCodexLogin(account, async () => {
+      if (!account) throw new UnknownAccountError(body.id);
+      /* Main signs in from here too (#2166): a device login into its own home.
+         It has no registry row to hold the managed reservation, so the
+         runtime's one attempt per home is its fence. */
+      const fenced = account.kind === "managed" ? <T,>(operation: () => Promise<T>) => withManagedCodexLogin(account, operation) : <T,>(operation: () => Promise<T>) => operation();
+      return await fenced(async () => {
         if (body.action === "cancel") {
           const cancelled = await managedCodexRuntime().cancelLogin(account.id);
           return NextResponse.json({ account: { id: account.id }, cancelled });

@@ -217,6 +217,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
         ref={sectionRef}
         className={`seat${side ? " side" : ""}${seat.collapsed ? " folded" : ""}${sized ? " sized" : ""}`}
         data-kanban-seat={project}
+        data-walk-anchor="seat"
         data-collapsed={seat.collapsed ? "1" : "0"}
         data-placement={seat.placement}
         data-role-host="seat"
