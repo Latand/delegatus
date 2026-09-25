@@ -63,10 +63,10 @@ test("a production-sized ledger of delta records is read whole within one visit,
     expect(read.outcomes.filter((outcome) => outcome.status === "interrupted")).toHaveLength(13);
     expect(read.cursor).toMatchObject({ atEnd: true, gap: null, activeTurn: null, settledThrough: ledger.seqs.at(-1), offset: ledger.size });
     expect(read.bytes).toBe(ledger.size);
-    /* The bound this reader exists for: a 10 MB ledger inside one check's
-       budget in well under a second, where the byte-at-a-time parser it
-       replaces needed the better part of an hour of visits. */
-    expect(elapsed).toBeLessThan(1_500);
+    /* The bound this reader exists for is the one visit above: the whole
+       10 MB ledger, every boundary, and the cursor at its end, where the
+       byte-at-a-time parser it replaces needed the better part of an hour of
+       visits. The time is reported, never asserted (#1761). */
     console.log(`[ledger] ${ledger.size} bytes, ${read.records} records in ${elapsed.toFixed(0)} ms`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

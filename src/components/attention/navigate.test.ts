@@ -1049,18 +1049,20 @@ test("a stage slot and a task band are waited for the same way", async () => {
 
 test("an anchor that never appears is still lost, inside the wait", async () => {
   const { bus, log } = harness("demo", {});
-  const started = Date.now();
+  let clock = 0;
 
   const outcome = await runFocusHandoff(
     request({ target: { kind: "pipeline", pipelineId: "pl-does-not-exist" }, frameAtCreation: { project: "demo", rect: UNREAD_FRAME_RECT, boardRevision: null } }),
     bus,
-    { timeoutMs: 60, pollMs: 5 },
+    { timeoutMs: 60, pollMs: 5, now: () => clock, sleep: async (ms) => { clock += ms; } },
   );
 
   expect(outcome.resolution).toBe("lost");
   expect(outcome.moved).toBe(false);
   expect(log.moved).toHaveLength(0);
   /* The wait is bounded by the handoff's own timeout, so the bounded failure
-     still reaches the caller well inside the landing grace. */
-  expect(Date.now() - started).toBeLessThan(1_000);
+     still reaches the caller well inside the landing grace: on the handoff's
+     own clock it gave up after one timeout and at most one poll past it. */
+  expect(clock).toBeGreaterThanOrEqual(60);
+  expect(clock).toBeLessThanOrEqual(65);
 });

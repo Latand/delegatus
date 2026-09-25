@@ -330,32 +330,35 @@ test("the controller records the probe's reset credits and carries them through 
 });
 
 
-test("a two-second quota probe leaves resume, send and spawn admission available", async () => {
+test("a quota probe still in flight leaves resume, send and spawn admission available", async () => {
   const registry = new AgentRegistry(path.join(QUOTA_SANDBOX, "slow-probe-registry.json"));
   const conversation = registry.ensureConversation("codex", "/fixture/session.jsonl", "default");
   const account: CodexAccount = { id: "default", label: "Account A", kind: "legacy", home: "/fixture/home", sessionsDir: "/fixture/home/sessions", authPresent: true, loginPane: null, createdAt: 0 };
   let entered!: () => void;
+  let finishProbe!: () => void;
   const started = new Promise<void>((resolve) => { entered = resolve; });
+  const probeHeld = new Promise<void>((resolve) => { finishProbe = resolve; });
   const controller = new QuotaController(registry, {
     list: () => [account], active: () => "default",
     async probe(engine, candidate, now) {
       entered();
-      await Bun.sleep(2_000);
+      /* Held until every admission below has answered, so none of them can
+         have waited for the probe to finish. */
+      await probeHeld;
       return { engine, accountId: candidate.id, authenticated: true, limits: null, provenance: { source: "live", reason: null, staleSince: null }, observedAt: now };
     },
   });
   const tick = controller.tick("codex");
   await started;
   try {
-    const startedAt = performance.now();
     const resume = registry.beginSpawnRequest({ engine: "codex", cwd: "/fixture", transport: "structured", accountId: "default", conversationId: conversation.id, purpose: "resume-successor", origin: { kind: "successor" }, launchProfile: { title: "Slow probe resume" } });
     const send = withAccountMutationLock(() => registry.holdDelivery(conversation.id, "hello", "slow-probe-send"));
     const spawn = registry.beginSpawnRequest({ engine: "codex", cwd: "/fixture", transport: "structured", accountId: "default", launchProfile: { title: "Slow probe spawn" } });
     expect(resume.kind).toBe("created");
     expect(send.id).toBeTruthy();
     expect(spawn.kind).toBe("created");
-    expect(performance.now() - startedAt).toBeLessThan(500);
   } finally {
+    finishProbe();
     await tick;
   }
 });
@@ -404,16 +407,20 @@ for (const mutation of ["removed", "switched", "reauthenticated", "keychain", "n
 }
 
 
-test("an eleven-second provider wait never becomes an account mutation lease", async () => {
+test("a long provider wait never becomes an account mutation lease", async () => {
   const { ManagedCodexRuntime } = await import("@/lib/accounts/codexRuntime");
   const registry = new AgentRegistry(path.join(QUOTA_SANDBOX, "long-probe", "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const account: CodexAccount = { id: "default", label: "Account A", kind: "legacy", home: path.join(QUOTA_SANDBOX, "home"), sessionsDir: path.join(QUOTA_SANDBOX, "home", "sessions"), authPresent: true, loginPane: null, createdAt: 0 };
   let entered!: () => void;
+  let finishProvider!: () => void;
   const ready = new Promise<void>((resolve) => { entered = resolve; });
+  /* The provider waits until the test lets it go, which stands for a wait of
+     any length (the incident's was eleven seconds). */
+  const providerHeld = new Promise<void>((resolve) => { finishProvider = resolve; });
   let providerDone = false;
   const runtime = new ManagedCodexRuntime({ startClient: async () => {
     entered();
-    await Bun.sleep(11_000);
+    await providerHeld;
     providerDone = true;
     throw new Error("oauth-rate-limited fixture");
   } });
@@ -436,7 +443,6 @@ test("an eleven-second provider wait never becomes an account mutation lease", a
     if (args[0] === lock && acquiredAt !== null) { holds.push(performance.now() - acquiredAt); acquiredAt = null; }
     return remove(...args);
   }) as typeof fs.rmSync);
-  const startedAt = performance.now();
   const tick = controller.tick("codex");
   try {
     await ready;
@@ -446,14 +452,19 @@ test("an eleven-second provider wait never becomes an account mutation lease", a
       clientAttemptId: `parallel-stage-${number}`, launchProfile: { title: "Parallel stage admission" },
     })));
     expect(admissions.map((entry) => entry.kind)).toEqual(["created", "created"]);
+    /* The provider is still waiting and no lease is open: every lease taken so
+       far was released before this point, so none spans the wait. */
     expect(providerDone).toBeFalse();
+    expect(fs.existsSync(lock)).toBeFalse();
+    expect(acquiredAt).toBeNull();
+    finishProvider();
     await tick;
-    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(11_000);
     expect(holds.length).toBeGreaterThanOrEqual(4);
-    expect(Math.max(...holds)).toBeLessThan(250);
     expect(registry.quotaObservations("codex")[0]?.provenance.reason).toBe("quota-probe-failed");
-    console.info(JSON.stringify({ measurement: "slow-provider-lock", providerWaitMs: 11_000, holds: holds.length, maxHoldMs: Math.round(Math.max(...holds) * 100) / 100 }));
+    // Hold times are reported, never asserted (#1761).
+    console.info(JSON.stringify({ measurement: "slow-provider-lock", holds: holds.length, maxHoldMs: Math.round(Math.max(...holds) * 100) / 100 }));
   } finally {
+    finishProvider();
     await tick;
     openSpy.mockRestore(); removeSpy.mockRestore();
   }

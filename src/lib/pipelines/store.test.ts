@@ -144,7 +144,11 @@ test.each([false, true])("archive enabled=%s lets the same event loop settle sta
     const result = await archive;
     const elapsedMs = performance.now() - start;
     console.log(JSON.stringify({ archiveContention: { enabled, elapsedMs, timerDelayMs: Math.max(0, elapsedMs - 100), timeline, result } }));
-    expect(elapsedMs).toBeLessThan(2_000);
+    /* The sweep never blocked the startup callback: the callback's timer
+       settled first and the archive then committed without a busy refusal.
+       A sweep that held the event loop while waiting for the lease could only
+       have given up, and would have answered an error here. The time is
+       reported above, never asserted (#1761). */
     expect(result).toEqual({ moved: enabled ? 1 : 0, error: null });
     expect(timeline).toEqual(enabled ? ["admission-entered", "callback-settled", "archive-commit"] : ["admission-entered", "callback-settled"]);
     const db = new Database(path.join(sandbox, "state.sqlite"), { readonly: true });

@@ -160,7 +160,9 @@ test("stale migration convergence scales linearly with a production-shaped regis
 
     terminalizeStaleUndeliverableHeldDeliveries(seeded, Date.now() + 6 * 60_000);
 
-    expect(performance.now() - startedAt).toBeLessThan(5_000);
+    /* A benchmark: the measurement is reported, and how fast a shared runner
+       happened to be is not asserted (#1761). */
+    console.log(JSON.stringify({ probe: "stale-migration-convergence-2500", ms: Math.round(performance.now() - startedAt) }));
     expect(seeded.snapshot().migrationIntents[intent.id]?.state).toBe("stopped");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

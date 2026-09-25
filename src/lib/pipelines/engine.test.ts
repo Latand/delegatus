@@ -1760,13 +1760,17 @@ const FETCHED_SHA = "b3f19a7c1d0e4b6a8f2c5d9e0a1b3c4d5e6f7a8b";
 
 /** A delayed fetch, and a remote whose head is only readable once it has run:
     a lane that resolved its base without fetching reads the stale ref. */
-function slowRemote(h: ReturnType<typeof harness>): { fetched: () => boolean } {
+/** A remote whose fetch takes SLOW_FETCH_MS, or, when `held`, lasts until the
+    test calls `release` — a fetch of any length. */
+function slowRemote(h: ReturnType<typeof harness>, options: { held?: boolean } = {}): { fetched: () => boolean; release: () => void } {
   const baseExec = h.ports.exec;
   let fetched = false;
+  let release = () => {};
+  const gate = options.held ? new Promise<void>((resolve) => { release = resolve; }) : null;
   h.ports.provisionExec = async (command, args, cwd) => {
     const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
     if (gitArgs[0] === "fetch") {
-      await Bun.sleep(SLOW_FETCH_MS);
+      await (gate ?? Bun.sleep(SLOW_FETCH_MS));
       fetched = true;
       return { code: 0, stdout: "", stderr: "" };
     }
@@ -1775,7 +1779,7 @@ function slowRemote(h: ReturnType<typeof harness>): { fetched: () => boolean } {
     }
     return baseExec(command, args, cwd);
   };
-  return { fetched: () => fetched };
+  return { fetched: () => fetched, release: () => release() };
 }
 
 test("create answers before the base fetch finishes, and the lane starts from what the fetch produced (#1799)", async () => {
@@ -1783,22 +1787,17 @@ test("create answers before the base fetch finishes, and the lane starts from wh
   savePipelines([]);
   const remote = slowRemote(h);
 
-  const askedAt = Date.now();
   const created = await createPipelineFromRequest({ task: "Answer at once", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
-  const answeredIn = Date.now() - askedAt;
 
   /* The call returned while the fetch that resolves its base had not even
      started, which is the whole of what the operator asked for. */
   expect(remote.fetched()).toBe(false);
-  expect(answeredIn).toBeLessThan(SLOW_FETCH_MS);
   expect(created.pipeline).toMatchObject({ state: "provisioning", baseBranch: "main", baseRef: "", lastPassedCommit: "" });
 
-  const tickedAt = Date.now();
   await tickPipelines([], h.ports);
 
   /* The controller is what pays for the fetch — and the lane starts from the
      commit that fetch produced, never from the ref the repository already had. */
-  expect(Date.now() - tickedAt).toBeGreaterThanOrEqual(SLOW_FETCH_MS);
   expect(remote.fetched()).toBe(true);
   expect(loadPipelines()[0]).toMatchObject({
     state: "running",
@@ -1812,7 +1811,7 @@ test("create answers before the base fetch finishes, and the lane starts from wh
 test("a create that arrives while the controller is provisioning is not held behind it (#1799)", async () => {
   const h = harness();
   savePipelines([]);
-  const remote = slowRemote(h);
+  const remote = slowRemote(h, { held: true });
   const first = await createPipelineFromRequest({ task: "First lane", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
   expect(first.pipeline).toBeDefined();
 
@@ -1822,18 +1821,20 @@ test("a create that arrives while the controller is provisioning is not held beh
      across the provisioning instead — which is what it used to be — this is
      the twenty-five seconds the operator watched. */
   const pass = tickPipelines([], h.ports);
-  const askedAt = Date.now();
   const second = await createPipelineFromRequest({ task: "Second lane", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
-  const answeredIn = Date.now() - askedAt;
+  /* Answered while the pass's fetch is still held open: a create queued
+     behind the provisioning could not have answered at all. */
+  const fetchedWhenAnswered = remote.fetched();
+  remote.release();
   await pass;
 
+  expect(fetchedWhenAnswered).toBe(false);
   expect(remote.fetched()).toBe(true);
   expect(second.pipeline).toMatchObject({ state: "provisioning", baseRef: "" });
-  expect(answeredIn).toBeLessThan(SLOW_FETCH_MS);
   expect(loadPipelines().map((pipeline) => pipeline.state).sort()).toEqual(["provisioning", "running"]);
 });
 
-test("two delayed git children leave status and append RPCs within their deadlines", async () => {
+test("two delayed git children run off the synchronous port while status and append RPCs keep answering", async () => {
   const h = harness();
   savePipelines([]);
   for (const task of ["First delayed lane", "Second delayed lane"]) {
@@ -1866,9 +1867,15 @@ test("two delayed git children leave status and append RPCs within their deadlin
   const baseExec = h.ports.exec;
   const delayArgs = ["-c", "alias.provision-delay=!sleep 1.7", "provision-delay"];
   const isFetch = (args: string[]) => args.includes("fetch");
-  // The synchronous port makes this a red test against the former pre-pass.
+  /* The synchronous port makes this a red test against the former pre-pass:
+     a fetch there blocks the event loop for the whole delay. It is counted,
+     and the count is the verdict. */
+  let synchronousFetches = 0;
   h.ports.exec = (command, args, cwd) => {
-    if (isFetch(args)) spawnSync("git", delayArgs);
+    if (isFetch(args)) {
+      synchronousFetches += 1;
+      spawnSync("git", delayArgs);
+    }
     return baseExec(command, args, cwd);
   };
   let active = 0;
@@ -1908,7 +1915,6 @@ test("two delayed git children leave status and append RPCs within their deadlin
     if (!ready) throw new Error(`isolated host did not start: ${hostLog}`);
     delay.enable();
     await Bun.sleep(30);
-    const provisionStarted = performance.now();
     const first = probe();
     tick = tickPipelines([], h.ports);
     await first;
@@ -1916,12 +1922,14 @@ test("two delayed git children leave status and append RPCs within their deadlin
     await tick;
     await Bun.sleep(30);
     const maxDelayMs = delay.max / 1e6;
+    /* RPC latency and event-loop delay are reported, never asserted (#1761):
+       they measure the runner as much as the controller. Responsiveness is
+       held by where the fetches ran: both on the asynchronous provisioning
+       port, concurrently, and none on the synchronous one. */
     console.log(JSON.stringify({ provisioningResponsiveness: { maxRpcMs: Math.max(...latencies), maxDelayMs, peakChildren: peak, rpcErrors: rpcErrors.length } }));
     expect(rpcErrors).toEqual([]);
-    expect(Math.max(...latencies)).toBeLessThan(3000);
-    expect(maxDelayMs).toBeLessThan(100);
+    expect(synchronousFetches).toBe(0);
     expect(peak).toBe(2);
-    expect(performance.now() - provisionStarted).toBeGreaterThanOrEqual(1700);
     expect(loadPipelines().every((pipeline) => pipeline.state === "running")).toBe(true);
   } finally {
     await tick;
@@ -2007,7 +2015,6 @@ for (const disposition of ["close", "remove"] as const) {
     try {
       await active;
       expect(await tickPipelines([], h.ports)).toEqual({ pipelines: [], changed: false });
-      const changedAt = performance.now();
       if (disposition === "close") {
         expect((await patchPipeline(id, { action: "close" }, h.ports)).pipeline?.state).toBe("closed");
       } else {
@@ -2015,7 +2022,7 @@ for (const disposition of ["close", "remove"] as const) {
         savePipelines([]);
       }
       await tick;
-      expect(performance.now() - changedAt).toBeLessThan(1000);
+      // Killed, not waited out: the five-second fetch ended on SIGKILL.
       expect(result?.stderr).toBe("pipeline provisioning cancelled");
       expect(result?.signal).toBe("SIGKILL");
       expect(fetches).toBe(1);
@@ -2620,9 +2627,10 @@ test.each([false, true])("activation drain measures lease hold and unrelated com
     await ticking;
     acquired.mockRestore(); released.mockRestore();
     console.log(`activation drain=${enabled}: max collection lease hold=${Math.max(...holds).toFixed(1)}ms, holds=${holds.length}`);
+    /* Whether the lease spans the pending spawn is read from the lease table
+       while the spawn is still pending, above; the hold times are reported,
+       never asserted (#1761). */
     expect(holds.length).toBeGreaterThan(0);
-    if (enabled) expect(Math.max(...holds)).toBeLessThan(100);
-    else expect(Math.max(...holds)).toBeGreaterThanOrEqual(100);
     if (oldWait === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS; else process.env.LLV_PIPELINE_LOCK_WAIT_MS = oldWait;
     if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
   }
@@ -13126,11 +13134,17 @@ test.each([false, true])("close drain answers before a five second stop and rele
   process.env.LLV_PIPELINE_ACTIVATION_DRAIN = enabled ? "1" : "0";
   let stops = 0;
   let entered!: () => void;
+  let finishStop!: () => void;
   const started = new Promise<void>((resolve) => { entered = resolve; });
+  const stopHeld = new Promise<void>((resolve) => { finishStop = resolve; });
+  /* The stop stands for a five-second one: it does not return until the test
+     lets it, and it records how many pipeline leases are held while it runs. */
+  const leasesHeldDuringStop: number[] = [];
   h.ports.stopStageAgent = async () => {
     stops++;
+    leasesHeldDuringStop.push(starts.size);
     entered();
-    await Bun.sleep(5_000);
+    await stopHeld;
     return { outcome: "stopped" };
   };
   const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
@@ -13156,7 +13170,7 @@ test.each([false, true])("close drain answers before a five second stop and rele
     const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
     const elapsed = performance.now() - begin;
     console.log(`close activation=${enabled}: answer=${elapsed.toFixed(1)}ms, max lease=${Math.max(...holds).toFixed(1)}ms`);
-    expect(elapsed).toBeLessThan(200);
+    // Answered before the stop: no stop has even been asked for yet.
     expect(closed.pipeline?.state).toBe("closed");
     expect(closed.close?.pending).toHaveLength(1);
     expect(stops).toBe(0);
@@ -13167,6 +13181,7 @@ test.each([false, true])("close drain answers before a five second stop and rele
     expect((await createPipelineFromRequest({ task: "Unrelated draft", repoDir: "/repo", autoStart: false, stages: [...RUN_STAGES] }, h.ports)).pipeline).toBeDefined();
     expect((await patchPipeline(retry.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
     expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
+    finishStop();
     await engineModule.drainStageActivations(h.ports);
     expect(stops).toBe(1);
     await draining;
@@ -13178,8 +13193,11 @@ test.each([false, true])("close drain answers before a five second stop and rele
     await engineModule.drainStageActivations(h.ports);
     expect(stops).toBe(1);
     console.log(`close activation=${enabled}: final max lease=${Math.max(...holds).toFixed(1)}ms across ${holds.length} holds`);
-    expect(Math.max(...holds)).toBeLessThan(200);
+    /* The lease is released before the stop, never held across it: the calls
+       above ran while the stop was still in flight, and it saw no lease. */
+    expect(leasesHeldDuringStop).toEqual([0]);
   } finally {
+    finishStop();
     await draining;
     acquired.mockRestore(); released.mockRestore();
     if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;

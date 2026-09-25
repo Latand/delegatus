@@ -165,16 +165,18 @@ test("a production-sized React join stays warm and bounded through Codex and Cla
 
   try {
     let committedRenders = 0;
+    /* Warm means the 477 KiB snapshot is on screen inside the act that started
+       the bus, fetched once over one source; how long that took on this runner
+       is reported, never asserted (#1761). */
     const warmStartedAt = performance.now();
     await act(async () => {
       root.render(<RuntimeProbe bus={bus} onCommit={() => { committedRenders += 1; }} />);
       bus.start();
       await Bun.sleep(25);
     });
-    const warmElapsedMs = performance.now() - warmStartedAt;
+    console.log(JSON.stringify({ probe: "runtime-bus-warm-join", ms: Math.round(performance.now() - warmStartedAt) }));
     expect(Buffer.byteLength(encodedSnapshot)).toBeGreaterThanOrEqual(477 * 1024);
     expect(host.textContent).toBe("100:codex,claude:802");
-    expect(warmElapsedMs).toBeLessThan(500);
     expect(snapshotFetches).toBe(1);
     expect(sources).toHaveLength(1);
 

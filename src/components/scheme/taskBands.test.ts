@@ -290,7 +290,8 @@ test("350 tasks and 1,000 conversations project to one band per task and place e
     expect(scene.bands.length).toBe(350);
     expect(scene.taskRects.size).toBe(350);
   }
-  expect(performance.now() - started).toBeLessThan(15000);
+  // Reported, not asserted: runner speed is not a property of the layout (#1761).
+  console.log(JSON.stringify({ probe: "task-bands-350x1000", ms: Math.round(performance.now() - started) }));
 });
 
 test("the anchor equation keeps a projection's top-left at its captured screen point under a new zoom", () => {

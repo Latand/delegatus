@@ -26,6 +26,7 @@ import {
   taskEdgesSignature,
   taskRect,
   taskWorldBounds,
+  type RouteWork,
   type TaskEdgeGeom,
   type TaskEdgeObstacle,
   type TaskTargetSource,
@@ -1072,7 +1073,11 @@ describe("routeTaskEdges — edge-to-edge crossing handling (Finding 1)", () => 
   test("stays within the render budget at the 300-task ceiling (Finding 2)", () => {
     /* The benchmark shape: 300 spread source edges, one placed card each, twelve
        panes. Broad-phase culling plus the reduction cap keep the whole global
-       pass well under a frame-budget ceiling; the un-bounded version took ~10s. */
+       pass well under a frame-budget ceiling; the un-bounded version took ~10s.
+       The budget is counted, so a slow runner cannot fail it and a fast one
+       cannot hide a regression: without the reduction cap this board computes
+       696 routes, without the control-hull cull it runs 3.6 million obstacle
+       tests, and without the crossing broad phase 54 969 pair tests. */
     const edges: TaskEdgeGeom[] = [];
     const cards: Array<SchemeRect & { id: string }> = [];
     for (let i = 0; i < 300; i++) {
@@ -1082,10 +1087,15 @@ describe("routeTaskEdges — edge-to-edge crossing handling (Finding 1)", () => 
       cards.push({ id: "e" + String(i).padStart(3, "0"), x: cx - 130, y: cy - 40, w: 260, h: 80 });
     }
     const panes: SchemeRect[] = Array.from({ length: 12 }, (_, i) => ({ x: (i % 6) * 700 + 200, y: Math.floor(i / 6) * 800 + 100, w: 600, h: 680 }));
-    const t0 = performance.now();
-    const routes = routeTaskEdges(edges, cards, panes);
-    expect(performance.now() - t0).toBeLessThan(1500);
+    const work: RouteWork = { routes: 0, obstacleTests: 0, pairTests: 0 };
+    const routes = routeTaskEdges(edges, cards, panes, work);
     expect(routes.size).toBe(300);
+    // Above the cap no edge tries the reduction's extra bows: one route each.
+    expect(work.routes).toBe(edges.length);
+    // Each route tests only the cards near its own hull, never the whole board.
+    expect(work.obstacleTests).toBeLessThan(edges.length * cards.length);
+    // Far-apart edges are rejected before the crossing test: fewer tests than pairs.
+    expect(work.pairTests).toBeLessThan((edges.length * (edges.length - 1)) / 2);
   });
 
   test("order-independent under broad-phase culling and the reduction cap", () => {
@@ -1193,18 +1203,19 @@ describe("routeTaskEdges — render-thread cost (Finding 2)", () => {
     return { edges, cards };
   }
 
-  test("routes the 300-task ceiling well under a frame-budget's worth of seconds", () => {
+  test("routes the 300-task ceiling while testing only the cards near each path", () => {
     /* The Finding-2 regression: an earlier build spent 9.86 s on 200 edges,
        blocking the render thread. The control-hull cull keeps obstacle routing
        near the cards actually on each path, so the whole pass stays double-digit
-       ms even at the 300-task ceiling. A generous ceiling here (still 60× under
-       the old 200-edge time) keeps the guard robust across CI hardware. */
+       ms even at the 300-task ceiling. The guard counts that work instead of
+       timing it: this star runs 313 999 obstacle tests with the cull and
+       1 108 292 without it, on any hardware. */
     const { edges, cards } = star(300);
-    const t0 = performance.now();
-    const routes = routeTaskEdges(edges, cards, []);
-    const dt = performance.now() - t0;
+    const work: RouteWork = { routes: 0, obstacleTests: 0, pairTests: 0 };
+    const routes = routeTaskEdges(edges, cards, [], work);
     expect(routes.size).toBe(300);
-    expect(dt).toBeLessThan(1500);
+    expect(work.routes).toBe(edges.length);
+    expect(work.obstacleTests).toBeLessThan(500_000);
   });
 });
 

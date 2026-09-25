@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -586,14 +586,29 @@ test("get_conversation returns a bounded partial from a synthetic 100 MiB transc
     listFiles: async () => { throw new Error("large reads must stay off the corpus scan path"); },
   } as never;
   const bindings = viewerMcpBindings(undefined, undefined, injected);
-  const startedAt = performance.now();
+  /* Bounded by what it reads, counted in bytes: the deadline is far enough
+     away that only the size of the file can make this answer partial. */
+  let bytesRead = 0;
+  const readSync = fs.readSync;
+  const reads = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+    const count = readSync(...args);
+    bytesRead += count;
+    return count;
+  }) as typeof fs.readSync);
+  const readFileSync = fs.readFileSync;
+  const wholeReads = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+    const contents = readFileSync(...args);
+    bytesRead += contents.length;
+    return contents;
+  }) as typeof fs.readFileSync);
 
   const result = await bindings.get_conversation(
     { clientRequestId: "get-large-partial", transcriptPath: pathname, maxRecords: 8 },
-    { deadlineAt: Date.now() + 2_000 },
-  ) as { messages: Array<{ text: string }>; truncated: boolean; hint: string };
+    { deadlineAt: Date.now() + 60_000 },
+  ).finally(() => { reads.mockRestore(); wholeReads.mockRestore(); }) as { messages: Array<{ text: string }>; truncated: boolean; hint: string };
 
-  expect(performance.now() - startedAt).toBeLessThan(2_000);
+  expect(bytesRead).toBeGreaterThan(0);
+  expect(bytesRead).toBeLessThanOrEqual(16 * 1024 * 1024);
   expect(result.messages.map((message) => message.text)).toEqual(Array.from({ length: 8 }, (_value, index) => `partial-${index + 4}`));
   expect(result.truncated).toBe(true);
   expect(result.hint).toContain("oversized transcript");

@@ -261,6 +261,9 @@ export function defaultEvidenceByteBudget(limit: number): number {
 
 export interface AgentLivenessSources {
   now(): number;
+  /** The clock the phase timings are read on. Production omits it and times on
+      `performance.now()`; a test steps it to attribute exact milliseconds. */
+  phaseClock?(): number;
   /**
    * Bounded selection over ONE completed scanner generation (#860): filters and
    * the row limit are applied to metadata the process already published, before
@@ -658,7 +661,8 @@ export async function agentLivenessSnapshot(
   request: AgentLivenessRequest,
   sources: AgentLivenessSources,
 ): Promise<AgentLivenessSnapshot> {
-  const startedAt = performance.now();
+  const phaseClock = sources.phaseClock ?? (() => performance.now());
+  const startedAt = phaseClock();
   const now = sources.now();
   const signal = request.signal ?? null;
   if (signal?.aborted) throw livenessAbortError(signal.reason);
@@ -667,7 +671,7 @@ export async function agentLivenessSnapshot(
     : DEFAULT_STALL_AFTER_MS;
   const limit = Math.max(1, Math.min(200, Number.isInteger(request.limit) ? request.limit as number : 100));
 
-  const projectionStartedAt = performance.now();
+  const projectionStartedAt = phaseClock();
   const registry = sources.registrySnapshot();
   const pipelines = pipelineIndex(sources.pipelines());
   const flows = sources.flows?.() ?? [];
@@ -675,7 +679,7 @@ export async function agentLivenessSnapshot(
     ...hostedTranscriptPaths(registry, sources.probe),
     ...activeHeadlessTranscriptPaths(flows, registry.conversations, sources.probe),
   ]);
-  const indexProjectionMs = performance.now() - projectionStartedAt;
+  const indexProjectionMs = phaseClock() - projectionStartedAt;
 
   /* A conversation id names its current generation's transcript; that is the
      only path whose liveness is meaningful. */
@@ -688,7 +692,7 @@ export async function agentLivenessSnapshot(
     if (path) requestedPaths.add(path);
   }
 
-  const selectionStartedAt = performance.now();
+  const selectionStartedAt = phaseClock();
   let entries: LivenessTranscript[];
   /* Everything the selection phase knows; the hydration counters are filled in
      once the evidence pass has run. */
@@ -779,11 +783,11 @@ export async function agentLivenessSnapshot(
       };
     }
   }
-  const inventorySelectionMs = performance.now() - selectionStartedAt;
+  const inventorySelectionMs = phaseClock() - selectionStartedAt;
   if (signal?.aborted) throw livenessAbortError(signal.reason);
 
   const hydratable = entries.filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot");
-  const evidenceStartedAt = performance.now();
+  const evidenceStartedAt = phaseClock();
   const deadlineMs = Number.isFinite(request.evidenceDeadlineMs) && (request.evidenceDeadlineMs as number) > 0
     ? Math.floor(request.evidenceDeadlineMs as number)
     : DEFAULT_EVIDENCE_DEADLINE_MS;
@@ -815,13 +819,13 @@ export async function agentLivenessSnapshot(
       now: sources.now,
     },
   );
-  const evidenceReadMs = performance.now() - evidenceStartedAt;
+  const evidenceReadMs = phaseClock() - evidenceStartedAt;
   if (signal?.aborted) throw livenessAbortError(signal.reason);
 
   /* Projection, then assembly, as two passes over the same rows — so each phase
      timing measures the phase it is named after instead of splitting the
      per-row registry and lineage lookups across both. */
-  const rowProjectionStartedAt = performance.now();
+  const rowProjectionStartedAt = phaseClock();
   let unreadable = 0;
   const projected = hydratable.map((entry, index) => {
     /* Three outcomes, kept apart: a read that produced evidence, a read that
@@ -870,9 +874,9 @@ export async function agentLivenessSnapshot(
       evidenceSource: (!attempted ? "projection" : evidence !== null ? "transcript" : "unreadable") as AgentLivenessRecord["evidenceSource"],
     };
   });
-  const journalProjectionMs = indexProjectionMs + (performance.now() - rowProjectionStartedAt);
+  const journalProjectionMs = indexProjectionMs + (phaseClock() - rowProjectionStartedAt);
 
-  const serializationStartedAt = performance.now();
+  const serializationStartedAt = phaseClock();
   const conversations: AgentLivenessRecord[] = projected.map((row) => ({
     conversationId: row.conversationId,
     transcriptPath: row.entry.path,
@@ -891,7 +895,7 @@ export async function agentLivenessSnapshot(
     pipeline: row.pipeline,
     evidenceSource: row.evidenceSource,
   }));
-  const serializationMs = performance.now() - serializationStartedAt;
+  const serializationMs = phaseClock() - serializationStartedAt;
 
   return {
     observedAt: new Date(now).toISOString(),
@@ -914,7 +918,7 @@ export async function agentLivenessSnapshot(
       journalProjectionMs: roundMs(journalProjectionMs),
       evidenceReadMs: roundMs(evidenceReadMs),
       serializationMs: roundMs(serializationMs),
-      totalMs: roundMs(performance.now() - startedAt),
+      totalMs: roundMs(phaseClock() - startedAt),
     },
   };
 }

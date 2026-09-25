@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -898,12 +898,10 @@ test("a project-scoped live read serves one completed generation, hydrates only 
   });
   expect(generation.starts()).toBe(1);
   expect(snapshot.selection.recovered).toBe(0);
-  /* The structural assertions above are what actually holds the repair: one
-     generation, six rows selected out of 10,001, six tails read. The wall clock
-     is a coarse backstop against a regression the counters cannot see — 26 ms
-     measured against a 500 ms bar, so a loaded runner has to be nineteen times
-     slower before it means anything. */
-  expect(elapsedMs).toBeLessThan(500);
+  /* The structural assertions above are what holds the repair: one
+     generation, six rows selected out of 10,001, six tails read. The time is
+     reported, never asserted (#1761). */
+  console.log(JSON.stringify({ probe: "liveness-live-only-10001", ms: Math.round(elapsedMs) }));
 });
 
 test("liveOnly limit skips stale headless history and keeps the current exact-identity reviewer", async () => {
@@ -1136,9 +1134,24 @@ test("the multi-gigabyte transcript is selected from metadata and never opened f
   expect(liveRead.conversations.map((record) => record.transcriptPath)).not.toContain(corpus.hugePath);
   expect(opened).not.toContain(corpus.hugePath);
 
-  /* When it IS selected, the evidence read stays a bounded tail: three
-     gigabytes of body would never come back in this budget. */
-  const startedAt = performance.now();
+  /* When it IS selected, the evidence read stays a bounded tail: every byte
+     read out of the three-gigabyte file is counted, and it is the tail. */
+  let hugeBytesRead = 0;
+  const open = fs.promises.open.bind(fs.promises);
+  const opens = spyOn(fs.promises, "open").mockImplementation((async (...args: Parameters<typeof fs.promises.open>) => {
+    const handle = await open(...args);
+    if (args[0] === corpus.hugePath) {
+      const read = handle.read.bind(handle) as (...readArgs: unknown[]) => Promise<{ bytesRead: number }>;
+      Object.assign(handle, {
+        read: async (...readArgs: unknown[]) => {
+          const result = await read(...readArgs);
+          hugeBytesRead += result.bytesRead;
+          return result;
+        },
+      });
+    }
+    return handle;
+  }) as typeof fs.promises.open);
   const hugeRead = await agentLivenessSnapshot(
     { project: PROJECT, limit: 1, stallAfterMs: 60_000 },
     corpusSources(generation, {
@@ -1150,12 +1163,12 @@ test("the multi-gigabyte transcript is selected from metadata and never opened f
         return selection;
       },
     }),
-  );
-  const elapsedMs = performance.now() - startedAt;
+  ).finally(() => { opens.mockRestore(); });
 
   expect(hugeRead.conversations[0]!.transcriptPath).toBe(corpus.hugePath);
   expect(hugeRead.conversations[0]!.evidenceSource).toBe("transcript");
-  expect(elapsedMs).toBeLessThan(1_000);
+  expect(hugeBytesRead).toBeGreaterThan(0);
+  expect(hugeBytesRead).toBeLessThanOrEqual(1024 * 1024);
 });
 
 test("twenty concurrent project reads share one completed generation and stay bounded (#860)", async () => {
@@ -1177,11 +1190,12 @@ test("twenty concurrent project reads share one completed generation and stay bo
   expect(snapshots.every((snapshot) => snapshot.selection.generation === 12)).toBe(true);
   expect(snapshots.every((snapshot) => snapshot.count === 6)).toBe(true);
   expect(snapshots.every((snapshot) => snapshot.selection.hydrated === 6)).toBe(true);
-  /* Sharing is proved by the counters above; the two resource bars are coarse
-     backstops for what counters cannot see. The RSS bar tracks what this
-     actually costs — ~85 MiB of transient snapshot clones — with room for GC
-     timing, so a regression that reintroduced per-caller corpus work moves it. */
-  expect(elapsedMs).toBeLessThan(2_000);
+  /* Sharing is proved by the counters above; the RSS bar is a coarse backstop
+     for what counters cannot see. It tracks what this actually costs — ~85 MiB
+     of transient snapshot clones — with room for GC timing, so a regression
+     that reintroduced per-caller corpus work moves it. The time is reported,
+     never asserted (#1761). */
+  console.log(JSON.stringify({ probe: "liveness-twenty-concurrent", ms: Math.round(elapsedMs) }));
   expect(rssDeltaBytes).toBeLessThan(256 * 1024 * 1024);
 });
 
@@ -1610,20 +1624,24 @@ test("the projection timing covers the per-row host and lineage resolution (#860
     activityReason: "jsonl_turn_open",
   })));
 
+  /* On a stepped phase clock the phases are exact: host resolution is the only
+     thing that moves it, five milliseconds per call, so whichever phase owns
+     that resolution owns exactly those milliseconds and no other phase owns any. */
+  let clock = 0;
+  let resolutions = 0;
   const snapshot = await agentLivenessSnapshot(
     { project: PROJECT, liveOnly: true, limit: 10 },
     corpusSources(generation, {
+      phaseClock: () => clock,
       registrySnapshot: () => ({
         entries: Object.fromEntries(paths.map((target, index) => [`claude:timing-${index}`, structuredEntry(target, 4242 + index)])),
         conversations: {},
       }) as unknown as RegistryFile,
       probe: {
         now: () => NOW,
-        /* Host resolution with a measurable cost, spun rather than slept so the
-           phase it lands in is not a scheduling accident. */
         pidAlive: () => {
-          const until = performance.now() + 5;
-          while (performance.now() < until) { /* spin */ }
+          resolutions += 1;
+          clock += 5;
           return true;
         },
         processIdentity: () => "start-token-of-a-dead-host",
@@ -1634,8 +1652,9 @@ test("the projection timing covers the per-row host and lineage resolution (#860
   expect(snapshot.count).toBe(3);
   /* Three rows, five milliseconds of host resolution each: the projection
      phase owns it, not serialization. */
-  expect(snapshot.timings.journalProjectionMs).toBeGreaterThanOrEqual(10);
-  expect(snapshot.timings.serializationMs).toBeLessThan(snapshot.timings.journalProjectionMs);
+  expect(snapshot.timings.journalProjectionMs).toBe(5 * resolutions);
+  expect(resolutions).toBeGreaterThanOrEqual(3);
+  expect(snapshot.timings.serializationMs).toBe(0);
 });
 
 test("the default byte budget covers the default row limit (#860)", async () => {

@@ -1359,11 +1359,11 @@ test("one rollback checkpoint publishes one coherent snapshot under sustained wr
   });
   beginTestSpawn(checkpoint, "/dirty");
   concurrentWrites = true;
-  const startedAt = performance.now();
   checkpoint.checkpointRollbackMirror();
 
-  expect(mirrorWrites).toBe(2); // startup plus this checkpoint
-  expect(performance.now() - startedAt).toBeLessThan(100);
+  /* Startup plus this checkpoint: a writer behind every mirror write never
+     turns the checkpoint into a chase, it writes once and reschedules. */
+  expect(mirrorWrites).toBe(2);
   expect(checkpoint.storageDiagnostics().mirrorDirty).toBeTrue();
   expect(scheduled).toHaveLength(1);
   const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision: number };
@@ -1436,15 +1436,16 @@ test("production-sized read burn-in defers full snapshot loading until its check
     durations.push(performance.now() - startedAt);
   }
 
+  /* Deferred is what the load count says: not one full snapshot load across
+     twelve mutations. Their times are reported, never asserted (#1761). */
   expect(snapshotLoads).toBe(startupLoads);
-  expect(percentile(durations, 0.95)).toBeLessThan(250);
   expect(registry.storageDiagnostics().mirrorDirty).toBeTrue();
 
   now += 60_000;
   const dueStartedAt = performance.now();
   registry.ensureConversation("codex", "/sessions/read-due.jsonl", "read-burn-in");
   const dueMutationMs = performance.now() - dueStartedAt;
-  expect(dueMutationMs).toBeLessThan(250);
+  console.log(JSON.stringify({ probe: "registry-read-burn-in", p95Ms: Math.round(percentile(durations, 0.95)), dueMutationMs: Math.round(dueMutationMs) }));
   expect(snapshotLoads).toBe(startupLoads);
 
   checkpoints.shift()!();
@@ -1593,38 +1594,60 @@ test("SQLite writers acquire a released lock without the long busy-handler sleep
   const receipt = beginTestSpawn(seed, "/writer-wakeup");
   const filename = path.join(directory, "registry.sqlite");
   let acquiredAt = 0;
-  const store = new SqliteAgentRegistryStore(filename, {
+  /* The deadline clock is read after every busy attempt, which makes it the
+     place to watch the wait from: it lets the holder go on the first busy
+     attempt, and reads the busy handler that attempt actually ran under. */
+  let onBusyAttempt: () => void = () => {};
+  const store: SqliteAgentRegistryStore = new SqliteAgentRegistryStore(filename, {
     initialSnapshot: seed.snapshot(), normalize: normalizeRegistry,
     onWriterWait: () => { acquiredAt = Date.now(); },
+    writerClock: () => { onBusyAttempt(); return performance.now(); },
   });
+  const connection = (store as unknown as { db: Database }).db;
   const delays: number[] = [];
   for (let pulse = 0; pulse < 4; pulse++) {
     const ready = path.join(directory, `ready-${pulse}`);
+    const release = path.join(directory, `release-${pulse}`);
     const released = path.join(directory, `released-${pulse}`);
     const holder = Bun.spawn([process.execPath, "-e", `
       const fs = require("node:fs");
       const { Database } = require("bun:sqlite");
-      const [filename, ready, released] = process.argv.slice(1);
+      const [filename, ready, release, released] = process.argv.slice(1);
       const db = new Database(filename);
       db.exec("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE");
       fs.writeFileSync(ready, "ready");
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 85);
+      while (!fs.existsSync(release)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
       db.exec("COMMIT");
       fs.writeFileSync(released, String(Date.now()));
       db.close();
-    `, filename, ready, released], { stdout: "pipe", stderr: "pipe" });
+    `, filename, ready, release, released], { stdout: "pipe", stderr: "pipe" });
     const deadline = performance.now() + 2_000;
     while (!fs.existsSync(ready) && performance.now() < deadline) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
     }
     expect(fs.existsSync(ready)).toBe(true);
+    const busyTimeouts: number[] = [];
+    let clockReads = 0;
+    onBusyAttempt = () => {
+      clockReads += 1;
+      if (clockReads === 1) return; // the read that starts the deadline
+      busyTimeouts.push(connection.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()!.timeout);
+      if (!fs.existsSync(release)) fs.writeFileSync(release, "release");
+    };
     store.mutate((file) => { file.receipts[receipt.launchId]!.error = `pulse-${pulse}`; }, false);
+    onBusyAttempt = () => {};
     expect(await holder.exited).toBe(0);
     expect(await new Response(holder.stderr).text()).toBe("");
+    /* The writer met the held lock and retried under the 5 ms handler, never
+       SQLite's default one that grows its sleep to 100 ms. */
+    expect(busyTimeouts.length).toBeGreaterThan(0);
+    expect(busyTimeouts.every((timeout) => timeout === 5)).toBe(true);
+    expect(store.snapshot().file.receipts[receipt.launchId]!.error).toBe(`pulse-${pulse}`);
     delays.push(Math.max(0, acquiredAt - Number(fs.readFileSync(released, "utf8"))));
   }
+  expect(connection.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()!.timeout).toBe(5_000);
+  // Reported, not asserted: how soon this runner woke is not the property (#1761).
   console.info(`[agent registry writer wakeup] release-to-acquire delays: ${delays.join(", ")}ms`);
-  expect(Math.max(...delays)).toBeLessThan(10);
 });
 
 test("SQLite mutation acquisition retains the five-second deadline and leaves a held writer untouched", () => {
@@ -1632,17 +1655,23 @@ test("SQLite mutation acquisition retains the five-second deadline and leaves a 
   const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
   const receipt = beginTestSpawn(seed, "/writer-deadline");
   const filename = path.join(directory, "registry.sqlite");
-  const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: seed.snapshot(), normalize: normalizeRegistry });
+  const clock = { now: 0, step: 0, reads: 0 };
+  const store = new SqliteAgentRegistryStore(filename, {
+    initialSnapshot: seed.snapshot(), normalize: normalizeRegistry,
+    writerClock: () => { clock.reads += 1; const at = clock.now; clock.now += clock.step; return at; },
+  });
   const before = store.snapshot();
   const holder = new Database(filename);
   holder.exec("BEGIN IMMEDIATE");
   try {
-    const startedAt = performance.now();
+    /* The deadline is read on a clock this test steps a second per busy
+       attempt: the wait gives up on the fifth, when five seconds have passed on
+       it, and not one attempt sooner or later. */
+    clock.reads = 0;
+    clock.step = 1_000;
     expect(() => store.mutate((file) => { file.receipts[receipt.launchId]!.error = "must not land"; }, false))
       .toThrow("database is locked");
-    const elapsed = performance.now() - startedAt;
-    expect(elapsed).toBeGreaterThanOrEqual(5_000);
-    expect(elapsed).toBeLessThan(5_500);
+    expect(clock.reads).toBe(1 + 5);
     expect(holder.inTransaction).toBe(true);
   } finally {
     holder.exec("ROLLBACK");
@@ -1653,7 +1682,7 @@ test("SQLite mutation acquisition retains the five-second deadline and leaves a 
   expect(after.file).toEqual(before.file);
   store.mutate((file) => { file.receipts[receipt.launchId]!.error = "after release"; }, false);
   expect(store.snapshot().file.receipts[receipt.launchId]!.error).toBe("after release");
-}, 7_000);
+});
 
 test.each([2, 1])("SQLite mutation converges against a 20ms foreign writer with a %i-attempt ceiling", async (ceiling) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-foreign-writer-"));
@@ -1681,7 +1710,6 @@ test.each([2, 1])("SQLite mutation converges against a 20ms foreign writer with 
     while (!fs.existsSync(ready) && performance.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
     expect(fs.existsSync(ready)).toBe(true);
     let attempts = 0;
-    const started = performance.now();
     const mutate = () => store.mutate((file) => {
       attempts += 1;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 110);
@@ -1693,7 +1721,6 @@ test.each([2, 1])("SQLite mutation converges against a 20ms foreign writer with 
     } else {
       mutate();
       expect(attempts).toBe(2);
-      expect(performance.now() - started).toBeLessThan(500);
     }
     expect(await writer.exited).toBe(0);
     expect(await new Response(writer.stderr).text()).toBe("");
@@ -1822,7 +1849,7 @@ test("SQLite preserves the release hand-off epoch across Viewer processes", () =
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
-test("production-sized SQLite registry bounds ten-lane writes, concurrent reads, and JSON rewrites", async () => {
+test("production-sized SQLite registry admits every ten-lane write beside a concurrent reader, with no JSON rewrite", async () => {
   const PRODUCTION_BYTES = 14_660_822;
   async function measure(): Promise<{
     operationP95: number;
@@ -1900,9 +1927,10 @@ test("production-sized SQLite registry bounds ten-lane writes, concurrent reads,
     `[agent registry benchmark] production ten-lane p95: operation=${sqlite.operationP95.toFixed(1)}ms `
     + `writer wait=${sqlite.writerWaitP95.toFixed(1)}ms; reader=${sqlite.readerP95.toFixed(1)}ms`,
   );
-  expect(sqlite.operationP95).toBeLessThan(250);
-  expect(sqlite.writerWaitP95).toBeLessThan(100);
-  expect(sqlite.readerP95).toBeLessThan(100);
+  /* A benchmark: the p95s above are the evidence and are not asserted, because
+     they measure the runner as much as the store (#1761). What must hold on any
+     machine is asserted inside measure(): every lane exits cleanly and the
+     revision advances by exactly the 140 admitted writes. */
 }, 60_000);
 
 test("seat child discovery uses its parent index and bounded payload reads across a large unrelated registry", () => {

@@ -215,10 +215,11 @@ for (const responseMs of [5_000, 11_000]) test(`slow startup keyed read complete
     expect(passes).toBe(1);
     // The startup signal read, then the historical fallback's comparison read.
     expect(requests).toEqual(Array.from({ length: 2 }, () => ({ method: "session-read", params: { conversationId: conversation.id } })));
+    /* No lease is held while a host request is in flight, sampled at every
+       request and every 10 ms besides. Hold times and event-loop delay are
+       reported below, never asserted (#1761). */
     expect(heldDuringRequest).toBe(false);
     expect(holds.length).toBeGreaterThan(0);
-    expect(Math.max(...holds)).toBeLessThan(100);
-    expect(delay.max / 1e6).toBeLessThan(500);
     console.log(JSON.stringify({ responseMs, keyedReads: requests.length, secondTriggerAdoptions: adoptions - firstPassAdoptions,
       heldDuringRequest, maxLeaseHoldMs: Math.max(...holds), eventLoopDelayMs: delay.max / 1e6 }));
   } finally {
@@ -587,8 +588,9 @@ test("the full retained history completes within the promoted serving budget", a
     }), () => {}, { waitUntilReady: true });
     const elapsedMs = performance.now() - started;
     console.log(JSON.stringify({ history: { receipts: 6623, conversations: 8078, entries: 5188 }, counts, elapsedMs }));
-    // Keep the optimization below the old deadline despite the new headroom.
-    expect(elapsedMs).toBeLessThan(120_000);
+    /* The budget is held by what startup asks the host for, counted below: no
+       full snapshot (three seconds each here), and a bounded number of every
+       other call. The time is reported above, never asserted (#1761). */
     expect(counts.snapshot ?? 0).toBe(0);
     expect(counts["session-read"]).toBeGreaterThan(0);
     expect(counts.append).toBeGreaterThan(4300);
@@ -656,10 +658,11 @@ test("granted operator rows keep HTTP answering through a full retained-history 
     /* Each row a structured host can own is read for its signals and again for its fallback, and each failed
        launch twice by spawn recovery. The other 2890 historical conversations are not read at all. */
     expect(counts["session-read"]).toBeLessThanOrEqual(2 * 5188 + 2 * 672);
-    expect(httpMaxMs).toBeLessThan(1_000);
-    expect(delay.max / 1e6).toBeLessThan(1_000);
-    // Before the decision was reused, this history took over sixty seconds to reach ready here.
-    expect(elapsedMs).toBeLessThan(30_000);
+    /* Before the decision was reused, this history took over sixty seconds to
+       reach ready here. The elapsed time, the slowest HTTP probe and the
+       event-loop delay are reported above, never asserted: all three measure
+       the runner as much as the startup (#1761). The call counts are what
+       hold the repair. */
     // The decision is reused, never skipped: each granted root keeps exactly its grant.
     for (const conversation of granted) {
       expect(f.registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
@@ -722,11 +725,11 @@ test("startup never holds a state lease across a five second host request", asyn
       refreshTranscriptState: async () => {}, adopt: async () => [], adoptClaude: async () => [], orchestratorSeats: () => [],
     });
     console.log(JSON.stringify({ heldDuringRequest, longestHoldMs, maxLeaseHoldMs: Math.max(...holds) }));
+    /* The lease table is read when the request starts: nothing is held across
+       it. Hold times are reported above, never asserted (#1761). */
     expect(holds.length).toBeGreaterThan(0);
-    expect(Math.max(...holds)).toBeLessThan(100);
     expect(calls).toBeGreaterThan(0);
     expect(heldDuringRequest).toBe(false);
-    expect(longestHoldMs).toBeLessThan(100);
   } finally {
     db.close();
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });

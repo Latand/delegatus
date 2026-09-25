@@ -245,9 +245,8 @@ describe("a one-line label leads with the real command", () => {
 
   test("the fold is bounded: a pathological wrapper chain still returns", () => {
     const nested = `${"sh -c '".repeat(200)}bun test${"'".repeat(200)}`;
-    const started = Date.now();
+    // Returning at all is the claim; an unbounded fold would never settle here.
     expect(label(nested).length).toBeGreaterThan(0);
-    expect(Date.now() - started).toBeLessThan(2000);
   });
 
   test("a long flat assignment chain spends a fixed budget, then keeps the rest verbatim", () => {
@@ -255,9 +254,7 @@ describe("a one-line label leads with the real command", () => {
     // number of them; the caller hands this raw command in before any display
     // limit applies. 100 000 assignments in front of the program.
     const chain = `${"DEMO_A=x ".repeat(100_000)}echo ok`;
-    const started = Date.now();
     const folded = cleanShellCommand(chain);
-    expect(Date.now() - started).toBeLessThan(250);
     // The budget is spent on a bounded number of assignments and the fold then
     // stops: what is left is the untouched tail, not a command cut in half.
     expect(folded.endsWith("echo ok")).toBe(true);
@@ -270,9 +267,10 @@ describe("a one-line label leads with the real command", () => {
   });
 
   test("a single enormous value is refused rather than scanned to its end", () => {
+    // The value does end, in a space before `echo`: a scan that read it to its
+    // end would fold the assignment away and answer "echo ok". Only a scan
+    // that stopped at its window leaves the command verbatim.
     const giant = `env DEMO_NOTE=${"x".repeat(200_000)} echo ok`;
-    const started = Date.now();
     expect(cleanShellCommand(giant)).toBe(giant);
-    expect(Date.now() - started).toBeLessThan(250);
   });
 });

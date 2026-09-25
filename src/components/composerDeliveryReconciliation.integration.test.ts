@@ -57,7 +57,6 @@ test("an expired window with no receipt resolves to null so the caller can recov
 
 test("an aborted window resolves to null without waiting out the deadline", async () => {
   const controller = new AbortController();
-  const started = Date.now();
   const pending = reconcileComposerReceipt({
     read: () => null,
     refresh: () => new Promise<boolean>(() => {}),
@@ -65,8 +64,14 @@ test("an aborted window resolves to null without waiting out the deadline", asyn
     pollIntervalMs: 1_000,
     signal: controller.signal,
   });
+  const observed: { settled: { value: unknown } | null } = { settled: null };
+  void pending.then((value) => { observed.settled = { value }; });
   controller.abort();
 
-  expect(await pending).toBeNull();
-  expect(Date.now() - started).toBeLessThan(1_000);
+  /* Counted in event-loop turns, not milliseconds: the abort settles the window
+     within a few turns, long before the 10 s deadline or a 1 s poll could. */
+  for (let turn = 0; turn < 50 && observed.settled === null; turn += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  expect(observed.settled).toEqual({ value: null });
 });

@@ -280,6 +280,10 @@ export interface SqliteRegistryStoreOptions {
   onRevisionQuery?(): void;
   /** Test seam for the hard ceiling; production uses two attempts. */
   maxMutationAttempts?: number;
+  /** Test seam for the writer-acquisition deadline: the clock it is measured
+      on, read once when the wait starts and once after every busy attempt.
+      Production omits it and measures on `performance.now()`. */
+  writerClock?(): number;
 }
 
 /**
@@ -347,6 +351,7 @@ export class SqliteAgentRegistryStore {
   private readonly normalize: (value: unknown) => RegistryFile;
   private readonly onWriterWait: ((durationMs: number) => void) | undefined;
   private readonly maxMutationAttempts: number;
+  private readonly writerClock: () => number;
   private onSnapshotLoad: (() => void) | undefined;
   private onRowPayloadRead: ((collection: RowCollection, count: number) => void) | undefined;
   private onRowPayloadParse: ((collection: RowCollection, count: number) => void) | undefined;
@@ -397,6 +402,7 @@ export class SqliteAgentRegistryStore {
     if (!Number.isInteger(this.maxMutationAttempts) || this.maxMutationAttempts < 1) {
       throw new RangeError("maxMutationAttempts must be a positive integer");
     }
+    this.writerClock = options.writerClock ?? (() => performance.now());
     this.onSnapshotLoad = options.onSnapshotLoad;
     this.onRowPayloadRead = options.onRowPayloadRead;
     this.onRowPayloadParse = options.onRowPayloadParse;
@@ -1001,7 +1007,7 @@ export class SqliteAgentRegistryStore {
   }
 
   private beginMutationWrite(): void {
-    const deadline = performance.now() + 5_000;
+    const deadline = this.writerClock() + 5_000;
     // SQLite's default busy handler grows its sleep to 100 ms. Short registry
     // commits can repeatedly pass a sleeping lane. Retry acquisition in short
     // intervals, retaining the same total deadline and measuring the whole wait.
@@ -1014,7 +1020,7 @@ export class SqliteAgentRegistryStore {
         } catch (error) {
           if (!(error instanceof Error)
             || (error as { code?: string }).code !== "SQLITE_BUSY"
-            || performance.now() >= deadline) throw error;
+            || this.writerClock() >= deadline) throw error;
         }
       }
     } finally {

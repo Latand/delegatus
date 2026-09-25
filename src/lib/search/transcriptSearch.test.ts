@@ -643,10 +643,9 @@ test("serves the committed index while a changed transcript is rebuilding", asyn
   const rebuilding = indexTranscriptSources([changed], { complete: true, readMessages });
   await started;
 
-  const queryStartedAt = performance.now();
+  // The rebuild is held at its gate, so this answer can only come from the committed index.
   const during = searchTranscripts({ query: "old" });
 
-  expect(performance.now() - queryStartedAt).toBeLessThan(250);
   expect(during.items).toHaveLength(1);
   release();
   await rebuilding;

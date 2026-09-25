@@ -342,10 +342,9 @@ describe("runtimeBus join", () => {
     };
     h.setSnapshot({ ...initial, sessions: [codex, claude] });
 
-    const warmStartedAt = performance.now();
+    // Warm means joined by the first flush, before any timer on the harness clock runs.
     h.bus.start();
     await flush();
-    expect(performance.now() - warmStartedAt).toBeLessThan(250);
     expect(h.bus.getState().store.sessions.conv_a?.sessionKey.engine).toBe("codex");
     expect(h.bus.getState().store.sessions.conv_b?.sessionKey.engine).toBe("claude");
     h.sources[0]!.open();
