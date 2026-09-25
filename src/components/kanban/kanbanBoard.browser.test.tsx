@@ -8059,6 +8059,155 @@ describe("board order: working cards first, then recently worked, then idle", ()
   }, 600_000);
 });
 
+describe("task priority: the Inbox takes high first and low last, the other columns keep their order", () => {
+  /* The `task-priority` scenario: an Inbox of two high, two normal and two
+     low tasks (one low task with a working agent, which still sits under
+     every normal one), and an Assigned column whose high and low tasks keep
+     the most recent agent work on top. On the desktop at 1440×900 the board,
+     the Inbox and the card's ⋯ with its Priority group; on the phone at
+     390×844 the Inbox tab and the task sheet's Priority face; en and uk.
+     Frames go to PRIORITY_PNG_DIR, or `.artifacts/task-priority/`, never
+     committed; the readings go to `evidence/task-priority/readings.json`.
+
+       CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 PRIORITY_PNG_DIR=… \
+         bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "task priority" */
+  const INBOX = ["t-prio-deploy", "t-prio-limits", "t-prio-notes", "t-prio-export", "t-prio-cleanup", "t-prio-idea"];
+  const ASSIGNED = ["t-prio-banner", "t-prio-search", "t-prio-docs"];
+  const MARKS: Record<string, string> = { "t-prio-deploy": "high", "t-prio-limits": "high", "t-prio-cleanup": "low", "t-prio-idea": "low", "t-prio-banner": "low", "t-prio-search": "high" };
+
+  browserTest("the Inbox sorts by priority with a quiet mark on high and low, on the desktop and the phone, en and uk", async () => {
+    const pngDir = path.resolve(process.env.PRIORITY_PNG_DIR ?? ".artifacts/task-priority");
+    const out = path.resolve(".artifacts/task-priority-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=task-priority`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const t = (key: string) => translate(lang, key as never);
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, "light", lang);
+          try {
+            await page.waitForSelector(card("t-prio-deploy"), { timeout: 30_000 });
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(800);
+            await page.screenshot({ path: path.join(pngDir, `${label}-board.png`) });
+            await page.locator('[data-kanban-board] .column[data-status="inbox"]').screenshot({ path: path.join(pngDir, `${label}-inbox.png`) });
+            const read = await page.evaluate(() => {
+              const column = (status: string) => [...document.querySelectorAll(`[data-kanban-board] .column[data-status="${status}"] .card`)]
+                .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, ""));
+              const marks = Object.fromEntries([...document.querySelectorAll("[data-kanban-board] .card")].flatMap((element) => {
+                const mark = element.querySelector(".prio-mark");
+                return mark ? [[(element.getAttribute("data-id") ?? "").replace(/^task:/, ""), [mark.getAttribute("data-priority"), mark.getAttribute("aria-label")]]] : [];
+              }));
+              /* The mark takes no room from the title: in one column a marked
+                 card's title is as wide as an unmarked card's. */
+              const squeezed = ["inbox", "assigned"].flatMap((status) => {
+                const widths = [...document.querySelectorAll(`[data-kanban-board] .column[data-status="${status}"] .card`)]
+                  .map((element) => Math.round(element.querySelector(".head > .title")?.getBoundingClientRect().width ?? 0));
+                return Math.max(...widths) - Math.min(...widths) > 1 ? [`${status} ${JSON.stringify(widths)}`] : [];
+              });
+              /* And it leads the foot line, in the foot's own row. */
+              const misplaced = [...document.querySelectorAll("[data-kanban-board] .card .prio-mark")].flatMap((mark) =>
+                mark.parentElement?.classList.contains("foot") && mark.parentElement.firstElementChild === mark ? [] : [(mark.closest(".card")?.getAttribute("data-id") ?? "")]);
+              return { inbox: column("inbox"), assigned: column("assigned"), marks, squeezed, misplaced };
+            });
+            readings[label] = read;
+            if (JSON.stringify(read.inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(read.inbox)}`);
+            if (JSON.stringify(read.assigned) !== JSON.stringify(ASSIGNED)) failures.push(`${label}: Assigned reads ${JSON.stringify(read.assigned)}`);
+            for (const [id, level] of Object.entries(MARKS)) {
+              const got = (read.marks as Record<string, [string, string]>)[id];
+              if (!got || got[0] !== level || got[1] !== t(`kanban.priorityMark.${level}`)) failures.push(`${label}: ${id} mark ${JSON.stringify(got)}`);
+            }
+            const extra = Object.keys(read.marks).filter((id) => !(id in MARKS));
+            if (extra.length) failures.push(`${label}: normal tasks carry a mark: ${extra.join(", ")}`);
+            if (read.squeezed.length) failures.push(`${label}: title widths differ: ${read.squeezed.join(", ")}`);
+            if (read.misplaced.length) failures.push(`${label}: mark not leading the foot: ${read.misplaced.join(", ")}`);
+            /* The card's ⋯: the Priority group under Move to, the current level checked. */
+            await page.locator(`${card("t-prio-notes")} [data-menu]`).click();
+            await page.waitForSelector(".menu", { timeout: 10_000 });
+            await page.waitForTimeout(300);
+            await page.locator(".menu").screenshot({ path: path.join(pngDir, `${label}-menu.png`) });
+            const menu = await page.evaluate(() => ({
+              heads: [...document.querySelectorAll(".menu .head")].map((head) => head.textContent?.trim()),
+              checked: [...document.querySelectorAll('.menu [role="menuitemradio"][aria-checked="true"]')].map((item) => item.querySelector(".lbl")?.firstChild?.textContent?.trim() ?? item.textContent?.trim()),
+            }));
+            readings[`${label}-menu`] = menu;
+            if (menu.heads[1] !== t("kanban.priority")) failures.push(`${label}: menu heads ${JSON.stringify(menu.heads)}`);
+            if (!menu.checked.includes(t("kanban.priority.normal"))) failures.push(`${label}: checked ${JSON.stringify(menu.checked)}`);
+            /* Raise it to high: it moves above the normal tasks at once. */
+            await page.locator('.menu [role="menuitemradio"]').filter({ hasText: t("kanban.priority.high") }).first().click();
+            await page.waitForTimeout(1500);
+            const raised = await page.evaluate(() => [...document.querySelectorAll('[data-kanban-board] .column[data-status="inbox"] .card')]
+              .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, "")));
+            readings[`${label}-raised`] = raised;
+            /* The newest edit leads its level, as it did among the normal ones. */
+            const RAISED = ["t-prio-notes", "t-prio-deploy", "t-prio-limits", "t-prio-export", "t-prio-cleanup", "t-prio-idea"];
+            if (JSON.stringify(raised) !== JSON.stringify(RAISED)) failures.push(`${label}: after High the Inbox reads ${JSON.stringify(raised)}`);
+            await page.mouse.move(0, 0);
+            await page.locator('[data-kanban-board] .column[data-status="inbox"]').screenshot({ path: path.join(pngDir, `${label}-inbox-raised.png`) });
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            await page.locator('[data-phone-kanban-tab="inbox"]').first().click();
+            await page.waitForSelector('[data-phone-kanban-column="inbox"] [data-phone-card="task:t-prio-deploy"]', { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            await page.screenshot({ path: path.join(pngDir, `${label}-inbox.png`) });
+            const read = await page.evaluate(() => ({
+              inbox: [...document.querySelectorAll('[data-phone-kanban-column="inbox"] [data-phone-card^="task:"]')].map((element) => (element.getAttribute("data-phone-card") ?? "").replace(/^task:/, "")),
+              marks: Object.fromEntries([...document.querySelectorAll('[data-phone-kanban-column="inbox"] [data-phone-card]')].flatMap((element) => {
+                const mark = element.querySelector("[data-phone-card-priority]");
+                return mark ? [[(element.getAttribute("data-phone-card") ?? "").replace(/^task:/, ""), mark.getAttribute("data-phone-card-priority")]] : [];
+              })),
+              overflowX: document.scrollingElement ? document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth : 0,
+            }));
+            readings[label] = read;
+            if (JSON.stringify(read.inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(read.inbox)}`);
+            for (const id of INBOX) if ((read.marks as Record<string, string>)[id] !== MARKS[id]) failures.push(`${label}: ${id} mark ${(read.marks as Record<string, string>)[id]}`);
+            if (read.overflowX > 0.5) failures.push(`${label}: overflows sideways by ${read.overflowX}px`);
+            /* The task sheet's Priority face. */
+            await page.locator('[data-phone-card="task:t-prio-notes"]').click();
+            await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 10_000 });
+            await page.locator('[data-mobile2-open="menu"]').first().click();
+            await page.locator('[data-phone-task-menu="priority"]').click();
+            await page.waitForSelector("[data-phone-task-priorities]", { timeout: 10_000 });
+            await page.waitForTimeout(500);
+            await page.screenshot({ path: path.join(pngDir, `${label}-sheet.png`) });
+            const sheet = await page.evaluate(() => [...document.querySelectorAll("[data-phone-task-priority]")].map((row) => [row.getAttribute("data-phone-task-priority"), row.textContent?.trim(), row.getAttribute("aria-checked"), Math.round(row.getBoundingClientRect().height)]));
+            readings[`${label}-sheet`] = sheet;
+            const want = (["high", "normal", "low"] as const).map((level) => [level, t(`kanban.priority.${level}`), level === "normal" ? "true" : "false"]);
+            if (JSON.stringify(sheet.map((row) => row.slice(0, 3))) !== JSON.stringify(want)) failures.push(`${label}: sheet ${JSON.stringify(sheet)}`);
+            if (sheet.some((row) => (row[3] as number) < 44)) failures.push(`${label}: sheet rows under 44px ${JSON.stringify(sheet)}`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/task-priority", { recursive: true });
+    fs.writeFileSync("evidence/task-priority/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
 describe("interface polish round 2: press and open/close motion, the status menu at the card's ⋯, quiet card tools, the narrow sheet head", () => {
   /*
    * What only a browser settles for the round-2 interface polish (#2148), over

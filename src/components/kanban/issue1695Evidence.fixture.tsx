@@ -165,6 +165,10 @@ const GHOSTS = SCENARIO === "ghost-tasks";
 const UNSTARTED = SCENARIO === "unstarted-regression";
 /* Board order: working cards first, then recently worked, then idle. */
 const BOARD_ORDER = SCENARIO === "board-order";
+/* Task priority: an Inbox of high, normal and low tasks read in its order,
+   one low task with a working agent, and an Assigned column whose priorities
+   do not change its order. */
+const PRIORITY = SCENARIO === "task-priority";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -1201,6 +1205,25 @@ if (BOARD_ORDER) {
     task("t-order-notes", "assigned", L("Write the upgrade notes", "Написати нотатки до оновлення"), L("Nobody has worked on it yet.", "Над нею ще ніхто не працював."), 1 * MIN),
   );
 }
+if (PRIORITY) {
+  const helper = conversation("priority-helper", L("Implementer: remove the unused tmux helpers", "Імплементер: прибрати невживані помічники tmux"), working({ plan: { current: L("Deleting the pane scraper", "Видаляю зчитувач панелей") } }));
+  const banner = conversation("priority-banner", L("Builder: the limit banner copy", "Білдер: текст банера про ліміт"), working({ plan: { current: L("Wording the reset time", "Формулюю час скидання") } }));
+  files.splice(0, files.length, orchestrator, helper, banner);
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length,
+    /* Inbox, in the order tasks arrived: the column sorts them. */
+    task("t-prio-cleanup", "inbox", L("Remove the unused tmux helpers", "Прибрати невживані помічники tmux"), L("Nothing calls them since the structured transport.", "Їх ніхто не викликає відтоді, як є структурований транспорт."), 3 * MIN, [helper], { priority: "low", color: "slate", icon: "wrench" }),
+    task("t-prio-notes", "inbox", L("Write the upgrade notes for 1.5", "Написати нотатки до оновлення 1.5"), "", 12 * MIN, [], { color: "pink", icon: "file-text" }),
+    task("t-prio-deploy", "inbox", L("A failed deploy tells the seat and the phone", "Невдалий деплой повідомляє сесію та телефон"), L("Today it fails silently until someone opens the board.", "Зараз він падає тихо, поки хтось не відкриє дошку."), 40 * MIN, [], { priority: "high", color: "coral", icon: "siren" }),
+    task("t-prio-export", "inbox", L("Export a board as Markdown", "Експорт дошки в Markdown"), "", 2 * 60 * MIN, [], { color: "lime", icon: "file-down" }),
+    task("t-prio-idea", "inbox", L("Try a compact density for the Done column", "Спробувати щільніший вигляд колонки «Готово»"), "", 26 * 60 * MIN, [], { priority: "low", color: "sky", icon: "layout-dashboard" }),
+    task("t-prio-limits", "inbox", L("Spend quota before its window resets", "Витратити квоту до скидання вікна"), L("Two accounts reset tonight with most of their week unused.", "Два облікові записи скидаються сьогодні ввечері з майже невикористаним тижнем."), 3 * 24 * 60 * MIN, [], { priority: "high", color: "amber", icon: "key-round" }),
+    /* Assigned keeps the most recent agent work on top, whatever the priority. */
+    task("t-prio-banner", "assigned", L("Rate-limit banner copy", "Текст банера про ліміт"), "", 20 * MIN, [banner], { priority: "low", color: "sky", icon: "megaphone" }),
+    task("t-prio-search", "assigned", L("Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"), "", 5 * 60 * MIN, [], { priority: "high", color: "coral", icon: "bug" }),
+    task("t-prio-docs", "assigned", L("Document the merge setting", "Задокументувати налаштування мерджу"), "", 9 * 60 * MIN, [], { color: "pink", icon: "book-open" }),
+  );
+}
 if (BALANCE) {
   for (const column of BALANCE_COLUMNS) {
     tasks.push(task(`t-bal-${column}`, column, `Stage pills in ${column}: 5, 20 and 40 character names`, "One-stage chains and Build → Review with a fail loop that fired.", 1 * MIN));
@@ -1736,6 +1759,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (body.color === "none") delete next.color;
       else next.color = body.color as BoardTask["color"];
     }
+    /* Normal is stored as nothing, as the route stores it. */
+    if (body.priority !== undefined) {
+      if (body.priority === "high" || body.priority === "low") next.priority = body.priority;
+      else delete next.priority;
+    }
     /* The picker only ever sends a lucide name or "none" (#2102). */
     if (body.icon !== undefined) {
       if (body.icon === "none" || body.icon === null) delete next.icon;
@@ -1756,7 +1784,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     } else if (body.hide === false) {
       delete next.groupHidden;
     }
-    const presentationOnly = Object.keys(body).every((key) => key === "color" || key === "icon" || key === "hide" || key === "expectedProject" || key === "expectedRevision");
+    const presentationOnly = Object.keys(body).every((key) => key === "color" || key === "icon" || key === "priority" || key === "hide" || key === "expectedProject" || key === "expectedRevision");
     next.updatedAt = presentationOnly ? current.updatedAt : new Date().toISOString();
     next.revision = REV(revision++);
     tasks[index] = next;

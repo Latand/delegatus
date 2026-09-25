@@ -1016,6 +1016,11 @@
 .kb .card .details-text:hover { background: var(--surface-sunken, var(--surface-well)); }
 .kb .card .edit.details-edit { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--text-caption); line-height: 16px; max-height: 320px; overflow-y: auto; }
 .kb .icon-btn.lock { color: var(--color-muted); cursor: default; }
+/* A high or low task's mark, leading the foot line in the quiet inks the
+   card already uses. */
+.kb .card .prio-mark { flex-shrink: 0; display: inline-flex; align-items: center; margin-right: -2px; color: var(--color-muted); }
+.kb .card .prio-mark svg { width: 13px; height: 13px; }
+.kb .card .prio-mark[data-priority="high"] { color: var(--color-secondary); }
 .kb .icon-btn.lock:hover { background: none; }
 @media (hover: hover) and (pointer: fine) {
   .kb .card .tools .icon-btn.hide { opacity: 0; transition: opacity var(--motion-fast); }

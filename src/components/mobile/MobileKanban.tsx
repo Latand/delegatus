@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
   useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type TouchEvent as ReactTouchEvent,
@@ -377,7 +377,9 @@ function CardView({ item, now, project, onOpen, onLongPress, onDismiss, onUndo }
   /* One coloured edge at most: the need's hue, else the task's colour label. */
   const colour = !item.edge && card.color ? { boxShadow: `inset 3px 0 0 ${TASK_COLOR_HEX[card.color]}, var(--shadow-1)` } : undefined;
   const loose = item.kind === "conversation" || item.kind === "flow";
-  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), project].filter(Boolean).join(", ");
+  /* High and low only, as on the desktop card; the card's label says it. */
+  const priority = item.kind === "task" && card.priority !== "normal" ? card.priority : null;
+  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, project].filter(Boolean).join(", ");
   const body = (
     <>
       {project ? (
@@ -407,6 +409,11 @@ function CardView({ item, now, project, onOpen, onLongPress, onDismiss, onUndo }
         >
           {title}
         </span>
+        {priority ? (
+          <span aria-hidden data-phone-card-priority={priority} className={`mt-[calc((1.25em-14px)/2)] shrink-0 text-body ${priority === "high" ? "text-secondary" : "text-muted"}`}>
+            {priority === "high" ? <ArrowUp className="h-[14px] w-[14px]" /> : <ArrowDown className="h-[14px] w-[14px]" />}
+          </span>
+        ) : null}
         <NeedBadge item={item} />
       </span>
       {item.shown && !loose ? (

@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { LIST_ANSWER_BYTES } from "./listAnswers";
 
-type Metadata = { id: string; time: string; project: string; status: string; placement: string; hidden: number; text: string; links: string };
+type Metadata = { id: string; time: string; project: string; status: string; placement: string; priority: string; hidden: number; text: string; links: string };
 export type Source<T> = { filename: string; read: (id: string) => T | null; database?: Database | null };
 export type BoardScope = { project: string; ids: string[]; query: string; updatedSince: string;
-  statuses?: string[]; states?: string[]; placement?: string; openOnly?: boolean; includeClosed?: boolean };
+  statuses?: string[]; states?: string[]; placement?: string; priorities?: string[]; openOnly?: boolean; includeClosed?: boolean };
 export type ProjectSelection = { canonical: (project: string) => string; aliases: () => Record<string, string> };
 const defaultProjects: ProjectSelection = { canonical: canonicalProject, aliases: () => projectAliasSnapshot().aliases };
 const projections = new Map<string, BoardSelection>();
@@ -29,7 +29,7 @@ export class BoardSelection {
   constructor(private filename: string, private collection: "tasks" | "pipelines" | "flows", private projects: ProjectSelection = defaultProjects) {
     const Database = sqliteDatabase();
     this.db = new Database(":memory:");
-    this.db.exec(`CREATE TABLE rows(id TEXT PRIMARY KEY, time TEXT, project TEXT, status TEXT, placement TEXT, hidden INTEGER, text TEXT);
+    this.db.exec(`CREATE TABLE rows(id TEXT PRIMARY KEY, time TEXT, project TEXT, status TEXT, placement TEXT, priority TEXT, hidden INTEGER, text TEXT);
       CREATE INDEX row_time ON rows(time DESC,id DESC);
       CREATE INDEX row_project ON rows(project,time DESC,id DESC);
       CREATE INDEX row_status ON rows(status,time DESC,id DESC);
@@ -47,6 +47,7 @@ export class BoardSelection {
       json_extract(value_json,'$.project') AS project,
       json_extract(value_json,'$.${task ? "status" : "state"}') AS status,
       CASE WHEN COALESCE(json_extract(value_json,'$.placement'),'pinned') = 'pinned' AND json_type(value_json,'$.pos.x') IN ('integer','real') AND json_type(value_json,'$.pos.y') IN ('integer','real') THEN 'pinned' ELSE 'unplaced' END AS placement,
+      CASE WHEN json_extract(value_json,'$.priority') IN ('high','low') THEN json_extract(value_json,'$.priority') ELSE 'normal' END AS priority,
       (json_extract(value_json,'$.${this.collection === "flows" ? "closedAt" : "hiddenAt"}') IS NOT NULL) AS hidden,
       ${this.collection === "flows" ? "''" : `json_extract(value_json,'$.${task ? "text" : "task"}')`} AS text,
       COALESCE(json_extract(value_json,'$.taskIds'),'[]') AS links
@@ -60,7 +61,7 @@ export class BoardSelection {
   private put(row: Metadata) {
     this.work.metadataRows++;
     this.remove(row.id);
-    this.db.query("INSERT INTO rows VALUES (?,?,?,?,?,?,?)").run(row.id, row.time, row.project, row.status, row.placement, row.hidden, row.text.toLowerCase());
+    this.db.query("INSERT INTO rows VALUES (?,?,?,?,?,?,?,?)").run(row.id, row.time, row.project, row.status, row.placement, row.priority, row.hidden, row.text.toLowerCase());
     const add = this.db.query("INSERT OR IGNORE INTO terms VALUES (?,?)");
     for (const term of grams(row.text.toLowerCase())) add.run(term, row.id);
     if (this.collection === "pipelines") for (const task of JSON.parse(row.links) as string[]) {
@@ -157,6 +158,7 @@ export class BoardSelection {
     if (scope.project) set("project", [scope.project, ...Object.keys(this.projects.aliases()).filter(key => this.projects.canonical(key) === scope.project)]);
     set("status", scope.statuses ?? expandStates(scope.states ?? []));
     if (scope.placement) set("placement", [scope.placement]);
+    set("priority", scope.priorities ?? []);
     if (scope.openOnly) clauses.push("status != 'done'");
     if (this.collection !== "tasks" && !scope.includeClosed) clauses.push("status != 'closed' AND hidden=0");
     if (scope.updatedSince) { clauses.push("time >= ?"); values.push(scope.updatedSince); }
@@ -181,6 +183,7 @@ function matches(row: Record<string, any>, scope: BoardScope, collection: string
   return (!scope.project || canonical(row.project) === scope.project)
     && (!states.length || states.includes(task ? row.status : row.state))
     && (!scope.openOnly || row.status !== "done") && (!scope.placement || row.placement === scope.placement)
+    && (!scope.priorities?.length || scope.priorities.includes(row.priority === "high" || row.priority === "low" ? row.priority : "normal"))
     && (task || scope.includeClosed || (row.state !== "closed" && !(collection === "flows" ? row.closedAt : row.hiddenAt)))
     && (!scope.updatedSince || (task ? row.updatedAt : row.createdAt) >= scope.updatedSince)
     && (!scope.query || (task ? row.text : row.task).toLowerCase().includes(scope.query));

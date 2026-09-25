@@ -3,7 +3,8 @@ import { conversationIdentity } from "@/lib/accounts/identity";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { groupHideState, isSeatConversation, seatAssignment, seatOnlyTask, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
-import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
+import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
+import { priorityRank } from "@/lib/tasks/priority";
 import type { FileEntry } from "@/lib/types";
 import { byNeedAge, conversationNeed, laneNeed, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
@@ -152,6 +153,8 @@ export interface KanbanCard {
   searchText: string;
   /** The task's colour label, when it names one this build knows. */
   color: TaskColor | null;
+  /** How soon to take the task; normal for a card with no task. */
+  priority: TaskPriority;
   /** The task's stored lucide icon (#2102); null draws the title's suggestion. */
   icon: string | null;
   /** Earlier attempts and review rounds of the card's pipelines, newest first. */
@@ -375,6 +378,15 @@ export function compareCards(a: KanbanCard, b: KanbanCard): number {
   return b.lastAgentWorkAtMs - a.lastAgentWorkAtMs
     || b.updatedAtMs - a.updatedAtMs
     || a.id.localeCompare(b.id);
+}
+
+/**
+ * The Inbox's order: high, normal, low, and {@link compareCards} inside each
+ * level. Every other column keeps {@link compareCards} alone, where the
+ * newest agent work already says what is being taken.
+ */
+export function compareInboxCards(a: KanbanCard, b: KanbanCard): number {
+  return priorityRank(a.priority) - priorityRank(b.priority) || compareCards(a, b);
 }
 
 /** When a working member's current work started: the anchor its working timer
@@ -724,6 +736,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
         .join("\n")
         .toLowerCase(),
       color,
+      priority: task ? taskPriority(task) : "normal",
       icon: typeof task?.icon === "string" && task.icon ? task.icon : null,
       past: pastAttempts(summaries.map((summary) => summary.pipeline), flowsById),
       hide,
@@ -742,7 +755,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const recorded = cards.filter((card) => card.task && !card.hide.hidden);
   const unlinked = cards.filter((card) => !card.task).sort(compareCards);
   const columns = Object.fromEntries(KANBAN_STATUSES.map((status) => {
-    const inColumn = recorded.filter((card) => card.status === status).sort(compareCards);
+    const inColumn = recorded.filter((card) => card.status === status).sort(status === "inbox" ? compareInboxCards : compareCards);
     return [status, {
       status,
       cards: inColumn,
