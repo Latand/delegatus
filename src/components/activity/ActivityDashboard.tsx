@@ -147,7 +147,7 @@ function Segmented<T extends string>({ label, value, options, onChange }: {
           aria-selected={value === option.value}
           data-activity-option={option.value}
           onClick={() => onChange(option.value)}
-          className={`min-h-8 flex-1 rounded-[6px] px-3 text-[12px] font-semibold whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-10 ${value === option.value ? "bg-sunken text-primary" : "text-muted hover:text-primary"}`}
+          className={`min-h-8 flex-1 rounded-[6px] px-3 text-[12px] font-semibold whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 ${value === option.value ? "bg-sunken text-primary" : "text-muted hover:text-primary"}`}
         >
           {option.label}
         </button>
@@ -793,7 +793,8 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
         <header className="flex flex-wrap items-center gap-x-4 gap-y-3">
           <a
             href="/"
-            className="flex h-8 items-center gap-1.5 rounded-[8px] border border-border bg-card px-2.5 text-[12px] font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-10"
+            data-activity-back=""
+            className="flex h-8 items-center gap-1.5 rounded-[8px] border border-border bg-card px-2.5 text-[12px] font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11"
           >
             <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
             {t("activity.back")}

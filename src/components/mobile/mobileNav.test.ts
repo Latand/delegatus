@@ -189,6 +189,51 @@ describe("sheets", () => {
     }
   });
 
+  test("a sheet's close and a page load in the same tap: the close's pop cancels the load", async () => {
+    const { nav, b } = phone("http://phone/");
+    nav.openSheet("menu");
+    nav.closeSheet();
+    b.host.assign!("/activity");
+    await settle();
+    expect(b.cancelled()).toEqual(["http://phone/activity"]);
+    expect(b.loading()).toBeNull();
+    expect(b.url()).toBe("http://phone/");
+  });
+
+  test("leaving from a sheet's row pops the sheet first, then loads the page over the screen it covered", async () => {
+    const { nav, b } = phone("http://phone/");
+    nav.openSheet("menu");
+    nav.leave("/activity");
+    expect(nav.getState().sheet).toBeNull();
+    await settle();
+    expect(b.loading()).toBe("http://phone/activity");
+    expect(b.cancelled()).toEqual([]);
+    /* Back from the page finds the board with no sheet over it. */
+    expect(b.index()).toBe(0);
+    expect(readMobileNavEntry(b.state())?.sheet).toBeNull();
+  });
+
+  test("leaving waits for a pop that lands late, and loads the page once it has", async () => {
+    const b = fakeHistory("http://phone/", { lateMs: 20 });
+    const nav = createMobileNav(b.host);
+    nav.configure(viewer("__overview__"));
+    nav.attach();
+    nav.openSheet("menu");
+    nav.leave("/activity");
+    await settle();
+    expect(b.loading()).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(b.loading()).toBe("http://phone/activity");
+    expect(b.cancelled()).toEqual([]);
+  });
+
+  test("leaving with no sheet open loads the page at once", () => {
+    const { nav, b } = phone("http://phone/");
+    nav.leave("/activity");
+    expect(b.loading()).toBe("http://phone/activity");
+    expect(b.index()).toBe(0);
+  });
+
   test("the Tasks list stays under a task opened from it, and Back finds the list again", () => {
     const { nav, b } = phone();
     nav.openSheet("tasks");

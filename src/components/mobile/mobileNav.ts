@@ -249,6 +249,8 @@ export interface MobileNavHost {
   /** How long a pop this store asked for may take before the store stops
       waiting for it. */
   settleMs?: number;
+  /** Load another page of the app in this tab. */
+  assign?(url: string): void;
 }
 
 export interface MobileNav {
@@ -268,6 +270,11 @@ export interface MobileNav {
   openSheet(name: MobileSheetName): void;
   /** Close the sheet: its entry is popped, so Back afterwards leaves the screen. */
   closeSheet(): void;
+  /** Leave the phone for another page of the app (Activity). The sheet under
+      the tap closes first and the page loads once its pop has landed: a
+      traversal asked for after a document navigation cancels it, so a close
+      and a load in the same tap otherwise land back on the board. */
+  leave(url: string): void;
   /** The Viewer moved somewhere else (a project, a conversation in another
       project): the shell draws that project's board with no sheet. Writes no
       history; the navigation that follows writes the entry. */
@@ -623,6 +630,11 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
       }
       set({ sheet: null, motion: "sheet" });
     },
+    leave(url) {
+      if (later(() => nav.leave(url))) return;
+      nav.closeSheet();
+      popThen(() => host.assign?.(url));
+    },
     home() {
       if (state.stack.length === 1 && topScreen(state).kind === "board" && !state.sheet && !state.bump) return;
       set({ stack: [BOARD], sheet: null, motion: "act", bump: null });
@@ -782,6 +794,7 @@ const INERT: MobileNav = {
   back: noop,
   openSheet: noop,
   closeSheet: noop,
+  leave: noop,
   home: noop,
   enterProject: noop,
   retargetProject: noop,
@@ -812,6 +825,7 @@ export function getMobileNav(): MobileNav {
         window.addEventListener("popstate", handler);
         return () => window.removeEventListener("popstate", handler);
       },
+      assign: (url) => window.location.assign(url),
     });
   }
   return browserNav;

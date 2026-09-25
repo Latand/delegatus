@@ -6,7 +6,9 @@ import type { MobileNavHost } from "./mobileNav";
  * branch, URLs resolve against the entry they are written on, and a traversal
  * moves the cursor and lands with the entry's state, as `popstate` does. The
  * store's deferred work (a sheet's close) runs as a microtask unless the test
- * holds it with `hold` and runs it with `flush`.
+ * holds it with `hold` and runs it with `flush`. `assign` starts loading
+ * another document, and a traversal asked for while it loads cancels the
+ * load, as Chrome's does.
  */
 export function fakeHistory(url = "http://localhost/#p=atlas", { hold = false, lateMs = 0, settleMs }: {
   hold?: boolean;
@@ -20,12 +22,18 @@ export function fakeHistory(url = "http://localhost/#p=atlas", { hold = false, l
   let pushes = 0;
   const listeners = new Set<(state: unknown, event?: object) => void>();
   const deferred: Array<() => void> = [];
+  let loading: string | null = null;
+  const cancelled: string[] = [];
   const land = () => {
     const event = {};
     for (const listener of [...listeners]) listener(entries[index]!.state, event);
   };
   const resolve = (next: string | undefined) => (next === undefined ? entries[index]!.url : new URL(next, entries[index]!.url).href);
   const go = (delta: number) => {
+    if (loading !== null) {
+      cancelled.push(loading);
+      loading = null;
+    }
     const move = () => {
       const to = index + delta;
       if (delta === 0 || to < 0 || to >= entries.length) return;
@@ -62,6 +70,9 @@ export function fakeHistory(url = "http://localhost/#p=atlas", { hold = false, l
         listeners.delete(listener);
       };
     },
+    assign(next) {
+      loading = resolve(next);
+    },
     defer: hold ? (task) => { deferred.push(task); } : (task) => queueMicrotask(task),
     ...(settleMs === undefined ? {} : { settleMs }),
   };
@@ -95,6 +106,9 @@ export function fakeHistory(url = "http://localhost/#p=atlas", { hold = false, l
     state: () => entries[index]!.state,
     entries: () => entries.map((entry) => ({ ...entry })),
     pushes: () => pushes,
+    /** The document `assign` is loading, until a traversal cancels it. */
+    loading: () => loading,
+    cancelled: () => [...cancelled],
     listening: () => listeners.size > 0,
   };
 }
