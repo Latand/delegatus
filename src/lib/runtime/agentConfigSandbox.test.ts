@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
 
+import { QUIET_DIAGNOSTICS_ENV } from "@/lib/startupDiagnostics";
 import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
 import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
@@ -17,6 +18,7 @@ test("a spawned agent's environment carries its own config and state root", () =
     LLV_STATE_DIR: "/opt/operator-home/.config/agent-log-viewer/state",
     TMPDIR: "/scratch/tmp",
     [STATE_OWNER_ENV]: "viewer",
+    [QUIET_DIAGNOSTICS_ENV]: "1",
   };
   const env = withAgentConfigSandbox({ ...source }, source, "/opt/operator-home/.config/agent-log-viewer/accounts/claude/lane");
 
@@ -25,6 +27,8 @@ test("a spawned agent's environment carries its own config and state root", () =
   expect(env.LLV_STATE_DIR).toBe(path.join(sandbox, "agent-log-viewer", "state"));
   /* The claim the Viewer made for itself stops at the boundary. */
   expect(env[STATE_OWNER_ENV]).toBeUndefined();
+  /* So does the CLI launcher's quiet terminal. */
+  expect(env[QUIET_DIAGNOSTICS_ENV]).toBeUndefined();
   /* `gh` read its configuration out of XDG_CONFIG_HOME, so it is pinned. */
   expect(env.GH_CONFIG_DIR).toBe("/opt/operator-home/.config/gh");
 });

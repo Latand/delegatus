@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { QUIET_DIAGNOSTICS_ENV } from "@/lib/startupDiagnostics";
 import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
 import { LEGACY_APP_DIR } from "../../../bin/appDir.mjs";
@@ -107,6 +108,9 @@ export function withAgentConfigSandbox(
      so a command the agent runs cannot resolve the real directories even if it
      points itself back at them. */
   delete env[STATE_OWNER_ENV];
+  /* The CLI launcher's quiet terminal is its own (#2168): a Viewer or a test
+     the agent starts prints its startup diagnostics as it would anywhere. */
+  delete env[QUIET_DIAGNOSTICS_ENV];
   /* Unconditional, and never probed on disk: what `gh` finds at the end of it
      is `gh`'s business, and a path that depends on what this machine happens
      to hold would make the spawned environment unreproducible. */

@@ -1,3 +1,4 @@
+import { startupDiagnostic } from "../startupDiagnostics";
 import { structuredHostsEnabled } from "./flags";
 
 const startupStore = process as typeof process & {
@@ -66,7 +67,7 @@ function setStatus(
   if (changed) {
     // Fixed phase names and numeric timing only. No exception, host identity,
     // transcript, operation payload or account data enters this diagnostic.
-    console.error("[structured hosts] startup progress", {
+    startupDiagnostic("error", "[structured hosts] startup progress", {
       pid: process.pid, phase: progress.phase, state,
       previousPhase: previous?.phase ?? null,
       previousPhaseMs: previous?.phaseStartedAt
