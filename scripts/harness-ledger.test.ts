@@ -18,6 +18,7 @@ import {
   mulberry32,
   noiseBand,
   outcomeObservations,
+  pipelinePassed,
   PREREGISTERED_CHANGES,
   readPipelines,
   scaffoldHash,
@@ -117,6 +118,17 @@ describe("parsing", () => {
     // Two fix attempts carry one activation: one round, as edgeRoundsUsed counts it.
     expect(rows.every((row) => row.pipelineFailEdgeRounds === 1 && row.pipelineHasFailEdge)).toBe(true);
     expect(rows[0].week).toBe("2026-W36");
+  });
+
+  test("a lane closed after its final stage passed counts as passed; a cut final stage does not", () => {
+    expect(pipelinePassed(fixturePipeline("done"))).toBe(true);
+    // The fixture's review stage ends on a running attempt: not passed once closed.
+    expect(pipelinePassed(fixturePipeline("cut", { state: "closed" }))).toBe(false);
+    const merged = fixturePipeline("merged", { state: "closed" });
+    merged.runs[1].attempts.pop();
+    expect(pipelinePassed(merged)).toBe(true);
+    const rows = ledgerRows([merged], () => true, null);
+    expect(outcomeObservations(rows, "reviewer").roundsToPass.map((entry) => entry.pipelineId)).toEqual(["merged"]);
   });
 
   test("this repository is every key a pipeline under the main checkout carries, siblings included", () => {
@@ -259,7 +271,7 @@ describe("noise band", () => {
   test("outcomes attribute a pipeline to the role's version and never read the reviewer's verdict", () => {
     const rows = ledgerRows([fixturePipeline("p1"), fixturePipeline("p2", { state: "closed" })], () => true, null);
     const observations = outcomeObservations(rows, "reviewer");
-    // Rounds-to-pass: completed pipelines only.
+    // Rounds-to-pass: passed pipelines only; p2 closed with its review cut.
     expect(observations.roundsToPass.map((entry) => [entry.pipelineId, entry.sum])).toEqual([["p1", 1]]);
     // WRONG-PREMISE: every finished pipeline.
     expect(observations.wrongPremise.map((entry) => entry.sum)).toEqual([1, 1]);

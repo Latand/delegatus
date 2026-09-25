@@ -51,6 +51,10 @@ export type LedgerRow = {
   pipelineFailEdgeRounds: number;
   pipelineHasFailEdge: boolean;
   pipelineState: string;
+  /** The pipeline passed: it completed, or every final stage's last own
+      attempt passed. A lane closed after its merge reads `closed`, so the
+      state alone undercounts. */
+  pipelinePassed: boolean;
   pipelineWeek: string;
   tokens: { total: number; output: number } | null;
 };
@@ -109,6 +113,17 @@ export function pipelineFailEdgeRounds(pipeline: Pipeline): { rounds: number; ha
   return { rounds, hasFailEdge };
 }
 
+export function pipelinePassed(pipeline: Pipeline): boolean {
+  if (pipeline.state === "completed") return true;
+  const finals = (pipeline.stages ?? []).filter((stage) => !stage.next);
+  if (!finals.length) return false;
+  return finals.every((stage) => {
+    const run = pipeline.runs?.find((candidate) => candidate.stageId === stage.id);
+    const last = run?.attempts.filter((attempt) => !attempt.historical && !attempt.legacyReview).at(-1);
+    return last?.verdict?.status === "pass";
+  });
+}
+
 export type TokenReader = (transcriptPath: string) => { total: number; output: number } | null;
 
 export function ledgerRows(
@@ -119,6 +134,7 @@ export function ledgerRows(
   const rows: LedgerRow[] = [];
   for (const pipeline of pipelines) {
     const { rounds, hasFailEdge } = pipelineFailEdgeRounds(pipeline);
+    const passed = pipelinePassed(pipeline);
     const split: ProjectSplit = isThisProject(pipeline) ? "this" : "other";
     for (const run of pipeline.runs ?? []) {
       for (const attempt of run.attempts ?? []) {
@@ -145,6 +161,7 @@ export function ledgerRows(
           pipelineFailEdgeRounds: rounds,
           pipelineHasFailEdge: hasFailEdge,
           pipelineState: pipeline.state,
+          pipelinePassed: passed,
           pipelineWeek: isoWeek(pipeline.createdAt),
           tokens: readTokens && attempt.agentPath ? readTokens(attempt.agentPath) : null,
         });
@@ -332,8 +349,8 @@ export type Observation = { pipelineId: string; version: string; model: string; 
 /**
  * The observations of each outcome for one role, each attributed to the
  * version and model of that role in the pipeline:
- * - rounds-to-pass: a completed pipeline with a fail edge, valued at its
- *   fail-edge rounds; attributed by the pipeline's first attempt of the role;
+ * - rounds-to-pass: a passed pipeline (`pipelinePassed`) with a fail edge,
+ *   valued at its fail-edge rounds; attributed by the pipeline's first attempt of the role;
  * - WRONG-PREMISE: a finished (completed or closed) pipeline, 1 when any of its
  *   findings carries the marker; attributed the same way;
  * - no-verdict: each settled attempt of the role, 1 when it carries no verdict;
@@ -354,7 +371,7 @@ export function outcomeObservations(rows: LedgerRow[], role: string): Record<Out
     if (!own.length) continue;
     const first = own[0];
     const pipelineKey = { pipelineId, version: first.scaffoldHash, model: first.model, split: first.split, week: first.pipelineWeek };
-    if (first.pipelineState === "completed" && first.pipelineHasFailEdge) {
+    if (first.pipelinePassed && first.pipelineHasFailEdge) {
       result.roundsToPass.push({ ...pipelineKey, sum: first.pipelineFailEdgeRounds, n: 1 });
     }
     if (TERMINAL_PIPELINE.has(first.pipelineState)) {
