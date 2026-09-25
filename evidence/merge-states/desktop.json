@@ -1,0 +1,395 @@
+{
+  "readings": {
+    "1440-en-light": {
+      "lanes": [
+        {
+          "task": "t-merge-wait",
+          "word": "waiting",
+          "wordText": "waiting for checks · 11m",
+          "wordColor": "rgb(108, 108, 121)",
+          "note": "waiting",
+          "noteText": "Merges when every check is green.",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-update",
+          "word": "updating",
+          "wordText": "updating from main",
+          "wordColor": "rgb(108, 108, 121)",
+          "note": "waiting",
+          "noteText": "Merges when every check is green.",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-stop",
+          "word": "stopped",
+          "wordText": "merge stopped",
+          "wordColor": "rgb(138, 95, 0)",
+          "note": null,
+          "noteText": null,
+          "reason": "Merge stopped: check privacy-publication failed.",
+          "answers": [
+            [
+              "dismiss",
+              "Leave the PR open"
+            ],
+            [
+              "retry-merge",
+              "Try the merge again"
+            ]
+          ],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-done",
+          "word": "merged",
+          "wordText": "merged",
+          "wordColor": "rgb(23, 122, 55)",
+          "note": "merged",
+          "noteText": "Delegatus merged it",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        }
+      ],
+      "menu": {
+        "on": {
+          "state": "on",
+          "checked": "true",
+          "label": "Merge when the review passes",
+          "hint": "Green checks only; a conflict waits for you.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true,
+          "switchHeight": 24
+        },
+        "off": {
+          "state": "off",
+          "checked": "false",
+          "label": "Merge when the review passes",
+          "hint": "Pipelines end with an open PR.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true,
+          "switchHeight": 24
+        },
+        "writes": [
+          {
+            "project": "atlas",
+            "mergeOnReview": false
+          }
+        ]
+      },
+      "patches": [
+        {
+          "id": "p-merge-stop",
+          "body": {
+            "action": "retry-merge"
+          }
+        }
+      ]
+    },
+    "1440-en-dark": {
+      "lanes": [
+        {
+          "task": "t-merge-wait",
+          "word": "waiting",
+          "wordText": "waiting for checks · 11m",
+          "wordColor": "rgb(139, 139, 152)",
+          "note": "waiting",
+          "noteText": "Merges when every check is green.",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-update",
+          "word": "updating",
+          "wordText": "updating from main",
+          "wordColor": "rgb(139, 139, 152)",
+          "note": "waiting",
+          "noteText": "Merges when every check is green.",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-stop",
+          "word": "stopped",
+          "wordText": "merge stopped",
+          "wordColor": "rgb(224, 174, 69)",
+          "note": null,
+          "noteText": null,
+          "reason": "Merge stopped: check privacy-publication failed.",
+          "answers": [
+            [
+              "dismiss",
+              "Leave the PR open"
+            ],
+            [
+              "retry-merge",
+              "Try the merge again"
+            ]
+          ],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-done",
+          "word": "merged",
+          "wordText": "merged",
+          "wordColor": "rgb(79, 195, 111)",
+          "note": "merged",
+          "noteText": "Delegatus merged it",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        }
+      ],
+      "menu": {
+        "on": {
+          "state": "on",
+          "checked": "true",
+          "label": "Merge when the review passes",
+          "hint": "Green checks only; a conflict waits for you.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true,
+          "switchHeight": 24
+        },
+        "off": {
+          "state": "off",
+          "checked": "false",
+          "label": "Merge when the review passes",
+          "hint": "Pipelines end with an open PR.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true,
+          "switchHeight": 24
+        },
+        "writes": [
+          {
+            "project": "atlas",
+            "mergeOnReview": false
+          }
+        ]
+      },
+      "patches": []
+    },
+    "1440-uk-light": {
+      "lanes": [
+        {
+          "task": "t-merge-wait",
+          "word": "waiting",
+          "wordText": "чекає перевірок · 11 хв",
+          "wordColor": "rgb(108, 108, 121)",
+          "note": "waiting",
+          "noteText": "Змерджиться, коли всі перевірки стануть зеленими.",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-update",
+          "word": "updating",
+          "wordText": "оновлюється з main",
+          "wordColor": "rgb(108, 108, 121)",
+          "note": "waiting",
+          "noteText": "Змерджиться, коли всі перевірки стануть зеленими.",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-stop",
+          "word": "stopped",
+          "wordText": "мердж зупинено",
+          "wordColor": "rgb(138, 95, 0)",
+          "note": null,
+          "noteText": null,
+          "reason": "Мердж зупинено: перевірка privacy-publication провалилась.",
+          "answers": [
+            [
+              "dismiss",
+              "Залишити PR відкритим"
+            ],
+            [
+              "retry-merge",
+              "Спробувати мердж ще раз"
+            ]
+          ],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-done",
+          "word": "merged",
+          "wordText": "змерджено",
+          "wordColor": "rgb(23, 122, 55)",
+          "note": "merged",
+          "noteText": "Delegatus змерджив",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        }
+      ],
+      "menu": {
+        "on": {
+          "state": "on",
+          "checked": "true",
+          "label": "Мерджити, коли ревʼю пройдено",
+          "hint": "Лише із зеленими перевірками; конфлікт чекає на вас.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true,
+          "switchHeight": 24
+        },
+        "off": {
+          "state": "off",
+          "checked": "false",
+          "label": "Мерджити, коли ревʼю пройдено",
+          "hint": "Пайплайни закінчуються відкритим PR.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true,
+          "switchHeight": 24
+        },
+        "writes": [
+          {
+            "project": "atlas",
+            "mergeOnReview": false
+          }
+        ]
+      },
+      "patches": [
+        {
+          "id": "p-merge-stop",
+          "body": {
+            "action": "retry-merge"
+          }
+        }
+      ]
+    },
+    "1440-uk-dark": {
+      "lanes": [
+        {
+          "task": "t-merge-wait",
+          "word": "waiting",
+          "wordText": "чекає перевірок · 11 хв",
+          "wordColor": "rgb(139, 139, 152)",
+          "note": "waiting",
+          "noteText": "Змерджиться, коли всі перевірки стануть зеленими.",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-update",
+          "word": "updating",
+          "wordText": "оновлюється з main",
+          "wordColor": "rgb(139, 139, 152)",
+          "note": "waiting",
+          "noteText": "Змерджиться, коли всі перевірки стануть зеленими.",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-stop",
+          "word": "stopped",
+          "wordText": "мердж зупинено",
+          "wordColor": "rgb(224, 174, 69)",
+          "note": null,
+          "noteText": null,
+          "reason": "Мердж зупинено: перевірка privacy-publication провалилась.",
+          "answers": [
+            [
+              "dismiss",
+              "Залишити PR відкритим"
+            ],
+            [
+              "retry-merge",
+              "Спробувати мердж ще раз"
+            ]
+          ],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        },
+        {
+          "task": "t-merge-done",
+          "word": "merged",
+          "wordText": "змерджено",
+          "wordColor": "rgb(79, 195, 111)",
+          "note": "merged",
+          "noteText": "Delegatus змерджив",
+          "reason": null,
+          "answers": [],
+          "clipped": [],
+          "overlaps": [],
+          "escapes": []
+        }
+      ],
+      "menu": {
+        "on": {
+          "state": "on",
+          "checked": "true",
+          "label": "Мерджити, коли ревʼю пройдено",
+          "hint": "Лише із зеленими перевірками; конфлікт чекає на вас.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true,
+          "switchHeight": 24
+        },
+        "off": {
+          "state": "off",
+          "checked": "false",
+          "label": "Мерджити, коли ревʼю пройдено",
+          "hint": "Пайплайни закінчуються відкритим PR.",
+          "labelMeetsSwitch": false,
+          "labelCut": false,
+          "inside": true,
+          "switchHeight": 24
+        },
+        "writes": [
+          {
+            "project": "atlas",
+            "mergeOnReview": false
+          }
+        ]
+      },
+      "patches": []
+    }
+  },
+  "failures": []
+}

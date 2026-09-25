@@ -8,7 +8,7 @@ import type { KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 
 import {
-  answerLabel, blockAgeSeconds, cardChainLevels, currentChipIndex, pipelineAnswers, pipelineReason, reviewStop, reviewStopFindings, sameTitle, STAGE_MARK, type ChainItem,
+  answerLabel, blockAgeSeconds, cardChainLevels, currentChipIndex, laneMergeWord, mergeNeedsYou, mergeReasonText, pipelineAnswers, pipelineReason, reviewStop, reviewStopFindings, sameTitle, STAGE_MARK, type ChainItem,
 } from "./pipelineBlockModel";
 import type { StageChipState } from "./pipelineModel";
 
@@ -183,4 +183,32 @@ test("each review stop names its reason and its plain answers; a stop that is no
   } as Partial<Pipeline>))).toBeNull();
   expect(reviewStop(parkedReview("park", "reviewer asked a question"))).toBeNull();
   expect(reviewStop(parked({ ...legacy, stateDetail: "review flow paused in relaying: kickoff delivery failed", runs: [] } as Partial<Pipeline>))).toBeNull();
+});
+
+/* #2187 §4.6, §6: a completed lane's merge on the block. */
+test("a completed lane's merge says its word, and a stopped one asks with two plain answers until it is cleared", () => {
+  const uk: TFunction = (key, params) => translate("uk", key, params);
+  const lane = (state: string, extra: Record<string, unknown> = {}) => ({
+    id: "m", state: "completed", stages: [], runs: [],
+    merge: { state, reason: null, blockedAt: null, updatedAt: "2026-09-25T10:00:00.000Z", ...extra },
+    ...("dismissedAt" in extra ? { dismissedAt: extra.dismissedAt } : {}),
+  }) as unknown as Pipeline;
+  expect(["queued", "checking", "waiting-checks", "updating", "merging", "blocked", "merged", "cancelled"].map((state) => laneMergeWord(lane(state))))
+    .toEqual(["waiting", "waiting", "waiting", "updating", "merging", "stopped", "merged", null]);
+  expect(laneMergeWord({ ...lane("merged"), state: "running" } as Pipeline)).toBeNull();
+
+  const stopped = lane("blocked", { reason: 'check "slow" failed', blockedAt: "2026-09-25T10:00:00.000Z" });
+  expect(mergeNeedsYou(stopped)).toBe(true);
+  const answers = pipelineAnswers(stopped, (entry) => entry.id)!;
+  expect(answers.kind).toBe("merge");
+  expect(answers.choices.map((choice) => answerLabel(t, answers, choice, false))).toEqual(["Leave the PR open", "Try the merge again"]);
+  expect(answers.choices.map((choice) => answerLabel(uk, answers, choice, true))).toEqual(["Залишити PR відкритим", "Спробувати мердж ще раз"]);
+  expect(mergeReasonText(t, stopped.merge!.reason)).toBe("check slow failed");
+  expect(mergeReasonText(uk, "conflict with the base branch")).toBe("конфлікт з базовою гілкою");
+  expect(mergeReasonText(t, "GitHub refused the merge: Head branch was modified")).toBe("GitHub refused the merge: Head branch was modified");
+
+  /* Cleared by a dismissal made after it stopped; one made before does not count. */
+  expect(mergeNeedsYou({ ...stopped, dismissedAt: "2026-09-25T10:05:00.000Z" } as Pipeline)).toBe(false);
+  expect(pipelineAnswers({ ...stopped, dismissedAt: "2026-09-25T10:05:00.000Z" } as Pipeline, (entry) => entry.id)).toBeNull();
+  expect(mergeNeedsYou({ ...stopped, dismissedAt: "2026-09-25T09:00:00.000Z" } as Pipeline)).toBe(true);
 });

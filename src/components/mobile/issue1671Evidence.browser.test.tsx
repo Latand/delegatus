@@ -3215,3 +3215,168 @@ browserTest("#2187: each row of §3.4's table draws its reason and plain answers
   fs.writeFileSync(path.join(evidence, `phone-${stamp}.json`), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (stamp === "after" && failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * #2187 — a completed lane's automatic merge and the project's merge setting
+ * (docs/design/merge-policy-and-task-finishing.md §4.6, §6) on the phone at
+ * 390 × 844, en and uk, dark and light: one task per merge state
+ * (`?merge-states=1`) on its task screen — the word after "done", the line
+ * under the chain, a stopped merge's reason and its two 44 px answers — and
+ * the ⋯ sheet's "Merge when the review passes" row, on and then off by its own
+ * 44 px switch. The task screen's own gates hold too: no sideways overflow, no
+ * text over text or a control, no small or crossing control.
+ *
+ *   MERGE_STATES_PNG_DIR=… LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2187: a completed lane"
+ */
+const MERGE_STATE_TASKS = [
+  { task: "t-merge-wait", word: "waiting", note: "waiting" },
+  { task: "t-merge-update", word: "updating", note: "waiting" },
+  { task: "t-merge-stop", word: "stopped", note: null },
+  { task: "t-merge-done", word: "merged", note: "merged" },
+] as const;
+
+browserTest("#2187: a completed lane says where its merge stands on the phone at 390, en and uk, and the ⋯ sheet carries the setting row", async () => {
+  const out = path.resolve(process.env.MERGE_STATES_PNG_DIR ?? ".artifacts/merge-states");
+  const evidence = path.resolve("evidence/merge-states");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      for (const scheme of ["dark", "light"] as const) {
+        const t = (name: string, params?: Record<string, string | number>) => translate(lang, name as never, params);
+        for (const lane of MERGE_STATE_TASKS) {
+          const key = `${lane.word}-390-${lang}-${scheme}`;
+          const fail = (text: string) => failures.push(`${key}: ${text}`);
+          const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+          await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+          try {
+            const page = await context.newPage();
+            const pageErrors: string[] = [];
+            page.on("pageerror", (error) => pageErrors.push(error.message));
+            await page.goto(`${fixtureBase}/?kanban=1&merge-states=1#p=atlas`);
+            await page.waitForSelector(`[data-phone-card="task:${lane.task}"]`, { timeout: 20_000 });
+            await pause(page, 600);
+            await page.locator(`[data-phone-card="task:${lane.task}"]`).click();
+            await page.waitForSelector(`[data-mobile2-task="${lane.task}"] [data-phone-task-body="${lane.task}"]`, { timeout: 10_000 });
+            /* A merged lane is finished and folds with the others; a merge
+               still moving or stopped stays out of the fold. */
+            const folded = await page.locator("[data-phone-task-ended]").count();
+            if (lane.word === "merged") {
+              if (!folded) fail("the merged lane is not folded with the finished ones");
+              else await page.locator("[data-phone-task-ended]").click();
+            } else if (folded) fail("an unsettled merge is folded away");
+            await page.mouse.move(0, 0);
+            await pause(page, 600);
+            await page.screenshot({ path: path.join(out, `phone-${key}.png`) });
+            const screen = await readTaskScreen(page);
+            const drawn = await page.evaluate(() => {
+              const body = document.querySelector("[data-phone-task-body]");
+              const words = [...(body?.querySelectorAll(".pb-merge") ?? [])];
+              const note = body?.querySelector("[data-merge-note]") ?? null;
+              const answer = body?.querySelector(".pb-answer[data-answer=\"merge\"]") ?? null;
+              const buttons = [...(answer?.querySelectorAll<HTMLElement>("[data-answer-action]") ?? [])];
+              const cut = buttons.flatMap((button) => (button.scrollWidth > button.clientWidth + 1 ? [(button.textContent ?? "").trim()] : []));
+              return {
+                words: words.map((word) => [word.getAttribute("data-merge-state"), (word.textContent ?? "").trim()]),
+                note: note?.getAttribute("data-merge-note") ?? null,
+                noteText: note?.textContent?.trim() ?? null,
+                reason: answer?.querySelector("[data-merge-stop]")?.textContent?.trim() ?? null,
+                answers: buttons.map((button) => [button.getAttribute("data-answer-action") ?? "", (button.textContent ?? "").trim()]),
+                heights: buttons.map((button) => Math.round(button.getBoundingClientRect().height)),
+                cut,
+              };
+            });
+            results.push({ key, ...drawn, screen });
+            if (!drawn.words.length || drawn.words.some(([state]) => state !== lane.word)) fail(`merge word ${JSON.stringify(drawn.words)}`);
+            const text = drawn.words[0]?.[1] ?? "";
+            if (lane.word === "waiting") {
+              const [lead] = t("pipelineBlock.merge.waiting", { age: "\u0000" }).split("\u0000");
+              if (!text.startsWith(lead!) || text === lead) fail(`word ${JSON.stringify(text)}`);
+            } else if (text !== t(`pipelineBlock.merge.${lane.word}`)) fail(`word ${JSON.stringify(text)}`);
+            if (drawn.note !== lane.note) fail(`note ${drawn.note}`);
+            if (lane.note === "waiting" && drawn.noteText !== t("pipelineBlock.merge.waitingHint")) fail(`note ${JSON.stringify(drawn.noteText)}`);
+            if (lane.note === "merged" && drawn.noteText !== t("pipelineBlock.merge.byDelegatus")) fail(`note ${JSON.stringify(drawn.noteText)}`);
+            if (lane.word === "stopped") {
+              const want = t("pipelineBlock.merge.reason", { reason: t("pipelineBlock.mergeReason.check", { name: "privacy-publication" }) });
+              if (drawn.reason !== want) fail(`reason ${JSON.stringify(drawn.reason)}, expected ${JSON.stringify(want)}`);
+              const answers = [["dismiss", t("pipelineBlock.answer.leaveOpen")], ["retry-merge", t("pipelineBlock.answer.retryMerge")]];
+              if (JSON.stringify(drawn.answers) !== JSON.stringify(answers)) fail(`answers ${JSON.stringify(drawn.answers)}`);
+              if (drawn.heights.some((height) => height < 44)) fail(`answers shorter than 44 px: ${drawn.heights.join(", ")}`);
+            } else if (drawn.answers.length) fail(`answers on a merge that asks nothing: ${JSON.stringify(drawn.answers)}`);
+            if (drawn.cut.length) fail(`labels cut by their button: ${drawn.cut.join(" | ")}`);
+            if (screen.overflowX > 0.5 || screen.bodyOverflowX > 0.5) fail(`overflows sideways by ${Math.max(screen.overflowX, screen.bodyOverflowX)} px`);
+            if (screen.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(screen.smallControls)}`);
+            if (screen.crossingControls.length) fail(`controls crossing: ${JSON.stringify(screen.crossingControls)}`);
+            if (screen.inkOverlaps.length) fail(`text over text: ${JSON.stringify(screen.inkOverlaps.slice(0, 6))}`);
+            if (screen.inkOnControls.length) fail(`text over a control: ${JSON.stringify(screen.inkOnControls.slice(0, 6))}`);
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+            await page.close();
+          } finally {
+            await context.close();
+          }
+        }
+        /* The ⋯ sheet: the setting row on, then off by its own switch. */
+        const key = `menu-390-${lang}-${scheme}`;
+        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          await page.goto(`${fixtureBase}/?kanban=1&merge-states=1#p=atlas`);
+          await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 20_000 });
+          await pause(page, 600);
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"] [data-merge-on-review]', { timeout: 10_000 });
+          await page.waitForFunction(() => !document.querySelector("[data-merge-on-review-switch]")?.hasAttribute("disabled"), undefined, { timeout: 10_000 });
+          const row = page.locator("[data-merge-on-review]");
+          await row.scrollIntoViewIfNeeded();
+          await pause(page, 400);
+          const readRow = () => page.evaluate(() => {
+            const element = document.querySelector("[data-merge-on-review]")!;
+            const toggle = element.querySelector<HTMLElement>("[data-merge-on-review-switch]")!;
+            const label = element.querySelector("span.flex-1")!;
+            const a = label.getBoundingClientRect();
+            const b = toggle.getBoundingClientRect();
+            return {
+              state: element.getAttribute("data-merge-on-review"),
+              label: label.textContent?.trim() ?? "",
+              hint: element.querySelector('[role="status"]')?.textContent?.trim() ?? "",
+              switchSize: [Math.round(b.width), Math.round(b.height)],
+              labelMeetsSwitch: Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5,
+              inside: b.right <= window.innerWidth && a.left >= 0,
+            };
+          });
+          await page.screenshot({ path: path.join(out, `phone-${key}-on.png`) });
+          const on = await readRow();
+          await page.locator("[data-merge-on-review-switch]").click();
+          await page.waitForFunction(() => document.querySelector("[data-merge-on-review]")?.getAttribute("data-merge-on-review") === "off", undefined, { timeout: 10_000 });
+          await page.waitForFunction(() => !document.querySelector("[data-merge-on-review-switch]")?.hasAttribute("disabled"), undefined, { timeout: 10_000 });
+          await pause(page, 300);
+          await page.screenshot({ path: path.join(out, `phone-${key}-off.png`) });
+          const off = await readRow();
+          results.push({ key, on, off });
+          const fail = (text: string) => failures.push(`${key}: ${text}`);
+          if (on.state !== "on" || on.label !== t("projectSettings.mergeOnReview") || on.hint !== t("projectSettings.mergeOnReview.on")) fail(`on ${JSON.stringify(on)}`);
+          if (off.state !== "off" || off.hint !== t("projectSettings.mergeOnReview.off")) fail(`off ${JSON.stringify(off)}`);
+          for (const entry of [on, off]) {
+            if (entry.switchSize[1]! < 44 || entry.switchSize[0]! < 44) fail(`switch under 44 px: ${entry.switchSize.join("×")}`);
+            if (entry.labelMeetsSwitch || !entry.inside) fail(`geometry ${JSON.stringify(entry)}`);
+          }
+          await page.close();
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

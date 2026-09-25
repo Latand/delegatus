@@ -88,8 +88,10 @@ import { pipelineValidationError, type PipelineValidationViolation } from "./val
 import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
+import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
+import { nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep, observeForgePullRequest } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
 import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
@@ -7263,6 +7265,12 @@ export async function patchPipeline(
       if (result.pipeline && !result.replayed) persist();
       return result;
     }
+    if (req.action === "retry-merge") {
+      const refused = retryMerge(pipeline, ports.now());
+      if (refused) return refused;
+      persist();
+      return { pipeline };
+    }
     if (req.action === "retry-stage" && pipeline.delivery?.operation?.state === "settled") {
       delete pipeline.delivery.operation;
       pipeline.publishedCommit = null;
@@ -7971,6 +7979,32 @@ export async function patchPipeline(
   /* The lock is gone: ask the sweep to read what the new links name. */
   for (const repository of linkRepositories) nudgeForgeSweep(repository);
   return patched;
+}
+
+/**
+ * Try a stopped merge again (#2187 §4.6): the merge runner takes the lane back
+ * into its repository's queue at its place in completion order. The head chain
+ * stays, so the runner's own update commits still count as the lane's, and the
+ * attempt is counted. Refused while the project's setting is off, because the
+ * runner would cancel it again at once.
+ */
+function retryMerge(pipeline: Pipeline, now: string): PipelinePatchResult | null {
+  const merge = pipeline.merge;
+  if (pipeline.state !== "completed" || !merge) return { error: "only a completed pipeline with a merge record can retry its merge", status: 409 };
+  if (merge.state !== "blocked" && merge.state !== "cancelled") return { error: `the merge is ${merge.state}; only a stopped merge can be tried again`, status: 409 };
+  if (!mergeOnReviewEnabled(pipeline.project)) return { error: "the project's \"merge when the review passes\" setting is off", status: 409 };
+  merge.state = "queued";
+  merge.attempts += 1;
+  merge.reason = null;
+  merge.blockedAt = null;
+  merge.readFailures = 0;
+  merge.nextReadAt = null;
+  merge.head = null;
+  merge.headSeenAt = null;
+  merge.lastChecks = null;
+  merge.updatedAt = now;
+  nudgeAutoMerge();
+  return null;
 }
 
 /**

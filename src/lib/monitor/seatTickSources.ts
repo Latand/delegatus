@@ -25,7 +25,7 @@ import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "
 import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
-import type { Pipeline } from "@/lib/pipelines/types";
+import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment, ledgerDeployment } from "@/lib/runtime/deploymentLedger";
@@ -1414,6 +1414,9 @@ async function unmergedPullRequests(context: {
     });
     const lane = lanes.find(named) ?? owner;
     if (!lane || !isFinished(lane)) continue;
+    /* #2187 §4.6: a pull request the merge runner is working on is the
+       runner's, not the seat's; one it stopped on comes back with its reason. */
+    if (lane.merge && PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state)) continue;
     found.push({
       number: pullRequest.number,
       title: redactBounded(pullRequest.title, PULL_REQUEST_TITLE_LIMIT),
@@ -1421,6 +1424,7 @@ async function unmergedPullRequests(context: {
       pipelineTitle: redactBounded(lane.task.split("\n")[0] ?? "", PULL_REQUEST_TITLE_LIMIT),
       updatedAt: pullRequest.updatedAt,
       ...(pipelineCompletedUnreviewed(lane) ? { lastFixUnreviewed: true as const } : {}),
+      ...(lane.merge?.state === "blocked" && lane.merge.reason ? { mergeBlocked: redactBounded(lane.merge.reason, PULL_REQUEST_TITLE_LIMIT) } : {}),
     });
   }
   /* An answer, so the run of failures is over: the source spoke, whatever it

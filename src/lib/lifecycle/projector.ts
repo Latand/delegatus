@@ -99,6 +99,18 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
   const events: LifecycleEventInput[] = [];
   for (const pipeline of pipelines) {
     events.push(...pipelinePauseEvents(pipeline));
+    const merge = pipeline.merge;
+    if (merge?.state === "merged") {
+      events.push({
+        key: `pipeline:${pipeline.id}:merged:${merge.prNumber}`,
+        type: "pipeline_merged",
+        at: merge.mergedAt ?? merge.updatedAt,
+        project: pipeline.project,
+        pipelineId: pipeline.id,
+        stageId: null,
+        summary: `pull request #${merge.prNumber} merged${merge.by === "auto-merge" ? " by Delegatus" : ""}`,
+      });
+    }
     /* A repair is ready as soon as the fail edge is traversed — visible on the
        pending cursor before the repair agent exists, and on the attempt once it
        does. Both build the same key, so it is journaled exactly once. */

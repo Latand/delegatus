@@ -609,6 +609,36 @@ function isDecisionAnswer(value: unknown): boolean {
     && isActor(answer.actor) && typeof answer.at === "string";
 }
 
+const MERGE_STATES = new Set(["queued", "checking", "waiting-checks", "updating", "merging", "merged", "blocked", "cancelled"]);
+const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/** The merge runner's record (#2187 §4.4). */
+function isPipelineMerge(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const merge = value as Record<string, unknown>;
+  return MERGE_STATES.has(String(merge.state))
+    && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
+    && typeof merge.repository === "string" && merge.repository.length > 0
+    && Number.isSafeInteger(merge.prNumber) && (merge.prNumber as number) > 0
+    && typeof merge.policyChangedAt === "string"
+    && typeof merge.reviewedHead === "string"
+    && isStringList(merge.chain)
+    && Array.isArray(merge.updates) && merge.updates.every((update) => Boolean(update) && typeof update === "object"
+      && typeof (update as Record<string, unknown>).requestedAt === "string" && isNullableString((update as Record<string, unknown>).head))
+    && isStringList(merge.seenChecks)
+    && isNullableString(merge.head) && isNullableString(merge.headSeenAt)
+    && (merge.lastChecks === null || isStringList(merge.lastChecks))
+    && isNullableString(merge.readAt) && isNullableString(merge.nextReadAt)
+    && (merge.readFailures === undefined || Number.isSafeInteger(merge.readFailures))
+    && typeof merge.requestedAt === "string"
+    && isNullableString(merge.mergedHead) && isNullableString(merge.mergeCommit)
+    && (merge.method === null || merge.method === "squash" || merge.method === "merge" || merge.method === "rebase")
+    && isNullableString(merge.mergedAt)
+    && Number.isSafeInteger(merge.attempts)
+    && isNullableString(merge.reason) && isNullableString(merge.blockedAt)
+    && typeof merge.updatedAt === "string";
+}
+
 function isPipeline(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
@@ -657,6 +687,7 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.reviewPending === undefined || isReviewPending(pipeline.reviewPending)) &&
     (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
     (pipeline.reviewAcceptances === undefined || (Array.isArray(pipeline.reviewAcceptances) && pipeline.reviewAcceptances.every(isReviewAcceptance))) &&
+    (pipeline.merge === undefined || isPipelineMerge(pipeline.merge)) &&
     (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
       && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&

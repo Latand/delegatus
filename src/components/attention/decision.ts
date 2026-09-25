@@ -109,6 +109,7 @@ export function decisionLine(t: TFunction, file: FileEntry, now: number = Date.n
  */
 export function needLabel(t: TFunction, need: NeedReason): string {
   if (need.subject === "pipeline") {
+    if (need.kind === "lane-merge") return t("needs.laneMerge");
     const stage = laneStageName(t, need.pipeline, need.stageId);
     const key = need.kind === "lane-review" ? "needs.laneReview" : "needs.laneDecision";
     return stage ? t(`${key}Stage`, { stage }) : t(key);

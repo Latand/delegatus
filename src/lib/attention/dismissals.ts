@@ -351,16 +351,24 @@ export function parseDismissalTarget(value: unknown, options: { allowSubjects: b
   throw new DismissalError("INVALID_TARGET", `target.kind must be ${options.allowSubjects ? "conversation, pipeline, task or subjects" : "conversation, pipeline or task"}`);
 }
 
+/** A completed lane whose automatic merge stopped (#2187 §4.6). */
+function laneMergeBlocked(pipeline: Pipeline): boolean {
+  return pipeline.state === "completed" && pipeline.merge?.state === "blocked";
+}
+
 /** A lane that waits on the operator right now. */
 function laneAsks(pipeline: Pipeline): boolean {
-  return pipeline.state === "needs_decision" || pipeline.state === "needs_review";
+  return pipeline.state === "needs_decision" || pipeline.state === "needs_review" || laneMergeBlocked(pipeline);
 }
 
 /** The operator's (or an earlier agent's) dismissal still covers what the
-    lane waits on: it moved nowhere since. */
+    lane waits on: it moved nowhere since, and a stopped merge was cleared
+    after it stopped. */
 function laneCleared(pipeline: Pipeline): boolean {
   if (!pipeline.dismissedAt) return false;
-  return laneMovedAt(pipeline) <= Date.parse(pipeline.dismissedAt);
+  const dismissed = Date.parse(pipeline.dismissedAt);
+  if (laneMergeBlocked(pipeline)) return dismissed >= Date.parse(pipeline.merge!.blockedAt ?? pipeline.merge!.updatedAt);
+  return laneMovedAt(pipeline) <= dismissed;
 }
 
 /** The subjects a target names. A task names the subjects its card drew when

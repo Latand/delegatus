@@ -1,5 +1,6 @@
 import type { TFunction } from "@/lib/i18n";
 import { failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
+import { MERGE_REASON_PATTERNS, MERGE_REASONS, type MergeReasonKey } from "@/lib/forge/mergeReasons";
 import type { Pipeline, PipelineStage, StageFinding } from "@/lib/pipelines/types";
 
 import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanbanModel";
@@ -146,7 +147,7 @@ export function stageFindings(pipeline: Pipeline, stageId: string): StageFinding
 }
 
 /** An answer the block gives in place, through the board's pipeline actions. */
-export type PipelineAnswerAction = "skip-stage" | "retry-stage" | "close" | "continue-review" | "accept-head";
+export type PipelineAnswerAction = "skip-stage" | "retry-stage" | "close" | "continue-review" | "accept-head" | "retry-merge" | "dismiss";
 
 export interface PipelineAnswer {
   action: PipelineAnswerAction;
@@ -219,7 +220,7 @@ export function reviewStopFindings(pipeline: Pipeline, stop: ReviewStop): StageF
 }
 
 export interface PipelineAnswers {
-  kind: "decision" | "review";
+  kind: "decision" | "review" | "merge";
   /** The stage the answer is about: the parked stage, or the review stage. */
   stage: PipelineStage | null;
   /** The quiet answer first, then the primary one. */
@@ -235,6 +236,10 @@ export interface PipelineAnswers {
  * (#1938, #2187) is accepted as is or reviewed again. Close stays in the ⋯.
  */
 export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStage) => string): PipelineAnswers | null {
+  if (mergeNeedsYou(pipeline)) {
+    const none = { stageId: null, stageName: null, expectedAttempt: null };
+    return { kind: "merge", stage: null, choices: [{ action: "dismiss", ...none }, { action: "retry-merge", ...none }], stop: null };
+  }
   if (pipeline.state === "needs_decision") {
     const retry = pipelineActionOptions(pipeline).find((option) => option.action === "retry-stage");
     if (!retry || retry.refusal || !retry.stageId) return null;
@@ -255,6 +260,8 @@ export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStag
     plain words, on the desktop and the phone alike (§3.4); any other decision
     keeps "Skip {stage}" / "Retry {stage}", or the phone's shorter words. */
 export function answerLabel(t: TFunction, answers: PipelineAnswers, answer: PipelineAnswer, large: boolean): string {
+  if (answer.action === "retry-merge") return t("pipelineBlock.answer.retryMerge");
+  if (answer.action === "dismiss") return t("pipelineBlock.answer.leaveOpen");
   if (answer.action === "accept-head") return t("pipelineBlock.answer.acceptAsIs");
   if (answer.action === "continue-review") return t("pipelineBlock.answer.reviewAgain");
   if (answers.stop && answer.action === "skip-stage") return t("pipelineBlock.answer.acceptWithoutReview");
@@ -316,4 +323,67 @@ export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage:
     t(failed ? "pipelineBlock.reason.failed" : "pipelineBlock.reason.parked", { stage: nameOf(stage) }),
     findings ? t("pipelineVerdict.findings", { count: findings }) : null,
   ].filter(Boolean).join(" · ");
+}
+
+/* ── The merge runner's record on a completed lane (#2187 §6) ─────────── */
+
+/** The word a completed lane's merge adds after "done", or null when the lane
+    has no merge to speak of (none taken, or cancelled by the setting). */
+export type LaneMergeWord = "waiting" | "updating" | "merging" | "stopped" | "merged";
+
+export function laneMergeWord(pipeline: Pick<Pipeline, "state" | "merge">): LaneMergeWord | null {
+  const merge = pipeline.merge;
+  if (pipeline.state !== "completed" || !merge) return null;
+  switch (merge.state) {
+    case "queued":
+    case "checking":
+    case "waiting-checks":
+      return "waiting";
+    case "updating":
+      return "updating";
+    case "merging":
+      return "merging";
+    case "blocked":
+      return "stopped";
+    case "merged":
+      return "merged";
+    default:
+      return null;
+  }
+}
+
+/**
+ * A completed lane whose merge stopped asks the operator (§4.6) until someone
+ * cleared it: "Leave the PR open" is a dismissal made after the merge
+ * stopped, and the record stays `blocked`.
+ */
+export function mergeNeedsYou(pipeline: Pick<Pipeline, "state" | "merge" | "dismissedAt">): boolean {
+  const merge = pipeline.merge;
+  if (pipeline.state !== "completed" || merge?.state !== "blocked") return false;
+  const dismissed = Date.parse(pipeline.dismissedAt ?? "");
+  const blocked = Date.parse(merge.blockedAt ?? merge.updatedAt);
+  return !(Number.isFinite(dismissed) && dismissed >= blocked);
+}
+
+/** A completed lane whose merge is still moving or stopped on the operator is
+    not finished business: the boards keep it out of the fold of finished
+    lanes, so "waiting for checks" and a stopped merge's answers stay in view. */
+export function laneMergeUnsettled(pipeline: Pick<Pipeline, "state" | "merge" | "dismissedAt">): boolean {
+  const word = laneMergeWord(pipeline);
+  return word === "waiting" || word === "updating" || word === "merging" || mergeNeedsYou(pipeline);
+}
+
+/** A stopped merge's reason in the operator's words: each sentence the runner
+    writes has its key, and GitHub's own words travel as they are. */
+export function mergeReasonText(t: TFunction, reason: string | null): string {
+  if (!reason) return "";
+  const key = (Object.keys(MERGE_REASONS) as MergeReasonKey[]).find((candidate) => MERGE_REASONS[candidate] === reason);
+  if (key) return t(`pipelineBlock.mergeReason.${key}`);
+  const check = MERGE_REASON_PATTERNS.check.exec(reason);
+  if (check) return t("pipelineBlock.mergeReason.check", { name: check[1]! });
+  const merge = MERGE_REASON_PATTERNS.refusedMerge.exec(reason);
+  if (merge) return t("pipelineBlock.mergeReason.refusedMerge", { message: merge[1]! });
+  const update = MERGE_REASON_PATTERNS.refusedUpdate.exec(reason);
+  if (update) return t("pipelineBlock.mergeReason.refusedUpdate", { message: update[1]! });
+  return reason;
 }

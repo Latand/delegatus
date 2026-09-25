@@ -592,6 +592,8 @@ export interface SeatTickPullRequestInput {
   /** The lane completed on a spent review budget and its last fix was never
       re-reviewed (#2187 §3.5), so the seat reads that before it merges. */
   lastFixUnreviewed?: true;
+  /** The merge runner stopped this lane's merge (#2187 §4.6), in its words. */
+  mergeBlocked?: string;
 }
 
 /**
