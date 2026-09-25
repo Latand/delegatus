@@ -143,6 +143,7 @@ export const BADGE_LABEL = {
   decision: "mobile2.board.badgeDecision",
   permission: "attention.decisionPermission",
   delivery: "needs.delivery",
+  launch: "needs.launch",
 } as const;
 
 /** A conversation as a phone row: the board's, and the task screen's agents

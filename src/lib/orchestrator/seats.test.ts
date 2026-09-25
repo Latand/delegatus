@@ -15,6 +15,9 @@ import {
   completeOrchestratorSeatIntent,
   failOrchestratorSeatIntent,
   orchestratorRevocations,
+  abandonStillbornOrchestratorSeat,
+  orchestratorSeatEverHeld,
+  orchestratorSeatEverHeldIn,
   orchestratorSeatFor,
   previousOrchestratorSeats,
   readOrchestratorSeatFile,
@@ -665,4 +668,34 @@ test("an unreadable seat record answers null rather than an empty cross-project 
   expect(allSeatConversations()).toEqual({ conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } });
   fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), "{ not json", "utf8");
   expect(allSeatConversations()).toBeNull();
+});
+
+test("a project whose designation never took has never held a seat; one that was seated has, even once it is empty (#2170)", () => {
+  expect(orchestratorSeatEverHeld("proj-a")).toBe(false);
+  /* A designation refused before anything ran. */
+  beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_0000001", mode: "spawn", now: AT });
+  failOrchestratorSeatIntent("proj-a", "req_0000001", "no Claude account is signed in", AT);
+  expect(orchestratorSeatEverHeld("proj-a")).toBe(false);
+  /* A provisional seat whose launch was stillborn is rolled back. */
+  beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_0000002", mode: "spawn", now: AT });
+  completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "req_0000002", conversationId: "conversation_stillborn", path: null, now: AT });
+  expect(orchestratorSeatEverHeld("proj-a")).toBe(true);
+  expect(abandonStillbornOrchestratorSeat({ project: "proj-a", clientRequestId: "req_0000002", error: "launch failed", now: AT })).not.toBeNull();
+  expect(orchestratorSeatFor("proj-a").active).toBeNull();
+  expect(orchestratorSeatEverHeld("proj-a")).toBe(false);
+  /* A seat that held the project. */
+  beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_0000003", mode: "spawn", now: AT });
+  completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "req_0000003", conversationId: "conversation_a", path: "/tmp/a.jsonl", now: AT });
+  expect(orchestratorSeatEverHeld("proj-a")).toBe(true);
+  expect(orchestratorSeatEverHeld("proj-b")).toBe(false);
+  /* A record that cannot be read cannot show the project never had one. */
+  expect(orchestratorSeatEverHeldIn(null, "proj-b")).toBe(true);
+});
+
+test("a revoked seat still counts as held once nothing is seated (#2170)", () => {
+  const file = readOrchestratorSeatFile();
+  expect(orchestratorSeatEverHeldIn({
+    ...file,
+    revocations: [{ project: "proj-a", conversationId: "conversation_old", seatEpoch: 1, revokedAt: AT }],
+  }, "proj-a")).toBe(true);
 });

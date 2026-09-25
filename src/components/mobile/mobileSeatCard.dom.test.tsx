@@ -80,6 +80,8 @@ const realFetch = globalThis.fetch;
 let incumbentAnswer: Record<string, unknown> | null = null;
 let runtimeRefreshes = 0;
 
+/* The launch module's account catalog; empty unless a test names one. */
+let claudeAccounts: { active: string; accounts: Array<Record<string, unknown>> } = { active: "", accounts: [] };
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   const method = init?.method ?? "GET";
@@ -91,7 +93,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return new Response(JSON.stringify(seatAnswer), { status: 200, headers: { "content-type": "application/json" } });
   }
   if (url.startsWith("/api/accounts")) {
-    return new Response(JSON.stringify({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } }), {
+    return new Response(JSON.stringify({ claude: claudeAccounts, codex: { active: "", accounts: [] } }), {
       status: 200, headers: { "content-type": "application/json" },
     });
   }
@@ -308,6 +310,31 @@ test("the invitation opens the create draft — the rotate sheet in create mode 
   expect(sheet(host)).toBeNull();
   expect(nav.getState().sheet).toBeNull();
   expect(seatPosts()).toHaveLength(0);
+});
+
+test("on a signed-out account the create draft says so, and its primary opens that account's sign-in instead of designating (#2170)", async () => {
+  claudeAccounts = { active: "default", accounts: [{ id: "default", label: "Main", authPresent: false }] };
+  const requested: unknown[] = [];
+  const listen = (event: Event) => requested.push((event as CustomEvent).detail);
+  window.addEventListener("llv:open-accounts", listen);
+  try {
+    const { host, root } = await mount([conversation({})]);
+    flushSync(() => openButton(host).click());
+    await settle(root, view([conversation({})]), 3);
+
+    const panel = sheet(host)!;
+    expect(panel.querySelector("[data-orchestrator-sign-in-first]")?.textContent).toBe("Main is signed out of Claude.");
+    expect(confirmButton(host).textContent).toBe("Sign in to Claude first");
+    flushSync(() => confirmButton(host).click());
+    await settle(root, view([conversation({})]), 2);
+    /* The modal steps aside for the Accounts screen, and nothing is designated. */
+    expect(sheet(host)).toBeNull();
+    expect(seatPosts()).toHaveLength(0);
+    expect(requested).toEqual([{ engine: "claude", accountId: "default" }]);
+  } finally {
+    window.removeEventListener("llv:open-accounts", listen);
+    claudeAccounts = { active: "", accounts: [] };
+  }
 });
 
 test("tapping the create row opens the fullscreen sheet with the prefilled mandate and the launch pickers", async () => {

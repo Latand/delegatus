@@ -1,12 +1,15 @@
 "use client";
 
-import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, PanelLeft, PanelTop, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, LogIn, PanelLeft, PanelTop, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AgentLaunchControls,
+  launchEngineLabel,
+  openLaunchSignIn,
   useAgentLaunchDraft,
   useLaunchAccountCatalog,
+  useLaunchReadiness,
   type LaunchAccountCatalog,
   type LaunchDraftStorage,
 } from "@/components/draft/AgentLaunchControls";
@@ -880,6 +883,11 @@ function OrchestratorDraft({
   const staleVersion = incumbent && orchestratorMandateStale(incumbent.promptVersion) ? incumbent.promptVersion : null;
   const keepOffered = staleVersion !== null && incumbent !== null && mandate !== incumbent.mandate && onKeepIncumbent !== undefined;
   const summary = mandateSummaryOf(mandate, incumbent);
+  /* The engine readiness preflight the agent launcher shares (#2170): on a
+     signed-out account the draft says so before anything is pressed, and its
+     primary opens that account's sign-in instead of designating. */
+  const readiness = useLaunchReadiness(launch);
+  const signInFirst = readiness.kind === "signed-out" ? readiness : null;
   /* The rules are collapsed by default: they are the part an operator rarely
      changes, and 58 lines of them ahead of the pickers is what made this draft
      unreadable (#1163).
@@ -907,7 +915,8 @@ function OrchestratorDraft({
       data-orchestrator-draft={mode}
       onSubmit={(event) => {
         event.preventDefault();
-        onConfirm();
+        if (signInFirst) openLaunchSignIn(signInFirst);
+        else onConfirm();
       }}
     >
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
@@ -1056,6 +1065,11 @@ function OrchestratorDraft({
         {formError ? (
           <p className="text-ui font-semibold text-danger" role="alert">{formError}</p>
         ) : null}
+        {signInFirst ? (
+          <p className="text-ui font-semibold text-warning" role="status" data-orchestrator-sign-in-first>
+            {t("launch.accountSignedOut", { label: signInFirst.label, engine: launchEngineLabel(signInFirst.engine) })}
+          </p>
+        ) : null}
         <div className="flex items-center gap-2">
           {onCancel ? (
             <button
@@ -1076,11 +1090,15 @@ function OrchestratorDraft({
           >
             {submitting
               ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
-              : rotate
-                ? <RefreshCw className="h-4 w-4" aria-hidden />
-                : <Bot className="h-4 w-4" aria-hidden />}
+              : signInFirst
+                ? <LogIn className="h-4 w-4" aria-hidden />
+                : rotate
+                  ? <RefreshCw className="h-4 w-4" aria-hidden />
+                  : <Bot className="h-4 w-4" aria-hidden />}
             <span className="truncate">
-              {t(errored ? "orchPanel.confirmRetry" : rotate ? "orchPanel.rotateConfirm" : "orchPanel.confirm")}
+              {signInFirst
+                ? t("launch.signInFirst", { engine: launchEngineLabel(signInFirst.engine) })
+                : t(errored ? "orchPanel.confirmRetry" : rotate ? "orchPanel.rotateConfirm" : "orchPanel.confirm")}
             </span>
           </button>
         </div>

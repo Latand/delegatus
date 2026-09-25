@@ -160,6 +160,17 @@ test("a project with open work and no active seat reports no-seat and asks for o
   expect(decision.state.lastCheckAt).toBe(new Date(NOW).toISOString());
 });
 
+test("a project that never had a seat reports no-seat and asks for no card (#2170)", () => {
+  const decision = seatTickDecision(input({ seat: null, seatEverHeld: false, pipelines: [lane()] }));
+  expect(decision.verdict).toEqual({
+    kind: "no-seat",
+    detail: "the project has open work and has never had an orchestrator seat",
+  });
+  expect(decision.cards.filter((card) => card.kind === "no-seat")).toEqual([]);
+  /* A project whose seat was revoked is missing one, and still says so. */
+  expect(seatTickDecision(input({ seat: null, seatEverHeld: true, pipelines: [lane()] })).cards.map((card) => card.kind)).toContain("no-seat");
+});
+
 test("a seat whose turn is genuinely moving is skipped, not queued", () => {
   const decision = seatTickDecision(input({
     seat: seat({ turn: "busy", activity: { lifecycle: "running", reason: "host_alive_turn_active" } }),

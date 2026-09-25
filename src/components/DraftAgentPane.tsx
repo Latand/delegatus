@@ -8,7 +8,9 @@ import {
   EngineRadioGroup,
   LaunchAccountSelect,
   launchEngineLabel,
+  openLaunchSignIn,
   useAgentLaunchDraft,
+  useLaunchReadiness,
 } from "@/components/draft/AgentLaunchControls";
 import { Play, X } from "@/components/icons";
 import { Select } from "@/components/ui/Select";
@@ -421,6 +423,10 @@ export function DraftAgentPane({
     onEngineChange: (value) => setSpawnImageNegotiation({ status: "loading", requestKey: `${project}\n${src ?? ""}\n${value}` }),
   });
   const { engine, model, effort, speed } = launch;
+  /* The engine readiness preflight (#2170): a launch on a signed-out account
+     would only fail, so the action becomes that account's sign-in. */
+  const readiness = useLaunchReadiness(launch);
+  const signInFirst = readiness.kind === "signed-out" ? readiness : null;
   const spawnImageNegotiationKey = `${project}\n${src ?? ""}\n${engine}`;
   const [spawnNegotiationAttempt, setSpawnNegotiationAttempt] = useState(0);
   const spawnImageNegotiation: SpawnImageNegotiationState = storedSpawnImageNegotiation.requestKey === spawnImageNegotiationKey
@@ -754,6 +760,10 @@ export function DraftAgentPane({
   const send = async (overrideText?: string) => {
     const payloadText = overrideText ?? text;
     if (busy || voiceSending || attempt) return;
+    if (signInFirst) {
+      openLaunchSignIn(signInFirst);
+      return;
+    }
     if (attachments.images.length && spawnImagesDisabled) {
       setStatus({ kind: "err", text: spawnImagesReason ?? t("composer.structuredImagesUnavailable") });
       return;
@@ -977,6 +987,11 @@ export function DraftAgentPane({
           sendIdleStyle={{ backgroundColor: tint.color, borderColor: tint.color }}
           imageDisabled={spawnImagesDisabled}
           imageDisabledReason={spawnImagesReason}
+          sendDisabledReason={signInFirst && !attempt
+            ? t("launch.accountSignedOut", { label: signInFirst.label, engine: launchEngineLabel(signInFirst.engine) })
+            : undefined}
+          onSendBlockedRecover={signInFirst && !attempt ? () => openLaunchSignIn(signInFirst) : undefined}
+          sendBlockedRecoverLabel={signInFirst ? t("launch.signInFirst", { engine: launchEngineLabel(signInFirst.engine) }) : undefined}
           leftSlot={
             <span
               className="inline-flex min-w-0 items-center gap-1 rounded-control bg-sunken px-1.5 py-1 text-caption font-semibold text-secondary"

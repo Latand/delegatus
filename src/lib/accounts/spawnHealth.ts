@@ -68,9 +68,19 @@ function refreshSingleFlight(
 export class NoHealthyClaudeAccountError extends Error {
   readonly accountIds: string[];
 
-  constructor(accountIds: string[]) {
-    const ids = [...new Set(accountIds)].sort();
-    const target = ids.length === 1 ? `account ${ids[0]}` : ids.length > 1 ? `accounts ${ids.join(", ")}` : "a Claude account";
+  /** Accounts are named by the label the Accounts panel shows ("Main"), never
+      by their internal id ("default"): the message tells the operator which
+      row to sign back in on (#2170). A bare id is its own label. */
+  constructor(accounts: ReadonlyArray<string | Pick<ClaudeAccount, "id" | "label">>) {
+    const byId = new Map<string, string>();
+    for (const account of accounts) {
+      const id = typeof account === "string" ? account : account.id;
+      const label = typeof account === "string" ? account : account.label.trim() || account.id;
+      if (!byId.has(id)) byId.set(id, label);
+    }
+    const ids = [...byId.keys()].sort();
+    const labels = ids.map((id) => byId.get(id)!);
+    const target = labels.length === 1 ? labels[0] : labels.length > 1 ? `${labels.slice(0, -1).join(", ")} or ${labels.at(-1)}` : "a Claude account";
     super(`No healthy Claude account is available. Re-login ${target} in Accounts and retry.`);
     this.name = "NoHealthyClaudeAccountError";
     this.accountIds = ids;
@@ -264,5 +274,5 @@ export async function selectHealthyClaudeAccount(
   const refreshedSelection = select(all);
   if (refreshedSelection) return result(refreshedSelection, requested);
   if (unknownAccounts.size > 0) throw new ClaudeCredentialUnavailableError();
-  throw new NoHealthyClaudeAccountError(accounts.map((candidate) => candidate.id));
+  throw new NoHealthyClaudeAccountError(accounts);
 }

@@ -135,6 +135,9 @@ function pipelineRecord(entry: PipelineFixture) {
 
 function harness(options: {
   seat?: { conversationId: string; seatEpoch: number; path: string | null; designatedAt?: string | null; mandate?: string; promptVersion?: number | null } | null;
+  /** Whether an orchestrator ever held the project (#2170); absent, the
+      source is not wired, as in a harness written before it existed. */
+  seatEverHeld?: boolean;
   turn?: "busy" | "idle";
   seatActivity?: Partial<AgentLivenessRecord> | null;
   pipelines?: PipelineFixture[];
@@ -261,6 +264,7 @@ function harness(options: {
         const seat = reads > 2 && options.rotateBeforeSend !== undefined ? options.rotateBeforeSend : result.seat;
         return { active: seat as never, pending: null, history: [] };
       },
+      ...(options.seatEverHeld === undefined ? {} : { seatEverHeld: () => options.seatEverHeld! }),
       activeSeats: () => [PROJECT],
       pipelines: () => pipelines as never,
       archivedPipelines: () => archived as never,
@@ -1709,6 +1713,14 @@ test("a busy seat the registry reports stalled is woken, which is what resumes i
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   expect(record!.verdict).toBe("wake");
   expect(rig.sent).toHaveLength(1);
+});
+
+test("open work in a project whose seat was never designated raises no orchestrator card (#2170)", async () => {
+  const rig = harness({ seat: null, seatEverHeld: false, tasks: [{ id: "first-task", status: "inbox" }] });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "no-seat", seatEpoch: null });
+  expect(rig.cards).toEqual([]);
+  expect(rig.sent).toEqual([]);
 });
 
 test("open work with nobody seated raises the orchestrator card and wakes nothing", async () => {

@@ -464,6 +464,31 @@ test("with no orchestrator the panel is a draft prefilled with the default manda
   expect(seatPosts[0]!.promptVersion).toBeUndefined();
 });
 
+test("a draft on a signed-out account says so and its primary opens that account's sign-in instead of designating (#2170)", async () => {
+  const saved = accounts.claude;
+  accounts.claude = { active: "default", accounts: [{ id: "default", label: "Main", authPresent: false }] };
+  const requests: unknown[] = [];
+  const listen = (event: Event) => requests.push((event as CustomEvent).detail);
+  window.addEventListener("llv:open-accounts", listen);
+  try {
+    const host = mount();
+    await settle();
+    flushSync(() => undefined);
+
+    expect(panelState(host)).toBe("draft");
+    expect(host.querySelector("[data-orchestrator-sign-in-first]")?.textContent).toBe("Main is signed out of Claude.");
+    expect(confirmButton(host).textContent).toBe("Sign in to Claude first");
+    flushSync(() => confirmButton(host).click());
+    await settle();
+    expect(seatPosts).toEqual([]);
+    expect(spawnPosts).toBe(0);
+    expect(requests).toEqual([{ engine: "claude", accountId: "default" }]);
+  } finally {
+    window.removeEventListener("llv:open-accounts", listen);
+    accounts.claude = saved;
+  }
+});
+
 test("the orchestrator draft confirms a resolved Viewer MCP registration", async () => {
   seatStatus = { seat: null, pending: null, exists: true, viewerMcpRegistered: true };
   const host = mount();

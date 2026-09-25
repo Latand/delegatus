@@ -1,13 +1,16 @@
 "use client";
 
 import { EngineMark } from "@/components/EngineMark";
-import { Bot, ChevronRight, CornerDownRight, LoaderCircle, Pencil, RefreshCw, RotateCcw, TriangleAlert } from "lucide-react";
+import { Bot, ChevronRight, CornerDownRight, LoaderCircle, LogIn, Pencil, RefreshCw, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { X } from "@/components/icons";
 import {
   AgentLaunchControls,
+  launchEngineLabel,
+  openLaunchSignIn,
   useAgentLaunchDraft,
+  useLaunchReadiness,
   type LaunchAccountCatalog,
   type LaunchEngine,
   type SpeedChoice,
@@ -457,6 +460,11 @@ function SeatDraftSheet({
   const [mandate, setMandateState] = useState(() => readSeatDraftField(project, "mandate") || ORCHESTRATOR_SYSTEM_PROMPT);
   const [formError, setFormError] = useState<string | null>(null);
   const launch = useCreateDraft(project);
+  /* The engine readiness preflight the dock and the agent launcher share
+     (#2170). The sheet is modal, so it closes before the Accounts screen
+     opens under it. */
+  const readiness = useLaunchReadiness(launch);
+  const signInFirst = readiness.kind === "signed-out" ? readiness : null;
 
   /* Full modal semantics through the shared layer stack: focus in on open, Tab
      trapped, Escape closes, body scroll locked, focus back to the card. */
@@ -496,9 +504,19 @@ function SeatDraftSheet({
      confirm that landed) keeps the surface with no primary rather than a
      control that no longer acts. */
   const drafting = state.kind === "draft" || state.kind === "intent-error";
-  const primary: { key: MessageKey; run: () => void; busy: boolean } | null = rotating || !drafting
+  const primary: { label: string; run: () => void; busy: boolean; signIn: boolean } | null = rotating || !drafting
     ? null
-    : { key: state.kind === "intent-error" ? "orchPanel.confirmRetry" : "orchPanel.confirm", run: submitDraft, busy: submitting };
+    : signInFirst
+      ? {
+          label: t("launch.signInFirst", { engine: launchEngineLabel(signInFirst.engine) }),
+          run: () => {
+            onClose();
+            openLaunchSignIn(signInFirst);
+          },
+          busy: submitting,
+          signIn: true,
+        }
+      : { label: t(state.kind === "intent-error" ? "orchPanel.confirmRetry" : "orchPanel.confirm"), run: submitDraft, busy: submitting, signIn: false };
 
   return (
     <div
@@ -617,6 +635,11 @@ function SeatDraftSheet({
             {primary ? (
               <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-sunken px-3 py-2.5">
                 {formError ? <p className="text-ui font-semibold text-danger" role="alert">{formError}</p> : null}
+                {signInFirst ? (
+                  <p className="text-ui font-semibold text-warning" role="status" data-orchestrator-sign-in-first>
+                    {t("launch.accountSignedOut", { label: signInFirst.label, engine: launchEngineLabel(signInFirst.engine) })}
+                  </p>
+                ) : null}
                 <div className="flex items-center gap-2">
                   {/* Cancel sits IN the draft (README §4.5), beside its primary:
                       a create reached from the board's invitation needs a way
@@ -636,8 +659,10 @@ function SeatDraftSheet({
                     disabled={primary.busy}
                     className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
                   >
-                    {primary.busy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden /> : <Bot className="h-4 w-4" aria-hidden />}
-                    <span className="truncate">{t(primary.key)}</span>
+                    {primary.busy
+                      ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
+                      : primary.signIn ? <LogIn className="h-4 w-4" aria-hidden /> : <Bot className="h-4 w-4" aria-hidden />}
+                    <span className="truncate">{primary.label}</span>
                   </button>
                 </div>
               </div>

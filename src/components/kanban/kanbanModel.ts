@@ -601,7 +601,9 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
         conversationId,
         atMs: Number.isFinite(atMs) ? atMs : failed.mtime * 1000,
         failed: { error: failed.spawn?.error ?? null, file: failed },
-        dismissable: Boolean(assignment && assignment.state !== "failed"),
+        /* A dismissed row was skipped above; a row the launch's own failure
+           marked failed (#2170) is still the operator's to dismiss. */
+        dismissable: Boolean(assignment),
       });
     }
     /* A launch of the task's own that never minted a conversation (a row

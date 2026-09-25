@@ -16,6 +16,7 @@ Object.assign(globalThis, {
   HTMLElement: dom.HTMLElement,
   HTMLSelectElement: dom.HTMLSelectElement,
   Event: dom.Event,
+  CustomEvent: dom.CustomEvent,
   MouseEvent: dom.MouseEvent,
   sessionStorage: dom.sessionStorage,
 });
@@ -157,4 +158,55 @@ test("the ukrainian locale localizes the default and sign-in markers", async () 
   const texts = [...select!.querySelectorAll("option")].map((option) => option.textContent);
   expect(texts).toContain("anna · активний");
   expect(texts).toContain("carol · потрібен вхід");
+});
+
+/* #2170: the engine readiness preflight. A newcomer's only Claude account,
+   «Main», is signed out; the launcher used to offer it as «Main · active»,
+   send, fail, and move the task. */
+test("a draft on a signed-out account opens that account's sign-in instead of launching, and launches once it signs in", async () => {
+  const posts: Record<string, unknown>[] = [];
+  installFetch(posts);
+  let signedIn = false;
+  const serve = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input) === "/api/accounts") {
+      return { ok: true, json: async () => ({
+        claude: { active: "default", accounts: [{ id: "default", label: "Main", authPresent: signedIn, auth: { state: signedIn ? "authenticated" : "signed_out" } }] },
+        codex: { active: "", accounts: [] },
+      }) } as Response;
+    }
+    return serve(input, init);
+  }) as typeof fetch;
+  const requests: unknown[] = [];
+  const listen = (event: Event) => requests.push((event as CustomEvent).detail);
+  window.addEventListener("llv:open-accounts", listen);
+  try {
+    const host = mount("signed-out-draft");
+    await settle();
+
+    const select = accountSelect(host, "Claude");
+    expect([...select.querySelectorAll("option")].map((option) => option.textContent)).toEqual(["Main · needs sign-in"]);
+    const blocked = host.querySelector('[data-testid="composer-send-blocked"]');
+    expect(blocked?.textContent).toContain("Main is signed out of Claude.");
+    const action = [...blocked!.querySelectorAll("button")].find((button) => button.textContent === "Sign in to Claude first");
+    expect(action).toBeTruthy();
+
+    /* Enter (the form submit) opens the sign-in too, and nothing is launched. */
+    await launch(host, "Add a delete command");
+    expect(posts).toEqual([]);
+    expect(requests).toEqual([{ engine: "claude", accountId: "default" }]);
+    flushSync(() => action!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
+    expect(requests).toHaveLength(2);
+
+    /* The sign-in lands; the next catalog read lifts the block. */
+    signedIn = true;
+    flushSync(() => window.dispatchEvent(new dom.Event("focus") as unknown as Event));
+    await settle();
+    expect(host.querySelector('[data-testid="composer-send-blocked"]')).toBeNull();
+    await launch(host, "Add a delete command");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.accountId).toBe("default");
+  } finally {
+    window.removeEventListener("llv:open-accounts", listen);
+  }
 });
