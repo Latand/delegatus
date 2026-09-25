@@ -133,6 +133,13 @@ guarantees for the 1.x series.
   GitHub the way they look in the app ([#2138]).
 
 ### Fixed
+- **The board scrolls smoothly on large boards.** On a screen at normal
+  pixel density, Chrome scrolled the desktop board's page and columns on the
+  main thread, so on a board of 173 cards every scroll frame waited for a
+  repaint and about half of them (50–57 %) did not move the content. The
+  board now scrolls on the compositor: no scroll frame waits for the main
+  thread, at most 0.1 % fail to move, and the median delay from wheel to
+  paint drops from 18–30 ms to 10–16 ms ([#2219]).
 - **Unanswered permission requests no longer wedge a stage.** Claude asks for
   a tool even with permissions bypassed when its safety check flags a command,
   and nothing answered, so the turn waited forever and read as
@@ -1191,3 +1198,4 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2212]: https://github.com/Latand/delegatus/pull/2212
 [#2214]: https://github.com/Latand/delegatus/pull/2214
 [#2216]: https://github.com/Latand/delegatus/pull/2216
+[#2219]: https://github.com/Latand/delegatus/pull/2219
