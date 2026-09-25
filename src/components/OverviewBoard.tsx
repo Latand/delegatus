@@ -18,6 +18,7 @@ import { KanbanSkeleton, PhoneKanbanSkeleton } from "./skeletons";
 import { FolderPlus, Search } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
+import { activityMobileMenuEntry } from "./activity/menuEntry";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { openOnboarding } from "./onboarding/useOnboarding";
@@ -244,8 +245,8 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
   if (isMobile) {
     /* The phone (mobile v2 lane 1): the shell's bar with «Overview» as the
        title cell (it opens the project switcher), the badge, search and ⋯; the
-       menu holds the hidden tasks (#2098, as a project's does) and the
-       device-local settings. */
+       menu holds the hidden tasks (#2098, as a project's does), the
+       device-local settings and Activity. */
     const renderSheet = (name: MobileSheetName, close: () => void) => {
       if (name === "menu") {
         const entries: MobileMenuEntry[] = [
@@ -273,6 +274,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           },
           { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
           { kind: "divider", key: "d-setup" },
+          activityMobileMenuEntry(t, mobileNav),
           ...onboardingMobileMenuEntries(t, close),
           selfUpdateMobileMenuEntry(t, close),
         ];

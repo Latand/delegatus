@@ -96,7 +96,12 @@
  * the prototype's layout. It also filters the page to one project
  * (`?project=`): every project, one project chosen (en and uk), the header's
  * picker open, and the phone with one project chosen, and requires the
- * server's scoped totals to equal that project's row. It checks sideways overflow, the 7-day page ending
+ * server's scoped totals to equal that project's row. On the phone it arrives
+ * the way the operator does, by ⋯ → Activity from the Overview's board and a
+ * project's, at 390 × 844 and 430 × 932 in en and uk, light and dark: the tap
+ * has to load /activity, the page has to fit, its range, view and Board
+ * controls have to take a 44 px thumb, and Board and Back have to return to a
+ * board with no menu over it. It checks sideways overflow, the 7-day page ending
  * inside 900 px, the trust chip and the Rhythm legend on one line, cut text,
  * tooltips inside the viewport, and the marks on the unread and flagged days.
  * With ACTIVITY_RENDER_DIR set, the images are copied there.
@@ -4687,6 +4692,98 @@ async function activityMain(): Promise<void> {
     must(scopedUk.scope === "orchard-client" && scopedUk.chip?.state === "lower", `one project uk: chip ${scopedUk.scope}, trust ${scopedUk.chip?.state}`);
     const phoneScoped = await capture("phone-project-selected", `range=7d&view=projects&project=${encodeURIComponent(orchard)}`, { phone: true });
     must(phoneScoped.layout === "narrow" && phoneScoped.scope === "orchard-client" && phoneScoped.tiles === 4, `phone, one project: ${phoneScoped.layout} layout, chip ${phoneScoped.scope}, ${phoneScoped.tiles} tiles`);
+
+    /* The phone arrives by its board menus: ⋯ → Activity on the Overview and
+       on a project's board. A sheet's close pops its history entry, and a pop
+       asked for after the page load cancels the load, so the tap has to land
+       on /activity rather than back on the board. */
+    const phoneArrivals = [
+      ...([[390, 844], [430, 932]] as const).flatMap(([width, height]) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, height, lang, colorScheme, from: "overview" as const })))),
+      ...(["en", "uk"] as const).map((lang) => ({ width: 390, height: 844, lang, colorScheme: "light" as const, from: "project" as const })),
+    ];
+    const arrivals: Record<string, unknown> = {};
+    /* An operator who has closed the first-run guide and its walk: they
+       would stand over the board. */
+    const onboarding = await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true, walk: "skipped" }) });
+    must(onboarding.ok, `phone arrivals: the guide was not dismissed (${onboarding.status})`);
+    for (const arrival of phoneArrivals) {
+      const name = `phone-arrive-${arrival.from}-${arrival.width}-${arrival.lang}-${arrival.colorScheme}`;
+      const context = await browser.newContext({ viewport: { width: arrival.width, height: arrival.height }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, colorScheme: arrival.colorScheme, reducedMotion: "reduce" });
+      try {
+        await context.addInitScript(seedInit);
+        await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), arrival.lang);
+        const page = await context.newPage();
+        const board = `${baseUrl}/${arrival.from === "project" ? `#p=${encodeURIComponent(keyOf("lantern-api"))}` : ""}`;
+        await page.goto(board, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 120_000 });
+        await page.waitForTimeout(800);
+        await page.tap('[data-mobile2-open="menu"]');
+        const row = page.locator('[data-testid="menu-activity"]');
+        if (!await row.waitFor({ state: "visible", timeout: 10_000 }).then(() => true, () => false)) {
+          must(false, `${name}: the ⋯ menu has no Activity row`);
+          continue;
+        }
+        await row.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(300);
+        if (arrival.width === 390 && arrival.colorScheme === "light") {
+          const menu = path.join(OUT_DIR, `activity-${name}-menu.png`);
+          await page.screenshot({ path: menu });
+          shots.push(menu);
+        }
+        await row.tap();
+        if (!await page.waitForURL(/\/activity(\?|$)/, { timeout: 15_000 }).then(() => true, () => false)) {
+          must(false, `${name}: ⋯ → Activity stayed on ${page.url().replace(baseUrl, "")}`);
+          continue;
+        }
+        await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
+        await page.waitForTimeout(400);
+        const fit = () => page.evaluate(() => {
+          const root = document.querySelector<HTMLElement>("[data-activity-page]")!;
+          const targets = [...document.querySelectorAll<HTMLElement>("[data-activity-back], [data-activity-option]")].map((element) => {
+            const box = element.getBoundingClientRect();
+            return { target: element.dataset.activityOption ?? "back", width: Math.round(box.width), height: Math.round(box.height) };
+          });
+          return { width: document.documentElement.clientWidth, scrollWidth: Math.max(document.documentElement.scrollWidth, root.scrollWidth), layout: root.dataset.activityLayout ?? "narrow", targets };
+        });
+        const landed = await fit();
+        const shot = path.join(OUT_DIR, `activity-${name}.png`);
+        await page.screenshot({ path: shot });
+        shots.push(shot);
+        /* The range and view controls, by touch: 30 days, then Projects. */
+        await page.tap('[data-activity-option="30d"]');
+        await page.waitForSelector('[data-activity-loaded="30d"]', { timeout: 60_000 });
+        await page.tap('[data-activity-option="projects"]');
+        await page.waitForSelector("section[data-activity-projects]", { timeout: 10_000 });
+        await page.waitForTimeout(400);
+        const projects = await fit();
+        const projectsShot = path.join(OUT_DIR, `activity-${name}-projects.png`);
+        await page.screenshot({ path: projectsShot });
+        shots.push(projectsShot);
+        for (const reading of [landed, projects]) {
+          must(reading.layout === "narrow", `${name}: the ${reading.layout} layout`);
+          must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+          for (const target of reading.targets) must(target.height >= 44 && target.width >= 44, `${name}: ${target.target} is ${target.width} × ${target.height}`);
+        }
+        must(landed.targets.length === 6, `${name}: ${landed.targets.length} of Board and five range/view controls`);
+        /* Back to the board, the browser's way (a range or view switch
+           replaces the page's entry) and the page's own. */
+        await page.goBack({ waitUntil: "domcontentloaded" });
+        await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
+        await page.waitForTimeout(600);
+        const backUrl = page.url().replace(baseUrl, "");
+        const sheetAfterBack = await page.evaluate(() => document.querySelector('[data-mobile2-open="menu"]')?.getAttribute("aria-expanded") === "true");
+        must(`${baseUrl}${backUrl}` === board && !sheetAfterBack, `${name}: Back lands on ${backUrl} with the menu ${sheetAfterBack ? "open" : "closed"}`);
+        await page.goForward({ waitUntil: "domcontentloaded" });
+        await page.waitForSelector("[data-activity-back]", { timeout: 60_000 });
+        await page.tap("[data-activity-back]");
+        const boardAgain = await page.waitForURL(`${baseUrl}/`, { timeout: 15_000 }).then(() => page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 })).then(() => true, () => false);
+        must(boardAgain, `${name}: Board leads to ${page.url().replace(baseUrl, "")}`);
+        arrivals[name] = { landed, projects, back: backUrl, sheetAfterBack, board: boardAgain };
+      } finally {
+        await context.close();
+      }
+    }
+    report.phoneArrivals = arrivals;
 
     /* Today with the stage host unread from 09:00 to 12:00: only once those
        hours have passed, since an hour still to come draws nothing. */
