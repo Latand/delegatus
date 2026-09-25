@@ -25,10 +25,11 @@ export function writeJsonDurably(target: string, value: unknown, options: Durabl
 /** fsync one file by path, for a writer that owns its own temp-and-rename steps.
     On Windows a directory cannot be opened for fsync at all, and NTFS journals
     the rename itself, so the directory step is skipped there: throwing after
-    the rename already happened reported every durable write as failed. */
+    the rename already happened reported every durable write as failed. A file
+    is flushed there only through a handle with write access (EPERM otherwise). */
 export function fsyncPath(filename: string, platform: NodeJS.Platform = process.platform): void {
   if (platform === "win32" && fs.statSync(filename).isDirectory()) return;
-  const descriptor = fs.openSync(filename, "r");
+  const descriptor = fs.openSync(filename, platform === "win32" ? "r+" : "r");
   try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
 }
 

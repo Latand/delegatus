@@ -10,11 +10,14 @@ const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-durable-json-test-"))
 afterAll(() => fs.rmSync(SANDBOX, { recursive: true, force: true }));
 
 /* Windows refuses to open a directory for fsync, after the rename already
-   published the file; the durable write must not report that as a failure. */
-test("a directory fsync is skipped on Windows and still runs elsewhere", () => {
+   published the file, and flushes a file only through a writable handle; the
+   durable write must not report either as a failure. */
+test("a directory fsync is skipped on Windows, a file is flushed writable there, and both run elsewhere", () => {
   const open = fs.openSync;
+  const flags: unknown[] = [];
   const refuseDirectories = spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
     if (fs.statSync(target).isDirectory()) throw Object.assign(new Error("EISDIR: illegal operation on a directory"), { code: "EISDIR" });
+    flags.push(rest[0]);
     return (open as (...args: unknown[]) => number)(target, ...rest);
   }) as typeof fs.openSync);
   try {
@@ -23,6 +26,8 @@ test("a directory fsync is skipped on Windows and still runs elsewhere", () => {
     const file = path.join(SANDBOX, "record.json");
     fs.writeFileSync(file, "{}\n");
     expect(() => fsyncPath(file, "win32")).not.toThrow();
+    expect(() => fsyncPath(file, "linux")).not.toThrow();
+    expect(flags).toEqual(["r+", "r"]);
   } finally {
     refuseDirectories.mockRestore();
   }
