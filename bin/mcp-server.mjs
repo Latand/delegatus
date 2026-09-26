@@ -13,12 +13,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { appDirIn } from "./appDir.mjs";
 import {
+  cliRuntimeHostConfig,
   discardWakatimeEnvironmentCredential,
   viewerChildProcessOptions,
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
+import { installedRelease, isGitCheckout, selfUpdatePaths } from "./self-update-supervisor.mjs";
 
 discardWakatimeEnvironmentCredential();
+/* The launcher imports only dependency-free helpers above. Claim before any
+   selected bundle can load modules that resolve the operator's state. */
+process.env.LLV_STATE_OWNER = "mcp";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let selectedReleaseRevision = null;
@@ -34,7 +39,7 @@ function deployedPackageRoot() {
   try {
     target = JSON.parse(readFileSync(targetFile, "utf8"));
   } catch (error) {
-    if (error?.code === "ENOENT") return packageRoot;
+    if (error?.code === "ENOENT") return null;
     throw new Error(`Could not read the Viewer release target: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!target
@@ -47,9 +52,8 @@ function deployedPackageRoot() {
     || !/^[0-9a-f]{40}$/.test(target.revision)) {
     throw new Error("The active Viewer release target is invalid.");
   }
-  selectedReleaseRevision = target.revision;
   const runtime = target.mcpRuntime;
-  if (runtime === undefined) return packageRoot;
+  if (runtime === undefined) return null;
   if (!runtime
     || typeof runtime !== "object"
     || runtime.source !== "managed"
@@ -63,6 +67,7 @@ function deployedPackageRoot() {
     || typeof runtime.stagedAt !== "string") {
     throw new Error("The active Viewer release has an invalid MCP runtime identity.");
   }
+  selectedReleaseRevision = target.revision;
   const releasesRoot = join(stateDir, "mcp-runtime", "releases");
   const releaseRoot = join(releasesRoot, runtime.releaseId);
   const bundle = join(releaseRoot, "dist", "mcp-server.mjs");
@@ -83,7 +88,21 @@ function deployedPackageRoot() {
   return releaseRoot;
 }
 
-const selectedPackageRoot = deployedPackageRoot();
+function installedPackageRoot() {
+  if (!isGitCheckout(packageRoot)) return packageRoot;
+  const runtimeHostConfig = cliRuntimeHostConfig(packageRoot);
+  const selfUpdate = selfUpdatePaths({
+    stateDirectory: runtimeHostConfig.stateDirectory,
+    cacheDirectory: process.env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache"),
+    installId: runtimeHostConfig.installId,
+  });
+  const release = installedRelease(selfUpdate.releasePointer, packageRoot);
+  return release.published && existsSync(join(release.dir, "dist", "mcp-server.mjs"))
+    ? release.dir
+    : packageRoot;
+}
+
+const selectedPackageRoot = deployedPackageRoot() ?? installedPackageRoot();
 if (selectedReleaseRevision) process.env.LLV_HOT_STATE_RELEASE_REVISION = selectedReleaseRevision;
 const bundled = join(selectedPackageRoot, "dist", "mcp-server.mjs");
 const source = join(selectedPackageRoot, "src", "lib", "mcp", "entry.ts");
