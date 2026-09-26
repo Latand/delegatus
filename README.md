@@ -67,15 +67,17 @@ yourself.
 
 ## What it does
 
-This section follows one piece of work from your request to a merged pull
+This section follows one piece of work from your request to a reviewed pull
 request.
 
 Each project gets one orchestrator: the agent you talk to about that
 project. You ask it for something in its chat. It opens a task on the project's board
 and starts a pipeline for it: one agent builds the change, another reviews
-it, and the builder fixes what the review found. The orchestrator watches the
-agents it started and files a short report each time a piece lands. When it
-needs a decision from you, the task's card says so.
+it, and the builder fixes what the review found. The pipeline ends with its
+pull request open for you to merge, or merged for you once you turn on
+**Merge when the review passes**. The orchestrator watches the agents it
+started and files a short report each time a piece lands. When it needs a
+decision from you, the task's card says so.
 
 Pipeline stages run on Claude Code or Codex, on your own accounts. You and
 the orchestrator can also start single agents, Copilot included. Delegatus
