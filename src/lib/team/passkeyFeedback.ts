@@ -21,8 +21,7 @@ export function passkeyFeedback(error: unknown, flow: PasskeyFlow, timing?: { el
   const causeName = typeof cause?.name === "string" ? cause.name : "";
   const is = (value: string) => name === value || causeName === value;
 
-  if (flow === "sign-in" && (code === "ERROR_AUTHENTICATOR_MISSING_DISCOVERABLE_CREDENTIAL"
-    || (is("NotAllowedError") && timing && timing.elapsedMs < 1_200))) {
+  if (flow === "sign-in" && code === "ERROR_AUTHENTICATOR_MISSING_DISCOVERABLE_CREDENTIAL") {
     return { key: "team.passkey.noCredential", tone: "error" };
   }
   if (code === "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED" || is("InvalidStateError")) {
@@ -37,8 +36,13 @@ export function passkeyFeedback(error: unknown, flow: PasskeyFlow, timing?: { el
   if (is("TimeoutError") || (is("NotAllowedError") && timing?.timeoutMs && timing.elapsedMs >= timing.timeoutMs - 1_000)) {
     return { key: "team.passkey.timeout", tone: "error" };
   }
-  if (code === "ERROR_CEREMONY_ABORTED" || is("AbortError") || is("NotAllowedError")) {
+  if (code === "ERROR_CEREMONY_ABORTED" || is("AbortError")) {
     return { key: "team.passkey.cancelled", tone: "note" };
+  }
+  // Browsers also use NotAllowedError for an empty credential picker. Its
+  // name and SimpleWebAuthn code cannot distinguish that from dismissing it.
+  if (is("NotAllowedError")) {
+    return { key: flow === "sign-in" ? "team.passkey.noCredentialOrCancelled" : "team.passkey.cancelled", tone: "note" };
   }
   return { key: "team.passkey.failed", tone: "error" };
 }

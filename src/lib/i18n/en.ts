@@ -5042,6 +5042,7 @@ export const en = {
   "team.passkey.unavailable": "Passkeys work when this Delegatus is opened by its name over HTTPS.",
   "team.passkey.unavailableAt": "Passkeys are unavailable at this address. Open {address} to use one.",
   "team.passkey.noCredential": "No passkey for this site was found on this device. Sign in by approval from another device, then add one in your profile.",
+  "team.passkey.noCredentialOrCancelled": "No passkey was selected for this site on this device; if none is available, approve sign-in from another device, then add one in your profile.",
   "team.passkey.cancelled": "Passkey request cancelled.",
   "team.passkey.timeout": "The passkey request timed out. Try again.",
   "team.passkey.alreadyRegistered": "This passkey is already registered. Use it to sign in, or remove it from your profile before adding it again.",

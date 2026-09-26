@@ -151,7 +151,8 @@ browserTest("production team pages register, sign out, sign in, and explain pass
     await virtualAuthenticator(empty.page);
     await empty.page.goto(`${origin}/sign-in`);
     await empty.page.locator('[data-sign-in-method="passkey"]').click();
-    await waitForText(empty.page.getByRole("alert"), translate("en", "team.passkey.noCredential"));
+    await waitForText(empty.page.locator("[data-passkey-note]"), translate("en", "team.passkey.noCredentialOrCancelled"));
+    expect(await empty.page.locator('[data-team-auth="sign-in"] [role="alert"]').count()).toBe(0);
     await waitForEnabled(empty.page.locator('[data-sign-in-method="passkey"]'));
     await empty.page.screenshot({ path: path.join(SHOTS, "sign-in-no-credential-1440-en.png") });
     await empty.context.close();
