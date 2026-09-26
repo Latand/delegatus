@@ -38,6 +38,13 @@ export interface World {
   needsYou: number;
 }
 
+/* ── transcripts, in the Claude line format ─────────────────────────── */
+const transcriptLine = (when: string, body: Record<string, unknown>) => JSON.stringify({ timestamp: when, ...body });
+/** An agent's reply, as a transcript line. */
+export const saidLine = (when: string, text: string, model = "claude-opus-5-5") => transcriptLine(when, { type: "assistant", message: { role: "assistant", model, content: [{ type: "text", text }], stop_reason: "end_turn" } });
+/** What the operator typed, as a transcript line. */
+export const askedLine = (when: string, text: string) => transcriptLine(when, { type: "user", message: { role: "user", content: text }, promptSource: "typed", origin: { kind: "human" } });
+
 export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSeconds: number[]): World {
   const L = (en: string, uk: string) => (lang === "uk" ? uk : en);
   /* Times read relative to the page's boot, and a step's own records to the
@@ -55,7 +62,8 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
   const transcripts = new Map<string, string>();
   const add = (id: string, title: string, over: Record<string, unknown> = {}) => {
     const file = {
-      path: `/work/.transcripts/${over.project ?? PROJECT}/${id}.jsonl`, root: "claude-projects", name: `${id}.jsonl`, project: PROJECT, title,
+      /* Under the account the conversation runs on, as a managed account keeps them, so every surface names it. */
+      path: `/work/.delegatus/accounts/${over.engine ?? "claude"}/main/projects/${over.project ?? PROJECT}/${id}.jsonl`, root: "claude-projects", name: `${id}.jsonl`, project: PROJECT, title,
       engine: "claude", kind: "session", fmt: "claude", parent: null, mtime: now - 40 * MIN, size: 4096, activity: "idle", proc: null, pid: null,
       model: "claude-opus-5-5", pendingQuestion: null, waitingInput: null, conversationId: `conversation_${id}`, cwd: `/work/${over.project ?? PROJECT}`,
       ...over,
@@ -76,10 +84,9 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
   });
   const codex = { engine: "codex", fmt: "claude", model: "gpt-6-sol" };
 
-  /* ── transcripts, in the Claude line format ─────────────────────────── */
-  const line = (when: string, body: Record<string, unknown>) => JSON.stringify({ timestamp: when, ...body });
-  const said = (when: string, text: string, model = "claude-opus-5-5") => line(when, { type: "assistant", message: { role: "assistant", model, content: [{ type: "text", text }], stop_reason: "end_turn" } });
-  const asked = (when: string, text: string) => line(when, { type: "user", message: { role: "user", content: text }, promptSource: "typed", origin: { kind: "human" } });
+  const line = transcriptLine;
+  const said = saidLine;
+  const asked = askedLine;
   let toolN = 0;
   const tool = (when: string, name: string, input: Record<string, unknown>, result: string) => {
     toolN += 1;

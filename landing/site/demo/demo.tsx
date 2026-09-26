@@ -1,3 +1,5 @@
+import "./frameSession";
+
 import { createRoot } from "react-dom/client";
 
 import { Viewer } from "@/components/Viewer";
@@ -5,7 +7,7 @@ import { reportCardRefs } from "@/lib/bridge/reportCardRefs";
 import { setLocale, translate, type MessageKey } from "@/lib/i18n";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN } from "@/lib/search/snippet";
 
-import { buildWorld, LAST_STEP, PROJECT, type Lang, type World } from "./world";
+import { askedLine, buildWorld, LAST_STEP, PROJECT, saidLine, type Lang, type World } from "./world";
 import TASK_ICONS from "./taskIcons.json";
 
 /*
@@ -19,7 +21,10 @@ import TASK_ICONS from "./taskIcons.json";
  *   → { type: "dlg:view", view }   press the product's own control for a view
  *   ← { type: "dlg:state", step, lang, playing }  after every change
  *   ← { type: "dlg:lang", lang }   the visitor switched language inside the product
- * The visitor's own send in the orchestrator's composer starts the script.
+ * The visitor's own send of the prepared request in the orchestrator's
+ * composer starts the script. Anything else the visitor sends is theirs: it
+ * shows in the chat as they wrote it, and the agent answers that it runs a
+ * script here.
  */
 
 const params = new URLSearchParams(location.search);
@@ -36,10 +41,17 @@ const ANSWER_AFTER_SEND_S = 2.5;
 
 /* Every frame on the page shares one origin, so what one frame left in
    storage — a conversation it opened, a message it sent — would otherwise
-   open in the next frame too. Each frame starts from the world alone. */
+   open in the next frame too. Each frame starts from the world alone: the
+   session store is the frame's own (./frameSession), and these are the
+   Viewer's records that live in the shared one. */
 for (const key of Object.keys(localStorage)) {
   if (key.startsWith("llvOutbox") || key.startsWith("llv:kanban-readers:")) localStorage.removeItem(key);
 }
+
+/* What the visitor sent beyond the script, kept for the life of the frame and
+   written into each world the script builds, in time order. */
+interface Aside { path: string; model: string; sentMs: number; text: string; reply: string | null }
+const asides: Aside[] = [];
 
 const boot = Math.floor(Date.now() / 1000);
 /* When each step arrived, in seconds to the millisecond. A page opened on a
@@ -67,11 +79,60 @@ function advance(to: number) {
     if (s === 2 && stepSeconds[1] !== undefined) stepSeconds[2] = Math.max(stepSeconds[2], stepSeconds[1] + ANSWER_AFTER_SEND_S);
   }
   step = to;
-  world = buildWorld(step, LANG, boot, stepSeconds);
-  filesRevision += 1;
-  for (const stream of runtimeStreams) stream.filesChanged();
+  refresh();
   if (step >= LAST_STEP) playing = false;
   announce();
+}
+
+function withAsides(built: World): World {
+  for (const file of built.files) {
+    const own = asides.filter((aside) => aside.path === file.path);
+    if (!own.length) continue;
+    const lines = (built.transcripts.get(file.path) ?? "").split("\n").filter(Boolean);
+    const stamp = (raw: string) => Date.parse((JSON.parse(raw) as { timestamp: string }).timestamp);
+    const insert = (atMs: number, raw: string) => {
+      const before = lines.findIndex((existing) => stamp(existing) > atMs);
+      lines.splice(before < 0 ? lines.length : before, 0, raw);
+    };
+    let latestMs = 0;
+    for (const aside of own) {
+      insert(aside.sentMs, askedLine(new Date(aside.sentMs).toISOString(), aside.text));
+      latestMs = Math.max(latestMs, aside.sentMs);
+      if (aside.reply === null) continue;
+      const repliedMs = aside.sentMs + ANSWER_AFTER_SEND_S * 1000;
+      insert(repliedMs, saidLine(new Date(repliedMs).toISOString(), aside.reply, aside.model));
+      latestMs = Math.max(latestMs, repliedMs);
+    }
+    const body = `${lines.join("\n")}\n`;
+    built.transcripts.set(file.path, body);
+    const entry = file as unknown as { size: number; mtime: number };
+    entry.size = new TextEncoder().encode(body).length;
+    entry.mtime = Math.max(entry.mtime, Math.floor(latestMs / 1000));
+  }
+  return built;
+}
+function refresh() {
+  world = withAsides(buildWorld(step, LANG, boot, stepSeconds));
+  filesRevision += 1;
+  for (const stream of runtimeStreams) stream.filesChanged();
+}
+/** Takes a message the script has no part for: it lands as sent, and its agent answers in its own voice. */
+function offScript(conversationId: unknown, text: string, atMs: number) {
+  const file = world.files.find((entry) => entry.conversationId === conversationId);
+  if (!file) return;
+  const toSeat = conversationId === world.seat.conversationId;
+  const aside: Aside = { path: file.path, model: file.model ?? "claude-opus-5-5", sentMs: atMs, text, reply: null };
+  asides.push(aside);
+  refresh();
+  setTimeout(() => {
+    aside.reply = toSeat && step === 0
+      ? L("This demo plays a script, so I can't run that one. Send the request waiting in the composer and I'll show you the rest.",
+        "Це демо грає за сценарієм, тож цього я не виконаю. Надішли запит, що чекає в полі вводу, і я покажу решту.")
+      : L("This demo plays a script, so I can't act on that here. Install Delegatus and I will.",
+        "Це демо грає за сценарієм, тож тут я цього не виконаю. Встанови Delegatus, і виконаю.");
+    refresh();
+    if (toSeat && step === 0) setTimeout(() => prefill(true), 400);
+  }, ANSWER_AFTER_SEND_S * 1000);
 }
 
 function play() {
@@ -272,12 +333,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (path === "/api/runtime/send" && method === "POST") {
     const sent = body();
     let at = Date.now();
-    if (sent.conversationId === world.seat.conversationId && step === 0) {
+    const text = typeof sent.text === "string" ? sent.text : "";
+    const same = (left: string, right: string) => left.replace(/\s+/g, " ").trim() === right.replace(/\s+/g, " ").trim();
+    if (sent.conversationId === world.seat.conversationId && step === 0 && same(text, world.request)) {
       advance(1);
       /* The transcript records the request at the very moment it was delivered. */
       at = Math.round(stepSeconds[1]! * 1000);
       play();
       settleSendControl();
+    } else if (text.trim()) {
+      offScript(sent.conversationId, text, at);
     }
     return json({ receipt: {
       operationId: `operation-demo-${at}`, idempotencyKey: sent.idempotencyKey, conversationId: sent.conversationId, kind: "send", status: "delivered",
@@ -541,12 +606,14 @@ window.addEventListener("message", (event) => {
 });
 
 /* The request waits in the orchestrator's composer until the visitor sends
-   it: every composer that appears while nothing was sent yet gets it once. */
+   it: every composer that appears while nothing was sent yet gets it once,
+   over whatever it restored, and an empty one gets it again once the
+   orchestrator has answered something else the visitor sent. */
 const prefilled = new WeakSet<HTMLTextAreaElement>();
-function prefill() {
+function prefill(again = false) {
   if (step !== 0) return;
   for (const field of document.querySelectorAll<HTMLTextAreaElement>("textarea")) {
-    if (prefilled.has(field) || field.value) continue;
+    if (again ? field.value : prefilled.has(field)) continue;
     prefilled.add(field);
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(field, world.request);
     field.dispatchEvent(new Event("input", { bubbles: true }));
