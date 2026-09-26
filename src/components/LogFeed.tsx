@@ -30,8 +30,8 @@ import {
   visibleRuntimeLiveTurnItems,
 } from "./conversation/liveTurnHandoff";
 import { orderedConversationTail } from "./conversation/tailOrder";
-import { DeputyBlock } from "./conversation/DeputyBlock";
-import { interleaveDeputyBlocks, placeDeputyBlocks } from "./conversation/deputyPlacement";
+import { DeputyBlock, SeatSpeakerLine } from "./conversation/DeputyBlock";
+import { interleaveDeputyBlocks, placeDeputyBlocks, resumedSeatRows } from "./conversation/deputyPlacement";
 import { useSeatDeputies } from "./orchestrator/seatDeputies";
 import { transcriptInstant } from "./feed/transcriptOrder";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
@@ -85,12 +85,16 @@ type ConversationRow =
       canonical: CanonicalMessage | null;
       responseDurationMs?: number;
     }
-  | { kind: "item"; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; responseDurationMs?: number }
+  | { kind: "item"; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; responseDurationMs?: number; resumes?: SeatResume }
   | { kind: "launch"; key: "launch" }
-  | { kind: "delta"; key: "delta" }
+  | { kind: "delta"; key: "delta"; resumes?: SeatResume }
   /* A seat deputy's block (docs/design/ghost-seat.md §6.1): pinned at its
      head's position among the transcript rows, never part of the tail. */
   | { kind: "deputy"; key: string; deputy: SeatDeputyView };
+
+/** A seat row that resumes after a drawn block, with the seat head it
+    continues (null: none in the window). */
+type SeatResume = { ask: string | null };
 
 /** Items rendered initially and added per «show earlier» step. */
 const RENDER_STEP = 1500;
@@ -1290,6 +1294,22 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         rows.push({ kind: "message", key: `msg:${entry.id}`, entry, canonical: null });
       }
     }
+    /* A block splits the seat's own answer, so the first seat row after one
+       names the seat head it continues (docs/design/ghost-seat.md §6.1). */
+    if (deputies.length) {
+      const resumed = resumedSeatRows(rows, (row) => {
+        if (row.kind === "message") return "head";
+        if (row.kind === "deputy") return "block";
+        if (row.kind === "delta") return "seat";
+        if (row.kind === "item") return row.item.kind === "user" ? "head" : "seat";
+        return "other";
+      }, (row) => row.kind === "message" ? row.canonical?.text ?? row.entry?.text ?? null
+        : row.kind === "item" && row.item.kind === "user" ? row.item.text : null);
+      for (const [index, ask] of resumed) {
+        const row = rows[index]!;
+        if (row.kind === "item" || row.kind === "delta") rows[index] = { ...row, resumes: { ask } };
+      }
+    }
     return rows;
     /* `messageRowKey`/`answerFor` are read, not depended on: both are pure
        functions of the memos already named here. */
@@ -1553,7 +1573,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 the message used to be re-created under the reader. */}
             {conversationRows.map((row) => {
               if (row.kind === "launch") return <LaunchChips key="launch" launch={launch!} onRetry={onLaunchRetry} />;
-              if (row.kind === "delta") return <LiveTurnRows key="delta" items={visibleLiveTurnItems} />;
+              if (row.kind === "delta") {
+                /* While a parallel self streams in the same window, the seat's
+                   own live turn names its participant too, so the two streams
+                   never read as one. */
+                const lead = row.resumes ? <SeatSpeakerLine resumes={row.resumes} />
+                  : deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine /> : null;
+                return <LiveTurnRows key="delta" items={visibleLiveTurnItems} lead={lead} />;
+              }
               if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} />;
               if (row.kind === "message") {
                 /* The operator's own message, in the one shape it ever has.
@@ -1579,7 +1606,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   </div>
                 );
               }
-              const { anchorKey, item, responseDurationMs, speakText } = row;
+              const { anchorKey, item, responseDurationMs, speakText, resumes } = row;
               return (
                 /* Session-stable keys: a row keeps its DOM node while the
                    window slides. Compact panes live on the zoomable canvas:
@@ -1593,6 +1620,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
                   className={compact ? "feed-cv" : undefined}
                 >
+                  {resumes ? <SeatSpeakerLine resumes={resumes} /> : null}
                   <GalleryOwnerProvider value={item}>
                     <FeedItem item={item} speakText={speakText} />
                   </GalleryOwnerProvider>

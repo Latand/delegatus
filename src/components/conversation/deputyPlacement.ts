@@ -70,3 +70,49 @@ export function interleaveDeputyBlocks<Row, Block>(
   }
   return out;
 }
+
+/** What a row of the merged window is to the seat's reading order. */
+export type ResumeRole = "head" | "block" | "seat" | "other";
+
+/**
+ * The seat rows that resume after a drawn block (docs/design/ghost-seat.md
+ * §6.1 "Ordering"). A block pinned at its head splits the seat's own answer:
+ * the seat keeps writing, and its next row lands under a foreign ask. So the
+ * first seat row after a block, or after a run of blocks, names the seat's own
+ * head it continues. A new seat head in between answers itself and needs no
+ * caption.
+ *
+ * Answers row index → the text of the seat head that row continues, or null
+ * when no seat head precedes it in the window.
+ */
+export function resumedSeatRows<Row>(
+  rows: readonly Row[],
+  role: (row: Row) => ResumeRole,
+  headText: (row: Row) => string | null,
+): Map<number, string | null> {
+  const resumed = new Map<number, string | null>();
+  let head: string | null = null;
+  let afterBlock = false;
+  rows.forEach((row, index) => {
+    const kind = role(row);
+    if (kind === "head") {
+      head = headText(row);
+      afterBlock = false;
+    } else if (kind === "block") {
+      afterBlock = true;
+    } else if (kind === "seat" && afterBlock) {
+      resumed.set(index, head);
+      afterBlock = false;
+    }
+  });
+  return resumed;
+}
+
+/** The first words of a head, short enough to quote on one caption line. */
+export function quoteHead(text: string, max = 28): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max + 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max / 2 ? cut.slice(0, space) : flat.slice(0, max)).replace(/[\s,.;:!?—–-]+$/, "")}…`;
+}

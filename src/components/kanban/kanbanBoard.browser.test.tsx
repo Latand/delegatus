@@ -11206,7 +11206,11 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
    * Gated: every block sits among the seat's rows and the seat's live turn
    * stays the last section; no ink of a block overlaps a seat row; an open
    * block's caption title keeps its width and its dashed edge spans its rows;
-   * a collapsed line keeps room for its text beside two chips. The phone half
+   * a collapsed line keeps room for its text beside two chips, shows it whole,
+   * and puts its first chip at most 12 px after it; every ask says it went to
+   * the parallel self and the seat row after every block names the head it
+   * continues; the chips read in the interface language; the two live
+   * streams wear different carets and the seat's names itself. The phone half
    * is the phone driver's (`issue1671Evidence.browser.test.tsx`).
    *
    * PNGs go to `~/Pictures/delegatus-review/ghost-seat/` (DEPUTY_PNG_DIR
@@ -11239,7 +11243,7 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
             }
             const reading = await opened.page.evaluate(MEASURE_DEPUTY_BLOCKS) as import("@/components/conversation/deputyBlockEvidence.measure").DeputyEvidenceReading;
             readings[label] = reading;
-            failures.push(...deputyEvidenceFailures(reading, label, { scenario, phone: false }));
+            failures.push(...deputyEvidenceFailures(reading, label, { scenario, phone: false, lang }));
             await opened.page.locator("[data-feed-state]").screenshot({ path: path.join(pngDir, `${scenario}-desktop-1440-${lang}.png`) });
             if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
           } catch (error) {

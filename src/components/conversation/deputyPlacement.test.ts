@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { interleaveDeputyBlocks, placeDeputyBlocks } from "./deputyPlacement";
+import { interleaveDeputyBlocks, placeDeputyBlocks, quoteHead, resumedSeatRows, type ResumeRole } from "./deputyPlacement";
 
 /* docs/design/ghost-seat.md §6.1: a block is pinned at its head by startedAt
    and grows only at its own end. */
@@ -38,4 +38,34 @@ test("an empty feed, or one whose rows are all later, places the block first", (
   expect(placeDeputyBlocks([], [{ id: "b", startedAt: at(39) }])).toEqual([{ id: "b", after: 0 }]);
   expect(placeDeputyBlocks([at(50), null], [{ id: "b", startedAt: at(39) }])).toEqual([{ id: "b", after: 0 }]);
   expect(interleaveDeputyBlocks([], [{ id: "b", after: 0 }], (id) => id)).toEqual(["b"]);
+});
+
+test("the first seat row after a block names the seat head it continues; a new head needs no caption", () => {
+  type Row = { role: ResumeRole; text?: string };
+  const rows: Row[] = [
+    { role: "head", text: "Go through the review queue" },
+    { role: "seat" },
+    { role: "block" },
+    { role: "seat" },
+    { role: "seat" },
+    { role: "block" },
+    { role: "block" },
+    { role: "other" },
+    { role: "seat" },
+    { role: "head", text: "Next question" },
+    { role: "block" },
+    { role: "head", text: "Answered in place" },
+    { role: "seat" },
+  ];
+  const resumed = resumedSeatRows(rows, (row) => row.role, (row) => row.text ?? null);
+  expect([...resumed]).toEqual([[3, "Go through the review queue"], [8, "Go through the review queue"]]);
+  /* A block before any seat head resumes with nothing to quote. */
+  expect([...resumedSeatRows<Row>([{ role: "block" }, { role: "seat" }], (row) => row.role, () => null)]).toEqual([[1, null]]);
+});
+
+test("a quoted head is cut at a word and closed with an ellipsis", () => {
+  expect(quoteHead("Short ask")).toBe("Short ask");
+  expect(quoteHead("Go through the review queue and tell me what blocks the release.")).toBe("Go through the review queue…");
+  expect(quoteHead("Проглянь чергу рев'ю і скажи, що блокує реліз.")).toBe("Проглянь чергу рев'ю і…");
+  expect(quoteHead("a\n\n  b")).toBe("a b");
 });

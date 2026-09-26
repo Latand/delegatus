@@ -11,13 +11,30 @@
           "chips": 0,
           "targetHeight": 44,
           "edge": {
-            "top": 454.5,
-            "bottom": 592.5,
-            "bodyTop": 454.5,
-            "lastRowBottom": 596.5
+            "top": 474.5,
+            "bottom": 612.5,
+            "bodyTop": 474.5,
+            "lastRowBottom": 616.5
           },
           "overlapWithSeat": 0,
-          "rows": 3
+          "rows": 3,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Open task",
+            "Open task",
+            "Open pipeline"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [
+            60,
+            60
+          ],
+          "caret": "deputy:rgb(85, 85, 95)"
         }
       ],
       "order": [
@@ -31,6 +48,10 @@
         "seat-live"
       ],
       "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Orchestrator",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
       "scrollWidth": 390,
       "viewportWidth": 390
     },
@@ -45,13 +66,30 @@
           "chips": 0,
           "targetHeight": 44,
           "edge": {
-            "top": 454.5,
-            "bottom": 592.5,
-            "bodyTop": 454.5,
-            "lastRowBottom": 596.5
+            "top": 474.5,
+            "bottom": 612.5,
+            "bodyTop": 474.5,
+            "lastRowBottom": 616.5
           },
           "overlapWithSeat": 0,
-          "rows": 3
+          "rows": 3,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Відкрити задачу",
+            "Відкрити задачу",
+            "Відкрити пайплайн"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [
+            60,
+            60
+          ],
+          "caret": "deputy:rgb(85, 85, 95)"
         }
       ],
       "order": [
@@ -65,6 +103,10 @@
         "seat-live"
       ],
       "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Оркестратор",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
       "scrollWidth": 390,
       "viewportWidth": 390
     },
@@ -79,13 +121,32 @@
           "chips": 0,
           "targetHeight": 44,
           "edge": {
-            "top": 454.5,
-            "bottom": 684,
-            "bodyTop": 454.5,
-            "lastRowBottom": 688
+            "top": 474.5,
+            "bottom": 704,
+            "bodyTop": 474.5,
+            "lastRowBottom": 708
           },
           "overlapWithSeat": 0,
-          "rows": 3
+          "rows": 3,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Open task",
+            "Open task",
+            "Open pipeline"
+          ],
+          "rowSpeakers": [
+            "Orchestrator · parallel self"
+          ],
+          "chipLineLefts": [
+            60,
+            60
+          ],
+          "caret": null
         },
         {
           "askId": "deputy_b",
@@ -96,13 +157,23 @@
           "chips": 0,
           "targetHeight": 44,
           "edge": {
-            "top": 1048.8,
-            "bottom": 1132.8,
-            "bodyTop": 1048.8,
-            "lastRowBottom": 1136.8
+            "top": 1113.3,
+            "bottom": 1179.3,
+            "bodyTop": 1113.3,
+            "lastRowBottom": 1183.3
           },
           "overlapWithSeat": 0,
-          "rows": 2
+          "rows": 2,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": "deputy:rgb(85, 85, 95)"
         }
       ],
       "order": [
@@ -117,6 +188,10 @@
         "seat-live"
       ],
       "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Orchestrator",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
       "scrollWidth": 390,
       "viewportWidth": 390
     },
@@ -131,13 +206,32 @@
           "chips": 0,
           "targetHeight": 44,
           "edge": {
-            "top": 454.5,
-            "bottom": 684,
-            "bodyTop": 454.5,
-            "lastRowBottom": 688
+            "top": 474.5,
+            "bottom": 721,
+            "bodyTop": 474.5,
+            "lastRowBottom": 725
           },
           "overlapWithSeat": 0,
-          "rows": 3
+          "rows": 3,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Відкрити задачу",
+            "Відкрити задачу",
+            "Відкрити пайплайн"
+          ],
+          "rowSpeakers": [
+            "Оркестратор · паралельне я"
+          ],
+          "chipLineLefts": [
+            60,
+            60
+          ],
+          "caret": null
         },
         {
           "askId": "deputy_b",
@@ -148,13 +242,23 @@
           "chips": 0,
           "targetHeight": 44,
           "edge": {
-            "top": 1048.8,
-            "bottom": 1132.8,
-            "bodyTop": 1048.8,
-            "lastRowBottom": 1136.8
+            "top": 1130.3,
+            "bottom": 1214.3,
+            "bodyTop": 1130.3,
+            "lastRowBottom": 1218.3
           },
           "overlapWithSeat": 0,
-          "rows": 2
+          "rows": 2,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": "deputy:rgb(85, 85, 95)"
         }
       ],
       "order": [
@@ -169,6 +273,10 @@
         "seat-live"
       ],
       "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Оркестратор",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
       "scrollWidth": 390,
       "viewportWidth": 390
     },
@@ -179,12 +287,25 @@
           "state": "ended",
           "open": false,
           "titleWidth": null,
-          "resultWidth": 197.8,
+          "resultWidth": 298,
           "chips": 2,
-          "targetHeight": 64.5,
+          "targetHeight": 101.5,
           "edge": null,
           "overlapWithSeat": 0,
-          "rows": 0
+          "rows": 0,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [
+            "Open task",
+            "Open pipeline"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null
         },
         {
           "askId": "deputy_b",
@@ -196,7 +317,17 @@
           "targetHeight": 49,
           "edge": null,
           "overlapWithSeat": 0,
-          "rows": 0
+          "rows": 0,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null
         }
       ],
       "order": [
@@ -210,6 +341,7 @@
         "seat"
       ],
       "seatLiveLast": false,
+      "seatLive": null,
       "scrollWidth": 390,
       "viewportWidth": 390
     },
@@ -220,12 +352,25 @@
           "state": "ended",
           "open": false,
           "titleWidth": null,
-          "resultWidth": 170.7,
+          "resultWidth": 298,
           "chips": 2,
-          "targetHeight": 64.5,
+          "targetHeight": 101.5,
           "edge": null,
           "overlapWithSeat": 0,
-          "rows": 0
+          "rows": 0,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [
+            "Відкрити задачу",
+            "Відкрити пайплайн"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null
         },
         {
           "askId": "deputy_b",
@@ -237,7 +382,17 @@
           "targetHeight": 49,
           "edge": null,
           "overlapWithSeat": 0,
-          "rows": 0
+          "rows": 0,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null
         }
       ],
       "order": [
@@ -251,6 +406,7 @@
         "seat"
       ],
       "seatLiveLast": false,
+      "seatLive": null,
       "scrollWidth": 390,
       "viewportWidth": 390
     }

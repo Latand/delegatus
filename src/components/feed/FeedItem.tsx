@@ -161,7 +161,9 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
         <div className="group/msg pt-2" data-mobile-message="agent" data-tts-message={`${item.engine}:${item.ts}`}>
           <div data-mobile-message-header className="mb-1 flex h-5 w-full items-center gap-1.5 text-label text-muted">
             {deputyInk ? <DeputyMark engine={item.engine} /> : <AvatarIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden />}
-            <span className="font-semibold text-secondary">{ENGINE_LABEL[item.engine]}</span>
+            {/* Inside a deputy's block the row is the parallel self's, and says so:
+                the bare engine name is what the seat's own rows carry. */}
+            <span data-mobile-message-speaker className="font-semibold text-secondary">{deputyInk ? t("deputy.participant") : ENGINE_LABEL[item.engine]}</span>
             {time ? <span className="tabular-nums">· {time}</span> : null}
           </div>
           <div className={`w-full whitespace-pre-wrap break-words text-title leading-[1.45]${deputyInk ? " text-secondary" : ""}`}>

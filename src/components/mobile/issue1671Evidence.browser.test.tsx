@@ -4245,7 +4245,9 @@ browserTest("permission row: the headline truncates, the age stays, and Allow on
  * «the orchestrator's parallel self in the seat's feed».
  *
  * Gated as there, plus the phone's own: a collapsed line is a 44 px target
- * across its whole width, and its text keeps room when two chips wrap.
+ * across its whole width, its result shows whole on up to two lines with the
+ * chevron on the first, no row inside a block is captioned with the bare
+ * engine name, and the chip lines of one block share a left edge.
  */
 browserTest("the orchestrator's parallel self on the phone: pinned, streaming, collapsed to a 44 px line", async () => {
   const { MEASURE_DEPUTY_BLOCKS, deputyEvidenceFailures } = await import("@/components/conversation/deputyBlockEvidence.measure");
@@ -4274,7 +4276,7 @@ browserTest("the orchestrator's parallel self on the phone: pinned, streaming, c
           }
           const reading = await opened.page.evaluate(MEASURE_DEPUTY_BLOCKS) as import("@/components/conversation/deputyBlockEvidence.measure").DeputyEvidenceReading;
           readings[label] = reading;
-          failures.push(...deputyEvidenceFailures(reading, label, { scenario, phone: true }));
+          failures.push(...deputyEvidenceFailures(reading, label, { scenario, phone: true, lang }));
           await opened.page.locator("[data-feed-state]").screenshot({ path: path.join(pngDir, `${scenario}-phone-390-${lang}.png`) });
           if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
         } catch (error) {

@@ -16,7 +16,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore, type ReactNode } from "react";
 
 import { liveToolImagePath, type RuntimeLiveTurnItem, type RuntimeLiveTurnTool } from "@/lib/runtime/liveTurn";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -29,6 +29,7 @@ import {
 import {
   describeMcpCall,
   isViewerMcpServer,
+  mcpLinkLabel,
   type McpCallIcon,
   type McpCallLink,
 } from "@/lib/mcp/presentation";
@@ -196,6 +197,8 @@ export function LiveMcpLinkChip({
   link: McpCallLink;
   availability: ConversationAvailabilitySnapshot;
 }) {
+  const { t } = useLocale();
+  const label = mcpLinkLabel(t, link);
   const shared = "inline-flex min-h-6 shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
   if (link.kind === "conversation" && (!availability.loaded || !availability.ids.has(link.id))) {
     return (
@@ -205,7 +208,7 @@ export function LiveMcpLinkChip({
         className={`${shared} cursor-wait border-border bg-sunken text-muted opacity-60`}
       >
         <MessageCircle className="h-3 w-3" aria-hidden />
-        {link.label}
+        {label}
       </span>
     );
   }
@@ -221,7 +224,7 @@ export function LiveMcpLinkChip({
       className={`${shared} border-accent/35 bg-accent-soft text-accent hover:border-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45`}
     >
       {link.kind === "conversation" ? <MessageCircle className="h-3 w-3" aria-hidden /> : <ExternalLink className="h-3 w-3" aria-hidden />}
-      {link.label}
+      {label}
     </a>
   );
 }
@@ -302,11 +305,14 @@ function LiveMcpRow({
       data-live-mcp-state={state}
       className="ml-9 flex min-w-0 items-start gap-x-2 rounded-control py-0.5 text-ui"
     >
-      <Icon
-        className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone} ${state === "pending" ? "animate-pulse" : ""}`}
-        aria-hidden
-      />
+      {/* The glyph opens the wrapping line, as it does on the canonical card:
+          a chip that wraps starts under the glyph on both, so the chips keep
+          one left edge when the transcript row replaces this one. */}
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+        <Icon
+          className={`h-3.5 w-3.5 shrink-0 ${tone} ${state === "pending" ? "animate-pulse" : ""}`}
+          aria-hidden
+        />
         <span className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted">
           MCP · {identity.serverName}
         </span>
@@ -425,14 +431,22 @@ function LiveCallRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
    with prose in response order (issue #1100), each rendered by LiveCallRow.
    What reaches this component is the whole unclaimed overlay; what it paints is
    `liveTurnTail` of it. */
-export function LiveTurnRows({ items }: { items: readonly RuntimeLiveTurnItem[] }) {
+export function LiveTurnRows({ items, lead = null }: {
+  items: readonly RuntimeLiveTurnItem[];
+  /** A line drawn above the rows, only when there are rows to name. */
+  lead?: ReactNode;
+}) {
   const { t } = useLocale();
   const deputyInk = useDeputyInk();
+  /* The settled prose row has no avatar column on the phone (mobile v2,
+     #1439), so the live one drops the indent there too, as the tool row does. */
+  const proseIndent = useIsMobile() ? "" : "ml-9 ";
   const { rows, earlier } = useMemo(() => liveTurnTail(items), [items]);
   if (!rows.length && !earlier) return null;
   const last = rows.at(-1);
   return (
     <div data-live-turn-group>
+      {lead}
       {/* One quiet line for the steps the overlay is not showing. It sits above
           the tail because that is where those steps happened, and it carries no
           `data-live-turn`: it is the absence of rows, not a row. */}
@@ -453,7 +467,7 @@ export function LiveTurnRows({ items }: { items: readonly RuntimeLiveTurnItem[] 
             key={key}
             data-live-turn
             data-live-turn-item-id={item.itemId ?? undefined}
-            className={`my-2 ml-9 ${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] text-ui ${deputyInk ? "text-secondary" : "text-primary"}`}
+            className={`my-2 ${proseIndent}${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] text-ui ${deputyInk ? "text-secondary" : "text-primary"}`}
           >
             {item.omittedChars ? (
               <span data-live-turn-omitted-chars className="text-muted">
@@ -462,7 +476,7 @@ export function LiveTurnRows({ items }: { items: readonly RuntimeLiveTurnItem[] 
             ) : null}
             <StreamingMd text={item.text} streaming={item.phase === "streaming"} />
             {item.phase === "streaming" && item === last ? (
-              <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-[2px] bg-accent align-text-bottom" aria-hidden />
+              <span data-live-turn-caret={deputyInk ? "deputy" : "seat"} className={`ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-[2px] align-text-bottom ${deputyInk ? "bg-secondary" : "bg-accent"}`} aria-hidden />
             ) : null}
           </div>
         );

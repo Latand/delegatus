@@ -416,6 +416,16 @@ blocks sit in the list:
   re-sorted by timestamp against the seat's rows. Two blocks started at
   different instants sit in start order; slice 1 has at most one ghost block
   live, but the placement rule already handles several.
+- **Resuming.** A block pinned at its head splits the seat's own answer: the
+  seat keeps writing, and its next row lands under a foreign ask, where it
+  would read as the answer to that ask. So the first seat row after a block,
+  or after a run of blocks, carries one caption line naming the seat head it
+  continues: «Оркестратор · далі до «Проглянь чергу рев'ю і…»» /
+  "Orchestrator · continuing «Go through the review queue…»", the head's
+  first words cut at a word. A new seat head in between answers itself and
+  needs none (`resumedSeatRows`, `deputyPlacement.ts`). While a ghost
+  streams, the seat's own live turn carries «Оркестратор» above its rows too,
+  so two live streams never read as one.
 - **Growth.** A block grows only at its own end. The seat's live turn stays
   the last tail section, so with a ghost live the reader sees the ghost's
   block filling in the middle of the list and the seat's answer filling at
@@ -462,7 +472,9 @@ built for them yet.
 - **Head.** The ask is the ordinary human message row (`UserMessageRow`,
   `--color-user` fill, `--radius-surface`, sender line in a team), drawn from
   `record.ask`. It is the only part of the block that is not "ghostly": the
-  person really said it.
+  person really said it. Its meta line says where it went: «→ ◌ паралельне я»
+  / "→ ◌ parallel self" with the outline mark, after the sender in a team, so
+  the ask never reads as one more message to the seat.
 - **Caption.** One 11 px line, `text-muted`, that names the participant the
   way the phone's prose caption does (`FeedItem.tsx:158-162`): the seat's
   engine mark drawn as an **outline** (the mark in `text-secondary` inside a
@@ -484,7 +496,10 @@ built for them yet.
   `LiveMcpRow`, unchanged, with their entity chips (task, lane, conversation)
   the same as everywhere. Prose is the feed's prose row with its avatar
   replaced by the outline mark and its text in `text-secondary` where the
-  seat's is `text-primary`. Nothing is dimmed by opacity: `text-secondary` clears the
+  seat's is `text-primary`; on the phone its caption names the parallel self
+  where the seat's rows name the engine. The streaming caret is drawn in
+  `secondary` ink, so the accent caret belongs to the seat's own live turn.
+  Nothing is dimmed by opacity: `text-secondary` clears the
   4.5:1 floor on every surface (§1.5), and a whole block at 60 % opacity
   would not. "Lighter" is the outline mark, the secondary ink and the dashed
   edge; "dashed" is the edge and the ring; "clearly the parallel self" is the
@@ -523,7 +538,9 @@ head plus one line:
   collapsing, so the answer is never pulled from under the reader.
 - `timeout`, `host-died` and `seat-rotated` draw the line in the `warning`
   role with the outcome named («не встиг за 15 хв», «хост зупинився», «місце
-  змінилось»), and the expanded body shows what the ghost had done. A record
+  змінилось»), and the expanded body shows what the ghost had done. The text
+  of such a line is the last thing the ghost said, often mid-sentence, so it
+  is prefixed «останній крок:» / "last step:" in muted ink and reads as ended. A record
   with no transcript on disk expands to one quiet line saying the transcript
   was removed.
 - The collapsed line stays in the feed for as long as the head does: it is
@@ -540,13 +557,15 @@ Both render the same rows; the differences are the ones §3.4 already fixes.
 | Caption | in the `ml-9` chrome column; mark 16 px in a 20 px dashed ring | full width from the 12 px gutter; mark 16 px, ring 20 px; the line is 44 px tall as the tap target |
 | Edge | 1.5 px dashed, in the avatar column, from caption to last row | 1.5 px dashed at the gutter, rows indented 12 px past it |
 | Rows | `ToolLine` and `LiveMcpRow` as today; prose at `READING_MEASURE` | same rows, full width, prose at 15 px as the phone's own prose |
-| Collapsed line | one line, chips inline, chevron at the right | wraps to two lines when chips do not fit, chevron stays on the first line; the whole line is the target |
+| Collapsed line | one line; the result keeps its own width so the chips follow its last word (at most 12 px after it), chevron at the right | caption on the first line with the chevron, the result on up to two lines under it, the chips on the line after; the whole line is the target |
 | Collapse motion | 200 ms height, static under reduced motion | same |
 
 Measurements the rendered evidence has to show (section 7): at 390 px the
 caption's title keeps a `basis-[10rem]` so two chips wrap under it and the
 title keeps its width (the `LiveMcpRow` rule, `LiveTurnRows.tsx:270-275`); the
-collapsed line's expand target is 44 px on the phone; no row of the block
+collapsed line's expand target is 44 px on the phone and its result shows
+whole in both languages; the chips of one block's MCP rows share a left edge
+within 2 px; the chips read in the interface language; no row of the block
 overlaps the seat's rows above or below while both stream; the dashed edge
 spans exactly the block.
 
@@ -652,7 +671,13 @@ Tests, by path, under isolated state:
   title does not collapse beside two chips (`basis-[10rem]`); the collapsed
   line's target is 44 px on the phone; no ink of the block overlaps a seat
   row (union of text rects, clipped by overflow ancestors); the dashed edge
-  spans the block's first to last row. The PNGs go under
+  spans the block's first to last row; every ask's meta line names the
+  parallel self and the seat row after every block names the head it
+  continues; the first chip sits at most 12 px after the result at 1440 and
+  the result shows whole at 390; no row inside a block is captioned with the
+  bare engine name on the phone; the chips of one block share a left edge;
+  the uk chips are Ukrainian; the two live carets differ and the seat's live
+  turn names its participant. The PNGs go under
   `~/Pictures/delegatus-review/ghost-seat/`, never into the repository.
 - `scripts/privacy-publication-gate.ts --base <merge-base>` before push.
 

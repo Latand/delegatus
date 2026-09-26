@@ -14,6 +14,7 @@ import { FeedItem } from "../feed/FeedItem";
 import { GalleryOwnerProvider } from "../feed/Lightbox";
 import { createFeedSession, type FeedSnapshot } from "../feed/parse";
 import { DeputyInkContext, DeputyMark } from "./deputyInk";
+import { quoteHead } from "./deputyPlacement";
 import { LiveMcpLinkChip, LiveTurnRows, useConversationAvailability } from "./LiveTurnRows";
 import { publishCanonicalAssistantClaims, useCanonicalAssistantClaims, visibleRuntimeLiveTurnItems } from "./liveTurnHandoff";
 import { FeedMessageRow } from "./OutboxBubbles";
@@ -22,7 +23,9 @@ import { FeedMessageRow } from "./OutboxBubbles";
  * The orchestrator's parallel self, as a block of the seat's own feed
  * (docs/design/ghost-seat.md §6.2, §6.3).
  *
- * Head: the ask, the ordinary operator bubble, drawn from the deputy record.
+ * Head: the ask, the ordinary operator bubble, drawn from the deputy record,
+ * with «→ parallel self» and the outline mark on its meta line: the person
+ * said it, so the bubble keeps its fill, and the line says who it went to.
  * Caption: the seat's engine mark in a dashed ring, «Orchestrator · parallel
  * self», the start time and the state. Body: the deputy's own rows, hanging
  * from a dashed edge — its canonical records read past the fork prefix, and
@@ -115,6 +118,9 @@ function withoutDeliveredAsk(lines: readonly string[]): string[] {
   });
 }
 
+/** The entity chips of what the deputy touched. The labels are the ones
+    `describeMcpCall` writes, so the chip draws them in the interface language
+    through the same `mcpLinkLabel` every MCP chip reads. */
 export function touchedLinks(touched: SeatDeputyView["touched"]): McpCallLink[] {
   return [
     ...touched.taskIds.map((id) => ({ kind: "task" as const, id, label: "Open task", href: `#task=${encodeURIComponent(id)}` })),
@@ -206,14 +212,21 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
       }}
     >
       {/* Head: the person really said it, so it is the one part not drawn in
-          outline. A team install stamps the sender the route recorded. */}
+          outline. Its meta line says where it went — to the parallel self,
+          not to the seat — and a team install stamps the sender the route
+          recorded in front of that. */}
       <div data-feed-key={`${blockKey}:head`} data-feed-kind="user" data-deputy-head>
-        {deputy.ask.sender ? (
-          <div data-deputy-sender className="mb-0.5 flex items-center justify-end gap-1.5 text-label text-muted">
-            <span className="h-2 w-2 rounded-full bg-accent" style={deputy.ask.sender.color ? { background: deputy.ask.sender.color } : undefined} aria-hidden />
-            <span className="font-semibold text-secondary">{deputy.ask.sender.name}</span>
-          </div>
-        ) : null}
+        <div data-deputy-addressee className="-mb-2 flex min-h-5 items-center justify-end gap-1.5 text-label text-muted">
+          {deputy.ask.sender ? (
+            <span data-deputy-sender className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-accent" style={deputy.ask.sender.color ? { background: deputy.ask.sender.color } : undefined} aria-hidden />
+              <span className="font-semibold text-secondary">{deputy.ask.sender.name}</span>
+            </span>
+          ) : null}
+          <span aria-hidden>→</span>
+          <DeputyMark engine={engine} />
+          <span className="font-semibold text-secondary">{t("deputy.addressee")}</span>
+        </div>
         <FeedMessageRow entry={null} canonical={{ text: deputy.ask.text }} />
       </div>
 
@@ -247,13 +260,23 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
           />
           <span className={`pointer-events-none flex shrink-0 items-center ${phone ? "" : "w-6.5 justify-center"}`}><DeputyMark engine={engine} /></span>
           <span className="pointer-events-none flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="shrink-0 font-semibold text-secondary">{t("deputy.short")}</span>
+            <span data-deputy-short className="shrink-0 font-semibold text-secondary">{t("deputy.short")}</span>
             {started ? <span className="shrink-0 tabular-nums text-muted">{started}</span> : null}
             <span data-deputy-outcome={deputy.outcome ?? "done"} className={`inline-flex shrink-0 items-center gap-1 font-semibold ${warn ? "text-warning" : "text-success"}`}>
               {warn ? <CircleAlert className="h-3.5 w-3.5" aria-hidden /> : <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />}
               {warn ? t(OUTCOME_KEYS[deputy.outcome!]) : null}
             </span>
-            <span data-deputy-result className={`min-w-0 grow basis-[10rem] truncate ${warn ? "text-warning" : "text-secondary"}`} title={deputy.result?.line || undefined}>
+            {/* The result keeps its own width on the desktop so the chips follow
+                its last word; on the phone it takes its own two lines under the
+                caption and the chips the line after, so the outcome is read
+                whole. An ended-early run's line is the last thing it said, so
+                it is marked as the last step, never as work in progress. */}
+            <span
+              data-deputy-result
+              className={`min-w-0 ${phone ? "basis-full line-clamp-2" : "truncate"} ${warn ? "text-warning" : "text-secondary"}`}
+              title={deputy.result?.line || undefined}
+            >
+              {warn && deputy.result?.line ? <span data-deputy-last-step className="text-muted">{`${t("deputy.lastStep")} `}</span> : null}
               {line}
             </span>
             {links.map((link) => (
@@ -262,7 +285,7 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
               </span>
             ))}
           </span>
-          <span className={`pointer-events-none flex shrink-0 items-center justify-center text-muted ${phone ? "h-8 w-8" : "h-5 w-5"}`} aria-hidden>
+          <span className={`pointer-events-none flex shrink-0 items-center justify-center text-muted ${phone ? "-mt-1.5 h-8 w-8" : "h-5 w-5"}`} aria-hidden>
             <ChevronRight className="h-3.5 w-3.5" />
           </span>
         </div>
@@ -328,6 +351,30 @@ function DeputyCaption({ engine, phone, started, stateWord, live, warn, open, to
       >
         <ChevronDown className="h-3.5 w-3.5" aria-hidden />
       </button>
+    </div>
+  );
+}
+
+/**
+ * The seat's own participant line, over a seat row the window has to name
+ * (docs/design/ghost-seat.md §6.1): the first seat row after a drawn block,
+ * «Orchestrator · continuing «Go through the review…»», so the seat's answer is
+ * never read as the answer to the ask above it; and the seat's live turn while
+ * a parallel self streams beside it, «Orchestrator». The seat's own ink, in
+ * the text column its rows already use.
+ */
+export function SeatSpeakerLine({ resumes }: { resumes?: { ask: string | null } }) {
+  const { t } = useLocale();
+  const phone = useIsMobile();
+  const ask = resumes?.ask ? quoteHead(resumes.ask) : null;
+  return (
+    <div
+      data-seat-speaker={resumes ? "resumes" : "live"}
+      className={`${phone ? "pt-2" : "-mb-2 ml-9 mt-3"} flex min-h-5 min-w-0 items-center gap-1.5 text-label text-muted`}
+      title={resumes?.ask ?? undefined}
+    >
+      <span className="shrink-0 font-semibold text-secondary">{t("roleCopy.orchestrator.name")}</span>
+      {ask ? <span className="min-w-0 truncate">{`· ${t("deputy.resumes", { ask })}`}</span> : null}
     </div>
   );
 }

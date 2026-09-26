@@ -17,8 +17,11 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
  */
 
 const dom = new HappyWindow({ width: 1440, height: 900, url: "http://localhost/" });
+const { MOBILE_LAYOUT_QUERY } = await import("@/lib/attention/eligibility");
+/* The phone's layout query answers true while a test sets this. */
+let phoneLayout = false;
 (dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
-  matches: false,
+  matches: phoneLayout && query === MOBILE_LAYOUT_QUERY,
   media: query,
   addEventListener() {},
   removeEventListener() {},
@@ -106,6 +109,7 @@ let recordReads = 0;
 
 beforeEach(() => {
   setLocale("en");
+  phoneLayout = false;
   dom.sessionStorage.clear();
   dom.localStorage.clear();
   liveSessions.clear();
@@ -212,9 +216,10 @@ function order(host: HTMLElement): string[] {
     if (element.dataset.deputyBlock) return [`block:${element.dataset.deputyBlock}`];
     if (element.hasAttribute("data-live-turn-group")) return ["seat-live"];
     const text = element.textContent ?? "";
-    if (text.includes("Review the queue")) return ["seat:u1"];
-    if (text.includes("Looking at the queue")) return ["seat:a1"];
+    /* A resumed row quotes the head it continues, so its own words decide. */
     if (text.includes("Seat row written after")) return ["seat:a2"];
+    if (text.includes("Looking at the queue")) return ["seat:a1"];
+    if (text.includes("Review the queue")) return ["seat:u1"];
     return [];
   });
 }
@@ -311,4 +316,78 @@ test("a feed with no deputies renders the same DOM as before", async () => {
   await settle();
   expect(empty.host.innerHTML).toBe(without.host.innerHTML);
   expect(without.host.querySelector("[data-deputy-block]")).toBeNull();
+});
+
+test("the ask is marked as sent to the parallel self, and the seat row after the block names the head it continues", async () => {
+  const { host } = mount([deputy()]);
+  await settle();
+  const block = host.querySelector<HTMLElement>('[data-deputy-block="deputy_1"]')!;
+  const addressee = block.querySelector<HTMLElement>("[data-deputy-head] [data-deputy-addressee]")!;
+  expect(addressee.textContent).toBe("→parallel self");
+  expect(addressee.querySelector("[data-deputy-mark]")).not.toBeNull();
+  /* The seat's own rows before the block carry no caption; the first after it does. */
+  const content = host.querySelector("[data-feed-state]")!;
+  const children = [...content.children] as HTMLElement[];
+  const next = children[children.indexOf(block) + 1]!;
+  expect(next.textContent).toContain("Seat row written after the ask.");
+  expect(next.querySelector('[data-seat-speaker="resumes"]')?.textContent).toBe("Orchestrator· continuing «Review the queue»");
+  expect(content.querySelectorAll("[data-seat-speaker]").length).toBe(1);
+});
+
+test("while a parallel self streams, the seat's live turn names its participant and the two carets differ", async () => {
+  liveSessions.set("conversation_seat", { turn: "running", liveTurn: { turnId: "seat-turn", text: "", items: [
+    { itemId: "seat-live", text: "The seat is still answering the queue", phase: "streaming", startedAt: at(42), completedAt: null },
+  ] } });
+  liveSessions.set("conversation_ghost", { turn: "running", liveTurn: { turnId: "ghost-turn", text: "", items: [
+    { itemId: "ghost-live", text: "Linking the task to the lane", phase: "streaming", startedAt: at(39, 50), completedAt: null },
+  ] } });
+  const { host } = mount([deputy()]);
+  await settle();
+  const seatLive = [...host.querySelector("[data-feed-state]")!.children].find((child) => child.hasAttribute("data-live-turn-group"))!;
+  expect(seatLive.querySelector('[data-seat-speaker="live"]')?.textContent).toBe("Orchestrator");
+  expect(seatLive.querySelector('[data-live-turn-caret="seat"]')?.className).toContain("bg-accent");
+  const ghostCaret = host.querySelector('[data-deputy-block] [data-live-turn-caret]')!;
+  expect(ghostCaret.getAttribute("data-live-turn-caret")).toBe("deputy");
+  expect(ghostCaret.className).toContain("bg-secondary");
+  expect(ghostCaret.className).not.toContain("bg-accent");
+});
+
+test("on the phone, a prose row inside the block is captioned as the parallel self, never with the bare engine name", async () => {
+  phoneLayout = true;
+  const { host } = mount([deputy()]);
+  await settle();
+  const speakers = [...host.querySelectorAll<HTMLElement>("[data-deputy-block] [data-mobile-message-speaker]")].map((speaker) => speaker.textContent);
+  expect(speakers.length).toBeGreaterThan(0);
+  expect(speakers.every((speaker) => speaker === "Orchestrator · parallel self")).toBe(true);
+  /* The seat's own rows keep the engine's name. */
+  const seatSpeakers = [...host.querySelectorAll<HTMLElement>("[data-mobile-message-speaker]")].filter((speaker) => !speaker.closest("[data-deputy-block]"));
+  expect(seatSpeakers.map((speaker) => speaker.textContent)).toContain("Claude");
+});
+
+test("a collapsed line keeps its result whole on the phone and draws its chips in the interface language", async () => {
+  setLocale("uk");
+  phoneLayout = true;
+  const { host } = mount([deputy({ state: "ended", endedAt: at(41), outcome: "done", touched: { taskIds: ["task_318"], pipelineIds: ["pipeline_2244"], conversationIds: ["conversation_x"] }, result: { line: "Створив задачу «Рев'юер для #2244» і прив'язав її до лейна #2244.", finalText: "" } })]);
+  await settle();
+  const result = host.querySelector<HTMLElement>("[data-deputy-result]")!;
+  expect(result.className).toContain("line-clamp-2");
+  expect(result.className).not.toContain("truncate");
+  const chips = [...host.querySelectorAll<HTMLElement>("[data-deputy-chip]")].map((chip) => chip.textContent);
+  expect(chips).toEqual(["Відкрити задачу", "Відкрити пайплайн", "Відкрити розмову"]);
+  expect(host.querySelector("[data-deputy-addressee]")?.textContent).toBe("→паралельне я");
+});
+
+test("on the desktop the result keeps its own width, so the chips follow its last word", async () => {
+  const { host } = mount([deputy({ state: "ended", endedAt: at(41), outcome: "done", touched: { taskIds: ["task_318"], pipelineIds: [], conversationIds: [] }, result: { line: "Created the task.", finalText: "" } })]);
+  await settle();
+  const result = host.querySelector<HTMLElement>("[data-deputy-result]")!;
+  expect(result.className).not.toContain("grow");
+  expect(result.className).toContain("truncate");
+});
+
+test("an ended-early line is marked as the last step", async () => {
+  const { host } = mount([deputy({ state: "ended", endedAt: at(54), outcome: "timeout", result: { line: "Reading the account limits…", finalText: "" } })]);
+  await settle();
+  expect(host.querySelector("[data-deputy-result]")?.textContent).toBe("last step: Reading the account limits…");
+  expect(host.querySelector("[data-deputy-last-step]")?.className).toContain("text-muted");
 });
