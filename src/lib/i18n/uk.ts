@@ -1258,7 +1258,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "album.loadMore": "Показати старіші",
   "album.failed": "Не вдалося завантажити альбом",
   "album.retry": "Повторити",
-  "album.openSource": "Відкрити розмову",
+  "album.openConversation": "Відкрити розмову",
   "album.conversation": "Розмова",
   "album.review": "{stage} · раунд {n}",
   "album.pasted": "Вставлене зображення",

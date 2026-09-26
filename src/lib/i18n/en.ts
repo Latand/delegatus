@@ -1305,7 +1305,7 @@ export const en = {
   "album.loadMore": "Show older",
   "album.failed": "Couldn't load the album",
   "album.retry": "Retry",
-  "album.openSource": "Open conversation",
+  "album.openConversation": "Open conversation",
   "album.conversation": "Conversation",
   "album.review": "{stage} · round {n}",
   "album.pasted": "Pasted image",

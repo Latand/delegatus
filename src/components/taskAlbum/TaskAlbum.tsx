@@ -227,7 +227,7 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
                         className="ml-auto inline-flex min-h-11 shrink-0 items-center text-label font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
                         onClick={onClose}
                       >
-                        {t("album.openSource")}
+                        {t("album.openConversation")}
                       </a>
                     </div>
                     <ul className={`m-0 grid list-none gap-2 p-0 ${phone ? "grid-cols-2" : "grid-cols-[repeat(auto-fill,minmax(176px,1fr))]"}`}>
