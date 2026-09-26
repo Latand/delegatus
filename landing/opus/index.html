@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Delegatus: delegate everything</title>
+  <meta name="description" content="Tell one agent what you want shipped. It runs Claude Code and Codex builders and reviewers, checks the work and reports back.">
+  <meta name="theme-color" content="#111218">
+  <link rel="icon" href="../../public/brand/delegatus-mark.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geologica:wght@300..600&family=Martian+Mono:wght@400;500&family=Unbounded:wght@600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    // Pick the language before first paint so a Ukrainian visitor never sees English flash.
+    (function () {
+      var q = new URLSearchParams(location.search).get("lang");
+      var saved = null;
+      try { saved = localStorage.getItem("dlg-lang"); } catch (e) {}
+      var nav = (navigator.language || "").toLowerCase();
+      var lang = q === "uk" || q === "en" ? q : saved || (nav.indexOf("uk") === 0 ? "uk" : "en");
+      document.documentElement.lang = lang;
+      document.documentElement.classList.add("js");
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("still");
+    })();
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <a class="brand" href="#top">
+      <img src="../../public/brand/delegatus-mark.svg" alt="" width="22" height="22">
+      <span>Delegatus</span>
+    </a>
+    <nav class="nav-links" aria-label="Delegatus">
+      <a class="nav-gh" href="https://github.com/Latand/delegatus">
+        <span>GitHub</span>
+        <span class="stars" data-stars hidden>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span data-stars-count></span>
+        </span>
+      </a>
+      <a href="https://github.com/Latand/delegatus#readme" data-i18n="nav.docs">Docs</a>
+      <div class="lang" role="group" data-i18n-aria="nav.lang" aria-label="Language">
+        <button type="button" data-lang="en" lang="en">EN</button>
+        <button type="button" data-lang="uk" lang="uk">UK</button>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <!-- 1. The handoff -->
+    <section class="hero" id="top" data-section="hero">
+      <div class="hero-copy">
+        <h1 data-i18n="hero.title">Delegate everything.</h1>
+        <p class="sub" data-i18n="hero.sub">Tell one agent what you want shipped. It runs the builders and reviewers, checks the work and reports back.</p>
+
+        <div class="hero-phone">
+          <span class="perch" data-mascot="perched"></span>
+          <div class="crop crop-phone" role="img" data-i18n-aria="hero.phoneAlt" aria-label="Delegatus on a phone: the harbor-api board, with the task that needs a decision pinned first.">
+            <div class="stage" style="--cw:392;--ch:848;--cx:0;--cy:0">
+              <img src="../../docs/media/readme/phone-board.svg" alt="" decoding="async">
+            </div>
+          </div>
+        </div>
+
+        <div class="install-slot" data-install="hero"></div>
+      </div>
+
+      <div class="shot-wrap" data-handoff>
+        <div class="crop crop-hero bleed-right" role="img" data-i18n-aria="hero.shotAlt" aria-label="Delegatus: the operator asks the harbor-api orchestrator to take the open work; it answers with a plan, and reports stack up in the log beside it.">
+          <div class="stage" style="--cw:1280;--ch:800;--cx:248;--cy:0">
+            <img class="base" src="../../docs/media/readme/orchestrator.svg" alt="" decoding="async" fetchpriority="high">
+            <div class="at cover" data-layer="working" style="--x:342;--y:11;--w:76;--h:25"></div>
+            <div class="at cover" data-layer="bubble" style="--x:404;--y:144;--w:512;--h:70"></div>
+            <div class="at cover" data-layer="line" style="--x:268;--y:227;--w:650;--h:31"></div>
+            <div class="at cover" data-layer="line" style="--x:305;--y:258;--w:613;--h:19"></div>
+            <div class="at cover" data-layer="line" style="--x:305;--y:277;--w:613;--h:19"></div>
+            <div class="at cover" data-layer="line" style="--x:305;--y:296;--w:613;--h:20"></div>
+            <div class="at cover" data-layer="line" style="--x:305;--y:329;--w:613;--h:24"></div>
+            <div class="at cover" data-layer="line" style="--x:305;--y:359;--w:613;--h:26"></div>
+            <div class="at composer" data-layer="composer" style="--x:280;--y:576;--w:560;--h:38"><span></span></div>
+            <div class="at reports" data-layer="reports" style="--x:925;--y:170;--w:337;--h:479">
+              <div class="entry" style="--ey:170"></div>
+              <div class="entry" style="--ey:266"></div>
+              <div class="entry" style="--ey:362"></div>
+              <div class="entry" style="--ey:458"></div>
+              <div class="entry" style="--ey:554"></div>
+            </div>
+            <div class="at ring" data-layer="needs" style="--x:1091;--y:9;--w:173;--h:30"></div>
+          </div>
+        </div>
+        <span class="catcher" data-mascot="catching"></span>
+        <div class="note" aria-hidden="true"><i></i><i></i><i></i></div>
+        <button class="replay" type="button" data-replay>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          <span data-i18n="hero.replay">Replay</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 2. It runs the work -->
+    <section class="sec sec-run" data-section="run">
+      <div class="sec-copy">
+        <h2 data-i18n="run.title">It runs the work, and checks it.</h2>
+        <ul class="caps">
+          <li><i class="dot"></i><span data-i18n="run.c1">Each task gets a worktree, a builder and a fresh reviewer.</span></li>
+          <li><i class="dot"></i><span data-i18n="run.c2">Claude Code builds, Codex reviews, and they message each other.</span></li>
+          <li><i class="dot dot-amber"></i><span data-i18n="run.c3">Reports land as work passes; decisions come to you.</span></li>
+        </ul>
+      </div>
+      <div class="crop crop-pipeline bleed-right" data-pipeline role="img" data-i18n-aria="run.alt" aria-label="A pipeline for Idempotent refunds: Build on Claude Opus 5.5 passed, Review on Codex is running, Verify waits; beneath it the builder’s and the reviewer’s conversations side by side.">
+        <div class="stage" style="--cw:1280;--ch:800;--cx:13;--cy:13">
+          <img src="../../docs/media/readme/pipeline.svg" alt="" loading="lazy" decoding="async">
+          <div class="at edge" data-layer="edge" style="--x:219;--y:119;--w:68;--h:22"></div>
+          <div class="at breathe" data-layer="breathe" style="--x:296;--y:147;--w:10;--h:10"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Nothing is hidden -->
+    <section class="sec sec-open" data-section="open">
+      <div class="composite">
+        <div class="crop crop-conv bleed-left" role="img" data-i18n-aria="open.alt" aria-label="A Claude Code session read as a chat, with an edit shown as a diff and a passing test run; over it, message search across projects, and the Claude accounts panel with each account’s limits.">
+          <div class="stage" style="--cw:1280;--ch:960;--cx:94;--cy:28">
+            <img src="../../docs/media/readme/conversation.svg" alt="" loading="lazy" decoding="async">
+          </div>
+        </div>
+        <div class="crop crop-conv-phone" role="img" data-i18n-aria="open.phoneAlt" aria-label="A Claude Code session on a phone, read as a chat: a passing test run and the agent’s answer.">
+          <div class="stage" style="--cw:392;--ch:848;--cx:0;--cy:100">
+            <img src="../../docs/media/readme/phone-conversation.svg" alt="" loading="lazy" decoding="async">
+          </div>
+        </div>
+
+        <div class="palette" aria-hidden="true">
+          <div class="pal-head">
+            <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <b data-i18n="search.title">Find my messages</b>
+            <span class="pal-input"><span data-i18n="search.query">retries</span><i class="caret"></i></span>
+            <span class="pal-scope"><span data-i18n="search.mine">My messages</span><span class="on" data-i18n="search.everything">Everything</span></span>
+          </div>
+          <div class="pal-body">
+            <div class="pal-results"><b data-i18n="search.results">Results</b><span>3</span></div>
+            <div class="hit">
+              <div class="hit-top"><span class="hit-title" data-i18n="hit1.title">Back off webhook retries</span><span class="proj">harbor-api</span><span class="eng eng-claude">Claude</span><span class="age">4m</span></div>
+              <div class="hit-text"><span class="who" data-i18n="search.you">you</span><span data-i18n-mark="hit1.text">Stop <mark>retries</mark> after 24 or 72 hours? The spec leaves it open.</span></div>
+            </div>
+            <div class="hit">
+              <div class="hit-top"><span class="hit-title" data-i18n="hit2.title">Checkout form</span><span class="proj">lumen-web</span><span class="eng eng-codex">Codex</span><span class="age">2d</span></div>
+              <div class="hit-text"><span class="who" data-i18n="search.agent">agent</span><span data-i18n-mark="hit2.text">Failed payments now say why, and <mark>retries</mark> keep the cart.</span></div>
+            </div>
+            <div class="hit">
+              <div class="hit-top"><span class="hit-title" data-i18n="hit3.title">Offline sync</span><span class="proj">fieldnotes</span><span class="eng eng-claude">Claude</span><span class="age">5d</span></div>
+              <div class="hit-text"><span class="who" data-i18n="search.you">you</span><span data-i18n-mark="hit3.text">Queue the <mark>retries</mark> until the phone is back online.</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="crop crop-acct" aria-hidden="true">
+          <div class="stage" style="--cw:1280;--ch:800;--cx:255;--cy:185">
+            <img src="../../docs/media/readme/accounts.svg" alt="" loading="lazy" decoding="async">
+          </div>
+        </div>
+      </div>
+      <div class="sec-copy">
+        <h2 data-i18n="open.title">Every conversation, open.</h2>
+        <ul class="caps">
+          <li><i class="dot"></i><span data-i18n="open.c1">Every Claude Code, Codex and Copilot session reads as a chat.</span></li>
+          <li><i class="dot"></i><span data-i18n-key="open.c2">Search every conversation with <kbd>/</kbd>.</span></li>
+          <li><i class="dot"></i><span data-i18n="open.c3">Several Claude and Codex accounts, limits in view.</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 4. It reaches you -->
+    <section class="sec sec-reach" data-section="reach">
+      <div class="sec-copy">
+        <h2 data-i18n="reach.title">It finds you when it needs you.</h2>
+        <ul class="caps">
+          <li><i class="dot dot-green"></i><span data-i18n="reach.c1">Your board on your phone, inside your tailnet.</span></li>
+          <li><i class="dot"></i><span data-i18n="reach.c2">Telegram built in: agents read chats you allow and report through your bot.</span></li>
+        </ul>
+      </div>
+      <div class="reach-art">
+        <div class="handset">
+          <span class="perch" data-mascot="perched"></span>
+          <div class="crop crop-handset" role="img" data-i18n-aria="reach.phoneAlt" aria-label="The harbor-api board on a phone: Back off webhook retries is pinned first with its amber needs-a-decision chip.">
+            <div class="stage" style="--cw:392;--ch:848;--cx:0;--cy:0">
+              <img src="../../docs/media/readme/phone-board.svg" alt="" loading="lazy" decoding="async">
+            </div>
+          </div>
+        </div>
+        <div class="tg">
+          <p class="tg-label">
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+            <span data-i18n="tg.label">Your bot, in Telegram</span>
+          </p>
+          <p class="tg-msg"><span data-i18n="tg.report">Idempotent refunds: Build passed. 4 tests pass.</span><time>19:00</time></p>
+          <p class="tg-msg tg-ask"><i class="dot dot-amber"></i><span data-i18n="tg.question">Retry window: 24 or 72 hours?</span><time>19:03</time></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="band">
+    <div class="band-inner">
+      <p class="band-line" data-i18n="foot.line">Open source. Runs on your machine, on your own accounts.</p>
+      <div class="install-slot" data-install="footer"></div>
+    </div>
+    <div class="band-meta">
+      <a href="https://github.com/Latand/delegatus">GitHub</a>
+      <a href="https://www.npmjs.com/package/delegatus-cli">npm <code>delegatus-cli</code></a>
+      <span><span data-i18n="foot.version">version</span> <span class="num" data-version>1.5.0</span></span>
+    </div>
+  </footer>
+
+  <template id="install-template">
+    <div class="install">
+      <div class="install-bar">
+        <div class="tabs" role="tablist" data-i18n-aria="install.tabs" aria-label="Install through your agent">
+          <button type="button" role="tab" data-agent="claude" aria-selected="true">Claude Code</button>
+          <button type="button" role="tab" data-agent="codex" aria-selected="false" tabindex="-1">Codex</button>
+        </div>
+        <button type="button" class="copy-btn" data-copy-prompt>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          <span data-copy-label data-i18n="install.copy">Copy prompt</span>
+        </button>
+      </div>
+      <div class="prompt" role="tabpanel" data-open="false">
+        <pre><code data-prompt></code></pre>
+        <button type="button" class="prompt-more" aria-expanded="false"><span data-i18n="install.more">Read the whole prompt</span>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+      </div>
+    </div>
+    <div class="legacy-wrap">
+      <button type="button" class="legacy-link" aria-expanded="false" data-i18n="legacy.open">I still use a terminal</button>
+      <div class="legacy" hidden>
+        <span class="giggler" data-mascot="giggling"></span>
+        <p class="bubble" aria-live="polite" data-bubble></p>
+        <div class="legacy-box">
+          <p class="legacy-title" data-i18n="legacy.title">Legacy install</p>
+          <div class="legacy-cmd">
+            <code>bunx delegatus-cli</code>
+            <button type="button" class="icon-btn" data-copy-cmd data-i18n-aria="legacy.copy" aria-label="Copy the command">
+              <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            </button>
+          </div>
+          <p class="legacy-needs"><span data-i18n="legacy.needs">Needs Bun 1.4+:</span> <code>curl -fsSL https://bun.com/install | bash</code></p>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script src="copy.js"></script>
+  <script src="mascot.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
