@@ -1,0 +1,615 @@
+{
+  "results": [
+    {
+      "key": "desktop-1440-en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "lang": "en",
+      "seatSheet": null,
+      "chipLog": {
+        "state": "log",
+        "label": "Reports",
+        "face": "Log",
+        "faceWhole": true,
+        "title": "Reports go to the log only.",
+        "row": {
+          "lines": 1,
+          "controls": [
+            {
+              "left": 1114,
+              "top": 103,
+              "width": 96,
+              "height": 24
+            },
+            {
+              "left": 1217,
+              "top": 103,
+              "width": 54,
+              "height": 24
+            },
+            {
+              "left": 1279,
+              "top": 103,
+              "width": 64,
+              "height": 24
+            }
+          ],
+          "right": 1343,
+          "host": 1351
+        }
+      },
+      "off": {
+        "box": {
+          "left": 869,
+          "top": 135,
+          "right": 1209,
+          "bottom": 238
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "sideways": 0,
+        "short": [
+          "button Also to Telegram 20"
+        ],
+        "text": "Reports · atlas\n\nAlso to Telegram\n\nReports go to the log only."
+      },
+      "picker": {
+        "box": {
+          "left": 869,
+          "top": 135,
+          "right": 1209,
+          "bottom": 587
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "sideways": 0,
+        "short": [
+          "button Also to Telegram 20",
+          "input Chat id or @username 32",
+          "button Add 32",
+          "input  28",
+          "button Save 28"
+        ],
+        "text": "Reports · atlas\n\nAlso to Telegram\n\nPick the group for this project's reports and save. Until then they go to the log only.\n\nGROUP\n\nTeam Reports\nteam-reports\nRelease notes\natlas-design-release\nAdd a chat by id\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nSave"
+      },
+      "added": {
+        "box": {
+          "left": 869,
+          "top": 135,
+          "right": 1209,
+          "bottom": 774
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "sideways": 0,
+        "short": [
+          "button Also to Telegram 20",
+          "input Chat id or @username 32",
+          "button Add 32",
+          "button Test post 28",
+          "input  28",
+          "button Save 28"
+        ],
+        "text": "Reports · atlas\n\nAlso to Telegram\n\nPick the group for this project's reports and save. Until then they go to the log only.\n\nGROUP\n\nTeam Reports\nteam-reports\nRelease notes\natlas-design-release\nDesign review\natlas-design-reviews\nAdd a chat by id\n\nA bot that only posts (another program reads its updates) never shows the groups it joins here. Add the group by its id or @username: Delegatus checks it with Telegram, allows posting and reads nothing from it.\n\nAdd\n\nDesign review added: agents may post there as atlas-design-reviews.\n\nTest post\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nSave"
+      },
+      "line": "Reports go to the log and to Design review.",
+      "chipChat": {
+        "state": "chat",
+        "label": "Reports",
+        "face": "Design review",
+        "faceWhole": true,
+        "title": "Reports go to the log and to Design review.",
+        "row": {
+          "lines": 1,
+          "controls": [
+            {
+              "left": 1068,
+              "top": 103,
+              "width": 141,
+              "height": 24
+            },
+            {
+              "left": 1217,
+              "top": 103,
+              "width": 54,
+              "height": 24
+            },
+            {
+              "left": 1279,
+              "top": 103,
+              "width": 64,
+              "height": 24
+            }
+          ],
+          "right": 1343,
+          "host": 1351
+        }
+      },
+      "rowChat": null,
+      "overview": {
+        "box": {
+          "left": 268,
+          "top": 550,
+          "right": 562,
+          "bottom": 776
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "sideways": 0,
+        "short": [
+          "select Where the reports of atlas go 32",
+          "select Where the reports of ledger go 32",
+          "select Where the reports of mesh go 32"
+        ],
+        "text": "PROJECT REPORTS\n\nEach project with an orchestrator, and the chat its reports also go to.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\natlas\nLog only\nTeam Reports\nRelease notes\nDesign review\nledger\nLog only\nTeam Reports\nRelease notes\nDesign review\nmesh\nLog only\nTeam Reports\nRelease notes\nDesign review"
+      },
+      "warning": {
+        "text": "The group may be public, so reports carry no private information, and they are posted silently, with no links.",
+        "above": true
+      },
+      "lines": [
+        {
+          "project": "atlas",
+          "value": "atlas-design-reviews"
+        },
+        {
+          "project": "-projects-ledger",
+          "value": "team-reports"
+        },
+        {
+          "project": "-projects-mesh",
+          "value": "log-only"
+        }
+      ],
+      "writes": [
+        {
+          "project": "atlas",
+          "reportTelegram": {
+            "chat": "atlas-design-reviews",
+            "name": "Atlas"
+          }
+        },
+        {
+          "project": "-projects-ledger",
+          "reportTelegram": {
+            "chat": "atlas-design-reviews",
+            "name": "Ledger"
+          }
+        }
+      ]
+    },
+    {
+      "key": "desktop-1440-uk",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "lang": "uk",
+      "seatSheet": null,
+      "chipLog": {
+        "state": "log",
+        "label": "Звіти",
+        "face": "Журнал",
+        "faceWhole": true,
+        "title": "Звіти йдуть лише в журнал.",
+        "row": {
+          "lines": 1,
+          "controls": [
+            {
+              "left": 1092,
+              "top": 103,
+              "width": 104,
+              "height": 24
+            },
+            {
+              "left": 1204,
+              "top": 103,
+              "width": 54,
+              "height": 24
+            },
+            {
+              "left": 1266,
+              "top": 103,
+              "width": 77,
+              "height": 24
+            }
+          ],
+          "right": 1343,
+          "host": 1351
+        }
+      },
+      "off": {
+        "box": {
+          "left": 856,
+          "top": 135,
+          "right": 1196,
+          "bottom": 238
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "sideways": 0,
+        "short": [
+          "button Ще й у Telegram 20"
+        ],
+        "text": "Звіти · atlas\n\nЩе й у Telegram\n\nЗвіти йдуть лише в журнал."
+      },
+      "picker": {
+        "box": {
+          "left": 856,
+          "top": 135,
+          "right": 1196,
+          "bottom": 601
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "sideways": 0,
+        "short": [
+          "button Ще й у Telegram 20",
+          "input Id чату або @username 32",
+          "button Додати 32",
+          "input  28",
+          "button Зберегти 28"
+        ],
+        "text": "Звіти · atlas\n\nЩе й у Telegram\n\nОберіть групу для звітів цього проєкту й збережіть. Доти вони йдуть лише в журнал.\n\nГРУПА\n\nTeam Reports\nteam-reports\nRelease notes\natlas-design-release\nДодати чат за id\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗберегти"
+      },
+      "added": {
+        "box": {
+          "left": 856,
+          "top": 135,
+          "right": 1196,
+          "bottom": 788
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "sideways": 0,
+        "short": [
+          "button Ще й у Telegram 20",
+          "input Id чату або @username 32",
+          "button Додати 32",
+          "button Тестовий допис 28",
+          "input  28",
+          "button Зберегти 28"
+        ],
+        "text": "Звіти · atlas\n\nЩе й у Telegram\n\nОберіть групу для звітів цього проєкту й збережіть. Доти вони йдуть лише в журнал.\n\nГРУПА\n\nTeam Reports\nteam-reports\nRelease notes\natlas-design-release\nDesign review\natlas-design-reviews\nДодати чат за id\n\nБот, який лише пише (його оновлення читає інша програма), ніколи не показує тут групи, куди його додали. Додайте групу за id або @username: Delegatus перевірить її в Telegram, дозволить дописи й нічого з неї не читатиме.\n\nДодати\n\nDesign review додано: агенти можуть писати туди як atlas-design-reviews.\n\nТестовий допис\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗберегти"
+      },
+      "line": "Звіти йдуть у журнал і в Design review.",
+      "chipChat": {
+        "state": "chat",
+        "label": "Звіти",
+        "face": "Design review",
+        "faceWhole": true,
+        "title": "Звіти йдуть у журнал і в Design review.",
+        "row": {
+          "lines": 1,
+          "controls": [
+            {
+              "left": 1066,
+              "top": 103,
+              "width": 130,
+              "height": 24
+            },
+            {
+              "left": 1204,
+              "top": 103,
+              "width": 54,
+              "height": 24
+            },
+            {
+              "left": 1266,
+              "top": 103,
+              "width": 77,
+              "height": 24
+            }
+          ],
+          "right": 1343,
+          "host": 1351
+        }
+      },
+      "rowChat": null,
+      "overview": {
+        "box": {
+          "left": 268,
+          "top": 550,
+          "right": 562,
+          "bottom": 776
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "sideways": 0,
+        "short": [
+          "select Куди йдуть звіти проєкту atlas 32",
+          "select Куди йдуть звіти проєкту ledger 32",
+          "select Куди йдуть звіти проєкту mesh 32"
+        ],
+        "text": "ЗВІТИ ПРОЄКТІВ\n\nКожен проєкт з оркестратором і чат, куди також ідуть його звіти.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\natlas\nЛише журнал\nTeam Reports\nRelease notes\nDesign review\nledger\nЛише журнал\nTeam Reports\nRelease notes\nDesign review\nmesh\nЛише журнал\nTeam Reports\nRelease notes\nDesign review"
+      },
+      "warning": {
+        "text": "Група може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.",
+        "above": true
+      },
+      "lines": [
+        {
+          "project": "atlas",
+          "value": "atlas-design-reviews"
+        },
+        {
+          "project": "-projects-ledger",
+          "value": "team-reports"
+        },
+        {
+          "project": "-projects-mesh",
+          "value": "log-only"
+        }
+      ],
+      "writes": [
+        {
+          "project": "atlas",
+          "reportTelegram": {
+            "chat": "atlas-design-reviews",
+            "name": "Atlas"
+          }
+        },
+        {
+          "project": "-projects-ledger",
+          "reportTelegram": {
+            "chat": "atlas-design-reviews",
+            "name": "Ledger"
+          }
+        }
+      ]
+    },
+    {
+      "key": "phone-390-en",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "lang": "en",
+      "seatSheet": {
+        "text": "Reports\nLog",
+        "box": {
+          "top": 512,
+          "bottom": 556,
+          "width": 358,
+          "height": 44
+        },
+        "controls": 1,
+        "reportLogButtons": 0
+      },
+      "chipLog": null,
+      "off": {
+        "box": {
+          "left": 0,
+          "top": 758,
+          "right": 390,
+          "bottom": 834
+        },
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sideways": 0,
+        "short": [],
+        "text": "Also to Telegram\n\nReports go to the log only."
+      },
+      "picker": {
+        "box": {
+          "left": 0,
+          "top": 350,
+          "right": 390,
+          "bottom": 834
+        },
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sideways": 0,
+        "short": [],
+        "text": "Also to Telegram\n\nPick the group for this project's reports and save. Until then they go to the log only.\n\nGROUP\n\nTeam Reports\nteam-reports\nRelease notes\natlas-design-release\nAdd a chat by id\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nSave"
+      },
+      "added": {
+        "box": {
+          "left": 0,
+          "top": 163,
+          "right": 390,
+          "bottom": 853
+        },
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sideways": 0,
+        "short": [],
+        "text": "Also to Telegram\n\nPick the group for this project's reports and save. Until then they go to the log only.\n\nGROUP\n\nTeam Reports\nteam-reports\nRelease notes\natlas-design-release\nDesign review\natlas-design-reviews\nAdd a chat by id\n\nA bot that only posts (another program reads its updates) never shows the groups it joins here. Add the group by its id or @username: Delegatus checks it with Telegram, allows posting and reads nothing from it.\n\nAdd\n\nDesign review added: agents may post there as atlas-design-reviews.\n\nTest post\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nSave"
+      },
+      "line": "Reports go to the log and to Design review.",
+      "chipChat": null,
+      "rowChat": "Reports\nDesign review",
+      "overview": {
+        "box": {
+          "left": 12,
+          "top": 446,
+          "right": 378,
+          "bottom": 693
+        },
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sideways": 0,
+        "short": [],
+        "text": "PROJECT REPORTS\n\nEach project with an orchestrator, and the chat its reports also go to.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\natlas\nLog only\nTeam Reports\nRelease notes\nDesign review\nledger\nLog only\nTeam Reports\nRelease notes\nDesign review\nmesh\nLog only\nTeam Reports\nRelease notes\nDesign review"
+      },
+      "warning": {
+        "text": "The group may be public, so reports carry no private information, and they are posted silently, with no links.",
+        "above": true
+      },
+      "lines": [
+        {
+          "project": "atlas",
+          "value": "atlas-design-reviews"
+        },
+        {
+          "project": "-projects-ledger",
+          "value": "team-reports"
+        },
+        {
+          "project": "-projects-mesh",
+          "value": "log-only"
+        }
+      ],
+      "writes": [
+        {
+          "project": "atlas",
+          "reportTelegram": {
+            "chat": "atlas-design-reviews",
+            "name": "Atlas"
+          }
+        },
+        {
+          "project": "-projects-ledger",
+          "reportTelegram": {
+            "chat": "atlas-design-reviews",
+            "name": "Ledger"
+          }
+        }
+      ]
+    },
+    {
+      "key": "phone-390-uk",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "lang": "uk",
+      "seatSheet": {
+        "text": "Звіти\nЖурнал",
+        "box": {
+          "top": 512,
+          "bottom": 556,
+          "width": 358,
+          "height": 44
+        },
+        "controls": 1,
+        "reportLogButtons": 0
+      },
+      "chipLog": null,
+      "off": {
+        "box": {
+          "left": 0,
+          "top": 758,
+          "right": 390,
+          "bottom": 834
+        },
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sideways": 0,
+        "short": [],
+        "text": "Ще й у Telegram\n\nЗвіти йдуть лише в журнал."
+      },
+      "picker": {
+        "box": {
+          "left": 0,
+          "top": 350,
+          "right": 390,
+          "bottom": 834
+        },
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sideways": 0,
+        "short": [],
+        "text": "Ще й у Telegram\n\nОберіть групу для звітів цього проєкту й збережіть. Доти вони йдуть лише в журнал.\n\nГРУПА\n\nTeam Reports\nteam-reports\nRelease notes\natlas-design-release\nДодати чат за id\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗберегти"
+      },
+      "added": {
+        "box": {
+          "left": 0,
+          "top": 163,
+          "right": 390,
+          "bottom": 868
+        },
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sideways": 0,
+        "short": [],
+        "text": "Ще й у Telegram\n\nОберіть групу для звітів цього проєкту й збережіть. Доти вони йдуть лише в журнал.\n\nГРУПА\n\nTeam Reports\nteam-reports\nRelease notes\natlas-design-release\nDesign review\natlas-design-reviews\nДодати чат за id\n\nБот, який лише пише (його оновлення читає інша програма), ніколи не показує тут групи, куди його додали. Додайте групу за id або @username: Delegatus перевірить її в Telegram, дозволить дописи й нічого з неї не читатиме.\n\nДодати\n\nDesign review додано: агенти можуть писати туди як atlas-design-reviews.\n\nТестовий допис\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗберегти"
+      },
+      "line": "Звіти йдуть у журнал і в Design review.",
+      "chipChat": null,
+      "rowChat": "Звіти\nDesign review",
+      "overview": {
+        "box": {
+          "left": 12,
+          "top": 446,
+          "right": 378,
+          "bottom": 693
+        },
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sideways": 0,
+        "short": [],
+        "text": "ЗВІТИ ПРОЄКТІВ\n\nКожен проєкт з оркестратором і чат, куди також ідуть його звіти.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\natlas\nЛише журнал\nTeam Reports\nRelease notes\nDesign review\nledger\nЛише журнал\nTeam Reports\nRelease notes\nDesign review\nmesh\nЛише журнал\nTeam Reports\nRelease notes\nDesign review"
+      },
+      "warning": {
+        "text": "Група може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.",
+        "above": true
+      },
+      "lines": [
+        {
+          "project": "atlas",
+          "value": "atlas-design-reviews"
+        },
+        {
+          "project": "-projects-ledger",
+          "value": "team-reports"
+        },
+        {
+          "project": "-projects-mesh",
+          "value": "log-only"
+        }
+      ],
+      "writes": [
+        {
+          "project": "atlas",
+          "reportTelegram": {
+            "chat": "atlas-design-reviews",
+            "name": "Atlas"
+          }
+        },
+        {
+          "project": "-projects-ledger",
+          "reportTelegram": {
+            "chat": "atlas-design-reviews",
+            "name": "Ledger"
+          }
+        }
+      ]
+    }
+  ],
+  "failures": []
+}

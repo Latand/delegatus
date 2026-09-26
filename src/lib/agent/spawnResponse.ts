@@ -36,6 +36,8 @@ export interface SpawnResponse {
       receipts persisted before attribution existed. */
   parent?: { conversationId: string; source: "explicit" | "inferred-caller" | null } | null;
   launched: boolean;
+  /** Which model runs, as `builder·trivial claude/sonnet/high` (docs/design/model-sizing-tiers.md §3). */
+  runtime?: string;
   retrySafe: boolean;
   initialMessage: "pending" | "queued" | "delivered" | "failed";
   state: "settled" | "path-pending" | "starting" | "failed" | "conflict";

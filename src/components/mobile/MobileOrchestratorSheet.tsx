@@ -43,6 +43,7 @@ import type { SeatConfirmLaunch } from "../orchestrator/useSeatConfirm";
 import { humanizeDuration } from "../turnDuration";
 import { statePhrase } from "./MobileBoard";
 import { MobileMeter } from "./MobileMeter";
+import { MobileSeatReportsRow, MobileSeatReportsSheet } from "./MobileSeatReportsSheet";
 import { MobileSeatTickRow, MobileSeatTickSheet } from "./MobileSeatTickSheet";
 import { MobileSheet } from "./MobileSheet";
 import { mobileRowState } from "./mobileBoardModel";
@@ -164,6 +165,8 @@ export interface SeatRotateFlow {
  *    against a surface that owns the whole viewport.
  *  - `tick` — the compact bottom sheet for the seat tick (#1681), reached from
  *    a row in the seat sheet and returning to it.
+ *  - `reports` — the project's Reports section (orchestrator-reports §5.6),
+ *    reached and left the same way.
  *
  * They are separate components rather than branches inside one so each owns
  * its own modal layer: switching from one to another unmounts a surface and
@@ -176,6 +179,9 @@ export function MobileOrchestratorSheet(props: SeatSheetProps) {
      (§3.3), and its close returns to the seat sheet the row was tapped in. */
   if (props.sheet === "tick") {
     return <MobileSeatTickSheet project={props.project} projectName={props.projectName} onClose={props.tick.onClose} />;
+  }
+  if (props.sheet === "reports" && props.reports) {
+    return <MobileSeatReportsSheet project={props.project} projectName={props.projectName} onClose={props.reports.onClose} />;
   }
   return <SeatStatusSheet {...props} />;
 }
@@ -194,7 +200,7 @@ interface SeatSheetProps {
   projectCwd?: string;
   /** Which of the card's sheets is open. The name decides the container; the
       seat state decides what is inside it. */
-  sheet: "seat" | "rotate" | "tick";
+  sheet: "seat" | "rotate" | "tick" | "reports";
   state: OrchestratorPanelState;
   /** The seat read itself, for the rotate draft's own error state. */
   status: OrchestratorSeatStatus | null;
@@ -212,6 +218,9 @@ interface SeatSheetProps {
   now: number;
   rotate: SeatRotateFlow;
   tick: SeatTickFlow;
+  /** The Reports row and its sheet, in the tick's shape. Absent, the seat
+      sheet draws no Reports row. */
+  reports?: SeatTickFlow;
   onConfirm: (payload: SeatConfirmPayload) => void;
   onRecheck: () => void;
   onOpenConversation: () => void;
@@ -257,6 +266,7 @@ function SeatStatusSheet({
   now,
   rotate,
   tick,
+  reports,
   onConfirm,
   onRecheck,
   onOpenConversation,
@@ -390,7 +400,7 @@ function SeatStatusSheet({
         ) : state.kind === "live" && previousOpen ? (
           <MobilePreviousSeatsScreen status={status} currentEngine={file?.engine ?? null} onBack={() => setPreviousOpen(false)} />
         ) : state.kind === "live" ? (
-          <LiveView state={state} project={project} file={file} incumbent={incumbent} now={now} onEditMandate={rotate.onOpen} onOpenTick={tick.onOpen} previousRow={<MobilePreviousSeatsRow status={status} onOpen={() => setPreviousOpen(true)} />} />
+          <LiveView state={state} project={project} file={file} incumbent={incumbent} now={now} onEditMandate={rotate.onOpen} onOpenTick={tick.onOpen} onOpenReports={reports?.onOpen} previousRow={<MobilePreviousSeatsRow status={status} onOpen={() => setPreviousOpen(true)} />} />
         ) : (
           /* A vacancy or a failed designation reached this sheet from somewhere
              other than the card (the platform's forward gesture onto a replaced
@@ -1021,6 +1031,7 @@ function LiveView({
   now,
   onEditMandate,
   onOpenTick,
+  onOpenReports,
   previousRow,
 }: {
   /** The Previous seats row, under the tick row (#1841). */
@@ -1036,6 +1047,8 @@ function LiveView({
   onEditMandate: () => void;
   /** The seat tick's row swaps this sheet for the tick's own (#1681). */
   onOpenTick: () => void;
+  /** The Reports row swaps this sheet for the Reports sheet. */
+  onOpenReports?: () => void;
 }) {
   const { t } = useLocale();
   return (
@@ -1050,6 +1063,7 @@ function LiveView({
       {/* The tick, directly under who holds the seat: whether the Viewer wakes
           this seat, and how often, is a property of the seat (#1681). */}
       <MobileSeatTickRow project={project} onOpen={onOpenTick} />
+      {onOpenReports ? <MobileSeatReportsRow project={project} onOpen={onOpenReports} /> : null}
       {previousRow}
       {state.bindFailure ? (
         <div role="status" data-orchestrator-bind-failure={state.bindFailure} className="rounded-control border border-warning/30 bg-warning/10 px-3 py-2 text-ui text-primary">

@@ -79,7 +79,9 @@ import * as legacyReview from "./legacyReviewDefinition";
 import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
 import { pipelineDeliveryGuidance, renderDecisionInput, renderStagePrompt } from "./prompts";
-import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
+import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
+import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
+import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { collectStageProvenance } from "./stageProvenance";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
@@ -245,6 +247,10 @@ export interface PipelinePorts {
   conversationAgentActive(conversationId: string): Promise<boolean | null>;
   /** False means the durable registry has never registered this conversation. */
   conversationRegistered?(conversationId: string): boolean;
+  /** The runtime a registered conversation runs on, null when unknown. The
+      sizing rules judge the agent that briefed a launch by it
+      (docs/design/model-sizing-tiers.md §2). */
+  conversationRuntime?(conversationId: string): LaunchRuntime | null;
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
@@ -378,6 +384,48 @@ function stageEngineRefusal(stages: readonly PipelineStage[], project: string, p
   const problem = stageEngineProblems(stages, project, ports)[0];
   if (!problem) return null;
   return { error: engineNotConnectedMessage(problem), status: 409, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(problem) };
+}
+
+/** Who briefed a pipeline launch, as the caller knows it: the operator, or an
+    agent conversation (null falls back to the pipeline's creator). */
+export type PipelineBriefer = { kind: "operator" } | { kind: "agent"; conversationId: string | null };
+
+function sizingBriefer(briefer: PipelineBriefer, fallbackConversationId: string | null, ports: Pick<PipelinePorts, "conversationRuntime">): Briefer {
+  if (briefer.kind === "operator") return briefer;
+  const conversationId = briefer.conversationId ?? fallbackConversationId;
+  return { kind: "agent", runtime: conversationId ? ports.conversationRuntime?.(conversationId) ?? null : null };
+}
+
+/** A stage that judges another stage's work, which R1 reads as reviewer work
+    whatever role it names: a review-loop stage, or the stage a conversion
+    made of one, which carries the fail edge to its fix stage. */
+function isReviewGate(stage: Pick<PipelineStage, "kind" | "onFail">): boolean {
+  return stage.kind === "review-loop" || Boolean(stage.onFail);
+}
+
+/** The sizing rules (docs/design/model-sizing-tiers.md §2) over stages already
+    normalized, as create violations. `only` limits the check to the stages a
+    graph edit touched; stages already admitted are not re-judged. */
+function stageSizingRefusal(
+  stages: readonly PipelineStage[],
+  briefer: Briefer,
+  ports: Pick<PipelinePorts, "roleLookup">,
+  only?: ReadonlySet<string>,
+): StageAccountRefusal | null {
+  const violations: PipelineValidationViolation[] = [];
+  for (const [index, stage] of stages.entries()) {
+    if (only && !only.has(stage.id)) continue;
+    const message = launchSizingRefusal({
+      roleId: stage.effectiveRole.roleId ?? null,
+      params: stage.role?.params,
+      config: { engine: stage.effectiveRole.engine, model: stage.effectiveRole.model },
+      explicitRuntime: stageRuntimeIsExplicit(stage, ports.roleLookup),
+      briefer,
+      reviewGate: isReviewGate(stage),
+    });
+    if (message) violations.push({ field: `stages[${index}].role`, message: `stage ${stage.id}: ${message}`, expected: STAGE_RUNTIME_SHAPE });
+  }
+  return violations.length ? { error: pipelineValidationError(violations), violations, status: 400 } : null;
 }
 
 /** Create/override-time reading of #1279's rule, over stages already
@@ -1164,6 +1212,7 @@ export function defaultPipelinePorts(
     },
     conversationRegistered: (conversationId) => conversationId.startsWith("conversation_")
       && Boolean(snapshot().conversations[conversationId as ViewerConversationId]),
+    conversationRuntime: (conversationId) => conversationRuntime(snapshot(), conversationId),
     conversationHostUnavailableSince: async (conversationId) => {
       if (!conversationId.startsWith("conversation_")) return undefined;
       const current = snapshot();
@@ -5993,6 +6042,9 @@ type CreatePipelineOptions = {
       write fence, or a lease held past the bounded wait — is queued for the
       serving release's controller instead of refused (#1835). */
   queueWhenBusy?: boolean;
+  /** Who briefed this create, for the sizing rules. Absent for the Viewer's
+      own creates (task assignment, health checks), which are not judged. */
+  briefer?: PipelineBriefer;
 };
 
 function taskSpawnCreatorLineage(
@@ -6154,6 +6206,10 @@ export async function createPipelineFromRequest(
   const project = ports.projectForCwd(repoDir) ?? path.basename(repoDir);
   const accountRefusal = stageAccountRefusal(normalized.stages, project, ports);
   if (accountRefusal) return accountRefusal;
+  if (options.briefer) {
+    const sizingRefusal = stageSizingRefusal(normalized.stages, sizingBriefer(options.briefer, creator.lineage.srcConversationId, ports), ports);
+    if (sizingRefusal) return sizingRefusal;
+  }
   /* #1876: a pipeline that starts now is refused while a stage's engine has
      nobody signed in; a draft is stored and says which stages would be. */
   if (req.autoStart !== false) {
@@ -7242,6 +7298,13 @@ function revertLegacyReview(
   return { pipeline, legacyReviewConversion: reverted.conversion, replayed: false };
 }
 
+/** The briefer of a graph edit: the operator, or the agent that sent it,
+    falling back to the pipeline's creator. */
+function graphEditBriefer(actor: PauseResumeActor | null, pipeline: Pipeline, ports: Pick<PipelinePorts, "conversationRuntime">): Briefer {
+  if (!actor || actor.kind === "operator") return { kind: "operator" };
+  return sizingBriefer({ kind: "agent", conversationId: actor.conversationId }, pipeline.srcConversationId ?? null, ports);
+}
+
 export async function patchPipeline(
   id: string,
   req: PatchPipelineRequest,
@@ -7486,6 +7549,11 @@ export async function patchPipeline(
          post-mutation refusal in this function does. */
       const addedAccountRefusal = stageAccountRefusal(pipeline.stages, pipeline.project, ports);
       if (addedAccountRefusal) return addedAccountRefusal;
+      /* The added stage, and the fix stage a review-loop conversion adds beside it. */
+      const before = new Set(inputs.map((stage) => stage.id).filter((stageId) => stageId !== inserted.id));
+      const added = new Set(pipeline.stages.map((stage) => stage.id).filter((stageId) => !before.has(stageId)));
+      const addedSizingRefusal = stageSizingRefusal(pipeline.stages, graphEditBriefer(actor, pipeline, ports), ports, added);
+      if (addedSizingRefusal) return addedSizingRefusal;
       legacyAnswer = newLegacyReviewAnswer(replaced.legacyReview);
       const fixer = legacyAnswer.convertedStages?.[0]?.fixer;
       graphEdit = recordGraphEdit(pipeline, ports, actor, {
@@ -7617,6 +7685,10 @@ export async function patchPipeline(
           const candidate = pipeline.stages.map((item) => (item.id === from.id ? { ...item, onFail } : item));
           const graphError = pipelineGraphError(candidate);
           if (graphError) return { error: graphError, status: 400 };
+          /* A fail edge makes the stage a review gate, so an agent cannot turn
+             a Sonnet or Haiku stage into one (R1). */
+          const gateRefusal = actor && actor.kind !== "operator" ? reviewGateRefusal(from.effectiveRole) : null;
+          if (gateRefusal) return { error: `stage ${from.id}: ${gateRefusal}`, status: 400 };
           from.onFail = onFail;
           graphEdit = recordGraphEdit(pipeline, ports, actor, {
             action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null,
@@ -7897,6 +7969,8 @@ export async function patchPipeline(
         /* Belt-and-braces: resolvePipelineRole already enforces these bounds, but
            re-check so a future resolver change can never persist a poisoned record. */
         if (!isEffectiveRole(target.effectiveRole)) return { error: "stage role is not a valid engine/model/effort combination", status: 400 };
+        const overrideSizingRefusal = stageSizingRefusal(pipeline.stages, graphEditBriefer(actor, pipeline, ports), ports, new Set([target.id]));
+        if (overrideSizingRefusal) return { error: overrideSizingRefusal.error, status: 400 };
       }
 
       if (req.prompt !== undefined) {

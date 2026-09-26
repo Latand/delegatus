@@ -1,9 +1,9 @@
 "use client";
 
-import { Send } from "lucide-react";
+import { ChevronRight, Send } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { ChatRow, ERROR_KEYS, TokenForm } from "@/components/TelegramBot";
+import { AddChatForm, ChatRow, ERROR_KEYS, TokenForm } from "@/components/TelegramBot";
 import { useTelegramBot } from "@/hooks/useTelegramBot";
 import { useLocale } from "@/lib/i18n";
 
@@ -202,6 +202,15 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
             </div>
           </div>
           {members.length === 0 ? <p className="text-ui text-muted">{t("onboarding.telegram.noChats")}</p> : null}
+          <details data-onboarding-report-add="" open={postable.length === 0 ? true : undefined} className="group max-w-[480px]">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1 text-ui font-semibold text-secondary sm:min-h-8 [&::-webkit-details-marker]:hidden">
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-90" aria-hidden />
+              {t("telegram.bot.addTitle")}
+            </summary>
+            <div className="pt-1">
+              <AddChatForm state={bot} onAdded={(alias) => { setPicked(alias); setSaved(undefined); }} />
+            </div>
+          </details>
           {notYet.length > 0 ? (
             <div className="flex flex-col gap-1.5">
               <div className="text-label font-semibold uppercase tracking-[0.06em] text-muted">{t("onboarding.telegram.allowMore")}</div>

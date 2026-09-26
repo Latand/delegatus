@@ -2758,7 +2758,8 @@ test("operator and agent structured Claude role launches both retain bypass perm
   const request = (capability: string, clientAttemptId = attemptId) => new NextRequest("http://127.0.0.1:8898/api/spawn", {
     method: "POST",
     headers: { host: "127.0.0.1:8898", "content-type": "application/json", "x-llv-spawn-capability": capability },
-    body: JSON.stringify({ title: "Test semantic spawn", engine: "claude", model: "sonnet", cwd, prompt: "build", src: callerPath, role: "builder", clientAttemptId }),
+    /* Opus: an agent may not put a builder on Sonnet by hand (docs/design/model-sizing-tiers.md §2, R3). */
+    body: JSON.stringify({ title: "Test semantic spawn", engine: "claude", model: "opus", cwd, prompt: "build", src: callerPath, role: "builder", clientAttemptId }),
   });
   const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
   const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
@@ -3992,6 +3993,91 @@ test("Astra and Sol orchestrator spawns carry top-tier effort and images into th
     for (const key of ["LLV_CODEX_BINARY", "LLV_SPAWN_TRANSPORT", "LLV_STRUCTURED_HOSTS", "LLV_RUNTIME_EVENTS", "NEXT_PUBLIC_RUNTIME_UI", "LLV_RUNTIME_HOST_SOCKET"]) {
       if (saved[key] === undefined) delete process.env[key];
       else process.env[key] = saved[key];
+    }
+  }
+});
+
+/* docs/design/model-sizing-tiers.md §2 and §3 at the spawn route: an agent is
+   judged by the runtime it runs on, and every accepted launch states which
+   model runs. */
+function agentCaller(store: AgentRegistry, model: string): { capability: string; callerPath: string } {
+  const capability = crypto.randomBytes(32).toString("base64url");
+  const callerPath = `/sessions/sizing-caller-${crypto.randomUUID()}.jsonl`;
+  const begun = store.beginSpawnRequest({
+    engine: "claude",
+    cwd: "/repo",
+    spawnCapabilityDigest: crypto.createHash("sha256").update(capability).digest("hex"),
+    launchProfile: { title: "Sizing caller", model },
+  });
+  if (begun.kind !== "created") throw new Error("expected create");
+  store.settleSpawn(begun.receipt.launchId, {
+    key: { engine: "claude", sessionId: crypto.randomUUID() },
+    artifactPath: callerPath,
+    cwd: "/repo",
+    accountId: "claude-test",
+    status: "live",
+    host: null,
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  return { capability, callerPath };
+}
+
+test("an agent on Sonnet spawning a trivial builder is refused, and a Sonnet reviewer is refused for any agent", async () => {
+  const { capability, callerPath } = agentCaller(agentRegistry(), "sonnet");
+  const post = (body: Record<string, unknown>) => POST(new NextRequest("http://127.0.0.1:8898/api/spawn", {
+    method: "POST",
+    headers: { host: "127.0.0.1:8898", "content-type": "application/json", "x-llv-spawn-capability": capability },
+    body: JSON.stringify({ title: "Sizing refusal", src: callerPath, cwd: "/repo", ["prompt"]: "Change the label", ...body }),
+  }));
+
+  const trivial = await post({ role: "builder", roleParams: { size: "trivial" } });
+  expect(trivial.status).toBe(400);
+  expect(await trivial.json()).toEqual({ error: "size=trivial runs a light model and needs a brief written by an Opus-class agent; this brief comes from claude/sonnet." });
+
+  const reviewer = await post({ role: "reviewer", roleParams: { diffSource: "#1" }, reviews: "#1", engine: "claude", model: "sonnet" });
+  expect(reviewer.status).toBe(400);
+  expect((await reviewer.json() as { error: string }).error).toContain("Sonnet and Haiku do not run");
+});
+
+test("an accepted role spawn answers which model runs", async () => {
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "sizing-runtime-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const dependencies = { ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {} };
+  const previous = {
+    LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT,
+    LLV_STRUCTURED_HOSTS: process.env.LLV_STRUCTURED_HOSTS,
+    LLV_RUNTIME_EVENTS: process.env.LLV_RUNTIME_EVENTS,
+    LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET,
+    NEXT_PUBLIC_RUNTIME_UI: process.env.NEXT_PUBLIC_RUNTIME_UI,
+  };
+  Object.assign(process.env, {
+    LLV_SPAWN_TRANSPORT: "structured",
+    LLV_STRUCTURED_HOSTS: "1",
+    LLV_RUNTIME_EVENTS: "1",
+    LLV_RUNTIME_HOST_SOCKET: path.join(cwd, "runtime.sock"),
+    NEXT_PUBLIC_RUNTIME_UI: "1",
+  });
+  try {
+    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST",
+      headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Change the settings label",
+        role: "builder",
+        roleParams: { size: "trivial", domain: "frontend" },
+        cwd,
+        ["prompt"]: "Change the label to Save",
+        clientAttemptId: "sizing_runtime_answer_2026",
+      }),
+    }), dependencies);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ runtime: "builder·trivial claude/sonnet/high" });
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
   }
 });

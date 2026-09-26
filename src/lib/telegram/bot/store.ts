@@ -399,6 +399,19 @@ export class TelegramBotStore {
     `).run(chatId, type, chatTitle(chat), chat.username ?? null, chat.is_forum ? 1 : 0, now.toISOString(), messageAt);
   }
 
+  /**
+   * A chat the operator added by its id or @username, from Telegram's own
+   * `getChat` answer and the bot's member status in it, without any update
+   * having named it. A chat already known keeps its messages and settings; its
+   * facts and the bot's status are refreshed.
+   */
+  recordLookedUpChat(chat: TgChat, botStatus: TelegramBotMemberStatus | null, now: Date): void {
+    this.transaction(() => {
+      this.upsertChat(chat, now, null);
+      if (botStatus !== null) this.setMemberStatus(String(chat.id), botStatus, false);
+    });
+  }
+
   /** `onlyIfUnknown` keeps a private chat a user blocked the bot in `kicked`
       when an older message is redelivered. */
   setMemberStatus(chatId: string, status: TelegramBotMemberStatus, onlyIfUnknown: boolean): void {

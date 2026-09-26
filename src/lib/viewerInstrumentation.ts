@@ -88,6 +88,9 @@ export interface HotStateCutoverBoundary {
 
 interface CurrentReleaseControllerLoaders {
   loadFlowPipelineController: () => Promise<{ startFlowPipelineController: () => void }>;
+  /** Optional for the same reason as the loaders below. The stale role
+      mapping pass (docs/design/model-sizing-tiers.md §5). */
+  loadRoleMappingRetirements?: () => Promise<{ applyRoleMappingRetirements: () => unknown }>;
   loadAccountMigrationController: () => Promise<{ startAccountMigrationController: () => Promise<void> }>;
   /** Optional so a test can supply the two controllers it exercises and get
       nothing else. Production always passes it. */
@@ -395,8 +398,19 @@ export async function startCurrentReleaseControllers(
     loadTempSweep: () => import("@/lib/tempSweep"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
+    loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
   },
 ): Promise<void> {
+  /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
+     once, by the release that owns traffic, before its controller launches
+     anything from them. A failure leaves the file as it was. */
+  try {
+    const retirements = await loaders.loadRoleMappingRetirements?.();
+    const outcome = retirements?.applyRoleMappingRetirements() as { state?: string; reset?: string[] } | undefined;
+    if (outcome?.state === "written" && outcome.reset?.length) console.error(`[roles] reset stale mapping rows to their defaults: ${outcome.reset.join(", ")}`);
+  } catch (error) {
+    console.error("[roles] mapping retirement failed", error instanceof Error ? error.name : "unknown");
+  }
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
   startFlowPipelineController();
   /* The shared Telegram connector dies with the viewer container it is a child

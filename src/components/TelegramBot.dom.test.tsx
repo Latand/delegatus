@@ -79,6 +79,8 @@ async function mount(): Promise<{ saves: Array<[string, string, boolean]>; secti
       saves.push([chatId, alias, postAllowed]);
       render(true);
     },
+    addChat: async () => null,
+    testPost: async () => false,
     remove: async () => {},
   });
   container = document.createElement("div");

@@ -1082,6 +1082,13 @@ test("flow tools read durable flows and return a stable action receipt", async (
     action: "pause",
     actor: { kind: "agent", role: "reviewer", conversationId: "conversation_reviewer" },
   }]);
+  /* set-roles carries the agent too, so the sizing rules judge its reviewer. */
+  await bindings.flow_action({ clientRequestId: "set-roles-flow", flowId: "flow_open", action: "set-roles", roles: { reviewer: { engine: "claude", model: "sonnet" } } });
+  expect(actions.at(-1)).toEqual({
+    id: "flow_open",
+    action: "set-roles",
+    actor: { kind: "agent", role: "reviewer", conversationId: "conversation_reviewer" },
+  });
 });
 
 test("list_pipelines applies project, state, and closed filters to the durable registry", async () => {
@@ -3735,4 +3742,55 @@ test("with the rename alias recorded, the Viewer's own project is the seat's und
     resetProjectAliasesForTests();
     fs.rmSync(state, { recursive: true, force: true });
   }
+});
+
+test("spawn_agent applies the sizing rules on the service's bound first dispatch", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-spawn-sizing-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  /* The production wiring: a recoverable spawn_agent, so the service hands the
+     binding a persisted binding on its one dispatch. */
+  const serviceFor = (callerModel: string) => {
+    const dispatched: Array<Record<string, unknown>> = [];
+    const domain = {
+      attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller", role: "builder" }),
+      recoveryPredecessors: () => [],
+      registrySnapshot: () => ({
+        conversations: {
+          conversation_caller: {
+            id: "conversation_caller",
+            engine: "claude",
+            generations: [{ path: path.join(sandbox, "caller.jsonl"), launchProfile: { ...emptyLaunchProfile(), model: callerModel } }],
+            continuityPaths: [],
+          },
+        },
+        conversationAliases: {},
+      }),
+    } as never;
+    const bindings = viewerMcpBindings(undefined, {
+      post: async () => { throw new Error("automatic POST fallback is forbidden"); },
+      dispatch: async (_pathname, body, _headers, context) => {
+        if (context?.dispatch) context.dispatch.attempted = true;
+        dispatched.push(body);
+        return { launchId: `launch_${dispatched.length}`, conversationId: `conversation_child_${dispatched.length}`, path: null, state: "starting", initialMessage: "pending" };
+      },
+    }, domain);
+    return { dispatched, service: createMcpToolService(bindings, new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain) }) };
+  };
+  const launch = (clientRequestId: string, extra: Record<string, unknown>) => ({
+    clientRequestId, cwd: sandbox, ["prompt"]: "Change the label on the save button.", title: "Sizing launch", ...extra,
+  });
+
+  const sonnet = serviceFor("sonnet");
+  expect(await sonnet.service.callTool("spawn_agent", launch("sizing-r1", { role: "reviewer", roleParams: { diffSource: "PR #1" }, engine: "claude", model: "sonnet" })))
+    .toMatchObject({ ok: false, error: expect.stringContaining("Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work") });
+  expect(await sonnet.service.callTool("spawn_agent", launch("sizing-r2", { role: "builder", roleParams: { size: "trivial" } })))
+    .toMatchObject({ ok: false, error: expect.stringContaining("needs a brief written by an Opus-class agent; this brief comes from claude/sonnet") });
+  expect(sonnet.dispatched).toEqual([]);
+
+  const opus = serviceFor("opus");
+  expect(await opus.service.callTool("spawn_agent", launch("sizing-opus", { role: "builder", roleParams: { size: "trivial" } })))
+    .toMatchObject({ ok: true, launchId: "launch_1" });
+  expect(opus.dispatched).toHaveLength(1);
+  expect(opus.dispatched[0]?.roleParams).toMatchObject({ size: "trivial" });
 });
