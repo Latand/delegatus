@@ -16,6 +16,8 @@ function stateFor(status: TelegramBotStatusPayload, failure: { code: string } | 
     refresh: async () => {},
     connect: async () => {},
     setChat: async () => {},
+    addChat: async () => null,
+    testPost: async () => false,
     remove: async () => {},
   };
 }
@@ -81,7 +83,9 @@ test("connected with mixed chats: name, receiving state, one compact row per cha
   expect(html).toContain("Team Reports");
   /* The alias field only where posting is on. */
   expect(html).toContain('value="team-reports"');
-  expect(html.match(/<input type="text"/g)).toHaveLength(1);
+  expect(html.match(/aria-label="Alias agents use: /g)).toHaveLength(1);
+  /* A post-only bot never hears of a group it joins, so a chat is added by id. */
+  expect(html).toContain('aria-label="Chat id or @username"');
   expect(html).toContain('role="switch" aria-checked="true" aria-label="Agents may post: Team Reports"');
   expect(html).toContain('role="switch" aria-checked="false" aria-label="Agents may post: Person A"');
   /* Every title here suggests an alias, so no row asks for one. */

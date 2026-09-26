@@ -297,6 +297,31 @@ immediately.
 - Private chats (a user wrote to the bot) appear like any other chat and can be
   allowlisted the same way.
 
+### Chats added by id
+
+A bot can be **post-only** here: another program owns its updates through a
+webhook, so the poller parks on `webhook_elsewhere` and no update ever tells
+Delegatus about a group the bot was added to. The operator does not want
+Delegatus reading those chats either. So the panel, the seat's Reports picker
+and the setup step each carry one form: a chat's numeric id (`-100…` for a
+group), its `@username` or its `t.me/` link.
+
+- `POST /api/telegram/bot { action: "add", chat, alias? }`, operator-only like
+  every other action, calls `getChat` for the chat and `getChatMember` for the
+  bot's own id, and nothing else. The chat is stored from Telegram's answer
+  (`TelegramBotStore.recordLookedUpChat`) with the bot's status, and posting is
+  switched on under the alias given, the chat's existing alias, or one built
+  from its title (a taken one gets a number). A chat Telegram does not know is
+  `chat_unknown`, a bot that left or was removed is `bot_not_in_chat`, and
+  neither stores a row. An unreadable reference is `chat_reference_invalid`
+  before any call.
+- `POST /api/telegram/bot { action: "test", chat }` is the operator's test
+  post: one silent `sendMessage` in the operator's interface language, only
+  to a chat agents may post in. It is not an agent's post, so it is neither
+  attributed nor recorded as the chat's last post.
+- Neither action calls `getUpdates` or starts the poller, and nothing reads a
+  chat's messages.
+
 **Visibility per chat** (`seesAllMessages`, and a one-line reason):
 
 | Chat type | Sees all messages when | Otherwise |

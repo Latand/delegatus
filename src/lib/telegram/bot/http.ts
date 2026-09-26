@@ -17,6 +17,7 @@ const STATUS: Record<TelegramBotErrorCode, number> = {
   bot_not_connected: 409,
   token_rejected: 400,
   chat_unknown: 404,
+  chat_reference_invalid: 400,
   chat_not_allowed: 403,
   bot_not_in_chat: 409,
   alias_invalid: 400,

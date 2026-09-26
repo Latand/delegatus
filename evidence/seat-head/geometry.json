@@ -61,7 +61,7 @@
           "titled": true
         },
         {
-          "name": "working 6:41",
+          "name": "working 6:40",
           "button": false,
           "visibleText": 59,
           "naturalText": 59,
@@ -182,7 +182,7 @@
           "titled": true
         },
         {
-          "name": "працює 6:41",
+          "name": "працює 6:40",
           "button": false,
           "visibleText": 58,
           "naturalText": 58,
@@ -251,7 +251,7 @@
     },
     "768-en-top": {
       "root": {
-        "width": 486,
+        "width": 494,
         "height": 97
       },
       "atoms": [
@@ -346,10 +346,19 @@
           "titled": true
         },
         {
-          "name": "mandate v21, default v22",
+          "name": "mandate v28, default v29",
           "button": false,
-          "visibleText": 114,
-          "naturalText": 114,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Report settings. Reports go to the log o",
+          "button": true,
+          "visibleText": 35,
+          "naturalText": 35,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -382,6 +391,15 @@
           "titled": true
         },
         {
+          "name": "Show reports",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Dock at the side",
           "button": true,
           "visibleText": 0,
@@ -406,7 +424,7 @@
     },
     "768-uk-top": {
       "root": {
-        "width": 486,
+        "width": 494,
         "height": 97
       },
       "atoms": [
@@ -501,10 +519,19 @@
           "titled": true
         },
         {
-          "name": "мандат v21, типовий v22",
+          "name": "мандат v28, типовий v29",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 117,
+          "naturalText": 117,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування звітів. Звіти йдуть лише в ",
+          "button": true,
+          "visibleText": 24,
+          "naturalText": 24,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -532,6 +559,15 @@
           "button": true,
           "visibleText": 74,
           "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Показати звіти",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -665,10 +701,19 @@
           "titled": true
         },
         {
-          "name": "mandate v21, default v22",
+          "name": "mandate v28, default v29",
           "button": false,
-          "visibleText": 114,
-          "naturalText": 114,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Report settings. Reports go to the log o",
+          "button": true,
+          "visibleText": 54,
+          "naturalText": 54,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -701,6 +746,15 @@
           "titled": true
         },
         {
+          "name": "Show reports",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Dock at the side",
           "button": true,
           "visibleText": 0,
@@ -726,7 +780,7 @@
     "1080-uk-top": {
       "root": {
         "width": 798,
-        "height": 73
+        "height": 97
       },
       "atoms": [
         {
@@ -829,10 +883,19 @@
           "titled": true
         },
         {
-          "name": "мандат v21, типовий v22",
+          "name": "мандат v28, типовий v29",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 117,
+          "naturalText": 117,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування звітів. Звіти йдуть лише в ",
+          "button": true,
+          "visibleText": 62,
+          "naturalText": 62,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -860,6 +923,15 @@
           "button": true,
           "visibleText": 74,
           "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Показати звіти",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -890,7 +962,7 @@
     "1080-uk-top-rail": {
       "root": {
         "width": 798,
-        "height": 73
+        "height": 97
       },
       "atoms": [
         {
@@ -993,10 +1065,19 @@
           "titled": true
         },
         {
-          "name": "мандат v21, типовий v22",
+          "name": "мандат v28, типовий v29",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 117,
+          "naturalText": 117,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування звітів. Звіти йдуть лише в ",
+          "button": true,
+          "visibleText": 62,
+          "naturalText": 62,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1024,6 +1105,15 @@
           "button": true,
           "visibleText": 74,
           "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Показати звіти",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1054,7 +1144,7 @@
     "1080-uk-top-halo": {
       "root": {
         "width": 798,
-        "height": 73
+        "height": 97
       },
       "atoms": [
         {
@@ -1157,10 +1247,19 @@
           "titled": true
         },
         {
-          "name": "мандат v21, типовий v22",
+          "name": "мандат v28, типовий v29",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 117,
+          "naturalText": 117,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування звітів. Звіти йдуть лише в ",
+          "button": true,
+          "visibleText": 62,
+          "naturalText": 62,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1188,6 +1287,15 @@
           "button": true,
           "visibleText": 74,
           "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Показати звіти",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1218,7 +1326,7 @@
     "1080-uk-top-bracket": {
       "root": {
         "width": 798,
-        "height": 73
+        "height": 97
       },
       "atoms": [
         {
@@ -1321,10 +1429,19 @@
           "titled": true
         },
         {
-          "name": "мандат v21, типовий v22",
+          "name": "мандат v28, типовий v29",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 117,
+          "naturalText": 117,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування звітів. Звіти йдуть лише в ",
+          "button": true,
+          "visibleText": 62,
+          "naturalText": 62,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1352,6 +1469,15 @@
           "button": true,
           "visibleText": 74,
           "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Показати звіти",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1485,10 +1611,19 @@
           "titled": true
         },
         {
-          "name": "mandate v21, default v22",
+          "name": "mandate v28, default v29",
           "button": false,
-          "visibleText": 114,
-          "naturalText": 114,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Report settings. Reports go to the log o",
+          "button": true,
+          "visibleText": 54,
+          "naturalText": 54,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1521,6 +1656,15 @@
           "titled": true
         },
         {
+          "name": "Hide reports",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Dock at the side",
           "button": true,
           "visibleText": 0,
@@ -1546,7 +1690,7 @@
     "1440-en-side": {
       "root": {
         "width": 379,
-        "height": 97
+        "height": 116
       },
       "atoms": [
         {
@@ -1640,10 +1784,19 @@
           "titled": true
         },
         {
-          "name": "mandate v21, default v22",
+          "name": "mandate v28, default v29",
           "button": false,
-          "visibleText": 114,
-          "naturalText": 114,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Report settings. Reports go to the log o",
+          "button": true,
+          "visibleText": 35,
+          "naturalText": 35,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1671,6 +1824,15 @@
           "button": true,
           "visibleText": 48,
           "naturalText": 48,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Show reports",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1804,10 +1966,19 @@
           "titled": true
         },
         {
-          "name": "мандат v21, типовий v22",
+          "name": "мандат v28, типовий v29",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 117,
+          "naturalText": 117,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування звітів. Звіти йдуть лише в ",
+          "button": true,
+          "visibleText": 62,
+          "naturalText": 62,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1840,6 +2011,15 @@
           "titled": true
         },
         {
+          "name": "Сховати звіти",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Закріпити збоку",
           "button": true,
           "visibleText": 0,
@@ -1865,7 +2045,7 @@
     "1440-uk-side": {
       "root": {
         "width": 379,
-        "height": 97
+        "height": 152
       },
       "atoms": [
         {
@@ -1959,10 +2139,19 @@
           "titled": true
         },
         {
-          "name": "мандат v21, типовий v22",
+          "name": "мандат v28, типовий v29",
           "button": false,
-          "visibleText": 115,
-          "naturalText": 115,
+          "visibleText": 117,
+          "naturalText": 117,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування звітів. Звіти йдуть лише в ",
+          "button": true,
+          "visibleText": 24,
+          "naturalText": 24,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -1990,6 +2179,15 @@
           "button": true,
           "visibleText": 74,
           "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Показати звіти",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
           "clipped": false,
           "truncated": false,
           "titled": true

@@ -4,7 +4,7 @@ import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { canonicalProject, recordedProjectRemote } from "@/lib/projects/aliases";
-import { viewerPostableReportChats } from "@/lib/projects/reportDestination";
+import { viewerPostableReportChats, viewerReportChatTitle } from "@/lib/projects/reportDestination";
 import {
   bridgeReportsSetting,
   mergeOnReviewSetting,
@@ -42,6 +42,9 @@ export interface ProjectSettingsResponse {
       Null while they chose none or "Log only": nothing is posted to Telegram
       until a chat is chosen. */
   reportDestination: EffectiveReportTelegram | null;
+  /** The chosen chat's title as Telegram names it, null with no chat chosen
+      or none known; the seat's Reports chip shows it. */
+  reportChatTitle: string | null;
   /** How many chats the bot may post in, so the step can offer a pick while
       nothing was chosen. */
   postableChats: number;
@@ -62,6 +65,7 @@ function answer(project: string): ProjectSettingsResponse {
     bridgeReports: bridgeReportsSetting(key),
     reportTelegram: choice,
     reportDestination: effectiveReportTelegram(key),
+    reportChatTitle: viewerReportChatTitle(choice?.chat ?? null),
     postableChats: postable.length,
     reportNameSuggestion: repositoryReportName(key),
     github: githubRepositoryOfRemote(recordedProjectRemote(key)),
