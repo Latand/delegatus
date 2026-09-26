@@ -13,6 +13,7 @@ import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pi
 import { textField, withField } from "@/components/kanban/taskText";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
 import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import { blockAgeSeconds, laneMergeUnsettled, pipelineEnded, pipelineNeedsYou, screenCurrentStageId } from "@/components/pipelines/pipelineBlockModel";
@@ -1047,6 +1048,9 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                     <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                   </button>
                 )}
+
+                {/* The task's album: every picture its agents made or looked at. */}
+                <PhoneAlbumRow taskId={taskId} title={title} pipelines={lanes.map((summary) => summary.pipeline)} files={files} rowClass={`${ROW} shrink-0 min-h-12`} />
 
                 {/* 6. The agents, working first. */}
                 <section data-phone-task-agents={agents.length} className="flex shrink-0 flex-col gap-2">

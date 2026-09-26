@@ -74,7 +74,7 @@ interface ResolvedComposeService {
   group_add?: string[];
   profiles?: string[];
   "user": string;
-  volumes: Array<{ source: string; target: string }>;
+  volumes: Array<{ source: string; target: string; read_only?: boolean }>;
 }
 
 function resolvedCompose(overrides: Record<string, string> = {}): { services: Record<string, ResolvedComposeService> } {
@@ -274,6 +274,13 @@ test("runtime-host propagates every Viewer Compose interpolation input", () => {
   expect(config.services.viewer.group_add).toEqual(["1203"]);
   expect(config.services.viewer.environment.TMUX_TMPDIR).toBe("/run/user/1201/agent-log-viewer");
   expect(config.services.viewer.volumes.map((volume) => volume.source)).toContain("/tmp/tmux-1201");
+});
+
+test("the Viewer reads the host's evidence renders under /var/tmp, and only reads them (#2084)", () => {
+  const config = resolvedCompose();
+  for (const service of [config.services.viewer, config.services["runtime-host"]]) {
+    expect(service.volumes).toContainEqual(expect.objectContaining({ source: "/var/tmp", target: "/var/tmp", read_only: true }));
+  }
 });
 
 test("rename slice 3: an exported app dir keeps the spelling an existing install recorded", () => {

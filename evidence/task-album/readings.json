@@ -1,0 +1,609 @@
+{
+  "readings": {
+    "desktop-1440-en-card": {
+      "text": "73 new",
+      "fresh": "1",
+      "dot": true,
+      "insideCard": true,
+      "overlapsFoot": false,
+      "newText": "3 new",
+      "footLines": 1,
+      "exportFresh": "0",
+      "buttonsOnBoard": 2
+    },
+    "desktop-1440-en-album": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dialog": {
+        "left": 160,
+        "top": 54,
+        "right": 1280,
+        "bottom": 846
+      },
+      "backdrop": "oklab(0 0 0 / 0.4)",
+      "sideways": 0,
+      "groups": [
+        {
+          "label": "Verify · attempt 2",
+          "link": "#c=conversation_search-ver-2",
+          "items": [
+            "a1",
+            "a2",
+            "a3"
+          ]
+        },
+        {
+          "label": "Review · attempt 1 · round 2",
+          "link": "#c=conversation_search-rev",
+          "items": [
+            "a4",
+            "a5"
+          ]
+        },
+        {
+          "label": "Implement · attempt 2",
+          "link": "#c=conversation_search-impl-2",
+          "items": [
+            "a6",
+            "a7"
+          ]
+        }
+      ],
+      "fresh": [
+        "a1",
+        "a2",
+        "a3"
+      ],
+      "thumbs": [
+        {
+          "id": "a1",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a2",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a3",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a4",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a5",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a6",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a7",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        }
+      ],
+      "accent": "rgb(90, 81, 224)",
+      "newCount": "3 new",
+      "tileOverlaps": 0,
+      "tileWidths": [
+        211,
+        211,
+        211,
+        211,
+        211,
+        211,
+        211
+      ],
+      "closeSize": [
+        32,
+        32
+      ]
+    },
+    "desktop-1440-en-viewer": {
+      "position": "2 / 7",
+      "caption": "after-swap-phone-390.png",
+      "detail": "· Verify · attempt 2 · 3m ago",
+      "captionClipped": false,
+      "detailClipped": false,
+      "buttons": [
+        [
+          38,
+          26
+        ],
+        [
+          45,
+          27
+        ],
+        [
+          38,
+          26
+        ],
+        [
+          38,
+          26
+        ]
+      ]
+    },
+    "phone-390-en-row": {
+      "text": "Images·73 new",
+      "fresh": "1",
+      "height": 48,
+      "right": 378,
+      "width": 390
+    },
+    "phone-390-en-album": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844
+      },
+      "backdrop": "rgba(0, 0, 0, 0)",
+      "sideways": 0,
+      "groups": [
+        {
+          "label": "Verify · attempt 2",
+          "link": "#c=conversation_search-ver-2",
+          "items": [
+            "a1",
+            "a2",
+            "a3"
+          ]
+        },
+        {
+          "label": "Review · attempt 1 · round 2",
+          "link": "#c=conversation_search-rev",
+          "items": [
+            "a4",
+            "a5"
+          ]
+        },
+        {
+          "label": "Implement · attempt 2",
+          "link": "#c=conversation_search-impl-2",
+          "items": [
+            "a6",
+            "a7"
+          ]
+        }
+      ],
+      "fresh": [
+        "a1",
+        "a2",
+        "a3"
+      ],
+      "thumbs": [
+        {
+          "id": "a1",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a2",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a3",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a4",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a5",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a6",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a7",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        }
+      ],
+      "accent": "rgb(90, 81, 224)",
+      "newCount": "3 new",
+      "tileOverlaps": 0,
+      "tileWidths": [
+        179,
+        179,
+        179,
+        179,
+        179,
+        179,
+        179
+      ],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "phone-390-en-jump": {
+      "inView": true,
+      "focused": true,
+      "button": [
+        64,
+        44
+      ]
+    },
+    "phone-390-en-viewer": {
+      "position": "2 / 7",
+      "caption": "after-swap-phone-390.png",
+      "detail": "· Verify · attempt 2 · 3m ago",
+      "captionClipped": false,
+      "detailClipped": false,
+      "buttons": [
+        [
+          44,
+          44
+        ],
+        [
+          45,
+          44
+        ],
+        [
+          44,
+          44
+        ],
+        [
+          44,
+          44
+        ]
+      ]
+    },
+    "desktop-1440-uk-card": {
+      "text": "73 нові",
+      "fresh": "1",
+      "dot": true,
+      "insideCard": true,
+      "overlapsFoot": false,
+      "newText": "3 нові",
+      "footLines": 1,
+      "exportFresh": "0",
+      "buttonsOnBoard": 2
+    },
+    "desktop-1440-uk-album": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dialog": {
+        "left": 160,
+        "top": 54,
+        "right": 1280,
+        "bottom": 846
+      },
+      "backdrop": "oklab(0 0 0 / 0.4)",
+      "sideways": 0,
+      "groups": [
+        {
+          "label": "Verify · спроба 2",
+          "link": "#c=conversation_search-ver-2",
+          "items": [
+            "a1",
+            "a2",
+            "a3"
+          ]
+        },
+        {
+          "label": "Review · спроба 1 · раунд 2",
+          "link": "#c=conversation_search-rev",
+          "items": [
+            "a4",
+            "a5"
+          ]
+        },
+        {
+          "label": "Implement · спроба 2",
+          "link": "#c=conversation_search-impl-2",
+          "items": [
+            "a6",
+            "a7"
+          ]
+        }
+      ],
+      "fresh": [
+        "a1",
+        "a2",
+        "a3"
+      ],
+      "thumbs": [
+        {
+          "id": "a1",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a2",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a3",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a4",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a5",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a6",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a7",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        }
+      ],
+      "accent": "rgb(90, 81, 224)",
+      "newCount": "3 нові",
+      "tileOverlaps": 0,
+      "tileWidths": [
+        211,
+        211,
+        211,
+        211,
+        211,
+        211,
+        211
+      ],
+      "closeSize": [
+        32,
+        32
+      ]
+    },
+    "desktop-1440-uk-viewer": {
+      "position": "2 / 7",
+      "caption": "after-swap-phone-390.png",
+      "detail": "· Verify · спроба 2 · 3 хв тому",
+      "captionClipped": false,
+      "detailClipped": false,
+      "buttons": [
+        [
+          38,
+          26
+        ],
+        [
+          45,
+          27
+        ],
+        [
+          38,
+          26
+        ],
+        [
+          38,
+          26
+        ]
+      ]
+    },
+    "phone-390-uk-row": {
+      "text": "Зображення·73 нові",
+      "fresh": "1",
+      "height": 48,
+      "right": 378,
+      "width": 390
+    },
+    "phone-390-uk-album": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844
+      },
+      "backdrop": "rgba(0, 0, 0, 0)",
+      "sideways": 0,
+      "groups": [
+        {
+          "label": "Verify · спроба 2",
+          "link": "#c=conversation_search-ver-2",
+          "items": [
+            "a1",
+            "a2",
+            "a3"
+          ]
+        },
+        {
+          "label": "Review · спроба 1 · раунд 2",
+          "link": "#c=conversation_search-rev",
+          "items": [
+            "a4",
+            "a5"
+          ]
+        },
+        {
+          "label": "Implement · спроба 2",
+          "link": "#c=conversation_search-impl-2",
+          "items": [
+            "a6",
+            "a7"
+          ]
+        }
+      ],
+      "fresh": [
+        "a1",
+        "a2",
+        "a3"
+      ],
+      "thumbs": [
+        {
+          "id": "a1",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a2",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a3",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a4",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a5",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a6",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a7",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        }
+      ],
+      "accent": "rgb(90, 81, 224)",
+      "newCount": "3 нові",
+      "tileOverlaps": 0,
+      "tileWidths": [
+        179,
+        179,
+        179,
+        179,
+        179,
+        179,
+        179
+      ],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "phone-390-uk-jump": {
+      "inView": true,
+      "focused": true,
+      "button": [
+        65,
+        44
+      ]
+    },
+    "phone-390-uk-viewer": {
+      "position": "2 / 7",
+      "caption": "after-swap-phone-390.png",
+      "detail": "· Verify · спроба 2 · 3 хв тому",
+      "captionClipped": false,
+      "detailClipped": false,
+      "buttons": [
+        [
+          44,
+          44
+        ],
+        [
+          45,
+          44
+        ],
+        [
+          44,
+          44
+        ],
+        [
+          44,
+          44
+        ]
+      ]
+    }
+  },
+  "failures": []
+}

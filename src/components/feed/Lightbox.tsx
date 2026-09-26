@@ -13,6 +13,8 @@ interface Props {
   src: string;
   alt: string;
   caption?: string;
+  /** Where the picture came from, on a line of its own under a narrow toolbar. */
+  detail?: string;
   /** The picture's place among the pictures its feed row draws. */
   at?: number;
   onClose: () => void;
@@ -24,6 +26,7 @@ export interface GalleryImage {
   src: string;
   alt: string;
   caption?: string;
+  detail?: string;
   owner?: unknown;
   at?: number;
 }
@@ -55,7 +58,7 @@ function openAt(images: readonly GalleryImage[], opened: GalleryImage, owner: un
   if (start < 0) start = images.findIndex(inRow);
   if (start < 0) start = images.findIndex((image) => image.src === opened.src);
   if (start < 0) return { images: [opened], start: 0 };
-  return { images: images.map((image, at) => (at === start ? { ...image, alt: opened.alt, caption: opened.caption } : image)), start };
+  return { images: images.map((image, at) => (at === start ? { ...image, alt: opened.alt, caption: opened.caption, detail: opened.detail } : image)), start };
 }
 
 /**
@@ -67,13 +70,13 @@ function openAt(images: readonly GalleryImage[], opened: GalleryImage, owner: un
  * stays mounted until the viewer closes: a picture no mounted feed row draws
  * has no other holder, and once let go the browser may download it again.
  */
-export function Lightbox({ src, alt, caption, at, onClose }: Props) {
+export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
   const { t } = useLocale();
   const gallery = useContext(GalleryContext);
   const owner = useContext(OwnerContext);
   /* Read once, when the viewer opens: the list holds still under the operator
      while a live feed keeps growing. */
-  const [{ images, start }] = useState(() => openAt(gallery?.() ?? [], { src, alt, caption, at }, owner));
+  const [{ images, start }] = useState(() => openAt(gallery?.() ?? [], { src, alt, caption, detail, at }, owner));
   const [index, setIndex] = useState(start);
   /* The first and the last picture shown so far. A move is one step, so every
      picture between them has been shown too. */
@@ -138,6 +141,8 @@ export function Lightbox({ src, alt, caption, at, onClose }: Props) {
   const image = images[index]!;
   const first = Math.max(0, reach.from - 1);
   const mounted = Array.from({ length: Math.min(images.length - 1, reach.to + 1) - first + 1 }, (_, at) => first + at);
+  /* A phone's toolbar buttons keep a whole finger's target. */
+  const tool = "inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:min-h-0 sm:min-w-0";
   const edge = "absolute top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-lg border border-white/25 bg-black/40 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60";
 
   /* Panes on the scheme canvas sit under a CSS transform, which turns the
@@ -163,37 +168,47 @@ export function Lightbox({ src, alt, caption, at, onClose }: Props) {
         onClose();
       }}
     >
-      <div className="flex items-center gap-2 px-4 py-2.5">
+      <div className={`flex items-center gap-x-2 px-4 py-2.5 ${image.detail ? "flex-wrap gap-y-1" : ""}`}>
         {images.length > 1 ? (
           <span data-lightbox-position className="shrink-0 text-[12.5px] font-semibold tabular-nums text-white/85">
             {index + 1} / {images.length}
           </span>
         ) : null}
-        <span className="min-w-0 truncate text-[12.5px] font-semibold text-white/85">{image.caption ?? image.alt}</span>
+        {image.detail ? (
+          /* A caption with a source: on a narrow screen the buttons leave it
+             no room, so it takes its own line under them, the name above the
+             source; a wide screen keeps it in the toolbar. */
+          <span data-lightbox-caption className="order-last flex min-w-0 basis-full flex-col text-[12.5px] font-semibold text-white/85 sm:order-none sm:flex-1 sm:basis-0 sm:flex-row sm:gap-1">
+            <span className="min-w-0 truncate">{image.caption ?? image.alt}</span>
+            <span data-lightbox-detail className="min-w-0 truncate text-white/65"><span aria-hidden className="hidden sm:inline">· </span>{image.detail}</span>
+          </span>
+        ) : (
+          <span data-lightbox-caption className="min-w-0 truncate text-[12.5px] font-semibold text-white/85">{image.caption ?? image.alt}</span>
+        )}
         <span className="ml-auto flex items-center gap-1.5">
           <button
-            className="inline-flex items-center rounded-lg border border-white/25 bg-white/10 px-2.5 py-1 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+            className={`${tool} px-2.5 py-1`}
             aria-label={t("lightbox.zoomOut")}
             onClick={() => zoomBy(1 / 1.4)}
           >
             <Minus className="h-4 w-4" aria-hidden />
           </button>
           <button
-            className="rounded-lg border border-white/25 bg-white/10 px-2 py-1 text-[11.5px] font-semibold text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+            className={`${tool} px-2 py-1 text-[11.5px] font-semibold`}
             aria-label={t("lightbox.resetZoom")}
             onClick={reset}
           >
             {Math.round(scale * 100)}%
           </button>
           <button
-            className="inline-flex items-center rounded-lg border border-white/25 bg-white/10 px-2.5 py-1 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+            className={`${tool} px-2.5 py-1`}
             aria-label={t("lightbox.zoomIn")}
             onClick={() => zoomBy(1.4)}
           >
             <Plus className="h-4 w-4" aria-hidden />
           </button>
           <button
-            className="ml-1 inline-flex items-center rounded-lg border border-white/25 bg-white/10 px-2.5 py-1 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+            className={`${tool} ml-1 px-2.5 py-1`}
             aria-label={t("common.close")}
             onClick={onClose}
           >
