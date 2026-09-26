@@ -458,8 +458,10 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    headroom in view. Raised to 12 000 for the role table (#1880), about 2 KB
    for eight one-line roles; the directives alone already measured 8 990. The
    20 000 bytes left still hold two history budgets, which the second
-   assertion below pins. */
-const DELIVERED_DIRECTIVE_BUDGET_BYTES = 12_000;
+   assertion below pins. Raised to 12 500 for the sizing rule and the variant
+   runtimes in the role table (docs/design/model-sizing-tiers.md §4); main
+   already measured 12 080 before it, and 19 500 bytes still hold two. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 12_500;
 
 test("what delivery appends stays inside its share of the envelope", () => {
   const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));

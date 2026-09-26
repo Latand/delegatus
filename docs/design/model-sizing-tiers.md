@@ -235,6 +235,16 @@ launches (UI drafts, operator capability) are the authority and pass:
   the mapping (the fix-round variant, or an install that mapped its base
   builder to Luna) passes: that is the operator's own choice. R3 is what makes
   the lighter builder available "ONLY" through the small-change tier.
+  *Built:* "explicit" is judged on the resolved values, not on which input
+  fields are present: a stage's runtime is explicit when its engine or model
+  differs from what the install's row gives that role and those params
+  (`stageRuntimeIsExplicit`, `src/lib/pipelines/roles.ts`). override-stage
+  mirrors every resolution onto the stage's input fields, so field presence
+  would read every overridden stage as explicit, and a fix stage that copied
+  its implementer's runtime reads the same as its implementer. A spawn reads it
+  the same way (`resolveSpawnRole` answers `explicitRuntime`). A role-less
+  spawn that names its own engine and model is judged as a hand-set builder,
+  as a role-less stage is.
 
 Call sites, each with the caller it already knows:
 
@@ -242,13 +252,18 @@ Call sites, each with the caller it already knows:
 | --- | --- | --- |
 | pipeline create | `engine.ts`, beside `stageAccountRefusal` (`:6138`), over `normalized.stages` | new `CreatePipelineOptions.briefer`: the HTTP route passes `operator` when `!isAgentInitiatedSpawn(req)` and the authenticated conversation otherwise; MCP passes `attributionOf(...).conversationId`, falling back to the resolved `srcConversationId` |
 | add-stage, override-stage | `patchPipeline` (`engine.ts:7227`), after `resolvePipelineRole` | the `actor`: `operator`, or the agent's `conversationId`, falling back to `pipeline.srcConversationId` |
-| spawn | `spawnCommand.ts:306`, after `resolveSpawnRole` | `authenticatedCaller` (`operator` when absent or operator-capability) |
+| spawn | `spawnCommand.ts:306`, after `resolveSpawnRole`; the same check in `/api/spawn/validate` (`spawnAdmissionValidation.ts`) so the validator never admits what the route refuses | `authenticatedCaller` (`operator` when absent or operator-capability) |
+| MCP `spawn_agent` (*built*) | `bindings.ts`, before dispatch | the attributed conversation, else `parentConversationId`. MCP dispatches reach `/api/spawn` same-origin on the **operator** capability, so the route alone would read every seat's spawn as the operator's; the binding knows the caller and judges it before anything is dispatched |
 | mapping write | `parseRoleMappingPatch` / `saveRoleMapping` (`store.ts:155-221`) | R1 only, for every writer: a mapping row is a standing default that agents then launch |
 
 The engine reads the briefer's runtime through one new optional port,
 `conversationRuntime(conversationId) → { engine, model } | null`, backed by the
 registry conversation's `engine` and its newest generation's
-`launchProfile.model`. A pipeline refusal is a normal create violation
+`launchProfile.model` (`src/lib/agent/conversationRuntime.ts`, shared with the
+spawn route and the MCP binding). A create without a `briefer` option is the
+Viewer's own (task assignment, the health check) and is not judged. The HTTP
+`PATCH /api/pipelines/:id` stays operator-attributed as it already is for
+pause and resume; agents edit graphs through MCP, which carries the actor. A pipeline refusal is a normal create violation
 (`field: "stages[i].role"`), so the caller reads it the way it reads an engine
 refusal today. Stage attempts launched later by the controller are not
 re-checked; they run the `effectiveRole` admitted at create.
@@ -270,10 +285,15 @@ it sized the lane that way.
 - `pipelineAcknowledgement` (`compactAnswers.ts:32-50`) gains, per stage,
   `role` and `variant` (from `variantForParams`), and one top-level
   `runtimeLine`, e.g.
-  `build builder·trivial claude/sonnet/high · review reviewer·trivial codex/gpt-6-luna/high · review-fix builder·trivial claude/sonnet/high`.
-  A stage whose engine or model was set explicitly is marked `(explicit)`.
-- `/api/spawn` answers `runtime` in the same one-stage form, and
-  `spawn_agent` passes it through (`bindings.ts:1328-1335`).
+  `build: builder·trivial claude/sonnet/high · review: reviewer·trivial codex/gpt-6-luna/high · review-fix: builder·trivial claude/sonnet/high`.
+  A stage whose engine or model the request named is marked `(explicit)`; at
+  create those input fields are present only when the caller sent them.
+  *Built:* the stage id is followed by a colon, which reads as a label and
+  keeps a stage id from running into its role.
+- `/api/spawn` answers `runtime` in the same one-stage form
+  (`builder·trivial claude/sonnet/high`) for a role launch, and `spawn_agent`
+  passes it through. A role-less launch answers as before, so its replay
+  answers stay byte for byte.
 
 ### 4. What the seat receives
 
@@ -282,7 +302,8 @@ inside the table block, which runs to the first blank line, so no blank lines.
 
 - The builder row lists its four variants and the reviewer row its trivial
   variant, both through `variantForParams`, from the install's mapping.
-- The bullet at `prompt.ts:414` is replaced by these:
+- The bullet at `prompt.ts:414` is replaced by these (the text as designed; see
+*Built* below for what shipped):
 
 ```
 - Size every lane before you launch it. trivial: a few lines of UI, copy, one flag or label, with the exact change and its acceptance written in your brief — builder and reviewer with size=trivial, one review round. normal: the rows as they are. design: options, architecture, proposals, or issues that come out of design work — an architect stage first, whose output briefs the builders.
@@ -294,6 +315,28 @@ inside the table block, which runs to the first blank line, so no blank lines.
 A seat that already holds a delivered table sees the new text at its next
 delivery (rotation or handoff); the refusals and the launch line work for it
 from the deploy on.
+
+*Built:* the four bullets as designed took the delivered mandate ~970 bytes
+past the room the envelope tests leave for a rotation's history. What shipped
+is the same rules in fewer words, merged with the two existing bullets they
+overlap (runtime overrides, and reading back create_pipeline's answer), and
+the effort guidance the old bullet carried is kept inside `normal`, so the
+2026-09-18 effort ladder is not lost:
+
+```
+- Runtime overrides go on the stage beside role. override-stage binds from the NEXT attempt: a running one keeps its runtime.
+- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium for routine work. design (options, architecture, proposals, issues from design work): an architect stage first.
+- Only an Opus-class agent's brief admits size=trivial. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier, nor a hand-set builder. README, docs, public text: builder domain=docs.
+- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 (draft, or pause, override-stage, start), and quote it with the size you chose and why.
+```
+
+Variant runtimes read `size=trivial: claude/sonnet/high; domain=frontend: …`.
+Even so the table grew by ~300 bytes: the section bound in
+`prompt.test.ts` is 3 300 bytes (was 3 000), the room left beside the
+delivered default is 7 800 bytes (was 8 000), and the delivered-directive
+budget in `handoffDigest.test.ts` is 12 500 bytes (was 12 000; main already
+measured 12 080 before this change). A rotation trims its history to what is
+left, and 19 500 bytes still hold two history budgets.
 
 ### 5. Stale preset overrides (requirement 5)
 
@@ -342,6 +385,9 @@ The journal is a new top-level key the store reads and preserves:
 - The role table's registry-status bullet lists each reset, so the seat can
   tell the operator.
 - Any mapping write to that row deletes its `reset` (keeping the id applied).
+- *Built:* the journal is read leniently: a malformed entry is dropped rather
+  than failing the whole registry into degraded mode, since it only drives a
+  notice. The boot pass logs the rows it reset.
 
 **Safety.**
 
@@ -378,8 +424,10 @@ deferred below.
 between engines never lands on a refused runtime: to Claude,
 `reviewer:trivial → opus/medium` (never Sonnet), `builder:trivial →
 sonnet/high`, `builder:docs → opus/medium`; to Codex, `builder:trivial →
-gpt-6-luna/high`, `builder:docs → gpt-6-astra/medium`. The mapping table's
-model select omits Sonnet and Haiku on the four denied rows.
+gpt-6-luna/high`, `builder:docs → gpt-6-astra/medium`, and (*built*, so a
+round trip lands back on the shipped value) `reviewer:trivial →
+gpt-6-luna/high`. The mapping table's model select omits Sonnet and Haiku on
+the four denied rows.
 
 ## Tests
 
@@ -410,6 +458,8 @@ model select omits Sonnet and Haiku on the four denied rows.
   agent actor is checked and by the operator it is not.
 - `src/app/api/spawn/route.test.ts`: an agent caller on Sonnet spawning
   `builder size=trivial` gets 400; the answer carries `runtime`.
+- `src/instrumentation.test.ts` (*built*): the boot pass runs with the serving
+  release, before the pipeline controller, and its failure stops nothing.
 - `src/lib/mcp/compactAnswers.test.ts`: `role`, `variant` and `runtimeLine`.
 - `src/lib/orchestrator/prompt.test.ts`: the sizing bullets, the variant
   listing, a reset in the status bullet, and still no blank line in the table.
@@ -441,7 +491,10 @@ Run each file by path, never a directory sweep (AGENTS.md).
 - `src/app/api/pipelines/route.ts`, `src/lib/mcp/bindings.ts` — pass the
   briefer; pass spawn `runtime` through.
 - `src/lib/agent/spawnCommand.ts` — the spawn call site and `runtime` in the
-  answer.
+  answer; `src/lib/agent/spawnResponse.ts` — the `runtime` field;
+  `src/lib/agent/spawnAdmissionValidation.ts` — the same refusal in
+  `/api/spawn/validate`; `src/lib/agent/conversationRuntime.ts` (new) — the
+  briefer's runtime from the registry.
 - `src/lib/mcp/compactAnswers.ts` — `role`, `variant`, `runtimeLine`.
 - `src/lib/orchestrator/prompt.ts` — role table rows and bullets, resets.
 - `src/app/api/roles/route.ts` — `shipped` variants for every role, `resets`.

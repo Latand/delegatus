@@ -58,7 +58,8 @@
  * releases on for that project. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
-import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "@/lib/roles/paramConfig";
+import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
+import { ROLE_VARIANT_IDS, type RoleVariantId } from "@/lib/roles/types";
 import type { RegistryRoleDefinitions, RoleConfig, RoleDefinition } from "@/lib/roles/types";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 
@@ -390,10 +391,18 @@ function runtimeLabel(config: RoleConfig): string {
     default `pipelineRoleLookup` derives from the same capabilities. */
 function roleTableRow(role: RoleDefinition): string {
   const access = role.capabilities.includes("read-only") ? "read-only" : "read-write";
-  const variants = role.id === "builder"
-    ? ` domain=frontend runs ${runtimeLabel(role.variants?.frontend ?? BUILDER_FRONTEND_CONFIG)}; mode=apply-fixes runs ${runtimeLabel(role.variants?.["apply-fixes"] ?? BUILDER_APPLY_FIXES_CONFIG)}.`
+  /* Each variant the role has, resolved the way a launch resolves it. */
+  const variantIds = (ROLE_VARIANT_IDS as Partial<Record<string, readonly RoleVariantId[]>>)[role.id] ?? [];
+  const variants = variantIds.length
+    ? ` ${variantIds.map((variant) => `${variantParamLabel(variant)}: ${runtimeLabel(configForVariant(role, VARIANT_PARAMS[variant]))}`).join("; ")}.`
     : "";
   return `| ${role.id} | ${role.config.engine} | ${role.config.model} | ${role.config.effort} | ${access} | ${role.description}${variants} |`;
+}
+
+/** Rows a retirement set back to the default, for the seat to tell the operator. */
+function resetNote(resets: readonly { row: string; from: RoleConfig }[]): string {
+  if (!resets.length) return "";
+  return ` Reset to the default by an update, untouched since: ${resets.map((reset) => `${reset.row} (was ${runtimeLabel(reset.from)})`).join(", ")}; tell the operator, who can restore it in the agent mapping.`;
 }
 
 /** The role table (#1880), rendered at delivery. It changes no default: it
@@ -401,19 +410,19 @@ function roleTableRow(role: RoleDefinition): string {
 export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string {
   const registry = (roles as RegistryRoleDefinitions).registry;
   const registryStatus = registry
-    ? `Registry revision: ${registry.revision}. Registry health: ${registry.health.state}${registry.health.state === "degraded" ? ` (${registry.health.reason}; shipped defaults shown)` : ""}.`
+    ? `Registry revision: ${registry.revision}. Registry health: ${registry.health.state}${registry.health.state === "degraded" ? ` (${registry.health.reason}; shipped defaults shown)` : ""}.${resetNote(registry.resets ?? [])}`
     : "Registry health: unknown (caller did not provide a registry snapshot).";
   return [
     ORCHESTRATOR_ROLE_TABLE_HEADING,
-    "Read from this install's role registry when this mandate was delivered. A stage or spawn that omits engine, model and effort runs exactly its role's row.",
+    "Read from this install's role registry at delivery. A stage or spawn that omits engine, model and effort runs its role's row.",
     "| role | engine | model | effort | access | for |",
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
-    "- Runtime overrides (engine, model, effort, access) go on the stage beside role, never inside it. A review-loop stage is always read-only.",
-    "- Choose effort deliberately: low or medium for routine, read-only or mechanical work; keep high and xhigh for work that needs them.",
-    "- Set the runtime at creation. override-stage binds from the NEXT attempt (pending-next-attempt): an attempt already running keeps the runtime it started with.",
-    "- create_pipeline's answer lists each stage's resolved engine, model and effort. Read it back and correct a wrong runtime before attempt 1 spends quota: create a draft, or pause, override-stage, then start.",
+    "- Runtime overrides go on the stage beside role. override-stage binds from the NEXT attempt: a running one keeps its runtime.",
+    "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium for routine work. design (options, architecture, proposals, issues from design work): an architect stage first.",
+    "- Only an Opus-class agent's brief admits size=trivial. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier, nor a hand-set builder. README, docs, public text: builder domain=docs.",
+    "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 (draft, or pause, override-stage, start), and quote it with the size you chose and why.",
   ].join("\n");
 }
 

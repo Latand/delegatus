@@ -620,7 +620,8 @@ const overlaps = (a: Rect, b: Rect, slack = 0) => a.x + slack < b.x + b.w && b.x
  * and Ukrainian starts from a first run and walks the slice's states: the guide
  * opening by itself, one engine connected and one not installed, the mapping
  * with the refusal banner and the very-heavy nudge, the move to Claude and its
- * undo, Codex installed and signed out with the sign-in open, neither engine
+ * undo, a row an update reset and its Restore (model sizing §5), Codex
+ * installed and signed out with the sign-in open, neither engine
  * connected, the menu rows, the mapping opened alone, and a dismissal that
  * keeps the guide shut on reload. Slice 2 adds the Check step: before a run,
  * running, passed, the pass a new install ends on (no orchestrator, so row 5
@@ -728,6 +729,8 @@ function measureOnboarding(phone: boolean) {
     chipOffsets,
     headrooms: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-headroom]")).map((el) => ({ text: el.textContent ?? "", h: Math.round(el.getBoundingClientRect().height) })),
     changedRows: dialog.querySelectorAll("[data-mapping-reset]").length,
+    /* A row an update set back to its default (docs/design/model-sizing-tiers.md §5). */
+    retired: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-retired]")).map((el) => ({ row: el.dataset.mappingRetired!, text: el.textContent ?? "", clipped: clipped(el), w: Math.round(el.getBoundingClientRect().width) })),
     legendFirst: legend && rows[0] ? legend.getBoundingClientRect().top < rows[0].getBoundingClientRect().top : false,
     modelSelectWidths: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-row] select")).filter((_, index) => index % 2 === 0).map((el) => Math.round(el.getBoundingClientRect().width)),
     selectedSegmentRing: Array.from(dialog.querySelectorAll<HTMLElement>("[role=radio][aria-checked=true]")).slice(0, 1).map((el) => getComputedStyle(el).boxShadow)[0] ?? null,
@@ -1001,18 +1004,19 @@ async function captureOnboarding(): Promise<void> {
               must(r.engines.claude === "connected" && r.engines.codex === "missing", `${tag}: with a Codex credential and no Codex command the engines read ${JSON.stringify(r.engines)}`);
             });
 
-            /* 2. The mapping: five roles and one variant sit on Codex, which is not connected. */
+            /* 2. The mapping: six roles and two variants sit on Codex, which is not connected. */
             await page.click("[data-onboarding-primary]");
             await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
             await page.click('[data-mapping-group="rare"] button[aria-expanded]');
             await page.waitForSelector('[data-mapping-row="deployer"]');
             await shot("agents-blocked", (r) => {
-              /* Seven rows ship on Codex: builder, fix rounds, reviewer, verifier, cleaner, prod-auditor, deployer. */
-              must(r.blockedRows === 7, `${tag}: ${r.blockedRows} blocked rows, expected the seven Codex rows`);
+              /* Eight rows ship on Codex: builder, fix rounds, reviewer, small-change reviewer, verifier, cleaner, prod-auditor, deployer. */
+              must(r.blockedRows === 8, `${tag}: ${r.blockedRows} blocked rows, expected the eight Codex rows`);
               must(r.nudges >= 1, `${tag}: no very-heavy nudge on the reviewer's xhigh default`);
               must(r.legendFirst, `${tag}: the cost legend comes after the first row`);
               must(r.costClasses.includes("reviewer=very-heavy") && r.costClasses.includes("cleaner=moderate"), `${tag}: cost classes ${r.costClasses.join(", ")}`);
-              must(r.roleLabels.length === 10, `${tag}: ${r.roleLabels.length} role rows rendered, expected 10`);
+              /* Ten rows, and the small-change builder, docs builder and small-change reviewer (docs/design/model-sizing-tiers.md §1). */
+              must(r.roleLabels.length === 13, `${tag}: ${r.roleLabels.length} role rows rendered, expected 13`);
             });
 
             /* 3. "Move them to Claude", then its receipt and every row changed. */
@@ -1071,6 +1075,25 @@ async function captureOnboarding(): Promise<void> {
             });
             await page.click('[data-mapping-reset="reviewer"]');
             await page.waitForSelector('[data-mapping-reset="reviewer"]', { state: "detached" });
+
+            /* 3c. An update reset a stale row (docs/design/model-sizing-tiers.md
+               §5): the row says what it was, and Restore puts it back through
+               the ordinary mapping write, which clears the notice. */
+            const retirementId = "2026-09-builder-frontend-opus-xhigh";
+            const presetsFile = path.join(STATE_DIR, "role-presets.json");
+            fs.writeFileSync(presetsFile, JSON.stringify({ schemaVersion: 1, overrides: {}, retirements: { [retirementId]: { at: "2100-01-02T10:00:00.000Z", reset: { row: "builder:frontend", from: { engine: "claude", model: "opus", effort: "xhigh" } } } } }));
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await page.waitForSelector('[data-mapping-retired="builder:frontend"]', { timeout: 60_000 });
+            await page.locator('[data-mapping-row="builder:frontend"]').scrollIntoViewIfNeeded();
+            await shot("agents-reset", (r) => {
+              must(r.retired.length === 1 && r.retired[0]!.row === "builder:frontend", `${tag}: reset lines ${JSON.stringify(r.retired)}`);
+              for (const line of r.retired) must(!line.clipped, `${tag}: the reset line "${line.text}" is clipped at ${line.w}px`);
+            });
+            await page.click('[data-mapping-restore="builder:frontend"]');
+            await page.waitForSelector('[data-mapping-retired="builder:frontend"]', { state: "detached" });
+            const restored = JSON.parse(fs.readFileSync(presetsFile, "utf8")) as { overrides: { builder?: { variants?: { frontend?: { effort: string } } } }; retirements?: Record<string, { reset?: unknown }> };
+            must(restored.overrides.builder?.variants?.frontend?.effort === "xhigh" && restored.retirements?.[retirementId] !== undefined && restored.retirements[retirementId]!.reset === undefined, `${tag}: after Restore the stored mapping is ${JSON.stringify(restored)}`);
+            fs.writeFileSync(presetsFile, JSON.stringify({ schemaVersion: 1, overrides: {} }));
             await page.unroute("**/api/accounts");
             codexSignedIn(false);
             fakeCli("codex", false);

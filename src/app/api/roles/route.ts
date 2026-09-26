@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
-import { BUILDER_VARIANT_DEFAULTS, loadRoleRegistrySnapshot, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, RoleStoreError, ROLE_OVERRIDES_SCHEMA_VERSION, saveRoleMapping } from "@/lib/roles/store";
+import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
+import { loadRoleRegistrySnapshot, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, RoleStoreError, ROLE_OVERRIDES_SCHEMA_VERSION, saveRoleMapping } from "@/lib/roles/store";
 import type { RoleRegistrySnapshot } from "@/lib/roles/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
@@ -23,9 +24,12 @@ function catalog(snapshot: RoleRegistrySnapshot) {
       promptPreview: role.promptScaffold,
       shipped: {
         config: ROLE_DEFAULTS.find((candidate) => candidate.id === role.id)!.config,
-        ...(role.id === "builder" ? { variants: BUILDER_VARIANT_DEFAULTS } : {}),
+        ...(role.id in ROLE_VARIANT_DEFAULTS ? { variants: ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS] } : {}),
       },
     })),
+    /* Rows a retirement set back to the default that the operator has not
+       touched since (docs/design/model-sizing-tiers.md §5). */
+    resets: snapshot.resets ?? [],
   };
 }
 

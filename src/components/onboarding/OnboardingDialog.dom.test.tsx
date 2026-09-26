@@ -50,7 +50,7 @@ Object.assign(globalThis, {
       return json({ ok: true, reportNameSuggestion: nameSuggestion, ...reportSettings });
     }
     if (url.includes("/api/onboarding")) return json({ marker: null });
-    if (url.includes("/api/roles")) return json({ schemaVersion: 2, roles: [] });
+    if (url.includes("/api/roles")) return json(rolesBody);
     if (url.includes("/api/transcribe/backend")) return json({ backend: "local", lockedByEnv: false, options: [] });
     if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
     if (url.includes("/api/orchestrator/seat")) return Promise.resolve(new Response("{}", { status: 404 }));
@@ -59,6 +59,9 @@ Object.assign(globalThis, {
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
 });
+
+/* What `/api/roles` answers; the agent mapping's case sets it. */
+let rolesBody: unknown = { schemaVersion: 2, roles: [] };
 
 /* Every request the guide made, and what the bot panel's status read answers:
    the Telegram step's cases set it (docs/design/orchestrator-reports.md §5.6). */
@@ -645,5 +648,52 @@ test("the Telegram step reads in Ukrainian", async () => {
     done();
   } finally {
     setLocale("en");
+  }
+});
+
+/* docs/design/model-sizing-tiers.md §5 and §6: the mapping lists the
+   small-change and docs rows, says which row an update reset and restores it
+   in one click, and offers no Sonnet or Haiku where the server refuses them. */
+test("the mapping shows the small-change and docs rows, a reset row with Restore, and no Sonnet on a denied row", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { ROLE_VARIANT_DEFAULTS } = await import("@/lib/roles/paramConfig");
+  const from = { engine: "claude", model: "opus", effort: "xhigh" };
+  const roles = mergeRoleDefinitions({}).map((role) => ({
+    ...role,
+    promptPreview: role.promptScaffold,
+    shipped: { config: role.config, ...(role.id in ROLE_VARIANT_DEFAULTS ? { variants: ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS] } : {}) },
+  }));
+  rolesBody = { schemaVersion: 3, roles, resets: [{ id: "2026-09-builder-frontend-opus-xhigh", row: "builder:frontend", from, at: "2026-09-27T08:00:00.000Z" }] };
+  requests.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row]")));
+    const rows = [...host.querySelectorAll("[data-mapping-row]")].map((row) => row.getAttribute("data-mapping-row"));
+    expect(rows.slice(0, 8)).toEqual(["builder", "builder:trivial", "builder:frontend", "builder:docs", "builder:apply-fixes", "reviewer", "reviewer:trivial", "verifier"]);
+    expect(host.querySelector("[data-mapping-row='builder:trivial']")?.textContent).toContain("Builder, small changes");
+    expect(host.querySelector("[data-mapping-row='builder:docs']")?.textContent).toContain("Builder, docs and text");
+    expect(host.querySelector("[data-mapping-row='reviewer:trivial']")?.textContent).toContain("Reviewer, small changes");
+
+    const retired = host.querySelector("[data-mapping-retired='builder:frontend']");
+    expect(retired?.textContent).toContain("Set to the default when Delegatus updated (was Opus 5.5 · xhigh).");
+    expect(host.querySelectorAll("[data-mapping-retired]")).toHaveLength(1);
+
+    const modelsOf = (row: string) => [...host.querySelectorAll(`[data-mapping-row='${row}'] select`)][0]!.querySelectorAll("option");
+    const ids = (row: string) => [...modelsOf(row)].map((option) => option.getAttribute("value"));
+    expect(ids("architect")).not.toContain("sonnet");
+    expect(ids("architect")).not.toContain("haiku");
+    expect(ids("architect")).toContain("opus");
+    expect(ids("builder:trivial")).toContain("sonnet");
+
+    flushSync(() => (host.querySelector("[data-mapping-restore='builder:frontend']") as HTMLElement).click());
+    await until(() => requests.some((request) => request.method === "PUT" && request.url.includes("/api/roles")));
+    expect(requests.find((request) => request.method === "PUT")?.body).toEqual({ overrides: { builder: { variants: { frontend: from } } } });
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    rolesBody = { schemaVersion: 2, roles: [] };
   }
 });

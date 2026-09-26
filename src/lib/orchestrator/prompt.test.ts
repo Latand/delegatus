@@ -576,8 +576,8 @@ test("the manager table uses resolved saved builder variants and keeps registry 
   });
 
   const table = orchestratorRoleTable(roles);
-  expect(table).toContain("domain=frontend runs claude/sonnet/high");
-  expect(table).toContain("mode=apply-fixes runs codex/gpt-5.6-luna/xhigh");
+  expect(table).toContain("domain=frontend: claude/sonnet/high");
+  expect(table).toContain("mode=apply-fixes: codex/gpt-5.6-luna/xhigh");
   expect(table).toContain("Registry revision: roles-1-saved-variant. Registry health: healthy.");
   const delivered = orchestratorMandateWithRoleTable("Bespoke mandate", table);
   expect(orchestratorMandateWithRoleTable(delivered, table)).toBe(delivered);
@@ -605,7 +605,40 @@ test("delivery replaces a role table the mandate already carries, so it is alway
 test("the role table keeps the delivered default inside the structured envelope", () => {
   const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
   const section = delivered.slice(delivered.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING));
-  expect(Buffer.byteLength(section)).toBeLessThan(3_000);
-  /* Leave the orchestrator scaffold and a rotation's history room beside it. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 8_000);
+  /* The sizing rule (docs/design/model-sizing-tiers.md §4) and the variant
+     runtimes took the table past its first 3 000-byte bound. */
+  expect(Buffer.byteLength(section)).toBeLessThan(3_300);
+  /* Leave the orchestrator scaffold and a rotation's history room beside it.
+     The sizing rule (docs/design/model-sizing-tiers.md §4) takes 200 bytes of
+     that room; a rotation trims its history to what is left. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 7_800);
+});
+
+/* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
+   variant's runtime from the table, and hears about a reset row. */
+test("the role table tells the seat to size lanes, lists every variant and names a reset row", () => {
+  const roles = ROLE_DEFAULTS.map((role) => ({ ...role })) as RegistryRoleDefinitions;
+  Object.defineProperty(roles, "registry", {
+    value: {
+      revision: "roles-1-reset",
+      health: { state: "healthy" },
+      resets: [{ id: "2026-09-builder-frontend-opus-xhigh", row: "builder:frontend", from: { engine: "claude", model: "opus", effort: "xhigh" }, at: "2026-09-27T08:00:00.000Z" }],
+    },
+  });
+  const table = orchestratorRoleTable(roles);
+  const builderRow = table.split("\n").find((line) => line.startsWith("| builder |"))!;
+  expect(builderRow).toContain("size=trivial: claude/sonnet/high; domain=frontend: claude/opus/high; domain=docs: claude/opus/medium; mode=apply-fixes: codex/gpt-5.6-terra/low.");
+  const reviewerRow = table.split("\n").find((line) => line.startsWith("| reviewer |"))!;
+  expect(reviewerRow).toContain("size=trivial: codex/gpt-6-luna/high.");
+  expect(table).toContain("- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round.");
+  expect(table).toContain("design (options, architecture, proposals, issues from design work): an architect stage first");
+  expect(table).toContain("- Only an Opus-class agent's brief admits size=trivial. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier, nor a hand-set builder.");
+  expect(table).toContain("README, docs, public text: builder domain=docs.");
+  expect(table).toContain("a runtimeLine (spawn_agent: runtime)");
+  expect(table).toContain("quote it with the size you chose and why");
+  expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
+  /* Delivery replaces the table up to the first blank line, so it carries none. */
+  expect(table).not.toContain("\n\n");
+  const delivered = orchestratorMandateWithRoleTable("Bespoke mandate", table);
+  expect(orchestratorMandateWithRoleTable(delivered, table)).toBe(delivered);
 });
