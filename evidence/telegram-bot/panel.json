@@ -806,6 +806,49 @@
       }
     },
     {
+      "key": "phone-390-light-refused-uk",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "refused",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 116.75,
+          "width": 390,
+          "height": 727.25,
+          "scrollHeight": 726
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 505.875,
+        "controls": 9,
+        "textLeaves": 25,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 941
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 720.25,
+        "controls": 9,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
       "key": "desktop-1280-light-chats-uk",
       "viewport": {
         "width": 1280,
@@ -844,6 +887,49 @@
         "botSectionHeight": 687.5625,
         "controls": 10,
         "textLeaves": 32,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-light-refused-uk",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "refused",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат"
+      ],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 236,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 606
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 423.625,
+        "controls": 9,
+        "textLeaves": 25,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 236,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 848
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 665.3125,
+        "controls": 9,
+        "textLeaves": 31,
         "overlaps": 0,
         "failures": []
       }

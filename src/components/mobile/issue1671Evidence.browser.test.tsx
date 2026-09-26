@@ -2188,7 +2188,8 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  * the phone (menu › Accounts › Telegram) at 390 and 430 in both schemes, and
  * on the desktop from the rail footer at 1440. The connected scene also runs
  * in Ukrainian at 390 and at a 1280 desktop, and its one allowed chat must
- * name the project whose reports go there:
+ * name the project whose reports go there; so does `refused`, the chat a
+ * project chose with posting switched off since, whose line says so:
  *
  *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
  *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "telegram bot"
@@ -2308,8 +2309,8 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
     { viewport: { width: 1_440, height: 900 }, scheme: "dark" as const, phone: false },
   ].map((entry): { viewport: { width: number; height: number }; scheme: "light" | "dark"; phone: boolean; lang: "en" | "uk"; scenes: readonly string[] } => ({ ...entry, lang: "en", scenes: BOT_SCENES }));
   cases.push(
-    { viewport: { width: 390, height: 844 }, scheme: "light", phone: true, lang: "uk", scenes: ["chats"] },
-    { viewport: { width: 1_280, height: 800 }, scheme: "light", phone: false, lang: "uk", scenes: ["chats"] },
+    { viewport: { width: 390, height: 844 }, scheme: "light", phone: true, lang: "uk", scenes: ["chats", "refused"] },
+    { viewport: { width: 1_280, height: 800 }, scheme: "light", phone: false, lang: "uk", scenes: ["chats", "refused"] },
   );
   try {
     for (const { viewport, scheme, phone, lang, scenes } of cases) {
@@ -2326,7 +2327,9 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
           const top = await readTelegramPanel(page, phone);
           const reportsLine = await page.locator('[role="dialog"][aria-label="Telegram"] [data-telegram-chat-reports]').allTextContents();
           await page.screenshot({ path: path.join(BOT_OUT, `${key}.png`) });
-          const expectedReports = scene === "chats" || scene === "webhook" ? [lang === "uk" ? "Звіти оркестратора: Atlas, бо це єдиний чат, куди агентам можна писати" : "Orchestrator reports: Atlas, since this is the only chat agents may post in"] : [];
+          const expectedReports = scene === "chats" || scene === "webhook" ? [lang === "uk" ? "Звіти оркестратора: Atlas, бо це єдиний чат, куди агентам можна писати" : "Orchestrator reports: Atlas, since this is the only chat agents may post in"]
+            : scene === "refused" ? [lang === "uk" ? "Звіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат" : "Orchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat"]
+            : [];
           if (JSON.stringify(reportsLine) !== JSON.stringify(expectedReports)) failures.push(`${key}: the chat's reports line reads ${JSON.stringify(reportsLine)}`);
           /* The panel scrolls inside itself; the second frame is its end. */
           await page.evaluate(() => {

@@ -119,8 +119,9 @@ const ORCH_WALK = SCENARIO === "orchestrator-first-walk";
    no bot connected; `bot=fallback` a bot in one chat that accepts posts and
    one it may not post to yet, with the project never having chosen, so its
    reports go to the first; `bot=several` two chats that accept posts and no
-   choice, so the step asks; `bot=chosen` one chat chosen in the step. The
-   chats are invented. */
+   choice, so the step asks; `bot=chosen` one chat chosen in the step;
+   `bot=refused` a chat chosen in the step whose posting was switched off
+   since, beside another that accepts posts. The chats are invented. */
 const TELEGRAM_STEP = SCENARIO === "telegram-reports";
 const TELEGRAM_BOT = new URLSearchParams(location.search).get("bot") ?? "none";
 const telegramChat = (over: Record<string, unknown>) => ({
@@ -134,6 +135,8 @@ const TELEGRAM_BOT_STATUS = TELEGRAM_BOT === "none"
     receiving: "polling", lastUpdateAt: null, lastCheckedAt: null, limits: [],
     chats: TELEGRAM_BOT === "several"
       ? [telegramChat({}), telegramChat({ chatId: "-1000000000202", title: "Design Lounge", alias: "design-lounge" })]
+      : TELEGRAM_BOT === "refused"
+      ? [telegramChat({}), telegramChat({ chatId: "-1000000000202", title: "Design Lounge", alias: "design-lounge", postAllowed: false, postable: false, reports: [{ name: "Atlas", onlyAllowedChat: false, refused: true }] })]
       : [
         telegramChat(TELEGRAM_BOT === "fallback" ? { reports: [{ name: "Atlas", onlyAllowedChat: true }] } : { reports: [{ name: "Atlas", onlyAllowedChat: false }] }),
         telegramChat({ chatId: "-1000000000202", title: "Design Lounge", alias: null, postAllowed: false, postable: false }),
@@ -141,10 +144,12 @@ const TELEGRAM_BOT_STATUS = TELEGRAM_BOT === "none"
   };
 const REPORT_TELEGRAM: { chat: string; name: string; changedAt: string; changedBy: string } | null = TELEGRAM_BOT === "chosen"
   ? { chat: "team-reports", name: "Atlas", changedAt: new Date().toISOString(), changedBy: "operator" }
+  : TELEGRAM_BOT === "refused" ? { chat: "design-lounge", name: "Atlas", changedAt: new Date().toISOString(), changedBy: "operator" }
   : null;
 /* Where the settings route says reports go now (§5.6). */
 const REPORT_DESTINATION = TELEGRAM_BOT === "chosen"
   ? { chat: "team-reports", name: "Atlas", source: "chosen" }
+  : TELEGRAM_BOT === "refused" ? { chat: "design-lounge", name: "Atlas", source: "chosen" }
   : TELEGRAM_BOT === "fallback" ? { chat: "team-reports", name: "Atlas", source: "only-allowed-chat" } : null;
 const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet" || ORCH_FIRST_OVERVIEW;
 const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
