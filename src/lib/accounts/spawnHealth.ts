@@ -244,7 +244,8 @@ export async function selectHealthyClaudeAccount(
     ...(pinPreferred && preferredId && requested ? { requestedAdmission: requested.admission } : {}),
   });
 
-  const providerCurrent: Evaluated[] = await Promise.all(classified.filter((candidate) => candidate.provider).map(async ({ account }) => {
+  const providers = classified.filter((candidate) => candidate.provider);
+  const providerCurrent: Evaluated[] = providers.length ? await Promise.all(providers.map(async ({ account }) => {
     const token = readClaudeProviderToken(account.home);
     let authentication: "authenticated" | "failed" = token ? "authenticated" : "failed";
     if (token && account.provider) {
@@ -252,7 +253,7 @@ export async function selectHealthyClaudeAccount(
       catch (error) { if (error instanceof Error && error.message === "Provider authentication failed") authentication = "failed"; }
     }
     return { account, admission: classifySpawnAccountAdmission({ enabled: true, authentication, limits: "unknown", stale: false, retryAt: null }, now) };
-  }));
+  })) : [];
   const current = [...providerCurrent, ...(await Promise.all(classified
     .filter((candidate) => candidate.oauth && candidate.oauth.expiresAt > now)
     .map(({ account }) => evaluate(account, dependencies.probe))))
