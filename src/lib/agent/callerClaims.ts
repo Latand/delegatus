@@ -70,6 +70,14 @@ export function internalServiceHeaders(service: InternalViewerService): Record<s
   return { [INTERNAL_SERVICE_HEADER]: `${service}.${internalServiceTag(service, ensureOperatorSpawnCapability())}` };
 }
 
+/** The same marker when the operator key already exists, and none otherwise:
+    for a caller that must not create the key, such as a read. Without the key
+    no tag could be verified anyway. */
+export function existingInternalServiceHeaders(service: InternalViewerService): Record<string, string> {
+  const key = currentOperatorSpawnCapability();
+  return key ? { [INTERNAL_SERVICE_HEADER]: `${service}.${internalServiceTag(service, key)}` } : {};
+}
+
 export type InternalServiceClaim =
   | { claim: "absent" }
   | { claim: "invalid" }

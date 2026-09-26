@@ -6,6 +6,7 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 
 import { installSpawnCapabilityResolver, internalServiceHeaders, spawnCapabilityDigest } from "@/lib/agent/callerClaims";
+import { productionViewerControlDependencies, viewerMcpBindings } from "@/lib/mcp/bindings";
 import { requestRemotePipelineTick } from "@/lib/pipelines/controllerSignal";
 import { viewerHealthRequestPlan } from "@/runtime-host/deploymentHealth";
 import { claimInstall, createHandoff } from "@/lib/team/members";
@@ -144,6 +145,52 @@ describe("team install: first-party callers name themselves and are checked", ()
         return new Response("{}", { status: statuses.at(-1) });
       }, { LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:18898", ...(token ? { LLV_VIEWER_CONTROL_TOKEN: token } : {}) });
       expect(statuses).toEqual([202]);
+    }
+  });
+
+  /* The MCP control client, exactly as an agent's tools use it, with the
+     proxy in place of the network: a read and deploy_exact_sha, on a team
+     install with the key and on one without any. */
+  test("an agent's MCP reads and deploy_exact_sha pass, with the key and without one", async () => {
+    const realFetch = globalThis.fetch;
+    const previousControl = { url: process.env.LLV_VIEWER_CONTROL_URL, token: process.env.LLV_VIEWER_CONTROL_TOKEN };
+    const SHA = "4f3c1b9a8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a";
+    /* The Viewer makes the key the tag is minted from at startup. */
+    internalServiceHeaders("mcp");
+    try {
+      for (const token of [TOKEN, null]) {
+        if (token) process.env.LLV_TOKEN = token;
+        else delete process.env.LLV_TOKEN;
+        process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:18898";
+        if (token) process.env.LLV_VIEWER_CONTROL_TOKEN = token;
+        else delete process.env.LLV_VIEWER_CONTROL_TOKEN;
+        const reached: string[] = [];
+        globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const response = proxy(new NextRequest(url, { method: init?.method, headers: init?.headers, body: init?.body as string }));
+          if (response.headers.get("x-middleware-next") !== "1") return response;
+          reached.push(`${init?.method ?? "GET"} ${new URL(url).pathname}`);
+          return Response.json(init?.method === "POST" ? { deploymentId: "deploy-1", revision: SHA, state: "accepted" } : { tasks: [] });
+        }) as typeof fetch;
+
+        const control = productionViewerControlDependencies();
+        expect(await control.get!("/api/tasks")).toEqual({ tasks: [] });
+        const deploy = viewerMcpBindings(undefined, control, {
+          callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: null }),
+          callerProject: () => "proj-a",
+          viewerProjects: () => ["proj-a"],
+          authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
+          recordSeatDeployment: () => {},
+        } as never).deploy_exact_sha;
+        expect(await deploy({ revision: SHA, clientRequestId: `deploy-${token ? "key" : "open"}` })).toMatchObject({ deploymentId: "deploy-1" });
+        expect(reached).toEqual(["GET /api/tasks", "POST /api/runtime/deployments"]);
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+      if (previousControl.url === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+      else process.env.LLV_VIEWER_CONTROL_URL = previousControl.url;
+      if (previousControl.token === undefined) delete process.env.LLV_VIEWER_CONTROL_TOKEN;
+      else process.env.LLV_VIEWER_CONTROL_TOKEN = previousControl.token;
     }
   });
 

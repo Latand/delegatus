@@ -8,7 +8,7 @@ import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import { MEMBER_COLOR_HEX, MEMBER_COLORS, type MemberColor, type TeamView } from "@/lib/team/contract";
 
 import { MemberAvatar } from "./MemberAvatar";
-import { errorText } from "./SignInCard";
+import { errorText, TelegramCodeForm, type TelegramState } from "./SignInCard";
 import { refreshTeamView } from "./teamClient";
 import { BUTTON, Field, INPUT, loopbackLink, relativeTime, TeamDialog, teamRequest } from "./ui";
 
@@ -314,7 +314,7 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
   const [busy, setBusy] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [passkeys, setPasskeys] = useState<{ available: boolean; passkeys: PasskeyRow[] } | null>(null);
-  const [telegram, setTelegram] = useState<{ id: string; proof: string; url: string } | null>(null);
+  const [telegram, setTelegram] = useState<{ id: string; proof: string; url: string; codeSent?: boolean } | null>(null);
 
   const loadPasskeys = useCallback(async () => {
     if (!self) return;
@@ -336,25 +336,34 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
     return true;
   };
 
-  /* Linking Telegram: open the bot, press Start, and this dialog hears it. */
+  /* Linking Telegram: open the bot, press Start, and type back the code it
+     sends — the same step as signing in, so a forwarded link binds nothing. */
+  const settleTelegram = useCallback(async (state: TelegramState, message?: string) => {
+    if (state.state === "waiting" || state.state === "code_sent") return;
+    setTelegram(null);
+    if (message) setError(message);
+    else if (state.state === "taken") setError(t("team.error.telegramTaken"));
+    else if (state.state !== "linked") setError(t("team.signIn.expired"));
+    await refreshTeamView();
+  }, [t]);
+
   useEffect(() => {
-    if (!telegram) return;
+    if (!telegram || telegram.codeSent) return;
     let alive = true;
     let timer: number | undefined;
     const poll = async () => {
-      const answer = await teamRequest<{ state: string }>(`/api/team/session/telegram/${telegram.id}`, { body: { proof: telegram.proof } });
+      const answer = await teamRequest<TelegramState>(`/api/team/session/telegram/${telegram.id}`, { body: { proof: telegram.proof } });
       if (!alive) return;
-      if (answer.ok && answer.body.state !== "waiting") {
-        setTelegram(null);
-        if (answer.body.state === "taken") setError(t("team.error.telegramTaken"));
-        await refreshTeamView();
+      if (answer.ok && answer.body.state === "code_sent") {
+        setTelegram((current) => (current?.id === telegram.id ? { ...current, codeSent: true } : current));
         return;
       }
+      if (answer.ok && answer.body.state !== "waiting") return void settleTelegram(answer.body);
       timer = window.setTimeout(poll, 3_000);
     };
     timer = window.setTimeout(poll, 3_000);
     return () => { alive = false; window.clearTimeout(timer); };
-  }, [telegram, t]);
+  }, [telegram, settleTelegram]);
 
   const linkTelegram = async () => {
     setError(null);
@@ -434,6 +443,8 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
                 <span className="min-w-0 flex-1 truncate text-ui text-primary">{member.telegram.username ? `@${member.telegram.username}` : member.telegram.firstName}</span>
                 <button type="button" className={BUTTON.text} onClick={() => void teamRequest("/api/team/telegram", { method: "DELETE" }).then(() => refreshTeamView())}>{t("team.telegram.unlink")}</button>
               </div>
+            ) : telegram?.codeSent ? (
+              <TelegramCodeForm id={telegram.id} proof={telegram.proof} onError={setError} onState={(state, message) => void settleTelegram(state, message)} />
             ) : telegram ? (
               <p className="flex items-center gap-2 text-ui text-secondary" aria-live="polite">
                 <span className="h-1.5 w-1.5 rounded-full bg-accent motion-safe:animate-pulse" aria-hidden />{t("team.telegram.waiting")}

@@ -121,13 +121,17 @@ export async function telegramBot(): Promise<{ available: boolean; botUsername: 
   }
 }
 
+/** The host a person reached this Delegatus by, without its port. */
+export function requestHostName(req: NextRequest): string {
+  return (req.headers.get("host") ?? req.nextUrl.host).replace(/:\d+$/, "");
+}
+
 export async function publicInfo(req: NextRequest): Promise<TeamPublicInfo> {
   const store = existingTeamStore();
   const mode = store?.hasActiveOwner() ? "team" : "solo";
-  const host = req.headers.get("host") ?? req.nextUrl.host;
   return {
     mode,
-    hostName: host.replace(/:\d+$/, ""),
+    hostName: requestHostName(req),
     methods: {
       approval: true,
       telegram: mode === "team" ? await telegramBot() : { available: false, botUsername: null },

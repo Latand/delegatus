@@ -26,6 +26,7 @@ import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/age
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { currentMcpHttpCaller } from "./callerContext";
@@ -293,6 +294,31 @@ async function waitForControlRetry(delayMs: number, signal?: AbortSignal): Promi
   });
 }
 
+/**
+ * The headers every control request carries, read or write, so no call site
+ * can forget one. The Viewer authenticates every connection once a token is
+ * configured (#1496), so a control read that sends nothing is refused exactly
+ * like a stranger's (#1511). On a team install the identity gate then admits
+ * only a named caller (sign-in-and-team §4.2), and the bearer names nobody:
+ * without the MCP service tag every read on a token-free install and every
+ * untagged write (deploy_exact_sha) was answered 401. A caller that set its own
+ * authorization or tag keeps it. The tag is minted from the operator key the
+ * Viewer creates at startup and is never a reason to create it here; a key
+ * that is missing or unreadable costs the tag and nothing else.
+ */
+function controlRequestHeaders(init: HeadersInit | undefined, token: string | null): Headers {
+  const headers = new Headers(init);
+  if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
+  if (!headers.has(INTERNAL_SERVICE_HEADER)) {
+    try {
+      for (const [name, value] of Object.entries(existingInternalServiceHeaders("mcp"))) headers.set(name, value);
+    } catch {
+      /* no key, no tag */
+    }
+  }
+  return headers;
+}
+
 async function requestViewerControl(
   pathname: string,
   init: RequestInit,
@@ -319,11 +345,7 @@ async function requestViewerControl(
       reason: "Viewer control reconnect attempt timed out",
     });
     try {
-      const headers = new Headers(init.headers);
-      /* The Viewer authenticates every connection once a token is configured
-         (#1496), so a control read that sends nothing is refused exactly like a
-         stranger's (#1511). A caller that set its own authorization keeps it. */
-      if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
+      const headers = controlRequestHeaders(init.headers, token);
       if (init.method === "POST") {
         headers.set("origin", baseUrl);
         headers.set("sec-fetch-site", "same-origin");
@@ -492,8 +514,7 @@ async function dispatchViewerControl(
     signal: context.signal,
     reason: "Viewer control dispatch timed out",
   });
-  const requestHeaders = new Headers({ "content-type": "application/json", ...headers });
-  if (token && !requestHeaders.has("authorization")) requestHeaders.set("authorization", `Bearer ${token}`);
+  const requestHeaders = controlRequestHeaders({ "content-type": "application/json", ...headers }, token);
   requestHeaders.set("origin", baseUrl);
   requestHeaders.set("sec-fetch-site", "same-origin");
   let response: Response;

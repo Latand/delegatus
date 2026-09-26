@@ -350,4 +350,22 @@ describe("who did what", () => {
     expect([...authors].map(([index, author]) => [index, author.name])).toEqual([[0, "Mira"], [2, "Oleh"], [3, "Oleh"]]);
     expect(recordAuthors("conversation_other", [{ role: "user", ts: new Date(t0).toISOString(), text: "review the seam" }]).size).toBe(0);
   });
+
+  test("two members sending the same words seconds apart each keep their own record", () => {
+    const store = teamStore();
+    const mira = claimInstall(store, "Mira", DESKTOP).member;
+    const oleh = redeemJoin(store, createInvite(store, mira, null).code, "Oleh", PHONE).member;
+    const t0 = Date.parse("2026-09-26T11:00:00.000Z");
+    const row = (id: string, member: string, ms: number) => store.recordMessageAuthor({ clientMessageId: id, conversationId: "conversation_d", memberId: member, at: new Date(ms).toISOString(), textDigest: messageTextDigest("ship it") });
+    row("a", mira.id, t0);
+    row("b", oleh.id, t0 + 3_000);
+    const authors = recordAuthors("conversation_d", [
+      { role: "user", ts: new Date(t0 + 500).toISOString(), text: "ship it" },
+      { role: "user", ts: new Date(t0 + 3_500).toISOString(), text: "ship it" },
+    ]);
+    expect([...authors].map(([index, author]) => [index, author.name])).toEqual([[0, "Mira"], [1, "Oleh"]]);
+    /* A record stamped a moment before its send (another clock) still finds it. */
+    const early = recordAuthors("conversation_d", [{ role: "user", ts: new Date(t0 - 1_000).toISOString(), text: "ship it" }]);
+    expect(early.get(0)?.name).toBe("Mira");
+  });
 });

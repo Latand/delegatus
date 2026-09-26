@@ -9,7 +9,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import { safeNextPath, type TeamPublicInfo } from "@/lib/team/contract";
 
 import { AuthError, AuthShell, AuthTitle } from "./AuthShell";
-import { BUTTON, teamRequest, type ApiAnswer } from "./ui";
+import { BUTTON, Field, INPUT, teamRequest, type ApiAnswer } from "./ui";
 
 /*
  * The sign-in page (sign-in-and-team §6.6). At most four ways in, drawn only
@@ -26,10 +26,13 @@ type Screen =
   | { kind: "telegram"; id: string; proof: string; url: string; expiresAt: string; state: TelegramState }
   | { kind: "done"; name: string };
 
-type TelegramState =
+export type TelegramState =
   | { state: "waiting" }
+  | { state: "code_sent" }
   | { state: "confirmed"; name: string }
   | { state: "needs_approval"; firstName: string | null; ownerName: string | null }
+  | { state: "linked"; name: string }
+  | { state: "taken" }
   | { state: "denied" }
   | { state: "expired" };
 
@@ -64,6 +67,54 @@ function useCountdown(expiresAt: string | null): string {
 
 function passkeysSupported(): boolean {
   return typeof window !== "undefined" && typeof window.PublicKeyCredential === "function";
+}
+
+/**
+ * The code the bot sent to whoever pressed Start, typed back on the device
+ * that asked (§5.3). Start alone grants nothing, so a forwarded link is worth
+ * nothing without this. `onState` gets the request's next state, and a
+ * message when the wrong codes spent it.
+ */
+export function TelegramCodeForm({ id, proof, onState, onError }: {
+  id: string;
+  proof: string;
+  onState: (state: TelegramState, message?: string) => void;
+  onError: (message: string | null) => void;
+}) {
+  const { t } = useLocale();
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    onError(null);
+    const answer = await teamRequest<TelegramState>(`/api/team/session/telegram/${id}`, { body: { proof, action: "confirm", code } });
+    setBusy(false);
+    if (answer.ok) return onState(answer.body);
+    setCode("");
+    if (answer.code === "too_many_attempts") return onState({ state: "expired" }, t("team.signIn.telegramTooMany"));
+    onError(errorText(t, answer));
+  };
+  return (
+    <form className="flex flex-col gap-3" onSubmit={(event) => { event.preventDefault(); void submit(); }} data-telegram-code-form="">
+      <Field label={t("team.signIn.telegramCode")} hint={t("team.signIn.telegramCodeHint")}>
+        <input
+          className={`${INPUT} font-mono text-[18px] tracking-[0.2em] tabular-nums`}
+          value={code}
+          maxLength={7}
+          autoFocus
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          spellCheck={false}
+          placeholder="123 456"
+          onChange={(event) => setCode(event.target.value)}
+          data-telegram-code=""
+        />
+      </Field>
+      <button type="submit" disabled={busy || code.replace(/\D/g, "").length !== 6} className={BUTTON.primary} data-telegram-code-submit="">
+        {t("team.signIn.continue")}
+      </button>
+    </form>
+  );
 }
 
 export function goNext(next: string): void {
@@ -172,7 +223,8 @@ export function SignInCard({ next }: { next: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the request id
   }, [approval?.id]);
 
-  /* The Telegram screen waits for the bot to hear Start. */
+  /* The Telegram screen waits for the bot to hear Start, then for the code
+     the person types (no polling while they type), then for the owner. */
   const telegram = screen.kind === "telegram" ? screen : null;
   const telegramState = telegram?.state.state;
   const confirmTimer = useRef<number | undefined>(undefined);
@@ -251,6 +303,16 @@ export function SignInCard({ next }: { next: string }) {
               <p className="text-body font-semibold text-primary">{t("team.signIn.signingInAs", { name: screen.state.name })}</p>
               <button type="button" className={`${BUTTON.text} mt-3`} onClick={() => void notMe()} data-sign-in-not-me="">{t("team.signIn.notMe")}</button>
             </div>
+          ) : screen.state.state === "code_sent" ? (
+            <TelegramCodeForm
+              id={screen.id}
+              proof={screen.proof}
+              onError={setError}
+              onState={(state, message) => {
+                setScreen((current) => (current.kind === "telegram" && current.id === screen.id ? { ...current, state } : current));
+                if (message) setError(message);
+              }}
+            />
           ) : screen.state.state === "needs_approval" ? (
             <p className="text-balance text-center text-ui leading-relaxed text-secondary" aria-live="polite">
               {t("team.signIn.needsApproval", { owner: screen.state.ownerName ?? t("team.role.owner") })}

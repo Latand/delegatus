@@ -69,8 +69,9 @@ export interface Challenge {
   invitedName: string | null;
   result: ChallengeResult | null;
   requester: ChallengeRequester | null;
-  /** Kind-specific extras: the WebAuthn challenge and its purpose, the
-      purpose of a Telegram link. Never a secret. */
+  /** Kind-specific extras: the WebAuthn challenge and its purpose; a
+      Telegram request's purpose, host, the account that pressed Start and
+      the hash of the code the bot sent it. Never a secret in the clear. */
   payload: Record<string, string> | null;
 }
 
@@ -444,6 +445,13 @@ export class TeamStore {
     const row = this.db.query<Row, [string]>(
       "SELECT * FROM challenges WHERE user_code = ? AND kind = 'approval' AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1",
     ).get(code);
+    return row ? challengeFrom(row) : null;
+  }
+
+  /** A Telegram request by the hash of the code its deep link carries, kept
+      in `user_code` so the link and the requester's proof stay two secrets. */
+  telegramChallengeByLink(linkHash: string): Challenge | null {
+    const row = this.db.query<Row, [string]>("SELECT * FROM challenges WHERE user_code = ? AND kind = 'telegram'").get(linkHash);
     return row ? challengeFrom(row) : null;
   }
 

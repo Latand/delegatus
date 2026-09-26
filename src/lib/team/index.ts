@@ -132,7 +132,8 @@ const AUTHOR_SLACK_MS = 10 * 60_000;
  * (#1497: "reading it through the MCP tools still says who sent what"). A
  * transcript record carries no submission id, so the join is the one the
  * occurrence evidence already uses: the digest of the words the member sent,
- * and the nearest send at or before the record. Each send names at most one
+ * and the latest send at or before the record (a send just after it only
+ * when none precedes it). Each send names at most one
  * record; a record nothing matches is left unnamed.
  */
 export function recordAuthors(
@@ -152,13 +153,23 @@ export function recordAuthors(
       if (record.role !== "user" || !record.ts) return;
       const at = Date.parse(record.ts);
       const digest = messageTextDigest(record.text.replace(RECORD_MARKER, ""));
-      let best: (typeof sends)[number] | null = null;
+      /* The latest send at or before the record is its own. A send up to 5 s
+         after the record counts only when none precedes it (clocks differ):
+         taking the latest inside that slack named a record after whoever sent
+         the same words a moment later. */
+      let preceding: (typeof sends)[number] | null = null;
+      let following: (typeof sends)[number] | null = null;
       for (const send of sends) {
         if (used.has(send.clientMessageId) || send.textDigest !== digest) continue;
         const sentAt = Date.parse(send.at);
         if (sentAt > at + 5_000 || at - sentAt > AUTHOR_SLACK_MS) continue;
-        if (!best || sentAt > Date.parse(best.at)) best = send;
+        if (sentAt <= at) {
+          if (!preceding || sentAt > Date.parse(preceding.at)) preceding = send;
+        } else if (!following || sentAt < Date.parse(following.at)) {
+          following = send;
+        }
       }
+      const best = preceding ?? following;
       const member = best ? members.get(best.memberId) : null;
       if (best && member) {
         used.add(best.clientMessageId);

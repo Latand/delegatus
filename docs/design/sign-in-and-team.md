@@ -106,7 +106,7 @@ scope of §0; three entries narrow it and say where the rest went (A8, A9, A10).
 | A3 | **Authorship is written into the team module's own records; the core records stay unchanged.** A message's author is a `message_authors` row keyed by the submission's client message id (the browser's idempotency key). A spawn's and a task's authors are `team_events` rows keyed by the conversation id or task id. The structured-user metadata record, the Claude delivery ledger, `RegistryConversation` and `BoardTask` are untouched. | D8, §7.1–§7.3, §11.1 touch-point rows for `structuredUserMetadata.ts`, `claudeStreamBrokerHost.ts`, `messageOrigin.ts`, `registry.ts`, `tasks/types.ts` | The feed already binds every delivered record to its submission id: the Codex marker's delivery token through the registry's owner rows, the Claude ledger's `submissionId` (#1950). `/api/log/provenance` therefore answers `senders: { submissionId → sender }` for the ids it already names, and the feed resolves a row's sender through the same identity it already trusts. Five core stores keep their schemas and every record they ever wrote, and the whole of authorship lives behind the seam. |
 | A4 | **MCP readability** is `author: { kind: "member", memberId, name }` on `conversation_messages` user records. A transcript record carries no submission id, so the join is the digest of the words the member sent plus the nearest send at or before the record (the occurrence join of #1117). Each send names at most one record, and a record nothing matches stays unnamed. `get_task` and `get_conversation` are not extended (see A9). | §7.1 last paragraph, §7.2–§7.3 read notes | This is the one place where no identity survives into the record, and a digest-and-time join is the precedent the codebase already uses there. A message cut short by `maxChars` does not match, and is left unnamed. |
 | A5 | **The audit records people.** `recordTeamEvent` keeps `member` actors and Viewer `service` actors (a Telegram join request). An agent's own spawns, messages and task edits are not repeated there. The Activity tab opens on **Work** (messages, answers, agents started, tasks created and changed); **All events** adds the account housekeeping (sign-ins, invites, passkeys, Telegram links). | §3.7, §6.8 | The first renders showed setup traffic burying the work, and agents' own traffic would bury it further. What an agent did is already in its lineage and receipts. The question the operator asked is which *person* did what. |
-| A6 | **Fewer route files, with step bodies.** `POST /api/team/session/passkey { step: "options" \| "verify" }`, `POST /api/team/passkeys { step }`, `POST /api/team/session/approval/<id> { proof, complete? }` and `POST /api/team/session/telegram/<id> { proof, action? }`. Polls are POSTs that carry the requester's proof (the code it was handed; the store keeps its hash). | §12 route list | A challenge's public id alone never completes anything, and the proof never rides a query string into a log. |
+| A6 | **Fewer route files, with step bodies.** `POST /api/team/session/passkey { step: "options" \| "verify" }`, `POST /api/team/passkeys { step }`, `POST /api/team/session/approval/<id> { proof, complete? }` and `POST /api/team/session/telegram/<id> { proof, action? }`. Polls are POSTs that carry the requester's proof (a secret it was handed, never the code a Telegram deep link carries; the store keeps its hash). | §12 route list | A challenge's public id alone never completes anything, and the proof never rides a query string into a log. |
 | A7 | **A passkey whose counter goes backwards is refused**, which is SimpleWebAuthn 14's own behaviour; the `passkey.counter_regressed` event is dropped. | §3.4 | Synced passkeys report a counter of 0 at registration and after, and pass unchanged (pinned in `passkeys.test.ts`). A non-zero counter moving backwards means a cloned authenticator, and refusing it is the conservative reading. |
 | A8 | **The setup guide's Team step is not built.** The Team row in the desktop ⋯ menu and in both phone menus opens `/team`, which on a solo install is the claim card of §6.2. | §6.1 | A team is set up on a shared box, where ⋯ → Team is where the operator looks. The guide is the solo user's first run, and "keep single-user local use frictionless" argues for no new step there. |
 | A9 | **Avatars on the board's cards are deferred**: the task card's `updatedBy` and the conversation header's `startedBy`. `subjectAuthorship()` in `src/lib/team/index.ts` already answers both from the audit, for the follow-up. | §6.7 last paragraph, §7.2–§7.3 read notes | §0 asks for authorship stamped on messages, spawns and task changes, the sender's name in chat, and a simple view of who did what. All of that ships. Board meta is a second surface on the busiest component in the product, and belongs in its own lane with its own board renders. |
@@ -681,54 +681,95 @@ setup guide's phone step draws the same QR. In solo mode the QR is unchanged.
 Available when the Telegram bot is connected in the Telegram panel
 (`telegramBotService().status().connected`) and receiving.
 
+**Pressing Start is not consent.** A deep link can be forwarded, and asking
+someone to "press Start to check the bot" costs nothing. Anyone past the
+perimeter (every invitee, and a revoked member until the key is rotated, §9)
+can open `/sign-in`, copy the link and send it to the owner. When Start was
+the whole proof, the owner pressing it signed the *sender's* browser in as the
+owner, and the "That's not me" button only ever appeared on the sender's own
+screen. The same shape bound a victim's Telegram to the sender's member
+(link), and wrapped an outsider's Start in a join request the sender's browser
+completed. So Start only makes the bot describe the request to whoever
+pressed it and hand them a code; the requesting browser has to type that code
+back before anything is granted.
+
 **Sign in.** `/sign-in` → **Continue with Telegram**. The page asks
-`POST /api/team/session/telegram` and gets `{ id, url:
-"https://t.me/<bot>?start=<code>", expiresAt }`. On a phone the button opens
-the link (the Telegram app opens the bot with a **Start** button); on a
-desktop the page also draws the link as a QR for the phone's camera and shows
-**Open Telegram** for the desktop app. The page polls
-`GET /api/team/session/telegram/<id>` every 3 s.
+`POST /api/team/session/telegram` and gets `{ id, proof, url:
+"https://t.me/<bot>?start=<link>", expiresAt }`. Two secrets, never the same
+value: `link` rides the deep link and only finds the request (its hash is kept
+in `userCode`); `proof` stays in the browser and is what polls and completes
+it (its hash is `secretHash`). On a phone the button opens the link (the
+Telegram app opens the bot with a **Start** button); on a desktop the page
+also draws the link as a QR for the phone's camera and shows **Open
+Telegram** for the desktop app. The page polls
+`POST /api/team/session/telegram/<id> { proof }` every 3 s.
 
-**The bot hears it.** `TelegramBotService` gains one hook: before storing a
-private-chat `message` whose text is `/start <param>`, it hands
-`{ from, param }` to `teamTelegramHook` (a function the team module registers
-at boot; absent in a build without the module). The hook finds the
-unconsumed `telegram` challenge whose `secretHash` matches `sha256(param)`,
-and records `result: { telegramUserId, firstName, username, memberId }` where
-`memberId` is the member whose `telegram.userId` equals `from.id`, or null.
-The message is then stored as usual (it is a normal DM), and the bot replies
-in the chat: "Signed in to Delegatus as <name>." or "Delegatus does not know
-you yet. <Owner name> can approve you from the Team page." (in the install's
-interface language).
+**The bot hears it.** `TelegramBotService` has one hook: before storing a
+private-chat `message` whose text is `/start <link>`, it hands `{ from, text }`
+to `teamTelegramHook`. The hook finds the open `telegram` challenge whose
+link hash matches, records who pressed Start (`telegramUserId`, first name,
+username) and the hash of a fresh six-digit code, and the bot replies in that
+chat, in the install's interface language, with what is being asked and the
+code:
 
-**Known user:** the poll returns `{ state: "confirmed", name }`; the page shows
-"Signing in as <name>" for one beat and calls
-`POST /api/team/session/telegram/<id>/complete` for the cookie.
+```
+Someone is signing in to Delegatus at dev.example.net as Mira.
+Chrome on a phone, just now.
 
-**Unknown user:** the poll returns `{ state: "needs_approval", firstName }`.
-The page says "Waiting for <owner name> to approve you"; a `join.requested`
-event is written and the Team page shows a pending strip "<firstName>
-(@username) asked to join · 2 min ago [Approve] [Deny]". **Approve** creates
-the member with `telegram` linked and a name defaulting to the Telegram first
-name; the next poll returns `confirmed`. The challenge's 10 minutes are
-extended to 1 hour once a request is pending, so the owner has time; the
-requester's page keeps polling while open and can be reopened from the same
-link.
+If that browser is in front of you, type this code into it: 482 913
+
+If someone sent you this link, do not share the code: whoever types it signs in as you.
+```
+
+The first line names the request: signing in as the member this Telegram
+account is linked to, joining (with the owner who will approve), or linking
+this account to a named member. The second is the requesting browser, its
+surface and how long ago it asked; the host is the one the requester reached.
+The first Telegram account to press Start holds the request: pressing again
+from it sends a fresh code, and any other account is told the link is used.
+
+**The browser types the code back.** The poll returns `{ state: "code_sent" }`
+and the page asks for the code (`{ proof, action: "confirm", code }`). A wrong
+code counts against the request; the fifth voids it. The right one is the
+only thing that grants anything:
+
+- **Known member:** the answer is `{ state: "confirmed", name }`; the page
+  shows "Signing in as <name>" for one beat and asks
+  `{ proof, action: "complete" }` for the cookie.
+- **Unknown person:** the answer is `{ state: "needs_approval", firstName }`.
+  Only now is a `join.requested` event written and the Team page shows a
+  pending strip "<firstName> (@username) asked to join · 2 min ago [Approve]
+  [Deny]". **Approve** creates the member with `telegram` linked and a name
+  defaulting to the Telegram first name; the next poll returns `confirmed`.
+  The challenge's 10 minutes are extended to 1 hour once a request is pending,
+  so the owner has time.
 
 **Link my Telegram** (a signed-in member, Team page → own row → *Link
-Telegram*) is the same deep link with `memberId` bound on the challenge; the
-`/start` binds `from.id` to that member and writes `telegram.linked`. A
-Telegram user id can be linked to one member; a second link attempt answers
-"That Telegram account is already linked to <name>".
+Telegram*) is the same deep link with `memberId` bound on the challenge and the
+same code step: Start makes the bot say "Someone is linking this Telegram
+account to <name>", and only the code typed into that member's dialog binds
+`from.id` and writes `telegram.linked`. A Telegram user id can be linked to one
+member; a Start from an account already linked elsewhere answers "That
+Telegram account is already linked to <name>".
 
-**What Telegram proves here.** Telegram delivered a message from user `from.id`
-to the bot with this exact code. The code is 128-bit, single use, ten minutes.
-The only way to sign in as someone else is to obtain their unexpired link
-before they press Start, in which case the session goes to the requesting browser and never to the link
-holder, and the page shows "Signing in as <name>": a member
-who sees a name that is not theirs presses **That's not me**, which voids the
-challenge and writes `join.denied`. The bot token never leaves
+**What this proves.** Telegram delivered the code to user `from.id`, and the
+person at the requesting browser typed it back within ten minutes. To sign in
+as someone else, one needs their link *and* the code Telegram sent to their
+account, which the bot tells its holder never to share. What is left is the
+residue every one-time-code scheme has: a person who is persuaded to read the
+code out to someone else has handed over the sign-in, and the bot's wording is
+the defence. The link is 128-bit and single use; the code is 20 bits and
+survives four wrong guesses. The bot token never leaves
 `src/lib/telegram/bot/transport.ts`.
+
+**Why the code travels from the bot to the browser.** The other direction —
+the browser shows a code the person types to the bot, or picks from inline
+buttons — also binds the device, but its phishing message is complete in
+itself: "press Start and type 4829". The attacker supplies both halves and the
+victim discloses nothing. With the code sent by the bot, the attacker needs
+something only the victim's Telegram holds, and the victim has to hand it over
+against the bot's explicit warning. It also needs no `callback_query` in the
+poller's allowed updates.
 
 ### 5.4 Passkeys
 
@@ -963,8 +1004,9 @@ no sentence runs around the button:
 desktop                                          phone
 │  Continue with Telegram                   │    │  Continue with Telegram          │
 │  ┌────────┐  Or open Telegram on this     │    │  Open Telegram and press Start   │
-│  │   QR   │  computer. Then press Start   │    │  in the chat with the bot.       │
-│  └────────┘  in the chat with the bot.    │    │  [ Open Telegram ]               │
+│  │   QR   │  computer. Press Start in the │    │  in the chat with the bot. It    │
+│  └────────┘  chat with the bot, and it    │    │  sends a code to type here.      │
+│              sends a code to type here.   │    │  [ Open Telegram ]               │
 │  Scan with   [ Open Telegram ]            │    │  Waiting for Telegram…  ‹ Back   │
 │  your phone                               │
 │  Waiting for Telegram…          ‹ Back    │
@@ -974,7 +1016,10 @@ The Ukrainian copy names the button the way the Ukrainian Telegram clients
 label it, «Розпочати» (translations.telegram.org, Android `BotStart`, iOS
 `Bot.Start`).
 
-States: `waiting` → `confirmed` ("Signing in as Oleh") → navigate;
+After Start the sub-screen becomes one field, "Code from Telegram", with the
+hint "The bot sent it in the chat where you pressed Start." and **Continue**.
+
+States: `waiting` → `code_sent` (the code field) → `confirmed` ("Signing in as Oleh") → navigate;
 `needs_approval` ("Waiting for Mira to approve you. You can keep this page
 open."); `denied`/`expired` ("This link expired. Try again.").
 
@@ -1217,11 +1262,11 @@ proxy knows.
 | A header as evidence (#1496) | The gate reads a cookie the browser keeps; a capability or service header passes only once verified against the registry or its HMAC (A20); no proxy-set trust header. |
 | A revoked member | Every session ends at once and every write is refused. The member still holds the perimeter key from their invite link and can make bearer GETs until the key is rotated (`delegatus --new-token`, or a new `LLV_TOKEN`); the Revoke dialog says so. |
 | Claiming someone else's message | A sender is recorded only after the host admitted a submission whose id no delivery record and no author row knew, and is read back only on that conversation (A22). |
-| Guessing | Link codes are 128-bit; the approval code is 30 bits and voided after 5 wrong entries; passkeys are not guessable. No persistent throttle store: a Viewer restart resets the small in-memory counters, which is acceptable for 10-minute codes. |
+| Guessing | Link codes are 128-bit; the approval code is 30 bits and voided after 5 wrong entries; the Telegram confirmation code is 20 bits and its request is voided on the fifth wrong entry; passkeys are not guessable. No persistent throttle store: a Viewer restart resets the small in-memory counters, which is acceptable for 10-minute codes. |
 | A stolen phone | Sessions tab → Sign out everywhere, or the owner revokes the member; both are immediate through the revision-keyed cache. |
 | Lost passkey and lost phone | Invite from the owner; for the owner, the host CLI. |
 | Leaked invite link | Single use, 7 days, withdrawable; the Members page shows who joined through it (`member.joined` names the invite). |
-| Telegram link forwarded before Start | The requesting browser gets the session and shows the name; **That's not me** voids it. |
+| Telegram link forwarded to someone else (the owner, a victim, an outsider) | Start grants nothing (§5.3): the bot tells whoever pressed it what is being asked and sends them a six-digit code, and only the requesting browser typing that code back signs in, links, or raises a join request. The browser's polling proof is a separate secret from the link. Five wrong codes void the request. The residue is a person persuaded to read the code out, which the bot's reply warns against. |
 | The bot token | Never leaves its transport closure; the hook receives `from` and `param`, never the transport. |
 | Same-uid local process | Unchanged and stated as before in `operatorAuthority.ts`: a process running as the operator's uid can read the browser's cookie jar; nothing in software on one uid closes that, and #691's five rounds established it. |
 | Public exposure without a perimeter | Out of scope, as it is today: an install reachable from the internet still needs `LLV_TOKEN` or a proxy in front. The identity layer is not the perimeter (D1). A non-loopback bind without a token is the existing launcher guard's job (#1495). |
