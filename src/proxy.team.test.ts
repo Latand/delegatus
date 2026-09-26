@@ -8,7 +8,7 @@ import { NextRequest } from "next/server";
 import { installSpawnCapabilityResolver, internalServiceHeaders, spawnCapabilityDigest } from "@/lib/agent/callerClaims";
 import { productionViewerControlDependencies, viewerMcpBindings } from "@/lib/mcp/bindings";
 import { requestRemotePipelineTick } from "@/lib/pipelines/controllerSignal";
-import { viewerHealthRequestPlan } from "@/runtime-host/deploymentHealth";
+import { viewerHealthRequestPlan, viewerRefusesUnauthorized } from "@/runtime-host/deploymentHealth";
 import { claimInstall, createHandoff } from "@/lib/team/members";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
@@ -55,6 +55,13 @@ describe("solo install", () => {
     const response = proxy(get("/", { cookie: `llv_auth=${TOKEN}`, "sec-fetch-mode": "navigate" }));
     expect(response.status).toBe(200);
     expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  test("the deploy gate's keyless probe is refused at the perimeter", async () => {
+    const probe = viewerHealthRequestPlan("https://dev.example.net", TOKEN, probeHeadersFrom(stateDir)).unauthorized!;
+    const response = proxy(new NextRequest(probe.url, { headers: probe.headers }));
+    expect(response.status).toBe(403);
+    expect(viewerRefusesUnauthorized(response.status, await response.text())).toBe(true);
   });
 });
 
@@ -262,6 +269,14 @@ describe("team install: first-party callers name themselves and are checked", ()
       if (previousControl.token === undefined) delete process.env.LLV_VIEWER_CONTROL_TOKEN;
       else process.env.LLV_VIEWER_CONTROL_TOKEN = previousControl.token;
     }
+  });
+
+  test("the deploy gate's keyless probe reads the team gate's refusal as refused", async () => {
+    const plan = viewerHealthRequestPlan("https://dev.example.net", TOKEN, probeHeadersFrom(stateDir));
+    const probe = plan.unauthorized!;
+    const response = proxy(new NextRequest(probe.url, { headers: probe.headers }));
+    expect(response.status).toBe(401);
+    expect(viewerRefusesUnauthorized(response.status, await response.text())).toBe(true);
   });
 
   test("an anonymous browser write stays refused, with the key and without one", () => {
