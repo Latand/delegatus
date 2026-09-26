@@ -486,6 +486,7 @@ export function teamView(store: TeamStore, me: Member | null, methods: TeamView[
         lastSurface: last?.surface ?? null,
         online: sessions.some((session) => session.memberId === member.id && !session.revokedAt && onlineWithin(session.lastSeenAt, nowMs)),
         createdAt: member.createdAt,
+        revokedAt: member.revokedAt,
       };
     }),
     methods,

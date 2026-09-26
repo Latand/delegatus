@@ -64,7 +64,7 @@ test("a delivered Claude message names its member through the ledger's submissio
   }, [item]);
   const container = render(<MessageProvenanceProvider value={lookup}><FeedItem item={item} /></MessageProvenanceProvider>);
   expect(container.querySelector("[data-user-bubble]")?.textContent).toContain("Review the auth seam again");
-  expect(senderOf(container)).toEqual({ id: "m_mira", text: "MKMira Koval" });
+  expect(senderOf(container)).toEqual({ id: "m_mira", text: "Mira Koval" });
   expect(container.querySelector("[data-member-avatar]")?.getAttribute("data-member-avatar")).toBe("violet");
 });
 
@@ -73,7 +73,7 @@ test("a structured Codex message names its member through the marker's delivery 
   const item = { kind: "user", ts: TS, text: "Check the Host pin too", structuredUserRef: structuredUserReference(token, true) } as Item;
   const lookup = provenanceLookupFor({ submissions: { [token]: "sub-oleh-1" }, senders: { "sub-oleh-1": OLEH } }, [item]);
   const container = render(<MessageProvenanceProvider value={lookup}><FeedItem item={item} /></MessageProvenanceProvider>);
-  expect(senderOf(container)).toEqual({ id: "m_oleh", text: "OLOleh" });
+  expect(senderOf(container)).toEqual({ id: "m_oleh", text: "Oleh" });
 });
 
 test("a message nobody can name draws no sender line", () => {

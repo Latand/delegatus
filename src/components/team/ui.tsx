@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 
 import { Z } from "@/components/layers";
 import { useModalLayer } from "@/components/modalLayer";
-import type { Locale } from "@/lib/i18n";
+import { translate, type Locale } from "@/lib/i18n";
 
 /* The team pages' few shared pieces. Every class is one the rest of the
    Viewer already uses (docs/design/viewer-design-system.md): one brand-filled
@@ -65,14 +65,17 @@ function intlLocale(locale: Locale): string {
   return locale === "uk" ? "uk-UA" : "en-GB";
 }
 
-/** "2 min ago", "in 6 days": the nearest whole unit. */
-export function relativeTime(iso: string | null | undefined, locale: Locale, nowMs = Date.now()): string {
+/** "2 min ago", "in 6 days": the nearest whole unit. Under a minute it is
+    "just now": Intl's "now" reads as a contradiction beside a past-tense verb
+    ("був(ла) зараз"). `long` spells the unit out, for a sentence that ends
+    after the value, where the short "7 дн." would double the full stop. */
+export function relativeTime(iso: string | null | undefined, locale: Locale, nowMs = Date.now(), style: "short" | "long" = "short"): string {
   if (!iso) return "";
   const deltaS = (Date.parse(iso) - nowMs) / 1000;
   if (!Number.isFinite(deltaS)) return "";
-  const format = new Intl.RelativeTimeFormat(intlLocale(locale), { numeric: "auto", style: "short" });
+  const format = new Intl.RelativeTimeFormat(intlLocale(locale), { numeric: "auto", style });
   const abs = Math.abs(deltaS);
-  if (abs < 45) return format.format(0, "second");
+  if (abs < 45) return translate(locale, "team.time.justNow");
   if (abs < 45 * 60) return format.format(Math.round(deltaS / 60), "minute");
   if (abs < 22 * 3600) return format.format(Math.round(deltaS / 3600), "hour");
   return format.format(Math.round(deltaS / 86400), "day");

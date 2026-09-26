@@ -257,20 +257,32 @@ export function SignInCard({ next }: { next: string }) {
             </p>
           ) : screen.state.state === "waiting" ? (
             <>
-              <div className={isMobile ? "flex flex-col items-stretch gap-3" : "flex items-center gap-4"}>
-                {isMobile ? null : (
-                  <div className="shrink-0 rounded-control border border-border bg-card p-1.5">
-                    <AccessQrImage url={screen.url} size={132} />
-                  </div>
-                )}
-                <div className="flex min-w-0 flex-col gap-2 text-ui text-secondary">
-                  {isMobile ? null : <span>{t("team.signIn.telegramScan")}</span>}
+              {/* Each layout says one whole sentence, and no sentence runs
+                  around the button: the phone opens the app on this device,
+                  the desktop offers the QR (captioned) or the app here. */}
+              {isMobile ? (
+                <div className="flex flex-col items-stretch gap-3">
+                  <p className="text-center text-ui leading-relaxed text-secondary">{t("team.signIn.telegramPhone")}</p>
                   <a href={screen.url} target="_blank" rel="noreferrer" className={BUTTON.primary} data-sign-in-open-telegram="">
                     <Send className="h-4 w-4" aria-hidden />{t("team.signIn.openTelegram")}
                   </a>
-                  <span>{t("team.signIn.thenStart")}</span>
                 </div>
-              </div>
+              ) : (
+                <div className="flex items-center gap-5">
+                  <figure className="flex shrink-0 flex-col items-center gap-1.5">
+                    <div className="rounded-control border border-border bg-card p-1.5">
+                      <AccessQrImage url={screen.url} size={132} />
+                    </div>
+                    <figcaption className="text-label text-muted">{t("team.signIn.telegramScan")}</figcaption>
+                  </figure>
+                  <div className="flex min-w-0 flex-col gap-3">
+                    <p className="text-ui leading-relaxed text-secondary">{t("team.signIn.telegramDesktop")}</p>
+                    <a href={screen.url} target="_blank" rel="noreferrer" className={BUTTON.secondary} data-sign-in-open-telegram="">
+                      <Send className="h-4 w-4" aria-hidden />{t("team.signIn.openTelegram")}
+                    </a>
+                  </div>
+                </div>
+              )}
               <p className="mt-4 flex items-center gap-2 text-label text-muted" aria-live="polite">
                 <span className="h-1.5 w-1.5 rounded-full bg-accent motion-safe:animate-pulse" aria-hidden />
                 {t("team.signIn.waiting")}

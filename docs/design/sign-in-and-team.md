@@ -86,7 +86,7 @@ under §14, Deferred.
 | D7 | **Identity is checked in `src/proxy.ts` (Node runtime) and re-checked at every stamp site.** The proxy redirects a browser without a session to `/sign-in` and answers `401 member_required` to API calls; the stamp sites refuse an anonymous human write in team mode. | Next 16's proxy runs on Node (§2.3), so one place sees every route including SSE and GET. The #20 plan's "call `requireSession` at the top of every handler" was never executed and is the kind of rule that gets missed. Belt and braces: the proxy is the UX and the coarse gate; the stamp site is the enforcement. |
 | D8 | **Authorship is written into the records that already exist**, as a `TeamActor`: the structured-user metadata record and the Claude delivery ledger for messages, the registry conversation for spawns (`startedBy`), the task row for task edits (`createdBy`, `updatedBy`). Names are joined at read time from the members store. | Renames must not rewrite history; ids are stable, names are looked up. The transcript text an agent reads is unchanged. |
 | D9 | **"Who did what" is one append-only collection, `team_events`, in `state.sqlite`**, written at the same chokepoints where `recordOperatorRequest` already runs. The activity dashboard's request ledger keeps its six-key privacy contract untouched. | One helper, one table, one page. The existing ledger deliberately stores no ids or titles; the audit needs both, so it is a sibling, never a widening. |
-| D10 | **The chat shows the sender on every human message in team mode**, own messages included: a 16 px initials avatar in the member's colour and the name, above the bubble. Solo mode draws nothing new. | A shared screen reads the same for everyone; "You" would differ per viewer. Agent relays keep the internal card; Viewer-authored cards keep the emblem. |
+| D10 | **The chat shows the sender on every human message in team mode**, own messages included: a dot in the member's colour and the name, above the bubble. Solo mode draws nothing new. | A shared screen reads the same for everyone; "You" would differ per viewer. Agent relays keep the internal card; Viewer-authored cards keep the emblem. |
 | D11 | **One repository, MIT, team features included; no closed fork.** The module lives behind one seam (§11) so the option stays open. If a paid edition is ever wanted, the cheapest true move is a directory licence in the same repository (GitLab's `ee/` pattern) or a whole-repo source-available licence (FSL), never a synced fork. | A fork is a permanent merge tax with no customer today. The seam costs a day; the fork costs every week. |
 | D12 | **Recovery root is the host.** `delegatus team recover` prints a one-time owner link; on Docker the same command runs in the release container. | Every other method can be lost with a phone; the machine cannot. Same principle as #20 §4.6. |
 
@@ -947,15 +947,23 @@ keyboard never needed on this screen.
 On approval the card shows "Signed in as Mira" and navigates.
 
 **Telegram sub-screen** (desktop shows the QR; the phone shows only the
-button, since the app opens directly):
+button, since the app opens directly). Each layout says whole sentences, and
+no sentence runs around the button:
 
 ```
-│  Continue with Telegram                      │
-│  ┌────────┐  Scan with your phone, or        │
-│  │   QR   │  [ Open Telegram ]               │
-│  └────────┘  then press Start.               │
-│  Waiting for Telegram…          ‹ Back       │
+desktop                                          phone
+│  Continue with Telegram                   │    │  Continue with Telegram          │
+│  ┌────────┐  Or open Telegram on this     │    │  Open Telegram and press Start   │
+│  │   QR   │  computer. Then press Start   │    │  in the chat with the bot.       │
+│  └────────┘  in the chat with the bot.    │    │  [ Open Telegram ]               │
+│  Scan with   [ Open Telegram ]            │    │  Waiting for Telegram…  ‹ Back   │
+│  your phone                               │
+│  Waiting for Telegram…          ‹ Back    │
 ```
+
+The Ukrainian copy names the button the way the Ukrainian Telegram clients
+label it, «Розпочати» (translations.telegram.org, Android `BotStart`, iOS
+`Bot.Start`).
 
 States: `waiting` → `confirmed` ("Signing in as Oleh") → navigate;
 `needs_approval` ("Waiting for Mira to approve you. You can keep this page
@@ -980,9 +988,7 @@ desktop (feed column)                                    phone (390)
                      │ Check the Host pin too      │
 ```
 
-The line: a 16 px circle (14 px on the phone) filled with the member's colour
-(`TASK_COLORS` mapped through the same soft/strong pairs the card colour rule
-uses) carrying the initials in `--text-caption` 700 on-brand ink, then the
+The line: a 10 px dot (9 px on the phone) in the member's colour, then the
 name in `--text-label` 600 `--text-secondary`, 4 px gap, 2 px below the line
 the bubble. The line is drawn on every human message in team mode, the
 viewer's own included. A message with no member (sent before this slice, or
@@ -1220,7 +1226,9 @@ proxy knows.
   header, three tabs in the page header. On the phone it is a full-width page
   reached from the ⋯ menu; sheets are used only for filters and confirmations.
 - One brand-filled button per screen. Outlined secondary. Text tertiary.
-- Avatars: a circle of the member's colour with initials; never a photo in
+- Avatars: a circle of the member's colour with initials from 20 px up; below
+  20 px two letters blur into the circle's edge at DPR 1, so a small mark (the
+  chat sender line, the Sessions group headers) is the colour dot alone. Never a photo in
   this slice (Telegram's `picture` would be a hot link to Telegram's CDN from
   every viewer's browser, which the privacy posture of this app does not want
   by default).
@@ -1246,12 +1254,13 @@ their mirror. Grouped:
   `team.signIn.telegram` Continue with Telegram / Продовжити через Telegram;
   `team.signIn.passkey` Use a passkey / Увійти з ключем доступу;
   `team.signIn.approval` Approve from another device / Підтвердити з іншого пристрою;
-  `team.signIn.or` or / або; `team.signIn.inviteHint` Have an invite link? Open it here. / Маєте посилання-запрошення? Відкрийте його тут.;
+  `team.signIn.or` or / або; `team.signIn.inviteHint` Got an invite link? Open that link on this device. / Маєте посилання-запрошення? Відкрийте це посилання на цьому пристрої.;
   `team.signIn.approvalHint` On a device where you are signed in, open ⋯ → Team → Approve a device and enter this code. / На пристрої, де ви вже увійшли, відкрийте ⋯ → Команда → Підтвердити пристрій і введіть цей код.;
   `team.signIn.expiresIn` Expires in {time} / Спливає через {time};
-  `team.signIn.telegramScan` Scan with your phone, or / Відскануйте телефоном або;
+  `team.signIn.telegramScan` Scan with your phone / Відскануйте телефоном (the caption under the QR);
   `team.signIn.openTelegram` Open Telegram / Відкрити Telegram;
-  `team.signIn.thenStart` then press Start. / потім натисніть Start.;
+  `team.signIn.telegramPhone` Open Telegram and press Start in the chat with the bot. / Відкрийте Telegram і натисніть «Розпочати» в чаті з ботом.;
+  `team.signIn.telegramDesktop` Or open Telegram on this computer. Then press Start in the chat with the bot. / Або відкрийте Telegram на цьому комп’ютері. Потім натисніть «Розпочати» в чаті з ботом.;
   `team.signIn.waiting` Waiting for Telegram… / Чекаємо на Telegram…;
   `team.signIn.signingInAs` Signing in as {name} / Входимо як {name};
   `team.signIn.notMe` That's not me / Це не я;
@@ -1264,27 +1273,27 @@ their mirror. Grouped:
   `team.join.passkeyOffer` Add a passkey on this device? / Додати ключ доступу на цьому пристрої?;
   `team.join.passkeyWhy` Next time, one touch signs you in. / Наступного разу один дотик — і ви увійшли.;
   `team.join.addPasskey` Add a passkey / Додати ключ доступу; `team.join.notNow` Not now / Не зараз
-- `team.claim.title` Set up a team / Налаштувати команду; `team.claim.body` Sign in as yourself, invite others, and see who did what. / Увійдіть як ви, запросіть інших і бачте, хто що зробив.;
-  `team.claim.name` Your name / Ваше ім’я; `team.claim.submit` Set me as owner / Зробити мене власником;
+- `team.claim.title` Set up a team / Налаштувати команду; `team.claim.body` Everyone signs in under their own name. Invite others and see who did what. / Кожен входить під власним ім’ям. Запросіть інших і дивіться, хто що зробив.;
+  `team.claim.name` Your name / Ваше ім’я; `team.claim.submit` Make me the owner / Зробити мене власником;
   `team.claim.consequence` Other people who reach this Delegatus will be asked to sign in from now on. / Відтепер інших людей, що відкривають цей Delegatus, проситимуть увійти.
 - `team.onboarding.title` Who uses this Delegatus? / Хто користується цим Delegatus?; `team.onboarding.justMe` Just me / Лише я; `team.onboarding.justMeHint` Nothing to set up. / Нічого налаштовувати.; `team.onboarding.myTeam` My team / Моя команда; `team.onboarding.myTeamHint` Sign in as yourself, invite others, see who did what. / Увійдіть як ви, запросіть інших, бачте, хто що зробив.
 - `team.tabs.members` Members / Учасники; `team.tabs.activity` Activity / Дії; `team.tabs.sessions` Sessions / Сеанси;
   `team.invite` Invite / Запросити; `team.approveDevice` Approve a device / Підтвердити пристрій;
-  `team.invite.title` Invite someone / Запросити когось; `team.invite.name` Their name (optional) / Ім’я (необов’язково); `team.invite.create` Create link / Створити посилання; `team.invite.note` Works once, for 7 days. Whoever opens it joins as a member. / Діє один раз, 7 днів. Хто відкриє — стане учасником.; `team.invite.open` Open invites / Відкриті запрошення; `team.invite.expires` expires in {time} / спливає через {time}; `team.invite.withdraw` Withdraw / Відкликати;
-  `team.request.asked` {name} asked to join · {age} / {name} просить приєднатися · {age}; `team.request.approve` Approve / Схвалити; `team.request.deny` Deny / Відхилити;
+  `team.invite.title` Invite someone / Запросити когось; `team.invite.name` Their name (optional) / Ім’я (необов’язково); `team.invite.create` Create link / Створити посилання; `team.invite.note` Works once and expires {time}. Whoever opens it joins as a member. You will not see this link again. / Діє один раз і спливає {time}. Хто відкриє — стане учасником. Більше це посилання не покажеться. ({time} in the long form, "через 7 днів", since the short "7 дн." would double the full stop); `team.invite.open` Open invites / Відкриті запрошення; `team.invite.expires` expires in {time} / спливає через {time}; `team.invite.withdraw` Withdraw / Відкликати;
+  `team.request.asked` {name} asked to join · {age} / {name} просить приєднатися · {age}; `team.request.approve` Approve / Підтвердити (one verb for approving in Ukrainian, on devices and people alike); `team.request.deny` Deny / Відхилити;
   `team.role.owner` owner / власник; `team.role.member` member / учасник; `team.role.revoked` revoked / відкликано;
-  `team.presence.online` online · {surface} / онлайн · {surface}; `team.presence.seen` seen {age} / був(ла) {age}; `team.presence.never` never / ще не заходив(ла);
+  `team.presence.online` online · {surface} / онлайн · {surface}; `team.presence.seen` seen {age} / був(ла) {age}; `team.presence.never` never signed in / ще не входив(ла); under a minute {age} is `team.time.justNow` just now / щойно, never Intl's "now"; a revoked member's line is `team.member.revokedAt` access ended {age} / доступ закрито {age}, since the pill already says "revoked";
   `team.member.rename` Rename / Перейменувати; `team.member.color` Change colour / Змінити колір; `team.member.revoke` Revoke / Відкликати; `team.member.restore` Restore / Повернути; `team.member.revokeConfirm` {name} will be signed out everywhere and cannot sign in again. Their past messages keep their name. / {name} вийде на всіх пристроях і більше не зможе увійти. Минулі повідомлення збережуть ім’я.;
   `team.telegram.link` Link Telegram / Прив’язати Telegram; `team.telegram.unlink` Unlink / Відв’язати; `team.telegram.taken` That Telegram account is already linked to {name} / Цей Telegram уже прив’язано до {name};
   `team.passkey.add` Add a passkey on this device / Додати ключ доступу на цьому пристрої; `team.passkey.remove` Remove / Видалити; `team.passkey.count` {n} passkeys / {n} ключів (plural forms);
-  `team.approve.title` Approve a device / Підтвердити пристрій; `team.approve.code` Code from the other device / Код з іншого пристрою; `team.approve.confirm` Sign in {surface} ({browser}) as you? / Увійти на {surface} ({browser}) як ви?; `team.approve.wrong` That code is not right. / Код неправильний.;
-  `team.sessions.thisDevice` this device / цей пристрій; `team.sessions.signOut` Sign out / Вийти; `team.sessions.signOutAll` Sign out everywhere / Вийти всюди; `team.sessions.via` via {method} / через {method}; method names: `team.method.claim` setup / налаштування, `team.method.invite` invite link / посилання-запрошення, `team.method.approval` approved device / підтверджений пристрій, `team.method.telegram` Telegram, `team.method.passkey` passkey / ключ доступу, `team.method.handoff` phone QR / QR для телефона, `team.method.recovery` host recovery / відновлення з хоста;
+  `team.approve.title` Approve a device / Підтвердити пристрій; `team.approve.code` Code from the other device / Код з іншого пристрою; `team.approve.confirm` Sign in the {surface} ({browser}) as you? / Увійти під вашим ім’ям на пристрої «{surface}» ({browser})?; `team.approve.wrong` That code is not right. / Код неправильний.;
+  `team.sessions.thisDevice` this device / цей пристрій; `team.sessions.signOut` Sign out / Вийти (this device's row only); `team.sessions.end` End session / Завершити сеанс (every other row, another person's or another device's); `team.sessions.signOutAll` Sign out everywhere / Вийти всюди; `team.sessions.via` via {method} / через {method}; method names: `team.method.claim` setup / налаштування, `team.method.invite` invite link / посилання-запрошення, `team.method.approval` approved device / підтверджений пристрій, `team.method.telegram` Telegram, `team.method.passkey` passkey / ключ доступу, `team.method.handoff` phone QR / QR для телефона, `team.method.recovery` host recovery / відновлення з хоста;
   `team.activity.everyone` Everyone / Усі; `team.activity.allProjects` All projects / Усі проєкти; `team.activity.loadMore` Load more / Показати ще; `team.activity.empty` Nothing yet. Actions appear here as people take them. / Поки нічого. Дії з’являться тут, щойно хтось щось зробить.;
-  action phrases `team.action.*` for every `TeamEventAction`: e.g. `message.sent` sent a message / надіслав(ла) повідомлення; `agent.started` started {role} / запустив(ла) {role}; `agent.stopped` stopped {role} / зупинив(ла) {role}; `task.created` created a task / створив(ла) задачу; `task.changed.status` moved a task to {to} / переніс(ла) задачу в {to}; `task.changed` edited a task / змінив(ла) задачу; `task.hidden` hid a task / приховав(ла) задачу; `member.joined` joined / приєднався(лась); `member.invited` invited someone / запросив(ла) когось; `member.revoked` revoked {name} / відкликав(ла) {name}; `session.revoked` signed out a device / вийшов(ла) з пристрою; `passkey.added` added a passkey / додав(ла) ключ доступу; `telegram.linked` linked Telegram / прив’язав(ла) Telegram; the remaining actions follow the same pattern.
+  action phrases `team.action.*` for every `TeamEventAction`: e.g. `message.sent` sent a message / надіслав(ла) повідомлення; `agent.started` started an agent / запустив(ла) агента, with the role in the context column beside the agent's title; `agent.stopped` stopped {role} / зупинив(ла) {role}; `task.created` created a task / створив(ла) задачу; `task.changed.status` moved a task to {to} / переніс(ла) задачу в {to}; `task.changed` edited a task / змінив(ла) задачу; `task.hidden` hid a task / приховав(ла) задачу; `member.joined` joined / приєднався(лась); `member.invited` invited someone / запросив(ла) когось; `member.revoked` revoked {name} / відкликав(ла) {name}; `session.revoked` ended a session on a {surface} / завершив(ла) сеанс на пристрої «{surface}»; `passkey.added` added a passkey / додав(ла) ключ доступу; `telegram.linked` linked Telegram / прив’язав(ла) Telegram; the remaining actions follow the same pattern.
 - Bot replies (server-rendered in the install's interface language, in
   `src/lib/team/telegramSignIn.ts`, outside the browser dictionary):
   `Signed in to Delegatus as {name}.` / `Ви увійшли в Delegatus як {name}.`;
-  `Delegatus does not know you yet. {owner} can approve you from the Team page.` / `Delegatus вас ще не знає. {owner} може схвалити вас на сторінці Команда.`;
+  `Delegatus does not know you yet. {owner} can approve you from the Team page.` / `Delegatus вас ще не знає. {owner} може підтвердити вас на сторінці «Команда».`;
   `Telegram linked to {name}.` / `Telegram прив’язано до {name}.`
 
 The gendered Ukrainian past-tense forms use the `(ла)` convention already used
@@ -1520,14 +1529,21 @@ neutral home with invented members:
 
 ```
 sign-in-desktop-{en,uk}.png, sign-in-phone-{en,uk}.png
-sign-in-approval-desktop-{en,uk}.png, sign-in-telegram-desktop-{en,uk}.png, sign-in-telegram-phone-{en,uk}.png
-join-desktop-{en,uk}.png, join-phone-{en,uk}.png, join-passkey-offer-phone-{en,uk}.png
-claim-desktop-{en,uk}.png
-invite-dialog-desktop-{en,uk}.png, invite-dialog-phone-{en,uk}.png
-chat-two-senders-desktop-{en,uk}.png, chat-two-senders-phone-{en,uk}.png
-team-members-desktop-{en,uk}.png, team-members-phone-{en,uk}.png
-team-activity-desktop-{en,uk}.png, team-activity-phone-{en,uk}.png
+sign-in-approval-{desktop,phone}-{en,uk}.png
+sign-in-telegram-{desktop,phone}-{en,uk}.png, sign-in-telegram-waiting-owner-{desktop,phone}-{en,uk}.png
+join-{desktop,phone}-{en,uk}.png, join-passkey-offer-{desktop,phone}-{en,uk}.png, join-invalid-{desktop,phone}-{en,uk}.png
+claim-{desktop,phone}-{en,uk}.png
+menu-team-{desktop,phone}-{en,uk}.png
+approve-device-code-{desktop,phone}-{en,uk}.png, approve-device-confirm-{desktop,phone}-{en,uk}.png
+invite-dialog-{desktop,phone}-{en,uk}.png
+chat-two-senders-{desktop,phone}-{en,uk}.png
+team-members-{desktop,phone}-{en,uk}.png, team-activity-{desktop,phone}-{en,uk}.png, team-sessions-{desktop,phone}-{en,uk}.png
 ```
+
+Each language pass starts from a freshly seeded home and builds the same
+team with the same invented names, so the en and uk renders show the same
+members, invites and sessions. One chat sender carries the longest fixture
+name, 24 characters.
 
 The reviewer measures at 390: no control narrower than 44 px, no clipped
 name, the code readable at arm's length, no overlap between the sender line

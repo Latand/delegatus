@@ -158,7 +158,12 @@ function MemberRow({ member, me, canEdit, onOpen, locale, t }: {
           </span>
         </div>
         <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-label text-muted">
-          <span className={online ? "text-success" : undefined}>{revoked ? t("team.role.revoked") : presence(t, member, locale)}</span>
+          {/* The pill already says "revoked"; the line says when. */}
+          {revoked ? (
+            member.revokedAt ? <span>{t("team.member.revokedAt", { age: relativeTime(member.revokedAt, locale) })}</span> : null
+          ) : (
+            <span className={online ? "text-success" : undefined}>{presence(t, member, locale)}</span>
+          )}
           {member.telegram ? (
             <span className="inline-flex items-center gap-1"><Send className="h-3 w-3" aria-hidden />{member.telegram.username ? `@${member.telegram.username}` : member.telegram.firstName ?? "Telegram"}</span>
           ) : null}
@@ -206,7 +211,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
             <AccessQrImage url={link.url} size={196} />
           </div>
           <AccessQrLink url={link.url} copyLabel={t("common.copy")} />
-          <p className="text-label leading-snug text-muted">{t("team.invite.note", { time: relativeTime(link.expiresAt, locale) })}</p>
+          <p className="text-label leading-snug text-muted">{t("team.invite.note", { time: relativeTime(link.expiresAt, locale, Date.now(), "long") })}</p>
           <button type="button" className={BUTTON.secondary} onClick={onClose}>{t("team.done")}</button>
         </div>
       ) : (

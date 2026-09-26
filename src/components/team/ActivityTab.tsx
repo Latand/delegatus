@@ -33,7 +33,7 @@ function phrase(t: TFunction, event: TeamEvent, members: Map<string, MemberSumma
   const detail = event.detail ?? {};
   switch (event.action) {
     case "agent.started":
-      return typeof detail.role === "string" && detail.role ? t("team.action.agentStartedRole", { role: detail.role }) : t("team.action.agentStarted");
+      return t("team.action.agentStarted");
     case "task.changed": {
       const to = typeof detail.to === "string" ? detail.to : null;
       if (to && STATUS_KEYS.has(to)) return t("team.action.taskMoved", { to: t(`kanban.status.${to}` as MessageKey) });
@@ -61,7 +61,9 @@ function phrase(t: TFunction, event: TeamEvent, members: Map<string, MemberSumma
 
 function subjectText(event: TeamEvent, t: TFunction): string | null {
   if (!event.subject || event.subject.kind === "member" || event.subject.kind === "session" || event.subject.kind === "passkey") return null;
-  const role = typeof event.detail?.role === "string" && event.action !== "agent.started" ? event.detail.role : null;
+  /* The role is an id ("reviewer"), so it sits in the context column and
+     never inside the verb phrase. */
+  const role = typeof event.detail?.role === "string" && event.detail.role ? event.detail.role : null;
   const title = event.subject.title ?? (event.subject.kind === "task" ? t("team.activity.untitledTask") : t("team.activity.untitledAgent"));
   return role ? `${role} · ${title}` : title;
 }
@@ -119,10 +121,12 @@ export function ActivityTab({ view }: { view: TeamView }) {
     return result;
   }, [data, locale, t]);
 
-  const select = "h-8 min-w-0 rounded-control border border-border bg-card px-2 text-ui font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-1";
+  /* On the phone the three filters do not fit one row at the phone's type
+     size: scope and person share the first row, the project takes the second. */
+  const select = "h-8 min-w-0 rounded-control border border-border bg-card px-2 text-ui font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:w-full";
   return (
     <div className="flex flex-col gap-3" data-team-activity={data ? data.events.length : "loading"}>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 max-sm:grid max-sm:grid-cols-2">
         <select aria-label={t("team.activity.what")} className={select} value={scope} onChange={(event) => setScope(event.target.value === "all" ? "all" : "work")} data-team-activity-scope="">
           <option value="work">{t("team.activity.work")}</option>
           <option value="all">{t("team.activity.all")}</option>
@@ -131,7 +135,7 @@ export function ActivityTab({ view }: { view: TeamView }) {
           <option value="">{t("team.activity.everyone")}</option>
           {view.members.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
         </select>
-        <select aria-label={t("team.activity.where")} className={select} value={project} onChange={(event) => setProject(event.target.value)} data-team-activity-project="">
+        <select aria-label={t("team.activity.where")} className={`${select} max-sm:col-span-2`} value={project} onChange={(event) => setProject(event.target.value)} data-team-activity-project="">
           <option value="">{t("team.activity.allProjects")}</option>
           {(data?.projects ?? []).map((entry) => <option key={entry} value={entry}>{projectName(entry, t, data?.projectNames)}</option>)}
         </select>
@@ -158,7 +162,7 @@ export function ActivityTab({ view }: { view: TeamView }) {
                     <span aria-hidden className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sunken text-muted"><Send className="h-3 w-3" /></span>
                   )}
                   <div className="min-w-0 flex-1 sm:flex sm:items-baseline sm:gap-2">
-                    <p className="min-w-0 truncate text-ui text-primary">
+                    <p className="min-w-0 text-ui text-primary sm:truncate">
                       <span className="font-semibold">{actor?.name ?? t("team.activity.delegatus")}</span>{" "}
                       <span className="text-secondary">{phrase(t, event, members)}</span>
                     </p>

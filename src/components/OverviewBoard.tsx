@@ -276,7 +276,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
           { kind: "divider", key: "d-setup" },
           activityMobileMenuEntry(t, mobileNav),
-      teamMobileMenuEntry(t, mobileNav),
+          teamMobileMenuEntry(t, mobileNav),
           ...onboardingMobileMenuEntries(t, close),
           selfUpdateMobileMenuEntry(t, close),
         ];

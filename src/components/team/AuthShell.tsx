@@ -37,6 +37,9 @@ export function AuthShell({ children, testId }: { children: ReactNode; testId: s
   );
 }
 
+/* The same small pill on every screen size. On the phone each half keeps a
+   44 px touch target through an invisible hit area around it, so the switch
+   stays the lightest thing on the page. */
 function LocaleSwitch() {
   const { locale, t, setLocale } = useLocale();
   const options: Locale[] = ["en", "uk"];
@@ -49,7 +52,7 @@ function LocaleSwitch() {
           aria-pressed={locale === option}
           data-team-locale={option}
           onClick={() => setLocale(option)}
-          className={`min-h-7 rounded-full px-2.5 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 max-sm:min-w-11 ${locale === option ? "bg-sunken text-primary" : "text-muted hover:text-primary"}`}
+          className={`relative min-h-7 rounded-full px-2.5 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:after:absolute max-sm:after:-inset-x-1.5 max-sm:after:-inset-y-2 max-sm:after:content-[''] ${locale === option ? "bg-sunken text-primary" : "text-muted hover:text-primary"}`}
         >
           {option.toUpperCase()}
         </button>

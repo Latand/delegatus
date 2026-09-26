@@ -114,16 +114,20 @@ function ClaimCard() {
       onSubmit={(event) => { event.preventDefault(); void claim(); }}
       className="mx-auto mt-4 w-full max-w-[440px] rounded-surface border border-border bg-card px-6 pb-6 pt-6 shadow-1 max-sm:px-4"
     >
-      <DelegatusBadge size={48} />
-      <h2 className="mt-3 text-title font-bold text-primary">{t("team.claim.title")}</h2>
-      <p className="mt-1 text-ui leading-relaxed text-secondary">{t("team.claim.body")}</p>
+      {/* Centred like the sign-in and join cards, so the page balances
+          under the left-aligned header. */}
+      <div className="flex justify-center">
+        <DelegatusBadge size={48} />
+      </div>
+      <h2 className="mt-3 text-center text-title font-bold text-primary">{t("team.claim.title")}</h2>
+      <p className="mt-1 text-center text-ui leading-relaxed text-secondary">{t("team.claim.body")}</p>
       <div className="mt-4">
         <Field label={t("team.claim.name")}>
           <input className={INPUT} value={name} maxLength={60} autoComplete="name" onChange={(event) => setName(event.target.value)} data-team-claim-name="" />
         </Field>
       </div>
       <button type="submit" disabled={busy} className={`${BUTTON.primary} mt-4 w-full`} data-team-claim-submit="">{t("team.claim.submit")}</button>
-      <p className="mt-3 text-label leading-snug text-muted">{t("team.claim.consequence")}</p>
+      <p className="mt-3 text-center text-label leading-snug text-muted">{t("team.claim.consequence")}</p>
       {error ? <p role="alert" className="mt-3 rounded-control bg-danger-soft px-3 py-2 text-ui text-danger">{error}</p> : null}
     </form>
   );

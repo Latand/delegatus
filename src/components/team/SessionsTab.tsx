@@ -12,8 +12,10 @@ import { BUTTON, relativeTime, teamRequest } from "./ui";
 
 /*
  * Sessions (sign-in-and-team §6.9): a member's own devices, and every
- * member's for the owner, grouped by member. Each row signs one device out;
- * "Sign out everywhere else" ends every other session of the caller.
+ * member's for the owner, grouped by member. Only this device's row says
+ * "Sign out"; every other row says "End session", so ending someone else's
+ * browser never reads as signing yourself out. "Sign out everywhere else"
+ * ends every other session of the caller.
  */
 
 interface SessionRow {
@@ -97,7 +99,9 @@ export function SessionsTab({ view }: { view: TeamView }) {
                     {session.online ? <span className="text-success">{t("team.sessions.active")}</span> : t("team.sessions.lastSeen", { age: relativeTime(session.lastSeenAt, locale) })}
                   </p>
                 </div>
-                <button type="button" className={BUTTON.text} onClick={() => void signOut(session)}>{t("team.sessions.signOut")}</button>
+                <button type="button" className={BUTTON.text} onClick={() => void signOut(session)} data-team-session-end="">
+                  {t(session.current ? "team.sessions.signOut" : "team.sessions.end")}
+                </button>
               </li>
             ))}
           </ul>

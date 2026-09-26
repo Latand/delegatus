@@ -139,6 +139,7 @@ export interface TeamView {
     /** A live session was used in the last two minutes. */
     online: boolean;
     createdAt: string;
+    revokedAt: string | null;
   }>;
   methods: TeamPublicInfo["methods"];
 }

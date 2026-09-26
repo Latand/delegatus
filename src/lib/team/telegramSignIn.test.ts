@@ -147,7 +147,7 @@ describe("signing in through the bot", () => {
     const store = teamStore();
     claimInstall(store, "Міра", DESKTOP);
     const { code } = startTelegram(store, "sign-in", null, PHONE);
-    expect(await deliver(started(OLEH, `/start ${code}`))).toEqual(["Delegatus вас ще не знає. Міра може схвалити вас на сторінці Команда."]);
+    expect(await deliver(started(OLEH, `/start ${code}`))).toEqual(["Delegatus вас ще не знає. Міра може підтвердити вас на сторінці «Команда»."]);
   });
 
   test("the bot token appears in no team record", async () => {

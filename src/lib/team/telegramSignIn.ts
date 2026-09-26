@@ -70,7 +70,7 @@ const REPLIES = {
   },
   uk: {
     signedIn: (name: string) => `Ви увійшли в Delegatus як ${name}.`,
-    unknown: (owner: string) => `Delegatus вас ще не знає. ${owner} може схвалити вас на сторінці Команда.`,
+    unknown: (owner: string) => `Delegatus вас ще не знає. ${owner} може підтвердити вас на сторінці «Команда».`,
     linked: (name: string) => `Telegram прив’язано до ${name}.`,
     taken: (name: string) => `Цей Telegram уже прив’язано до ${name}.`,
     expired: "Це посилання для входу спливло. Почніть знову зі сторінки входу.",
