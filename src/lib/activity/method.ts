@@ -715,7 +715,9 @@ export interface DayActivity extends AgentSplit {
   workday: boolean;
   /** One entry per clock hour in the zone (23 or 25 on a DST day). */
   hours: HourActivity[];
-  /** The day's report hours per project, with the raw minutes behind each. */
+  /** The day's report hours per project, with the raw minutes behind each.
+      A billable project's hours are the billable pass, so these need not add
+      up to the day's `humanHours`. */
   projects: Array<{ project: string | null; humanMs: number; humanHours: number }>;
   /** Complete when every expected host was read for the whole day (up to
       now); otherwise the human figures are a lower bound. */
@@ -750,6 +752,8 @@ export interface ProjectActivity extends AgentSplit {
   humanOwnMs: number;
   /** Minutes of its episodes that went to a more recently asked project. */
   humanReassignedMs: number;
+  /** Report hours; for a billable project, counted among the billable
+      projects alone, as the paid report counts them. */
   humanHours: number;
   requests: number;
   episodes: number;
@@ -852,7 +856,9 @@ export function activityReport(input: ReportInput): ActivityReport {
   const segments = clipIntervals(humanSegments(episodes), rangeStart, limit);
   /* The billable figure is counted as the paid report counts: from the
      billable projects' inputs alone, so another project's request never takes
-     a billable minute. */
+     a billable minute. A billable project's own report hours are this count
+     (docs/design/worktime-matches-zvit.md, F1): its hours compete only with
+     the other billable projects', as they do in the daily report. */
   const billable = new Set(input.billable ?? []);
   const billableSegments = billable.size
     ? clipIntervals(humanSegments(humanEpisodes(input.anchors.filter((anchor) => anchor.project !== null && billable.has(anchor.project)), params, nowMs)), rangeStart, limit)
@@ -885,6 +891,7 @@ export function activityReport(input: ReportInput): ActivityReport {
 
   const projectKeys = new Set<string>([...own.keys(), ...agentsByProject.keys()]);
   for (const segment of segments) projectKeys.add(projectKey(segment.project));
+  for (const segment of billableSegments) projectKeys.add(projectKey(segment.project));
   for (const anchor of input.anchors) {
     if (anchor.at >= rangeStart && anchor.at <= limit) projectKeys.add(projectKey(anchor.project));
   }
@@ -973,12 +980,16 @@ export function activityReport(input: ReportInput): ActivityReport {
     const window = { start: day.start, end: Math.min(day.end, limit) };
     const uncovered = uncoveredSpans(window, input.hosts);
     const daySegments = clipIntervals(segments, day.start, day.end);
-    const reportHours = dayReportHours(segments, day, params.rounding);
+    const allHours = dayReportHours(segments, day, params.rounding);
+    const billableReport = dayReportHours(billableSegments, day, params.rounding);
+    /* The day's total is every project's count; each project's figure is its
+       own count, the billable pass for a billable project. */
     let humanHours = 0;
-    for (const [key, hours] of reportHours) {
-      projects.get(key)!.humanHours += hours;
-      humanHours += hours;
-    }
+    for (const hours of allHours.values()) humanHours += hours;
+    const reportHours = new Map<string, number>();
+    for (const [key, hours] of allHours) if (!billable.has(key)) reportHours.set(key, hours);
+    for (const [key, hours] of billableReport) reportHours.set(key, hours);
+    for (const [key, hours] of reportHours) projects.get(key)!.humanHours += hours;
     const split = emptySplit();
     if (window.end > window.start) {
       /* Wall-clock and its supervised part across projects; agent-hours per
@@ -997,7 +1008,7 @@ export function activityReport(input: ReportInput): ActivityReport {
     }
     const humanMs = totalMs(daySegments);
     let billableHours = 0;
-    for (const hours of dayReportHours(billableSegments, day, params.rounding).values()) billableHours += hours;
+    for (const hours of billableReport.values()) billableHours += hours;
     const weekday = new Date(`${day.date}T12:00:00Z`).getUTCDay();
     const projectMs = new Map<string, number>();
     for (const segment of daySegments) projectMs.set(projectKey(segment.project), (projectMs.get(projectKey(segment.project)) ?? 0) + segment.end - segment.start);
@@ -1104,6 +1115,7 @@ export function activityReport(input: ReportInput): ActivityReport {
   const view = input.scope
     ? projectView(input.scope.project, {
       params, limit, rangeWindow, hosts: input.hosts, segments, billableSegments, dayRows,
+      billable: billable.has(projectKey(input.scope.project)),
       agents: agentsByProject.get(projectKey(input.scope.project)) ?? [],
       supervision: own.get(projectKey(input.scope.project)) ?? [],
       unclear: unclearByProject.get(projectKey(input.scope.project)) ?? [],
@@ -1131,6 +1143,8 @@ interface ProjectViewInput {
   /** Human time of every project, one minute once, clipped to the range. */
   segments: readonly HumanSegment[];
   billableSegments: readonly HumanSegment[];
+  /** The project is billable: its report hours are the billable pass. */
+  billable: boolean;
   /** Every project's days, for the days' own facts: dates, workdays, flags. */
   dayRows: readonly DayActivity[];
   /** The project's agents, their activity clipped to the range. */
@@ -1147,7 +1161,8 @@ interface ProjectViewInput {
  * One project's totals and days (ReportInput.scope). Every figure is the
  * project's share of what the method already decided over all inputs, so it
  * is the number that project's row carries: its minutes after one-minute-once,
- * the report hours whose clock hours it won, its agents against its own
+ * the report hours whose clock hours it won (among the billable projects
+ * alone, for a billable project), its agents against its own
  * episodes, and its hosts' coverage. A day keeps its flag, which is about the
  * day and not about a project.
  */
@@ -1175,8 +1190,8 @@ function projectView(project: string | null, input: ProjectViewInput): { totals:
     const uncovered = uncoveredSpans(window, hosts, project);
     const daySegments = clipIntervals(mine, whole.start, whole.end);
     const humanMs = totalMs(daySegments);
-    const humanHours = dayReportHours(input.segments, whole, params.rounding).get(key) ?? 0;
     const billableHours = dayReportHours(input.billableSegments, whole, params.rounding).get(key) ?? 0;
+    const humanHours = input.billable ? billableHours : dayReportHours(input.segments, whole, params.rounding).get(key) ?? 0;
     const split = window.end > window.start ? agentSplit(activities, input.supervision, window) : emptySplit();
     split.unattendedUnreadMs = inWindow(input.unclear, window);
     const agentLane = [
@@ -1190,7 +1205,7 @@ function projectView(project: string | null, input: ProjectViewInput): { totals:
       workday: whole.workday,
       /* An hour's weight is the project's only when it won the hour, so the
          day's cells add up to its report hours as the whole page's do. */
-      hours: clockHourShares(input.segments, whole).map((share) => {
+      hours: clockHourShares(input.billable ? input.billableSegments : input.segments, whole).map((share) => {
         const hour = { start: share.start, end: Math.min(share.end, limit) };
         const mineMs = inWindow(mine, hour);
         const wallMs = inWindow(wall, hour);

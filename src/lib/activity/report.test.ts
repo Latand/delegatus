@@ -139,6 +139,31 @@ describe("GET /api/activity?project=: the page filtered to one project", () => {
   });
 });
 
+describe("GET /api/activity?project= for a billable project: the paid report's count", () => {
+  test("its totals and each day's report hours are its billable figure, which another project's minutes no longer take", async () => {
+    /* The client (billable, by its older key) asks every ten minutes from
+       10:00 and harbor five minutes after each: over every project harbor
+       wins 10:00, over the billable projects the client holds 40 minutes. */
+    const inputs = [
+      ...["10:00", "10:10", "10:20", "10:30"].map((hhmm) => input("2026-09-22", hhmm, CLIENT_OLD, "stage")),
+      ...["10:05", "10:15", "10:25", "10:35"].map((hhmm) => input("2026-09-22", hhmm, HARBOR)),
+    ];
+    const deps = dependencies([source("pull", "read", [ALWAYS])], inputs, []);
+    const scoped = await get(`range=7d&project=${CLIENT}`, deps);
+    expect(scoped.billableConfigured).toBe(true);
+    expect(scoped.totals.humanHours).toBe(1);
+    expect(scoped.totals.humanHours).toBe(scoped.totals.billableHours);
+    for (const day of scoped.days) expect(day.humanHours).toBe(day.billableHours);
+    expect(scoped.days.find((day) => day.date === "2026-09-22")!.humanHours).toBe(1);
+    const all = await get("range=7d", deps);
+    expect(row(all, CLIENT).humanHours).toBe(1);
+    /* The page's own total and a project that is not billable keep the
+       all-project count: the hour is harbor's there. */
+    expect(row(all, HARBOR).humanHours).toBe(1);
+    expect(all.totals.humanHours).toBe(1);
+  });
+});
+
 describe("a listed host whose agent turns never arrived", () => {
   const client = (body: ActivityResponse) => row(body, CLIENT);
 
