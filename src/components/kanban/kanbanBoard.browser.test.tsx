@@ -11190,6 +11190,131 @@ describe("orchestrator reports: the setup guide's optional Reports to Telegram s
   }, 600_000);
 });
 
+describe("asks you: an agent that asked the operator, on its card, in the report log and behind the switch", () => {
+  /*
+   * docs/research/attention-classifier.md §7, on the desktop board at 1440, en
+   * and uk: the export explorer ended its turn asking the operator, so its card
+   * says «asks you · Explorer»; the seat's report log carries that ask by time
+   * among the reports, «‹agent› asks you: ‹the sentence›», and the agent's name
+   * opens its conversation; the board's ⋯ carries the "Asks you" switch, on,
+   * with this month's spend. The phone at 390 is the phone driver's case.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 ASKS_YOU_PNG_DIR=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "asks you"
+   *
+   * PNGs go to `ASKS_YOU_PNG_DIR`, or `.artifacts/asks-you/`, never committed.
+   */
+  const OUT = path.resolve(process.env.ASKS_YOU_PNG_DIR ?? ".artifacts/asks-you");
+  const EVIDENCE = path.resolve("evidence/asks-you");
+
+  browserTest("the card names the ask, the log line opens the conversation, and the ⋯ switch shows the spend, at 1440 in en and uk", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/asks-you-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const label = `1440-${lang}-light`;
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+        const fail = (text: string) => failures.push(`${label}: ${text}`);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=asks-you`, VIEWPORT, "light", lang);
+        try {
+          /* The card: its foot names the reason and the agent's role. */
+          await page.waitForSelector(`${card("t-export")} [data-foot-needs]`, { timeout: 30_000 });
+          await page.waitForSelector("[data-report-log] [data-report-ask]", { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          const toast = await page.evaluate(() => document.querySelector("[data-attention-toast]")?.textContent?.trim() ?? null);
+          await page.locator("[data-attention-toast-dismiss]").click().catch(() => {});
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(600);
+          const exportCard = page.locator(card("t-export"));
+          await exportCard.scrollIntoViewIfNeeded();
+          await exportCard.screenshot({ path: path.join(OUT, `card-${label}.png`) });
+          await page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
+          const foot = await page.evaluate((selector) => {
+            const needs = document.querySelector(`${selector} [data-foot-needs]`) as HTMLElement | null;
+            const clamp = needs?.querySelector(".clamp") as HTMLElement | null;
+            return { text: needs?.textContent?.trim() ?? "", title: needs?.getAttribute("title") ?? "", cut: clamp ? clamp.scrollWidth > clamp.clientWidth + 1 : false };
+          }, card("t-export"));
+          if (!foot.title.startsWith(`${t("needs.ask")} · `)) fail(`the card's reason reads ${JSON.stringify(foot)}`);
+
+          /* The report log: the ask by time among the reports, its agent a link. */
+          const seat = page.locator("[data-kanban-seat]");
+          await seat.screenshot({ path: path.join(OUT, `log-${label}.png`) });
+          const log = await page.evaluate(() => {
+            const rows = [...document.querySelectorAll("[data-report-log-entries] > li")];
+            const asks = rows.filter((row) => row.hasAttribute("data-report-ask"));
+            const firstAsk = rows.findIndex((row) => row.hasAttribute("data-report-ask"));
+            const times = rows.map((row) => Date.parse(row.querySelector("time")?.getAttribute("datetime") ?? ""));
+            return {
+              asks: asks.map((row) => ({
+                label: row.querySelector("[data-report-class-label]")?.textContent ?? "",
+                text: row.querySelector("p")?.textContent ?? "",
+                link: row.querySelector("a[data-report-link=conversation]")?.getAttribute("href") ?? null,
+                linkText: row.querySelector("a[data-report-link=conversation]")?.textContent ?? "",
+              })),
+              firstAsk,
+              ordered: times.every((time, index) => index === 0 || time <= times[index - 1]!),
+              sideways: (() => { const scroller = document.querySelector("[data-report-log] .overflow-y-auto"); return scroller ? scroller.scrollWidth - scroller.clientWidth : 0; })(),
+            };
+          });
+          const recent = log.asks[0];
+          /* Both asks fall inside the first page of reports: the one seven
+             minutes old and the one from almost three hours ago. */
+          if (log.asks.length !== 2) fail(`the first page holds ${log.asks.length} ask lines`);
+          if (!recent || recent.label !== t("reportLog.class.ask") || recent.link !== "#c=conversation_export-explore") fail(`the ask line reads ${JSON.stringify(recent)}`);
+          if (recent && recent.text !== `${recent.linkText} ${t("reportLog.askLine", { gist: "Keep the per-format presets, or fold them into one «Export» button with an advanced drawer?" })}`) fail(`the ask line's words: ${recent.text}`);
+          if (!log.ordered) fail("the log is not newest first");
+          if (log.sideways > 0) fail(`the log scrolls sideways by ${log.sideways}px`);
+          await seat.locator("[data-report-ask] a[data-report-link=conversation]").first().screenshot({ path: path.join(OUT, `log-link-${label}.png`) });
+
+          /* The ⋯ menu: the Asks you row, on, with the month's spend. */
+          await page.locator('[data-bar-group="more"] button').first().click();
+          await page.locator("[data-bar-menu-group] [data-asks-you]").waitFor({ timeout: 10_000 });
+          await page.waitForFunction(() => document.querySelector("[data-bar-menu-group] [data-asks-you]")?.getAttribute("data-asks-you") === "on", undefined, { timeout: 10_000 });
+          await page.waitForTimeout(400);
+          await page.locator('[data-bar-menu-group="project"]').locator("xpath=..").screenshot({ path: path.join(OUT, `menu-${label}.png`) });
+          const row = await page.evaluate(() => {
+            const element = document.querySelector("[data-bar-menu-group] [data-asks-you]")!;
+            const toggle = element.querySelector<HTMLElement>("[data-asks-you-switch]")!;
+            const name = element.querySelector("span.flex-1")!;
+            const menu = element.closest("[data-bar-menu-group]")!.getBoundingClientRect();
+            const hint = element.querySelector('[role="status"]')!;
+            return {
+              checked: toggle.getAttribute("aria-checked"), label: name.textContent?.trim() ?? "", hint: hint.textContent?.trim() ?? "",
+              inside: hint.getBoundingClientRect().right <= menu.right + 1 && toggle.getBoundingClientRect().right <= menu.right + 1,
+            };
+          });
+          if (row.checked !== "true" || row.label !== t("asksYou.label") || !row.hint.includes("Jev") || !row.hint.includes("0,19") && !row.hint.includes("0.19") || !row.inside) fail(`the switch row ${JSON.stringify(row)}`);
+          await page.keyboard.press("Escape");
+          if (await page.locator("[data-bar-menu-group]").count()) await page.locator('[data-bar-group="more"] button').first().click();
+          await page.waitForFunction(() => !document.querySelector("[data-bar-menu-group]"), undefined, { timeout: 10_000 });
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(300);
+
+          /* The link opens the agent's conversation. */
+          await page.locator("[data-report-ask] a[data-report-link=conversation]").first().click();
+          await page.waitForFunction(() => location.hash === "#c=conversation_export-explore", undefined, { timeout: 10_000 }).catch(() => fail(`the link left the hash at ${page.url()}`));
+          await page.waitForTimeout(1_200);
+          await page.screenshot({ path: path.join(OUT, `opened-${label}.png`) });
+          const opened = await page.evaluate(() => [...document.querySelectorAll("[data-kanban-member-open], [data-reader-path], [data-conversation-path]")].some((element) => (element.getAttribute("data-reader-path") ?? element.getAttribute("data-conversation-path") ?? "").includes("export-explore")));
+          readings[label] = { toast, foot, log, row, opened };
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
 describe("the orchestrator's parallel self in the seat's feed", () => {
   /*
    * Rendered evidence for docs/design/ghost-seat.md §6 at the desktop width:

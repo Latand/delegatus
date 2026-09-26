@@ -941,6 +941,13 @@ export function lastScannedProjectCatalog(): FileScanSnapshot["projectCatalog"] 
   return globalFileScanSlot().snapshot?.projectCatalog ?? null;
 }
 
+/** The last completed scan's rows, uncloned and never starting a scan, for a
+    reader on a clock that only reads them ("Asks you"). Null until a scan has
+    completed. The rows are the cache's own: never mutate them. */
+export function lastScannedFiles(): readonly FileScanSnapshot["files"][number][] | null {
+  return globalFileScanSlot().snapshot?.files ?? null;
+}
+
 /** Returns metadata from a completed current generation. The first fresh
     caller reserves a generation beyond existing requests; concurrent fresh
     callers join that pending fence. Older work completes before the fence. */

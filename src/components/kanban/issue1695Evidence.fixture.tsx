@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { runFocusTransaction } from "@/components/attention/navigate";
-import { reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
+import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
@@ -185,6 +185,12 @@ const MERGE_SETTING = { enabled: new URLSearchParams(location.search).get("merge
    report log beside the seat's chat, empty with `?reports=empty`. */
 const BRIDGE_SETTING = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 const REPORTS_EMPTY = new URLSearchParams(location.search).get("reports") === "empty";
+/* "Asks you" (docs/research/attention-classifier.md §7): the switch on, the
+   export explorer ended its turn asking the operator, and the seat's report
+   log carries that ask and an older one. Every other scene answers the switch
+   off. */
+const ASKS_YOU = SCENARIO === "asks-you";
+const ASKS_YOU_SETTING = { enabled: ASKS_YOU };
 /* The seat's header at its fullest: a mandate a version behind the default,
    so the stale chip draws, a designated incumbent with its effort, account and
    a context past the rotation line, twenty previous seats and a running host
@@ -291,6 +297,16 @@ const uploadUi = add(conversation("upload-ui", "Wiring the resume banner", worki
 /* t-export: two plain conversations. */
 const exportImpl = add(conversation("export-impl", "Implementer: simplify the export settings", working({ plan: { current: "Writing the preset model" } })));
 const exportExplore = add(conversation("export-explore", "Explorer: list every export toggle", { mtime: now - 120 * MIN, engine: "codex", model: "gpt-5.6" }));
+const EXPORT_ASK_GIST = "Keep the per-format presets, or fold them into one «Export» button with an advanced drawer?";
+if (ASKS_YOU) {
+  Object.assign(exportExplore, {
+    mtime: now - 7 * MIN,
+    lastTurn: { startedAt: (now - 19 * MIN) * 1_000, endedAt: (now - 7 * MIN) * 1_000 },
+    lastAssistantMessageAt: (now - 7 * MIN) * 1_000,
+    operatorAsk: { id: `ask:${exportExplore.conversationId}:fixture`, messageAt: (now - 7 * MIN) * 1_000, gist: EXPORT_ASK_GIST },
+    durableLineage: { kind: "spawn", role: "architect", parentConversationId: null, reviewsConversationId: null, memberships: [] },
+  });
+}
 /* t-links: a simple chain parked on a decision. */
 const linksImpl = add(conversation("links-impl", "Which of the two anchors should win?", { mtime: now - 17 * MIN, engine: "codex", model: "gpt-5.6", waitingInput: { since: now - 17 * MIN } }));
 /* t-limits: build failed, the fail edge started diagnose, which needs a decision. */
@@ -1750,7 +1766,22 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
     ]);
     /* A seat created a moment ago (the walk's scene) has filed nothing yet. */
-    return json(reportLogFixturePage(url, { project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY || ORCH_WALK }));
+    return json(reportLogFixturePage(url, {
+      project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY || ORCH_WALK,
+      asks: ASKS_YOU ? asksYouFixtureLines(now * 1_000, [
+        { conversationId: exportExplore.conversationId!, path: exportExplore.path, role: "architect", title: exportExplore.title, gist: EXPORT_ASK_GIST, minutesAgo: 7 },
+        { conversationId: searchImpl1.conversationId!, path: searchImpl1.path, role: "builder", title: searchImpl1.title, gist: "Лишити старий індекс ще на добу чи прибрати його одразу після перемикання?", minutesAgo: 170 },
+      ]) : [],
+    }));
+  }
+  /* "Asks you": the installation's switch and this month's spend. */
+  if (url.pathname === "/api/asks-you") {
+    if (method === "PUT") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { enabled?: unknown };
+      evidence.settingWrites.push({ asksYou: body.enabled });
+      if (typeof body.enabled === "boolean") ASKS_YOU_SETTING.enabled = body.enabled;
+    }
+    return json({ ok: true, ...asksYouFixtureSetting(ASKS_YOU_SETTING.enabled) });
   }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST || ORCH_WALK ? [] : tasks });
   if (ORCH_WALK && url.pathname === "/api/onboarding") {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { mutateOperatorAsks, projectReportLogAsks, type OperatorAskRecord } from "@/lib/asks/store";
 import { setBridgeReports } from "@/lib/projects/settings";
 
 import { readProjectReportLog, reportCardRefs, type ReportLogCard } from "./reportLog";
@@ -118,4 +119,56 @@ test("a body names only the cards the board knows, each once", () => {
   appendBridgeReports([report(1, { body: "Lane 9612c532 completed; PR #2146 is green." })]);
   const page = readProjectReportLog({ project: SCOPE.project }, { knownCards: () => known });
   expect(page.entries[0]!.cards).toEqual([{ id: "9612c532", kind: "pipeline" }]);
+});
+
+function seedAsks(project: string, count: number, from: number): void {
+  const asks: OperatorAskRecord[] = Array.from({ length: count }, (_, index) => ({
+    id: `ask:conv-${index}:claude:msg-${index}`,
+    subject: `conv-${index}`,
+    conversationId: `conv-${index}`,
+    path: `/transcripts/${index}.jsonl`,
+    project,
+    role: "builder",
+    title: null,
+    messageId: `claude:msg-${index}`,
+    /* Two lines share each second, so the cursor has ties to break. */
+    messageAt: from + Math.floor(index / 2) * 1_000,
+    gist: `question ${index}`,
+    score: 0.9,
+    recordedAt: new Date(from).toISOString(),
+  }));
+  mutateOperatorAsks((file) => { file.asks.push(...asks); }, new Date(from + 3_600_000));
+}
+
+/** Every ask line a reader paging back to the start is shown, as the log pages. */
+function everyAskLine(project: string): string[] {
+  const dependencies = { ...NO_CARDS, asks: projectReportLogAsks };
+  const seen: string[] = [];
+  let before: number | null = null;
+  let asksBefore: string | null = null;
+  let reportsDone = false;
+  let asksDone = false;
+  for (let round = 0; round < 50 && !(reportsDone && asksDone); round += 1) {
+    const page = readProjectReportLog({ project, limit: 1, before: reportsDone ? null : before, asksBefore: asksDone ? null : asksBefore }, dependencies);
+    for (const ask of page.asks ?? []) seen.push(ask.id);
+    if (!reportsDone) { before = page.nextBefore; reportsDone = before === null; }
+    if (!asksDone) { asksBefore = page.nextAsksBefore ?? null; asksDone = asksBefore === null; }
+  }
+  return seen;
+}
+
+test("every ask line is reachable by paging back, however many fall between two reports", () => {
+  sandbox();
+  appendBridgeReports([report(1), report(2)]);
+  seedAsks(SCOPE.project, 60, Date.UTC(2026, 8, 24, 9, 0));
+  expect(new Set(everyAskLine(SCOPE.project)).size).toBe(60);
+});
+
+test("every ask line is reachable on a project with no bridge reports at all", () => {
+  sandbox();
+  seedAsks("repo-project-quiet", 120, Date.UTC(2026, 8, 24, 9, 0));
+  const lines = everyAskLine("repo-project-quiet");
+  expect(new Set(lines).size).toBe(120);
+  /* Each line comes once, newest first. */
+  expect(lines).toHaveLength(120);
 });

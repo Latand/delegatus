@@ -1,3 +1,4 @@
+import type { AsksYouSettingView, ReportLogAsk } from "@/lib/asks/types";
 import { reportCardRefs, type ReportLogCard } from "@/lib/bridge/reportCardRefs";
 import type { ReportLogEntry, ReportLogPage } from "@/lib/bridge/reportLog";
 import type { BridgeReportClass } from "@/lib/bridge/types";
@@ -62,6 +63,8 @@ export function reportLogFixturePage(url: URL, options: {
   enabled: boolean;
   knownCards: ReadonlyMap<string, ReportLogCard["kind"]>;
   empty?: boolean;
+  /** "Asks you" lines; every page carries them and the log places them by time. */
+  asks?: ReportLogAsk[];
 }): ReportLogPage {
   seeded ??= { now: Date.now(), entries: seededReports(Date.now()) };
   const all = options.empty ? [] : seeded.entries;
@@ -73,5 +76,36 @@ export function reportLogFixturePage(url: URL, options: {
   const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit") ?? 30) || 30));
   const older = all.filter((entry) => entry.seq < before);
   const entries = older.slice(0, limit).map((entry) => ({ ...entry, cards: reportCardRefs(entry.body, options.knownCards) }));
-  return { ...base, entries, nextBefore: older.length > limit ? entries.at(-1)!.seq : null };
+  return { ...base, entries, nextBefore: older.length > limit ? entries.at(-1)!.seq : null, asks: options.asks ?? [] };
+}
+
+/**
+ * The "Asks you" evidence (docs/research/attention-classifier.md §7), shared by
+ * the kanban and the phone fixtures: two agents that asked the operator, one in
+ * English and one in Ukrainian, as the classifier would have recorded them.
+ */
+export function asksYouFixtureLines(now: number, asks: Array<{ conversationId: string; path: string; role: string | null; title: string; gist: string; minutesAgo: number }>): ReportLogAsk[] {
+  return asks.map((ask) => ({
+    id: `ask:${ask.conversationId}:fixture`,
+    at: new Date(now - ask.minutesAgo * MIN).toISOString(),
+    conversationId: ask.conversationId,
+    path: ask.path,
+    role: ask.role,
+    title: ask.title,
+    gist: ask.gist,
+  }));
+}
+
+/** The switch as `/api/asks-you` answers it: on with a month's spend, or off. */
+export function asksYouFixtureSetting(enabled: boolean): AsksYouSettingView {
+  return {
+    enabled,
+    keySource: "file",
+    keyPath: "$HOME/.config/agent-log-viewer/openrouter-api-key",
+    month: new Date().toISOString().slice(0, 7),
+    spentUsd: enabled ? 0.19 : 0,
+    capUsd: 1,
+    calls: enabled ? 4_120 : 0,
+    capped: 0,
+  };
 }

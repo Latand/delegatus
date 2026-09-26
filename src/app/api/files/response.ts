@@ -6,6 +6,7 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 
 import { listFilesWithProjectCatalog, pinnedPathsFor } from "@/lib/scanner";
+import { overlayOperatorAsks } from "@/lib/asks/overlay";
 import { overlayAttentionDismissals } from "@/lib/attention/dismissals";
 import { overlayBridgeAsks } from "@/lib/bridge/asks";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
@@ -828,6 +829,10 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      with the reason it would otherwise flag. */
   overlayAttentionDismissals(projected.files);
   markTiming("files-attention-dismissals");
+  /* "Asks you" (docs/research/attention-classifier.md §7): the newest ask the
+     classifier recorded for each conversation. */
+  overlayOperatorAsks(projected.files);
+  markTiming("files-operator-asks");
   const visibleProjects = [
     ...projected.files.map((file) => file.project),
     ...effectiveProjectCatalog.map((entry) => entry.project),

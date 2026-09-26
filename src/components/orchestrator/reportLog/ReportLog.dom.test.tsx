@@ -1,5 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { Window as HappyWindow } from "happy-dom";
+import { NextRequest } from "next/server";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -27,6 +32,10 @@ Object.assign(globalThis, {
 const { setRuntimeBusForTests } = await import("@/hooks/runtimeBus");
 const { ReportLog } = await import("./ReportLog");
 const { resetBridgeReportsSettingForTests } = await import("./bridgeReportsSetting");
+const { GET } = await import("@/app/api/orchestrator/reports/route");
+const { mutateOperatorAsks } = await import("@/lib/asks/store");
+const { appendBridgeReports } = await import("@/lib/bridge/store");
+const { setBridgeReports } = await import("@/lib/projects/settings");
 
 const PROJECT = "repo-widgets";
 const realFetch = globalThis.fetch;
@@ -197,4 +206,161 @@ test("with bridge reports off the panel is one line and the switch, which turns 
   expect(settingWrites).toEqual([{ project: PROJECT, bridgeReports: true }]);
   expect(host.querySelector("[data-report-log-off]")).toBeNull();
   expect([...host.querySelectorAll("[data-report-entry]")].map((row) => row.getAttribute("data-report-entry"))).toEqual(["2", "1"]);
+});
+
+test("an agent that asked the operator is one line by time among the reports, and its name opens that conversation", async () => {
+  const ask = {
+    id: "ask:conv-builder-1:claude:msg-1",
+    at: new Date(Date.UTC(2026, 8, 24, 9, 2, 30)).toISOString(),
+    conversationId: "conv-builder-1",
+    path: "/transcripts/builder.jsonl",
+    role: "builder",
+    title: "Migrate the ledger",
+    gist: "Should I merge it now, or wait for the review round?",
+  };
+  pages = [page([entry(3), entry(2), entry(1)], { asks: [ask] })];
+  const host = mount();
+  await settle();
+
+  const rows = [...host.querySelectorAll("[data-report-log-entries] > li")];
+  expect(rows.map((row) => row.getAttribute("data-report-entry") ?? `ask:${row.getAttribute("data-report-ask")}`)).toEqual(["3", `ask:${ask.id}`, "2", "1"]);
+  const line = host.querySelector(`[data-report-ask='${ask.id}']`)!;
+  expect(line.querySelector("[data-report-class-label]")!.textContent).toBe("needs you");
+  expect(line.querySelector("p")!.textContent).toBe("Builder asks you: Should I merge it now, or wait for the review round?");
+  const link = line.querySelector("a[data-report-link=conversation]")!;
+  expect(link.textContent).toBe("Builder");
+  expect(link.getAttribute("href")).toBe("#c=conv-builder-1");
+
+  /* The link is the Viewer's own deep link: following it opens the conversation. */
+  (link as HTMLAnchorElement).click();
+  expect(window.location.hash).toBe("#c=conv-builder-1");
+});
+
+test("ask lines stay when the orchestrator's bridge reports are off: they are the Viewer's, not its", async () => {
+  const ask = { id: "ask:conv-2:claude:m", at: entry(2).at, conversationId: null, path: "/transcripts/two.jsonl", role: null, title: "Logo variants", gist: "" };
+  pages = [page([entry(2)], { bridgeReports: false, asks: [ask] })];
+  const host = mount();
+  await settle();
+  expect(host.querySelector("[data-report-log-off]")).not.toBeNull();
+  const line = host.querySelector(`[data-report-ask='${ask.id}']`)!;
+  expect(line.querySelector("p")!.textContent).toBe("Logo variants asks you");
+  expect(line.querySelector("a")!.getAttribute("href")).toBe("#f=%2Ftranscripts%2Ftwo.jsonl");
+});
+
+/* Paging through the real route: the ask lines page on their own cursor, so a
+   reader who keeps asking for older lines sees every ask and every report
+   once, newest first, and never a line out of its place on the way. */
+describe("paging back through the real route", () => {
+  const FROM = Date.UTC(2026, 8, 24, 6, 0);
+  const originalStateDir = process.env.LLV_STATE_DIR;
+  let sandbox = "";
+
+  beforeEach(() => {
+    sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-log-paging-"));
+    process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+    const served = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.startsWith("/api/orchestrator/reports")) return served(input, init);
+      requests.push(url);
+      return GET(new NextRequest(new URL(url, "http://127.0.0.1:8899")));
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = originalStateDir;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  /** `count` asks, two to each minute so the cursor has ties to break. */
+  function seedAsks(count: number): { at: number; key: string }[] {
+    const asks = Array.from({ length: count }, (_, index) => ({
+      id: `ask:conv-${index}:claude:msg-${index}`,
+      subject: `conv-${index}`,
+      conversationId: `conv-${index}`,
+      path: `/transcripts/${index}.jsonl`,
+      project: PROJECT,
+      role: "builder",
+      title: null,
+      messageId: `claude:msg-${index}`,
+      messageAt: FROM + Math.floor(index / 2) * 60_000,
+      gist: `question ${index}`,
+      score: 0.9,
+      recordedAt: new Date(FROM).toISOString(),
+    }));
+    mutateOperatorAsks((file) => { file.asks.push(...asks); }, new Date(FROM + 3_600_000));
+    return asks
+      .sort((left, right) => right.messageAt - left.messageAt || left.id.localeCompare(right.id))
+      .map((ask) => ({ at: ask.messageAt, key: `ask:${ask.id}` }));
+  }
+
+  /** `count` reports, one each 50 s from 25 s past, never on an ask's minute. */
+  function seedReports(count: number): { at: number; key: string }[] {
+    const inputs = Array.from({ length: count }, (_, index) => ({
+      key: `report-${index}`,
+      class: "completed" as const,
+      at: new Date(FROM + index * 50_000 + 25_000).toISOString(),
+      body: `report ${index}`,
+      project: PROJECT,
+      targetSeatConversationId: "conversation_seat",
+    }));
+    const { appended } = appendBridgeReports(inputs);
+    return appended.map((report) => ({ at: Date.parse(report.at), key: String(report.seq) }));
+  }
+
+  const shown = (host: HTMLElement, list = "[data-report-log-entries]") => [...host.querySelectorAll(`${list} > li`)]
+    .map((row) => row.getAttribute("data-report-entry") ?? `ask:${row.getAttribute("data-report-ask")}`);
+
+  /** Every view on the way back, until no older control is left. */
+  async function pageBack(host: HTMLElement, list?: string): Promise<string[][]> {
+    const views = [shown(host, list)];
+    for (let round = 0; round < 20; round += 1) {
+      const older = host.querySelector<HTMLButtonElement>("[data-report-log-older]");
+      if (!older) return views;
+      older.click();
+      await settle();
+      views.push(shown(host, list));
+    }
+    throw new Error("the older control never went away");
+  }
+
+  test("a project with no reports shows every one of its 60 asks, once each, newest first", async () => {
+    const asks = seedAsks(60).map((ask) => ask.key);
+    const host = mount();
+    await settle();
+    const views = await pageBack(host);
+    expect(views.length).toBeGreaterThan(1);
+    expect(views.at(-1)).toEqual(asks);
+    for (const view of views) expect(view).toEqual(asks.slice(0, view.length));
+    expect(requests.some((url) => new URL(url, "http://x").searchParams.has("asksBefore"))).toBe(true);
+  });
+
+  test("asks and reports interleaved by time page back together, every line once and in its place", async () => {
+    const asks = seedAsks(130);
+    const reports = seedReports(70);
+    const expected = [
+      ...reports.map((report) => ({ ...report, order: 0 })),
+      ...asks.map((ask, order) => ({ ...ask, order })),
+    ].sort((left, right) => right.at - left.at || left.order - right.order).map((row) => row.key);
+    const host = mount();
+    await settle();
+    const views = await pageBack(host);
+    expect(views.length).toBeGreaterThanOrEqual(3);
+    expect(views.at(-1)).toEqual(expected);
+    for (const view of views) expect(view).toEqual(expected.slice(0, view.length));
+  });
+
+  test("with bridge reports off, the ask lines still page back to the oldest", async () => {
+    const asks = seedAsks(60).map((ask) => ask.key);
+    seedReports(5);
+    setBridgeReports(PROJECT, false, "operator");
+    /* The settings read answers off as well. */
+    pages = [page([], { bridgeReports: false })];
+    const host = mount();
+    await settle();
+    expect(host.querySelector("[data-report-log-off]")).not.toBeNull();
+    const views = await pageBack(host, "[data-report-log-asks]");
+    expect(views.at(-1)).toEqual(asks);
+  });
 });

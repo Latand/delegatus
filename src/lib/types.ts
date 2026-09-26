@@ -365,6 +365,10 @@ export interface FileEntry {
       (docs/design/needs-attention.md §5). A reason that started at or before
       it is not flagged; a newer one is. */
   attentionDismissal?: import("@/lib/attention/dismissalTypes").AttentionDismissalMark;
+  /** The newest message the "Asks you" classifier judged an ask of the
+      operator (docs/research/attention-classifier.md §7). The reason model
+      decides whether it is still open. */
+  operatorAsk?: import("@/lib/asks/types").OperatorAskMark;
   /** Durable launch projection shown before its transcript enters the scan. */
   spawn?: StructuredSpawnCardState;
   /** Transient launch/delivery facts of the launch that CREATED this live
