@@ -107,9 +107,8 @@ export async function runAsksSweepOnce(): Promise<void> {
   let announced = false;
   await runAskSweep({
     now: () => new Date(),
-    enabled: settings.enabled,
+    settings: () => readAsksYouSettings(),
     enabledSince,
-    capUsd: settings.capUsd,
     apiKey: key,
     candidates,
     finalMessage: (candidate) => {

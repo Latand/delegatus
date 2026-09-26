@@ -68,10 +68,13 @@ export function classifierText(text: string): string {
   return redacted.length <= 4_000 ? redacted : `${redacted.slice(0, 1_000)} … ${redacted.slice(-3_000)}`;
 }
 
-/** What a call for this text costs, by the token formula §1 measured; the
-    cap is checked against it before the call. */
-export function estimatedJevCostUsd(text: string): number {
-  return (462 + 0.42 * classifierText(text).length) * JEV_INPUT_PRICE_USD;
+/** The most a call for this text can bill: the 462 tokens of the fixed
+    request (§1) plus one token per UTF-8 byte of the text sent, which no
+    byte-level tokenizer exceeds. The measured 0.42 tokens per character holds
+    for English only; Cyrillic and code tokenize denser. The cap is checked
+    against this before the call, so no call it admits can bill past it. */
+export function jevCostCeilingUsd(text: string): number {
+  return (462 + Buffer.byteLength(classifierText(text), "utf8")) * JEV_INPUT_PRICE_USD;
 }
 
 function probability(value: unknown): number | null {

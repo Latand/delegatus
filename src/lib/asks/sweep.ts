@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import type { FinalAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
 
 import { askGist, askSkipReason } from "./gist";
-import { ASK_THRESHOLD, estimatedJevCostUsd, JevError, type JevVerdict } from "./jev";
+import { ASK_THRESHOLD, JevError, jevCostCeilingUsd, type JevVerdict } from "./jev";
 import { currentSpend, type OperatorAskRecord, type OperatorAsksFileV1 } from "./store";
 
 /*
@@ -37,10 +37,11 @@ export interface AskCandidate {
 
 export interface AskSweepPorts {
   now(): Date;
-  enabled: boolean;
+  /** The operator's switch and cap as they stand now. Read before every
+      call, so a switch turned off mid-sweep sends nothing more. */
+  settings(): { enabled: boolean; capUsd: number };
   /** When the switch turned on: nothing older is sent. */
   enabledSince: number | null;
-  capUsd: number;
   apiKey: string | null;
   candidates: readonly AskCandidate[];
   finalMessage(candidate: AskCandidate): FinalAssistantMessage | null;
@@ -69,7 +70,7 @@ export function askId(subject: string, messageId: string): string {
 
 export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = new Set()): Promise<AskSweepResult> {
   const result: AskSweepResult = { classified: 0, asks: [], skipped: 0, capped: 0, failed: 0 };
-  if (!ports.enabled || !ports.apiKey) return result;
+  if (!ports.apiKey || !ports.settings().enabled) return result;
   const credential = ports.apiKey;
   let seen = new Set(ports.read().seen);
   for (const candidate of ports.candidates) {
@@ -92,9 +93,11 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
       result.skipped += 1;
       continue;
     }
-    const estimate = estimatedJevCostUsd(message.text);
+    const settings = ports.settings();
+    if (!settings.enabled) break;
+    const ceiling = jevCostCeilingUsd(message.text);
     const spend = currentSpend(ports.read(), now);
-    if (spend.usd + estimate > ports.capUsd) {
+    if (spend.usd + ceiling > settings.capUsd) {
       ports.write((file) => { file.seen.push(seenKey); file.spend.capped += 1; });
       seen.add(seenKey);
       result.capped += 1;
@@ -130,9 +133,9 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
       file.seen.push(seenKey, duplicate);
       file.spend.calls += 1;
       /* A call that timed out may still have been billed: count the
-         estimate, so the cap errs on the side of spending less. A refused
+         ceiling, so the cap errs on the side of spending less. A refused
          or failed request bills nothing. */
-      file.spend.usd += verdict ? verdict.costUsd : timedOut ? estimate : 0;
+      file.spend.usd += verdict ? verdict.costUsd : timedOut ? ceiling : 0;
       if (ask && !file.asks.some((held) => held.id === ask.id)) file.asks.push(ask);
     });
     seen = new Set([...seen, seenKey, duplicate]);

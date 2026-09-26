@@ -11,9 +11,9 @@ import { translate, type TFunction } from "@/lib/i18n";
 import { finalAssistantMessageFromRecords, type FinalAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
 import type { FileEntry } from "@/lib/types";
 
-import { estimatedJevCostUsd, JevError, type JevVerdict } from "./jev";
+import { classifierText, JEV_INPUT_PRICE_USD, JevError, jevCostCeilingUsd, type JevVerdict } from "./jev";
 import { overlayOperatorAsks } from "./overlay";
-import { writeAsksYouSettings } from "./settings";
+import { readAsksYouSettings, writeAsksYouSettings } from "./settings";
 import { mutateOperatorAsks, operatorAsksSignature, projectReportLogAsks, readOperatorAsks } from "./store";
 import { runAskSweep, type AskCandidate, type AskSweepPorts } from "./sweep";
 
@@ -82,9 +82,8 @@ function ports(overrides: Partial<AskSweepPorts> & { text?: string; classify?: A
   const classify = overrides.classify ?? (async () => verdict(0.93));
   return {
     now: () => new Date(NOW),
-    enabled: true,
+    settings: () => readAsksYouSettings(),
     enabledSince: NOW - 3_600_000,
-    capUsd: 1,
     apiKey: "test-key",
     candidates: [candidate()],
     finalMessage: () => message(text),
@@ -202,6 +201,22 @@ describe("an agent whose turn ends asking the operator", () => {
     expect(attentionReason(file, NOW / 1000)?.kind).toBe("permission");
   });
 
+  test("turning the switch off mid-sweep sends nothing more", async () => {
+    const two = [candidate(), candidate({ subject: "conv-2", conversationId: "conv-2", path: "/transcripts/two.jsonl" })];
+    const sweep = ports({
+      candidates: two,
+      finalMessage: (target) => message(`${ASKING} (${target.subject})`, { id: `claude:${target.subject}` }),
+      classify: async () => {
+        writeAsksYouSettings({ enabled: false }, new Date(NOW));
+        return verdict(0.93);
+      },
+    });
+    const result = await runAskSweep(sweep);
+    expect(sweep.calls).toHaveLength(1);
+    expect(result.classified).toBe(1);
+    expect(readOperatorAsks().seen).not.toContain("conv-2:claude:conv-2");
+  });
+
   test("turning the switch off takes the reason off every card", async () => {
     await runAskSweep(ports());
     writeAsksYouSettings({ enabled: false }, new Date(NOW));
@@ -242,7 +257,7 @@ describe("an agent whose turn ends without asking", () => {
       { enabledSince: MESSAGE_AT + 1 },
       { candidates: [candidate({ working: true })] },
       { candidates: [candidate({ structuredAsk: true })] },
-      { enabled: false },
+      { settings: () => ({ enabled: false, capUsd: 1 }) },
       { apiKey: null },
     ] satisfies Partial<AskSweepPorts>[]) {
       const sweep = ports(overrides);
@@ -254,13 +269,13 @@ describe("an agent whose turn ends without asking", () => {
 
 describe("the monthly cap", () => {
   test("stops calls once this month's spend would pass it, and counts what it left unclassified", async () => {
-    const estimate = estimatedJevCostUsd(ASKING);
+    const ceiling = jevCostCeilingUsd(ASKING);
+    writeAsksYouSettings({ capUsd: ceiling * 1.5 }, new Date(NOW));
     const two = [candidate(), candidate({ subject: "conv-2", conversationId: "conv-2", path: "/transcripts/two.jsonl" })];
     const sweep = ports({
       candidates: two,
-      capUsd: estimate * 1.5,
       finalMessage: (target) => message(`${ASKING} (${target.subject})`, { id: `claude:${target.subject}` }),
-      classify: async () => verdict(0.93, estimate),
+      classify: async () => verdict(0.93, ceiling),
     });
     const result = await runAskSweep(sweep);
     expect(sweep.calls).toHaveLength(1);
@@ -268,12 +283,34 @@ describe("the monthly cap", () => {
     const spend = readOperatorAsks().spend;
     expect(spend.calls).toBe(1);
     expect(spend.capped).toBe(1);
-    expect(spend.usd).toBeCloseTo(estimate, 12);
+    expect(spend.usd).toBeCloseTo(ceiling, 12);
 
     /* A cap already spent calls nothing at all. */
-    const spent = ports({ candidates: [candidate({ subject: "conv-3", conversationId: "conv-3", path: "/transcripts/three.jsonl" })], capUsd: estimate * 1.5 });
+    const spent = ports({ candidates: [candidate({ subject: "conv-3", conversationId: "conv-3", path: "/transcripts/three.jsonl" })] });
     await runAskSweep(spent);
     expect(spent.calls).toHaveLength(0);
+  });
+
+  test("admits no call that could bill past it, even for text that tokenizes denser than English", async () => {
+    /* Cyrillic runs well past the 0.42 tokens per character measured on
+       English; the stub bills the most the tokenizer could. The cap sits
+       where a gate on the English estimate admits a second call that the
+       bill then carries past it. */
+    const dense = (subject: string) => `Міграція готова на гілці, перевірки зелені. Злити її зараз чи дочекатися раунду рецензії? (${subject})`;
+    const english = (462 + 0.42 * classifierText(dense("conv-a")).length) * JEV_INPUT_PRICE_USD;
+    const ceiling = jevCostCeilingUsd(dense("conv-a"));
+    expect(ceiling).toBeGreaterThan(english);
+    const capUsd = (ceiling + english + 2 * ceiling) / 2;
+    writeAsksYouSettings({ capUsd }, new Date(NOW));
+    const three = ["conv-a", "conv-b", "conv-c"].map((subject) => candidate({ subject, conversationId: subject, path: `/transcripts/${subject}.jsonl` }));
+    const sweep = ports({
+      candidates: three,
+      finalMessage: (target) => message(dense(target.subject), { id: `claude:${target.subject}` }),
+      classify: async (body) => verdict(0.93, jevCostCeilingUsd(body)),
+    });
+    await runAskSweep(sweep);
+    expect(sweep.calls).toHaveLength(1);
+    expect(readOperatorAsks().spend.usd).toBeLessThanOrEqual(capUsd);
   });
 
   test("a new month starts from nothing", async () => {
@@ -304,10 +341,10 @@ describe("a classifier failure", () => {
     }
   });
 
-  test("a timeout counts its estimated cost against the cap and raises nothing", async () => {
+  test("a timeout counts its largest possible cost against the cap and raises nothing", async () => {
     const sweep = ports({ classify: async () => { throw new JevError("timeout", "slow"); } });
     await runAskSweep(sweep);
-    expect(readOperatorAsks().spend.usd).toBeCloseTo(estimatedJevCostUsd(ASKING), 12);
+    expect(readOperatorAsks().spend.usd).toBeCloseTo(jevCostCeilingUsd(ASKING), 12);
     expect(attentionReason(projected(), NOW / 1000)).toBeNull();
   });
 });
