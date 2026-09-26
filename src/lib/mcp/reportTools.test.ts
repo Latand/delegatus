@@ -36,8 +36,18 @@ const PROJECT = "repo-project-a";
 const SEAT = "conversation_seat";
 const MANAGER: CallerAttribution = { kind: "manager", conversationId: SEAT, role: "orchestrator" };
 
+/* The bot has exactly one chat agents may post in; every other Viewer control
+   read is refused, so no revision reaches a live Viewer. */
+const CONTROL = {
+  get: async (pathname: string) => {
+    if (pathname !== "/api/telegram/bot/agent?op=chats") throw new Error(`unexpected Viewer control read ${pathname}`);
+    return { chats: [{ chat: "team-reports", postAllowed: true }] };
+  },
+  post: async () => ({ ok: true }),
+};
+
 function bindings(over: Record<string, unknown> = {}) {
-  return viewerMcpBindings(undefined, { post: async () => ({ ok: true }) }, {
+  return viewerMcpBindings(undefined, CONTROL, {
     registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
     attentionAuthority: () => ({ kind: "worker", conversationId: SEAT, role: "orchestrator" }),
     callerAttribution: () => MANAGER,

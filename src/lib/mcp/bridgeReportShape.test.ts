@@ -85,8 +85,19 @@ async function sendThroughBot(input: ReportTelegramSend) {
   }
 }
 
+/* The Viewer control a binding reads the bot's chats through, answered from
+   the test bot and refusing everything else, so a revision that still looks
+   the chat list up sees the one allowed chat without a network. */
+const BOT_CONTROL = {
+  get: async (pathname: string) => {
+    if (pathname !== "/api/telegram/bot/agent?op=chats") throw new Error(`unexpected Viewer control read ${pathname}`);
+    return { chats: bot.listChats().chats.map((chat) => ({ chat: chat.chat, postAllowed: chat.postAllowed })) };
+  },
+  post: async (pathname: string) => { throw new Error(`unexpected Viewer control write ${pathname}`); },
+};
+
 function serviceAs(attribution: CallerAttribution, project = PROJECT, seatProject = project) {
-  const bindings = viewerMcpBindings(undefined, undefined, {
+  const bindings = viewerMcpBindings(undefined, BOT_CONTROL, {
     callerAttribution: () => attribution,
     callerProject: () => project,
     authorizedSeats: () => [{ conversationId: MANAGER.conversationId!, path: null, project: seatProject }],
