@@ -17,7 +17,9 @@ test.skipIf(process.env.LLV_CLAUDE_PROVIDER_SMOKE !== "1")("production host fenc
   const sse = [
     ["message_start", { type: "message_start", message: { id: "msg_fixture", type: "message", role: "assistant", content: [], model: "fixture-model", stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } }],
     ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
-    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "pong" } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `pong ${token.slice(0, 10)}` } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `${token.slice(10)} ${headerValue.slice(0, 12)}` } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: headerValue.slice(12) } }],
     ["content_block_stop", { type: "content_block_stop", index: 0 }],
     ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }],
     ["message_stop", { type: "message_stop" }],
@@ -115,6 +117,33 @@ test.skipIf(process.env.LLV_CLAUDE_PROVIDER_SMOKE !== "1")("production host fenc
     expect(logs).toContain("Reply with pong");
     expect(logs).not.toContain(token);
     expect(logs).not.toContain(headerValue);
+    const findTranscript = (directory: string): string | null => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) { const found = findTranscript(file); if (found) return found; }
+        else if (entry.isFile() && entry.name === `${sessionId}.jsonl`) return file;
+      }
+      return null;
+    };
+    const actualTranscript = findTranscript(root);
+    expect(actualTranscript).not.toBeNull();
+    const { compactText } = await import("@/lib/view/compactText");
+    const entry = { path: actualTranscript!, root: "claude-projects", name: path.basename(actualTranscript!), project: "fixture",
+      title: "fixture", engine: "claude", kind: "session", fmt: "claude", parent: null, mtime: 1, size: fs.statSync(actualTranscript!).size,
+      activity: "idle", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null } as import("@/lib/types").FileEntry;
+    const feed = compactText(entry, 100, 100_000, 100_000);
+    expect(JSON.stringify(feed)).not.toContain(token);
+    expect(JSON.stringify(feed)).not.toContain(headerValue);
+    const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+    const mcp = viewerMcpBindings(undefined, undefined, { pinnedTranscript: (candidate: string) => {
+      if (candidate !== actualTranscript) return undefined;
+      const descriptor = fs.openSync(candidate, "r");
+      return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root: account.projectsDir,
+        sameIdentity: () => true };
+    } } as never);
+    const messages = await mcp.conversation_messages({ clientRequestId: "provider-split-live-messages", transcriptPath: actualTranscript!, limit: 200 });
+    expect(JSON.stringify(messages)).not.toContain(token);
+    expect(JSON.stringify(messages)).not.toContain(headerValue);
   } finally {
     await host?.release(); a.stop(); b.stop();
     if (oldState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = oldState;

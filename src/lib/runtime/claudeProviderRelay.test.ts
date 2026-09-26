@@ -49,6 +49,77 @@ test("provider relay authenticates only its child and scrubs split credential ec
   } finally { relay.close(); upstream.stop(); }
 });
 
+test("provider relay redacts credentials split across text and tool-input deltas", async () => {
+  const token = "opaque-provider-token-8427";
+  const header = "opaque-header-value-8427";
+  const event = (type: string, body: unknown) => `event: ${type}\ndata: ${JSON.stringify(body)}\n\n`;
+  const sse = [
+    event("message_start", { type: "message_start", message: { id: "msg_fixture", type: "message", role: "assistant", content: [], model: "fixture", usage: { input_tokens: 1, output_tokens: 1 } } }),
+    event("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+    event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `before ${token.slice(0, 10)}` } }),
+    event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `${token.slice(10)} after` } }),
+    event("content_block_stop", { type: "content_block_stop", index: 0 }),
+    event("content_block_start", { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "tool_fixture", name: "fixture", input: {} } }),
+    event("content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: `{"value":"${header.slice(0, 9)}` } }),
+    event("content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: `${header.slice(9)}"}` } }),
+    event("content_block_stop", { type: "content_block_stop", index: 1 }),
+    event("message_stop", { type: "message_stop" }),
+  ].join("");
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(sse, { headers: { "content-type": "text/event-stream" } }) });
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token,
+    headers: { "x-feature": header }, sessionId: "fixture" });
+  try {
+    const response = await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+    const output = await response.text();
+    expect(output).not.toContain(token);
+    expect(output).not.toContain(header);
+    const events = output.trim().split("\n\n").map((frame) => JSON.parse(frame.split("\n").find((line) => line.startsWith("data: "))!.slice(6)));
+    expect(events.map((item) => item.type)).toEqual(["message_start", "content_block_start", "content_block_delta", "content_block_stop",
+      "content_block_start", "content_block_delta", "content_block_stop", "message_stop"]);
+    expect(events[2].delta.text).toBe("before [redacted] after");
+    expect(JSON.parse(events[5].delta.partial_json)).toEqual({ value: "[redacted]" });
+  } finally { relay.close(); upstream.stop(); }
+});
+
+test("provider relay checks initial block text together with later deltas", async () => {
+  const token = "opaque-provider-token-8427";
+  const frame = (type: string, body: unknown) => `event: ${type}\ndata: ${JSON.stringify(body)}\n\n`;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response([
+    frame("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: token.slice(0, 10) } }),
+    frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: token.slice(10) } }),
+    frame("content_block_stop", { type: "content_block_stop", index: 0 }),
+  ].join(""), { headers: { "content-type": "text/event-stream" } }) });
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token, headers: {}, sessionId: "fixture" });
+  try {
+    const response = await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+    const frames = (await response.text()).trim().split("\n\n");
+    const events = frames.map((value) => JSON.parse(value.split("\n").find((line) => line.startsWith("data: "))!.slice(6)));
+    expect(events[0].content_block.text).toBe("");
+    expect(events[1].delta.text).toBe("[redacted]");
+  } finally { relay.close(); upstream.stop(); }
+});
+
+test("provider relay preserves thinking and signature deltas in one block", async () => {
+  const token = "opaque-provider-token-8427";
+  const frame = (type: string, body: unknown) => `event: ${type}\ndata: ${JSON.stringify(body)}\n\n`;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response([
+    frame("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }),
+    frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: token.slice(0, 10) } }),
+    frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: token.slice(10) } }),
+    frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "safe-signature" } }),
+    frame("content_block_stop", { type: "content_block_stop", index: 0 }),
+  ].join(""), { headers: { "content-type": "text/event-stream" } }) });
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token, headers: {}, sessionId: "fixture" });
+  try {
+    const response = await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+    const frames = (await response.text()).trim().split("\n\n");
+    const events = frames.map((value) => JSON.parse(value.split("\n").find((line) => line.startsWith("data: "))!.slice(6)));
+    expect(events.map((item) => item.type)).toEqual(["content_block_start", "content_block_delta", "content_block_delta", "content_block_stop"]);
+    expect(events[1].delta).toEqual({ type: "thinking_delta", thinking: "[redacted]" });
+    expect(events[2].delta).toEqual({ type: "signature_delta", signature: "safe-signature" });
+  } finally { relay.close(); upstream.stop(); }
+});
+
 test("provider error prose and headers are withheld before Claude can persist them", async () => {
   const token = "opaque-provider-8427";
   const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {

@@ -953,7 +953,7 @@ async function captureOnboarding(): Promise<void> {
       stdio: ["ignore", "inherit", "inherit"],
     });
     await waitForServer(baseUrl, server);
-    await waitForBoard(baseUrl, false);
+    const { project } = await waitForBoard(baseUrl, false);
     const first = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: unknown };
     must(first.marker === null, `a first run with only engine transcripts answered marker ${JSON.stringify(first.marker)}; the guide would not open`);
     report.firstRunMarker = first.marker;
@@ -1034,11 +1034,25 @@ async function captureOnboarding(): Promise<void> {
             });
 
             if (providerOnly) {
+              const guideForm = async (selector: string, name: string) => {
+                const fields = page.locator(`${selector} input:not([type="checkbox"]), ${selector} textarea, ${selector} button`);
+                const readings = [];
+                for (let index = 0; index < await fields.count(); index++) {
+                  await fields.nth(index).scrollIntoViewIfNeeded();
+                  readings.push(await fields.nth(index).evaluate((node) => {
+                    const r = node.getBoundingClientRect();
+                    return { x: r.x, y: r.y, w: r.width, h: r.height };
+                  }));
+                }
+                must(readings.length >= 8 && readings.every((r) => r.w >= 44 && r.h >= (viewport.phone ? 44 : 24)
+                  && r.x >= -1 && r.x + r.w <= viewport.width + 1 && r.y >= -1 && r.y + r.h <= viewport.height + 1),
+                `${tag} ${name}: setup-guide provider controls are clipped or unreachable: ${JSON.stringify(readings)}`);
+                await shot(name, () => {});
+              };
               const selector = '[data-onboarding-accounts="claude"] [data-claude-provider-editor="new"]';
               await page.locator(`${selector} button`).first().click();
               await page.locator(`${selector} input`).first().waitFor();
-              await page.locator(`${selector} input`).last().scrollIntoViewIfNeeded();
-              await shot("engines-provider-form", () => {});
+              await guideForm(selector, "engines-provider-form");
               const geometry = await page.locator(selector).evaluate((node) => ({
                 fields: [...node.querySelectorAll("input,button")].map((field) => {
                   const rect = field.getBoundingClientRect();
@@ -1050,8 +1064,7 @@ async function captureOnboarding(): Promise<void> {
               await page.locator(`${selector} button`).first().click();
               const edit = '[data-onboarding-accounts="claude"] [data-claude-provider-editor="provider-fixture"]';
               await page.locator(`${edit} button`).first().click();
-              await page.locator(`${edit} input`).last().scrollIntoViewIfNeeded();
-              await shot("engines-provider-edit", () => {});
+              await guideForm(edit, "engines-provider-edit");
               const editGeometry = await page.locator(edit).evaluate((node) => ({
                 fields: [...node.querySelectorAll("input,button")].map((field) => {
                   const rect = field.getBoundingClientRect();
@@ -1060,6 +1073,54 @@ async function captureOnboarding(): Promise<void> {
                 overflow: node.scrollWidth - node.clientWidth,
               }));
               must(editGeometry.overflow <= 1 && editGeometry.fields.every((field) => field.width >= 44 && (viewport.phone ? field.height >= 44 : field.height >= 24) && field.left >= 0 && field.right <= viewport.width + 1), `${tag}: provider edit controls overflow or collapse: ${JSON.stringify(editGeometry)}`);
+              /* The Accounts screen has a separate scroll/fixed-position layout.
+                 Walk its own add and edit controls after leaving the guide. */
+              await page.locator('[data-onboarding-dialog] button[title]').last().click();
+              await page.waitForSelector('[data-onboarding-dialog]', { state: "detached" });
+              await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded" });
+              if (viewport.phone) {
+                await page.waitForSelector('[data-mobile2-bar]');
+                await page.click('[data-mobile2-bar] [data-mobile2-open="menu"]');
+                await page.click('[data-mobile2-menu-row="accounts"]');
+                await page.waitForSelector('[data-mobile2-accounts]');
+              } else {
+                await page.waitForSelector('[data-kanban-board] header.bar');
+                await page.locator('button[aria-haspopup="dialog"][aria-label*="Claude"]').first().click();
+                await page.waitForSelector('[role="dialog"] [data-claude-provider-editor="new"]');
+              }
+              const accountRoot = viewport.phone ? '[data-mobile2-accounts-engine="claude"]' : '[role="dialog"]';
+              const accountShot = async (name: string, editor: string) => {
+                const controls = page.locator(`${accountRoot} ${editor} input:not([type="checkbox"]), ${accountRoot} ${editor} textarea, ${accountRoot} ${editor} button`);
+                const count = await controls.count();
+                must(count >= 8, `${tag} ${name}: only ${count} editor controls rendered`);
+                const readings = [];
+                for (let index = 0; index < count; index++) {
+                  await controls.nth(index).scrollIntoViewIfNeeded();
+                  readings.push(await controls.nth(index).evaluate((node) => {
+                    const r = node.getBoundingClientRect();
+                    return { x: r.x, y: r.y, w: r.width, h: r.height };
+                  }));
+                }
+                const bounds = await page.locator(accountRoot).first().evaluate((node) => {
+                  const r = node.getBoundingClientRect();
+                  return { x: r.x, y: r.y, w: r.width, h: r.height, overflowX: node.scrollWidth - node.clientWidth };
+                });
+                must(bounds.x >= -1 && bounds.x + bounds.w <= viewport.width + 1 && bounds.overflowX <= 1
+                  && (viewport.phone || (bounds.y >= -1 && bounds.y + bounds.h <= viewport.height + 1)),
+                  `${tag} ${name}: Accounts frame overflows: ${JSON.stringify(bounds)}`);
+                must(readings.every((r) => r.w >= 44 && r.h >= (viewport.phone ? 44 : 24) && r.x >= -1 && r.x + r.w <= viewport.width + 1 && r.y >= -1 && r.y + r.h <= viewport.height + 1),
+                  `${tag} ${name}: editor controls are clipped or unreachable: ${JSON.stringify(readings)}`);
+                frames[name] = { bounds, controls: readings };
+                await page.screenshot({ path: path.join(OUT_DIR, `${tag}-${name}.png`),
+                  ...(viewport.phone ? {} : { clip: { x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h } }) });
+              };
+              const accountNew = '[data-claude-provider-editor="new"]';
+              await page.locator(`${accountRoot} ${accountNew} > button`).click();
+              await accountShot("accounts-provider-add", accountNew);
+              await page.locator(`${accountRoot} ${accountNew} > button`).click();
+              const accountEdit = '[data-claude-provider-editor="provider-fixture"]';
+              await page.locator(`${accountRoot} ${accountEdit} > button`).click();
+              await accountShot("accounts-provider-edit", accountEdit);
               report[tag] = frames;
               await context.close();
               continue;

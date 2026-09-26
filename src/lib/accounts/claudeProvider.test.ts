@@ -13,7 +13,7 @@ process.env.LLV_CLAUDE_HOME = path.join(sandbox, "main");
 
 const accounts = await import("./claude");
 const { accountManager } = await import("./manager");
-const { freshSpecFor, resumeSpecForSession, resolveBinary } = await import("@/lib/agent/cli");
+const { freshSpecFor, resumeSpecForSession, resolveBinary, resolveHostBinary } = await import("@/lib/agent/cli");
 const { claudeStructuredHostOptions } = await import("@/lib/runtime/structuredSpawn");
 const { applyClaudeSpawnPolicy } = await import("@/lib/agent/spawnPolicy");
 const { selectHealthyClaudeAccount } = await import("./spawnHealth");
@@ -221,10 +221,10 @@ test("OpenCode Go catalog offers documented Messages routes and validates both l
   const fetchBefore = globalThis.fetch;
   const captured: { headers?: Headers } = {};
   try {
-    globalThis.fetch = (async (_input, init) => {
+    globalThis.fetch = Object.assign(async (_input: RequestInfo | URL, init?: RequestInit) => {
       captured.headers = new Headers(init?.headers);
       return Response.json({ data: mixed.map((id) => ({ id })) });
-    }) as typeof fetch;
+    }, { preconnect: fetchBefore.preconnect }) as typeof fetch;
     expect(await accounts.listClaudeProviderModels(go, token)).toEqual(["qwen3.8-max", "qwen3.8-flash", "minimax-m3"]);
   } finally { globalThis.fetch = fetchBefore; }
   expect(captured.headers?.get("x-opencode-session")).toMatch(/^[0-9a-f-]{36}$/);
@@ -237,9 +237,9 @@ test("generic model catalog drops JSON-escaped echoes of the provider credential
   const quoted = 'abc"defgh';
   const fetchBefore = globalThis.fetch;
   try {
-    globalThis.fetch = (async () => Response.json({ data: [
+    globalThis.fetch = Object.assign(async () => Response.json({ data: [
       { id: JSON.stringify(quoted).slice(1, -1) }, { id: "safe-model" },
-    ] })) as typeof fetch;
+    ] }), { preconnect: fetchBefore.preconnect }) as typeof fetch;
     expect(await accounts.listClaudeProviderModels(provider, quoted)).toEqual(["safe-model"]);
   } finally { globalThis.fetch = fetchBefore; }
 });
@@ -248,7 +248,8 @@ test("catalog and retained transcript reads remove slash-escaped credentials", a
   const slashToken = "abcde123/";
   const fetchBefore = globalThis.fetch;
   try {
-    globalThis.fetch = (async () => Response.json({ data: [{ id: "abcde123\\/" }, { id: "safe-model" }] })) as typeof fetch;
+    globalThis.fetch = Object.assign(async () => Response.json({ data: [{ id: "abcde123\\/" }, { id: "safe-model" }] }),
+      { preconnect: fetchBefore.preconnect }) as typeof fetch;
     expect(await accounts.listClaudeProviderModels(provider, slashToken)).toEqual(["safe-model"]);
   } finally { globalThis.fetch = fetchBefore; }
   const account = accounts.createManagedClaudeAccount("Slash", { config: provider, token: slashToken });
@@ -331,8 +332,10 @@ test("headless Claude reviewer uses the selected provider through the private la
   expect(settings).not.toContain(token);
 });
 
-test("headless reviewer launch reaches the account provider with its stable session header", async () => {
+test("container-bound headless reviewer resolves the host CLI and reaches the provider", async () => {
   const seen: { value?: { auth: string | null; session: string | null; feature: string | null } } = {};
+  const oldShims = process.env.LLV_DOCKER_NSENTER_SHIMS;
+  process.env.LLV_DOCKER_NSENTER_SHIMS = "1";
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     seen.value = { auth: request.headers.get("authorization"), session: request.headers.get("x-opencode-session"), feature: request.headers.get("x-feature") };
     return Response.json({ ok: true });
@@ -342,14 +345,20 @@ test("headless reviewer launch reaches the account provider with its stable sess
       token, headers: { "x-feature": "private-feature-8427" } });
     const built = reviewerCommand({ engine: "claude", model: "haiku", effort: null }, "Review", path.join(sandbox, "review.md"), sandbox,
       null, { home: account.home, projectsDir: account.projectsDir, managed: true });
+    expect(built.args[built.args.indexOf("--") + 1]).toBe(resolveHostBinary("claude"));
+    expect(built.args[built.args.indexOf("--") + 1]).not.toBe("/usr/local/bin/claude");
     const fake = path.join(sandbox, "fake-headless-claude");
     fs.writeFileSync(fake, `#!/usr/bin/env bun\nconst response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages", { method: "POST", headers: { authorization: "Bearer " + process.env.ANTHROPIC_AUTH_TOKEN, "user-agent": "claude-cli/fixture" } }); process.exit(response.ok ? 0 : 1);\n`, { mode: 0o700 });
-    const args = built.args.map((value) => value === resolveBinary("claude") ? fake : value);
+    const args = built.args.map((value) => value === resolveHostBinary("claude") ? fake : value);
     const child = spawn(built.command, args, { cwd: sandbox, env: built.env, stdio: "ignore" });
     const status = await new Promise<number | null>((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
     expect(status).toBe(0);
     expect(seen.value).toEqual({ auth: `Bearer ${token}`, session: built.sessionId, feature: "private-feature-8427" });
-  } finally { server.stop(); }
+  } finally {
+    if (oldShims === undefined) delete process.env.LLV_DOCKER_NSENTER_SHIMS;
+    else process.env.LLV_DOCKER_NSENTER_SHIMS = oldShims;
+    server.stop();
+  }
 });
 
 test("provider health admits unknown limits and reports its own authentication failure", async () => {

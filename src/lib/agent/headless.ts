@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { resolveBinary } from "@/lib/agent/cli";
+import { resolveBinary, resolveHostBinary } from "@/lib/agent/cli";
 import { claudeManagedEnvironment, claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt } from "@/lib/agent/spawnPolicy";
@@ -311,7 +311,7 @@ export function reviewerCommand(
     return { command: provider ? "bun" : resolveBinary("claude"),
       args: provider ? [claudeProviderLauncherPath(claudeAccount!.home), "--home", claudeAccount!.home,
         "--base-url", provider.baseUrl, "--default-model", provider.model, "--small-model", provider.smallFastModel ?? "",
-        "--header-names", JSON.stringify(provider.customHeaderNames ?? []), "--", resolveBinary("claude"), ...args] : args,
+        "--header-names", JSON.stringify(provider.customHeaderNames ?? []), "--", resolveHostBinary("claude"), ...args] : args,
       env: reviewerEnvironment(baseEnv, spawnCapability), stdin: null, outputPath: null, sessionId,
       reviewerPath: claudeTranscriptPath(cwd, sessionId, claudeAccount?.projectsDir) };
   }

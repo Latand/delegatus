@@ -96,6 +96,9 @@ export async function startClaudeProviderRelay(input) {
       response.writeHead(upstreamResponse.statusCode ?? 200, { "content-type": "text/event-stream" });
       const decoder = new StringDecoder("utf8");
       let pending = "";
+      let eventLines = [];
+      const blocks = new Map();
+      let bufferedBlockBytes = 0;
       const filter = new Transform({
         transform(chunk, _encoding, callback) {
           pending += decoder.write(chunk);
@@ -104,21 +107,80 @@ export async function startClaudeProviderRelay(input) {
           while (newline >= 0) {
             const line = pending.slice(0, newline).replace(/\r$/, "");
             pending = pending.slice(newline + 1);
-            if (line.startsWith("data:")) {
-              const data = line.slice(5).trim();
-              if (data === "[DONE]") this.push("data: [DONE]\n");
-              else {
-                try { this.push(`data: ${JSON.stringify(scrubJson(JSON.parse(data)))}\n`); }
-                catch { return callback(new Error("Provider SSE data is invalid")); }
-              }
-            } else this.push(scrub(line) + "\n");
+            if (line) eventLines.push(line);
+            else if (eventLines.length) {
+              try {
+                const lines = eventLines;
+                eventLines = [];
+                const data = lines.filter((item) => item.startsWith("data:")).map((item) => item.slice(5).trimStart()).join("\n");
+                const emit = (event, body) => {
+                  for (const item of event) {
+                    if (item.startsWith("data:")) continue;
+                    this.push(scrub(item) + "\n");
+                  }
+                  this.push(`data: ${body === "[DONE]" ? body : JSON.stringify(scrubJson(body))}\n\n`);
+                };
+                if (!data) {
+                  for (const item of lines) this.push(scrub(item) + "\n");
+                  this.push("\n");
+                } else if (data === "[DONE]") {
+                  if (blocks.size) throw new Error("Provider SSE content block is incomplete");
+                  emit(lines, data);
+                } else {
+                  const body = JSON.parse(data);
+                  const index = body?.index;
+                  if (body?.type === "content_block_start" && Number.isInteger(index)) {
+                    if (blocks.has(index)) throw new Error("Provider SSE content block overlaps");
+                    blocks.set(index, { start: { lines, body }, deltas: [] });
+                  } else if (body?.type === "content_block_delta" && Number.isInteger(index)) {
+                    const block = blocks.get(index);
+                    if (!block) throw new Error("Provider SSE content delta has no start");
+                    const value = body.delta?.type === "text_delta" ? body.delta.text
+                      : body.delta?.type === "input_json_delta" ? body.delta.partial_json
+                        : body.delta?.type === "thinking_delta" ? body.delta.thinking
+                          : body.delta?.type === "signature_delta" ? body.delta.signature : null;
+                    if (typeof value !== "string") throw new Error("Provider SSE content delta is invalid");
+                    bufferedBlockBytes += Buffer.byteLength(value);
+                    if (bufferedBlockBytes > 8 * 1024 * 1024) throw new Error("Provider SSE content block is oversized");
+                    block.deltas.push({ lines, body, value });
+                  } else if (body?.type === "content_block_stop" && Number.isInteger(index)) {
+                    const block = blocks.get(index);
+                    if (!block) throw new Error("Provider SSE content stop has no start");
+                    blocks.delete(index);
+                    bufferedBlockBytes -= block.deltas.reduce((size, delta) => size + Buffer.byteLength(delta.value), 0);
+                    const initialText = block.start.body.content_block?.type === "text"
+                      ? block.start.body.content_block.text : "";
+                    if (typeof initialText !== "string") throw new Error("Provider SSE text block is invalid");
+                    const kinds = [...new Set(block.deltas.map((delta) => delta.body.delta.type))];
+                    if (kinds.length > 1 && !kinds.every((kind) => kind === "thinking_delta" || kind === "signature_delta"))
+                      throw new Error("Provider SSE content delta types differ");
+                    if (initialText && kinds.some((kind) => kind !== "text_delta")) throw new Error("Provider SSE text block has incompatible deltas");
+                    // Nothing from a content block reaches Claude until all its logical
+                    // deltas can be checked as one value, including split tool JSON.
+                    emit(block.start.lines, initialText ? { ...block.start.body,
+                      content_block: { ...block.start.body.content_block, text: "" } } : block.start.body);
+                    for (const kind of kinds.length ? kinds : initialText ? ["text_delta"] : []) {
+                      const group = block.deltas.filter((delta) => delta.body.delta.type === kind);
+                      const delta = group[0] ?? { lines: ["event: content_block_delta"],
+                        body: { type: "content_block_delta", index, delta: { type: "text_delta", text: "" } } };
+                      const combined = (kind === "text_delta" ? initialText : "") + group.map((item) => item.value).join("");
+                      const safe = kind === "input_json_delta" ? JSON.stringify(scrubJson(JSON.parse(combined))) : scrubString(combined);
+                      emit(delta.lines, { ...delta.body, delta: { ...delta.body.delta,
+                        [kind === "text_delta" ? "text" : kind === "input_json_delta" ? "partial_json"
+                          : kind === "thinking_delta" ? "thinking" : "signature"]: safe } });
+                    }
+                    emit(lines, body);
+                  } else emit(lines, body);
+                }
+              } catch { return callback(new Error("Provider SSE data is invalid")); }
+            }
             newline = pending.indexOf("\n");
           }
           callback();
         },
         flush(callback) {
           const tail = pending + decoder.end();
-          if (tail.trim()) callback(new Error("Provider SSE event is incomplete"));
+          if (tail.trim() || eventLines.length || blocks.size) callback(new Error("Provider SSE event is incomplete"));
           else callback();
         },
       });
