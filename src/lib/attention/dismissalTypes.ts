@@ -16,7 +16,7 @@ export type DismissedBy =
   | { kind: "manager" | "agent" | "gateway" | "unidentified"; conversationId: string | null; role: string | null; via?: { deputy: string } };
 
 /** The reasons a conversation can need the operator for (§4). */
-export type ConversationReasonKind = "decision" | "question" | "plan" | "permission" | "delivery" | "launch";
+export type ConversationReasonKind = "decision" | "question" | "plan" | "permission" | "delivery" | "launch" | "ask";
 
 /** The reasons a lane can need the operator for: a decision, a spent review
     budget, and a completed lane's merge that stopped (#2187 §4.6). */
@@ -34,10 +34,13 @@ export interface AttentionDismissalMark {
   reasonId?: string | null;
 }
 
-/** One subject a dismissal touched. */
+/** One subject a dismissal touched. A `report` is an orchestrator's
+    decision request in the report log, by its seq: dismissing it resolves it,
+    and the report log's tick is the same record. */
 export type DismissalSubject =
   | { kind: "conversation"; conversationId: string }
-  | { kind: "pipeline"; pipelineId: string };
+  | { kind: "pipeline"; pipelineId: string }
+  | { kind: "report"; seq: number };
 
 /** What the caller asks to clear. A task expands to the subjects its card
     drew, when the caller names them, and otherwise to everything on it. */
@@ -55,7 +58,8 @@ export type DismissalTarget =
     A lane that moved since is not cleared. */
 export type DismissalSubjectRequest =
   | { kind: "conversation"; conversationId?: string; path?: string; reasonId?: string | null; reason?: ConversationReasonKind | null }
-  | { kind: "pipeline"; pipelineId: string; laneMovedAt?: number | null };
+  | { kind: "pipeline"; pipelineId: string; laneMovedAt?: number | null }
+  | { kind: "report"; seq: number };
 
 export interface DismissalOutcome {
   dismissed: DismissalSubject[];

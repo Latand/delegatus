@@ -86,7 +86,19 @@ function decisionText(t: TFunction, reason: ConversationReason): string {
        back in on (#2170). */
     case "launch":
       return reason.header ? t("attention.decisionLaunchReason", { reason: reason.header }) : t("attention.decisionLaunch");
+    /* The agent's own sentence, as it asked it. */
+    case "ask":
+      return reason.header ? t("attention.decisionAskNamed", { ask: reason.header }) : t("needs.ask");
   }
+}
+
+/**
+ * The line of one needs-you row: the wait in the same fixed words, without the
+ * role, which the row names with its own mark. An orchestrator's question in
+ * the report log reads «Question»; its text is the row's title.
+ */
+export function reasonLine(t: TFunction, reason: ConversationReason): string {
+  return reason.report ? t("attention.reportQuestion") : decisionText(t, reason);
 }
 
 /**
@@ -140,6 +152,8 @@ export function conversationNeedText(t: TFunction, reason: Pick<ConversationReas
       return t("needs.delivery");
     case "launch":
       return t("needs.launch");
+    case "ask":
+      return t("needs.ask");
   }
 }
 

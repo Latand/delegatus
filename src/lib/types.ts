@@ -115,21 +115,26 @@ export interface RateLimitState {
 
 /**
  * A decision the project's orchestrator is waiting on the operator for
- * (issue #1168): its newest unanswered `blocked`/`question` bridge report.
+ * (issue #1168): one open `blocked`/`question` bridge report.
  *
  * The bridge report log is drained only by the voice gateway, so with that
  * channel off a manager saying "I cannot proceed" reached the operator as
  * prose in a feed and nothing more. This is the same fact, shaped for the
- * attention queue and carrying only what that queue needs: the report's own
- * key, so re-reading the log can never enqueue it twice, and the time it was
- * filed, which is both the item's `since` and what ages it out. The report's
- * prose stays in the feed that already renders it.
+ * attention queue: the report's own key, so re-reading the log can never
+ * enqueue it twice, the time it was filed, which is both the item's `since`
+ * and what ages it out, and the seq and first line of the report, so the
+ * needs-you row says what is asked and resolving it names the row the report
+ * log ticks.
  */
 export interface BridgeAsk {
   /** The caller's report key — stable across re-reads, and the item's id. */
   id: string;
   /** ISO time the manager filed the report; the attention item's `since`. */
   at: string;
+  /** The report's seq: what resolving it records. */
+  seq?: number;
+  /** The report's first line, bounded. */
+  body?: string;
 }
 
 /** One sidebar entry returned by GET /api/files. */
@@ -246,6 +251,9 @@ export interface FileEntry {
       (issue #1168), stamped server-side from the durable report log. Present
       only on a designated seat's entry; null or absent everywhere else. */
   bridgeAsk?: BridgeAsk | null;
+  /** Every open bridge ask of this seat, oldest first: each is its own
+      needs-you item. `bridgeAsk` is the newest of them. */
+  bridgeAsks?: BridgeAsk[];
   /** Newest still-pending self-scheduled wakeup, for the board timer chip. */
   pendingWakeup?: PendingWakeup | null;
   /** Newest TodoWrite/update_plan state — the agent's plan and current goal. */
@@ -365,6 +373,10 @@ export interface FileEntry {
       (docs/design/needs-attention.md §5). A reason that started at or before
       it is not flagged; a newer one is. */
   attentionDismissal?: import("@/lib/attention/dismissalTypes").AttentionDismissalMark;
+  /** The newest message the "Asks you" classifier judged an ask of the
+      operator (docs/research/attention-classifier.md §7). The reason model
+      decides whether it is still open. */
+  operatorAsk?: import("@/lib/asks/types").OperatorAskMark;
   /** Durable launch projection shown before its transcript enters the scan. */
   spawn?: StructuredSpawnCardState;
   /** Transient launch/delivery facts of the launch that CREATED this live

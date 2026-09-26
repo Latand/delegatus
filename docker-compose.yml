@@ -37,6 +37,9 @@ x-viewer-common: &viewer-common
     - ${HOME:-/home/user}:${HOME:-/home/user}
     - /tmp/tmux-${DELEGATUS_UID:-${LLV_UID:-1000}}:/tmp/tmux-${DELEGATUS_UID:-${LLV_UID:-1000}}
     - /tmp/claude-${DELEGATUS_UID:-${LLV_UID:-1000}}:/tmp/claude-${DELEGATUS_UID:-${LLV_UID:-1000}}
+    # Agents on the host render evidence under /var/tmp (#2084); the Viewer
+    # only reads it, through the image routes' evidence root.
+    - /var/tmp:/var/tmp:ro
 
 services:
   # Explicit activation only. This service owns the Viewer replacement

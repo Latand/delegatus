@@ -29,7 +29,7 @@ Object.assign(globalThis, {
 });
 
 const { AttentionToast } = await import("./AttentionToast");
-const { AttentionQueueRow } = await import("./AttentionIsland");
+const { AttentionPanel } = await import("./AttentionPanel");
 const { buildAttentionQueue, STALLED_ATTENTION_TTL } = await import("../attention");
 type FileEntry = import("@/lib/types").FileEntry;
 
@@ -152,7 +152,7 @@ test("a plan, a terminal prompt and an owed message each name themselves", async
   }
 });
 
-test("the toast title and the island popover row are the SAME line, for every kind of wait", async () => {
+test("the toast title and the needs-you panel's row are the SAME line, for every kind of wait", async () => {
   for (const [, overrides] of WAITS) {
     const entry = file(overrides as Partial<FileEntry>);
     const item = buildAttentionQueue([entry], NOW)[0]!;
@@ -161,7 +161,19 @@ test("the toast title and the island popover row are the SAME line, for every ki
     const toastLine = title(host);
     await unmount();
 
-    host = await render(<AttentionQueueRow item={item} onOpen={() => {}} />);
+    host = await render(
+      <AttentionPanel
+        queue={[{ kind: "conversation", id: item.id, item }]}
+        current={entry.project}
+        projectNames={{}}
+        pipelines={[]}
+        placement="overlay"
+        canDock={false}
+        onPlacement={() => {}}
+        onClose={() => {}}
+        onOpen={() => {}}
+      />,
+    );
     const rowLine = host.querySelector("[data-attention-decision]")?.textContent ?? null;
     await unmount();
 

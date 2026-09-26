@@ -83,6 +83,7 @@ function ports(state: World): DismissalPorts {
       state.lanes.set(pipelineId, next);
       return { pipeline: next };
     },
+    resolveReports: () => ({ resolved: [], alreadyClear: [], unknown: [] }),
   };
 }
 

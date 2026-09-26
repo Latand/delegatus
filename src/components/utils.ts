@@ -10,8 +10,12 @@ export function escText(value: string): string {
 }
 
 export function fmtAge(mtime: number): string {
+  return fmtAgeSeconds(Date.now() / 1000 - mtime);
+}
+
+/** `fmtAge` for a wait already measured in seconds, against a clock the caller holds. */
+export function fmtAgeSeconds(s: number): string {
   const locale = getLocale();
-  const s = Date.now() / 1000 - mtime;
   if (s < 90) return translate(locale, "time.agoSec", { n: Math.round(s) });
   if (s < 5400) return translate(locale, "time.agoMin", { n: Math.round(s / 60) });
   if (s < 129600) return translate(locale, "time.agoHour", { n: Math.round(s / 3600) });

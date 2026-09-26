@@ -533,6 +533,46 @@ questions, so the transcript's pending question surfaces them and they have no
 timeout; an unattended conversation still gets an immediate deny, because
 nobody could answer it there.
 
+## Asks you: an agent that asks in prose
+
+Most agents that need the operator say so in words ("say go and I'll merge")
+and raise no structured signal. `docs/research/attention-classifier.md`
+measured that case and chose a narrow slice, built here:
+
+- **Opt-in, per installation.** "Asks you" in the board's ⋯ menu and the
+  phone's ⋯ sheet, off by default (`state/asks-you-settings.json`, written only
+  by the operator through `PUT /api/asks-you`). Its hint says that, while it is
+  on, the last message of each agent's turn goes to Jev on OpenRouter, and it
+  shows this month's spend against the cap (USD 1 by default). Without an
+  OpenRouter key (`OPENROUTER_API_KEY`, or the `openrouter-api-key` file in the
+  config directory) it cannot be turned on and names where the key goes.
+- **What is sent.** The Viewer's classifier clock (`src/lib/asks/controller.ts`)
+  reads the last scan every 15 s. For each conversation Delegatus knows whose
+  turn has ended, except engine subagents, pipeline stages and review flows, it
+  takes the last text of the turn (never a tool call) and sends it once
+  (deduplicated by message id) with the evaluation's redaction and clipping.
+  Stage endings, bodies under 30 characters, engine errors, repeated bodies,
+  messages older than 30 minutes and messages from before the switch turned
+  on are never sent. The call is the research's "Jev V2" at a 0.85 threshold
+  with a 2 s timeout and no retry. A failure, a timeout, a missing key or a
+  spent cap leaves the message unclassified and changes nothing else.
+- **The reason.** A message at or over the threshold is stored in
+  `state/operator-asks.json`, and `/api/files` stamps it on the conversation as
+  `operatorAsk`. `attentionReason` returns it as the `ask` kind, below every
+  structured reason: «asks you · ‹role›» on the card, the agent's sentence on
+  the phone card and in the toast. It clears when a newer turn starts (the
+  operator or anyone wrote to the agent), when the agent writes again or is
+  working, on Dismiss, and for every card at once when the switch goes off.
+- **The report log.** Each ask is one Viewer-authored line in its project's
+  report log, placed by time among the orchestrator's reports: «‹agent› asks
+  you: ‹the sentence›», the agent's name linking to `#c=<conversation>`. It is
+  no bridge report: nothing relays, speaks or posts it, and the orchestrator's
+  Bridge reports switch does not hide it.
+
+The rendered readings (the card, the log line and the switch at 1440 and 390,
+en and uk) are in `evidence/asks-you/`, from the "asks you" case of the kanban
+driver and the "Asks you" case of the phone driver.
+
 ## Deferred: not currently justified
 
 - **Other structured-host approvals (#14) as a reason.** Codex and Copilot

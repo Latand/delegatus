@@ -6,6 +6,7 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 
 import { listFilesWithProjectCatalog, pinnedPathsFor } from "@/lib/scanner";
+import { overlayOperatorAsks } from "@/lib/asks/overlay";
 import { overlayAttentionDismissals } from "@/lib/attention/dismissals";
 import { overlayBridgeAsks } from "@/lib/bridge/asks";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
@@ -810,7 +811,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     if (file.project === "project_unresolved") file.projectUnresolved = true;
   }
   markTiming("files-project-catalog");
-  /* The orchestrator seat's open decision request (issue #1168). The bridge
+  /* The orchestrator seat's open decision requests (issue #1168). The bridge
      report log had exactly one reader — the voice gateway — so a `blocked` or
      `question` report reached the operator only if that channel happened to be
      up. Stamped here, on the seat's own row, it becomes an ordinary hard block
@@ -828,6 +829,10 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      with the reason it would otherwise flag. */
   overlayAttentionDismissals(projected.files);
   markTiming("files-attention-dismissals");
+  /* "Asks you" (docs/research/attention-classifier.md §7): the newest ask the
+     classifier recorded for each conversation. */
+  overlayOperatorAsks(projected.files);
+  markTiming("files-operator-asks");
   const visibleProjects = [
     ...projected.files.map((file) => file.project),
     ...effectiveProjectCatalog.map((entry) => entry.project),

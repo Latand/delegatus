@@ -1,21 +1,26 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
-import { ChevronRight, X } from "@/components/icons";
+import { ChevronDown, ChevronRight, X } from "@/components/icons";
 import { ChatEngineMark } from "@/components/mobile/chatEngineMark";
 import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardModel";
+import { showReceipt } from "@/components/mobile/MobileReceipt";
 import { topScreen, useMobileNav, type MobileScreen } from "@/components/mobile/mobileNav";
 import { MobileSheet, MobileSheetSection } from "@/components/mobile/MobileSheet";
 import type { AttentionNotice } from "@/lib/attention/types";
+import { projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
+import type { Pipeline } from "@/lib/pipelines/types";
+import type { FrameRole } from "@/lib/roleFrames";
 
 import type { AttentionItem } from "../attention";
-import { pipelineReviewHeads, stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
-import { humanizeDuration } from "../turnDuration";
-import { cleanTitle, fileModelLabel } from "../utils";
-import { nextMobileAttention, type MobileAttentionEntry } from "./attentionQueue";
-import { decisionLine } from "./decision";
+import { RoleTag } from "../RoleFrameMark";
+import { cleanTitle, fileModelLabel, fmtAgeSeconds } from "../utils";
+import type { MobileAttentionEntry } from "./attentionQueue";
+import { decisionLine, reasonLine } from "./decision";
+import { sendDismissal } from "./dismissalOverlay";
+import { needsYouDismissal, needsYouEntryRole, needsYouEntrySince, needsYouLaneLine, needsYouSections } from "./needsYouPanel";
 import { PermissionActions } from "./PermissionActions";
 
 /*
@@ -23,29 +28,33 @@ import { PermissionActions } from "./PermissionActions";
  * §4.1, §4.6; the prototype's `attentionSheet`). The bar's `⚠ n` opens it
  * over whatever screen is showing, and it lists the ONE phone queue
  * (`attentionQueue.ts`): conversations waiting on a decision, and pipelines in
- * `needs_decision`, in the board's Needs-you order. Its header says «Needs you · n» and, when there is more
- * than one item, carries «Next ›», which skips the item the operator is
- * looking at and wraps.
+ * `needs_decision`, one section per project in the rail's order, oldest wait
+ * first inside each (`needsYouSections`). Its header is the desktop panel's
+ * «Waiting for you · n» and carries «Dismiss all n»; there is no «Next ›»
+ * (docs/design/needs-you-options.md, option B): the rows are the way in, and
+ * nothing walks the operator.
  *
- * Rows are the sheet-row anatomy (`.mrow`): a warning dot, the title, one meta
- * line, a chevron. The meta line of a conversation is the DECISION — the one
- * `decisionLine` the desktop's toast and popover row also read (#1167) — then
- * how long it has waited, the engine glyph and the model; a pipeline's reads
- * `pipeline · stage k/n · <stage> failed · n findings · age`, the same words
- * the board's queue row uses (`MobilePipelineQueueRow`), so the two entries
- * cannot describe one pipeline differently.
+ * Rows are the sheet-row anatomy (`.mrow`): the role of the agent behind it
+ * (the needs-you panel's role tag), the title, one meta
+ * line, a chevron. The meta line of a conversation is its wait in the words
+ * the desktop panel uses (`reasonLine`), then how long it has waited, the
+ * engine glyph and the model; a lane's is the panel's lane line
+ * (`needsYouLaneLine`, the card's `needLabel`) and its age, so one item reads
+ * the same on both surfaces. The wait gives way to an ellipsis before the age
+ * does: the age is the one fact on the line that must stay whole.
  *
  * A row is the phone's OPEN gesture (#1244): the conversation screen it pushes
  * stamps the card seen. Pipelines have a destination once lane 7 lands the
  * pipeline screen; until the host passes `onOpenPipeline`, a pipeline row is a
- * statement rather than a control, and «Next ›» walks the conversations.
+ * statement rather than a control. Every row has «Dismiss», the needs-you
+ * dismissal every card makes, with the receipt's Undo; a section of a sheet
+ * that lists more than one project has its own «Dismiss n».
  *
  * Above the queue, «From your agents» lists the root agent's recent
  * `request_attention` calls (docs/design/needs-attention.md §6): on the phone
  * a request is this row and the bar's dot, never a move. A tap goes where it
  * points, × clears it on this phone, and opening the sheet marks the rows it
- * shows as seen, which puts the dot out. The count and «Next ›» stay the
- * queue's.
+ * shows as seen, which puts the dot out. The count stays the queue's.
  */
 
 /** One notice as the sheet draws it: the host names its target. */
@@ -66,8 +75,18 @@ export interface MobileAttentionSheetProps {
   /** The pipeline screen's opener (lane 7). Absent, pipeline rows are inert. */
   onOpenPipeline?: (row: MobileBoardPipelineRow) => void;
   onClose: () => void;
-  /** Test seam: the screen «Next ›» steps from. Production reads the nav store. */
+  /** For the role each row names. */
+  pipelines?: readonly Pipeline[];
+  /** Project display names, for the section headers. */
+  projectNames?: Readonly<Record<string, string>>;
+  /** The project behind the sheet, whose section leads. */
+  current?: string | null;
+  /** The rail's project order, which the other sections follow. */
+  order?: readonly string[];
+  /** Test seam: the screen the rows mark as current. Production reads the nav store. */
   screen?: MobileScreen;
+  /** Test seam. */
+  dismiss?: typeof sendDismissal;
   /** An agent's requests for the operator, newest first. */
   notices?: readonly MobileNoticeRow[];
   onOpenNotice?: (notice: AttentionNotice) => void;
@@ -81,42 +100,75 @@ const META = "flex items-center gap-[5px] overflow-hidden text-label font-medium
 const SEP = <span aria-hidden className="shrink-0 opacity-60">·</span>;
 
 const NO_NOTICES: readonly MobileNoticeRow[] = [];
+const NO_PIPELINES: readonly Pipeline[] = [];
+const NO_NAMES: Readonly<Record<string, string>> = {};
 
-export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, screen, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen }: MobileAttentionSheetProps) {
+export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen }: MobileAttentionSheetProps) {
   const { t } = useLocale();
+  const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
   const shownNotices = notices.map((row) => row.notice.id).join("\n");
   useEffect(() => {
     if (shownNotices) onNoticesSeen?.(shownNotices.split("\n"));
   }, [shownNotices, onNoticesSeen]);
   const navState = useMobileNav();
   const here = screen ?? topScreen(navState);
-  /* «Next ›» walks what can be opened: every entry once the pipeline screen
-     has an opener, the conversations alone until then. */
-  const walkable = onOpenPipeline ? entries : entries.filter((entry) => entry.kind === "conversation");
   const open = (entry: MobileAttentionEntry) => {
     if (entry.kind === "conversation") onOpenConversation(entry.item);
     else onOpenPipeline?.(entry.row);
   };
-  const next = () => {
-    const target = nextMobileAttention(walkable, here, 1);
-    if (target) open(target);
+  /* A dismissal leaves on the tap and the receipt carries its Undo. */
+  const clear = (list: readonly MobileAttentionEntry[], text: string) => {
+    if (!list.length) return;
+    const { target, subjects } = needsYouDismissal(list);
+    showReceipt(text, { kind: "undo", run: () => void dismiss(target, subjects, { undo: true, surface: "phone" }) });
+    void dismiss(target, subjects, { surface: "phone" }).then((result) => {
+      if (!result.ok) showReceipt(t("attention.dismissFailed", { error: result.error }), null, { error: true });
+    });
   };
-  const title = entries.length ? `${t("mobile2.attention.title")} · ${entries.length}` : t("mobile2.attention.title");
+  const laneAge = (entry: MobileAttentionEntry) => {
+    const since = needsYouEntrySince(entry);
+    return since === null ? (entry.kind === "pipeline" ? entry.row.seconds : null) : Math.max(0, now - since);
+  };
+  const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
+  const sections = needsYouSections(entries, current, order);
+  const titled = sections.length > 1;
+  const title = entries.length ? t("attention.panelTitle", { count: entries.length }) : t("attention.panelAria");
+  const row = (entry: MobileAttentionEntry) => {
+    const role = needsYouEntryRole(entry, pipelines);
+    const body = entry.kind === "conversation" ? (
+      <ConversationRow item={entry.item} now={now} role={role} current={here.kind === "chat" && here.id === entry.item.file.path} onOpen={() => open(entry)} />
+    ) : (
+      <PipelineRow row={entry.row} role={role} age={laneAge(entry)} current={here.kind === "pipeline" && here.id === entry.row.id} onOpen={onOpenPipeline ? () => open(entry) : undefined} />
+    );
+    return (
+      <div key={entry.id} className="flex min-w-0 items-start" data-needs-you-row={entry.id} data-needs-you-role={role}>
+        <div className="min-w-0 flex-1">{body}</div>
+        <button
+          type="button"
+          data-needs-you-dismiss={entry.id}
+          aria-label={t("needs.dismissAria", { title: rowTitle(entry) })}
+          className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-3 text-label font-semibold text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+          onClick={() => clear([entry], t("needs.dismissedReceipt", { title: rowTitle(entry) }))}
+        >
+          {t("needs.dismiss")}
+        </button>
+      </div>
+    );
+  };
   return (
     <MobileSheet
       name="attention"
       title={title}
       onClose={onClose}
-      extra={walkable.length > 1 ? (
+      extra={entries.length ? (
         <button
           type="button"
-          data-attention-next
-          className="inline-flex min-h-11 shrink-0 items-center gap-0.5 rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          aria-label={t("mobile2.attention.nextHint")}
-          onClick={next}
+          data-needs-you-dismiss-all=""
+          className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          title={t("attention.dismissAllTitle")}
+          onClick={() => clear(entries, t("needs.dismissedReceipt", { title: t("attention.dismissAll", { count: entries.length }) }))}
         >
-          {t("mobile2.attention.next")}
-          <ChevronRight className="h-4 w-4" aria-hidden />
+          {t("attention.dismissAll", { count: entries.length })}
         </button>
       ) : null}
     >
@@ -132,16 +184,51 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
               onClear={onClearNotice ? () => onClearNotice(row.notice.id) : undefined}
             />
           ))}
-          {entries.length ? <MobileSheetSection>{t("mobile2.attention.title")}</MobileSheetSection> : null}
+          {entries.length ? <MobileSheetSection>{t("attention.panelAria")}</MobileSheetSection> : null}
         </div>
       ) : null}
       {entries.length ? (
         <div className="flex flex-col" data-mobile2-attention-list>
-          {entries.map((entry) => entry.kind === "conversation" ? (
-            <ConversationRow key={entry.id} item={entry.item} now={now} current={here.kind === "chat" && here.id === entry.item.file.path} onOpen={() => open(entry)} />
-          ) : (
-            <PipelineRow key={entry.id} row={entry.row} current={here.kind === "pipeline" && here.id === entry.row.id} onOpen={onOpenPipeline ? () => open(entry) : undefined} />
-          ))}
+          {titled ? sections.map((section) => {
+            const name = projectTitle(section.project, projectNames[section.project]) ?? section.project;
+            const isFolded = folded.has(section.project);
+            return (
+              <div key={section.project} className="flex flex-col" data-needs-you-section={section.project} data-folded={isFolded ? "" : undefined}>
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    className="flex min-h-11 min-w-0 flex-1 items-center text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                    aria-expanded={!isFolded}
+                    aria-label={t(isFolded ? "attention.sectionUnfold" : "attention.sectionFold", { project: name })}
+                    data-needs-you-fold={section.project}
+                    onClick={() => setFolded((held) => {
+                      const next = new Set(held);
+                      if (next.has(section.project)) next.delete(section.project);
+                      else next.add(section.project);
+                      return next;
+                    })}
+                  >
+                    {/* A long project name truncates; the chevron and the count stay whole. */}
+                    <MobileSheetSection className="min-w-0 flex-1">
+                      {isFolded ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}
+                      <span className="min-w-0 truncate">{name}</span>
+                      <span className="shrink-0 text-caption font-semibold tabular-nums text-muted" data-needs-you-section-count="">{section.entries.length}</span>
+                    </MobileSheetSection>
+                  </button>
+                  <button
+                    type="button"
+                    data-needs-you-dismiss-section={section.project}
+                    aria-label={t("attention.dismissAllIn", { project: name })}
+                    className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-3 text-label font-semibold text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                    onClick={() => clear(section.entries, t("needs.dismissedReceipt", { title: name }))}
+                  >
+                    {t("attention.dismissSection", { count: section.entries.length })}
+                  </button>
+                </div>
+                {isFolded ? null : section.entries.map(row)}
+              </div>
+            );
+          }) : sections.flatMap((section) => section.entries.map(row))}
         </div>
       ) : notices.length ? null : (
         <div className="px-4 py-4 text-center text-ui text-muted" data-mobile2-attention-empty>{t("mobile2.attention.empty")}</div>
@@ -153,7 +240,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
 function NoticeRow({ row, now, onOpen, onClear }: { row: MobileNoticeRow; now: number; onOpen?: () => void; onClear?: () => void }) {
   const { t } = useLocale();
   const asked = Date.parse(row.notice.createdAt);
-  const age = Number.isFinite(asked) ? humanizeDuration(Math.max(0, now - asked / 1000)) : null;
+  const age = Number.isFinite(asked) ? fmtAgeSeconds(Math.max(0, now - asked / 1000)) : null;
   const Tag = onOpen ? "button" : "div";
   return (
     <div className="flex min-w-0 items-center" data-mobile2-notice-row={row.notice.id}>
@@ -189,11 +276,13 @@ function NoticeRow({ row, now, onOpen, onClear }: { row: MobileNoticeRow; now: n
   );
 }
 
-function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; now: number; current: boolean; onOpen: () => void }) {
+function ConversationRow({ item, now, current, onOpen, role }: { item: AttentionItem; now: number; current: boolean; onOpen: () => void; role?: FrameRole }) {
   const { t } = useLocale();
-  const title = cleanTitle(item.file.title, 90);
-  const decision = decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
-  const headline = item.reason.kind === "permission" && Boolean(item.file.pendingPermission);
+  /* An orchestrator's question in the report log is its own title. */
+  const title = (role && item.reason.report?.body) || cleanTitle(item.file.title, 90);
+  /* With the role on its own mark, the line is the wait alone. */
+  const decision = role ? reasonLine(t, item.reason) : decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
+  const headline = (item.reason.kind === "permission" && Boolean(item.file.pendingPermission)) || (item.reason.kind === "ask" && Boolean(item.reason.header));
   const row = (
     <button
       type="button"
@@ -206,22 +295,24 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
       className={ROW}
       onClick={onOpen}
     >
-      <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />
+      {role ? null : <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        {role ? <RoleTag role={role} /> : null}
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
         {/* A permission headline (tool, command, reason) runs to hundreds of
             characters, so it gets a line of its own that ends in an ellipsis
             and the meta line keeps the age in view: the request is denied
-            at ten minutes (#2215). */}
+            at ten minutes (#2215). An agent's own sentence that asks the
+            operator gets the same line. */}
         {headline ? <span data-attention-decision className="min-w-0 truncate text-label font-medium text-muted">{decision}</span> : null}
         <span className={META}>
           {headline ? null : (
             <>
-              <span data-attention-decision className="shrink-0">{decision}</span>
+              <span data-attention-decision className="min-w-0 truncate">{decision}</span>
               {SEP}
             </>
           )}
-          <span data-attention-age className="shrink-0">{humanizeDuration(Math.max(0, now - item.since))}</span>
+          <span data-attention-age className="shrink-0">{fmtAgeSeconds(Math.max(0, now - item.since))}</span>
           {item.file.model ? (
             <>
               {SEP}
@@ -234,8 +325,9 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
       <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
     </button>
   );
-  /* A structured permission request is answered right here (#2215). */
-  if (!headline) return row;
+  /* A structured permission request is answered right here (#2215); an ask
+     shares its headline line and nothing else. */
+  if (item.reason.kind !== "permission" || !item.file.pendingPermission) return row;
   return (
     <div className="min-w-0">
       {row}
@@ -244,15 +336,8 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
   );
 }
 
-function PipelineRow({ row, current, onOpen }: { row: MobileBoardPipelineRow; current: boolean; onOpen?: () => void }) {
+function PipelineRow({ row, age, current, onOpen, role }: { row: MobileBoardPipelineRow; age: number | null; current: boolean; onOpen?: () => void; role?: FrameRole }) {
   const { t } = useLocale();
-  const stageName = row.stageRef ? stageCardLabel(t, row.stageRef, stageLatestAttemptPlace(row.pipeline, row.stageRef.id)).toLocaleLowerCase() : "";
-  const meta = [
-    t("mobile2.attention.pipeline"),
-    t(row.stageFailed ? "mobile2.board.pipelineStageFailed" : "mobile2.board.pipelineStage", { stage: row.stage, total: row.total, name: stageName }),
-    row.findings ? t("mobile2.board.pipelineFindings", { count: row.findings }) : null,
-    pipelineReviewHeads(t, row.review),
-  ].filter(Boolean).join(" · ");
   const Tag = onOpen ? "button" : "div";
   return (
     <Tag
@@ -263,15 +348,16 @@ function PipelineRow({ row, current, onOpen }: { row: MobileBoardPipelineRow; cu
       data-mobile2-pipeline-row={row.id}
       className={ROW}
     >
-      <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />
+      {role ? null : <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        {role ? <RoleTag role={role} /> : null}
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{row.task}</span>
         <span className={META}>
-          <span data-attention-decision className="shrink-0">{meta}</span>
-          {row.seconds === null ? null : (
+          <span data-attention-decision className="min-w-0 truncate">{needsYouLaneLine(t, row.pipeline)}</span>
+          {age === null ? null : (
             <>
               {SEP}
-              <span className="shrink-0">{humanizeDuration(row.seconds)}</span>
+              <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
             </>
           )}
         </span>

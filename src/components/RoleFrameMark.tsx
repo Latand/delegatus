@@ -54,3 +54,21 @@ export function RoleFrameMark({ role }: { role: FrameRole }) {
     </span>
   );
 }
+
+/**
+ * The role on a list row (the needs-you panel, the phone's Needs-you sheet):
+ * the emblem tile the open-agents rail draws and the role's name in the role's
+ * ink, from the one palette `src/styles/roleFrames.css` keeps. On a row the
+ * role is content, so it is drawn under every frame variant and with none.
+ */
+export function RoleTag({ role, compact = false }: { role: FrameRole; compact?: boolean }) {
+  const name = useFrameRoleName(role);
+  return (
+    <span className="role-tag" data-role={role} data-role-tag={role} title={name}>
+      <span className="role-tag-emblem" aria-hidden>
+        <RoleEmblem role={role} />
+      </span>
+      {compact ? null : <span className="role-tag-word">{name}</span>}
+    </span>
+  );
+}

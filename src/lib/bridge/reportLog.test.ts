@@ -3,10 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { mutateOperatorAsks, projectReportLogAsks, type OperatorAskRecord } from "@/lib/asks/store";
 import { setBridgeReports } from "@/lib/projects/settings";
 
 import { readProjectReportLog, reportCardRefs, type ReportLogCard } from "./reportLog";
-import { acknowledgeBridgeReports, appendBridgeReports, BRIDGE_REPORT_PAGE_MAX, openBridgeChannel, pageBridgeReports, readBridgeChannel } from "./store";
+import { bridgeQuestionsForProject } from "./service";
+import { acknowledgeBridgeReports, appendBridgeReports, BRIDGE_REPORT_PAGE_MAX, openBridgeChannel, pageBridgeReports, readBridgeChannel, resolveBridgeAsks } from "./store";
 import type { BridgeReportInput } from "./types";
 
 /* The operator's report log (#2146): one project's bridge reports, newest
@@ -118,4 +120,76 @@ test("a body names only the cards the board knows, each once", () => {
   appendBridgeReports([report(1, { body: "Lane 9612c532 completed; PR #2146 is green." })]);
   const page = readProjectReportLog({ project: SCOPE.project }, { knownCards: () => known });
   expect(page.entries[0]!.cards).toEqual([{ id: "9612c532", kind: "pipeline" }]);
+});
+
+function seedAsks(project: string, count: number, from: number): void {
+  const asks: OperatorAskRecord[] = Array.from({ length: count }, (_, index) => ({
+    id: `ask:conv-${index}:claude:msg-${index}`,
+    subject: `conv-${index}`,
+    conversationId: `conv-${index}`,
+    path: `/transcripts/${index}.jsonl`,
+    project,
+    role: "builder",
+    title: null,
+    messageId: `claude:msg-${index}`,
+    /* Two lines share each second, so the cursor has ties to break. */
+    messageAt: from + Math.floor(index / 2) * 1_000,
+    gist: `question ${index}`,
+    score: 0.9,
+    recordedAt: new Date(from).toISOString(),
+  }));
+  mutateOperatorAsks((file) => { file.asks.push(...asks); }, new Date(from + 3_600_000));
+}
+
+/** Every ask line a reader paging back to the start is shown, as the log pages. */
+function everyAskLine(project: string): string[] {
+  const dependencies = { ...NO_CARDS, asks: projectReportLogAsks };
+  const seen: string[] = [];
+  let before: number | null = null;
+  let asksBefore: string | null = null;
+  let reportsDone = false;
+  let asksDone = false;
+  for (let round = 0; round < 50 && !(reportsDone && asksDone); round += 1) {
+    const page = readProjectReportLog({ project, limit: 1, before: reportsDone ? null : before, asksBefore: asksDone ? null : asksBefore }, dependencies);
+    for (const ask of page.asks ?? []) seen.push(ask.id);
+    if (!reportsDone) { before = page.nextBefore; reportsDone = before === null; }
+    if (!asksDone) { asksBefore = page.nextAsksBefore ?? null; asksDone = asksBefore === null; }
+  }
+  return seen;
+}
+
+test("every ask line is reachable by paging back, however many fall between two reports", () => {
+  sandbox();
+  appendBridgeReports([report(1), report(2)]);
+  seedAsks(SCOPE.project, 60, Date.UTC(2026, 8, 24, 9, 0));
+  expect(new Set(everyAskLine(SCOPE.project)).size).toBe(60);
+});
+
+test("every ask line is reachable on a project with no bridge reports at all", () => {
+  sandbox();
+  seedAsks("repo-project-quiet", 120, Date.UTC(2026, 8, 24, 9, 0));
+  const lines = everyAskLine("repo-project-quiet");
+  expect(new Set(lines).size).toBe(120);
+  /* Each line comes once, newest first. */
+  expect(lines).toHaveLength(120);
+});
+
+test("the page carries the project's questions from the needs-you projection, and a resolution moves its revision", () => {
+  sandbox();
+  const now = new Date(Date.UTC(2026, 8, 24, 8, 30));
+  const [open, resolved] = appendBridgeReports([
+    report(1, { class: "question", body: "Keep 25 MB?" }),
+    report(2, { class: "blocked", body: "Pick a base" }),
+    report(3, { class: "status", body: "Two lanes running" }),
+    report(4, { class: "question", body: "Another project's question", project: "repo-project-b", targetSeatConversationId: "conversation_seat_b" }),
+  ]).appended;
+  const questions = (inProject: (project: string) => boolean) => bridgeQuestionsForProject(inProject, { now });
+  const before = readProjectReportLog({ project: SCOPE.project }, { ...NO_CARDS, questions });
+  expect(before.questions).toEqual({ open: [open!.seq, resolved!.seq], resolved: [] });
+
+  resolveBridgeAsks([resolved!.seq], { by: { kind: "operator", surface: "desktop" }, at: now.toISOString() });
+  const after = readProjectReportLog({ project: SCOPE.project, since: before.revision }, { ...NO_CARDS, questions });
+  expect(after.unchanged).toBeUndefined();
+  expect(after.revision).not.toBe(before.revision);
+  expect(after.questions).toEqual({ open: [open!.seq], resolved: [{ seq: resolved!.seq, at: now.toISOString() }] });
 });

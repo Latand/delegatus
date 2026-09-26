@@ -4238,6 +4238,139 @@ browserTest("permission row: the headline truncates, the age stays, and Allow on
 }, 300_000);
 
 /*
+ * "Asks you" (docs/research/attention-classifier.md §7) on the phone at
+ * 390 × 844, en and uk, on the fixture's `?asks=1` scene: a task whose agent
+ * ended its turn asking the operator carries the «asks you» badge and the
+ * sentence that asks; the seat's report log carries the ask by time among the
+ * reports, «‹agent› asks you: ‹the sentence›», and the agent's name opens its
+ * conversation; the ⋯ sheet carries the "Asks you" switch with this month's
+ * spend.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable ASKS_YOU_PNG_DIR=… \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "Asks you"
+ *
+ * PNGs go to `ASKS_YOU_PNG_DIR` (default `.artifacts/asks-you`, not
+ * committed); readings to `evidence/asks-you/phone.json`.
+ */
+browserTest("Asks you: the card, the report-log line and the ⋯ switch on the phone at 390, en and uk", async () => {
+  const out = path.resolve(process.env.ASKS_YOU_PNG_DIR ?? ".artifacts/asks-you");
+  const evidence = path.resolve("evidence/asks-you");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      const t = (name: string, params?: Record<string, string | number>) => translate(lang, name as never, params);
+      const key = `390-${lang}-light`;
+      const fail = (text: string) => failures.push(`${key}: ${text}`);
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: "light" });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/?kanban=1&asks=1#p=atlas`);
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+        await pause(page, 800);
+
+        /* The card: the badge names the reason, the line under it the ask. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await page.waitForFunction(() => document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active") === "assigned");
+        await pagerAtRest(page);
+        const askCard = page.locator('[data-phone-card="task:t-cache"]');
+        await askCard.scrollIntoViewIfNeeded();
+        await pause(page, 400);
+        await page.screenshot({ path: path.join(out, `phone-board-${key}.png`) });
+        await askCard.screenshot({ path: path.join(out, `phone-card-${key}.png`) });
+        const cardReading = await page.evaluate(() => {
+          const element = document.querySelector('[data-phone-card="task:t-cache"]')!;
+          const ask = element.querySelector("[data-phone-card-ask]");
+          return {
+            badge: element.querySelector("[data-phone-card-badge]")?.textContent?.trim() ?? null,
+            ask: ask?.textContent?.trim() ?? null,
+            sideways: document.documentElement.scrollWidth - innerWidth,
+          };
+        });
+        if (cardReading.badge !== t("needs.ask")) fail(`the card's badge reads ${cardReading.badge}`);
+        if (!cardReading.ask?.includes("Evict by size or by age?")) fail(`the card's ask line reads ${cardReading.ask}`);
+        if (cardReading.sideways > 0) fail(`the page scrolls sideways by ${cardReading.sideways}px`);
+
+        /* The seat's report log: the ask lines, by time, their agents links. */
+        await page.locator("[data-mobile2-seat-open]").click();
+        await page.waitForSelector('[data-mobile2-open="reports"]', { timeout: 10_000 });
+        await page.locator('[data-mobile2-open="reports"]').click();
+        await page.waitForSelector("[data-report-log] [data-report-ask]", { timeout: 10_000 });
+        await page.locator("[data-report-log] [data-report-ask]").first().scrollIntoViewIfNeeded();
+        await page.mouse.move(0, 0);
+        await pause(page, 500);
+        await page.screenshot({ path: path.join(out, `phone-log-${key}.png`) });
+        const log = await page.evaluate(() => {
+          const rows = [...document.querySelectorAll("[data-report-log-entries] > li")];
+          const times = rows.map((row) => Date.parse(row.querySelector("time")?.getAttribute("datetime") ?? ""));
+          return {
+            asks: rows.filter((row) => row.hasAttribute("data-report-ask")).map((row) => ({
+              text: row.querySelector("p")?.textContent ?? "",
+              link: row.querySelector("a[data-report-link=conversation]")?.getAttribute("href") ?? null,
+              linkHeight: Math.round(row.querySelector("a[data-report-link=conversation]")?.getBoundingClientRect().height ?? 0),
+            })),
+            ordered: times.every((time, index) => index === 0 || time <= times[index - 1]!),
+            sideways: document.documentElement.scrollWidth - innerWidth,
+          };
+        });
+        if (log.asks.length !== 2) fail(`${log.asks.length} ask lines`);
+        if (!log.asks[0]?.text.endsWith(t("reportLog.askLine", { gist: "Evict by size or by age? Say which and I finish the migration." }))) fail(`the first ask line reads ${log.asks[0]?.text}`);
+        if (!log.asks[0]?.link?.startsWith("#c=conversation_kanban-")) fail(`the first ask links to ${log.asks[0]?.link}`);
+        if (!log.ordered || log.sideways > 0) fail(`order ${log.ordered}, sideways ${log.sideways}`);
+
+        /* The ⋯ sheet: the Asks you switch, on, with the month's spend. */
+        await page.locator('[data-mobile2-open="menu"]').first().click();
+        await page.waitForSelector('[data-mobile2-sheet="menu"] [data-asks-you]', { timeout: 10_000 });
+        await page.locator('[data-mobile2-sheet="menu"] [data-asks-you]').scrollIntoViewIfNeeded();
+        await pause(page, 500);
+        await page.screenshot({ path: path.join(out, `phone-menu-${key}.png`) });
+        const row = await page.evaluate(() => {
+          const element = document.querySelector('[data-mobile2-sheet="menu"] [data-asks-you]')!;
+          const toggle = element.querySelector<HTMLElement>("[data-asks-you-switch]")!;
+          const box = toggle.getBoundingClientRect();
+          return {
+            state: element.getAttribute("data-asks-you"),
+            hint: element.querySelector('[role="status"]')?.textContent?.trim() ?? "",
+            switchSize: [Math.round(box.width), Math.round(box.height)],
+            inside: box.right <= innerWidth,
+          };
+        });
+        if (row.state !== "on" || !row.hint.includes("Jev") || row.switchSize[0]! < 44 || row.switchSize[1]! < 44 || !row.inside) fail(`the switch row ${JSON.stringify(row)}`);
+        await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-close]').click();
+        await page.waitForFunction(() => !document.querySelector('[data-mobile2-sheet="menu"]'), undefined, { timeout: 10_000 });
+
+        /* The agent's name opens its conversation. */
+        const target = log.asks[0]?.link ?? "";
+        await page.locator("[data-report-log] [data-report-ask] a[data-report-link=conversation]").first().click();
+        await page.waitForFunction((hash) => location.hash === hash, target, { timeout: 10_000 }).catch(() => fail(`the link left the hash at ${page.url()}`));
+        await pause(page, 1_000);
+        await page.screenshot({ path: path.join(out, `phone-opened-${key}.png`) });
+        const opened = await page.evaluate(() => ({ screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen") ?? null, hash: location.hash }));
+        if (opened.screen !== "chat") fail(`the link opened ${JSON.stringify(opened)}`);
+        results.push({ key, card: cardReading, log, row, opened });
+        if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);
+
+/*
  * Each orchestrator sets its own project's reports (orchestrator-reports
  * §5.6.1) over a post-only bot (`?bot=postonly`: another program owns its
  * updates through a webhook). On the desktop the seat row's Reports chip opens

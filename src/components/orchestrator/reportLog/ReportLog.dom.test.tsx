@@ -1,5 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { Window as HappyWindow } from "happy-dom";
+import { NextRequest } from "next/server";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -27,6 +32,12 @@ Object.assign(globalThis, {
 const { setRuntimeBusForTests } = await import("@/hooks/runtimeBus");
 const { ReportLog } = await import("./ReportLog");
 const { resetBridgeReportsSettingForTests } = await import("./bridgeReportsSetting");
+const { GET } = await import("@/app/api/orchestrator/reports/route");
+const { mutateOperatorAsks } = await import("@/lib/asks/store");
+const { appendBridgeReports } = await import("@/lib/bridge/store");
+const { setBridgeReports } = await import("@/lib/projects/settings");
+const { resetDismissalOverlayForTests, useDismissalOverlay } = await import("@/components/attention/dismissalOverlay");
+const { buildNeedsYouQueue } = await import("@/components/attention/attentionQueue");
 
 const PROJECT = "repo-widgets";
 const realFetch = globalThis.fetch;
@@ -35,18 +46,21 @@ let filesListener: ((revision: number) => void) | null = null;
 let pages: ReportLogPage[] = [];
 let requests: string[] = [];
 let settingWrites: unknown[] = [];
+let dismissals: Array<{ target: unknown; undo: boolean; surface: string }> = [];
 
 function entry(seq: number, overrides: Partial<ReportLogEntry> = {}): ReportLogEntry {
   return { seq, at: new Date(Date.UTC(2026, 8, 24, 9, seq)).toISOString(), class: "completed", body: `report ${seq}`, cards: [], ...overrides };
 }
 
 function page(entries: ReportLogEntry[], overrides: Partial<ReportLogPage> = {}): ReportLogPage {
-  return { ok: true, project: PROJECT, bridgeReports: true, github: "acme/widgets", revision: `r${entries[0]?.seq ?? 0}`, entries, nextBefore: null, ...overrides };
+  return { ok: true, project: PROJECT, bridgeReports: true, github: "acme/widgets", revision: `r${entries[0]?.seq ?? 0}`, entries, nextBefore: null, questions: { open: [], resolved: [] }, ...overrides };
 }
 
 beforeEach(() => {
   requests = [];
   settingWrites = [];
+  dismissals = [];
+  resetDismissalOverlayForTests();
   pages = [];
   dom.localStorage.clear();
   /* A live runtime bus whose `files.revision` the test fires by hand. */
@@ -67,6 +81,11 @@ beforeEach(() => {
       requests.push(url);
       const next = pages.length > 1 ? pages.shift()! : pages[0]!;
       return new Response(JSON.stringify(next));
+    }
+    if (url.startsWith("/api/attention/dismissals")) {
+      const body = JSON.parse(String(init!.body)) as { target: { subjects: Array<{ kind: "report"; seq: number }> }; undo: boolean; surface: string };
+      dismissals.push(body);
+      return new Response(JSON.stringify({ ok: true, dismissed: body.target.subjects, alreadyClear: [], changed: [], at: "2026-09-24T12:00:00.000Z", by: { kind: "operator", surface: body.surface }, undo: body.undo }));
     }
     if (url.startsWith("/api/projects/settings")) {
       if (init?.method === "PUT") {
@@ -197,4 +216,278 @@ test("with bridge reports off the panel is one line and the switch, which turns 
   expect(settingWrites).toEqual([{ project: PROJECT, bridgeReports: true }]);
   expect(host.querySelector("[data-report-log-off]")).toBeNull();
   expect([...host.querySelectorAll("[data-report-entry]")].map((row) => row.getAttribute("data-report-entry"))).toEqual(["2", "1"]);
+});
+
+test("an agent that asked the operator is one line by time among the reports, and its name opens that conversation", async () => {
+  const ask = {
+    id: "ask:conv-builder-1:claude:msg-1",
+    at: new Date(Date.UTC(2026, 8, 24, 9, 2, 30)).toISOString(),
+    conversationId: "conv-builder-1",
+    path: "/transcripts/builder.jsonl",
+    role: "builder",
+    title: "Migrate the ledger",
+    gist: "Should I merge it now, or wait for the review round?",
+  };
+  pages = [page([entry(3), entry(2), entry(1)], { asks: [ask] })];
+  const host = mount();
+  await settle();
+
+  const rows = [...host.querySelectorAll("[data-report-log-entries] > li")];
+  expect(rows.map((row) => row.getAttribute("data-report-entry") ?? `ask:${row.getAttribute("data-report-ask")}`)).toEqual(["3", `ask:${ask.id}`, "2", "1"]);
+  const line = host.querySelector(`[data-report-ask='${ask.id}']`)!;
+  expect(line.querySelector("[data-report-class-label]")!.textContent).toBe("needs you");
+  expect(line.querySelector("p")!.textContent).toBe("Builder asks you: Should I merge it now, or wait for the review round?");
+  const link = line.querySelector("a[data-report-link=conversation]")!;
+  expect(link.textContent).toBe("Builder");
+  expect(link.getAttribute("href")).toBe("#c=conv-builder-1");
+
+  /* The link is the Viewer's own deep link: following it opens the conversation. */
+  (link as HTMLAnchorElement).click();
+  expect(window.location.hash).toBe("#c=conv-builder-1");
+});
+
+test("ask lines stay when the orchestrator's bridge reports are off: they are the Viewer's, not its", async () => {
+  const ask = { id: "ask:conv-2:claude:m", at: entry(2).at, conversationId: null, path: "/transcripts/two.jsonl", role: null, title: "Logo variants", gist: "" };
+  pages = [page([entry(2)], { bridgeReports: false, asks: [ask] })];
+  const host = mount();
+  await settle();
+  expect(host.querySelector("[data-report-log-off]")).not.toBeNull();
+  const line = host.querySelector(`[data-report-ask='${ask.id}']`)!;
+  expect(line.querySelector("p")!.textContent).toBe("Logo variants asks you");
+  expect(line.querySelector("a")!.getAttribute("href")).toBe("#f=%2Ftranscripts%2Ftwo.jsonl");
+});
+
+/* Paging through the real route: the ask lines page on their own cursor, so a
+   reader who keeps asking for older lines sees every ask and every report
+   once, newest first, and never a line out of its place on the way. */
+describe("paging back through the real route", () => {
+  const FROM = Date.UTC(2026, 8, 24, 6, 0);
+  const originalStateDir = process.env.LLV_STATE_DIR;
+  let sandbox = "";
+
+  beforeEach(() => {
+    sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-log-paging-"));
+    process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+    const served = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.startsWith("/api/orchestrator/reports")) return served(input, init);
+      requests.push(url);
+      return GET(new NextRequest(new URL(url, "http://127.0.0.1:8899")));
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = originalStateDir;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  /** `count` asks, two to each minute so the cursor has ties to break. */
+  function seedAsks(count: number): { at: number; key: string }[] {
+    const asks = Array.from({ length: count }, (_, index) => ({
+      id: `ask:conv-${index}:claude:msg-${index}`,
+      subject: `conv-${index}`,
+      conversationId: `conv-${index}`,
+      path: `/transcripts/${index}.jsonl`,
+      project: PROJECT,
+      role: "builder",
+      title: null,
+      messageId: `claude:msg-${index}`,
+      messageAt: FROM + Math.floor(index / 2) * 60_000,
+      gist: `question ${index}`,
+      score: 0.9,
+      recordedAt: new Date(FROM).toISOString(),
+    }));
+    mutateOperatorAsks((file) => { file.asks.push(...asks); }, new Date(FROM + 3_600_000));
+    return asks
+      .sort((left, right) => right.messageAt - left.messageAt || left.id.localeCompare(right.id))
+      .map((ask) => ({ at: ask.messageAt, key: `ask:${ask.id}` }));
+  }
+
+  /** `count` reports, one each 50 s from 25 s past, never on an ask's minute. */
+  function seedReports(count: number): { at: number; key: string }[] {
+    const inputs = Array.from({ length: count }, (_, index) => ({
+      key: `report-${index}`,
+      class: "completed" as const,
+      at: new Date(FROM + index * 50_000 + 25_000).toISOString(),
+      body: `report ${index}`,
+      project: PROJECT,
+      targetSeatConversationId: "conversation_seat",
+    }));
+    const { appended } = appendBridgeReports(inputs);
+    return appended.map((report) => ({ at: Date.parse(report.at), key: String(report.seq) }));
+  }
+
+  const shown = (host: HTMLElement, list = "[data-report-log-entries]") => [...host.querySelectorAll(`${list} > li`)]
+    .map((row) => row.getAttribute("data-report-entry") ?? `ask:${row.getAttribute("data-report-ask")}`);
+
+  /** Every view on the way back, until no older control is left. */
+  async function pageBack(host: HTMLElement, list?: string): Promise<string[][]> {
+    const views = [shown(host, list)];
+    for (let round = 0; round < 20; round += 1) {
+      const older = host.querySelector<HTMLButtonElement>("[data-report-log-older]");
+      if (!older) return views;
+      older.click();
+      await settle();
+      views.push(shown(host, list));
+    }
+    throw new Error("the older control never went away");
+  }
+
+  test("a project with no reports shows every one of its 60 asks, once each, newest first", async () => {
+    const asks = seedAsks(60).map((ask) => ask.key);
+    const host = mount();
+    await settle();
+    const views = await pageBack(host);
+    expect(views.length).toBeGreaterThan(1);
+    expect(views.at(-1)).toEqual(asks);
+    for (const view of views) expect(view).toEqual(asks.slice(0, view.length));
+    expect(requests.some((url) => new URL(url, "http://x").searchParams.has("asksBefore"))).toBe(true);
+  });
+
+  test("asks and reports interleaved by time page back together, every line once and in its place", async () => {
+    const asks = seedAsks(130);
+    const reports = seedReports(70);
+    const expected = [
+      ...reports.map((report) => ({ ...report, order: 0 })),
+      ...asks.map((ask, order) => ({ ...ask, order })),
+    ].sort((left, right) => right.at - left.at || left.order - right.order).map((row) => row.key);
+    const host = mount();
+    await settle();
+    const views = await pageBack(host);
+    expect(views.length).toBeGreaterThanOrEqual(3);
+    expect(views.at(-1)).toEqual(expected);
+    for (const view of views) expect(view).toEqual(expected.slice(0, view.length));
+  });
+
+  test("with bridge reports off, the ask lines still page back to the oldest", async () => {
+    const asks = seedAsks(60).map((ask) => ask.key);
+    seedReports(5);
+    setBridgeReports(PROJECT, false, "operator");
+    /* The settings read answers off as well. */
+    pages = [page([], { bridgeReports: false })];
+    const host = mount();
+    await settle();
+    expect(host.querySelector("[data-report-log-off]")).not.toBeNull();
+    const views = await pageBack(host, "[data-report-log-asks]");
+    expect(views.at(-1)).toEqual(asks);
+  });
+});
+
+/* ── The orchestrator's questions: one record with the needs-you panel ── */
+
+function questionPage(): ReportLogPage {
+  return page([
+    entry(6, { class: "question", body: "Raise the attachment limit to 100 MB or keep 25?" }),
+    entry(5, { class: "status", body: "Two lanes running." }),
+    entry(4, { class: "blocked", body: "Cannot merge #88 until the base is picked." }),
+    entry(3, { class: "question", body: "Ship the digest on weekends too?" }),
+    entry(2, { class: "question", body: "An older question the operator answered in chat." }),
+  ], { questions: { open: [6, 4, 3], resolved: [{ seq: 1, at: "2026-09-24T09:30:00.000Z" }] } });
+}
+
+test("every open question carries an unticked box, a resolved one a ticked box, dimmed, with its check; other rows carry none", async () => {
+  pages = [page([
+    entry(3, { class: "question", body: "Open question" }),
+    entry(2, { class: "status", body: "Status" }),
+    entry(1, { class: "question", body: "Resolved question" }),
+  ], { questions: { open: [3], resolved: [{ seq: 1, at: "2026-09-24T09:30:00.000Z" }] } })];
+  const host = mount();
+  await settle();
+  const box = (seq: number) => host.querySelector<HTMLInputElement>(`[data-report-resolve="${seq}"]`);
+  expect(box(3)!.checked).toBe(false);
+  expect(box(2)).toBeNull();
+  expect(box(1)!.checked).toBe(true);
+  const resolved = host.querySelector('[data-report-entry="1"]')!;
+  expect(resolved.getAttribute("data-report-question")).toBe("resolved");
+  expect(resolved.querySelector("[data-report-resolved-mark]")).not.toBeNull();
+  expect(resolved.querySelector("p")!.className).toContain("text-muted");
+  expect(host.querySelector("[data-report-open-count]")!.getAttribute("data-report-open-count")).toBe("1");
+});
+
+test("ticking a question resolves it through the needs-you dismissal, and the needs-you queue loses the same question on the same click", async () => {
+  pages = [questionPage()];
+  const host = mount();
+  await settle();
+  /* The seat as the files poll carries it: three open questions. */
+  const seat = {
+    path: "/sessions/seat.jsonl", root: "claude-projects", name: "seat.jsonl", project: PROJECT, title: "Orchestrator", engine: "claude", kind: "session", fmt: "claude",
+    parent: null, mtime: 0, size: 0, activity: "idle", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null, conversationId: "conversation_seat",
+    bridgeAsks: [3, 4, 6].map((seq) => ({ id: `ask-${seq}`, at: new Date().toISOString(), seq, body: `question ${seq}` })),
+  } as const;
+  let queueLength = -1;
+  function Probe() {
+    const { files, pipelines } = useDismissalOverlay([seat as never], []);
+    queueLength = buildNeedsYouQueue(files, pipelines, Date.now() / 1000, []).length;
+    return null;
+  }
+  const probeHost = document.createElement("div");
+  document.body.append(probeHost);
+  const probeRoot = createRoot(probeHost);
+  flushSync(() => probeRoot.render(<Probe />));
+  expect(queueLength).toBe(3);
+
+  flushSync(() => host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.click());
+  await settle();
+  expect(dismissals).toEqual([{ target: { kind: "subjects", subjects: [{ kind: "report", seq: 4 }] }, undo: false, surface: "desktop" }]);
+  expect(host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.checked).toBe(true);
+  expect(host.querySelector('[data-report-entry="4"]')!.getAttribute("data-report-question")).toBe("resolved");
+  expect(host.querySelector("[data-report-open-count]")!.getAttribute("data-report-open-count")).toBe("2");
+  expect(queueLength).toBe(2);
+
+  /* Unticking is the undo of the same record. */
+  flushSync(() => host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.click());
+  await settle();
+  expect(dismissals.at(-1)).toEqual({ target: { kind: "subjects", subjects: [{ kind: "report", seq: 4 }] }, undo: true, surface: "desktop" });
+  expect(host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.checked).toBe(false);
+  expect(queueLength).toBe(3);
+  flushSync(() => probeRoot.unmount());
+});
+
+test("«Resolve all» resolves exactly the open set in one request", async () => {
+  pages = [questionPage()];
+  const host = mount();
+  await settle();
+  flushSync(() => host.querySelector<HTMLButtonElement>("[data-report-resolve-all]")!.click());
+  await settle();
+  expect(dismissals).toHaveLength(1);
+  const subjects = (dismissals[0]!.target as { subjects: Array<{ seq: number }> }).subjects.map((subject) => subject.seq).sort();
+  expect(subjects).toEqual([3, 4, 6]);
+  expect([...host.querySelectorAll('[data-report-question="open"]')]).toHaveLength(0);
+  expect(host.querySelector<HTMLButtonElement>("[data-report-resolve-all]")!.disabled).toBe(true);
+});
+
+test("prev and next walk the open questions only, wrapping, and mark the one they land on", async () => {
+  pages = [questionPage()];
+  const host = mount();
+  await settle();
+  const current = () => host.querySelector("[data-report-current]")?.getAttribute("data-report-entry") ?? null;
+  const next = () => flushSync(() => host.querySelector<HTMLButtonElement>("[data-report-question-next]")!.click());
+  const prev = () => flushSync(() => host.querySelector<HTMLButtonElement>("[data-report-question-prev]")!.click());
+  next();
+  expect(current()).toBe("6");
+  next();
+  expect(current()).toBe("4");
+  next();
+  expect(current()).toBe("3");
+  next();
+  expect(current()).toBe("6");
+  prev();
+  expect(current()).toBe("3");
+});
+
+test("«Clear resolved» takes resolved questions out of the view on this device and «Show resolved» brings them back", async () => {
+  pages = [page([
+    entry(3, { class: "question", body: "Open" }),
+    entry(1, { class: "question", body: "Resolved" }),
+  ], { questions: { open: [3], resolved: [{ seq: 1, at: "2026-09-24T09:30:00.000Z" }] } })];
+  const host = mount();
+  await settle();
+  flushSync(() => host.querySelector<HTMLButtonElement>('[data-report-hide-resolved="shown"]')!.click());
+  expect(host.querySelector('[data-report-entry="1"]')).toBeNull();
+  expect(host.querySelector('[data-report-entry="3"]')).not.toBeNull();
+  expect(dom.localStorage.getItem(`llvReportLogHideResolved:${PROJECT}`)).toBe("1");
+  flushSync(() => host.querySelector<HTMLButtonElement>('[data-report-hide-resolved="hidden"]')!.click());
+  expect(host.querySelector('[data-report-entry="1"]')).not.toBeNull();
 });

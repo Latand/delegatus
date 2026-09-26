@@ -33,7 +33,7 @@ import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
-import { BAR_WIDE_MIN, BarCreateGroup, BarIslandSlot } from "@/components/ProjectBar";
+import { BAR_WIDE_MIN, BarCreateGroup, BarIslandSlot, useBoardPaneRef } from "@/components/ProjectBar";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
 import type { CardEditField } from "./CardInlineText";
@@ -261,6 +261,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const { t, locale } = useLocale();
   const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
   const workLinks = useWorkLinks();
+  const boardPaneRef = useBoardPaneRef();
   /* The bar's word on the server (#2071 D7): a reconnect in progress is a
      quiet note, a long outage the red alert it always was. */
   const reach = useServerReach();
@@ -2624,7 +2625,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       <div className={`kb-body${seatSide ? " seat-side" : ""}`}>
       {seatSide && seatView}
       {/* The board's pane: its page, and the receipts over its foot, centred on the pane. */}
-      <div className="kb-pane">
+      <div className="kb-pane" ref={boardPaneRef}>
       <div className="kb-page">
       {seatSide ? null : seatView}
       <div className={`board-frame${railShown ? " with-rail" : ""}`} id={boardId} tabIndex={-1} aria-label={t("kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>

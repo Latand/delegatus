@@ -12,8 +12,9 @@ const headers = { "Cache-Control": "no-store" };
  * first, a bounded page at a time. The same access as the board's own reads;
  * reading moves no relay cursor.
  *
- * `project` is required; `before=<seq>` pages back; `limit` is clamped to the
- * page bound; `since=<revision>` answers `unchanged` when the log has not moved.
+ * `project` is required; `before=<seq>` pages back; `asksBefore=<cursor>` pages
+ * the ask lines back; `limit` is clamped to the page bound; `since=<revision>`
+ * answers `unchanged` when the log has not moved.
  */
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const parameters = request.nextUrl.searchParams;
@@ -23,10 +24,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
   const beforeRaw = Number(parameters.get("before"));
   const limitRaw = Number(parameters.get("limit"));
+  const asksBefore = parameters.get("asksBefore");
   try {
     return NextResponse.json(readProjectReportLog({
       project,
       before: parameters.has("before") && Number.isInteger(beforeRaw) ? beforeRaw : null,
+      asksBefore: asksBefore && asksBefore.length <= 1_024 ? asksBefore : null,
       ...(parameters.has("limit") && Number.isFinite(limitRaw) ? { limit: limitRaw } : {}),
       since: parameters.get("since"),
     }), { headers });

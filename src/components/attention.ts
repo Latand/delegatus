@@ -1,6 +1,7 @@
 import { BRIDGE_ASK_TTL_SECONDS } from "@/lib/bridge/types";
 import { permissionHeadline } from "@/lib/runtime/permissionRequests";
 import type { AttentionDismissalMark, ConversationReasonKind } from "@/lib/attention/dismissalTypes";
+import type { OperatorAskMark } from "@/lib/asks/types";
 import type { BridgeAsk, FileEntry } from "@/lib/types";
 import { DELIVERY_UNCERTAIN_MS, DELIVERY_WAIT_HELD_MS } from "@/components/runtime/deliveryWait";
 
@@ -119,11 +120,18 @@ export function stalledAttention(file: FileEntry, now: number): boolean {
  * than dropping the row.
  */
 export function openBridgeAsk(file: FileEntry, now: number): BridgeAsk | null {
-  const ask = file.bridgeAsk;
-  if (!ask) return null;
-  const at = isoSeconds(ask.at);
-  if (at === null) return null;
-  return now - at <= BRIDGE_ASK_TTL_SECONDS ? ask : null;
+  return openBridgeAskList(file, now).at(-1) ?? null;
+}
+
+/** Every open ask of a seat, oldest first, the clock applied to each: each is
+    its own needs-you item. An entry from before the list existed carries the
+    one `bridgeAsk`. */
+export function openBridgeAskList(file: FileEntry, now: number): BridgeAsk[] {
+  const asks = file.bridgeAsks ?? (file.bridgeAsk ? [file.bridgeAsk] : []);
+  return asks.filter((ask) => {
+    const at = isoSeconds(ask.at);
+    return at !== null && now - at <= BRIDGE_ASK_TTL_SECONDS;
+  });
 }
 
 /**
@@ -143,6 +151,24 @@ export function failedOperatorLaunch(file: FileEntry): number | null {
 }
 
 /**
+ * The agent's open ask of the operator ("Asks you",
+ * docs/research/attention-classifier.md §7), or null once it is answered or
+ * moot. It is the last text of a turn the classifier judged an ask, and it
+ * stays open only while that text still ends the conversation: a newer turn
+ * means the operator (or someone) wrote to the agent, a newer agent message or
+ * a turn in progress means the agent moved on.
+ */
+export function openOperatorAsk(file: FileEntry): OperatorAskMark | null {
+  const ask = file.operatorAsk;
+  if (!ask) return null;
+  if (file.activity === "live") return null;
+  const turn = file.lastTurn;
+  if (turn && (turn.endedAt === null || turn.startedAt > ask.messageAt)) return null;
+  if (typeof file.lastAssistantMessageAt === "number" && file.lastAssistantMessageAt > ask.messageAt) return null;
+  return ask;
+}
+
+/**
  * Epoch seconds at which the queue changes on its own, with nothing polled
  * moving: an orchestrator ask crossing its TTL, an owed message crossing the
  * half hour. `/api/files` keeps the array identity while its body is
@@ -152,8 +178,10 @@ export function failedOperatorLaunch(file: FileEntry): number | null {
 export function attentionExpiries(files: readonly FileEntry[]): number[] {
   const expiries: number[] = [];
   for (const file of files) {
-    const at = file.bridgeAsk ? isoSeconds(file.bridgeAsk.at) : null;
-    if (at !== null) expiries.push(at + BRIDGE_ASK_TTL_SECONDS);
+    for (const ask of file.bridgeAsks ?? (file.bridgeAsk ? [file.bridgeAsk] : [])) {
+      const at = isoSeconds(ask.at);
+      if (at !== null) expiries.push(at + BRIDGE_ASK_TTL_SECONDS);
+    }
     const deliverySince = file.stuckDelivery ? isoSeconds(file.stuckDelivery.since) : null;
     if (deliverySince !== null) expiries.push(deliverySince + DELIVERY_UNCERTAIN_MS / 1000);
   }
@@ -181,6 +209,9 @@ export interface ConversationReason {
   header: string | null;
   /** The dismissal that covers this reason, or null while it is flagged. */
   dismissal: AttentionDismissalMark | null;
+  /** An orchestrator's decision request: the report it is, by seq, and its
+      first line. Dismissing it resolves that report in the report log. */
+  report?: { seq: number; body: string | null };
 }
 
 /**
@@ -205,7 +236,8 @@ export function dismissalCovers(reason: Pick<ConversationReason, "id" | "raisedA
  * orchestrator's open bridge ask, then a structured question or plan, a
  * structured host's tool permission request, the screen-scrape permission
  * fallback, an owed message delivery, and a launch
- * that failed before it ran (#2170). Null when none of them holds. A
+ * that failed before it ran (#2170), and last an agent that asked the operator
+ * in prose ("Asks you"). Null when none of them holds. A
  * dismissed reason is still returned, with its
  * `dismissal`, so a card can say who cleared it; `attentionId` is what counts.
  *
@@ -218,6 +250,22 @@ export function attentionReason(file: FileEntry, now: number = Date.now() / 1000
   return { ...reason, dismissal: dismissalCovers(reason, file.attentionDismissal) ? file.attentionDismissal! : null };
 }
 
+/** One open ask as a reason. `openBridgeAskList` already refused an
+    unparseable time. */
+function askReason(ask: BridgeAsk): ConversationReason {
+  const at = isoSeconds(ask.at)!;
+  return {
+    kind: "decision",
+    id: ask.id,
+    since: at,
+    raisedAt: at,
+    clocked: true,
+    header: null,
+    dismissal: null,
+    ...(ask.seq !== undefined ? { report: { seq: ask.seq, body: ask.body?.trim() || null } } : {}),
+  };
+}
+
 function undismissedReason(file: FileEntry, now: number): ConversationReason | null {
   /* First, and above the file's own signals (issue #1168). A bridge ask is the
      manager saying, in as many words, that it cannot go on without the
@@ -227,8 +275,7 @@ function undismissedReason(file: FileEntry, now: number): ConversationReason | n
   const ask = openBridgeAsk(file, now);
   if (ask) {
     /* `openBridgeAsk` already refused an unparseable time. */
-    const at = isoSeconds(ask.at)!;
-    return { kind: "decision", id: ask.id, since: at, raisedAt: at, clocked: true, header: null, dismissal: null };
+    return askReason(ask);
   }
   const pending = file.pendingQuestion;
   if (pending) {
@@ -296,6 +343,13 @@ function undismissedReason(file: FileEntry, now: number): ConversationReason | n
       dismissal: null,
     };
   }
+  /* Last: an inference from the agent's own words, below every structured
+     signal (docs/research/attention-classifier.md §7.3). */
+  const operatorAsk = openOperatorAsk(file);
+  if (operatorAsk) {
+    const at = operatorAsk.messageAt / 1000;
+    return { kind: "ask", id: operatorAsk.id, since: at, raisedAt: at, clocked: true, header: operatorAsk.gist || null, dismissal: null };
+  }
   return null;
 }
 
@@ -322,6 +376,17 @@ export function buildAttentionQueue(
   const items: AttentionItem[] = [];
   for (const file of files) {
     if (project !== undefined && projectKey(file) !== project) continue;
+    /* An orchestrator seat with several open questions is several items: each
+       is resolved on its own, here and in the report log. */
+    const asks = openBridgeAskList(file, now);
+    if (asks.length > 1) {
+      for (const ask of asks) {
+        const reason = askReason(ask);
+        if (dismissalCovers(reason, file.attentionDismissal)) continue;
+        items.push({ id: reason.id, file, project: projectKey(file), tier: "blocked", since: reason.since, reason });
+      }
+      continue;
+    }
     const reason = attentionReason(file, now);
     if (!reason || reason.dismissal) continue;
     items.push({ id: reason.id, file, project: projectKey(file), tier: "blocked", since: reason.since, reason });

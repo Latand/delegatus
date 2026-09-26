@@ -63,6 +63,10 @@ const PROJECTION_STATE_FILES = [
   /* A state database fallback or a refused backup (#1870 slice 10) shows in
      `systemHealth.storage` on the next poll, not after some other store moves. */
   "storage-incidents.json",
+  /* A new ask ("Asks you") and the switch that shows or hides them move no
+     scan and no other store. */
+  "operator-asks.json",
+  "asks-you-settings.json",
 ] as const;
 /* A client more links behind than this, or whose deltas add up to more than a
    quarter of the full body, is sent the full body. */
@@ -196,6 +200,9 @@ function projectionBaseKey(
          has to invalidate the projection. Without it the ask would appear, and
          clear, only when some unrelated store happened to move. */
       bridgeReportLogSignature(),
+      /* An operator message to the seat answers its open questions, and the
+         moment it was admitted lives in the reply-suggestion store. */
+      hotStateSignature("reply_suggestions", "reply-suggestions.json"),
     ],
   })).digest("hex");
 }

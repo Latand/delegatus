@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { act, useEffect } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
 
@@ -19,7 +19,7 @@ Object.assign(globalThis, {
   localStorage: dom.localStorage,
 });
 
-const { AttentionIsland, AttentionQueueRow } = await import("./AttentionIsland");
+const { AttentionIsland } = await import("./AttentionIsland");
 const { advanceAttentionCycle, buildAttentionQueue } = await import("../attention");
 type FileEntry = import("@/lib/types").FileEntry;
 type AttentionItem = import("../attention").AttentionItem;
@@ -45,10 +45,9 @@ function island(overrides: Partial<Parameters<typeof AttentionIsland>[0]> = {}) 
   return (
     <AttentionIsland
       count={3}
-      queueOpen={false}
+      panelOpen={false}
       filterActive={false}
-      onToggleQueue={() => {}}
-      onNext={() => {}}
+      onTogglePanel={() => {}}
       onToggleFilter={() => {}}
       {...overrides}
     />
@@ -60,26 +59,35 @@ const click = (element: Element, init: { shiftKey?: boolean } = {}) =>
     element.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, ...init }) as never);
   });
 
-test("the count opens the queue and announces itself with the shared badge wording", async () => {
+test("the control reads «● Waiting N» in the bar's own outlined style, and opens the panel", async () => {
   const toggles: string[] = [];
-  const host = await render(island({ count: 6, onToggleQueue: () => toggles.push("queue") }));
+  const host = await render(island({ count: 6, onTogglePanel: () => toggles.push("panel") }));
   const count = host.querySelector("[data-attention-count]")!;
-  expect(count.textContent).toContain("Needs you");
-  expect(count.textContent).toContain("6");
+  expect(count.textContent).toBe("Waiting6");
+  expect(count.querySelector("[data-attention-dot]")).not.toBeNull();
   expect(count.getAttribute("aria-label")).toBe("6 waiting");
   expect(count.getAttribute("aria-expanded")).toBe("false");
+  /* The bar's control, not the amber uppercase pill. */
+  expect(count.className).toContain("h-8");
+  expect(count.className).toContain("border-border");
+  expect(count.className).not.toContain("uppercase");
+  expect(count.className).not.toContain("bg-warning-soft");
   await click(count);
-  expect(toggles).toEqual(["queue"]);
+  expect(toggles).toEqual(["panel"]);
 });
 
-test("Next advances forward on click and backward on Shift-click, mirroring N/Shift-N", async () => {
-  const advances: Array<1 | -1> = [];
-  const host = await render(island({ onNext: (dir) => advances.push(dir) }));
-  const next = host.querySelector("[data-attention-next]")!;
-  expect(next.getAttribute("aria-keyshortcuts")).toBe("n shift+n");
-  await click(next);
-  await click(next, { shiftKey: true });
-  expect(advances).toEqual([1, -1]);
+test("there is no Next: nothing in the header walks the operator from project to project", async () => {
+  const host = await render(island({ count: 5 }));
+  expect(host.querySelector("[data-attention-next]")).toBeNull();
+  expect(host.querySelector("[aria-keyshortcuts]")).toBeNull();
+  expect(host.textContent).not.toContain("Next");
+});
+
+test("open, the control is pressed in the accent tone", async () => {
+  const host = await render(island({ panelOpen: true }));
+  const count = host.querySelector("[data-attention-count]")!;
+  expect(count.getAttribute("aria-expanded")).toBe("true");
+  expect(count.className).toContain("text-accent");
 });
 
 test("the filter toggle keeps its pressed state and accessible labels", async () => {
@@ -97,45 +105,30 @@ test("the filter toggle keeps its pressed state and accessible labels", async ()
   expect(host.querySelector("[data-attention-filter]")!.getAttribute("aria-pressed")).toBe("true");
 });
 
-test("with no toggle handed in, the island offers no filter and keeps its count and Next", async () => {
+test("with no toggle handed in, the island offers no filter and keeps its count", async () => {
   const host = await render(island({ count: 1, onToggleFilter: undefined }));
   expect(host.querySelector("[data-attention-filter]")).toBeNull();
   expect(host.querySelector("[data-attention-count]")!.textContent).toContain("1");
-  expect(host.querySelector("[data-attention-next]")).not.toBeNull();
 });
 
-test("the zero state is present, muted, inert and pulse-free", async () => {
-  const host = await render(island({ count: 0 }));
+test("the zero state stays on screen, muted and without the dot, still opening the panel", async () => {
+  const toggles: string[] = [];
+  const host = await render(island({ count: 0, onToggleFilter: undefined, onTogglePanel: () => toggles.push("panel") }));
   const zero = host.querySelector("[data-attention-island]")!;
   expect(zero.hasAttribute("data-attention-zero")).toBeTrue();
-  expect(zero.textContent).toContain("Needs you");
-  expect(zero.textContent).toContain("0");
-  expect(zero.getAttribute("aria-label")).toBe("0 waiting");
-  /* Quiet means quiet: no actions to press, no warning tone, no animation. */
-  expect(host.querySelector("button")).toBeNull();
-  expect(zero.className).not.toContain("warning");
-  expect(zero.className).not.toContain("animate");
-  expect(zero.className).toContain("text-muted");
-});
-
-/* The island is the DESKTOP corner since mobile v2 lane 8 (#1439). The phone's
-   badge is the shell's bar target — `⚠ n`, hidden at zero, 44 px, opening the
-   Needs-you sheet — and those assertions live with the shell
-   (MobileShell.dom.test.tsx) and the sheet (MobileAttentionSheet.dom.test.tsx).
-   What this component owes the phone is nothing: no compact face, no «⚠ 0». */
-test("the island has one face — the desktop's — and no phone variant to fall into", async () => {
-  const host = await render(island({ count: 4 }));
   const count = host.querySelector("[data-attention-count]")!;
-  expect(count.textContent).toContain("Needs you");
-  expect(count.className).not.toContain("min-h-11");
-  expect(host.querySelector("[data-attention-filter]")).not.toBeNull();
-  expect(host.querySelector("svg.lucide-triangle-alert")).toBeNull();
+  expect(count.textContent).toBe("Waiting0");
+  expect(count.getAttribute("aria-label")).toBe("0 waiting");
+  expect(count.querySelector("[data-attention-dot]")).toBeNull();
+  expect(count.className).toContain("text-muted");
+  expect(count.className).not.toContain("animate");
+  await click(count);
+  expect(toggles).toEqual(["panel"]);
 });
 
 /* ------------------------------------------------------------------------- *
- * The shared-cycle contract: the visible Next and the N/Shift-N keys move
- * ONE pointer through `advanceAttentionCycle`, wired here exactly as the
- * Viewer wires them (keys over the project queue, Next over the global one).
+ * The N key still walks, and only the project on screen (D4): the one route
+ * the Viewer wires, over its project queue.
  * ------------------------------------------------------------------------- */
 
 /* The wall clock: a row re-derives its decision line on render, and the stalled
@@ -165,178 +158,19 @@ function entry(path: string, project: string, since: number): FileEntry {
   } as FileEntry;
 }
 
-function Harness({ pointer, queue, projectQueue, onServe }: {
-  pointer: { current: string | null };
-  queue: AttentionItem[];
-  projectQueue: AttentionItem[];
-  onServe: (path: string) => void;
-}) {
-  useEffect(() => {
-    const onDown = (event: KeyboardEvent) => {
-      if (event.key !== "n" && event.key !== "N") return;
-      const next = advanceAttentionCycle(pointer, projectQueue, event.shiftKey ? -1 : 1);
-      if (next) onServe(next.file.path);
-    };
-    window.addEventListener("keydown", onDown);
-    return () => window.removeEventListener("keydown", onDown);
-  }, [pointer, projectQueue, onServe]);
-  return (
-    <AttentionIsland
-      count={queue.length}
-      queueOpen={false}
-      filterActive={false}
-      onToggleQueue={() => {}}
-      onToggleFilter={() => {}}
-      onNext={(dir) => {
-        const next = advanceAttentionCycle(pointer, queue, dir);
-        if (next) onServe(next.file.path);
-      }}
-    />
-  );
-}
-
-const pressN = (shiftKey = false) =>
-  act(async () => {
-    window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: shiftKey ? "N" : "n", shiftKey, bubbles: true }) as never);
-  });
-
-test("mouse Next and keyboard N continue one cycle and survive queue mutation mid-flight", async () => {
+test("N walks the project on screen and never leaves it, surviving queue mutation mid-flight", () => {
   const files = [
     entry("/alpha-old", "alpha", NOW - 400),
     entry("/beta-mid", "beta", NOW - 300),
     entry("/alpha-new", "alpha", NOW - 200),
   ];
-  const queue = buildAttentionQueue(files, NOW);
-  const projectQueue = buildAttentionQueue(files, NOW, "alpha");
-  const served: string[] = [];
+  const projectQueue: AttentionItem[] = buildAttentionQueue(files, NOW, "alpha");
   const pointer: { current: string | null } = { current: null };
-  const host = await render(<Harness pointer={pointer} queue={queue} projectQueue={projectQueue} onServe={(path) => served.push(path)} />);
-
-  /* Keyboard first: N serves alpha's oldest. */
-  await pressN();
-  /* Mouse continues the SAME pointer over the global queue: beta is next. */
-  await click(host.querySelector("[data-attention-next]")!);
-  /* Shift-N walks the project queue backward from the shared pointer; beta's
-     id is off-project, so the id-anchored fallback serves the project tail. */
-  await pressN(true);
-  expect(served).toEqual(["/alpha-old", "/beta-mid", "/alpha-new"]);
-
-  /* The queue mutates under the open cycle: the pointed-at item (beta) is
-     answered elsewhere. The rebuilt queue drops its id, and the next visible
-     advance serves the next-oldest remaining item instead of erring or
-     restarting arbitrarily. */
-  await act(async () => { root?.unmount(); });
-  document.body.replaceChildren();
-  pointer.current = queue[1]!.id;
-  const rebuilt = buildAttentionQueue([files[0]!, files[2]!], NOW);
-  const rebuiltProject = buildAttentionQueue([files[0]!, files[2]!], NOW, "alpha");
-  const second = await render(<Harness pointer={pointer} queue={rebuilt} projectQueue={rebuiltProject} onServe={(path) => served.push(path)} />);
-  await click(second.querySelector("[data-attention-next]")!);
-  expect(served.at(-1)).toBe("/alpha-old");
-});
-
-test("an emptied queue leaves both routes quiet", async () => {
-  const pointer: { current: string | null } = { current: null };
-  const served: string[] = [];
-  await render(<Harness pointer={pointer} queue={[]} projectQueue={[]} onServe={(path) => served.push(path)} />);
-  await pressN();
-  /* The island renders its inert zero pill: there is no Next to click. */
-  expect(document.querySelector("[data-attention-next]")).toBeNull();
-  expect(document.querySelector("[data-attention-zero]")).not.toBeNull();
-  expect(served).toEqual([]);
-});
-
-/* ------------------------------------------------------------------------- *
- * The popover rows NAME the decision (issue #1167). The count says how many
- * agents are waiting; a row that only repeats the conversation title still
- * leaves the operator to open each one to find out what it wants.
- * ------------------------------------------------------------------------- */
-
-function pendingQuestion(header: string): FileEntry["pendingQuestion"] {
-  return {
-    kind: "question",
-    toolUseId: `tool-${header}`,
-    transcriptPath: "/alpha-question",
-    pid: 4242,
-    paneTarget: null,
-    askedAt: "2026-08-25T10:00:00.000Z",
-    questions: [{ header, question: `${header}?`, multiSelect: false, options: [] }],
-  } as FileEntry["pendingQuestion"];
-}
-
-function questionItem(overrides: Partial<FileEntry> = {}): AttentionItem {
-  const file = { ...entry("/alpha-question", "alpha", NOW - 120), waitingInput: null, pendingQuestion: pendingQuestion("Rollout window"), ...overrides } as FileEntry;
-  return buildAttentionQueue([file], NOW)[0]!;
-}
-
-test("a queue row carries the decision line, the title, the project and the age", async () => {
-  const item = questionItem({
-    title: "Ship the rollout",
-    durableLineage: { kind: "spawn", role: "builder", parentConversationId: null, reviewsConversationId: null, memberships: [] },
-  } as Partial<FileEntry>);
-  const opened: string[] = [];
-  const host = await render(<AttentionQueueRow item={item} onOpen={() => opened.push(item.id)} />);
-
-  const row = host.querySelector("[data-attention-row]")!;
-  expect(row.getAttribute("data-attention-row")).toBe(item.id);
-  expect(row.textContent).toContain("Ship the rollout");
-  /* The one shared line: the decision, then who is asking. */
-  expect(host.querySelector("[data-attention-decision]")!.textContent).toBe("Rollout window · Builder");
-  expect(row.textContent).toContain("alpha");
-
-  await click(row);
-  expect(opened).toEqual([item.id]);
-});
-
-test("a terminal prompt keeps its own wording, and a stalled agent is not in the queue", async () => {
-  /* The prompt is named by its KIND, never by the menu the terminal happens to
-     be drawing: «❯ 1. Yes» names the options, and a row that says it has told
-     the operator nothing about what they are being asked to allow. */
-  const terminal = buildAttentionQueue([entry("/alpha-terminal", "alpha", NOW - 60)], NOW)[0]!;
-  const host = await render(<AttentionQueueRow item={terminal} onOpen={() => {}} />);
-  expect(host.querySelector("[data-attention-decision]")!.textContent).toBe("permission prompt");
-
-  /* docs/design/needs-attention.md §3, reason 7: a quiet turn asks nothing. */
-  const stalledFile = { ...entry("/alpha-stalled", "alpha", NOW - 60), waitingInput: null, activity: "stalled", proc: "running", mtime: NOW - 60 } as FileEntry;
-  expect(buildAttentionQueue([stalledFile], NOW)).toEqual([]);
-});
-
-test("a structured permission request names tool, command and reason, and answers Allow once or Deny from its row (#2215)", async () => {
-  const file = {
-    ...entry("/alpha-permission", "alpha", NOW - 120),
-    waitingInput: null,
-    conversationId: "conversation_alpha",
-    pendingPermission: {
-      id: "request-1",
-      tool: "Bash",
-      command: "rm -rf $R/*.json",
-      reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json",
-      reasonType: "safetyCheck",
-      since: new Date((NOW - 120) * 1000).toISOString(),
-    },
-  } as FileEntry;
-  const item = buildAttentionQueue([file], NOW)[0]!;
-  expect(item.reason.kind).toBe("permission");
-
-  const posts: Array<Record<string, unknown>> = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-    posts.push(JSON.parse(String(init?.body)));
-    return new Response(JSON.stringify({ ok: true }), { status: 202 });
-  }) as typeof fetch;
-  try {
-    const host = await render(<AttentionQueueRow item={item} onOpen={() => {}} />);
-    expect(host.querySelector("[data-attention-decision]")!.textContent)
-      .toBe("permission: Bash: rm -rf $R/*.json — Dangerous rm operation on possibly-empty variable path: $R/*.json");
-    const allow = host.querySelector("[data-permission-allow]")!;
-    expect(allow.textContent).toBe("Allow once");
-    await click(allow);
-    await click(host.querySelector("[data-permission-deny]")!);
-    expect(posts).toEqual([
-      { conversationId: "conversation_alpha", path: "/alpha-permission", action: "permission", decision: "allow", requestId: "request-1", operationId: "permission:request-1:allow" },
-      { conversationId: "conversation_alpha", path: "/alpha-permission", action: "permission", decision: "deny", requestId: "request-1", operationId: "permission:request-1:deny" },
-    ]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const served = [1, 1, 1].map((dir) => advanceAttentionCycle(pointer, projectQueue, dir as 1)!.file.path);
+  expect(served).toEqual(["/alpha-old", "/alpha-new", "/alpha-old"]);
+  /* The pointed-at item is answered elsewhere: the next press serves the
+     next-oldest remaining item of this project. */
+  pointer.current = projectQueue[0]!.id;
+  const rebuilt = buildAttentionQueue([files[1]!, files[2]!], NOW, "alpha");
+  expect(advanceAttentionCycle(pointer, rebuilt, 1)!.file.path).toBe("/alpha-new");
 });

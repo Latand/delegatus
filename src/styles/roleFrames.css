@@ -77,6 +77,22 @@
 [data-role="deployer"] { --role: var(--rf-deployer); --role-2: var(--rf-deployer-2); --role-ink: var(--rf-deployer-ink); --role-fill: var(--rf-deployer-fill); }
 [data-role="neutral"] { --role: var(--rf-neutral); --role-2: var(--rf-neutral-2); --role-ink: var(--rf-neutral-ink); --role-fill: var(--rf-neutral-fill); }
 
+/* ── A role named on a list row ─────────────────────────────────────────
+   The needs-you rows (desktop panel, phone sheet): the open-agents rail's
+   emblem tile and the rail variant's word, drawn with no variant chosen too,
+   since on a row the role is what the row says rather than a frame. */
+.role-tag {
+  display: inline-flex; align-items: center; flex-shrink: 0; gap: 5px; min-width: 0;
+  font-size: var(--text-caption); font-weight: 700; line-height: 1; letter-spacing: 0.06em;
+  text-transform: uppercase; white-space: nowrap; color: var(--role-ink);
+}
+.role-tag-emblem {
+  width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center; color: #fff; background: var(--role-fill);
+}
+.role-tag-emblem svg { width: 11px; height: 11px; }
+.role-tag-word { overflow: hidden; text-overflow: ellipsis; }
+
 /* ── The mark, and the overlay every variant draws on ───────────────────── */
 .role-mark { display: none; }
 :root[data-role-frame] .role-mark {

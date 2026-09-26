@@ -1,0 +1,79 @@
+{
+  "results": [
+    {
+      "key": "390-en-light",
+      "card": {
+        "badge": "asks you",
+        "ask": "opus·Evict by size or by age? Say which and I finish the migration.·4m",
+        "sideways": 0
+      },
+      "log": {
+        "asks": [
+          {
+            "text": "Builder asks you: Evict by size or by age? Say which and I finish the migration.",
+            "link": "#c=conversation_kanban-36",
+            "linkHeight": 17
+          },
+          {
+            "text": "Architect asks you: Лишити 14 днів логів чи 30? Скажіть, і я допишу міграцію.",
+            "link": "#c=conversation_kanban-37",
+            "linkHeight": 17
+          }
+        ],
+        "ordered": true,
+        "sideways": 0
+      },
+      "row": {
+        "state": "on",
+        "hint": "On, for all projects: each agent's last message of a turn goes to Jev on OpenRouter. This month $0.19 of $1.00.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "inside": true
+      },
+      "opened": {
+        "screen": "chat",
+        "hash": "#c=conversation_kanban-36"
+      }
+    },
+    {
+      "key": "390-uk-light",
+      "card": {
+        "badge": "питає вас",
+        "ask": "opus·Evict by size or by age? Say which and I finish the migration.·3 хв",
+        "sideways": 0
+      },
+      "log": {
+        "asks": [
+          {
+            "text": "Білдер питає вас: Evict by size or by age? Say which and I finish the migration.",
+            "link": "#c=conversation_kanban-36",
+            "linkHeight": 17
+          },
+          {
+            "text": "Архітектор питає вас: Лишити 14 днів логів чи 30? Скажіть, і я допишу міграцію.",
+            "link": "#c=conversation_kanban-37",
+            "linkHeight": 17
+          }
+        ],
+        "ordered": true,
+        "sideways": 0
+      },
+      "row": {
+        "state": "on",
+        "hint": "Увімкнено для всіх проєктів: останнє повідомлення кожного ходу агента йде в Jev на OpenRouter. Цього місяця 0,19 USD з 1,00 USD.",
+        "switchSize": [
+          48,
+          44
+        ],
+        "inside": true
+      },
+      "opened": {
+        "screen": "chat",
+        "hash": "#c=conversation_kanban-36"
+      }
+    }
+  ],
+  "failures": []
+}

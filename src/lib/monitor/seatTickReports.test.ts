@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
 
+import { resolvedQuestionAnswers } from "@/lib/bridge/asks";
+import type { BridgeReportV1 } from "@/lib/bridge/types";
+
 import { DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { defaultSeatTickSettings, effectiveSeatTickSettings, type SeatTickSettings } from "./seatTickSettings";
 import { seatTickStateForEpoch } from "./seatTickState";
@@ -495,4 +498,25 @@ test("the replayed day with no report filed: every owed key is asked for in each
     "18:10 Ask owed: you asked the operator at 16:56 UTC and filed no question report. File one with key ask:rsg_000000000000000000001656 and the ask in the decision section.",
   ]);
   expect(day.digestLines.length).toBeLessThanOrEqual(6);
+});
+
+test("a question the operator resolved in the report log counts as their answer: the ask owed from before it is cleared", () => {
+  const at = (clock: string) => Date.parse(`2026-09-25T${clock}:00.000Z`);
+  const a = setAt("rsg_a", at("13:00"));
+  let state = seatTickDecision(input({ now: at("13:15"), reports: reports({ suggestionSets: [a] }) })).state;
+  expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_a"]);
+
+  const question: BridgeReportV1 = { seq: 41, id: "rpt_41", key: "q-41", at: iso(at("13:05")), class: "question", project: PROJECT, targetSeatConversationId: SEAT_A, body: "Keep 25 MB?" };
+  const status: BridgeReportV1 = { ...question, seq: 42, id: "rpt_42", key: "s-42", class: "status" };
+  const operator = { kind: "operator" as const, surface: "desktop" as const };
+  const answers = resolvedQuestionAnswers([question, status], [
+    { seq: 41, at: iso(at("13:40")), by: operator },
+    /* Not a question, and not the operator's: neither answers anything. */
+    { seq: 42, at: iso(at("13:41")), by: operator },
+    { seq: 41, at: iso(at("13:42")), by: { kind: "manager", conversationId: SEAT_A, role: null } },
+  ]);
+  expect(answers).toEqual([{ conversationId: SEAT_A, at: iso(at("13:40")) }]);
+
+  state = seatTickDecision(input({ now: at("13:45"), state, reports: reports({ suggestionSets: [a], operatorAdmissions: answers }) })).state;
+  expect(state.asksOwed).toEqual([]);
 });
