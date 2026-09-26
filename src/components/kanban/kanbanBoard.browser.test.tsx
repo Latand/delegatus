@@ -11096,9 +11096,9 @@ describe("orchestrator reports: the setup guide's optional Reports to Telegram s
     { label: "390-en", width: 390, height: 844, lang: "en", touch: true },
     { label: "390-uk", width: 390, height: 844, lang: "uk", touch: true },
   ] as const;
-  const STATES = ["none", "fallback", "several", "chosen", "refused"] as const;
+  const STATES = ["none", "unchosen", "several", "chosen", "refused"] as const;
 
-  browserTest("Reports to Telegram: no bot, the one allowed chat in use, several to pick from, a chat chosen, a chosen chat refusing posts; desktop and phone; en and uk", async () => {
+  browserTest("Reports to Telegram: no bot, one allowed chat never chosen, several to pick from, a chat chosen, a chosen chat refusing posts; desktop and phone; en and uk", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     fs.mkdirSync(EVIDENCE, { recursive: true });
     const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "llv-reports-step-")));
@@ -11135,11 +11135,10 @@ describe("orchestrator reports: the setup guide's optional Reports to Telegram s
                 current: document.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current") ?? null,
                 heading: document.querySelector("[data-onboarding-dialog] h2")?.textContent ?? null,
                 chats: [...step.querySelectorAll<HTMLElement>("[data-onboarding-report-chat]")].map((node) => ({ chat: node.dataset.onboardingReportChat, checked: node.getAttribute("aria-checked"), inUse: node.querySelector<HTMLElement>("[data-onboarding-report-in-use]")?.dataset.onboardingReportInUse ?? null })),
-                asking: Boolean(step.querySelector("[data-onboarding-report-asking]")),
+                notReporting: step.querySelector("[data-onboarding-report-not-reporting]")?.textContent ?? null,
                 allowSwitches: [...step.querySelectorAll("[role=switch]")].map((node) => node.getAttribute("aria-label")),
                 tokenField: Boolean(step.querySelector("input[type=password]")),
                 name: step.querySelector<HTMLInputElement>("[data-onboarding-report-name]")?.value ?? null,
-                nameInUse: step.querySelector("[data-onboarding-report-name-in-use]")?.textContent ?? null,
                 refused: step.querySelector("[data-onboarding-report-refused]")?.textContent ?? null,
                 saveDisabled: step.querySelector<HTMLButtonElement>("[data-onboarding-telegram-save]")?.disabled ?? null,
                 buttonHeights: buttons.map((node) => round(node.getBoundingClientRect().height)),
@@ -11166,10 +11165,11 @@ describe("orchestrator reports: the setup guide's optional Reports to Telegram s
               const checked = reading.chats.find((chat) => chat.checked === "true")?.chat ?? null;
               const inUse = reading.chats.filter((chat) => chat.inUse !== null).map((chat) => `${chat.chat}:${chat.inUse}`);
               if (state === "chosen" && (checked !== "team-reports" || JSON.stringify(inUse) !== JSON.stringify(["team-reports:chosen"]))) failures.push(`${label}: the chosen chat is not selected and in use (${checked}, ${JSON.stringify(inUse)})`);
-              if (state === "fallback" && (checked !== "team-reports" || JSON.stringify(inUse) !== JSON.stringify(["team-reports:only-allowed-chat"]))) failures.push(`${label}: the one allowed chat is not preselected and marked in use (${checked}, ${JSON.stringify(inUse)})`);
-              if (state === "several" && (checked !== null || !reading.asking || JSON.stringify(inUse) !== JSON.stringify(["log-only:chosen"]))) failures.push(`${label}: with several chats the step does not ask (${checked}, asking ${reading.asking}, ${JSON.stringify(inUse)})`);
-              if (state !== "several" && reading.asking) failures.push(`${label}: the step asks with one allowed chat`);
-              if ((state === "fallback") !== (reading.nameInUse !== null)) failures.push(`${label}: the hint naming what reports carry now reads ${JSON.stringify(reading.nameInUse)}`);
+              /* Never chosen: not reporting to Telegram, nothing preselected or
+                 marked in use, however many chats accept posts. */
+              const unchosen = state === "unchosen" || state === "several";
+              if (unchosen && (checked !== null || inUse.length > 0 || reading.notReporting === null || reading.saveDisabled !== true)) failures.push(`${label}: a project that never chose shows a destination (${checked}, ${JSON.stringify(inUse)}, not reporting ${JSON.stringify(reading.notReporting)}, save disabled ${reading.saveDisabled})`);
+              if (!unchosen && reading.notReporting !== null) failures.push(`${label}: a chosen destination reads as not reporting`);
               if (state === "refused" && (checked !== "design-lounge" || JSON.stringify(inUse) !== JSON.stringify(["design-lounge:chosen"]) || reading.refused === null || reading.saveDisabled !== true)) failures.push(`${label}: the chosen chat that refuses posts is not shown chosen, in use and unsaveable (${checked}, ${JSON.stringify(inUse)}, ${JSON.stringify(reading.refused)}, save disabled ${reading.saveDisabled})`);
               if ((state === "refused") !== (reading.refused !== null)) failures.push(`${label}: the refused line reads ${JSON.stringify(reading.refused)}`);
             }

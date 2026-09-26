@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { projectDisplayName } from "@/lib/displayNames";
+import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
+import { translate, type Locale } from "@/lib/i18n";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { canonicalProject, projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
 
@@ -37,8 +38,8 @@ type StoredSwitch = { enabled: boolean; changedAt: string; changedBy: string };
  * (docs/design/orchestrator-reports.md §3.6, §5.6): one allowlisted bot chat,
  * chosen by the operator in the setup guide, and the name report headers
  * carry. An explicit "Log only" is stored as `chat: null`, so it stays apart
- * from a project that never chose: only the latter falls back to the bot's one
- * allowed chat ({@link effectiveReportTelegram}).
+ * from a project that never chose. Both report to the bridge log only: a
+ * project posts to Telegram only once the operator chose a chat for it.
  */
 export interface ReportTelegramSetting {
   /** The bot chat's alias. */
@@ -60,13 +61,13 @@ export type ReportTelegramChoice = ReportTelegramSetting | ReportLogOnlySetting;
 
 /**
  * Where a project's reports actually go besides the bridge: the chat the
- * operator chose, or, for a project that never chose, the one chat the bot
- * may post in (`only-allowed-chat`).
+ * operator chose. There is no other source; a project that never chose
+ * reports to the bridge log only.
  */
 export interface EffectiveReportTelegram {
   chat: string;
   name: string;
-  source: "chosen" | "only-allowed-chat";
+  source: "chosen";
 }
 
 interface ProjectSettingsEntry {
@@ -240,17 +241,14 @@ export function reportTelegram(project: string): ReportTelegramSetting | null {
 }
 
 /**
- * Where the project's reports go besides the bridge, given the chats the
- * connected bot may post in (their aliases). A chosen chat or "Log only"
- * always wins. A project that never chose uses the bot's allowed chat when
- * there is exactly one, since the operator already picked it in the bot
- * panel; with none or several nothing is posted until the operator picks.
+ * Where the project's reports go besides the bridge: the chat the operator
+ * chose for it, and nothing else. "Log only" and a project that never chose
+ * both answer null, however many chats the bot may post in: reports reach a
+ * Telegram chat only from a project the operator marked for it.
  */
-export function effectiveReportTelegram(project: string, postableChats: readonly string[]): EffectiveReportTelegram | null {
-  const choice = reportTelegramChoice(project);
-  if (choice) return choice.chat === null ? null : { chat: choice.chat, name: choice.name, source: "chosen" };
-  const chats = [...new Set(postableChats.map((chat) => chat.trim()).filter(Boolean))];
-  return chats.length === 1 ? { chat: chats[0]!, name: reportHeaderName(project), source: "only-allowed-chat" } : null;
+export function effectiveReportTelegram(project: string): EffectiveReportTelegram | null {
+  const choice = reportTelegram(project);
+  return choice ? { chat: choice.chat, name: choice.name, source: "chosen" } : null;
 }
 
 /**
@@ -290,14 +288,15 @@ export function repositoryReportName(project: string): string | null {
  * The name a report header carries (docs/design/orchestrator-reports.md §5.6):
  * the name the operator set with the Telegram destination; else the GitHub
  * repository's name capitalised; else the project's display name. The last can
- * be a local folder name; the setup step asks for a name whenever a chat is
- * chosen there, and a project posting to the bot's only allowed chat without
- * having chosen uses this same fallback.
+ * be a local folder name, which only the bridge log carries: the setup step
+ * asks for a name whenever a chat is chosen, and only a chosen chat is posted
+ * to. An internal key (`dir-<hash>`, `repo-<hash>`) is never a name: a project
+ * with nothing readable is called "Unnamed project" in the operator's language.
  */
-export function reportHeaderName(project: string): string {
+export function reportHeaderName(project: string, locale: Locale = "en"): string {
   const key = canonicalProject(project.trim());
   const set = reportTelegram(key)?.name?.trim();
-  if (set) return set;
+  if (set && !isOpaqueProjectKey(set)) return set;
   const repository = repositoryReportName(key);
   if (repository) return repository;
   let displayName: string | undefined;
@@ -306,7 +305,8 @@ export function reportHeaderName(project: string): string {
   } catch {
     displayName = undefined;
   }
-  return projectDisplayName(key, displayName);
+  const name = projectDisplayName(key, displayName);
+  return isOpaqueProjectKey(name) ? translate(locale, "dash.projectUnnamed") : name;
 }
 
 export function resetProjectSettingsForTests(): void {

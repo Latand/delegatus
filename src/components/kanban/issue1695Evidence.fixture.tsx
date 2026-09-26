@@ -136,9 +136,11 @@ const TELEGRAM_BOT_STATUS = TELEGRAM_BOT === "none"
     chats: TELEGRAM_BOT === "several"
       ? [telegramChat({}), telegramChat({ chatId: "-1000000000202", title: "Design Lounge", alias: "design-lounge" })]
       : TELEGRAM_BOT === "refused"
-      ? [telegramChat({}), telegramChat({ chatId: "-1000000000202", title: "Design Lounge", alias: "design-lounge", postAllowed: false, postable: false, reports: [{ name: "Atlas", onlyAllowedChat: false, refused: true }] })]
+      ? [telegramChat({}), telegramChat({ chatId: "-1000000000202", title: "Design Lounge", alias: "design-lounge", postAllowed: false, postable: false, reports: [{ name: "Atlas", refused: true }] })]
       : [
-        telegramChat(TELEGRAM_BOT === "fallback" ? { reports: [{ name: "Atlas", onlyAllowedChat: true }] } : { reports: [{ name: "Atlas", onlyAllowedChat: false }] }),
+        /* "unchosen": the bot's one allowed chat, which a project that never
+           chose does not report to. */
+        telegramChat(TELEGRAM_BOT === "chosen" ? { reports: [{ name: "Atlas" }] } : {}),
         telegramChat({ chatId: "-1000000000202", title: "Design Lounge", alias: null, postAllowed: false, postable: false }),
       ],
   };
@@ -149,8 +151,7 @@ const REPORT_TELEGRAM: { chat: string; name: string; changedAt: string; changedB
 /* Where the settings route says reports go now (§5.6). */
 const REPORT_DESTINATION = TELEGRAM_BOT === "chosen"
   ? { chat: "team-reports", name: "Atlas", source: "chosen" }
-  : TELEGRAM_BOT === "refused" ? { chat: "design-lounge", name: "Atlas", source: "chosen" }
-  : TELEGRAM_BOT === "fallback" ? { chat: "team-reports", name: "Atlas", source: "only-allowed-chat" } : null;
+  : TELEGRAM_BOT === "refused" ? { chat: "design-lounge", name: "Atlas", source: "chosen" } : null;
 const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet" || ORCH_FIRST_OVERVIEW;
 const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
 const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
@@ -1739,7 +1740,6 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       reportTelegram: REPORT_TELEGRAM,
       reportDestination: REPORT_DESTINATION,
       postableChats: TELEGRAM_BOT === "none" ? 0 : TELEGRAM_BOT === "several" ? 2 : 1,
-      reportFallbackName: REPORT_TELEGRAM ? null : "Atlas",
       reportNameSuggestion: "Atlas",
       github: "acme/atlas",
     });

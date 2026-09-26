@@ -87,27 +87,22 @@ test("the Telegram report destination is refused for a chat the bot may not post
   }
 });
 
-/* The operator already allowed a chat in the bot panel: a project that never
-   chose reports there, and the step shows it; several allowed chats wait for
-   a pick, and a stored Log only stays the log only. */
-test("the effective destination is the one allowed chat for a project that never chose, and nothing after Log only", async () => {
+/* Only a project the operator marked posts to Telegram: a project that never
+   chose shows no destination even when the bot may post in exactly one chat,
+   a chosen chat is the destination, and a stored Log only stays the log only. */
+test("the effective destination is the chosen chat only, never a chat the operator did not pick", async () => {
   const { setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
-  const allow = (aliases: string[]) => setTelegramBotServiceForTests({
-    listChats: () => ({ chats: aliases.map((alias) => ({ chat: alias, alias, postAllowed: true })) }),
+  setTelegramBotServiceForTests({
+    listChats: () => ({ chats: [{ chat: "team-reports", alias: "team-reports", postAllowed: true }] }),
   } as never);
   try {
-    allow(["team-reports"]);
-    const one = await (await get("repo-fresh")).json();
-    expect(one).toMatchObject({ reportTelegram: null, reportDestination: { chat: "team-reports", source: "only-allowed-chat" }, postableChats: 1 });
-    /* The name the fallback posts under is answered with or without a single
-       allowed chat, so the step can show it the moment one is allowed. */
-    expect(typeof one.reportFallbackName).toBe("string");
-    expect(one.reportFallbackName).toBe(one.reportDestination.name);
-    allow(["team-reports", "design-lounge"]);
-    expect(await (await get("repo-fresh")).json()).toMatchObject({ reportTelegram: null, reportDestination: null, reportFallbackName: one.reportFallbackName, postableChats: 2 });
-    allow(["team-reports"]);
+    const fresh = await (await get("repo-fresh")).json();
+    expect(fresh).toMatchObject({ reportTelegram: null, reportDestination: null, postableChats: 1 });
+    expect("reportFallbackName" in fresh).toBe(false);
+    await put({ project: "repo-fresh", reportTelegram: { chat: "team-reports", name: "Fresh" } });
+    expect(await (await get("repo-fresh")).json()).toMatchObject({ reportDestination: { chat: "team-reports", name: "Fresh", source: "chosen" } });
     await put({ project: "repo-fresh", reportTelegram: null });
-    expect(await (await get("repo-fresh")).json()).toMatchObject({ reportTelegram: { chat: null }, reportDestination: null, reportFallbackName: null, postableChats: 1 });
+    expect(await (await get("repo-fresh")).json()).toMatchObject({ reportTelegram: { chat: null }, reportDestination: null, postableChats: 1 });
   } finally {
     setTelegramBotServiceForTests(null);
   }
