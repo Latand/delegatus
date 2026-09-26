@@ -44,17 +44,20 @@ export interface ReportLogPage {
   nextBefore: number | null;
   /** Viewer-authored lines ("Asks you", docs/research/attention-classifier.md
       §7.4): an agent that asked the operator, with the conversation to open.
-      They are no bridge report: nothing relays or posts them. A page carries
-      those as old as its oldest entry, or all of them on the last page; the
-      log merges them by time and by id. Absent from a server before them. */
+      They are no bridge report: nothing relays or posts them. They page on
+      their own cursor: a page carries the newest lines past `asksBefore`,
+      and the log merges them with the reports by time and by id. Absent from
+      a server before them. */
   asks?: ReportLogAsk[];
+  /** The cursor to pass as `asksBefore` for older ask lines, null at the start. */
+  nextAsksBefore?: string | null;
 }
 
 export interface ReportLogDependencies {
   /** The card ids the board shows for the project. */
   knownCards: (project: string) => ReadonlyMap<string, ReportLogCard["kind"]>;
-  /** The project's ask lines down to `since` (epoch ms), newest first. */
-  asks?: (inProject: (project: string) => boolean, since: number | null, limit: number) => ReportLogAsk[];
+  /** The project's ask lines past the cursor `before`, newest first, and the next cursor. */
+  asks?: (inProject: (project: string) => boolean, before: string | null, limit: number) => { asks: ReportLogAsk[]; nextBefore: string | null };
   asksRevision?: () => string;
 }
 
@@ -74,12 +77,12 @@ function boardCards(project: string): ReadonlyMap<string, ReportLogCard["kind"]>
 
 const DEFAULT_DEPENDENCIES: ReportLogDependencies = {
   knownCards: boardCards,
-  asks: (inProject, since, limit) => projectReportLogAsks(inProject, since, limit),
+  asks: (inProject, before, limit) => projectReportLogAsks(inProject, before, limit),
   asksRevision: operatorAsksSignature,
 };
 
 export function readProjectReportLog(
-  request: { project: string; before?: number | null; limit?: number; since?: string | null },
+  request: { project: string; before?: number | null; asksBefore?: string | null; limit?: number; since?: string | null },
   dependencies: ReportLogDependencies = DEFAULT_DEPENDENCIES,
 ): ReportLogPage {
   const project = canonicalProject(request.project.trim());
@@ -94,8 +97,8 @@ export function readProjectReportLog(
   };
   /* The live refresh asks with the revision it holds; an unchanged log costs
      no read at all. */
-  if (request.since && request.since === revision && request.before == null) {
-    return { ...base, unchanged: true, entries: [], nextBefore: null, asks: [] };
+  if (request.since && request.since === revision && request.before == null && request.asksBefore == null) {
+    return { ...base, unchanged: true, entries: [], nextBefore: null, asks: [], nextAsksBefore: null };
   }
   const page = pageBridgeReports({
     inProject: (stored) => stored === project || canonicalProject(stored) === project,
@@ -103,12 +106,13 @@ export function readProjectReportLog(
     limit: request.limit,
   });
   const known = page.reports.length ? dependencies.knownCards(project) : new Map<string, ReportLogCard["kind"]>();
-  const oldest = page.reports.at(-1);
-  const since = page.nextBefore !== null && oldest ? Date.parse(oldest.at) : null;
   const inProject = (stored: string) => stored === project || canonicalProject(stored) === project;
   let asks: ReportLogAsk[] = [];
+  let nextAsksBefore: string | null = null;
   try {
-    asks = dependencies.asks?.(inProject, since !== null && Number.isFinite(since) ? since : null, ASK_LINES_PER_PAGE) ?? [];
+    const lines = dependencies.asks?.(inProject, request.asksBefore ?? null, ASK_LINES_PER_PAGE);
+    asks = lines?.asks ?? [];
+    nextAsksBefore = lines?.nextBefore ?? null;
   } catch {
     /* An unreadable ask record costs its lines, never the log. */
   }
@@ -124,5 +128,6 @@ export function readProjectReportLog(
     })),
     nextBefore: page.nextBefore,
     asks,
+    nextAsksBefore,
   };
 }

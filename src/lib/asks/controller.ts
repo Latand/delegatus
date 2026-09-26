@@ -84,7 +84,8 @@ async function announceAsk(): Promise<void> {
   }
 }
 
-const inflight = new Set<string>();
+/** Every message this process has sent, for the life of the process. */
+const sent = new Map<string, number>();
 
 export async function runAsksSweepOnce(): Promise<void> {
   const settings = readAsksYouSettings();
@@ -123,7 +124,7 @@ export async function runAsksSweepOnce(): Promise<void> {
       announced = true;
       void announceAsk();
     },
-  }, inflight);
+  }, sent);
 }
 
 const host = globalThis as typeof globalThis & { __llvAsksSweepTimer?: ReturnType<typeof setTimeout> };

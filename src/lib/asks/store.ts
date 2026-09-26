@@ -18,9 +18,12 @@ import type { ReportLogAsk } from "./types";
  *    without a second call.
  *  - `spend`: this month's calls and their billed cost, against the cap.
  *
- * Anything unreadable reads as empty: a lost file costs a flag that does not
- * show, never a message sent twice in the same process (the sweep also keeps
- * its own in-memory set) and never a spend over the cap for long.
+ * A send is recorded before its call, with its largest possible cost, and
+ * settled after it (sweep.ts), so a write that fails after a call leaves the
+ * cost counted and the message seen. Anything unreadable reads as empty: a
+ * lost file costs a flag that does not show and forgets this month's spend,
+ * but the classifier's process never sends a message twice, since it keeps
+ * every key it sent in memory beside the file.
  */
 
 export const OPERATOR_ASKS_SCHEMA_VERSION = 1 as const;
@@ -197,16 +200,39 @@ export function operatorAsksSignature(file = operatorAsksFile()): string {
   }
 }
 
-/** A project's ask lines, newest first, down to `since` (epoch ms) when given. */
+/** Where the page after `ask` starts: its time, then its id for a tie. */
+export function askCursor(ask: Pick<OperatorAskRecord, "messageAt" | "id">): string {
+  return `${ask.messageAt}:${ask.id}`;
+}
+
+function parseAskCursor(cursor: string | null): { at: number; id: string } | null {
+  if (!cursor) return null;
+  const split = cursor.indexOf(":");
+  const at = Number(cursor.slice(0, split));
+  return split > 0 && Number.isFinite(at) ? { at, id: cursor.slice(split + 1) } : null;
+}
+
+/**
+ * A project's ask lines, newest first, a page at a time: the lines past
+ * `before` (a cursor from the page before, null for the newest), and the
+ * cursor of the next page, null once none is older. Ask lines page on their
+ * own cursor, apart from the reports, so every one is reachable however many
+ * fall between two reports and on a project with no reports at all.
+ */
 export function projectReportLogAsks(
   inProject: (project: string) => boolean,
-  since: number | null,
+  before: string | null,
   limit: number,
   file: OperatorAsksFileV1 = readOperatorAsks(),
-): ReportLogAsk[] {
-  return file.asks
-    .filter((ask) => inProject(ask.project) && (since === null || ask.messageAt >= since))
-    .sort((left, right) => right.messageAt - left.messageAt || left.id.localeCompare(right.id))
-    .slice(0, limit)
-    .map(reportLogAsk);
+): { asks: ReportLogAsk[]; nextBefore: string | null } {
+  const cursor = parseAskCursor(before);
+  const older = file.asks
+    .filter((ask) => inProject(ask.project)
+      && (!cursor || ask.messageAt < cursor.at || (ask.messageAt === cursor.at && ask.id.localeCompare(cursor.id) > 0)))
+    .sort((left, right) => right.messageAt - left.messageAt || left.id.localeCompare(right.id));
+  const page = older.slice(0, Math.max(1, limit));
+  return {
+    asks: page.map(reportLogAsk),
+    nextBefore: older.length > page.length ? askCursor(page.at(-1)!) : null,
+  };
 }

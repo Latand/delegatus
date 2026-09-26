@@ -4,7 +4,7 @@ import type { FinalAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
 
 import { askGist, askSkipReason } from "./gist";
 import { ASK_THRESHOLD, jevCostCeilingUsd, jevFailureCostUsd, type JevVerdict } from "./jev";
-import { currentSpend, type OperatorAskRecord, type OperatorAsksFileV1 } from "./store";
+import { currentSpend, spendMonth, type OperatorAskRecord, type OperatorAsksFileV1 } from "./store";
 
 /*
  * One pass of the "Asks you" classifier (docs/research/attention-classifier.md
@@ -14,6 +14,12 @@ import { currentSpend, type OperatorAskRecord, type OperatorAsksFileV1 } from ".
  * an ask. A timeout, an error or a missing key records no ask and is not
  * retried: the message simply stays unclassified, and nothing else waits on
  * it. What a failed call may have cost still counts against the cap.
+ *
+ * The send is written ahead of the call: the message marked seen and its
+ * largest possible cost counted, then settled to what the call cost once it
+ * answers. A state write that fails after the call, or a process that dies
+ * during it, leaves the ceiling counted and the message never sent again; a
+ * send that cannot be recorded is not made.
  */
 
 /** A message older than this when the sweep first sees it is history. */
@@ -69,10 +75,18 @@ export function askId(subject: string, messageId: string): string {
   return `ask:${subject}:${messageId}`;
 }
 
-export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = new Set()): Promise<AskSweepResult> {
+/**
+ * `sent` is the caller's record of every message this process has sent, by
+ * seen key to the message's time, kept for the life of the process: a message
+ * is never sent twice here even while the state file cannot be written. A key
+ * leaves it once its message is too old to be sent at all.
+ */
+export async function runAskSweep(ports: AskSweepPorts, sent: Map<string, number> = new Map()): Promise<AskSweepResult> {
   const result: AskSweepResult = { classified: 0, asks: [], skipped: 0, capped: 0, failed: 0 };
   if (!ports.apiKey || !ports.settings().enabled) return result;
   const credential = ports.apiKey;
+  const horizon = ports.now().getTime() - ASK_MAX_AGE_MS;
+  for (const [key, messageAt] of sent) if (messageAt < horizon) sent.delete(key);
   const seen = new Set(ports.read().seen);
   for (const candidate of ports.candidates) {
     if (candidate.working || candidate.structuredAsk) continue;
@@ -85,7 +99,7 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
     if (now.getTime() - message.ts > ASK_MAX_AGE_MS) continue;
     if (ports.enabledSince !== null && message.ts < ports.enabledSince) continue;
     const seenKey = `${candidate.subject}:${message.id}`;
-    if (seen.has(seenKey) || inflight.has(seenKey)) continue;
+    if (seen.has(seenKey) || sent.has(seenKey)) continue;
     const skip = message.engineError ? "engine-error" : askSkipReason(message.text);
     if (skip) {
       ports.write((file) => { file.seen.push(seenKey); });
@@ -138,7 +152,14 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
       result.capped += 1;
       continue;
     }
-    inflight.add(seenKey);
+    const month = spendMonth(now);
+    ports.write((file) => {
+      file.seen.push(seenKey);
+      file.spend.calls += 1;
+      file.spend.usd += ceiling;
+    });
+    seen.add(seenKey);
+    sent.set(seenKey, message.ts);
     let verdict: JevVerdict | null = null;
     let failureCost = 0;
     try {
@@ -146,24 +167,21 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
     } catch (error) {
       verdict = null;
       failureCost = jevFailureCostUsd(error, ceiling);
-    } finally {
-      inflight.delete(seenKey);
     }
     const ask = verdict ? askFor(verdict.score) : null;
     ports.write((file) => {
-      file.seen.push(seenKey);
-      file.spend.calls += 1;
-      /* Every call that may have been billed counts: what the provider
-         reported, or else the ceiling, so the cap errs on the side of
-         spending less. Only an error status is known to bill nothing. */
-      file.spend.usd += verdict ? verdict.costUsd : failureCost;
+      /* The reservation settles to what the call may have cost: what the
+         provider reported, or else the ceiling, so the cap errs on the side
+         of spending less. Only an error status is known to bill nothing. A
+         month that turned during the call keeps the reservation where it was
+         made. */
+      if (file.spend.month === month) file.spend.usd = Math.max(0, file.spend.usd - ceiling + (verdict ? verdict.costUsd : failureCost));
       if (verdict) {
         delete file.scores[textKey];
         file.scores[textKey] = verdict.score;
       }
       if (ask && !file.asks.some((held) => held.id === ask.id)) file.asks.push(ask);
     });
-    seen.add(seenKey);
     if (!verdict) {
       result.failed += 1;
       continue;

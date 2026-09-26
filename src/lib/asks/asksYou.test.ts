@@ -388,6 +388,59 @@ describe("a classifier failure", () => {
   });
 });
 
+describe("a state file that cannot be written", () => {
+  const failing = () => { throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" }); };
+
+  test("sends nothing when not even the send can be recorded", async () => {
+    const sweep = ports({ write: failing });
+    for (let round = 0; round < 3; round += 1) await runAskSweep(sweep).catch(() => undefined);
+    expect(sweep.calls).toHaveLength(0);
+  });
+
+  test("a failure after the call sends the message once, with its largest possible cost counted", async () => {
+    const sweep = ports();
+    const record = sweep.write;
+    sweep.write = (mutation) => {
+      if (sweep.calls.length > 0) failing();
+      record(mutation);
+    };
+    for (let round = 0; round < 5; round += 1) await runAskSweep(sweep).catch(() => undefined);
+    expect(sweep.calls).toHaveLength(1);
+    const spend = readOperatorAsks().spend;
+    expect(spend.calls).toBe(1);
+    expect(spend.usd).toBeCloseTo(jevCostCeilingUsd(ASKING), 12);
+  });
+
+  test("a file that loses every write still sends each message once in this process", async () => {
+    const sent = new Map<string, number>();
+    const lost = readOperatorAsks(undefined, new Date(NOW));
+    const sweep = ports({ read: () => structuredClone(lost), write: () => {} });
+    for (let round = 0; round < 5; round += 1) await runAskSweep(sweep, sent);
+    expect(sweep.calls).toHaveLength(1);
+  });
+
+  test("a restart during the call reads a spend that already holds the call's ceiling", async () => {
+    const ceiling = jevCostCeilingUsd(ASKING);
+    writeAsksYouSettings({ capUsd: ceiling * 1.5 }, new Date(NOW));
+    let reached!: () => void;
+    const calling = new Promise<void>((resolve) => { reached = resolve; });
+    /* The process dies mid-call: the answer never comes. */
+    void runAskSweep(ports({ classify: () => { reached(); return new Promise<JevVerdict>(() => {}); } }), new Map());
+    await calling;
+    const spend = readOperatorAsks().spend;
+    expect(spend.calls).toBe(1);
+    expect(spend.usd).toBeCloseTo(ceiling, 12);
+
+    const restarted = ports({
+      candidates: [candidate(), candidate({ subject: "conv-2", conversationId: "conv-2", path: "/transcripts/two.jsonl" })],
+      finalMessage: (target) => message(target.subject === CONVERSATION ? ASKING : `${ASKING} (conv-2)`, { id: target.subject === CONVERSATION ? "claude:msg-1" : "claude:conv-2" }),
+    });
+    const result = await runAskSweep(restarted, new Map());
+    expect(restarted.calls).toHaveLength(0);
+    expect(result.capped).toBe(1);
+  });
+});
+
 describe("the same words asked again", () => {
   const LATER = NOW - 10_000;
 
