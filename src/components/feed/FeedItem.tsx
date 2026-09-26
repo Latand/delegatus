@@ -246,7 +246,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
        it replaces (send-latency slice 3): the message keeps one width, one
        opacity, one type size and one set of controls from the moment it is
        submitted to the moment the transcript carries it. */
-    return <UserMessageRow text={item.text} selectedContext={item.selectedContext ?? null} />;
+    return <UserMessageRow text={item.text} selectedContext={item.selectedContext ?? null} sender={provenance.senderFor(sourceItem)} />;
   }
   if (item.kind === "tool" && item.mcp) return <McpCallCard event={item} />;
   if (item.kind === "tool" && item.wakeup) return <WakeupCard event={item} wakeup={item.wakeup} />;

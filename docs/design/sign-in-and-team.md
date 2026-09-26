@@ -1,8 +1,11 @@
 # Sign-in and team: members, message authorship, who did what
 
-Status: design. Written 2026-09-26 against `main` at `0f5dae610`. Product
-source is untouched; this document is the lane's only output. The build lane
-that follows implements it in the slices of §13.
+Status: built. Written 2026-09-26 against `main` at `0f5dae610` as the
+design; the build lane that followed implemented all three slices of §13 in
+one pull request. Where building showed a better way, the change is recorded
+in **As built** below, with its reason; a passage that section overrides is
+marked there by its section number, and the rest of this document stands as
+written.
 
 ## 0. Originating requirement
 
@@ -90,6 +93,50 @@ under §14, Deferred.
 No ADR is filed: nothing here is hard to reverse. Members, sessions and events
 are additive collections; the perimeter is untouched; the passkey and Telegram
 methods are independent files behind one interface.
+
+## As built: what changed while building, and why
+
+Each entry names the design section it overrides. Nothing here widens the
+scope of §0; three entries narrow it and say where the rest went (A8, A9, A10).
+
+| # | Changed | Overrides | Why |
+|---|---|---|---|
+| A1 | **The team keeps its own SQLite file, `<state>/team/team.sqlite` (0600)**, opened like the Telegram bot's `telegram/bot.sqlite`. The design had five collections in `state.sqlite`. The file's absence *is* solo mode. | §3.5, D9 | `state.sqlite` collections are seeded by the first-boot cutover and written under the hot-state writer authority and rollback mirror (#1870). Team data has no legacy file to import, and none of that machinery buys it anything. With its own file, a solo install costs one `stat` per request and creates nothing (#1905), and a rollback to a release without the module simply ignores the file. The file also moves with the module if the seam is ever used (§11). Costs: the file is outside the `VACUUM INTO` backups, exactly like `bot.sqlite`; losing it returns the install to solo mode, where the perimeter still holds. A team file that exists but cannot be read **fails closed** (503), because letting everyone through as the unnamed operator is what a team install asked not to happen. |
+| A2 | **A session is checked by one indexed row read per request**; there is no revision-keyed in-memory cache. `lastSeenAt` is refreshed at most once a minute (the design said once an hour). | §3.2, §4.2 rule 4 | A primary-key read in SQLite costs about as much as the revision read the cache needed, and revocation is immediate with nothing to invalidate. The one-minute refresh is what lets the Members tab say "online · phone". |
+| A3 | **Authorship is written into the team module's own records; the core records stay unchanged.** A message's author is a `message_authors` row keyed by the submission's client message id (the browser's idempotency key). A spawn's and a task's authors are `team_events` rows keyed by the conversation id or task id. The structured-user metadata record, the Claude delivery ledger, `RegistryConversation` and `BoardTask` are untouched. | D8, §7.1–§7.3, §11.1 touch-point rows for `structuredUserMetadata.ts`, `claudeStreamBrokerHost.ts`, `messageOrigin.ts`, `registry.ts`, `tasks/types.ts` | The feed already binds every delivered record to its submission id: the Codex marker's delivery token through the registry's owner rows, the Claude ledger's `submissionId` (#1950). `/api/log/provenance` therefore answers `senders: { submissionId → sender }` for the ids it already names, and the feed resolves a row's sender through the same identity it already trusts. Five core stores keep their schemas and every record they ever wrote, and the whole of authorship lives behind the seam. |
+| A4 | **MCP readability** is `author: { kind: "member", memberId, name }` on `conversation_messages` user records. A transcript record carries no submission id, so the join is the digest of the words the member sent plus the nearest send at or before the record (the occurrence join of #1117). Each send names at most one record, and a record nothing matches stays unnamed. `get_task` and `get_conversation` are not extended (see A9). | §7.1 last paragraph, §7.2–§7.3 read notes | This is the one place where no identity survives into the record, and a digest-and-time join is the precedent the codebase already uses there. A message cut short by `maxChars` does not match, and is left unnamed. |
+| A5 | **The audit records people.** `recordTeamEvent` keeps `member` actors and Viewer `service` actors (a Telegram join request). An agent's own spawns, messages and task edits are not repeated there. The Activity tab opens on **Work** (messages, answers, agents started, tasks created and changed); **All events** adds the account housekeeping (sign-ins, invites, passkeys, Telegram links). | §3.7, §6.8 | The first renders showed setup traffic burying the work, and agents' own traffic would bury it further. What an agent did is already in its lineage and receipts. The question the operator asked is which *person* did what. |
+| A6 | **Fewer route files, with step bodies.** `POST /api/team/session/passkey { step: "options" \| "verify" }`, `POST /api/team/passkeys { step }`, `POST /api/team/session/approval/<id> { proof, complete? }` and `POST /api/team/session/telegram/<id> { proof, action? }`. Polls are POSTs that carry the requester's proof (the code it was handed; the store keeps its hash). | §12 route list | A challenge's public id alone never completes anything, and the proof never rides a query string into a log. |
+| A7 | **A passkey whose counter goes backwards is refused**, which is SimpleWebAuthn 14's own behaviour; the `passkey.counter_regressed` event is dropped. | §3.4 | Synced passkeys report a counter of 0 at registration and after, and pass unchanged (pinned in `passkeys.test.ts`). A non-zero counter moving backwards means a cloned authenticator, and refusing it is the conservative reading. |
+| A8 | **The setup guide's Team step is not built.** The Team row in the desktop ⋯ menu and in both phone menus opens `/team`, which on a solo install is the claim card of §6.2. | §6.1 | A team is set up on a shared box, where ⋯ → Team is where the operator looks. The guide is the solo user's first run, and "keep single-user local use frictionless" argues for no new step there. |
+| A9 | **Avatars on the board's cards are deferred**: the task card's `updatedBy` and the conversation header's `startedBy`. `subjectAuthorship()` in `src/lib/team/index.ts` already answers both from the audit, for the follow-up. | §6.7 last paragraph, §7.2–§7.3 read notes | §0 asks for authorship stamped on messages, spawns and task changes, the sender's name in chat, and a simple view of who did what. All of that ships. Board meta is a second surface on the busiest component in the product, and belongs in its own lane with its own board renders. |
+| A10 | **Presence comes from sessions**; `presenceStore` gains no `memberId`. "Online" means a live session was used in the last two minutes; "seen 2 h ago" counts ended sessions too, so a member who signed out still reads as seen. | §1 row `presenceStore.ts`, §6.9 | The session row already carries the time and the surface. A second writer into the presence mirror would have been a touch point for nothing. |
+| A11 | **The seam's one exception: `src/proxy.ts` imports `src/lib/team/gate.ts` directly.** `nullTeam` and the `TeamModule` interface live in `contract.ts`; every other touch point goes through `src/lib/team/index.ts`. | §11.1 | The proxy is its own bundle. Through `index.ts` it would pull `teamActor`, the agent registry and the rest of the server graph into the proxy. |
+| A12 | **`delegatus team recover` and `revoke-sessions` are `bin/team.mjs`**, which writes the two rows it needs straight into `team.sqlite` (`bun:sqlite` under Bun, `node:sqlite` under Node). | §5.5 | `bin/cli.mjs` is plain `.mjs`, and the published package ships only `bin`, `dist` and `vendor`, so the command cannot import the TypeScript store. `cli.team.test.ts` creates the store with the module, runs the command, and redeems the printed link through the module's own join code, so the two cannot drift apart. |
+| A13 | **Invite and hand-off links** use the request's own origin, or the tailnet's when the owner is on loopback. They carry `?k=` when `LLV_TOKEN` is set, exactly as the phone QR does. | §5.1, §5.2 | On the stage box a teammate who opens a bare `/join/<code>` is stopped by the perimeter before the join page exists. The key already travels this way in every shared link, and the proxy drops it from the address after setting its cookie. |
+| A14 | **The sign-in pages' language switch changes this browser only** (`setLocale`). | §6.6 | The in-app toggle also writes the install-wide language that agents and reports read, and a visitor who is not signed in must not change it. |
+| A15 | **Losing a session is noticed by a watcher of `fetch` answers** in `TeamSessionGuard`, mounted in the root layout; `serverReach.ts` is unchanged. | §4.4 | It covers `/activity` and `/team` as well as the board, and it only reads a 401 whose body says `member_required`. Nothing is retried or changed. |
+| A16 | **Approval codes are throttled per approver**: five wrong codes in ten minutes stop that member from asking for ten minutes. | §3.3 `attempts` | A wrong code names no challenge, so there is nothing to void. What can be bounded is the one who is guessing. |
+| A17 | **Audit ids carry a per-process sequence** (`<ms>-<seq><random>`), so events of one millisecond sort in the order they happened. | §3.7 | A claim and the session it opens land in the same millisecond. With a random suffix alone, the audit read "signed in" before "set up the team". |
+| A18 | **The proxy sets `X-Frame-Options: DENY`, `frame-ancestors 'none'` and `Referrer-Policy: no-referrer`** on `/sign-in` and `/join/*`. | §9 last row | A layout cannot set response headers in this Next version, and the proxy is already the one place that sees these paths. `no-referrer` keeps a join code out of any outgoing Referer. |
+| A19 | **Activity rows link** a conversation to `/#c=<id>` and a task to its project board, `/#p=<project>`. Projects are named the way the Activity dashboard names them (`catalogProjectNames`). | §6.8 | The board has no desktop deep link to one task. |
+
+**The one residual, stated plainly (§9).** The proxy checks an agent's
+capability header by shape only, because the registry lookup would pull the
+server graph into the proxy bundle (A11). So someone already past the
+perimeter can forge a capability-shaped header and reach routes without being
+a member. Every route that attributes a human action re-resolves the capability
+through the registry (`teamActor`) and refuses a forged one: messages, answers,
+spawns, task create/change/send, claim. The identity layer is attribution among
+people who already hold the perimeter; D1 has always said the perimeter is the
+security boundary. The practical consequence: **revoking a member ends their
+sessions, but not their perimeter access.** To shut a person out entirely,
+also rotate the key (`delegatus --new-token`) or remove their Caddy password.
+
+**What the build verified** is listed in the pull request: the model, flows,
+gate matrix, Telegram through the real poller, passkeys through a software
+authenticator, the routes end to end with two people on two devices, the proxy
+layers, the CLI, the sender line, and the stamp site's RED against the base.
 
 ## 1. What exists today, verified in code
 
@@ -1302,8 +1349,8 @@ Not a closed edition, and not a fork. Reasons:
    independent of where the team module lives.
 4. **The seam keeps every option open.** If a paid edition is ever wanted, the
    move is the GitLab shape, in this repository: move `src/lib/team`,
-   `src/app/(team)`, `src/app/team`, `src/app/api/team` and
-   `src/components/team` under one directory (`ee/` or `team/`), put a
+   `src/app/(team)`, `src/app/team`, `src/app/api/team`, `src/components/team`
+   and `bin/team.mjs` under one directory (`ee/` or `team/`), put a
    licence file in it, keep `contract.ts` and `nullTeam` in the core, make
    `src/lib/team/index.ts` choose by a build-time flag (`LLV_EDITION=team`),
    and add a CI job that builds the core with the directory removed. That is

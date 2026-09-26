@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { LINE_EDIT_KEYS } from "@/lib/lineEdits";
 import { deleteTask, patchTask, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
@@ -18,6 +19,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const TASK_REQUEST_FIELDS = ["text", "details", "status"] as const;
+/* What the team audit names as a change to a task (§7.3): its words, where it
+   stands, and whether it is on the board. Placement and decoration are not. */
+const TEAM_TASK_FIELDS = ["text", "details", "status", "hide", "board", "priority", "dueAt"] as const;
 
 type TaskRouteContext = {
   params: Promise<{ id: string }>;
@@ -42,8 +46,15 @@ export async function PATCH(
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
+  /* Who changed it (sign-in-and-team §7.3): a person needs a member in team mode. */
+  const actor = teamActor(req);
+  const anonymous = refuseAnonymous(actor);
+  if (anonymous) return anonymous;
+
   const { id } = await ctx.params;
+  const before: { status: string | null } = { status: null };
   const result = mutateTasks((tasks) => {
+    before.status = tasks.find((task) => task.id === id)?.status ?? null;
     /* The dashboard is the operator; a group hide is refused for the task
        holding the project's orchestrator seat. */
     const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", seatHolding: taskSeatHolding, workLinks: taskWorkLinkContext(loadPipelines) });
@@ -61,6 +72,20 @@ export async function PATCH(
      move, a colour, an icon, a link or a hide does not, and is not recorded. */
   if (TASK_REQUEST_FIELDS.some((field) => Object.hasOwn(body, field)) && directOperatorActivityAuthority(req).ok) {
     recordOperatorRequest(req, { kind: "task", project: result.task.project });
+  }
+  const changedFields = TEAM_TASK_FIELDS.filter((field) => Object.hasOwn(body, field));
+  if (changedFields.length) {
+    const statusMoved = Object.hasOwn(body, "status") && before.status !== result.task.status;
+    recordTeamEvent({
+      actor,
+      action: "task.changed",
+      project: result.task.project,
+      subject: { kind: "task", id: result.task.id, title: result.task.text.split("\n")[0] ?? null },
+      detail: {
+        fields: changedFields.join(","),
+        ...(statusMoved ? { from: before.status, to: result.task.status } : {}),
+      },
+    });
   }
   /* #2059: the card redraws its links from this answer, not the next poll. */
   const links = Object.hasOwn(body, "attachLinks") || Object.hasOwn(body, "detachLinks") ? taskWorkLinks(result.task, loadPipelines()) : null;

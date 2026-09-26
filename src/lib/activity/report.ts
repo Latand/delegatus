@@ -117,7 +117,7 @@ export interface ActivityResponseDependencies {
 /** Names from the board's last scan and the project aliases. A cold scan
     takes tens of seconds, so none is started or awaited: until one has
     finished, the page names projects by their readable keys. */
-async function catalogProjectNames(): Promise<ReadonlyMap<string, string>> {
+export async function catalogProjectNames(): Promise<ReadonlyMap<string, string>> {
   const names = new Map<string, string>();
   try {
     const { lastScannedProjectCatalog } = await import("@/lib/scanner/scanCache");

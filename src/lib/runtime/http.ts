@@ -11,6 +11,7 @@ import type { InboxFileUpload, StagedInboxFiles } from "@/lib/inboxFiles";
 import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { recordConversationEvent, recordMessageAuthor, refuseAnonymous, teamActor } from "@/lib/team";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 import { RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -157,6 +158,11 @@ async function dispatchRuntimeCommand(
 ): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) return rejection;
+  /* Who is acting (sign-in-and-team §7.1): in team mode a person needs a
+     member session, refused before anything is parsed, written or sent. */
+  const person = teamActor(request);
+  const anonymous = refuseAnonymous(person);
+  if (anonymous) return anonymous;
   if (!dependencies.enabled()) return refusedBeforeDispatch("runtime events are disabled");
   if (!(dependencies.structuredEnabled ?? (() => structuredHostsEnabled()))()) {
     return refusedBeforeDispatch("structured hosts are disabled");
@@ -279,6 +285,16 @@ async function dispatchRuntimeCommand(
         idempotencyKey: command.idempotencyKey,
         conversationId: command.conversationId,
       });
+    }
+    /* A member's words are stamped with the member (sign-in-and-team §7.1),
+       against the key the feed joins the delivered record to, so the chat can
+       name the sender on every device. The member session is the evidence
+       here, whichever client carried it. */
+    if ((command.kind === "send" || command.kind === "steer" || command.kind === "inject" || command.kind === "answer") && person.kind === "member") {
+      if (command.kind !== "answer") {
+        recordMessageAuthor({ actor: person, clientMessageId: command.idempotencyKey, conversationId: command.conversationId, text: "text" in command && typeof command.text === "string" ? command.text : "" });
+      }
+      recordConversationEvent({ actor: person, action: command.kind === "answer" ? "question.answered" : "message.sent", conversationId: command.conversationId });
     }
     /* #1202: the operator's own message retires the reply drafts offered under
        the question it answers. Done in the path that accepts the message, so a

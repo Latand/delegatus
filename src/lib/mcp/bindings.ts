@@ -161,6 +161,7 @@ import { recordReplySuggestions } from "@/lib/suggestions/store";
 import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
+import { recordAuthors, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, reportTelegramChoice, type EffectiveReportTelegram } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
@@ -2489,7 +2490,8 @@ async function conversationMessages(
       transcriptPath,
       engine,
       lastRecordAt: page.lastRecordAt,
-      records: page.records,
+      /* sign-in-and-team §7.1: a human message names its member. */
+      records: withRecordAuthors(conversationId, page.records),
       hasMore: page.hasMore,
       cursor: page.cursor ? encodeMessagesCursor(page.cursor, scope) : null,
       scanned: page.scanned,
@@ -2498,6 +2500,11 @@ async function conversationMessages(
   } finally {
     fs.closeSync(pinned.descriptor);
   }
+}
+
+function withRecordAuthors<T extends { role: string; ts: string | null; text: string }>(conversationId: string | null, records: T[]): Array<T & { author?: RecordAuthor }> {
+  const authors = recordAuthors(conversationId, records);
+  return authors.size ? records.map((record, index) => (authors.has(index) ? { ...record, author: authors.get(index)! } : record)) : records;
 }
 
 async function deployExactSha(

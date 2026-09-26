@@ -20,6 +20,7 @@ import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHE
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { ENGINE_NOT_CONNECTED, engineNotConnectedDetails, engineNotConnectedMessage, engineReadiness, type EngineReadiness } from "@/lib/accounts/engineConnection";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
@@ -465,6 +466,11 @@ export async function executeSpawnRequest(
     return NextResponse.json({ error: `not a directory: ${cwd}` }, { status: 400 });
   }
 
+  /* Who started this agent (sign-in-and-team §7.2): in team mode a person
+     needs a member session, and the audit names them once the launch exists. */
+  const spawnActor = teamActor(req);
+  const anonymousSpawn = refuseAnonymous(spawnActor);
+  if (anonymousSpawn) return anonymousSpawn;
   const recordsDirectOperatorActivity = directOperatorActivityAuthority(req).ok;
   if (recordsDirectOperatorActivity && !clientAttemptId) {
     return NextResponse.json({ error: "clientAttemptId is required for direct operator spawn" }, { status: 400 });
@@ -880,6 +886,15 @@ export async function executeSpawnRequest(
     }, { holder: "spawn admission", caller: "spawn" });
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created") launchId = begun.receipt.launchId;
+    if (begun.kind === "created" && begun.receipt.conversationId) {
+      recordTeamEvent({
+        actor: spawnActor,
+        action: "agent.started",
+        project: spawnProject,
+        subject: { kind: "conversation", id: begun.receipt.conversationId, title: launchTitle },
+        detail: { role: role.value?.role ?? null, engine },
+      });
+    }
     /* ATTRIBUTION, not a gate (#1279's rule, launch seam). The binding no
        longer refuses a launch that NAMES an account outside the project's pool,
        so the crossing has to be visible instead — the project view renders this

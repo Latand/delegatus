@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
 import { attachmentPath } from "@/lib/tasks/attachments";
@@ -63,6 +64,10 @@ async function postTaskSend(
 ): Promise<NextResponse<SendResponse | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
+  /* Who sent the task to its agents (sign-in-and-team §7.1). */
+  const actor = teamActor(req);
+  const anonymous = refuseAnonymous(actor);
+  if (anonymous) return anonymous;
 
   let body: unknown;
   try {
@@ -107,6 +112,15 @@ async function postTaskSend(
       kind: "message",
       idempotencyKey: clientRequestId ? `task-send:${clientRequestId}` : null,
       project: task.project,
+    });
+  }
+  if (targetEntries.length) {
+    recordTeamEvent({
+      actor,
+      action: "message.sent",
+      project: task.project,
+      subject: { kind: "task", id: task.id, title: task.text.split("\n")[0] ?? null },
+      detail: { agents: targetEntries.length },
     });
   }
   /* Durable attachment paths ride in the delivery text (the buildImagePayload

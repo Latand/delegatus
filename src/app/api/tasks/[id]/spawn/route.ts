@@ -15,6 +15,7 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { modelFromBody, validateLaunchModel } from "@/lib/agent/models";
 import { agentRegistry, type AgentRegistry, type SpawnBeginResult, type SpawnReceipt } from "@/lib/agent/registry";
@@ -312,6 +313,10 @@ async function postTaskSpawn(
     claudeConfigDir: engine === "claude" ? account.home : null,
     claudeProjectsDir: engine === "claude" ? account.transcriptRoot : null,
   });
+  /* Who started this agent (sign-in-and-team §7.2). */
+  const spawnActor = teamActor(req);
+  const anonymousSpawn = refuseAnonymous(spawnActor);
+  if (anonymousSpawn) return anonymousSpawn;
   if (directOperatorActivityAuthority(req).ok) {
     try {
       dependencies.recordOperatorActivity?.({
@@ -357,6 +362,15 @@ async function postTaskSpawn(
   }
   if (begun.kind === "conflict") {
     return NextResponse.json({ error: "task spawn attempt conflicts with its original request" }, { status: 409 });
+  }
+  if (begun.kind === "created" && begun.receipt.conversationId) {
+    recordTeamEvent({
+      actor: spawnActor,
+      action: "agent.started",
+      project,
+      subject: { kind: "conversation", id: begun.receipt.conversationId, title: spec.launchProfile.title },
+      detail: { engine, task: task.id },
+    });
   }
   let launchReceipt = begun.receipt;
 

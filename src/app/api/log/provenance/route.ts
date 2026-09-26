@@ -5,6 +5,8 @@ import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccur
 import type { DeliveredMessageOccurrence } from "@/lib/runtime/messageOrigin";
 import { submissionIdentities } from "@/lib/runtime/submissionIdentity";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { messageSenders } from "@/lib/team";
+import type { MessageSender } from "@/lib/team/contract";
 import { pathAllowed } from "@/lib/scanner/roots";
 import type { ApiError } from "@/lib/types";
 
@@ -27,6 +29,11 @@ export interface MessageProvenanceResponse {
       the binding depends on the delivered TEXT. Empty when the registry
       cannot answer, and a row with no entry here binds as it did before. */
   submissions: Record<string, string>;
+  /** `submission id → sender` for the submissions this answer names
+      (sign-in-and-team §6.7): which member sent each human message, resolved
+      from the team's own record at read time. Empty on a solo install and
+      for any message sent before a team existed. */
+  senders: Record<string, MessageSender>;
 }
 
 /**
@@ -42,12 +49,16 @@ export function GET(req: NextRequest): NextResponse<MessageProvenanceResponse | 
   if (!path || !pathAllowed(path)) {
     return NextResponse.json({ error: "path not allowed" }, { status: 403 });
   }
+  const messages = claudeMessageProvenance(path);
+  const occurrences = deliveredMessageOccurrences(path);
+  const submissions = submissionIdentities(path);
+  const ids = [
+    ...Object.values(messages).flatMap((entry) => (entry.submissionId ? [entry.submissionId] : [])),
+    ...occurrences.flatMap((entry) => (entry.submissionId ? [entry.submissionId] : [])),
+    ...Object.values(submissions),
+  ];
   return NextResponse.json(
-    {
-      messages: claudeMessageProvenance(path),
-      occurrences: deliveredMessageOccurrences(path),
-      submissions: submissionIdentities(path),
-    },
+    { messages, occurrences, submissions, senders: messageSenders(ids) },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

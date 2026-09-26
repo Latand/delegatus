@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { attachmentPath, sweepAttachments } from "@/lib/tasks/attachments";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds, type TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
@@ -59,6 +60,11 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
+  /* Who created it (sign-in-and-team §7.3): a person needs a member in team mode. */
+  const actor = teamActor(req);
+  const anonymous = refuseAnonymous(actor);
+  if (anonymous) return anonymous;
+
   let body: CreateTaskInput;
   try {
     body = (await req.json()) as CreateTaskInput;
@@ -89,6 +95,14 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
   /* A replayed create answers the same task, so its id is the key. */
   if (directOperatorActivityAuthority(req).ok) {
     recordOperatorRequest(req, { kind: "task", idempotencyKey: `task-create:${result.task.id}`, project: result.task.project });
+  }
+  if (!result.replay) {
+    recordTeamEvent({
+      actor,
+      action: "task.created",
+      project: result.task.project,
+      subject: { kind: "task", id: result.task.id, title: result.task.text.split("\n")[0] ?? null },
+    });
   }
   /* An icon that names no lucide icon, or a colour that is no task colour, was
      clamped to none, and says so (#2102). */

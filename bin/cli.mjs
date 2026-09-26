@@ -971,6 +971,17 @@ async function prepareRuntime(options) {
 }
 
 async function main() {
+  /* `delegatus team …` (sign-in-and-team §5.5): the host's recovery of a
+     team's sign-in. It touches the team file only and starts nothing. */
+  if (process.argv[2] === "team") {
+    const packageRoot = findPackageRoot(cliDir);
+    const { runTeamCommand } = await import("./team.mjs");
+    process.exitCode = await runTeamCommand(process.argv.slice(3), {
+      stateDirectory: cliRuntimeHostConfig(packageRoot).stateDirectory,
+      port: DEFAULT_PORT,
+    });
+    return;
+  }
   const options = parseArgs(process.argv.slice(2));
   /* Phone access turned on from the setup guide is remembered as a file; its
      presence stands for --tailscale. */

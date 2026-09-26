@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
+import type { MessageSender } from "@/lib/team/contract";
+import { SenderLine } from "@/components/team/SenderLine";
 
 import { ChevronUp } from "../icons";
 import { SelectedContextBadge } from "../SelectedContextBadge";
@@ -45,6 +47,7 @@ export function UserMessageRow({
   action,
   below,
   rowAttributes,
+  sender,
 }: {
   text: string;
   /** What the copy control puts on the clipboard; defaults to {@link text}. */
@@ -57,12 +60,15 @@ export function UserMessageRow({
   /** Under the bubble: the failure line, the transport disclosure. */
   below?: ReactNode;
   rowAttributes?: Record<string, string | undefined>;
+  /** Who sent it, in a team (sign-in-and-team §6.7). Absent draws nothing. */
+  sender?: MessageSender | null;
 }) {
   const isMobile = useIsMobile();
   const long = text.length > LONG_MESSAGE;
   const gutter = action ?? <CopyButton text={copyText ?? text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
   return (
     <div className="my-3 flex flex-col items-end" {...rowAttributes}>
+      {sender ? <SenderLine sender={sender} mobile={isMobile} /> : null}
       <div
         className="group/msg flex w-full items-start justify-end gap-1.5"
         data-mobile-message={isMobile ? "user" : undefined}
