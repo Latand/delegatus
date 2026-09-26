@@ -97,6 +97,11 @@ export interface DeliveredMessageOccurrence extends DeliveredMessageProvenance {
   clientMessageId?: string;
 }
 
+/** What the composer routes stamp on a caller that is not a Viewer page: a
+    script or an agent holding the operator's token. Admitted the same, but
+    never the operator's words. */
+export const API_CLIENT_ORIGIN: MessageOrigin = { kind: "agent", role: "api-client" };
+
 /** Same grammar as the other opaque marker tokens: no whitespace, no `>`. */
 const ROLE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
 

@@ -188,6 +188,18 @@ test("queue HTTP admits immediately on the populated fixture without waiting for
   f.journal.close();
 });
 
+test("a queued message is the operator's only from a Viewer page; a script's is an API client's", async () => {
+  const f = fixture();
+  const post = (id: string, headers: Record<string, string>) => handleNativeQueue(new NextRequest("http://localhost/api/runtime/queue", {
+    method: "POST", headers: { host: "localhost", ...headers }, body: JSON.stringify(command(id)),
+  }), { client: () => f.client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [] });
+  expect((await post("op-page", { "sec-fetch-site": "same-origin" })).status).toBe(202);
+  expect((await post("op-script", { authorization: "Bearer fixture-token" })).status).toBe(202);
+  const origins = Object.fromEntries(f.journal.nativeQueueRead(conversationId).map((entry) => [entry.entryId, entry.versions[0]!.origin]));
+  expect(origins).toEqual({ "op-page": { kind: "operator" }, "op-script": { kind: "agent", role: "api-client" } });
+  f.journal.close();
+});
+
 test("the queue read answers the journal's entries beside Codex's own snapshot", async () => {
   /* What the panel reads. Both halves are needed and neither substitutes for the
      other: the journal knows about a mutation the queue has not acknowledged,

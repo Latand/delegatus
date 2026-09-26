@@ -25,7 +25,8 @@ import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorAct
 import { humanReceiptReasonKey } from "@/components/runtime/runtimeModel";
 import { translate } from "@/lib/i18n";
 
-function request(body: unknown, headers: Record<string, string> = { host: "127.0.0.1" }): NextRequest {
+/** A Viewer page's request: a browser stamps `sec-fetch-site` on every fetch. */
+function request(body: unknown, headers: Record<string, string> = { host: "127.0.0.1", "sec-fetch-site": "same-origin" }): NextRequest {
   return new NextRequest("http://127.0.0.1/api/runtime/send", {
     method: "POST",
     headers: { ...headers, "content-type": "application/json" },
