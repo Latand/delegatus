@@ -16,24 +16,47 @@ import type { GuideProject } from "./ProjectStep";
  * so there is no second path to the bot: the token form when no bot is
  * connected, the chats that accept posts as choices, and the panel's own
  * switch for a chat the bot is in but may not post to yet. "Log only" is
- * always a choice, and Skip writes nothing: reports stay bridge-only.
+ * always a choice, and Skip writes nothing. The choice where reports go now
+ * is preselected and marked in use: for a project that never chose, that is
+ * the bot's one allowed chat, since the operator already picked it in the
+ * bot panel; with several such chats nothing is preselected and the step asks.
  */
 
 const LOG_ONLY = "\u0000log-only";
 
 export type TelegramReportsOutcome = { chat: string; name: string } | null;
 
-type ProjectReportSettings = { reportTelegram: { chat: string; name: string } | null; reportNameSuggestion: string | null };
+type ProjectReportSettings = {
+  /** The operator's choice: a chat, "Log only" (`chat: null`), or null when never chosen. */
+  reportTelegram: { chat: string | null; name?: string } | null;
+  /** Where reports go now besides the log, null for the log only. */
+  reportDestination: { chat: string; name: string; source: "chosen" | "only-allowed-chat" } | null;
+  reportNameSuggestion: string | null;
+  postableChats: number;
+};
+
+function settingsOf(body: Partial<ProjectReportSettings>): ProjectReportSettings {
+  return {
+    reportTelegram: body.reportTelegram ?? null,
+    reportDestination: body.reportDestination ?? null,
+    reportNameSuggestion: body.reportNameSuggestion ?? null,
+    postableChats: typeof body.postableChats === "number" ? body.postableChats : 0,
+  };
+}
 
 async function readSettings(project: string): Promise<ProjectReportSettings | null> {
   try {
     const response = await fetch(`/api/projects/settings?project=${encodeURIComponent(project)}`, { cache: "no-store" });
     if (!response.ok) return null;
-    const body = await response.json() as Partial<ProjectReportSettings>;
-    return { reportTelegram: body.reportTelegram ?? null, reportNameSuggestion: body.reportNameSuggestion ?? null };
+    return settingsOf(await response.json() as Partial<ProjectReportSettings>);
   } catch {
     return null;
   }
+}
+
+/** The radio that stands for where reports go now. */
+function inUseChoice(settings: ProjectReportSettings): string {
+  return settings.reportDestination?.chat ?? LOG_ONLY;
 }
 
 export function TelegramReportsStep({ project, onSaved, onSkip }: {
@@ -49,13 +72,18 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<TelegramReportsOutcome | undefined>(undefined);
   const [failed, setFailed] = useState(false);
+  const [settings, setSettings] = useState<ProjectReportSettings | null>(null);
 
   useEffect(() => {
     if (!project) return;
     let cancelled = false;
     void readSettings(project.project).then((settings) => {
       if (cancelled || !settings) return;
-      setChoice((value) => value ?? settings.reportTelegram?.chat ?? null);
+      setSettings(settings);
+      /* A project that never chose starts on where its reports go now, which
+         is nothing when several chats accept posts: the operator picks. */
+      const chosen = settings.reportTelegram ? settings.reportTelegram.chat ?? LOG_ONLY : settings.reportDestination?.chat ?? null;
+      setChoice((value) => value ?? chosen);
       setName((value) => value || settings.reportTelegram?.name || settings.reportNameSuggestion || "");
     });
     return () => { cancelled = true; };
@@ -84,6 +112,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
         body: JSON.stringify({ project: project.project, reportTelegram: outcome }),
       });
       if (!response.ok) throw new Error(String(response.status));
+      setSettings(settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>));
       setSaved(outcome);
       onSaved(outcome);
     } catch {
@@ -93,8 +122,13 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
     }
   };
 
+  const inUse = settings ? inUseChoice(settings) : null;
+  const onlyAllowedChat = settings?.reportDestination?.source === "only-allowed-chat";
+  const asking = settings !== null && settings.reportTelegram === null && settings.reportDestination === null && settings.postableChats > 1;
+
   const radio = (value: string, label: string, detail: string | null) => {
     const on = choice === value;
+    const used = inUse === value;
     return (
       <button
         key={value}
@@ -111,6 +145,11 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-body font-semibold text-primary">{label}</span>
           {detail ? <span className="truncate font-mono text-[11px] text-muted">{detail}</span> : null}
+          {used ? (
+            <span data-onboarding-report-in-use={onlyAllowedChat && value !== LOG_ONLY ? "only-allowed-chat" : "chosen"} className="text-caption font-semibold leading-snug text-accent">
+              {onlyAllowedChat && value !== LOG_ONLY ? t("onboarding.telegram.inUseOnly") : t("onboarding.telegram.inUse")}
+            </span>
+          ) : null}
         </span>
       </button>
     );
@@ -139,6 +178,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
           </div>
           <div className="flex flex-col gap-2">
             <div className="text-label font-semibold uppercase tracking-[0.06em] text-muted">{t("onboarding.telegram.choose")}</div>
+            {asking ? <p data-onboarding-report-asking="" className="text-ui leading-snug text-secondary">{t("onboarding.telegram.pickOne")}</p> : null}
             <div role="radiogroup" aria-label={t("onboarding.telegram.choose")} className="flex flex-col gap-2">
               {postable.map((chat) => radio(chat.alias!, chat.title, chat.alias))}
               {radio(LOG_ONLY, t("onboarding.telegram.logOnly"), null)}

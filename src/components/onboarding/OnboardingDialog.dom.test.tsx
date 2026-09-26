@@ -43,8 +43,11 @@ Object.assign(globalThis, {
     requests.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null });
     if (url.includes("/api/telegram/bot")) return json({ bot: botStatus });
     if (url.includes("/api/projects/settings")) {
-      if (init?.method === "PUT") return json({ ok: true, reportTelegram: (JSON.parse(String(init.body)) as { reportTelegram: unknown }).reportTelegram });
-      return json({ ok: true, reportTelegram: null, reportNameSuggestion: nameSuggestion });
+      if (init?.method === "PUT") {
+        const written = (JSON.parse(String(init.body)) as { reportTelegram: { chat: string; name: string } | null }).reportTelegram;
+        return json({ ok: true, reportTelegram: written ?? { chat: null }, reportDestination: written ? { ...written, source: "chosen" } : null, reportNameSuggestion: nameSuggestion, postableChats: 1 });
+      }
+      return json({ ok: true, reportNameSuggestion: nameSuggestion, ...reportSettings });
     }
     if (url.includes("/api/onboarding")) return json({ marker: null });
     if (url.includes("/api/roles")) return json({ schemaVersion: 2, roles: [] });
@@ -61,6 +64,9 @@ Object.assign(globalThis, {
    the Telegram step's cases set it (docs/design/orchestrator-reports.md §5.6). */
 const requests: { url: string; method: string; body: Record<string, unknown> | null }[] = [];
 let nameSuggestion: string | null = "Widgets";
+/* What the settings route answers about the destination: never chosen, and
+   no chat the bot may post in, unless a case says otherwise. */
+let reportSettings: Record<string, unknown> = { reportTelegram: null, reportDestination: null, postableChats: 0 };
 let botStatus: unknown = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
 
 /* What `/api/accounts` answers; the orchestrator step's cases set it. */
@@ -427,6 +433,55 @@ test("a connected bot lists the chats that accept posts, allows another in place
   expect(host.querySelector("[data-onboarding-report-saved]")?.textContent).toBe("Reports go to the log and to team-reports.");
   expect(requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "done" } }))).toBe(true);
   done();
+});
+
+/* The operator allowed one chat in the bot panel and never chose in the step:
+   the step shows that chat as where reports go now. */
+test("a project that never chose starts on the bot's one allowed chat, marked in use", async () => {
+  botStatus = connectedBot([chatView({})]);
+  reportSettings = { reportTelegram: null, reportDestination: { chat: "team-reports", name: "Widgets", source: "only-allowed-chat" }, postableChats: 1 };
+  try {
+    const { host, done } = renderTelegramStep();
+    await until(() => host.querySelector("[data-onboarding-report-chat=team-reports]")?.getAttribute("aria-checked") === "true");
+    expect(host.querySelector("[data-onboarding-report-chat=log-only]")!.getAttribute("aria-checked")).toBe("false");
+    const inUse = host.querySelector("[data-onboarding-report-chat=team-reports] [data-onboarding-report-in-use]");
+    expect(inUse?.getAttribute("data-onboarding-report-in-use")).toBe("only-allowed-chat");
+    expect(inUse?.textContent).toBe("In use now: the only chat agents may post in");
+    expect(host.querySelector("[data-onboarding-report-asking]")).toBeNull();
+    done();
+  } finally {
+    reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 0 };
+  }
+});
+
+test("with several allowed chats and no choice, nothing is preselected and the step asks for one", async () => {
+  botStatus = connectedBot([chatView({}), chatView({ chatId: "-100202", title: "Lounge", alias: "lounge" })]);
+  reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 2 };
+  try {
+    const { host, done } = renderTelegramStep();
+    await until(() => Boolean(host.querySelector("[data-onboarding-report-asking]")));
+    expect([...host.querySelectorAll("[data-onboarding-report-chat]")].map((node) => node.getAttribute("aria-checked"))).toEqual(["false", "false", "false"]);
+    expect(host.querySelector("[data-onboarding-report-asking]")!.textContent).toBe("Agents may post in several chats: pick one. Until then reports go to the log only.");
+    expect(host.querySelector("[data-onboarding-report-chat=log-only] [data-onboarding-report-in-use]")).not.toBeNull();
+    done();
+  } finally {
+    reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 0 };
+  }
+});
+
+test("a stored Log only starts on Log only, in use, even with one allowed chat", async () => {
+  botStatus = connectedBot([chatView({})]);
+  reportSettings = { reportTelegram: { chat: null, changedAt: "2026-09-26T10:00:00.000Z", changedBy: "operator" }, reportDestination: null, postableChats: 1 };
+  try {
+    const { host, done } = renderTelegramStep();
+    await until(() => host.querySelector("[data-onboarding-report-chat=log-only]")?.getAttribute("aria-checked") === "true");
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("false");
+    expect(host.querySelector("[data-onboarding-report-chat=log-only] [data-onboarding-report-in-use]")?.getAttribute("data-onboarding-report-in-use")).toBe("chosen");
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports] [data-onboarding-report-in-use]")).toBeNull();
+    done();
+  } finally {
+    reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 0 };
+  }
 });
 
 test("with no GitHub name to suggest, a chosen chat needs a name before it can be used", async () => {

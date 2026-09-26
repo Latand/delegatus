@@ -56,6 +56,16 @@ test("get_orchestrator carries the interface language and the Telegram destinati
   expect(await bindings().get_orchestrator({ clientRequestId: "o-3", project: PROJECT, full: true })).toMatchObject({ operatorLocale: "uk", reportTelegram: { chat: "team-reports", name: "Delegatus" } });
 });
 
+test("get_orchestrator reports the bot's one allowed chat for a project that never chose, and nothing after Log only", async () => {
+  const withChats = (chats: string[]) => bindings({ reportChats: async () => chats });
+  expect(await withChats(["team-reports"]).get_orchestrator({ clientRequestId: "f-1", project: PROJECT })).toMatchObject({ reportTelegram: { chat: "team-reports", source: "only-allowed-chat" } });
+  expect(await withChats(["team-reports", "design-lounge"]).get_orchestrator({ clientRequestId: "f-2", project: PROJECT })).toMatchObject({ reportTelegram: null });
+  setReportTelegram(PROJECT, null, "operator");
+  expect(await withChats(["team-reports"]).get_orchestrator({ clientRequestId: "f-3", project: PROJECT })).toMatchObject({ reportTelegram: null });
+  setReportTelegram(PROJECT, { chat: "design-lounge", name: "Atlas" }, "operator");
+  expect(await withChats(["team-reports"]).get_orchestrator({ clientRequestId: "f-4", project: PROJECT, full: true })).toMatchObject({ reportTelegram: { chat: "design-lounge", name: "Atlas", source: "chosen" } });
+});
+
 test("the session instructions name the interface language once a client reported it, and say nothing before", () => {
   expect(operatorLanguageInstruction(null)).toBe("");
   expect(viewerMcpInstructions(null)).not.toContain("interface language");

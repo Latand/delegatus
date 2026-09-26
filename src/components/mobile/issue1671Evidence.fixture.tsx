@@ -761,7 +761,9 @@ const telegramBot = BOT_SCENE === "typed"
     lastUpdateAt: iso(120),
     lastCheckedAt: iso(60),
     chats: [
-      botChat({ alias: "team-reports", postAllowed: true, postable: true, seesAllMessages: true, lastPostAt: iso(3_600), lastPostBy: { conversationId: "conversation_writer", title: "Weekly delivery report for the atlas team" } }),
+      /* The one chat agents may post in, so a project that never chose a
+         report destination reports here (orchestrator-reports §5.6). */
+      botChat({ alias: "team-reports", postAllowed: true, postable: true, seesAllMessages: true, lastPostAt: iso(3_600), lastPostBy: { conversationId: "conversation_writer", title: "Weekly delivery report for the atlas team" }, reports: [{ name: "Atlas", onlyAllowedChat: true }] }),
       botChat({ chatId: "-1000000000202", title: "Design review and release coordination", isForum: true }),
       botChat({ chatId: "700000303", title: "Person A", type: "private", seesAllMessages: true }),
       botChat({ chatId: "-1000000000404", title: "Old Project", member: false, alias: "old-project", postAllowed: true }),

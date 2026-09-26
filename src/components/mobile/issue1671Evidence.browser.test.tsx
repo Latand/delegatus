@@ -2186,7 +2186,9 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  * The Telegram bot account's setup panel (docs/design/telegram-bot-account.md)
  * — not connected, connected with chats, and reading blocked by a webhook — on
  * the phone (menu › Accounts › Telegram) at 390 and 430 in both schemes, and
- * on the desktop from the rail footer at 1440:
+ * on the desktop from the rail footer at 1440. The connected scene also runs
+ * in Ukrainian at 390 and at a 1280 desktop, and its one allowed chat must
+ * name the project whose reports go there:
  *
  *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
  *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "telegram bot"
@@ -2268,7 +2270,7 @@ async function readTelegramPanel(page: Page, phone: boolean) {
     return {
       panel: { left: box.left, top: box.top, width: box.width, height: box.height, scrollHeight: dialog.scrollHeight },
       scrim: scrimColor,
-      botSectionHeight: dialog.querySelector('section[aria-label="Bot"]')?.getBoundingClientRect().height ?? null,
+      botSectionHeight: dialog.querySelector('section[aria-label="Bot"], section[aria-label="Бот"]')?.getBoundingClientRect().height ?? null,
       controls: controls.length,
       textLeaves: leaves.length,
       overlaps,
@@ -2277,7 +2279,7 @@ async function readTelegramPanel(page: Page, phone: boolean) {
   }, phone);
 }
 
-async function openTelegramPanel(page: Page, phone: boolean): Promise<void> {
+async function openTelegramPanel(page: Page, phone: boolean, lang: "en" | "uk" = "en"): Promise<void> {
   if (phone) {
     await page.locator('[data-mobile2-open="menu"]').first().click();
     await page.locator('[data-mobile2-menu-row="accounts"]').click();
@@ -2287,9 +2289,9 @@ async function openTelegramPanel(page: Page, phone: boolean): Promise<void> {
     const footer = page.locator("[data-rail-footer]").first();
     await footer.waitFor({ timeout: 10_000 });
     if (await footer.getAttribute("data-rail-footer") === "folded") await page.click("[data-rail-footer-toggle]");
-    await page.locator('button[aria-label="Telegram connection"]').click();
+    await page.locator(`button[aria-label="${lang === "uk" ? "Підключення Telegram" : "Telegram connection"}"]`).click();
   }
-  await page.waitForSelector('[role="dialog"][aria-label="Telegram"] section[aria-label="Bot"]', { timeout: 10_000 });
+  await page.waitForSelector(`[role="dialog"][aria-label="Telegram"] section[aria-label="${lang === "uk" ? "Бот" : "Bot"}"]`, { timeout: 10_000 });
   await pause(page, 500);
 }
 
@@ -2304,20 +2306,28 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
     ...VIEWPORTS.flatMap((viewport) => SCHEMES.map((scheme) => ({ viewport, scheme, phone: true }))),
     { viewport: { width: 1_440, height: 900 }, scheme: "light" as const, phone: false },
     { viewport: { width: 1_440, height: 900 }, scheme: "dark" as const, phone: false },
-  ];
+  ].map((entry): { viewport: { width: number; height: number }; scheme: "light" | "dark"; phone: boolean; lang: "en" | "uk"; scenes: readonly string[] } => ({ ...entry, lang: "en", scenes: BOT_SCENES }));
+  cases.push(
+    { viewport: { width: 390, height: 844 }, scheme: "light", phone: true, lang: "uk", scenes: ["chats"] },
+    { viewport: { width: 1_280, height: 800 }, scheme: "light", phone: false, lang: "uk", scenes: ["chats"] },
+  );
   try {
-    for (const { viewport, scheme, phone } of cases) {
-      for (const scene of BOT_SCENES) {
-        const key = `${phone ? "phone" : "desktop"}-${viewport.width}-${scheme}-${scene}`;
+    for (const { viewport, scheme, phone, lang, scenes } of cases) {
+      for (const scene of scenes) {
+        const key = `${phone ? "phone" : "desktop"}-${viewport.width}-${scheme}-${scene}${lang === "en" ? "" : `-${lang}`}`;
         const context = await browser.newContext({ viewport, colorScheme: scheme, deviceScaleFactor: 2, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
         try {
+          await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
           const page = await context.newPage();
           const pageErrors: string[] = [];
           page.on("pageerror", (error) => pageErrors.push(error.message));
           await page.goto(`${base}/?bot=${scene}`);
-          await openTelegramPanel(page, phone);
+          await openTelegramPanel(page, phone, lang);
           const top = await readTelegramPanel(page, phone);
+          const reportsLine = await page.locator('[role="dialog"][aria-label="Telegram"] [data-telegram-chat-reports]').allTextContents();
           await page.screenshot({ path: path.join(BOT_OUT, `${key}.png`) });
+          const expectedReports = scene === "chats" || scene === "webhook" ? [lang === "uk" ? "Звіти оркестратора: Atlas, бо це єдиний чат, куди агентам можна писати" : "Orchestrator reports: Atlas, since this is the only chat agents may post in"] : [];
+          if (JSON.stringify(reportsLine) !== JSON.stringify(expectedReports)) failures.push(`${key}: the chat's reports line reads ${JSON.stringify(reportsLine)}`);
           /* The panel scrolls inside itself; the second frame is its end. */
           await page.evaluate(() => {
             const dialog = document.querySelector('[role="dialog"][aria-label="Telegram"]');
@@ -2330,7 +2340,7 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
           if (!top || !end) failures.push(`${key}: the panel did not open`);
           for (const reading of [top, end]) for (const failure of reading?.failures ?? []) failures.push(`${key}: ${failure}`);
           if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
-          results.push({ key, viewport, scheme, scene, top, end });
+          results.push({ key, viewport, scheme, lang, scene, reportsLine, top, end });
         } finally {
           await context.close();
         }

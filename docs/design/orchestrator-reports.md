@@ -571,8 +571,11 @@ they are stored; the task-text rule is what puts them in the right language.
 - Every manager report goes to the bridge log, which the report log and the
   voice relay read as they do today.
 - It also goes to the project's Telegram chat when the operator set one, in
-  the optional setup-guide step (§5.6). With no chat set, or the step
-  skipped, reports go to the bridge only and everything else works as before.
+  the optional setup-guide step (§5.6). A project that never chose, the step
+  skipped included, uses the bot's one chat that agents may post in, because
+  the operator already picked that chat in the bot panel. With no such chat or
+  several, or with "Log only" chosen, reports go to the bridge only and
+  everything else works as before.
 - Reports from other sessions (origin `agent`, `gateway`, `unidentified`) go
   to the bridge only.
 - While the project's Bridge reports setting is off, nothing is stored and
@@ -1016,22 +1019,34 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   and `bridgeReports`; `chat` is the bot chat's alias and `name` the project's
   name in report headers. `src/lib/projects/settings.ts` stores only boolean
   switches today, so it gains this one entry with its own reader,
-  `reportTelegram(project)`. `/api/projects/settings`
+  `reportTelegram(project)`. "Log only" is stored as `{ chat: null, changedAt,
+  changedBy }`, so it stays apart from a project that never chose.
+  `effectiveReportTelegram(project, postableChats)` is where reports go: the
+  chosen chat; nothing after "Log only"; for a project that never chose, the
+  bot's one chat that agents may post in, under the fallback header name
+  below, and nothing with none or several. `bridge_report` and
+  `get_orchestrator` read the chats through the Viewer's bot agent route,
+  and `get_orchestrator`'s `reportTelegram` carries `source: "chosen" |
+  "only-allowed-chat"`. `/api/projects/settings`
   (`src/app/api/projects/settings/route.ts`) accepts
   `{ project, reportTelegram: { chat, name } | null }`, only from the operator
   (`requireOperatorAuthority`, as the bot route does), and refuses a chat that
   `TelegramBotService` does not list with `postAllowed`. There is no MCP write,
   so no agent chooses where a public post goes. `get_orchestrator` carries
-  `reportTelegram` (alias and name, or null).
+  `reportTelegram` (alias, name and source, or null), the destination in
+  effect. The route's answer adds `reportDestination`, the same, and
+  `postableChats`, the count; the bot panel names on each chat the projects
+  with a seat whose reports go there, and says when that is only because it
+  is the one allowed chat.
 - **Header name**, used by both copies and resolved by
   `reportHeaderName(project)` in `src/lib/projects/settings.ts`:
   `reportTelegram.name` when the operator set one; else the project's GitHub
   repository name capitalised, when it has a GitHub remote; else the project's
   display name from the catalog. A project that skipped the step, like
   projects B–E today, therefore gets its repository or display name in its
-  bridge-only reports. The display name can be a local folder name, which is
-  acceptable only because such a report never leaves the bridge: choosing a
-  Telegram chat requires a name (below).
+  bridge-only reports. The display name can be a local folder name: choosing
+  a Telegram chat in the step requires a name (below), and a project posting
+  to the bot's one allowed chat without having chosen uses this same fallback.
 - **Where**: the guide becomes Engines, Project, **Reports to Telegram
   (optional)**, Orchestrator. The step sits before Orchestrator because Create
   ends the guide on the new seat, and the seat's first report should already
@@ -1047,7 +1062,10 @@ Both answers are tested at the tool; the ask line is tested at the tick.
     `src/components/TelegramBot.tsx`, exported for this) on
     `useTelegramBot` (`src/hooks/useTelegramBot.ts`), which calls the same
     operator-only `connect` action;
-  - a bot connected: its name, and the chats `useTelegramBot` lists. Chats
+  - a bot connected: its name, and the chats `useTelegramBot` lists. The
+    destination in effect is preselected and marked "In use now", with the
+    reason when it is the one allowed chat; with several allowed chats and no
+    choice nothing is preselected and the step asks for one. Chats
     that accept posts are choices; chats the bot is in but not allowlisted
     show the panel's own `ChatRow` switch, so allowing one is the same one tap
     as in the panel; "Log only, no Telegram" is always a choice;
@@ -1058,7 +1076,7 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   - the rule in one sentence: the group may be public, so reports carry no
     private information, and they are posted silently, with no links;
   - Skip, as prominent as Continue. Skip writes nothing and leaves the step
-    `skipped`; reports stay bridge-only.
+    `skipped`; reports go where they went before (§3.6).
 - **Later changes**: the same step, reopened from the setup guide's menu entry
   (`src/components/onboarding/menuEntries.tsx`) or from the guide's step list.
   The report log and the ⋯ menus are unchanged.
