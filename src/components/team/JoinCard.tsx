@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { useLocale } from "@/lib/i18n";
 import type { TeamPublicInfo } from "@/lib/team/contract";
+import { passkeyFeedback, passkeyFeedbackText } from "@/lib/team/passkeyFeedback";
 
 import { AuthError, AuthShell, AuthTitle } from "./AuthShell";
 import { errorText, goNext } from "./SignInCard";
@@ -35,6 +36,7 @@ export function JoinCard({ code }: { code: string }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [passkeyNote, setPasskeyNote] = useState<string | null>(null);
   const [passkeyHere, setPasskeyHere] = useState(false);
 
   useEffect(() => {
@@ -70,19 +72,29 @@ export function JoinCard({ code }: { code: string }) {
   const addPasskey = async () => {
     setBusy(true);
     setError(null);
+    setPasskeyNote(null);
     try {
       const options = await teamRequest<{ id: string; options: unknown }>("/api/team/passkeys", { body: { step: "options" } });
       if (!options.ok) return setError(errorText(t, options));
       const { startRegistration } = await import("@simplewebauthn/browser");
       let response;
+      const startedAt = Date.now();
       try {
         response = await startRegistration({ optionsJSON: options.body.options as never });
-      } catch {
+      } catch (cause) {
+        const feedback = passkeyFeedback(cause, "registration", {
+          elapsedMs: Date.now() - startedAt,
+          timeoutMs: (options.body.options as { timeout?: number }).timeout,
+        });
+        if (feedback.tone === "note") setPasskeyNote(passkeyFeedbackText(t, feedback));
+        else setError(passkeyFeedbackText(t, feedback));
         return;
       }
       const saved = await teamRequest("/api/team/passkeys", { body: { step: "verify", id: options.body.id, response } });
       if (!saved.ok) return setError(errorText(t, saved));
       goNext("/");
+    } catch {
+      setError(t("team.passkey.failed"));
     } finally {
       setBusy(false);
     }
@@ -149,6 +161,7 @@ export function JoinCard({ code }: { code: string }) {
   return (
     <AuthShell testId="join">
       {body}
+      {passkeyNote ? <p className="mt-3 text-center text-label text-muted" role="status" data-passkey-note="">{passkeyNote}</p> : null}
       <AuthError text={error} />
     </AuthShell>
   );

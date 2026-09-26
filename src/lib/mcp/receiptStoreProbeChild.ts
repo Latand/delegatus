@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -137,14 +138,14 @@ async function runHttpHost(configPath: string): Promise<void> {
         clientMessageId,
         "text",
         [],
-        null,
-        { operationId, kind: "send", policy: "queue" },
+        messageTextDigest(request.text),
+        { operationId, kind: "send", policy: "queue", ...(request.origin ? { origin: request.origin } : {}) },
       );
       const actuate = (): void => {
         registry.beginDeliveryAttempt(reservation.id, config.recipientGenerationId);
         /* THE recipient effect: the controlled recipient takes the message
            exactly here, once per actuation, whatever the HTTP layer answers. */
-        effect({ kind: "recipient", clientMessageId, operationId, text: request.text });
+        effect({ kind: "recipient", clientMessageId, operationId, text: request.text, origin: request.origin });
         if ((control().sendEffect ?? "deliver") === "deliver") {
           registry.recordDeliveryOutcome(reservation.id, "delivered", null, "delivered");
         }

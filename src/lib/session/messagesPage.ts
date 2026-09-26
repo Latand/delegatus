@@ -53,6 +53,9 @@ export interface MessagesPageQuery {
 export interface ConversationMessage extends SessionRecord {
   seq: number;
   truncated?: true;
+  /** Internal, non-serialized evidence retained before redaction and truncation. */
+  sourceText?: string;
+  sourceId?: string;
 }
 
 export interface MessagesPage {
@@ -168,7 +171,9 @@ function parsedLine(line: Buffer, engine: SessionEngine): NormalizedSessionLine[
     return [];
   }
   const row = objectRecord(value);
-  return row ? normalizeSessionLine(engine, row) : [];
+  if (!row) return [];
+  const sourceId = engine === "claude" && typeof row.uuid === "string" ? row.uuid : undefined;
+  return normalizeSessionLine(engine, row).map((candidate) => ({ ...candidate, sourceId }));
 }
 
 function newestRecordTimestamp(
@@ -208,7 +213,7 @@ function boundedRecord(
 ): ConversationMessage {
   const redacted = hardenedRedact(normalized.record.text);
   const truncated = redacted.length > maxChars;
-  return {
+  const record: ConversationMessage = {
     seq,
     kind: normalized.record.kind,
     role: normalized.record.role,
@@ -218,6 +223,118 @@ function boundedRecord(
     ...(normalized.record.name ? { name: normalized.record.name } : {}),
     ...(normalized.record.phase ? { phase: normalized.record.phase } : {}),
   };
+  Object.defineProperties(record, {
+    sourceText: { value: normalized.record.text, enumerable: false },
+    sourceId: { value: normalized.sourceId, enumerable: false },
+  });
+  return record;
+}
+
+/** A complete, bounded author join domain. Partial transcript scans cannot
+ * safely assign an occurrence to one of several identical messages. */
+export function readMessageAuthorContext(
+  source: MessagesPageSource,
+  focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }> = [],
+): ConversationMessage[] | null {
+  if (source.size > MAX_SCAN_BYTES) return readMessageAuthorNeighborhood(source, focus);
+  const records: ConversationMessage[] = [];
+  let cursor: MessagesPageCursor | null = null;
+  do {
+    const page = readMessagesPage(source, {
+      kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor,
+    });
+    records.push(...page.records);
+    if (records.length > 10_000 || page.scanned.capped) return readMessageAuthorNeighborhood(source, focus);
+    cursor = page.cursor;
+  } while (cursor);
+  return records;
+}
+
+/** Find the first later user row outside the time neighborhood, starting at
+ * the requested row. A tail-relative start can be arbitrarily far away after
+ * an append, even when the neighborhood itself is small. */
+function upperAuthorBoundary(
+  source: MessagesPageSource,
+  offset: number,
+  upper: number,
+): { offset: number; bytes: number; atEnd: boolean } | null {
+  let position = offset;
+  let bytes = 0;
+  let carry = Buffer.alloc(0);
+  while (position < source.size) {
+    if (bytes >= MAX_SCAN_BYTES) return null;
+    const length = Math.min(CHUNK_BYTES, source.size - position, MAX_SCAN_BYTES - bytes);
+    const chunk = Buffer.allocUnsafe(length);
+    const read = fs.readSync(source.descriptor, chunk, 0, length, position);
+    if (!read) return null;
+    bytes += read;
+    const base = position - carry.length;
+    const data = carry.length ? Buffer.concat([carry, chunk.subarray(0, read)]) : chunk.subarray(0, read);
+    position += read;
+    let start = 0;
+    let newline = data.indexOf(0x0a);
+    while (newline >= 0) {
+      const line = data.subarray(start, newline);
+      if (line.length) {
+        const later = parsedLine(line, source.engine).some((candidate) => candidate.record.role === "user"
+          && candidate.record.ts && Date.parse(candidate.record.ts) > upper);
+        if (later) return { offset: base + newline + 1, bytes, atEnd: false };
+      }
+      start = newline + 1;
+      newline = data.indexOf(0x0a, start);
+    }
+    carry = Buffer.from(data.subarray(start));
+    if (carry.length > MAX_LINE_BYTES) return null;
+  }
+  if (carry.length) {
+    const later = parsedLine(carry, source.engine).some((candidate) => candidate.record.role === "user"
+      && candidate.record.ts && Date.parse(candidate.record.ts) > upper);
+    if (later) return { offset: source.size, bytes, atEnd: false };
+  }
+  return { offset: source.size, bytes, atEnd: true };
+}
+
+/** Read the time neighborhood of a requested page when the complete transcript
+ * is too large. The extra ten minutes on either side includes every row that
+ * could compete for an occurrence matching a focused row. If the byte budget
+ * cannot prove both time boundaries, leave occurrence authors unassigned. */
+function readMessageAuthorNeighborhood(
+  source: MessagesPageSource,
+  focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }>,
+): ConversationMessage[] | null {
+  const users = focus.filter((record) => record.role === "user" && record.ts && Number.isFinite(Date.parse(record.ts)));
+  if (!users.length) return null;
+  const times = users.map((record) => Date.parse(record.ts!));
+  const window = 20 * 60_000;
+  const lower = Math.min(...times) - window;
+  const upper = Math.max(...times) + window;
+  const newestOffset = Math.max(...users.map((record) => record.seq));
+  const boundary = upperAuthorBoundary(source, newestOffset, upper);
+  if (!boundary) return null;
+  const records: ConversationMessage[] = [];
+  let cursor: MessagesPageCursor | null = { o: boundary.offset, p: 0, r: [] };
+  let spent = boundary.bytes;
+  let sawUpperBoundary = boundary.atEnd;
+  do {
+    const page = readMessagesPage(source, {
+      kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor,
+    });
+    spent += page.scanned.bytes;
+    if (page.scanned.capped || spent > MAX_SCAN_BYTES) return null;
+    for (const record of page.records) {
+      const at = record.ts ? Date.parse(record.ts) : Number.NaN;
+      if (!Number.isFinite(at)) continue;
+      if (at > upper) {
+        sawUpperBoundary = true;
+        continue;
+      }
+      if (!sawUpperBoundary) return null;
+      if (at < lower) return records;
+      records.push(record);
+    }
+    cursor = page.cursor;
+  } while (cursor);
+  return sawUpperBoundary ? records : null;
 }
 
 function boundedPageInteger(value: number, fallback: number, maximum: number): number {

@@ -1,7 +1,7 @@
 import type { DeliveredMessageOccurrence, DeliveredMessageProvenance } from "@/lib/runtime/messageOrigin";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 
-import type { Item } from "./parse";
+import { rawUserTextFor, type Item } from "./parse";
 
 /*
  * The occurrence join of #1117: attaches each delivered-message occurrence
@@ -26,6 +26,8 @@ export interface OccurrenceCandidate {
   text: string;
   tsMs: number;
 }
+
+export type MatchedDeliveryProvenance = DeliveredMessageProvenance & { matchedRawUserText?: boolean };
 
 /**
  * The rows a delivery could have produced. Every row that IS a message —
@@ -64,6 +66,11 @@ export function candidateDigests(candidate: OccurrenceCandidate): readonly strin
   const trimmed = candidate.text.trim();
   const digests = [messageTextDigest(trimmed)];
   if (trimmed !== candidate.text) digests.push(messageTextDigest(candidate.text));
+  const raw = rawUserTextFor(candidate.item);
+  if (raw && raw !== candidate.text) {
+    digests.push(messageTextDigest(raw.trim()));
+    if (raw.trim() !== raw) digests.push(messageTextDigest(raw));
+  }
   digestCache.set(candidate.item, digests);
   return digests;
 }
@@ -72,6 +79,8 @@ function provenanceOf(occurrence: DeliveredMessageOccurrence): DeliveredMessageP
   return {
     origin: occurrence.origin,
     ...(occurrence.senderRole ? { senderRole: occurrence.senderRole } : {}),
+    ...(occurrence.senderProject ? { senderProject: occurrence.senderProject } : {}),
+    ...(occurrence.senderConversationId ? { senderConversationId: occurrence.senderConversationId } : {}),
     ...(occurrence.selectedContext ? { selectedContext: occurrence.selectedContext } : {}),
     ...(occurrence.mandate ? { mandate: occurrence.mandate } : {}),
   };
@@ -85,8 +94,8 @@ function provenanceOf(occurrence: DeliveredMessageOccurrence): DeliveredMessageP
 export function assignDeliveredOccurrences(
   items: Iterable<Item>,
   occurrences: readonly DeliveredMessageOccurrence[],
-): Map<Item, DeliveredMessageProvenance> {
-  const assigned = new Map<Item, DeliveredMessageProvenance>();
+): Map<Item, MatchedDeliveryProvenance> {
+  const assigned = new Map<Item, MatchedDeliveryProvenance>();
   if (occurrences.length === 0) return assigned;
   const byDigest = new Map<string, OccurrenceCandidate[]>();
   for (const item of items) {
@@ -116,7 +125,12 @@ export function assignDeliveredOccurrences(
         bestDistance = distance;
       }
     }
-    if (best) assigned.set(best.item, provenanceOf(occurrence));
+    if (best) {
+      const raw = rawUserTextFor(best.item);
+      const matchedRawUserText = raw && raw !== best.text &&
+        (messageTextDigest(raw.trim()) === occurrence.textDigest || messageTextDigest(raw) === occurrence.textDigest);
+      assigned.set(best.item, { ...provenanceOf(occurrence), ...(matchedRawUserText ? { matchedRawUserText: true } : {}) });
+    }
   }
   return assigned;
 }

@@ -38,6 +38,7 @@ import {
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
+import { delegatusOriginForRecipient } from "./agentMessageAuthor";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
 import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
@@ -510,7 +511,7 @@ async function deliverInterruptionContinuations(
       clientMessageId: obligation.id,
       text: interruptionContinuationText(obligation),
       images: [],
-      origin: RECOVERY_NOTICE_ORIGIN,
+      origin: delegatusOriginForRecipient(snapshot, conversation.id, RECOVERY_NOTICE_ORIGIN.role ?? "runtime-host"),
     }, {
       enabled: () => true,
       client: () => client,
@@ -690,7 +691,7 @@ async function enqueueInterruptedCodexContinuations(
       text: INTERRUPTED_CODEX_CONTINUATION_TEXT,
       policy: "queue",
       turnId: null,
-      origin: RECOVERY_NOTICE_ORIGIN,
+      origin: delegatusOriginForRecipient(registry.readOnlySnapshot(), conversationId, RECOVERY_NOTICE_ORIGIN.role ?? "runtime-host"),
     });
   }
 }

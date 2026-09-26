@@ -32,8 +32,11 @@ import { listFiles } from "@/lib/scanner";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
-import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
+import { API_CLIENT_ORIGIN, parseMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type MessageAuthorClaim } from "@/lib/team";
+import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
+import { agentRegistry } from "@/lib/agent/registry";
+import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import { materializeStructuredTerminal } from "@/lib/runtime/structuredTerminal";
 import { attachmentsAreOrphaned, structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
@@ -413,7 +416,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   /* #1117: message authorship declared by the caller — the in-process MCP
      bindings stamp their sends `agent` with the server-attributed sender role.
      Validated, never defaulted: a send without it stays unattributed. */
-  const origin = parseMessageOrigin((body as { origin?: unknown }).origin);
+  const requestedOrigin = parseMessageOrigin((body as { origin?: unknown }).origin);
 
   const clientMessageId = typeof body.clientMessageId === "string" ? body.clientMessageId.trim().slice(0, 128) : "";
   /* Who is sending (sign-in-and-team §7.1). In team mode a person's message
@@ -424,6 +427,19 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   const sender = teamActor(req);
   const anonymousSend = refuseAnonymous(sender);
   if (anonymousSend) return anonymousSend;
+  const service = internalServiceClaim(req);
+  /* Only the server's caller capability can name an agent. An ordinary client
+     cannot turn its own message into another seat's by supplying `origin`. */
+  const origin = sender.kind === "agent"
+    ? (() => {
+      try { return agentMessageOrigin(agentRegistry().readOnlySnapshot(), sender.conversationId,
+        service.claim === "valid" && service.service === "mcp" ? requestedOrigin?.role : null); }
+      catch { return { kind: "agent" as const, role: "agent", conversationId: sender.conversationId }; }
+    })()
+    : sender.kind === "service" ? service.claim === "valid"
+      ? requestedOrigin ?? { kind: "agent" as const, role: service.service }
+      : API_CLIENT_ORIGIN
+    : { kind: "operator" as const };
   const operatorTarget = { pid, hasPid, filePath, conversationId };
   /* Stamped before the message is accepted, so the compare-and-clear below
      retires the set that was standing when the operator pressed send and

@@ -34,7 +34,8 @@ import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppSe
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { supervisedRuntimeHostUnavailableReason } from "./flags";
 import { StructuredHostAdoptionCleanupError, StructuredSessionMaterializationError, type EngineHost, type HostState, type SessionMaterializationEvidence } from "./engineHost";
-import { messageOriginRole, type MessageOrigin } from "./messageOrigin";
+import type { MessageOrigin } from "./messageOrigin";
+import { agentMessageOrigin, delegatusMessageOrigin } from "./agentMessageAuthor";
 import { isStructuredHostKind, runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeOperationResult, type RuntimeSession, type RuntimeSnapshot } from "./contracts";
 import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPersistence } from "./registry";
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
@@ -1718,11 +1719,13 @@ async function defaultBindHost(
  * Legacy receipts without a depth stay unattributed — the feed must not guess.
  */
 function spawnMessageOrigin(receipt: SpawnReceipt, registry: AgentRegistry): MessageOrigin | undefined {
+  const membership = registry.readOnlySnapshot().memberships[receipt.conversationId]
+    ?.find((entry) => entry.kind === "pipeline" || entry.kind === "flow");
+  if (membership) return delegatusMessageOrigin(membership.kind, receipt.explicitProject ?? receipt.launchProfile.project, receipt.cwd);
   if (receipt.delegationDepth === 0) return { kind: "operator" };
   if (receipt.delegationDepth === null || receipt.delegationDepth === undefined) return undefined;
-  const parent = receipt.parentConversationId ? registry.conversation(receipt.parentConversationId) : null;
-  const role = messageOriginRole(parent?.agentRole ?? undefined);
-  return { kind: "agent", ...(role ? { role } : {}) };
+  return agentMessageOrigin(registry.readOnlySnapshot(), receipt.parentConversationId, receipt.parentConversationId
+    ? registry.conversation(receipt.parentConversationId)?.agentRole : null);
 }
 
 async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: string): Promise<void | "held"> {

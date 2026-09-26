@@ -5,6 +5,7 @@ import {
   settleInboxFiles, stageInboxFiles, withInboxBatch, type InboxFileUpload, type StagedInboxFiles,
 } from "@/lib/inboxFiles";
 import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
+import { agentRegistry } from "@/lib/agent/registry";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { claimMessageAuthor, refuseAnonymous, settleMessageAuthor, teamActor } from "@/lib/team";
 import type { TeamActor } from "@/lib/team/contract";
@@ -14,6 +15,7 @@ import { parseRuntimeCommand } from "./commands";
 import type { RuntimeOperationResult } from "./contracts";
 import { nativeQueueDeliveryKey } from "./deliveryDedup";
 import { API_CLIENT_ORIGIN } from "./messageOrigin";
+import { agentMessageOrigin } from "./agentMessageAuthor";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { structuredHostsEnabled } from "./flags";
 import { admitRuntimeImagePayload, type RuntimeImageAdmissionResult } from "./runtimeImageAdmission";
@@ -81,7 +83,12 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
        `/api/runtime/send` is, so authorship is stamped HERE and never read off
        the body — a queued message keeps the same provenance a sent one has,
        the operator's only from a Viewer page. */
-    body = { ...payload, origin: operatorBrowserRequest(request) ? { kind: "operator" } : API_CLIENT_ORIGIN };
+    let agentOrigin = API_CLIENT_ORIGIN;
+    if (person.kind === "agent") {
+      try { agentOrigin = agentMessageOrigin(agentRegistry().readOnlySnapshot(), person.conversationId); }
+      catch { agentOrigin = { kind: "agent", role: "agent", conversationId: person.conversationId }; }
+    }
+    body = { ...payload, origin: operatorBrowserRequest(request) ? { kind: "operator" } : agentOrigin };
     if (Array.isArray(payload.images) && payload.images.some((image) => image && typeof image === "object" && "base64" in image)) {
       const admitted = dependencies.admitImages(payload.images);
       if (admitted.error) return NextResponse.json({ error: admitted.error.error }, { status: admitted.error.status });

@@ -115,9 +115,10 @@ const deckRequested = new URLSearchParams(location.search).has("deck");
 const reviewerLineage = deckRequested
   ? { durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation_done-0", reviewsConversationId: "conversation_done-0", memberships: [] } }
   : {};
+const AGENT_LABEL = new URLSearchParams(location.search).has("agent-label");
 
 const files: FileEntry[] = [
-  conversation(RUNNING_PATH, "Rebuild the board status projection", {
+  conversation(RUNNING_PATH, AGENT_LABEL ? "Orchestrator" : "Rebuild the board status projection", {
     activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
     /* A real launch model, not a one-word one: the bar line has to hold
        `fable-5-1 · high` beside the state phrase and the account (#1795). */
@@ -838,6 +839,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
+let agentEvidence: Promise<{ feed: string; provenance: unknown }> | null = null;
+const deliveredAgentEvidence = () => agentEvidence ??= serverFetch("/evidence/agent-message-label")
+  .then((response) => response.json() as Promise<{ feed: string; provenance: unknown }>);
 const mergeSetting = { enabled: true };
 /* #2146: the project's Bridge reports switch, off with `?bridge=off`. */
 const bridgeSetting = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
@@ -845,6 +849,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (body.action === "permission") {
@@ -941,13 +946,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/files" && KANBAN) {
     return json({
-      files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length }], flows: [], pipelines: kanbanPipelines,
+      files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
       workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" } },
     });
   }
   if (url.pathname === "/api/files") {
     return json({
-      files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows, pipelines,
+      files, projectCatalog: [{ project: PROJECT, conversations: files.length, smt: now - 20 }], flows, pipelines,
       workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } },
     });
   }
@@ -1027,6 +1032,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
+    if (AGENT_LABEL) return json({ seat: {
+      project: PROJECT, seatEpoch: 1, conversationId: "conversation_running", path: RUNNING_PATH,
+      mandate: "Run the atlas board.", state: "active", designatedAt: iso(86_400),
+      intent: { clientRequestId: "seat-agent-label", mode: "existing", launchId: null, error: null },
+    }, pending: null, exists: true });
     /* The Overview's read of every project's seats (#1841). */
     if (url.searchParams.get("scope") === "all") {
       return json({ all: { conversationIds: SEAT_PATH ? [idOf(SEAT_PATH)] : [], paths: SEAT_PATH ? [SEAT_PATH] : [], previous: { conversationIds: [], paths: [] } } });
@@ -1055,10 +1065,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* The feed's poll transport (the fixture has no log stream). */
   if (url.pathname === "/api/logs" && method === "POST") {
+    const evidenceFeed = AGENT_LABEL ? (await deliveredAgentEvidence()).feed : FEED;
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = request.path === RUNNING_PATH ? FEED : "";
+      const body = request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });

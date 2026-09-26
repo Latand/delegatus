@@ -8,6 +8,7 @@ import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery
 import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/orchestrator/seats";
 import { recordSeatProjectSuccessions } from "@/lib/orchestrator/seatProjectIdentity";
 import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, runtimeIdempotencyKeyAdmissible } from "@/lib/runtime/contracts";
+import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { createTask, patchTask } from "@/lib/tasks/commands";
 import { loadTasks, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -1010,7 +1011,7 @@ async function reconcileOutstandingWake(context: {
     let outcome: DeliveryOutcome | null = null;
     try {
       outcome = await context.deliver({ pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
-        clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: { kind: "agent", role: "seat-tick" } });
+        clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project) });
       redispatched = deliveryOutcomeLabel(outcome);
       redispatchReason = sendRefusalDetail(outcome);
     } catch (error) {
@@ -1494,7 +1495,7 @@ async function check(
           try {
             if (accounting && !token) throw new Error("wake dispatch already claimed");
             outcome = await deliver({ pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
-              clientMessageId, text, images: [], origin: { kind: "agent", role: "seat-tick" } });
+              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project) });
             delivery = { clientMessageId, outcome: deliveryOutcomeLabel(outcome) };
             sendDetail = sendRefusalDetail(outcome);
           } catch (error) {
