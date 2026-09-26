@@ -47,9 +47,9 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
   const iso = (secondsBeforeBoot: number) => new Date((bootSeconds - secondsBeforeBoot) * 1000).toISOString();
   const ago = (seconds: number) => new Date((now - seconds) * 1000).toISOString();
   /** How long ago step `s` arrived, in seconds. */
-  const at = (s: number) => Math.max(1, now - (stepSeconds[s] ?? now));
-  /** The moment step `s` arrived, less `before` seconds. */
-  const since = (s: number, before = 0) => new Date(((stepSeconds[s] ?? now) - before) * 1000).toISOString();
+  const at = (s: number) => Math.max(1, Math.round(now - (stepSeconds[s] ?? now)));
+  /** The moment step `s` arrived, less `before` seconds, to the millisecond. */
+  const since = (s: number, before = 0) => new Date(Math.round(((stepSeconds[s] ?? now) - before) * 1000)).toISOString();
 
   const files: FileEntry[] = [];
   const transcripts = new Map<string, string>();

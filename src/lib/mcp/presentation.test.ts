@@ -71,6 +71,13 @@ describe("describeMcpCall", () => {
     }
   });
 
+  test("creating a task, a pipeline or an agent reads in the operator's language", () => {
+    expect(describeMcpCall("create_task", { text: "Ідемпотентні повернення" }, undefined, "uk").title).toBe("Створюю задачу: Ідемпотентні повернення");
+    expect(describeMcpCall("create_pipeline", { task: "Ідемпотентні повернення" }, undefined, "uk").title).toBe("Створюю пайплайн: Ідемпотентні повернення");
+    expect(describeMcpCall("spawn_agent", {}, undefined, "uk")).toMatchObject({ verb: "Створюю", title: "Створюю агента: новий виконавець" });
+    expect(describeMcpCall("create_task", {}).title).toBe("Creating task: untitled task");
+  });
+
   test("unknown tools use a stable generic fallback", () => {
     expect(describeMcpCall("future_tool", { payload: "x" })).toEqual({
       icon: "tool",

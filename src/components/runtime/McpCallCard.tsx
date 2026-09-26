@@ -23,6 +23,7 @@ import {
   subscribeConversationAvailability,
   type ConversationAvailabilitySnapshot,
 } from "@/lib/mcp/availability";
+import { useLocale } from "@/lib/i18n";
 import {
   describeMcpCall,
   type McpCallIcon,
@@ -129,9 +130,10 @@ export function McpCallCard({
 }) {
   const mcp = event.mcp;
   const result = mcp?.result;
+  const { locale } = useLocale();
   const description = useMemo(
-    () => describeMcpCall(mcp?.toolName ?? event.tool, mcp?.args ?? {}, result),
-    [event.tool, mcp?.args, mcp?.toolName, result],
+    () => describeMcpCall(mcp?.toolName ?? event.tool, mcp?.args ?? {}, result, locale),
+    [event.tool, mcp?.args, mcp?.toolName, result, locale],
   );
   const conversationAvailability = useConversationAvailability(availableConversationIds);
   const state = event.status === "run" ? "pending" : event.status === "err" ? "error" : "success";

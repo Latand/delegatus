@@ -464,11 +464,15 @@ kbd {
   .catcher { width: 76px; right: 22px; }
   .steps { gap: 4px; padding: 8px; }
   .steps li:not(.steps-replay) span { display: none; }
-  .steps button[aria-current="step"] span { display: inline-block; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
-  .steps li { min-width: 0; }
+  /* One line: the numbers keep their size, and only the current step's name
+     gives way, inside its own pill. */
   .steps { flex-wrap: nowrap; }
+  .steps li { flex-shrink: 0; }
+  .steps li:has(> button[aria-current="step"]) { flex-shrink: 1; min-width: 0; }
   .steps button { padding: 0 6px; }
-  .steps button[aria-current="step"] { padding-right: 12px; }
+  .steps button[aria-current="step"] { max-width: 100%; min-width: 0; padding-right: 12px; }
+  .steps button[aria-current="step"] b { flex-shrink: 0; }
+  .steps button[aria-current="step"] span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .steps-replay span { display: none; }
   .step-hint { padding: 0 14px 14px; font-size: 15px; }
 

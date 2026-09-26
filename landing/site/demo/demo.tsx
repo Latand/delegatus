@@ -29,9 +29,21 @@ const START = Math.max(0, Math.min(LAST_STEP, Number(params.get("step") ?? 0) ||
 
 /* How long each step waits after the one before it, once the visitor sent. */
 const STEP_DELAY_MS = [0, 0, 2600, 5200, 5200, 4600];
+/* The composer keeps its copy of a delivered message until the transcript
+   moves this far past the delivery (OUTBOX_MTIME_GRACE_MS, 2 s), so the
+   orchestrator's answer is always dated at least this long after the send. */
+const ANSWER_AFTER_SEND_S = 2.5;
+
+/* Every frame on the page shares one origin, so what one frame left in
+   storage — a conversation it opened, a message it sent — would otherwise
+   open in the next frame too. Each frame starts from the world alone. */
+for (const key of Object.keys(localStorage)) {
+  if (key.startsWith("llvOutbox") || key.startsWith("llv:kanban-readers:")) localStorage.removeItem(key);
+}
 
 const boot = Math.floor(Date.now() / 1000);
-/* A page opened on a later step dates the earlier ones a little apart. */
+/* When each step arrived, in seconds to the millisecond. A page opened on a
+   later step dates the earlier ones a little apart. */
 const stepSeconds: number[] = [];
 for (let s = 1; s <= START; s += 1) stepSeconds[s] = boot - (START - s + 1) * 40;
 let step = START;
@@ -50,7 +62,10 @@ function announce() {
 
 function advance(to: number) {
   if (to <= step) return;
-  for (let s = step + 1; s <= to; s += 1) stepSeconds[s] = Math.floor(Date.now() / 1000) - (to - s);
+  for (let s = step + 1; s <= to; s += 1) {
+    stepSeconds[s] = Date.now() / 1000 - (to - s);
+    if (s === 2 && stepSeconds[1] !== undefined) stepSeconds[2] = Math.max(stepSeconds[2], stepSeconds[1] + ANSWER_AFTER_SEND_S);
+  }
   step = to;
   world = buildWorld(step, LANG, boot, stepSeconds);
   filesRevision += 1;
@@ -256,13 +271,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (path === "/api/runtime/snapshot") return json(runtimeSnapshot());
   if (path === "/api/runtime/send" && method === "POST") {
     const sent = body();
+    let at = Date.now();
     if (sent.conversationId === world.seat.conversationId && step === 0) {
       advance(1);
+      /* The transcript records the request at the very moment it was delivered. */
+      at = Math.round(stepSeconds[1]! * 1000);
       play();
+      settleSendControl();
     }
     return json({ receipt: {
-      operationId: `operation-demo-${Date.now()}`, idempotencyKey: sent.idempotencyKey, conversationId: sent.conversationId, kind: "send", status: "delivered",
-      text: sent.text, at: new Date().toISOString(), revision: 1,
+      operationId: `operation-demo-${at}`, idempotencyKey: sent.idempotencyKey, conversationId: sent.conversationId, kind: "send", status: "delivered",
+      text: sent.text, at: new Date(at).toISOString(), revision: 1,
     } });
   }
   if (path === "/api/runtime/send") return json({ outcome: "not-executed" });
@@ -394,6 +413,20 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 function closeOverlays() {
   (document.activeElement instanceof HTMLElement ? document.activeElement : document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 }
+/** The send control's hint stays up while the pointer or focus rests on it;
+    once the request is on its way, the chat is what the visitor reads. Hints
+    stay quiet from the send until the pointer really moves. */
+let lastPointer: { x: number; y: number } | null = null;
+window.addEventListener("pointermove", (event) => {
+  if (lastPointer && document.documentElement.dataset.demoQuietHints && Math.hypot(event.clientX - lastPointer.x, event.clientY - lastPointer.y) > 6) {
+    delete document.documentElement.dataset.demoQuietHints;
+  }
+  if (!document.documentElement.dataset.demoQuietHints || !lastPointer) lastPointer = { x: event.clientX, y: event.clientY };
+}, { passive: true });
+function settleSendControl() {
+  document.documentElement.dataset.demoQuietHints = "1";
+  setTimeout(() => (document.activeElement as HTMLElement | null)?.blur(), 0);
+}
 function goBoard() {
   if (location.hash !== `#p=${PROJECT}`) location.hash = `#p=${PROJECT}`;
 }
@@ -403,7 +436,9 @@ async function showView(view: string) {
   closeOverlays();
   if (PHONE) {
     const screens: Record<string, string> = {
-      board: `#p=${PROJECT}`, orchestrator: "#reports", accounts: "#accounts", pipelines: "#pipelines",
+      /* The orchestrator is its chat until the answer is in, then its report log. */
+      board: `#p=${PROJECT}`, orchestrator: step <= 2 ? `#c=${encodeURIComponent(world.seat.conversationId!)}` : "#reports",
+      reports: "#reports", accounts: "#accounts", pipelines: "#pipelines",
       pipeline: `#pipeline=${step >= 2 ? "p-refunds" : "p-retries"}`, decision: "#pipeline=p-retries",
       conversation: `#c=${encodeURIComponent(`conversation_${step >= 2 ? "refunds-builder" : "webhook-retries"}`)}`,
     };
@@ -414,7 +449,7 @@ async function showView(view: string) {
     }
     if (view === "search") {
       await press(() => document.querySelector<HTMLElement>('[data-mobile2-open="search"]'));
-      await typeSearch();
+      await typeSearch(false);
     }
     return;
   }
@@ -462,21 +497,35 @@ async function showView(view: string) {
   }
   if (view === "accounts") {
     await press(() => byLabel(label("accounts.triggerAria", { engine: "Claude" })));
+    /* The accounts popover floats over the middle of the board and would cut
+       its cards mid-word; here it takes the board's whole place beside the
+       rail, whose limits it details. */
+    const panel = await waitFor(() => document.querySelector<HTMLElement>(`[role="dialog"][aria-label="${CSS.escape(label("accounts.titleFor", { engine: "Claude" }))}"]`), 20);
+    const rail = document.querySelector<HTMLElement>(`nav[aria-label="${CSS.escape(label("rail.projects"))}"]`);
+    if (panel && rail) {
+      document.documentElement.style.setProperty("--demo-rail-right", `${Math.round(rail.getBoundingClientRect().right)}px`);
+      panel.dataset.demoDocked = "";
+    }
     return;
   }
   if (view === "search") {
     await pause(150);
+    (document.activeElement as HTMLElement | null)?.blur();
     document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
-    await typeSearch();
+    await typeSearch(true);
   }
 }
 
-/** Types the search the demo shows into the search field that just opened. */
-async function typeSearch() {
+/** Types the search the demo shows into the search field that just opened:
+    on the desktop the message-search dialog's own field, never the board's
+    task filter behind it. */
+async function typeSearch(inDialog: boolean) {
   const field = await waitFor(() => {
+    const dialogField = document.querySelector<HTMLInputElement>('[role="dialog"] input');
+    if (dialogField || inDialog) return dialogField;
     const active = document.activeElement;
     if (active instanceof HTMLInputElement) return active;
-    return document.querySelector<HTMLInputElement>('[role="dialog"] input, input[type="search"]');
+    return document.querySelector<HTMLInputElement>('input[type="search"]');
   }, 30);
   if (!field) return;
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, L("webhook", "вебхук"));
@@ -513,6 +562,19 @@ html[data-demo-step="0"] [data-mobile2-board-dock] { animation: demo-coach 1.8s 
 @keyframes demo-coach { 0% { box-shadow: 0 0 0 0 rgb(143 136 255 / 0.7); } 70%, 100% { box-shadow: 0 0 0 12px rgb(143 136 255 / 0); } }
 @media (prefers-reduced-motion: reduce) { html[data-demo-step="0"] [aria-label="${label("composer.sendToAgent")}"], html[data-demo-step="0"] [data-mobile2-board-dock] { animation: none; box-shadow: 0 0 0 3px rgb(143 136 255 / 0.6); } }`;
 document.head.appendChild(coach);
+
+/* A frame is a small window, so a pipeline's stages and a conversation opened
+   full take all of it: nothing half-covered shows around their edges. Hints
+   stay quiet after the send (above), and at phone scale a message's faint
+   copy control reads as a stray mark in the margin, so the phone leaves it out. */
+const frameFill = document.createElement("style");
+frameFill.textContent = `
+html[data-demo-quiet-hints] [role="tooltip"] { display: none; }
+[data-demo-docked] { position: fixed !important; margin: 0 !important; inset: 0 0 0 var(--demo-rail-right) !important; width: auto !important; max-width: none !important; max-height: none !important; translate: none !important; transform: none !important; border-radius: 0 !important; }
+html[data-demo-phone] [aria-label="${label("feed.copyMd")}"] { display: none; }
+.kb .gsheet-scrim, .kb .reader-full { padding: 0; }
+.kb .gsheet, .kb .reader-full .reader.conv { border-radius: 0; }`;
+document.head.appendChild(frameFill);
 
 setLocale(LANG);
 localStorage.setItem("llvProject", PROJECT);

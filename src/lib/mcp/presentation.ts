@@ -1,3 +1,7 @@
+import type { Locale } from "@/lib/i18n";
+import { en } from "@/lib/i18n/en";
+import { uk } from "@/lib/i18n/uk";
+
 export type McpCallIcon =
   | "bot"
   | "message"
@@ -70,7 +74,10 @@ export function describeMcpCall(
   toolName: string,
   argsValue: unknown,
   resultValue?: unknown,
+  locale: Locale = "en",
 ): McpCallDescription {
+  const t = (key: keyof typeof en, params: Record<string, string> = {}) =>
+    String((locale === "uk" ? uk : en)[key]).replace(/\{(\w+)\}/g, (whole, name: string) => params[name] ?? whole);
   const args = record(argsValue);
   const result = record(resultValue);
 
@@ -79,11 +86,11 @@ export function describeMcpCall(
       .filter(Boolean)
       .join(" ");
     const prompt = compact(string(args.prompt));
-    const subject = [profile, prompt].filter(Boolean).join(" · ") || "new worker";
+    const subject = [profile, prompt].filter(Boolean).join(" · ") || t("tools.mcp.newWorker");
     return {
       icon: "bot",
-      verb: "Creating",
-      title: `Creating agent: ${subject}`,
+      verb: t("tools.mcp.creating"),
+      title: t("tools.mcp.creatingAgent", { subject }),
       subtitle: string(result.transcriptPath),
       links: conversationLink(result),
     };
@@ -121,8 +128,8 @@ export function describeMcpCall(
     const id = entityId(result, "task");
     return {
       icon: "task",
-      verb: "Creating",
-      title: `Creating task: ${compact(string(args.text)) || "untitled task"}`,
+      verb: t("tools.mcp.creating"),
+      title: t("tools.mcp.creatingTask", { subject: compact(string(args.text)) || t("tools.mcp.untitledTask") }),
       subtitle: replaySubtitle(result, string(args.project)),
       links: entityLink("task", id),
     };
@@ -144,8 +151,8 @@ export function describeMcpCall(
     const id = entityId(result, "pipeline");
     return {
       icon: "pipeline",
-      verb: "Creating",
-      title: `Creating pipeline: ${compact(string(args.task)) || "untitled pipeline"}`,
+      verb: t("tools.mcp.creating"),
+      title: t("tools.mcp.creatingPipeline", { subject: compact(string(args.task)) || t("tools.mcp.untitledPipeline") }),
       subtitle: replaySubtitle(result, string(args.repoDir)),
       links: entityLink("pipeline", id),
     };

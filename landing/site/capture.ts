@@ -12,6 +12,12 @@
  * are written beside them in report.json.
  *
  * `--only=en-1440` limits the run to one language and width.
+ *
+ * `--check-request=10` renders nothing: it plays the hero's script that many
+ * times in each language and width and fails unless every step shows the
+ * visitor's request exactly once in the orchestrator's chat, above the reply.
+ * On the phone the chat is held open (the visitor pressed "Orchestrator"), so
+ * the chat is on screen at every step there too.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -21,10 +27,13 @@ import { chromium, type Frame, type Page } from "playwright-core";
 
 import { translate, type Locale } from "@/lib/i18n";
 
+import { buildWorld } from "./demo/world";
+
 const here = path.dirname(new URL(import.meta.url).pathname);
 const dist = path.join(here, "dist");
 const out = process.env.LANDING_RENDER_DIR ?? path.join(os.homedir(), "Pictures/delegatus-review/landing/final");
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length) ?? null;
+const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
 if (!fs.existsSync(path.join(dist, "demo/demo.js"))) throw new Error("landing/site/dist is not built: run bun landing/site/build.ts first");
 fs.mkdirSync(out, { recursive: true });
 
@@ -64,6 +73,65 @@ async function shoot(page: Page, selector: string, file: string) {
   await element.screenshot({ path: path.join(out, file) });
 }
 
+/* The orchestrator's answer to the request, by a phrase of it that is plain text. */
+const ANSWER = { en: "is on the board", uk: "вже на дошці" } as const;
+/* When to look after the send, each wait after the last. The script moves at
+   2.6 s, 7.8 s, 13 s and 17.6 s after the send, and the feed polls every
+   1.2 s, so each look falls a poll or more after its step arrived. */
+const TIMES_MS = [900, 3800, 4200, 5300, 5000];
+
+/** How many copies of the request the frame shows, and whether each sits above the answer. */
+async function requestBubbles(frame: Frame, lang: Locale) {
+  const request = buildWorld(0, lang, 0, []).request;
+  return frame.evaluate(({ request, answer }) => {
+    /* The composer's one-line delivery receipt quotes the message too; it is not a chat row. */
+    /* The feed binds short words to the next one with no-break spaces. */
+    const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ");
+    const leaves = (text: string) => [...document.querySelectorAll<HTMLElement>("body *")].filter((el) =>
+      (el.getClientRects().length > 0 || getComputedStyle(el).display === "contents") && !el.closest("[data-delivery-echo]") && words(el).includes(text) && ![...el.children].some((child) => words(child).includes(text)));
+    /* A display: contents wrapper has no box of its own; its parent's stands for it. */
+    const top = (el: HTMLElement) => (el.getClientRects().length ? el : el.parentElement!).getBoundingClientRect().top;
+    const answers = leaves(answer).map(top);
+    const copies = leaves(request).map(top);
+    return { copies: copies.length, belowAnswer: copies.filter((top) => answers.some((at) => top > at)).length, answered: answers.length > 0 };
+  }, { request, answer: ANSWER[lang] });
+}
+
+async function checkRequest(lang: Locale, viewport: (typeof VIEWPORTS)[number], run: number): Promise<string[]> {
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme: "dark",
+    ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
+  });
+  const page = await context.newPage();
+  await page.goto(`${base}?lang=${lang}`);
+  const hero = await frameOf(page, ".live-hero");
+  await settle(page, 1500);
+  const failures: string[] = [];
+  await hero.locator(`[aria-label="${translate(lang, "composer.sendToAgent")}"]`).first().click();
+  if (viewport.phone) await page.locator('.hero [data-hero-view="orchestrator"]').click();
+  for (let at = 1; at <= 5; at += 1) {
+    await settle(page, TIMES_MS[at - 1]!);
+    const seen = await requestBubbles(hero, lang);
+    if (seen.copies !== 1 || seen.belowAnswer > 0 || (at >= 2 && !seen.answered)) failures.push(`${lang}-${viewport.name} run ${run} step ${at}: ${JSON.stringify(seen)}`);
+  }
+  await context.close();
+  return failures;
+}
+
+if (checkRuns > 0) {
+  const failures: string[] = [];
+  for (let run = 0; run < checkRuns; run += 1) {
+    const combos = (["en", "uk"] as Locale[]).flatMap((lang) => VIEWPORTS.map((viewport) => ({ lang, viewport })))
+      .filter(({ lang, viewport }) => !only || only === `${lang}-${viewport.name}`);
+    for (const found of await Promise.all(combos.map(({ lang, viewport }) => checkRequest(lang, viewport, run)))) failures.push(...found);
+    console.log(`run ${run}: ${failures.length ? `${failures.length} failure(s) so far` : "one request, above the answer, at every step"}`);
+  }
+  await browser.close();
+  server.stop(true);
+  for (const failure of failures) console.error(failure);
+  process.exit(failures.length ? 1 : 0);
+}
+
 for (const lang of ["en", "uk"] as Locale[]) {
   for (const viewport of VIEWPORTS) {
     const key = `${lang}-${viewport.name}`;
@@ -99,24 +167,11 @@ for (const lang of ["en", "uk"] as Locale[]) {
     const demo = ".hero .stage-wrap";
     await shoot(page, demo, `${key}-demo-0-request.png`);
     const send = translate(lang, "composer.sendToAgent");
-    if (viewport.phone) {
-      await hero.locator("[data-mobile2-board-dock]").first().click();
-      await settle(page, 1200);
-      await shoot(page, demo, `${key}-demo-0b-chat.png`);
-    }
     await hero.locator(`[aria-label="${send}"]`).first().click();
-    await page.mouse.move(2, 2);
-    await hero.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await settle(page, 900);
-    await shoot(page, demo, `${key}-demo-1-sent.png`);
-    await settle(page, 2600);
-    await shoot(page, demo, `${key}-demo-2-task.png`);
-    await settle(page, 5400);
-    await shoot(page, demo, `${key}-demo-3-build.png`);
-    await settle(page, 5300);
-    await shoot(page, demo, `${key}-demo-4-review.png`);
-    await settle(page, 5000);
-    await shoot(page, demo, `${key}-demo-5-needs-you.png`);
+    for (const [index, name] of ["1-sent", "2-task", "3-build", "4-review", "5-needs-you"].entries()) {
+      await settle(page, TIMES_MS[index]!);
+      await shoot(page, demo, `${key}-demo-${name}.png`);
+    }
 
     /* The other faces of each frame, through the page's own tabs. */
     const tab = async (selector: string, settleMs: number, file: string, target: string) => {
@@ -131,7 +186,7 @@ for (const lang of ["en", "uk"] as Locale[]) {
       await tab(`.sec-open [data-view="${view}"]`, 2600, `${key}-3-open-${view}.png`, viewport.phone ? ".live-open" : ".sec-open");
     }
     await tab('.seg-phone [data-view="decision"]', 1800, `${key}-4-reach-decision.png`, ".reach-art");
-    await tab('.seg-phone [data-view="orchestrator"]', 1800, `${key}-4-reach-reports.png`, ".reach-art");
+    await tab('.seg-phone [data-view="reports"]', 1800, `${key}-4-reach-reports.png`, ".reach-art");
 
     /* The page whole, every frame loaded: each is brought into view first so it renders. */
     for (const selector of [".live-open", ".live-run", ".live-phone", ".live-hero"]) {

@@ -30,6 +30,14 @@ product's own send control, as a visitor does), every tab of every frame, and
 the legacy install. `report.json` beside the PNGs lists page errors, requests
 the demo left unanswered, and sideways overflow.
 
+```
+bun landing/site/capture.ts --check-request=10
+```
+
+renders nothing: it plays the hero's script ten times in each language and
+width and fails unless every step shows the visitor's request exactly once in
+the orchestrator's chat, above the orchestrator's answer.
+
 ## Files
 
 | file | what it holds |
@@ -81,7 +89,17 @@ other frames load a fresh frame per view and swap it in once it has drawn.
   plays, the frame turns to where each step happened; a tab the visitor picks
   wins from then on.
 - **On a phone** every frame runs the product's phone interface at 390 px.
-  The hero's script starts from the board's "Tell the orchestrator" dock.
+  The hero opens in the orchestrator's chat with the request typed, turns to
+  the board when the task lands, to the report log for Build and Review, and
+  back to the board for the decision; the highlighted tab follows it.
+- **One message, one row.** The composer keeps its own copy of a sent message
+  until the transcript moves 2 s past the delivery, so the demo dates the
+  request at the exact moment of the send and the answer at least 2.5 s
+  later. Each frame also clears what another frame left in the shared
+  storage (sent messages, opened conversations) before it draws.
+- **Panels fill the frame.** A pipeline's stages and a conversation opened
+  full take the whole frame, and the accounts panel takes the board's place
+  beside the rail, so nothing half-covered shows at their edges.
 - **Activity** is the product's Overview: the cards someone is working on
   right now, across every project.
 - **Telegram** has no drawn cards: the product has no Telegram surface to show

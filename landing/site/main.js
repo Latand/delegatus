@@ -282,7 +282,12 @@
   // runs the scripted walkthrough and reports its step back.
 
   const phoneQuery = matchMedia("(max-width: 639px)");
+  // Where the hero's frame turns at each step of the script. On the desktop
+  // the board has the orchestrator docked beside it; on the phone the chat
+  // holds the request until it is sent, the board shows the new card, and
+  // "Orchestrator" is its report log once the reports start landing.
   const HERO_VIEW_FOR_STEP = { 0: "board", 2: "board", 3: "orchestrator", 4: "orchestrator", 5: "board" };
+  const HERO_PHONE_VIEW_FOR_STEP = { 0: "orchestrator", 2: "board", 3: "orchestrator", 4: "orchestrator", 5: "board" };
   const lives = [...document.querySelectorAll("[data-live]")].map((el) => ({
     el,
     id: el.dataset.live,
@@ -296,6 +301,7 @@
   }));
   const hero = lives.find((live) => live.id === "hero");
   let heroManual = false;
+  const heroViewFor = (step) => ((hero.fixed || phoneQuery.matches) ? HERO_PHONE_VIEW_FOR_STEP : HERO_VIEW_FOR_STEP)[step];
 
   function liveSrc(live) {
     const params = new URLSearchParams(live.phone ? live.el.dataset.phoneQuery : live.el.dataset.query);
@@ -365,13 +371,17 @@
     if (live.iframe && live.iframe.contentWindow) live.iframe.contentWindow.postMessage(message, "*");
   }
 
-  function showView(live, view, fresh) {
+  function markTabs(live, view) {
     live.view = view;
     for (const tab of document.querySelectorAll(`[data-tabs-for="${live.id}"] [data-view], [data-tabs-for="${live.id}"] [data-hero-view]`)) {
       const on = (tab.dataset.view || tab.dataset.heroView) === view;
       tab.setAttribute("aria-selected", String(on));
       tab.tabIndex = on ? 0 : -1;
     }
+  }
+
+  function showView(live, view, fresh) {
+    markTabs(live, view);
     if (fresh) reload(live);
     else send(live, { type: "dlg:view", view });
   }
@@ -436,11 +446,11 @@
         hero.step = to;
         heroStep = to;
         renderSteps();
-        showView(hero, HERO_VIEW_FOR_STEP[to], true);
+        showView(hero, heroViewFor(to), true);
         return;
       }
       send(hero, { type: "dlg:step", step: to });
-      showView(hero, HERO_VIEW_FOR_STEP[to]);
+      showView(hero, heroViewFor(to));
     });
   }
   document.querySelector("[data-replay]").addEventListener("click", () => {
@@ -448,7 +458,7 @@
     hero.step = 0;
     heroStep = 0;
     renderSteps();
-    showView(hero, "board", true);
+    showView(hero, heroViewFor(0), true);
   });
 
   window.addEventListener("message", (event) => {
@@ -470,13 +480,14 @@
     if (live !== hero) return;
     heroStep = data.step;
     renderSteps();
-    /* While the script plays, the frame turns to where the step happened. On
-       the phone the answer lands in the chat the visitor is reading, so step 2 stays there. */
-    const target = hero.phone && data.step === 2 ? null : HERO_VIEW_FOR_STEP[data.step];
+    /* While the script plays, the frame turns to where the step happened. */
+    const target = heroViewFor(data.step);
     if (moved && !heroManual && target && target !== hero.view) showView(hero, target);
   });
 
-  // The hero's frame loads with the page; the others as they come near.
+  // The hero's frame loads with the page, on the view its first step shows;
+  // the others as they come near.
+  markTabs(hero, heroViewFor(0));
   mount(hero);
   const near = new IntersectionObserver((entries) => {
     for (const entry of entries) {
