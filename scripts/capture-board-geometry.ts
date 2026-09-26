@@ -964,6 +964,11 @@ async function captureOnboarding(): Promise<void> {
           const tag = `${viewport.tag}-${colorScheme}-${locale}`;
           const frames: Record<string, unknown> = {};
           await resetInstall(false);
+          /* The page adopts the language the server keeps over the browser's
+             own (docs/design/orchestrator-reports.md §4.2), so the combination's
+             language is written there as the operator's choice. */
+          const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale, source: "chosen" }) });
+          must(localeWrite.ok, `${tag}: the interface language write answered ${localeWrite.status}`);
           const context = await browser.newContext({
             viewport: { width: viewport.width, height: viewport.height },
             colorScheme,
@@ -995,6 +1000,16 @@ async function captureOnboarding(): Promise<void> {
             check(reading);
           };
 
+          /* #2166 moved Agents under "Later, any time", outside Continue and
+             Back, and a reload reopens the guide on the next numbered step:
+             the walk opens the step it measures by name. On the phone the
+             step list sits behind its toggle. */
+          const openStep = async (step: string) => {
+            await page.waitForSelector("[data-onboarding-dialog]", { timeout: 60_000 });
+            if (viewport.phone && !(await page.$(`[data-onboarding-step="${step}"]`))) await page.click("[data-onboarding-step-list-toggle]");
+            await page.click(`[data-onboarding-step="${step}"]`);
+          };
+
           try {
             /* 1. First run: the guide opens by itself on the Engines step. */
             await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 120_000 });
@@ -1005,7 +1020,7 @@ async function captureOnboarding(): Promise<void> {
             });
 
             /* 2. The mapping: six roles and two variants sit on Codex, which is not connected. */
-            await page.click("[data-onboarding-primary]");
+            await openStep("agents");
             await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
             await page.click('[data-mapping-group="rare"] button[aria-expanded]');
             await page.waitForSelector('[data-mapping-row="deployer"]');
@@ -1053,6 +1068,7 @@ async function captureOnboarding(): Promise<void> {
               await route.fulfill({ response, json: body });
             });
             await page.reload({ waitUntil: "domcontentloaded" });
+            await openStep("agents");
             await page.waitForSelector("[data-mapping-headroom]", { timeout: 60_000 });
             await page.click('[data-mapping-group="rare"] button[aria-expanded]');
             await page.waitForSelector('[data-mapping-row="deployer"]');
@@ -1083,6 +1099,7 @@ async function captureOnboarding(): Promise<void> {
             const presetsFile = path.join(STATE_DIR, "role-presets.json");
             fs.writeFileSync(presetsFile, JSON.stringify({ schemaVersion: 1, overrides: {}, retirements: { [retirementId]: { at: "2100-01-02T10:00:00.000Z", reset: { row: "builder:frontend", from: { engine: "claude", model: "opus", effort: "xhigh" } } } } }));
             await page.reload({ waitUntil: "domcontentloaded" });
+            await openStep("agents");
             await page.waitForSelector('[data-mapping-retired="builder:frontend"]', { timeout: 60_000 });
             await page.locator('[data-mapping-row="builder:frontend"]').scrollIntoViewIfNeeded();
             await shot("agents-reset", (r) => {
@@ -1091,7 +1108,14 @@ async function captureOnboarding(): Promise<void> {
             });
             await page.click('[data-mapping-restore="builder:frontend"]');
             await page.waitForSelector('[data-mapping-retired="builder:frontend"]', { state: "detached" });
-            const restored = JSON.parse(fs.readFileSync(presetsFile, "utf8")) as { overrides: { builder?: { variants?: { frontend?: { effort: string } } } }; retirements?: Record<string, { reset?: unknown }> };
+            /* The row turns "changed" as the write leaves; the file lands when
+               the server answers, so the read waits for it. */
+            type StoredPresets = { overrides: { builder?: { variants?: { frontend?: { effort: string } } } }; retirements?: Record<string, { reset?: unknown }> };
+            let restored = JSON.parse(fs.readFileSync(presetsFile, "utf8")) as StoredPresets;
+            for (const restoredBy = Date.now() + 10_000; Date.now() < restoredBy && restored.overrides.builder?.variants?.frontend === undefined;) {
+              await page.waitForTimeout(100);
+              restored = JSON.parse(fs.readFileSync(presetsFile, "utf8")) as StoredPresets;
+            }
             must(restored.overrides.builder?.variants?.frontend?.effort === "xhigh" && restored.retirements?.[retirementId] !== undefined && restored.retirements[retirementId]!.reset === undefined, `${tag}: after Restore the stored mapping is ${JSON.stringify(restored)}`);
             fs.writeFileSync(presetsFile, JSON.stringify({ schemaVersion: 1, overrides: {} }));
             await page.unroute("**/api/accounts");
@@ -1099,12 +1123,12 @@ async function captureOnboarding(): Promise<void> {
             fakeCli("codex", false);
             await fetch(`${baseUrl}/api/accounts/cli`);
             await page.reload({ waitUntil: "domcontentloaded" });
+            await openStep("agents");
             await page.waitForSelector("[data-mapping-banner]", { timeout: 60_000 });
 
             /* 4. Codex installed and signed out; its sign-in opens in place. */
             fakeCli("codex", true);
-            if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
-            else await page.click('[data-onboarding-step="engines"]');
+            await openStep("engines");
             await page.click('[data-onboarding-engine="codex"] button');
             await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="signed-out"]', { timeout: 30_000 });
             /* Slice 3: the card is the account list, with the add row always there. */
@@ -1120,12 +1144,12 @@ async function captureOnboarding(): Promise<void> {
             fakeCli("codex", false);
             await fetch(`${baseUrl}/api/accounts/cli`);
             await page.reload({ waitUntil: "domcontentloaded" });
+            await openStep("agents");
             await page.waitForSelector("[data-agent-mapping] [data-mapping-row]", { timeout: 60_000 });
             await shot("agents-neither", (r) => {
               must(r.roleLabels.length > 0 && r.blockedRows === r.roleLabels.length, `${tag}: with no engine ${r.blockedRows} of ${r.roleLabels.length} rendered rows are blocked, expected every one`);
             });
-            if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
-            else await page.click('[data-onboarding-step="engines"]');
+            await openStep("engines");
             await page.waitForSelector("[data-onboarding-engines-note]");
             await shot("engines-neither", (r) => {
               must(r.engines.claude !== "connected" && r.engines.codex === "missing", `${tag}: engines read ${JSON.stringify(r.engines)} with nothing signed in`);
@@ -1180,10 +1204,6 @@ async function captureOnboarding(): Promise<void> {
             }
             await page.waitForSelector('[data-onboarding-dialog="guide"]');
             /* The guide reopens on the first step not yet done; go to Agents by the step list. */
-            const openStep = async (id: string) => {
-              if (viewport.phone) await page.click("[data-onboarding-step-list-toggle]");
-              await page.click(`[data-onboarding-step="${id}"]`);
-            };
             await openStep("agents");
             await page.waitForSelector("[data-agent-mapping] [data-mapping-row]");
             await shot("finish", () => {});
