@@ -1,6 +1,8 @@
+import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import type { BridgeAsk, FileEntry } from "@/lib/types";
 
 import {
+  type BridgeResolvedAskV1,
   bridgeReportOriginLabel,
   isBridgeDecisionRequestClass,
   BRIDGE_ASK_TTL_SECONDS,
@@ -20,26 +22,41 @@ import {
  * queue entry, nothing that survives scrolling past it.
  *
  * This module is the missing read. It is pure over the log and derives at
- * read time — no store of its own, no subscription, no second copy of the
- * manager's state that could disagree with the log. Everything it decides comes
- * out of fields the log already carries: the row's class, its key, its seq, and
- * the seqs a directive has answered.
+ * read time: everything it decides comes out of fields the log already
+ * carries — the row's class, key and seq, the seqs a directive answered, and
+ * the seqs the operator resolved — plus, when the caller has them, the
+ * operator's own messages to the seat.
  *
- * ONE open ask per PROJECT, deliberately, and it is that project's NEWEST
- * manager report that decides — whichever seat filed it. Two consequences, both
- * wanted:
+ * EVERY unanswered decision request is its own question. The report log shows
+ * each one with a tick, and the needs-you panel lists each one as a row; the
+ * two read this one projection, so they cannot disagree about which are open.
+ * A question stops asking when:
  *
- * - The manager talks in sequence, so an earlier `blocked` is superseded by a
- *   newer decision request AND by the manager simply moving on: a `status` or
- *   `completed` since means it is no longer stuck on the old one. The
- *   alternative — every unanswered row, forever — turns a queue that answers
- *   "who needs me right now" into an inbox.
- * - A project has exactly one designated orchestrator at a time, and a report
- *   is routed to that seat at write time. So the project's last word also
- *   settles a ROTATION: the successor's first report retires whatever its
- *   predecessor was still asking, with no second authority to consult and
- *   nothing to go stale.
+ * - the operator resolves it (a tick in the log, «Dismiss» on its row), which
+ *   is one record, `resolvedAsks`, in the log itself;
+ * - a directive answered its seq and reached the manager;
+ * - the operator wrote to the seat after it was filed: they answered it there;
+ * - its seat is no longer the project's: a project has exactly one designated
+ *   orchestrator at a time, so the successor's first report retires whatever
+ *   its predecessor was still asking;
+ * - it aged past {@link BRIDGE_ASK_TTL_SECONDS}.
+ *
+ * The manager merely filing another report no longer retires a question: that
+ * made at most one question open per project, so a second question silently
+ * took the first one away before anybody had read it.
  */
+
+/** Where one decision request stands. `open` asks; every other state does not. */
+export type BridgeQuestionState = "open" | "resolved" | "answered" | "retired" | "lapsed";
+
+export interface BridgeQuestion {
+  report: BridgeReportV1;
+  /** The seat that filed it, canonical. */
+  seat: string;
+  state: BridgeQuestionState;
+  /** Set on `resolved`: the operator's (or an agent's) record. */
+  resolved?: { at: string; by: DismissedBy };
+}
 
 /**
  * Whether one row speaks in the MANAGER's own voice.
@@ -90,27 +107,26 @@ export interface OpenBridgeAskOptions {
       turns that parked ref into a cleared ask, and what leaves a dropped one
       standing. Absent, only recorded answers clear an ask. */
   deliveredOperation?: (operationId: string) => boolean;
+  /** Whether the operator wrote to this seat (canonical id) at or after
+      `atMs`: an answer given in the seat's own conversation. Absent, only the
+      log's own records clear a question. */
+  operatorWroteSince?: (seat: string, atMs: number) => boolean;
+}
+
+/** The first line of a report, bounded, for the row that lists it. */
+const ASK_LINE_MAX = 240;
+function askLine(body: string): string {
+  const line = body.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  return line.length > ASK_LINE_MAX ? `${line.slice(0, ASK_LINE_MAX - 1)}…` : line;
 }
 
 /**
- * The open ask of every project the log names, keyed by the conversation id of
- * the seat that filed it — which is the card the operator answers it on.
- *
- * Only rows in the manager's own voice qualify (see {@link isManagerVoice}),
- * and one qualifies while all three clearing signals stay silent:
- * - **answered** — a directive carried `[bridge ref=<seq>]` for it AND that
- *   directive reached the manager; one the runtime merely accepted clears the
- *   ask only once its send is recorded delivered (#1131);
- * - **superseded** — the project's manager has filed ANY newer report since;
- * - **expired** — it aged past {@link BRIDGE_ASK_TTL_SECONDS}.
- *
- * Unrouted rows (no project, or no recipient seat) never qualify: they are the
- * log's quarantine, and the drain does not hand them to a conversation either.
+ * Every decision request the log holds, oldest first, with where it stands.
+ * Only rows in the manager's own voice (see {@link isManagerVoice}), routed to
+ * a project and a seat, keyed, and dated are questions at all: the rest never
+ * asked anyone.
  */
-export function openBridgeAsks(
-  log: BridgeReportLogV1,
-  options: OpenBridgeAskOptions,
-): Map<string, BridgeAsk> {
+export function bridgeQuestions(log: BridgeReportLogV1, options: OpenBridgeAskOptions): BridgeQuestion[] {
   const canonical = options.canonicalConversationId ?? ((id: string) => id);
   const ttlMs = (options.ttlSeconds ?? BRIDGE_ASK_TTL_SECONDS) * 1000;
   const answered = new Set(log.answeredRefs ?? []);
@@ -120,32 +136,56 @@ export function openBridgeAsks(
       if (delivered(pending.operationId)) answered.add(pending.ref);
     }
   }
+  const resolved = new Map((log.resolvedAsks ?? []).map((entry) => [entry.seq, entry] as const));
 
-  /* The project's LAST WORD from its manager, whatever class it was and
-     whichever seat filed it — supersedence is "the manager has spoken since",
-     not "the manager has asked again". */
-  const newestByProject = new Map<string, BridgeReportV1>();
+  /* Which seat is the project's now: the one its manager's newest report was
+     routed to, whatever class it was. */
+  const currentSeat = new Map<string, BridgeReportV1>();
   for (const report of log.reports) {
     if (!isManagerVoice(report)) continue;
     if (!report.project || !report.targetSeatConversationId) continue;
-    const incumbent = newestByProject.get(report.project);
-    if (!incumbent || report.seq > incumbent.seq) newestByProject.set(report.project, report);
+    const incumbent = currentSeat.get(report.project);
+    if (!incumbent || report.seq > incumbent.seq) currentSeat.set(report.project, report);
   }
 
-  const asks = new Map<string, BridgeAsk>();
-  for (const report of newestByProject.values()) {
-    const seat = report.targetSeatConversationId;
-    if (!seat) continue;
+  const questions: BridgeQuestion[] = [];
+  for (const report of [...log.reports].sort((left, right) => left.seq - right.seq)) {
+    if (!isManagerVoice(report)) continue;
+    if (!report.project || !report.targetSeatConversationId) continue;
     if (!isBridgeDecisionRequestClass(report.class)) continue;
-    if (answered.has(report.seq)) continue;
+    if (askIdentity(report) === null) continue;
     const at = Date.parse(report.at);
     /* An unparseable time cannot be aged, and an ask nothing can retire is
        worse than one that never opened. */
     if (!Number.isFinite(at)) continue;
-    if (options.now.getTime() - at > ttlMs) continue;
-    const id = askIdentity(report);
-    if (id === null) continue;
-    asks.set(canonical(seat), { id, at: report.at });
+    const seat = canonical(report.targetSeatConversationId);
+    const project = currentSeat.get(report.project);
+    const record = resolved.get(report.seq);
+    let state: BridgeQuestionState = "open";
+    if (record) state = "resolved";
+    else if (answered.has(report.seq) || options.operatorWroteSince?.(seat, at)) state = "answered";
+    else if (project && canonical(project.targetSeatConversationId!) !== seat) state = "retired";
+    else if (options.now.getTime() - at > ttlMs) state = "lapsed";
+    questions.push({ report, seat, state, ...(record ? { resolved: { at: record.at, by: record.by } } : {}) });
+  }
+  return questions;
+}
+
+/**
+ * The open questions of every seat, oldest first, keyed by the conversation id
+ * of the seat that filed them — which is the card the operator answers them on.
+ * Each is its own needs-you item.
+ */
+export function openBridgeAsks(
+  log: BridgeReportLogV1,
+  options: OpenBridgeAskOptions,
+): Map<string, BridgeAsk[]> {
+  const asks = new Map<string, BridgeAsk[]>();
+  for (const question of bridgeQuestions(log, options)) {
+    if (question.state !== "open") continue;
+    const list = asks.get(question.seat) ?? [];
+    list.push({ id: askIdentity(question.report)!, at: question.report.at, seq: question.report.seq, body: askLine(question.report.body) });
+    asks.set(question.seat, list);
   }
   return asks;
 }
@@ -163,12 +203,34 @@ export function openBridgeAsks(
  */
 export function overlayBridgeAsks(
   files: FileEntry[],
-  asks: ReadonlyMap<string, BridgeAsk>,
+  asks: ReadonlyMap<string, readonly BridgeAsk[]>,
 ): void {
   if (asks.size === 0) return;
   for (const file of files) {
     if (file.supersededBy || file.migratedTo) continue;
-    const ask = file.conversationId ? asks.get(file.conversationId) : undefined;
-    if (ask) file.bridgeAsk = ask;
+    const open = file.conversationId ? asks.get(file.conversationId) : undefined;
+    if (!open?.length) continue;
+    file.bridgeAsks = [...open];
+    file.bridgeAsk = open.at(-1)!;
   }
+}
+
+/**
+ * The operator's resolutions as the seat tick reads them (§5.1): a question
+ * the operator resolved is a question they answered, so it counts as an
+ * operator message in the seat it was asked from, at the moment it was
+ * resolved. Only the operator's own resolutions count, and only of the rows
+ * handed in (the project's manager reports).
+ */
+export function resolvedQuestionAnswers(
+  reports: readonly BridgeReportV1[],
+  resolved: readonly BridgeResolvedAskV1[],
+): { conversationId: string; at: string }[] {
+  const bySeq = new Map(reports.map((report) => [report.seq, report] as const));
+  return resolved.flatMap((entry) => {
+    const report = bySeq.get(entry.seq);
+    return report?.targetSeatConversationId && entry.by.kind === "operator" && isBridgeDecisionRequestClass(report.class)
+      ? [{ conversationId: report.targetSeatConversationId, at: entry.at }]
+      : [];
+  });
 }

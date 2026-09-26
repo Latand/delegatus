@@ -11622,3 +11622,368 @@ describe("a task's album: every picture its agents made, one click from the card
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("needs-you panel: renders and readings over the real Viewer", () => {
+  /*
+   * docs/design/needs-you-options.md, option B, as built: the header control,
+   * the panel docked and floating, a dismissal with its Undo, a project's
+   * «Dismiss all», the report log's question ticks, and the phone's sheet and
+   * report screen, over `src/components/attention/needsYouPanel.fixture.tsx`
+   * at 1440×900 and 390×844 in uk and en. The frames are for the operator's
+   * eyes and go outside the repository; the readings each frame is checked
+   * against are committed under evidence/needs-you-panel/.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "needs-you panel"
+   *
+   * NEEDS_YOU_PANEL_OUT overrides where the frames go.
+   */
+  const OUT = process.env.NEEDS_YOU_PANEL_OUT?.trim()
+    || path.join(process.env.HOME ?? "/tmp", "Pictures/delegatus-review/needs-you-b");
+  const DESKTOP = { width: 1440, height: 900 } as const;
+  const PHONE = { width: 390, height: 844 } as const;
+  type Page = Awaited<ReturnType<typeof openFixture>>["page"];
+
+  const chipCount = (page: Page) => page.evaluate(() => Number((document.querySelector("[data-attention-count]")?.textContent ?? "").replace(/\D+/g, "")));
+  const panelReading = (page: Page) => page.evaluate(() => {
+    const panel = document.querySelector("[data-needs-you-panel]");
+    const rows = [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-row]")];
+    return {
+      placement: panel?.getAttribute("data-needs-you-panel") ?? null,
+      title: panel?.querySelector("[data-needs-you-title]")?.textContent ?? null,
+      sections: [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]")].map((section) => [
+        section.getAttribute("data-needs-you-section"),
+        Number(section.querySelector("[data-needs-you-section-count]")?.textContent ?? "0"),
+        section.hasAttribute("data-folded"),
+      ]),
+      roles: rows.map((row) => row.getAttribute("data-needs-you-role")),
+      rowsWithoutTag: rows.filter((row) => !row.querySelector("[data-role-tag] .role-tag-emblem svg")).length,
+      tagColours: [...new Set(rows.map((row) => {
+        const emblem = row.querySelector(".role-tag-emblem") as HTMLElement | null;
+        return emblem ? `${row.getAttribute("data-needs-you-role")}:${getComputedStyle(emblem).backgroundColor}` : "";
+      }))],
+      next: document.querySelectorAll("[data-attention-next]").length,
+      title_: document.title,
+    };
+  });
+  /* The header bar's project name, whole or cut, and the rail's project order.
+     Whole is the name's ink against its box, unrounded: Chrome draws the
+     ellipsis for a fraction of a pixel that `scrollWidth` and `clientWidth`
+     both round away. */
+  const barReading = (page: Page) => page.evaluate(() => {
+    const name = document.querySelector('[data-bar="project"] [data-bar-group="where"] h1') as HTMLElement | null;
+    const flip = [...document.querySelectorAll("[data-flip-key]")].map((row) => row.getAttribute("data-flip-key") ?? "");
+    const range = document.createRange();
+    if (name) range.selectNodeContents(name);
+    const ink = name ? range.getBoundingClientRect().width : null;
+    const box = name ? name.getBoundingClientRect().width : null;
+    return { name: name?.textContent ?? null, whole: ink !== null && box !== null ? ink <= box : null, ink, box, rail: flip.filter((key) => !key.startsWith("__")) };
+  });
+  /* The phone sheet's geometry: every row's age inside its line and its row,
+     a cut wait ending in an ellipsis, and every section header's name, count
+     and «Dismiss n» on screen and apart. */
+  const sheetGeometry = (page: Page) => page.evaluate(() => {
+    const sheet = document.querySelector('[data-mobile2-sheet="attention"]')!;
+    const width = document.documentElement.clientWidth;
+    const rows = [...sheet.querySelectorAll("[data-needs-you-row]")].map((row) => {
+      const box = row.querySelector("[data-attention-row]")!.getBoundingClientRect();
+      const age = row.querySelector("[data-attention-age]");
+      const line = age?.parentElement ?? null;
+      const decision = row.querySelector("[data-attention-decision]") as HTMLElement | null;
+      const ageBox = age?.getBoundingClientRect() ?? null;
+      const lineBox = line?.getBoundingClientRect() ?? null;
+      const cut = decision ? decision.scrollWidth > decision.clientWidth : false;
+      return {
+        id: row.getAttribute("data-needs-you-row"),
+        age: age?.textContent ?? null,
+        ageInside: Boolean(ageBox && lineBox && ageBox.right <= lineBox.right + 0.5 && ageBox.right <= box.right + 0.5 && ageBox.left >= lineBox.left - 0.5),
+        decision: decision?.textContent ?? null,
+        cut,
+        ellipsis: !cut || (decision ? getComputedStyle(decision).textOverflow === "ellipsis" : false),
+      };
+    });
+    const sections = [...sheet.querySelectorAll("[data-needs-you-section]")].map((section) => {
+      const fold = section.querySelector("[data-needs-you-fold]")!;
+      const name = fold.querySelector(".truncate") as HTMLElement;
+      const count = section.querySelector("[data-needs-you-section-count]")!.getBoundingClientRect();
+      const dismiss = section.querySelector("[data-needs-you-dismiss-section]")!;
+      const button = dismiss.getBoundingClientRect();
+      const nameBox = name.getBoundingClientRect();
+      return {
+        project: section.getAttribute("data-needs-you-section"),
+        folded: section.hasAttribute("data-folded"),
+        count: Number(section.querySelector("[data-needs-you-section-count]")!.textContent),
+        dismiss: dismiss.textContent,
+        onScreen: [nameBox, count, button].every((box) => box.left >= 0 && box.right <= width && box.width > 0),
+        apart: nameBox.right <= count.left + 0.5 && count.right <= button.left + 0.5,
+        nameWhole: name.scrollWidth <= name.clientWidth,
+      };
+    });
+    return {
+      title: sheet.querySelector("h2")?.textContent ?? null,
+      head: sheet.querySelector("[data-needs-you-dismiss-all]")?.textContent ?? null,
+      rows,
+      sections,
+    };
+  });
+  const shot = async (page: Page, lang: string, name: string) => {
+    const file = path.join(OUT, lang, `${name}.png`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: file });
+  };
+
+  browserTest("the panel, its dismissals, the report log's ticks and the phone, in uk and en", async () => {
+    const work = path.resolve(".artifacts/needs-you-panel");
+    fs.mkdirSync(work, { recursive: true });
+    const server = await serveEvidenceFixture(work, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const check = (frame: string, ok: boolean, what: string) => { if (!ok) failures.push(`${frame}: ${what}`); };
+    const desktopAges = new Map<string, string>();
+    /* The fixture pins its clock at each load; every epoch second in a reading
+       (a wait's start, an id that carries one) is written as its distance from
+       that clock, which is the same on every run. */
+    let fixtureNow = 0;
+    const relative = <T,>(value: T): T => JSON.parse(JSON.stringify(value), (_key, item: unknown) => {
+      const near = (epoch: number) => Math.abs(fixtureNow - epoch) < 30 * 86_400;
+      if (typeof item === "number" && near(item)) return `now-${fixtureNow - item}`;
+      if (typeof item === "string") return item.replace(/\b1\d{9}\b/g, (digits) => (near(Number(digits)) ? `now-${fixtureNow - Number(digits)}` : digits));
+      return item;
+    }) as T;
+    const open = async (query: string, lang: "uk" | "en", phone = false) => {
+      const opened = await openFixture(browser, `${server.base}?lang=${lang}${query}`, phone ? PHONE : DESKTOP, "light", lang, "reduce", phone);
+      await opened.page.waitForSelector(phone ? "[data-mobile2-bar]" : "[data-attention-count]", { timeout: 20_000 });
+      await opened.page.waitForTimeout(700);
+      fixtureNow = await opened.page.evaluate(() => (window as unknown as { __needsYouFixtureNow?: number }).__needsYouFixtureNow ?? 0);
+      /* The fixture's first poll raises an arrival toast; it is closed with
+         its own ×, as the operator would, so it covers nothing in a frame. */
+      const toast = opened.page.locator("[data-attention-toast-dismiss]");
+      if (await toast.count()) await toast.first().click();
+      return opened;
+    };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        /* Closed: the quiet control, no Next. */
+        let opened = await open("", lang);
+        try {
+          const count = await chipCount(opened.page);
+          readings[`${lang}/desktop-closed`] = relative({ count, next: await opened.page.locator("[data-attention-next]").count(), title: await opened.page.title() });
+          check(`${lang}/desktop-closed`, count === 10, `the control counts ${count}, expected every project's 10`);
+          check(`${lang}/desktop-closed`, (await opened.page.locator("[data-attention-next]").count()) === 0, "a Next is drawn");
+          check(`${lang}/desktop-closed`, (await opened.page.title()).startsWith("(10) "), "the tab title lost the global count");
+          await shot(opened.page, lang, "1440x900-closed");
+        } finally { await opened.context.close(); }
+
+        /* Open: docked beside the board, grouped by project, a role on every row. */
+        opened = await open("&open=1", lang);
+        try {
+          const reading = await panelReading(opened.page);
+          check(`${lang}/desktop-open-docked`, reading.placement === "docked", `placement ${reading.placement}`);
+          check(`${lang}/desktop-open-docked`, reading.sections[0]?.[0] === "delegatus" && reading.sections.length === 3, `sections ${JSON.stringify(reading.sections)}`);
+          check(`${lang}/desktop-open-docked`, reading.rowsWithoutTag === 0, `${reading.rowsWithoutTag} rows without a role emblem`);
+          check(`${lang}/desktop-open-docked`, new Set(reading.roles).size >= 3, `roles ${JSON.stringify(reading.roles)}`);
+          /* The project name stays whole with the panel docked beside the board. */
+          const bar = await barReading(opened.page);
+          readings[`${lang}/desktop-open-docked`] = relative({ ...reading, bar });
+          check(`${lang}/desktop-open-docked`, bar.whole === true && bar.name === "delegatus", `the bar's project name is cut: ${JSON.stringify(bar)}`);
+          /* After the project on screen, the sections follow the rail. */
+          const others = reading.sections.map((section) => section[0] as string).slice(1);
+          check(`${lang}/desktop-open-docked`, JSON.stringify(others) === JSON.stringify(bar.rail.filter((project) => others.includes(project))), `sections ${JSON.stringify(others)} against the rail ${JSON.stringify(bar.rail)}`);
+          /* The head's «Dismiss all N» and a section's «Dismiss n» read differently. */
+          const labels = await opened.page.evaluate(() => [
+            document.querySelector("[data-needs-you-panel] [data-needs-you-dismiss-all]")?.textContent ?? "",
+            document.querySelector("[data-needs-you-panel] [data-needs-you-dismiss-section]")?.textContent ?? "",
+          ]);
+          readings[`${lang}/desktop-dismiss-labels`] = relative(labels);
+          check(`${lang}/desktop-open-docked`, labels[0] !== labels[1] && /10/.test(labels[0]!), `head and section read ${JSON.stringify(labels)}`);
+          /* «Asks you»: the architect that asked in prose is a row of its
+             project, its role on it and its own sentence as the line. */
+          const askRow = await opened.page.evaluate(() => {
+            const fixture = (window as unknown as { __needsYouFixtureAsk?: { id: string; gist: string } }).__needsYouFixtureAsk!;
+            const row = document.querySelector(`[data-needs-you-panel] [data-needs-you-section="delegatus"] [data-needs-you-row="${CSS.escape(fixture.id)}"]`);
+            return {
+              gist: fixture.gist,
+              role: row?.getAttribute("data-needs-you-role") ?? null,
+              tag: row?.querySelector("[data-role-tag]")?.textContent ?? null,
+              emblem: Boolean(row?.querySelector("[data-role-tag] .role-tag-emblem svg")),
+              title: row?.querySelector("[data-needs-you-title-line]")?.textContent ?? null,
+              line: row?.querySelector("[data-attention-decision]")?.textContent ?? null,
+            };
+          });
+          readings[`${lang}/desktop-ask-row`] = relative(askRow);
+          const askLine = translate(lang, "attention.decisionAskNamed", { ask: askRow.gist });
+          check(`${lang}/desktop-ask-row`, askRow.role === "architect" && askRow.emblem && askRow.tag === translate(lang, "roleCopy.architect.name" as never) && askRow.line === askLine, `the ask row reads ${JSON.stringify(askRow)}`);
+          await shot(opened.page, lang, "1440x900-open-docked");
+          /* Every section open, to show every role. */
+          for (const project of ["shop-web", "tg-bot"]) {
+            const fold = opened.page.locator(`[data-needs-you-panel] [data-needs-you-section="${project}"][data-folded] [data-needs-you-fold]`);
+            if (await fold.count()) await fold.click();
+          }
+          const all = await panelReading(opened.page);
+          check(`${lang}/desktop-open-all-sections`, new Set(all.roles).size >= 5, `roles ${JSON.stringify(all.roles)}`);
+          check(`${lang}/desktop-open-all-sections`, all.roles.length === 10, `${all.roles.length} rows`);
+          /* Oldest wait first in every section, lanes among the conversations. */
+          const since = await opened.page.evaluate(() => [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]")].map((section) => ({
+            project: section.getAttribute("data-needs-you-section"),
+            ages: [...section.querySelectorAll("[data-needs-you-row]")].map((row) => [row.getAttribute("data-needs-you-row"), (row.querySelector("[data-attention-age]")?.textContent ?? "").replace(/^·\s*/, "")]),
+            since: [...section.querySelectorAll("[data-needs-you-row]")].map((row) => Number(row.getAttribute("data-needs-you-since"))),
+          })));
+          readings[`${lang}/desktop-open-all-sections`] = relative({ ...all, ages: since });
+          for (const [id, age] of since.flatMap((section) => section.ages)) desktopAges.set(`${lang}/${id}`, age!);
+          for (const section of since) {
+            check(`${lang}/desktop-open-all-sections`, section.since.every((value, index) => index === 0 || value >= section.since[index - 1]!), `${section.project} not oldest first: ${JSON.stringify(section)}`);
+          }
+          await shot(opened.page, lang, "1440x900-open-all-sections");
+        } finally { await opened.context.close(); }
+
+        /* Floating over the board. */
+        opened = await open("&open=1&placement=overlay", lang);
+        try {
+          const reading = await panelReading(opened.page);
+          readings[`${lang}/desktop-open-overlay`] = relative(reading);
+          check(`${lang}/desktop-open-overlay`, reading.placement === "overlay", `placement ${reading.placement}`);
+          await shot(opened.page, lang, "1440x900-open-overlay");
+        } finally { await opened.context.close(); }
+
+        /* The phone: the bar, then the sheet. */
+        opened = await open("", lang, true);
+        try {
+          await shot(opened.page, lang, "390x844-closed");
+          await opened.page.locator('[data-mobile2-open="attention"]').click();
+          await opened.page.waitForSelector('[data-mobile2-sheet="attention"]', { timeout: 10_000 });
+          const phone = await opened.page.evaluate(() => ({
+            rows: [...document.querySelectorAll('[data-mobile2-sheet="attention"] [data-needs-you-row]')].map((row) => row.getAttribute("data-needs-you-role")),
+            dismiss: document.querySelectorAll('[data-mobile2-sheet="attention"] [data-needs-you-dismiss]').length,
+            next: document.querySelectorAll("[data-attention-next]").length,
+          }));
+          readings[`${lang}/phone-sheet`] = relative(phone);
+          check(`${lang}/phone-sheet`, phone.next === 0, "the sheet draws a Next");
+          check(`${lang}/phone-sheet`, phone.rows.length === 6 && phone.dismiss === 6, `rows ${JSON.stringify(phone)}`);
+          check(`${lang}/phone-sheet`, !phone.rows.includes(null), "a row without a role");
+          const geometry = await sheetGeometry(opened.page);
+          readings[`${lang}/phone-sheet-geometry`] = relative(geometry);
+          for (const row of geometry.rows) {
+            check(`${lang}/phone-sheet`, row.ageInside, `${row.id}: the age «${row.age}» leaves its row`);
+            check(`${lang}/phone-sheet`, row.ellipsis, `${row.id}: a cut wait without an ellipsis`);
+          }
+          const phoneAsk = geometry.rows.find((row) => row.id?.startsWith("ask:"));
+          check(`${lang}/phone-sheet`, Boolean(phoneAsk && phoneAsk.decision?.startsWith(translate(lang, "needs.ask"))), `the phone's ask row reads ${JSON.stringify(phoneAsk)}`);
+          await shot(opened.page, lang, "390x844-sheet");
+        } finally { await opened.context.close(); }
+
+        /* The phone's Overview: every project in its own section, one folded. */
+        opened = await open("&overview=1", lang, true);
+        try {
+          await opened.page.locator('[data-mobile2-open="attention"]').click();
+          await opened.page.waitForSelector('[data-mobile2-sheet="attention"] [data-needs-you-section]', { timeout: 10_000 });
+          await opened.page.locator('[data-mobile2-sheet="attention"] [data-needs-you-fold="shop-web"]').click();
+          const geometry = await sheetGeometry(opened.page);
+          readings[`${lang}/phone-sheet-overview`] = relative(geometry);
+          check(`${lang}/phone-sheet-overview`, geometry.sections.length === 3, `sections ${JSON.stringify(geometry.sections)}`);
+          check(`${lang}/phone-sheet-overview`, geometry.sections.some((section) => section.folded), "no folded section");
+          for (const section of geometry.sections) {
+            check(`${lang}/phone-sheet-overview`, section.onScreen && section.apart && section.nameWhole, `${section.project}: header ${JSON.stringify(section)}`);
+            check(`${lang}/phone-sheet-overview`, section.dismiss !== geometry.head, `${section.project}: «${section.dismiss}» reads like the head's «${geometry.head}»`);
+          }
+          for (const row of geometry.rows) {
+            /* One item reads the same wait on the phone as on the desktop panel. */
+            const desktop = desktopAges.get(`${lang}/${row.id}`);
+            check(`${lang}/phone-sheet-overview`, desktop === undefined || desktop === row.age, `${row.id}: the phone reads «${row.age}», the desktop panel «${desktop}»`);
+            check(`${lang}/phone-sheet-overview`, row.ageInside, `${row.id}: the age «${row.age}» leaves its row`);
+            check(`${lang}/phone-sheet-overview`, row.ellipsis, `${row.id}: a cut wait without an ellipsis`);
+          }
+          await shot(opened.page, lang, "390x844-sheet-overview");
+        } finally { await opened.context.close(); }
+      }
+
+      /* uk: the seat beside the board leaves no room, so the panel floats. */
+      let opened = await open("&open=1&seat=beside", "uk");
+      try {
+        const reading = await panelReading(opened.page);
+        readings["uk/desktop-seat-beside"] = relative(reading);
+        check("uk/desktop-seat-beside", reading.placement === "overlay", `placement ${reading.placement}`);
+        await shot(opened.page, "uk", "1440x900-seat-beside-open");
+      } finally { await opened.context.close(); }
+
+      /* uk: «Dismiss», «Dismiss all» on a project, Undo, and a poll between. */
+      opened = await open("&open=1", "uk");
+      try {
+        const page = opened.page;
+        const first = page.locator('[data-needs-you-panel] [data-needs-you-section="delegatus"] [data-needs-you-dismiss]').first();
+        const firstId = await first.getAttribute("data-needs-you-dismiss");
+        await first.click();
+        await page.waitForTimeout(300);
+        const afterOne = { count: await chipCount(page), panel: await panelReading(page), gone: await page.locator(`[data-needs-you-row="${firstId}"]`).count() === 0 };
+        readings["uk/desktop-dismiss-one"] = relative(afterOne);
+        check("uk/desktop-dismiss-one", afterOne.count === 9 && afterOne.gone, `after one dismissal: ${JSON.stringify(afterOne)}`);
+        check("uk/desktop-dismiss-one", (await page.locator("[data-needs-you-undo]").count()) === 1, "no Undo after a dismissal");
+        await shot(page, "uk", "1440x900-dismissed-one-undo");
+        await page.locator('[data-needs-you-dismiss-section="shop-web"]').click();
+        await page.waitForTimeout(300);
+        const afterSection = { count: await chipCount(page), sections: (await panelReading(page)).sections };
+        readings["uk/desktop-dismiss-section"] = relative(afterSection);
+        check("uk/desktop-dismiss-section", afterSection.count === 7 && !afterSection.sections.some((section) => section[0] === "shop-web"), `after shop-web's Dismiss all: ${JSON.stringify(afterSection)}`);
+        await shot(page, "uk", "1440x900-dismissed-section");
+        /* A poll later the server's record still holds. */
+        await page.evaluate(() => window.dispatchEvent(new Event("llv:files-changed")));
+        await page.waitForTimeout(800);
+        check("uk/desktop-dismiss-section", (await chipCount(page)) === 7, "the dismissal did not survive a poll");
+        await page.locator("[data-needs-you-undo]").click();
+        await page.waitForTimeout(500);
+        const undone = await chipCount(page);
+        readings["uk/desktop-undo"] = relative({ count: undone });
+        check("uk/desktop-undo", undone === 9, `Undo brought the count to ${undone}, expected 9`);
+      } finally { await opened.context.close(); }
+
+      /* uk and en: the report log beside the seat, a question ticked there
+         leaving the panel too. */
+      for (const lang of ["uk", "en"] as const) {
+        opened = await open("&seat=beside", lang);
+        try {
+          const page = opened.page;
+          const toggle = page.locator("[data-report-log-toggle]").first();
+          if (await toggle.count()) await toggle.click();
+          await page.waitForSelector("[data-report-log-entries]", { timeout: 10_000 });
+          const log = () => page.evaluate(() => ({
+            open: document.querySelector("[data-report-open-count]")?.getAttribute("data-report-open-count") ?? null,
+            ticks: [...document.querySelectorAll("[data-report-entry]")].map((entry) => [entry.getAttribute("data-report-entry"), entry.getAttribute("data-report-question")]),
+          }));
+          const before = { ...(await log()), count: await chipCount(page) };
+          readings[`${lang}/report-log`] = relative(before);
+          check(`${lang}/report-log`, before.open === "2", `open questions ${before.open}`);
+          await shot(page, lang, "1440x900-report-log");
+          if (lang === "uk") {
+            await page.locator('[data-report-resolve="1204"]').check();
+            await page.waitForTimeout(400);
+            const after = { ...(await log()), count: await chipCount(page) };
+            readings["uk/report-log-ticked"] = relative(after);
+            check("uk/report-log-ticked", after.open === "1" && after.count === before.count - 1, `after the tick: ${JSON.stringify(after)} from ${JSON.stringify(before)}`);
+            await page.locator("[data-attention-count]").click();
+            await page.waitForTimeout(300);
+            check("uk/report-log-ticked", (await page.locator('[data-needs-you-row="report-merge-order"]').count()) === 0, "the ticked question is still on the panel");
+            await shot(page, "uk", "1440x900-report-log-ticked-panel");
+          }
+        } finally { await opened.context.close(); }
+      }
+
+      /* uk: the phone's report screen with its ticks. */
+      opened = await open("", "uk", true);
+      try {
+        /* In-app, as the phone's menu gets there: a pasted `#reports` link
+           is what the unknown-link notice is for. */
+        await opened.page.evaluate(() => { location.hash = "#reports"; });
+        await opened.page.waitForSelector('[data-report-log][data-report-log-variant="screen"] [data-report-log-entries]', { timeout: 10_000 });
+        await shot(opened.page, "uk", "390x844-report-log");
+      } finally { await opened.context.close(); }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const evidence = path.resolve("evidence/needs-you-panel/readings.json");
+    fs.mkdirSync(path.dirname(evidence), { recursive: true });
+    fs.writeFileSync(evidence, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});

@@ -59,6 +59,9 @@ interface Props {
   /** Attention clock owned by Viewer — advances when a stalled entry crosses
       its TTL, so the rail badges expire together with the queue. */
   now: number;
+  /** Each project's needs-you count, from the one queue the header and the
+      panel read, so the badge here carries the panel section's number. */
+  needsYouCounts?: ReadonlyMap<string, number>;
   /** Desktop only: puts the whole rail away (issue #1819). The phone reaches
       the rail through its drawer, which already has a way out. */
   onHide?: () => void;
@@ -69,14 +72,14 @@ interface Props {
 
 const EMPTY_CROWNS: ReadonlySet<string> = new Set();
 
-export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, onHide, onSelect, onToggleCrown, onCreateProject }: Props) {
+export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject }: Props) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const [query, setQuery] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
   const summaries = useMemo(
-    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames),
-    [files, now, workflows, projectCatalog, pipelines, projectDisplayNames],
+    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts),
+    [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
   const visible = useMemo(() => {
     return summaries.filter((summary) => projectMatchesQuery(summary.project, query, summary.displayName));

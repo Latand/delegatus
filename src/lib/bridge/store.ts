@@ -30,6 +30,7 @@ import {
 import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { isDismissedBy, type DismissedBy } from "@/lib/attention/dismissalTypes";
 
 import {
   BRIDGE_ANSWERED_REF_CAPACITY,
@@ -46,6 +47,7 @@ import {
   type BridgeChannelV1,
   type BridgeChannelScope,
   type BridgePendingAnswerV1,
+  type BridgeResolvedAskV1,
   type BridgeReportBatch,
   type BridgeReportInput,
   type BridgeReportLogV1,
@@ -252,7 +254,24 @@ function emptyLog(): BridgeReportLogV1 {
     retired: [],
     answeredRefs: [],
     pendingAnswers: [],
+    resolvedAsks: [],
   };
+}
+
+/** Resolutions, one per seq, sorted and bounded like the answers. A malformed
+    entry is noise: it can only leave a question asking, never hide one. */
+function normalizeResolvedAsks(value: unknown): BridgeResolvedAskV1[] {
+  if (!Array.isArray(value)) return [];
+  const resolved = new Map<number, BridgeResolvedAskV1>();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const candidate = entry as Partial<BridgeResolvedAskV1>;
+    if (!Number.isInteger(candidate.seq) || (candidate.seq as number) < 1) continue;
+    if (typeof candidate.at !== "string" || !Number.isFinite(Date.parse(candidate.at))) continue;
+    if (!isDismissedBy(candidate.by)) continue;
+    resolved.set(candidate.seq as number, { seq: candidate.seq as number, at: candidate.at, by: candidate.by });
+  }
+  return [...resolved.values()].sort((left, right) => left.seq - right.seq).slice(-BRIDGE_ANSWERED_REF_CAPACITY);
 }
 
 /** Recorded answers, sorted and bounded. Unlike a report row a malformed entry
@@ -335,6 +354,7 @@ function normalizeLog(value: unknown, target: string): BridgeReportLogV1 {
     retired: Array.isArray(file.retired) ? file.retired.filter((id): id is string => typeof id === "string") : [],
     answeredRefs,
     pendingAnswers: normalizePendingAnswers(file.pendingAnswers, answeredRefs),
+    resolvedAsks: normalizeResolvedAsks(file.resolvedAsks),
   };
 }
 
@@ -480,7 +500,7 @@ function channelsCollection(purpose: "read" | "write"): SqliteStateCollection<Br
 type LogMeta = Pick<BridgeReportLogV1, "lastSeq" | "trimmedThroughSeq" | "trimmedThroughByChannel">;
 
 /** The log as rows, in the order they are stored: meta, reports by seq, retired
-    ids oldest first, answers, parked answers. A duplicate id in a file older
+    ids oldest first, answers, parked answers, resolutions. A duplicate id in a file older
     code wrote keeps its first row, because a key names one row. */
 function rowsFromLog(log: BridgeReportLogV1): BridgeRow[] {
   const meta: LogMeta = {
@@ -499,6 +519,7 @@ function rowsFromLog(log: BridgeReportLogV1): BridgeRow[] {
   for (const id of log.retired) push({ k: `x:${id}`, v: { id } });
   for (const ref of log.answeredRefs ?? []) push({ k: `answer:${ref}`, v: ref });
   for (const pending of log.pendingAnswers ?? []) push({ k: `pending:${pending.ref}`, v: pending });
+  for (const resolved of log.resolvedAsks ?? []) push({ k: `resolved:${resolved.seq}`, v: resolved });
   return rows;
 }
 
@@ -506,6 +527,7 @@ function logFromRows(rows: readonly BridgeRow[], target: string): BridgeReportLo
   const log = emptyLog();
   const answered: unknown[] = [];
   const pending: unknown[] = [];
+  const resolved: unknown[] = [];
   for (const row of rows) {
     if (row.k === "meta") {
       const meta = row.v as Partial<LogMeta>;
@@ -522,12 +544,15 @@ function logFromRows(rows: readonly BridgeRow[], target: string): BridgeReportLo
       answered.push(row.v);
     } else if (row.k.startsWith("pending:")) {
       pending.push(row.v);
+    } else if (row.k.startsWith("resolved:")) {
+      resolved.push(row.v);
     }
   }
   log.reports.sort((left, right) => left.seq - right.seq);
   log.lastSeq = Math.max(log.lastSeq, log.reports.at(-1)?.seq ?? 0);
   log.answeredRefs = normalizeAnsweredRefs(answered);
   log.pendingAnswers = normalizePendingAnswers(pending, log.answeredRefs);
+  log.resolvedAsks = normalizeResolvedAsks(resolved);
   return log;
 }
 
@@ -990,6 +1015,44 @@ export function recordBridgeDirectivePendingAnswer(
   });
 }
 
+/**
+ * Mark decision requests resolved, or take the mark back (`undo`). The one
+ * write behind a tick in the report log and «Dismiss» on a question's needs-you
+ * row: both surfaces read this record, so resolving in either is resolving in
+ * both. Only a decision request (`blocked`/`question`) can be resolved, and
+ * `inProject`, when given, fences the seqs to the caller's project. Resolving
+ * an already-resolved seq keeps its first instant. Answers which seqs changed
+ * and which had nothing to change.
+ */
+export function resolveBridgeAsks(
+  seqs: readonly number[],
+  options: { by: DismissedBy; at: string; undo?: boolean; inProject?: (project: string) => boolean },
+): { resolved: number[]; alreadyClear: number[]; unknown: number[] } {
+  const wanted = [...new Set(seqs.filter((seq) => Number.isInteger(seq) && seq > 0))];
+  if (!wanted.length) return { resolved: [], alreadyClear: [], unknown: [] };
+  return mutateLog((file) => {
+    const held = new Map((file.resolvedAsks ?? []).map((entry) => [entry.seq, entry] as const));
+    const result = { resolved: [] as number[], alreadyClear: [] as number[], unknown: [] as number[] };
+    for (const seq of wanted) {
+      const report = file.reports.find((candidate) => candidate.seq === seq);
+      if (!report || !isBridgeDecisionRequestClass(report.class) || (options.inProject && !(report.project && options.inProject(report.project)))) {
+        result.unknown.push(seq);
+        continue;
+      }
+      if (options.undo ? !held.has(seq) : held.has(seq)) {
+        result.alreadyClear.push(seq);
+        continue;
+      }
+      if (options.undo) held.delete(seq);
+      else held.set(seq, { seq, at: options.at, by: options.by });
+      result.resolved.push(seq);
+    }
+    if (!result.resolved.length) return { result, changed: false };
+    file.resolvedAsks = normalizeResolvedAsks([...held.values()]);
+    return { result, changed: true };
+  });
+}
+
 function gapNotice(cursor: number, resumedAtSeq: number, missedThroughSeq: number, at: string): BridgeReportV1 {
   const missed = missedThroughSeq - cursor;
   return {
@@ -1144,6 +1207,7 @@ function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { 
     }
     log.answeredRefs = normalizeAnsweredRefs([...(log.answeredRefs ?? []), ...(body.answeredRefs ?? [])]);
     log.pendingAnswers = normalizePendingAnswers([...(body.pendingAnswers ?? []), ...(log.pendingAnswers ?? [])], log.answeredRefs);
+    log.resolvedAsks = normalizeResolvedAsks([...(body.resolvedAsks ?? []), ...(log.resolvedAsks ?? [])]);
     trimToCapacity(log, readBridgeChannel()?.managerReportCursor ?? 0);
     log.retired = log.retired.slice(-BRIDGE_RETIRED_ID_CAPACITY);
     return diffRows(rows, rowsFromLog(log));

@@ -6,7 +6,12 @@ import { canonicalProject, recordedProjectRemote } from "@/lib/projects/aliases"
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
 import { loadTasksForList } from "@/lib/tasks/store";
 
+import { agentRegistry } from "@/lib/agent/registry";
+
+import type { BridgeQuestion } from "./asks";
 import { reportCardRefs, type ReportLogCard } from "./reportCardRefs";
+import { seatIdentityResolver } from "./seatIdentity";
+import { bridgeQuestionsForProject } from "./service";
 import { bridgeReportLogSignature, pageBridgeReports } from "./store";
 import type { BridgeReportClass } from "./types";
 
@@ -27,6 +32,18 @@ export interface ReportLogEntry {
   body: string;
   /** Card ids in the body that name a card on this project's board. */
   cards: ReportLogCard[];
+}
+
+/**
+ * The project's decision requests as the needs-you panel reads them: `open`
+ * lists every one still asking (each a needs-you row), `resolved` every one the
+ * operator resolved and when. The rest (answered, retired, aged out) ask
+ * nothing and carry no tick. Whole-project, never paged, so a tick on an
+ * entry the log loaded earlier follows every change.
+ */
+export interface ReportLogQuestions {
+  open: number[];
+  resolved: Array<{ seq: number; at: string }>;
 }
 
 export interface ReportLogPage {
@@ -51,6 +68,7 @@ export interface ReportLogPage {
   asks?: ReportLogAsk[];
   /** The cursor to pass as `asksBefore` for older ask lines, null at the start. */
   nextAsksBefore?: string | null;
+  questions: ReportLogQuestions;
 }
 
 export interface ReportLogDependencies {
@@ -59,6 +77,23 @@ export interface ReportLogDependencies {
   /** The project's ask lines past the cursor `before`, newest first, and the next cursor. */
   asks?: (inProject: (project: string) => boolean, before: string | null, limit: number) => { asks: ReportLogAsk[]; nextBefore: string | null };
   asksRevision?: () => string;
+  /** The project's decision requests with where each stands. */
+  questions?: (inProject: (project: string) => boolean) => BridgeQuestion[];
+}
+
+function projectQuestions(inProject: (project: string) => boolean): BridgeQuestion[] {
+  const registry = agentRegistry();
+  return bridgeQuestionsForProject(inProject, {
+    canonicalConversationId: seatIdentityResolver((id) => registry.canonicalConversationId(id)),
+  });
+}
+
+/** The page's questions, from the one projection the needs-you panel reads. */
+export function reportLogQuestions(questions: readonly BridgeQuestion[]): ReportLogQuestions {
+  return {
+    open: questions.filter((question) => question.state === "open").map((question) => question.report.seq),
+    resolved: questions.flatMap((question) => (question.state === "resolved" && question.resolved ? [{ seq: question.report.seq, at: question.resolved.at }] : [])),
+  };
 }
 
 /** Ask lines one page carries at most. */
@@ -79,6 +114,7 @@ const DEFAULT_DEPENDENCIES: ReportLogDependencies = {
   knownCards: boardCards,
   asks: (inProject, before, limit) => projectReportLogAsks(inProject, before, limit),
   asksRevision: operatorAsksSignature,
+  questions: projectQuestions,
 };
 
 export function readProjectReportLog(
@@ -86,14 +122,20 @@ export function readProjectReportLog(
   dependencies: ReportLogDependencies = DEFAULT_DEPENDENCIES,
 ): ReportLogPage {
   const project = canonicalProject(request.project.trim());
+  const inProject = (stored: string) => stored === project || canonicalProject(stored) === project;
+  const questions = reportLogQuestions((dependencies.questions ?? projectQuestions)(inProject));
+  /* A question stops asking on evidence outside the log too (its age, an
+     operator message), so the revision a caller holds moves with the ticks. */
+  const reportsRevision = `${bridgeReportLogSignature()}:${questions.open.join(",")}:${questions.resolved.map((entry) => entry.seq).join(",")}`;
   const asksRevision = dependencies.asksRevision?.() ?? "";
-  const revision = asksRevision ? `${bridgeReportLogSignature()}|${asksRevision}` : bridgeReportLogSignature();
+  const revision = asksRevision ? `${reportsRevision}|${asksRevision}` : reportsRevision;
   const base = {
     ok: true as const,
     project,
     bridgeReports: bridgeReportsEnabled(project),
     github: githubRepositoryOfRemote(recordedProjectRemote(project)),
     revision,
+    questions,
   };
   /* The live refresh asks with the revision it holds; an unchanged log costs
      no read at all. */
@@ -101,12 +143,11 @@ export function readProjectReportLog(
     return { ...base, unchanged: true, entries: [], nextBefore: null, asks: [], nextAsksBefore: null };
   }
   const page = pageBridgeReports({
-    inProject: (stored) => stored === project || canonicalProject(stored) === project,
+    inProject,
     before: request.before ?? null,
     limit: request.limit,
   });
   const known = page.reports.length ? dependencies.knownCards(project) : new Map<string, ReportLogCard["kind"]>();
-  const inProject = (stored: string) => stored === project || canonicalProject(stored) === project;
   let asks: ReportLogAsk[] = [];
   let nextAsksBefore: string | null = null;
   try {

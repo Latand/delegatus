@@ -120,11 +120,18 @@ export function stalledAttention(file: FileEntry, now: number): boolean {
  * than dropping the row.
  */
 export function openBridgeAsk(file: FileEntry, now: number): BridgeAsk | null {
-  const ask = file.bridgeAsk;
-  if (!ask) return null;
-  const at = isoSeconds(ask.at);
-  if (at === null) return null;
-  return now - at <= BRIDGE_ASK_TTL_SECONDS ? ask : null;
+  return openBridgeAskList(file, now).at(-1) ?? null;
+}
+
+/** Every open ask of a seat, oldest first, the clock applied to each: each is
+    its own needs-you item. An entry from before the list existed carries the
+    one `bridgeAsk`. */
+export function openBridgeAskList(file: FileEntry, now: number): BridgeAsk[] {
+  const asks = file.bridgeAsks ?? (file.bridgeAsk ? [file.bridgeAsk] : []);
+  return asks.filter((ask) => {
+    const at = isoSeconds(ask.at);
+    return at !== null && now - at <= BRIDGE_ASK_TTL_SECONDS;
+  });
 }
 
 /**
@@ -171,8 +178,10 @@ export function openOperatorAsk(file: FileEntry): OperatorAskMark | null {
 export function attentionExpiries(files: readonly FileEntry[]): number[] {
   const expiries: number[] = [];
   for (const file of files) {
-    const at = file.bridgeAsk ? isoSeconds(file.bridgeAsk.at) : null;
-    if (at !== null) expiries.push(at + BRIDGE_ASK_TTL_SECONDS);
+    for (const ask of file.bridgeAsks ?? (file.bridgeAsk ? [file.bridgeAsk] : [])) {
+      const at = isoSeconds(ask.at);
+      if (at !== null) expiries.push(at + BRIDGE_ASK_TTL_SECONDS);
+    }
     const deliverySince = file.stuckDelivery ? isoSeconds(file.stuckDelivery.since) : null;
     if (deliverySince !== null) expiries.push(deliverySince + DELIVERY_UNCERTAIN_MS / 1000);
   }
@@ -200,6 +209,9 @@ export interface ConversationReason {
   header: string | null;
   /** The dismissal that covers this reason, or null while it is flagged. */
   dismissal: AttentionDismissalMark | null;
+  /** An orchestrator's decision request: the report it is, by seq, and its
+      first line. Dismissing it resolves that report in the report log. */
+  report?: { seq: number; body: string | null };
 }
 
 /**
@@ -238,6 +250,22 @@ export function attentionReason(file: FileEntry, now: number = Date.now() / 1000
   return { ...reason, dismissal: dismissalCovers(reason, file.attentionDismissal) ? file.attentionDismissal! : null };
 }
 
+/** One open ask as a reason. `openBridgeAskList` already refused an
+    unparseable time. */
+function askReason(ask: BridgeAsk): ConversationReason {
+  const at = isoSeconds(ask.at)!;
+  return {
+    kind: "decision",
+    id: ask.id,
+    since: at,
+    raisedAt: at,
+    clocked: true,
+    header: null,
+    dismissal: null,
+    ...(ask.seq !== undefined ? { report: { seq: ask.seq, body: ask.body?.trim() || null } } : {}),
+  };
+}
+
 function undismissedReason(file: FileEntry, now: number): ConversationReason | null {
   /* First, and above the file's own signals (issue #1168). A bridge ask is the
      manager saying, in as many words, that it cannot go on without the
@@ -247,8 +275,7 @@ function undismissedReason(file: FileEntry, now: number): ConversationReason | n
   const ask = openBridgeAsk(file, now);
   if (ask) {
     /* `openBridgeAsk` already refused an unparseable time. */
-    const at = isoSeconds(ask.at)!;
-    return { kind: "decision", id: ask.id, since: at, raisedAt: at, clocked: true, header: null, dismissal: null };
+    return askReason(ask);
   }
   const pending = file.pendingQuestion;
   if (pending) {
@@ -349,6 +376,17 @@ export function buildAttentionQueue(
   const items: AttentionItem[] = [];
   for (const file of files) {
     if (project !== undefined && projectKey(file) !== project) continue;
+    /* An orchestrator seat with several open questions is several items: each
+       is resolved on its own, here and in the report log. */
+    const asks = openBridgeAskList(file, now);
+    if (asks.length > 1) {
+      for (const ask of asks) {
+        const reason = askReason(ask);
+        if (dismissalCovers(reason, file.attentionDismissal)) continue;
+        items.push({ id: reason.id, file, project: projectKey(file), tier: "blocked", since: reason.since, reason });
+      }
+      continue;
+    }
     const reason = attentionReason(file, now);
     if (!reason || reason.dismissal) continue;
     items.push({ id: reason.id, file, project: projectKey(file), tier: "blocked", since: reason.since, reason });

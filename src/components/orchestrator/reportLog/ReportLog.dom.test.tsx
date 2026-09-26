@@ -36,6 +36,8 @@ const { GET } = await import("@/app/api/orchestrator/reports/route");
 const { mutateOperatorAsks } = await import("@/lib/asks/store");
 const { appendBridgeReports } = await import("@/lib/bridge/store");
 const { setBridgeReports } = await import("@/lib/projects/settings");
+const { resetDismissalOverlayForTests, useDismissalOverlay } = await import("@/components/attention/dismissalOverlay");
+const { buildNeedsYouQueue } = await import("@/components/attention/attentionQueue");
 
 const PROJECT = "repo-widgets";
 const realFetch = globalThis.fetch;
@@ -44,18 +46,21 @@ let filesListener: ((revision: number) => void) | null = null;
 let pages: ReportLogPage[] = [];
 let requests: string[] = [];
 let settingWrites: unknown[] = [];
+let dismissals: Array<{ target: unknown; undo: boolean; surface: string }> = [];
 
 function entry(seq: number, overrides: Partial<ReportLogEntry> = {}): ReportLogEntry {
   return { seq, at: new Date(Date.UTC(2026, 8, 24, 9, seq)).toISOString(), class: "completed", body: `report ${seq}`, cards: [], ...overrides };
 }
 
 function page(entries: ReportLogEntry[], overrides: Partial<ReportLogPage> = {}): ReportLogPage {
-  return { ok: true, project: PROJECT, bridgeReports: true, github: "acme/widgets", revision: `r${entries[0]?.seq ?? 0}`, entries, nextBefore: null, ...overrides };
+  return { ok: true, project: PROJECT, bridgeReports: true, github: "acme/widgets", revision: `r${entries[0]?.seq ?? 0}`, entries, nextBefore: null, questions: { open: [], resolved: [] }, ...overrides };
 }
 
 beforeEach(() => {
   requests = [];
   settingWrites = [];
+  dismissals = [];
+  resetDismissalOverlayForTests();
   pages = [];
   dom.localStorage.clear();
   /* A live runtime bus whose `files.revision` the test fires by hand. */
@@ -76,6 +81,11 @@ beforeEach(() => {
       requests.push(url);
       const next = pages.length > 1 ? pages.shift()! : pages[0]!;
       return new Response(JSON.stringify(next));
+    }
+    if (url.startsWith("/api/attention/dismissals")) {
+      const body = JSON.parse(String(init!.body)) as { target: { subjects: Array<{ kind: "report"; seq: number }> }; undo: boolean; surface: string };
+      dismissals.push(body);
+      return new Response(JSON.stringify({ ok: true, dismissed: body.target.subjects, alreadyClear: [], changed: [], at: "2026-09-24T12:00:00.000Z", by: { kind: "operator", surface: body.surface }, undo: body.undo }));
     }
     if (url.startsWith("/api/projects/settings")) {
       if (init?.method === "PUT") {
@@ -363,4 +373,121 @@ describe("paging back through the real route", () => {
     const views = await pageBack(host, "[data-report-log-asks]");
     expect(views.at(-1)).toEqual(asks);
   });
+});
+
+/* ── The orchestrator's questions: one record with the needs-you panel ── */
+
+function questionPage(): ReportLogPage {
+  return page([
+    entry(6, { class: "question", body: "Raise the attachment limit to 100 MB or keep 25?" }),
+    entry(5, { class: "status", body: "Two lanes running." }),
+    entry(4, { class: "blocked", body: "Cannot merge #88 until the base is picked." }),
+    entry(3, { class: "question", body: "Ship the digest on weekends too?" }),
+    entry(2, { class: "question", body: "An older question the operator answered in chat." }),
+  ], { questions: { open: [6, 4, 3], resolved: [{ seq: 1, at: "2026-09-24T09:30:00.000Z" }] } });
+}
+
+test("every open question carries an unticked box, a resolved one a ticked box, dimmed, with its check; other rows carry none", async () => {
+  pages = [page([
+    entry(3, { class: "question", body: "Open question" }),
+    entry(2, { class: "status", body: "Status" }),
+    entry(1, { class: "question", body: "Resolved question" }),
+  ], { questions: { open: [3], resolved: [{ seq: 1, at: "2026-09-24T09:30:00.000Z" }] } })];
+  const host = mount();
+  await settle();
+  const box = (seq: number) => host.querySelector<HTMLInputElement>(`[data-report-resolve="${seq}"]`);
+  expect(box(3)!.checked).toBe(false);
+  expect(box(2)).toBeNull();
+  expect(box(1)!.checked).toBe(true);
+  const resolved = host.querySelector('[data-report-entry="1"]')!;
+  expect(resolved.getAttribute("data-report-question")).toBe("resolved");
+  expect(resolved.querySelector("[data-report-resolved-mark]")).not.toBeNull();
+  expect(resolved.querySelector("p")!.className).toContain("text-muted");
+  expect(host.querySelector("[data-report-open-count]")!.getAttribute("data-report-open-count")).toBe("1");
+});
+
+test("ticking a question resolves it through the needs-you dismissal, and the needs-you queue loses the same question on the same click", async () => {
+  pages = [questionPage()];
+  const host = mount();
+  await settle();
+  /* The seat as the files poll carries it: three open questions. */
+  const seat = {
+    path: "/sessions/seat.jsonl", root: "claude-projects", name: "seat.jsonl", project: PROJECT, title: "Orchestrator", engine: "claude", kind: "session", fmt: "claude",
+    parent: null, mtime: 0, size: 0, activity: "idle", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null, conversationId: "conversation_seat",
+    bridgeAsks: [3, 4, 6].map((seq) => ({ id: `ask-${seq}`, at: new Date().toISOString(), seq, body: `question ${seq}` })),
+  } as const;
+  let queueLength = -1;
+  function Probe() {
+    const { files, pipelines } = useDismissalOverlay([seat as never], []);
+    queueLength = buildNeedsYouQueue(files, pipelines, Date.now() / 1000, []).length;
+    return null;
+  }
+  const probeHost = document.createElement("div");
+  document.body.append(probeHost);
+  const probeRoot = createRoot(probeHost);
+  flushSync(() => probeRoot.render(<Probe />));
+  expect(queueLength).toBe(3);
+
+  flushSync(() => host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.click());
+  await settle();
+  expect(dismissals).toEqual([{ target: { kind: "subjects", subjects: [{ kind: "report", seq: 4 }] }, undo: false, surface: "desktop" }]);
+  expect(host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.checked).toBe(true);
+  expect(host.querySelector('[data-report-entry="4"]')!.getAttribute("data-report-question")).toBe("resolved");
+  expect(host.querySelector("[data-report-open-count]")!.getAttribute("data-report-open-count")).toBe("2");
+  expect(queueLength).toBe(2);
+
+  /* Unticking is the undo of the same record. */
+  flushSync(() => host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.click());
+  await settle();
+  expect(dismissals.at(-1)).toEqual({ target: { kind: "subjects", subjects: [{ kind: "report", seq: 4 }] }, undo: true, surface: "desktop" });
+  expect(host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.checked).toBe(false);
+  expect(queueLength).toBe(3);
+  flushSync(() => probeRoot.unmount());
+});
+
+test("«Resolve all» resolves exactly the open set in one request", async () => {
+  pages = [questionPage()];
+  const host = mount();
+  await settle();
+  flushSync(() => host.querySelector<HTMLButtonElement>("[data-report-resolve-all]")!.click());
+  await settle();
+  expect(dismissals).toHaveLength(1);
+  const subjects = (dismissals[0]!.target as { subjects: Array<{ seq: number }> }).subjects.map((subject) => subject.seq).sort();
+  expect(subjects).toEqual([3, 4, 6]);
+  expect([...host.querySelectorAll('[data-report-question="open"]')]).toHaveLength(0);
+  expect(host.querySelector<HTMLButtonElement>("[data-report-resolve-all]")!.disabled).toBe(true);
+});
+
+test("prev and next walk the open questions only, wrapping, and mark the one they land on", async () => {
+  pages = [questionPage()];
+  const host = mount();
+  await settle();
+  const current = () => host.querySelector("[data-report-current]")?.getAttribute("data-report-entry") ?? null;
+  const next = () => flushSync(() => host.querySelector<HTMLButtonElement>("[data-report-question-next]")!.click());
+  const prev = () => flushSync(() => host.querySelector<HTMLButtonElement>("[data-report-question-prev]")!.click());
+  next();
+  expect(current()).toBe("6");
+  next();
+  expect(current()).toBe("4");
+  next();
+  expect(current()).toBe("3");
+  next();
+  expect(current()).toBe("6");
+  prev();
+  expect(current()).toBe("3");
+});
+
+test("«Clear resolved» takes resolved questions out of the view on this device and «Show resolved» brings them back", async () => {
+  pages = [page([
+    entry(3, { class: "question", body: "Open" }),
+    entry(1, { class: "question", body: "Resolved" }),
+  ], { questions: { open: [3], resolved: [{ seq: 1, at: "2026-09-24T09:30:00.000Z" }] } })];
+  const host = mount();
+  await settle();
+  flushSync(() => host.querySelector<HTMLButtonElement>('[data-report-hide-resolved="shown"]')!.click());
+  expect(host.querySelector('[data-report-entry="1"]')).toBeNull();
+  expect(host.querySelector('[data-report-entry="3"]')).not.toBeNull();
+  expect(dom.localStorage.getItem(`llvReportLogHideResolved:${PROJECT}`)).toBe("1");
+  flushSync(() => host.querySelector<HTMLButtonElement>('[data-report-hide-resolved="hidden"]')!.click());
+  expect(host.querySelector('[data-report-entry="1"]')).not.toBeNull();
 });

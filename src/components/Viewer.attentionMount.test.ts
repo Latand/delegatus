@@ -64,9 +64,15 @@ test("the shell renders the attention toast on both surfaces, and no longer inli
   expect(code).not.toContain("viewer.agentWaiting");
 });
 
-test("the shell renders the popover rows from the island's own component", () => {
-  expect(code).toMatch(/import\s*\{[^}]*\bAttentionQueueRow\b[^}]*\}\s*from\s*"\.\/attention\/AttentionIsland"/);
-  expect(code).toMatch(/<AttentionQueueRow\b/);
+test("the shell renders the needs-you panel and no cross-project Next", () => {
+  expect(code).toMatch(/import\s*\{[^}]*\bAttentionPanel\b[^}]*\}\s*from\s*"\.\/attention\/AttentionPanel"/);
+  expect(code).toMatch(/<AttentionPanel\b/);
+  /* docs/design/needs-you-options.md, option B: the walk that moved the
+     operator from project to project is gone; only the N key walks, and only
+     the project on screen. */
+  expect(code).not.toContain("advanceGlobalAttention");
+  expect(code).not.toMatch(/onNext=/);
+  expect(code).toMatch(/advanceAttentionCycle\(cycleRef, projectEntries,/);
   /* The row's own line derivation replaced the shell's parallel snippet. */
   expect(code).not.toContain("attentionSnippet");
 });
