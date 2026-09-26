@@ -127,6 +127,8 @@ import {
 import { VoiceFloatButton } from "./voice/VoiceFloatButton";
 import { isDesignatedManagerConversation } from "./voice/managerIdentity";
 import { viewerContextPrelude } from "./voice/viewerContextPrelude";
+import { publishSeatDeputy, useSeatProjectFor } from "./orchestrator/seatDeputies";
+import { parseSeatDeputyView } from "@/lib/orchestrator/deputyView";
 import {
   getServerVoiceComposerHostMounted,
   getServerVoiceSlot,
@@ -4122,6 +4124,61 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     })();
   };
 
+  /* «Ask in parallel» (docs/design/ghost-seat.md §6.6): on an orchestrator
+     seat's own conversation, while its turn runs, the draft starts the seat's
+     parallel self instead of interrupting it. The ask never enters the seat's
+     transcript; its block's head, drawn from the deputy record the route
+     answers with, takes the place a sent message would have. Pictures ride
+     along; documents are refused by name rather than dropped. */
+  const seatProject = useSeatProjectFor(file.conversationId ?? null);
+  const seatTurnRunning = structuredSession?.session.turn === "running";
+  const askInParallel = () => {
+    if (!seatProject) return;
+    const requestedText = textRef.current.trim();
+    const requestedImages = attachments.imagesRef.current.map((image) => ({ ...image }));
+    if (!requestedText && !requestedImages.length) return;
+    if (!seatTurnRunning) {
+      setStatus({ kind: "err", text: t("composer.askInParallelFailed", { error: t("queue.steerIdle") }) });
+      return;
+    }
+    if (attachments.filesRef.current.length) {
+      setStatus({ kind: "err", text: t("inject.imagesUnsupported") });
+      return;
+    }
+    if (requestedImages.length && !attachments.validate()) return;
+    const snapshotText = textRef.current;
+    const clientRequestId = mintIdempotencyKey();
+    setText("");
+    void (async () => {
+      let answer: { ok?: boolean; error?: string; deputy?: unknown } = {};
+      try {
+        const response = await fetch("/api/orchestrator/ghost", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            project: seatProject,
+            text: requestedText,
+            images: requestedImages.map((image) => ({ base64: image.base64, mime: image.mime })),
+            clientRequestId,
+          }),
+        });
+        answer = await response.json() as typeof answer;
+        if (!response.ok) answer.ok = false;
+      } catch (error) {
+        answer = { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+      const deputy = answer.ok ? parseSeatDeputyView(answer.deputy) : null;
+      if (deputy) {
+        publishSeatDeputy(deputy);
+        attachments.settleDelivered(requestedImages, []);
+        setStatus({ kind: "ok", text: t("composer.askInParallel") });
+        return;
+      }
+      setStatus({ kind: "err", text: t("composer.askInParallelFailed", { error: answer.error ?? "" }) });
+      setText((current) => current || snapshotText);
+    })();
+  };
+
   /* An engine without steer that interrupts and resends instead (Copilot):
      the steer action is offered under its true name and submits as the
      default interrupt-active send (docs/design/copilot-engine.md 3.4). */
@@ -4524,7 +4581,17 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       /* Alt+Enter hands the draft to Codex instead of interrupting the turn.
          Enter keeps its meaning; this is the second submission beside it. */
       onAlternateSubmit={nativeQueueEnabled ? queueForCodex : undefined}
+      onParallelSubmit={seatProject ? askInParallel : undefined}
       sendMenuActions={[
+        ...(seatProject
+          ? [{
+            id: "ask-in-parallel",
+            label: t("composer.askInParallel"),
+            description: t("composer.askInParallelHint"),
+            disabled: busy || voiceSending || sendBlocked || !seatTurnRunning,
+            onSelect: askInParallel,
+          } as const]
+          : []),
         ...(nativeQueueEnabled
           ? [{
             id: "native-queue",

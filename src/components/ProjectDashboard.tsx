@@ -27,7 +27,7 @@ import type { Workflow } from "@/lib/workflows/types";
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
 import { onOrchestratorDraftRequest, takePendingBoardView } from "./orchestrator/draftPrefill";
-import { deriveOrchestratorPanelState, resolveSeatFile, retiredSeatPaths, seatRefsOf } from "./orchestrator/seatState";
+import { deriveOrchestratorPanelState, resolveSeatFile, retiredSeatPaths, seatDeputyPaths, seatRefsOf } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
 import { DesktopConversations } from "./DesktopConversations";
 import { clearDraftStorage, draftBand, draftCwd, draftParentConversationId, draftSrc, resolveSystemDraftCwd, setDraftBand, setDraftCwd, setDraftSrc, setDraftText } from "./DraftAgentPane";
@@ -102,6 +102,7 @@ import { boundFlowExpansions } from "./scheme/placementHorizon";
 import { ArchiveRestore } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
+import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { SoundToggle } from "./SoundToggle";
@@ -1794,8 +1795,13 @@ function ProjectDashboardView({
   /* Seats the project retired are the seat sheet's to list (#1841), never
      rows beside product work. A failed read hides nothing extra. */
   const retiredPaths = useMemo(
-    () => retiredSeatPaths(seatRead.failed ? [] : seatRead.status?.previous ?? [], files),
-    [files, seatRead.failed, seatRead.status?.previous],
+    () => [
+      ...retiredSeatPaths(seatRead.failed ? [] : seatRead.status?.previous ?? [], files),
+      /* A seat's parallel selves are the seat's, never rows of their own
+         (docs/design/ghost-seat.md §5). */
+      ...seatDeputyPaths(seatRead.failed ? null : seatRead.status, files),
+    ],
+    [files, seatRead.failed, seatRead.status],
   );
   const mobileHidden = useMemo(() => (retiredPaths.length ? new Set([...hiddenSet, ...retiredPaths]) : hiddenSet), [hiddenSet, retiredPaths]);
   const mobileBoardProps = {
@@ -2062,6 +2068,9 @@ function ProjectDashboardView({
       { kind: "divider", key: "d-merge" },
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
+      /* "Asks you" is the installation's, not the project's; it sits here
+         because this is where the operator looks for what reports to them. */
+      { kind: "custom", key: "asks-you", node: <AsksYouRow variant="sheet" /> },
     );
     if (archived) {
       entries.push({ kind: "divider", key: "d4" }, {
@@ -2138,6 +2147,7 @@ function ProjectDashboardView({
             <BarMenuGroup name="project">
               <MergeOnReviewRow project={project} variant="menu" />
               <BridgeReportsRow project={project} variant="menu" />
+              <AsksYouRow variant="menu" />
               {archived ? (
                 <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
                   <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}

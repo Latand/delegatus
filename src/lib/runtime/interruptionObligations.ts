@@ -89,6 +89,12 @@ export function interruptionObligationId(input: Pick<InterruptionObligation,
   return `${OBLIGATION_PREFIX}${digest}`;
 }
 
+/** Whether a client message id is an obligation's own key, which is what its
+    continuation is delivered under. */
+export function isInterruptionObligationId(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(OBLIGATION_PREFIX) && value.length > OBLIGATION_PREFIX.length;
+}
+
 export function interruptionObligationUnresolved(obligation: InterruptionObligation): boolean {
   return obligation.state === "owed" || obligation.state === "submitted";
 }

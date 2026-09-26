@@ -184,7 +184,7 @@ export function hashValidatedHistory(sourcePath: string, sourceRoot: string, max
   return hashFile(source.sourcePath, maxBytes, source);
 }
 
-interface ReceiptFile { operationId: string; hash: string; size: number }
+interface ReceiptFile { operationId: string; hash: string; size: number; records?: number }
 
 function readReceipt(pathname: string): ReceiptFile | null {
   try {
@@ -387,6 +387,12 @@ export interface ForkClaudeHistoryInput {
   maxBytes?: number;
   /** Read size per step. Tests shrink it to force a multi-byte character across a boundary. */
   chunkBytes?: number;
+  /** Copy a transcript its own session is still appending to (the seat's
+      deputy, docs/design/ghost-seat.md §5): read exactly the bytes the source
+      held when it was validated, drop a trailing line the writer had not
+      finished, and accept growth past that point. Without it any growth
+      between validation and the read is an integrity failure. */
+  snapshot?: boolean;
 }
 
 export interface ForkClaudeHistoryResult {
@@ -396,6 +402,9 @@ export interface ForkClaudeHistoryResult {
   reused: boolean;
   /** Top-level `sessionId` fields renamed; zero on a reused fork. */
   rewritten: number;
+  /** Complete transcript lines the fork holds. Read back from the receipt on a
+      reused fork; null only for a receipt written before it was recorded. */
+  records: number | null;
 }
 
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -424,11 +433,13 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
 
   /* One pass over the source: rewrites lines into `targetFd`, or only measures
      what the rewrite would produce when `targetFd` is null. */
-  const rewrite = (targetFd: number | null): { hash: string; size: number; rewritten: number } => {
+  const snapshot = input.snapshot === true;
+  const rewrite = (targetFd: number | null): { hash: string; size: number; rewritten: number; records: number } => {
     const sourceFd = fs.openSync(source.sourcePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
     try {
       const opened = fs.fstatSync(sourceFd);
-      if (opened.dev !== source.device || opened.ino !== source.inode || opened.size !== source.size) throw new HistorySecurityError("unsafe-source");
+      if (opened.dev !== source.device || opened.ino !== source.inode
+        || (snapshot ? opened.size < source.size : opened.size !== source.size)) throw new HistorySecurityError("unsafe-source");
       const digest = crypto.createHash("sha256");
       const decoder = new StringDecoder("utf8");
       const buffer = Buffer.allocUnsafe(Math.max(1, input.chunkBytes ?? 1024 * 1024));
@@ -436,6 +447,7 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
       let read = 0;
       let size = 0;
       let rewritten = 0;
+      let records = 0;
       const emit = (text: string): void => {
         if (!text) return;
         const bytes = Buffer.from(text, "utf8");
@@ -453,7 +465,9 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
         });
       };
       for (;;) {
-        const count = fs.readSync(sourceFd, buffer, 0, buffer.length, null);
+        const want = snapshot ? Math.min(buffer.length, source.size - read) : buffer.length;
+        if (want <= 0) break;
+        const count = fs.readSync(sourceFd, buffer, 0, want, null);
         if (count === 0) break;
         read += count;
         if (read > maxBytes) throw new HistorySecurityError("history-too-large");
@@ -463,6 +477,7 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
         let out = "";
         while (newline !== -1) {
           out += rewriteLine(pending.slice(start, newline)) + "\n";
+          records += 1;
           start = newline + 1;
           newline = pending.indexOf("\n", start);
         }
@@ -470,11 +485,20 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
         emit(out);
       }
       pending += decoder.end();
-      emit(rewriteLine(pending));
+      /* A snapshot ends at the last complete line: the writer may be halfway
+         through the next one, and a resumed session must not parse half a
+         record. */
+      if (!snapshot) {
+        emit(rewriteLine(pending));
+        if (pending) records += 1;
+      }
       if (read !== source.size) throw new HistorySecurityError("history-integrity");
       if (rewritten === 0) throw new HistorySecurityError("history-integrity");
-      if (!sameIdentity(fs.fstatSync(sourceFd), source)) throw new HistorySecurityError("history-integrity");
-      return { hash: digest.digest("hex"), size, rewritten };
+      const after = fs.fstatSync(sourceFd);
+      if (snapshot
+        ? after.nlink !== 1 || after.dev !== source.device || after.ino !== source.inode || after.size < source.size
+        : !sameIdentity(after, source)) throw new HistorySecurityError("history-integrity");
+      return { hash: digest.digest("hex"), size, rewritten, records };
     } finally {
       fs.closeSync(sourceFd);
     }
@@ -487,12 +511,12 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
       if (receipt.operationId !== input.operationId || receipt.hash !== existing.hash || receipt.size !== existing.size) {
         throw new HistorySecurityError("history-collision");
       }
-      return { path: destination, ...existing, reused: true, rewritten: 0 };
+      return { path: destination, ...existing, reused: true, rewritten: 0, records: typeof receipt.records === "number" ? receipt.records : null };
     }
     const expected = rewrite(null);
     if (expected.hash !== existing.hash || expected.size !== existing.size) throw new HistorySecurityError("history-collision");
-    writeReceipt(receiptPath, { operationId: input.operationId, hash: existing.hash, size: existing.size });
-    return { path: destination, ...existing, reused: true, rewritten: 0 };
+    writeReceipt(receiptPath, { operationId: input.operationId, hash: existing.hash, size: existing.size, records: expected.records });
+    return { path: destination, ...existing, reused: true, rewritten: 0, records: expected.records };
   }
 
   const temp = path.join(parent, `.${path.basename(destination)}.${process.pid}.${crypto.randomUUID()}.tmp`);
@@ -513,8 +537,8 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
     fs.rmSync(temp, { force: true });
     const published = fs.openSync(parent, "r");
     try { fs.fsyncSync(published); } finally { fs.closeSync(published); }
-    writeReceipt(receiptPath, { operationId: input.operationId, hash: written.hash, size: written.size });
-    return { path: destination, hash: written.hash, size: written.size, reused: false, rewritten: written.rewritten };
+    writeReceipt(receiptPath, { operationId: input.operationId, hash: written.hash, size: written.size, records: written.records });
+    return { path: destination, hash: written.hash, size: written.size, reused: false, rewritten: written.rewritten, records: written.records };
   } finally {
     if (targetFd !== null) fs.closeSync(targetFd);
     fs.rmSync(temp, { force: true });

@@ -13,10 +13,10 @@
     An agent's is the same shape the attention record's `raisedBy` carries. */
 export type DismissedBy =
   | { kind: "operator"; surface?: "desktop" | "phone" }
-  | { kind: "manager" | "agent" | "gateway" | "unidentified"; conversationId: string | null; role: string | null };
+  | { kind: "manager" | "agent" | "gateway" | "unidentified"; conversationId: string | null; role: string | null; via?: { deputy: string } };
 
 /** The reasons a conversation can need the operator for (§4). */
-export type ConversationReasonKind = "decision" | "question" | "plan" | "permission" | "delivery" | "launch";
+export type ConversationReasonKind = "decision" | "question" | "plan" | "permission" | "delivery" | "launch" | "ask";
 
 /** The reasons a lane can need the operator for: a decision, a spent review
     budget, and a completed lane's merge that stopped (#2187 §4.6). */

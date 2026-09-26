@@ -2,20 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { roleNameById } from "@/components/builderCopy";
+import type { ReportLogAsk } from "@/lib/asks/types";
 import type { ReportLogEntry, ReportLogPage } from "@/lib/bridge/reportLog";
 import type { BridgeReportClass } from "@/lib/bridge/types";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { BridgeReportsRow } from "../../BridgeReportsRow";
 import { useBridgeReportsSetting } from "./bridgeReportsSetting";
-import { bodySegments, entryTime, readSeenSeq, writeSeenSeq } from "./reportLogModel";
+import { askHref, bodySegments, entryTime, readSeenSeq, reportLogRows, writeSeenSeq } from "./reportLogModel";
 import { useReportLog } from "./useReportLog";
 
 /*
  * The orchestrator's report log (#2146): this project's bridge reports, newest
  * first, beside the seat's chat. Each entry is its local time, its class as a
  * word and its body as written, with `#123` and the board's card ids linked.
- * Nothing else lives here: no lanes, no deploys, no counts, no groups. Entries
+ * Between them, by time, the Viewer's own "Asks you" lines: an agent that
+ * asked the operator, linked to its conversation (docs/research/attention-classifier.md
+ * §7.4). Nothing else lives here: no lanes, no deploys, no counts, no groups. Entries
  * that arrived since the operator last looked carry a quiet «new». One project
  * per mount: callers key it by the project.
  */
@@ -56,14 +60,41 @@ export function ReportLog({ project, active = true, variant, initial, now }: {
   }, [active, off, newest, project]);
 
   const column = variant === "column";
+  const rows = useMemo(
+    () => reportLogRows(log.entries, log.asks, { reports: !log.olderReports, asks: !log.olderAsks }),
+    [log.entries, log.asks, log.olderReports, log.olderAsks],
+  );
+  const askLines = (asks: readonly ReportLogAsk[]) => (
+    <ol className="flex flex-col" data-report-log-asks="">
+      {asks.map((ask) => <AskLine key={ask.id} ask={ask} t={t} locale={locale} now={now} />)}
+    </ol>
+  );
+  const olderButton = (
+    <div className="px-3 py-2">
+      <button
+        type="button"
+        data-report-log-older=""
+        disabled={log.loadingOlder}
+        onClick={log.loadOlder}
+        className={`w-full rounded-control border border-border bg-card px-3 text-ui font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${column ? "min-h-8" : "min-h-11"}`}
+      >
+        {log.loadingOlder ? t("reportLog.loading") : t("reportLog.older")}
+      </button>
+    </div>
+  );
   let body: React.ReactNode;
   if (off) {
     body = (
-      <div className={column ? "flex flex-col gap-2 px-3 py-3" : "flex flex-col gap-1 py-3"} data-report-log-off="">
-        <p className={`text-body text-secondary${column ? "" : " px-4"}`}>{t("reportLog.off")}</p>
-        {/* The phone's switch is 44 px, as in its ⋯ sheet. */}
-        <BridgeReportsRow project={project} variant={column ? "inline" : "sheet"} />
-      </div>
+      <>
+        <div className={column ? "flex flex-col gap-2 px-3 py-3" : "flex flex-col gap-1 py-3"} data-report-log-off="">
+          <p className={`text-body text-secondary${column ? "" : " px-4"}`}>{t("reportLog.off")}</p>
+          {/* The phone's switch is 44 px, as in its ⋯ sheet. */}
+          <BridgeReportsRow project={project} variant={column ? "inline" : "sheet"} />
+        </div>
+        {/* The asks are the Viewer's, not the orchestrator's: its switch does not hide them. */}
+        {log.asks.length ? askLines(log.asks) : null}
+        {log.olderAsks ? olderButton : null}
+      </>
     );
   } else if (!log.loaded) {
     body = (
@@ -71,38 +102,26 @@ export function ReportLog({ project, active = true, variant, initial, now }: {
         {t(log.failed ? "reportLog.failed" : "reportLog.loading")}
       </p>
     );
-  } else if (log.entries.length === 0) {
+  } else if (rows.length === 0) {
     body = <p className="px-3 py-3 text-body text-muted" data-report-log-empty="">{t("reportLog.empty")}</p>;
   } else {
     body = (
       <>
         <ol className="flex flex-col" data-report-log-entries="">
-          {log.entries.map((entry) => (
+          {rows.map((row) => row.kind === "ask" ? <AskLine key={row.key} ask={row.ask} t={t} locale={locale} now={now} /> : (
             <ReportEntry
-              key={entry.seq}
-              entry={entry}
+              key={row.key}
+              entry={row.entry}
               github={log.github}
               locale={locale}
               now={now}
-              fresh={seenAtOpen !== null && entry.seq > seenAtOpen}
-              classLabel={t(`reportLog.class.${entry.class}`)}
+              fresh={seenAtOpen !== null && row.entry.seq > seenAtOpen}
+              classLabel={t(`reportLog.class.${row.entry.class}`)}
               newLabel={t("reportLog.new")}
             />
           ))}
         </ol>
-        {log.hasOlder ? (
-          <div className="px-3 py-2">
-            <button
-              type="button"
-              data-report-log-older=""
-              disabled={log.loadingOlder}
-              onClick={log.loadOlder}
-              className={`w-full rounded-control border border-border bg-card px-3 text-ui font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${column ? "min-h-8" : "min-h-11"}`}
-            >
-              {log.loadingOlder ? t("reportLog.loading") : t("reportLog.older")}
-            </button>
-          </div>
-        ) : null}
+        {log.hasOlder ? olderButton : null}
       </>
     );
   }
@@ -119,6 +138,39 @@ export function ReportLog({ project, active = true, variant, initial, now }: {
       ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">{body}</div>
     </section>
+  );
+}
+
+/** Who asked, in the board's words: the agent's role, else its title. */
+function askAgent(t: TFunction, ask: ReportLogAsk): string {
+  return ask.role ? roleNameById(t, ask.role) : ask.title?.trim() || t("reportLog.askAgent");
+}
+
+/**
+ * One "Asks you" line: «‹agent› asks you: ‹the sentence that asks›». The agent
+ * is the link, and it opens that agent's conversation.
+ */
+function AskLine({ ask, t, locale, now }: { ask: ReportLogAsk; t: TFunction; locale: string; now?: Date }) {
+  const agent = askAgent(t, ask);
+  return (
+    <li className="flex flex-col gap-1 border-b border-border px-3 py-2.5" data-report-ask={ask.id}>
+      <div className="flex items-baseline gap-2 text-caption">
+        <time dateTime={ask.at} className="tabular-nums text-muted">{entryTime(ask.at, locale, now)}</time>
+        <span className="font-semibold text-accent" data-report-class-label="">{t("reportLog.class.ask")}</span>
+      </div>
+      <p className="break-words text-body text-primary [overflow-wrap:anywhere]">
+        <a
+          href={askHref(ask)}
+          data-report-link="conversation"
+          aria-label={t("reportLog.askOpen", { agent })}
+          className="font-semibold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          {agent}
+        </a>
+        {" "}
+        {ask.gist ? t("reportLog.askLine", { gist: ask.gist }) : t("reportLog.askBare")}
+      </p>
+    </li>
   );
 }
 

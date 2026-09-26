@@ -469,6 +469,24 @@ body {
   transform: translateY(-26px) scale(0.85) !important;
 }
 
+/* A seat deputy's block collapsing to its one line or opening back to its
+   rows (docs/design/ghost-seat.md §6.3): --motion-base, and only when the
+   change happens in view, never on first paint. Static under reduced motion. */
+@keyframes deputy-settle {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.deputy-settle {
+  animation: deputy-settle 200ms var(--ease-standard, ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .deputy-settle {
+    animation: none;
+  }
+}
+
 @keyframes deck-unfold {
   from {
     opacity: 0;

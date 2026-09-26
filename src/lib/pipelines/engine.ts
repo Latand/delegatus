@@ -97,6 +97,7 @@ import { nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep, observeForgePullRequest } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
 import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
+import { productionDeputyPrincipal } from "@/lib/orchestrator/deputies";
 import type {
   CreatePipelineRequest,
   EffectivePipelineRole,
@@ -286,6 +287,11 @@ export interface PipelinePorts {
   pathForConversation(conversationId: string): string | null;
   sourcePathAllowed(pathname: string): boolean;
   conversationIdForPath(pathname: string): string | null;
+  /** The seat a live deputy of an orchestrator stands for
+      (docs/design/ghost-seat.md §4 rule 3): a lane a deputy creates is the
+      seat's lane, so the seat can answer its decisions after the deputy is
+      gone. Optional: a harness without deputies leaves lineage as given. */
+  deputySeatFor?(conversationId: string): { conversationId: string; path: string | null } | null;
   pipelineAdoptionCandidates(pipelineId: string): PipelineAdoptionCandidate[];
   createFlow(req: CreateFlowRequest, entries: FileEntry[]): Promise<{ flow?: Flow; error?: string }>;
   patchFlow(id: string, action: "advance" | "pause" | "resume" | "retry-round", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
@@ -1299,6 +1305,10 @@ export function defaultPipelinePorts(
         if (conversation.generations.some((generation) => generation.path === pathname)) return conversation.id;
       }
       return null;
+    },
+    deputySeatFor: (conversationId) => {
+      const principal = productionDeputyPrincipal(conversationId);
+      return principal ? { conversationId: principal.seatConversationId, path: principal.seatPath } : null;
     },
     pipelineAdoptionCandidates: (pipelineId) => adoptionCandidates().get(pipelineId) ?? [],
     createFlow: async (request, entries) => {
@@ -5987,6 +5997,9 @@ export type PipelineMutationResult = {
 type PipelineCreatorLineage = {
   srcPath: string | null;
   srcConversationId: string | null;
+  /** Set when a live deputy created the lane for its seat: the seat is the
+      creator above, and this names the deputy that acted. */
+  srcDeputyConversationId?: string;
 };
 
 /** #1026: the roots a creator transcript may live under, named in every `src`
@@ -5996,9 +6009,9 @@ type PipelineCreatorLineage = {
 export const PIPELINE_SRC_ROOT_GUIDANCE =
   "src must be a .jsonl transcript under an accepted root: the shared Claude transcript store (<viewer config dir>/shared/claude/projects), a Claude account's own projects root, or a Codex sessions root (~/.codex/sessions). A native ~/.claude/projects path is accepted and normalized to the shared store when the mirrored file exists there.";
 
-function resolvePipelineCreatorLineage(
+export function resolvePipelineCreatorLineage(
   value: unknown,
-  ports: Pick<PipelinePorts, "sourcePathAllowed" | "conversationIdForPath">,
+  ports: Pick<PipelinePorts, "sourcePathAllowed" | "conversationIdForPath" | "deputySeatFor">,
 ): { lineage?: PipelineCreatorLineage; error?: string; status?: number } {
   const requested = typeof value === "string" ? value.trim() : "";
   if (!requested) return { error: "pipeline creator lineage is required; pass src", status: 400 };
@@ -6008,7 +6021,11 @@ function resolvePipelineCreatorLineage(
   for (const srcPath of [requested, mirroredClaudeTranscriptPath(requested)]) {
     if (!srcPath || !ports.sourcePathAllowed(srcPath)) continue;
     const srcConversationId = ports.conversationIdForPath(srcPath);
-    if (srcConversationId) return { lineage: { srcPath, srcConversationId } };
+    if (!srcConversationId) continue;
+    /* A live deputy creates the lane on its seat's behalf: the seat owns it. */
+    const seat = ports.deputySeatFor?.(srcConversationId) ?? null;
+    if (seat) return { lineage: { srcPath: seat.path ?? srcPath, srcConversationId: seat.conversationId, srcDeputyConversationId: srcConversationId } };
+    return { lineage: { srcPath, srcConversationId } };
   }
   if (!ports.sourcePathAllowed(requested)) {
     return { error: `src path is not an allowed conversation transcript. ${PIPELINE_SRC_ROOT_GUIDANCE}`, status: 400 };
@@ -6222,6 +6239,7 @@ export async function createPipelineFromRequest(
     stages: normalized.stages,
     srcPath: creator.lineage.srcPath,
     srcConversationId: creator.lineage.srcConversationId,
+    srcDeputyConversationId: creator.lineage.srcDeputyConversationId ?? null,
     now: ports.now(),
     state: req.autoStart === false ? "draft" : "provisioning",
     ...(req.publication === "internal" || req.publication === "remote-branch" ? { publication: req.publication } : {}),
@@ -7395,6 +7413,8 @@ export async function patchPipeline(
       }
       pipeline.srcPath = creator.lineage.srcPath;
       pipeline.srcConversationId = creator.lineage.srcConversationId;
+      if (creator.lineage.srcDeputyConversationId) pipeline.srcDeputyConversationId = creator.lineage.srcDeputyConversationId;
+      else delete pipeline.srcDeputyConversationId;
     } else if (req.action === "link-task") {
       const taskId = typeof req.taskId === "string" ? req.taskId.trim() : "";
       if (!taskId) return { error: "taskId is required", status: 400 };
@@ -8150,7 +8170,7 @@ function applyPipelineDismissal(pipeline: Pipeline, dismiss: boolean, by: Dismis
     route carries: the operator, or the server-attributed agent. */
 function dismissedByActor(actor: PauseResumeActor | null): DismissedBy {
   if (!actor || actor.kind === "operator") return { kind: "operator" };
-  return { kind: "agent", conversationId: actor.conversationId, role: actor.role };
+  return { kind: "agent", conversationId: actor.conversationId, role: actor.role, ...(actor.via ? { via: { deputy: actor.via.deputy } } : {}) };
 }
 
 /** The dismissal service's write (`@/lib/attention/dismissals`): the same

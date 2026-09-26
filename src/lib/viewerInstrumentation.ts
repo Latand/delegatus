@@ -104,9 +104,13 @@ interface CurrentReleaseControllerLoaders {
   /** Optional for the same reason. */
   loadSeatTick?: () => Promise<{ startSeatTick: () => boolean }>;
   /** Optional for the same reason. */
+  loadDeputySweep?: () => Promise<{ startDeputySweep: () => void }>;
+  /** Optional for the same reason. */
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
   /** Optional for the same reason. */
   loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
+  /** Optional for the same reason. */
+  loadAsksClassifier?: () => Promise<{ startAsksClassifier: () => void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -395,7 +399,9 @@ export async function startCurrentReleaseControllers(
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
+    loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
     loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
+    loadAsksClassifier: () => import("@/lib/asks/controller"),
   },
 ): Promise<void> {
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
@@ -493,6 +499,25 @@ export async function startCurrentReleaseControllers(
     worktreeSweep?.startWorktreeSweep();
   } catch (error) {
     console.error("[worktree sweep] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* "Asks you" (docs/research/attention-classifier.md §7), on the same clock
+     for the same reason. Each sweep reads the switch first; off, it reads one
+     small file and stops. */
+  try {
+    const asks = await loaders.loadAsksClassifier?.();
+    asks?.startAsksClassifier();
+  } catch (error) {
+    console.error("[asks you] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* A seat's deputy that was running when the Viewer stopped still has to end
+     and tell its seat (docs/design/ghost-seat.md §5). The sweep stops itself
+     when nothing is live, so this is one small read on an install that never
+     asks in parallel. */
+  try {
+    const deputySweep = await loaders.loadDeputySweep?.();
+    deputySweep?.startDeputySweep();
+  } catch (error) {
+    console.error("[deputy] sweep start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();

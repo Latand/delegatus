@@ -34,6 +34,8 @@ import { ToolCard, mobileClock } from "./cards/ToolCard";
 import { WakeupCard } from "./cards/WakeupCard";
 import { SpeakButton } from "./SpeakButton";
 import { McpCallCard } from "../runtime/McpCallCard";
+import { DeputyMark, useDeputyInk } from "../conversation/deputyInk";
+import { quoteHead } from "../conversation/deputyPlacement";
 
 /**
  * Resolves a row with delivery evidence (#1117). A delivered Claude system row
@@ -105,7 +107,7 @@ function internalCard(ts: unknown, text: string, senderRole: string | undefined)
 /* Mobile v2 (#1439, lane 4): the engine mark is the only avatar left on the
    phone — a 16 px glyph in secondary colour beside the engine's name in the
    message header (README §5). Proper nouns, so no locale entry. */
-const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> = {
+export const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> = {
   claude: "Claude",
   codex: "Codex",
   copilot: "Copilot",
@@ -116,10 +118,20 @@ const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> 
    (poll tick, camera state, files refresh) skips re-parsing markdown for
    every message that did not change. The provenance lookup arrives by context,
    so a resolved map re-renders exactly the memoized consumers. */
-export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: { item: Item; speakText?: string }) {
+export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, resumesAsk }: {
+  item: Item;
+  speakText?: string;
+  /** Phone only: this seat row is the first after a parallel self's block, so
+      its header also says which seat head it continues (null: the head has no
+      text to quote). Absent: an ordinary row. */
+  resumesAsk?: string | null;
+}) {
   const { t } = useLocale();
   const provenance = useMessageProvenance();
   const isMobile = useIsMobile();
+  /* Inside a deputy's block (docs/design/ghost-seat.md §6.2) the prose row is
+     the seat's parallel self: outline mark, secondary ink. */
+  const deputyInk = useDeputyInk();
   const item = resolveDeliveredItem(sourceItem, provenance);
   /* Mobile v2 (#1439, lane 4): no avatar column on the phone, so nothing lines
      up with one — the `ml-9` chrome indent goes with it. */
@@ -155,12 +167,22 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
       const time = mobileClock(item.ts);
       return (
         <div className="group/msg pt-2" data-mobile-message="agent" data-tts-message={`${item.engine}:${item.ts}`}>
-          <div data-mobile-message-header className="mb-1 flex h-5 w-full items-center gap-1.5 text-label text-muted">
-            <AvatarIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden />
-            <span className="font-semibold text-secondary">{ENGINE_LABEL[item.engine]}</span>
-            {time ? <span className="tabular-nums">· {time}</span> : null}
+          <div
+            data-mobile-message-header
+            data-seat-speaker={resumesAsk !== undefined ? "resumes" : undefined}
+            className="mb-1 flex h-5 w-full min-w-0 items-center gap-1.5 text-label text-muted"
+            title={resumesAsk ?? undefined}
+          >
+            {deputyInk ? <DeputyMark engine={item.engine} /> : <AvatarIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden />}
+            {/* Inside a deputy's block the row is the parallel self's, and says so:
+                the bare engine name is what the seat's own rows carry. */}
+            <span data-mobile-message-speaker className="shrink-0 font-semibold text-secondary">{deputyInk ? t("deputy.participant") : ENGINE_LABEL[item.engine]}</span>
+            {time ? <span className="shrink-0 tabular-nums">· {time}</span> : null}
+            {/* The seat's one name on the phone stays this header, so the head
+                it continues after a block joins it here (ghost-seat.md §6.1). */}
+            {resumesAsk ? <span data-seat-continues className="min-w-0 truncate">{`· ${t("deputy.resumes", { ask: quoteHead(resumesAsk) })}`}</span> : null}
           </div>
-          <div className="w-full whitespace-pre-wrap break-words text-title leading-[1.45]">
+          <div className={`w-full whitespace-pre-wrap break-words text-title leading-[1.45]${deputyInk ? " text-secondary" : ""}`}>
             <div className="contents" data-tts-body>{mdBlocks(item.text)}</div>
           </div>
           <div data-mobile-message-actions className="-mx-3 -my-1.5 flex h-11 items-center">
@@ -172,9 +194,11 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
     }
     return (
       <div className="group/msg my-3 flex gap-2.5">
-        <div className={`mt-1 flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-full text-[color:var(--engine-fill-ink)] ${cls}`} style={fillStyle}>
-          <AvatarIcon className="h-3.5 w-3.5" aria-hidden />
-        </div>
+        {deputyInk ? <DeputyMark engine={item.engine} size={26} className="mt-1" /> : (
+          <div className={`mt-1 flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-full text-[color:var(--engine-fill-ink)] ${cls}`} style={fillStyle}>
+            <AvatarIcon className="h-3.5 w-3.5" aria-hidden />
+          </div>
+        )}
         {/* `data-tts-message` / `data-tts-body`: the anchors the read-aloud
             control uses to find the RENDERED text of this answer, so the
             karaoke highlight and click-to-seek of #1022 ride over the markdown
@@ -188,7 +212,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
             row sits inside it, so the time and the controls end where the text
             ends. Tool calls and diffs are items of their own and keep the full
             width. */}
-        <div className={`min-w-0 flex-1 ${READING_MEASURE} whitespace-pre-wrap break-words`} data-tts-message={`${item.engine}:${item.ts}`}>
+        <div className={`min-w-0 flex-1 ${READING_MEASURE} whitespace-pre-wrap break-words${deputyInk ? " text-secondary" : ""}`} data-tts-message={`${item.engine}:${item.ts}`}>
           {/* Issue #698: this cluster used to be `absolute right-0 top-0` over a
               body with no reserved gutter — on a coarse pointer the 44px buttons
               sat permanently at 60% opacity on the first lines of the message,
