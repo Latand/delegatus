@@ -15,14 +15,21 @@ export type MessageKey = keyof typeof en;
 const DICTS: Record<Locale, Dictionary> = { en, uk };
 const STORAGE_KEY = "llv_lang";
 
-function detectLocale(): Locale {
-  if (typeof window === "undefined") return "en";
+/** The language this browser keeps, or null when it keeps none. */
+function storedLocale(): Locale | null {
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved === "en" || saved === "uk") return saved;
   } catch {
-    /* private mode / disabled storage: fall through to navigator */
+    /* private mode / disabled storage */
   }
+  return null;
+}
+
+function detectLocale(): Locale {
+  if (typeof window === "undefined") return "en";
+  const saved = storedLocale();
+  if (saved) return saved;
   const nav = typeof navigator !== "undefined" ? navigator.language : "";
   return nav.toLowerCase().startsWith("uk") ? "uk" : "en";
 }
@@ -105,30 +112,40 @@ export function resetLocaleForTests(): void {
 
 /**
  * Once per page load, after the app has mounted: adopt the server's language
- * when it differs from what this browser shows (another device chose it), or,
- * when the server has none yet, report what this browser shows as `detected`.
- * The time zone is reported either way. Storage stays the boot cache, so the
- * first paint never waits on this.
+ * when it differs from what this browser shows and another device chose it,
+ * or, when the server has none yet, report what this browser shows as
+ * `detected`. A language the server only detected never replaces one this
+ * browser keeps: until the server learned the language, the toggle was the
+ * only writer of storage, so a kept language is the operator's own choice and
+ * is written back as `chosen`. The time zone is reported either way. Storage
+ * stays the boot cache, so the first paint never waits on this.
  */
 export async function syncOperatorLocale(): Promise<void> {
   if (operatorLocaleSynced || typeof window === "undefined" || typeof fetch !== "function") return;
   operatorLocaleSynced = true;
   const shown = getLocale();
   let server: Locale | null = null;
+  let serverDetected = false;
   let serverTimeZone: string | null = null;
   try {
     const response = await fetch(OPERATOR_SETTINGS_URL, { cache: "no-store" });
     if (!response.ok) return;
-    const body = await response.json() as { locale?: { value?: unknown } | null; timeZone?: { value?: unknown } | null };
+    const body = await response.json() as { locale?: { value?: unknown; source?: unknown } | null; timeZone?: { value?: unknown } | null };
     const value = body.locale?.value;
     server = value === "en" || value === "uk" ? value : null;
+    serverDetected = body.locale?.source === "detected";
     serverTimeZone = typeof body.timeZone?.value === "string" ? body.timeZone.value : null;
   } catch {
     return;
   }
   const zone = clientTimeZone();
   const zoneChanged = zone.timeZone !== undefined && zone.timeZone !== serverTimeZone;
-  if (server && server !== shown) setLocale(server);
+  const kept = storedLocale();
+  if (server && serverDetected && kept) {
+    await writeOperatorSettings({ locale: kept, source: "chosen", ...zone });
+    return;
+  }
+  if (server && server !== shown && !serverDetected) setLocale(server);
   if (!server) {
     await writeOperatorSettings({ locale: shown, source: "detected", ...zone });
   } else if (zoneChanged) {

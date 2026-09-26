@@ -1476,9 +1476,10 @@ function instant(value: string | null | undefined): number {
 function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): SeatTickProjectState {
   const reports = input.reports;
   if (!reports) return state;
-  const reported = new Set(reports.reportedIds);
+  const ids = new Set(reports.reportedIds);
+  const reported = (key: string) => reports.reportIdsFor(key).some((id) => ids.has(id));
   const coveredThrough = instant(reports.latestCoversOwedAt);
-  const owed = (state.reportsOwed ?? []).filter((entry) => !reported.has(reports.reportIdFor(entry.key))
+  const owed = (state.reportsOwed ?? []).filter((entry) => !reported(entry.key)
     && !(Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
 
   const sets = new Map(reports.suggestionSets.map((set) => [set.conversationId, set] as const));
@@ -1486,7 +1487,7 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   const answeredSince = (conversationId: string, since: string) => reports.operatorAdmissions
     .some((admission) => admission.conversationId === conversationId && instant(admission.at) >= instant(since));
   const asks: SeatTickAskOwed[] = (state.asksOwed ?? []).filter((entry) => {
-    if (reported.has(reports.reportIdFor(entry.key))) return false;
+    if (reported(entry.key)) return false;
     if (read.has(entry.conversationId) && !sets.has(entry.conversationId)) return false;
     return !answeredSince(entry.conversationId, entry.at);
   });
@@ -1494,7 +1495,7 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   if (current && reports.bridgeReports && !asks.some((entry) => entry.setId === current.setId)) {
     const key = `ask:${current.setId}`;
     const old = input.now - instant(current.at) >= ASK_OWED_AFTER_MS;
-    if (old && !reported.has(reports.reportIdFor(key)) && !answeredSince(current.conversationId, current.at)) {
+    if (old && !reported(key) && !answeredSince(current.conversationId, current.at)) {
       asks.push({ key, setId: current.setId, conversationId: current.conversationId, at: current.at });
     }
   }

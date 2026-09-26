@@ -680,9 +680,12 @@ part.
   one; the server enforces that.
 - **Client** (`src/lib/i18n/index.ts`): `setLocale` from the toggle `PUT`s
   `{ locale, source: "chosen" }`. After hydration the client `GET`s once: a
-  server value different from the local one is adopted locally, with no PUT;
-  no server value means the client `PUT`s what it shows with
-  `source: "detected"`. `localStorage` stays as the boot cache, so the first
+  `chosen` server value different from the local one is adopted locally, with
+  no PUT; no server value means the client `PUT`s what it shows with
+  `source: "detected"`. A `detected` server value never replaces a language the
+  browser keeps in `llv_lang`: until this build the toggle was that key's only
+  writer, so the kept value is written back as `chosen`. A browser that keeps
+  none does not adopt a `detected` value either. `localStorage` stays as the boot cache, so the first
   paint has no flash and fixtures that seed `llv_lang` keep working.
 - **Readers**:
   - `get_orchestrator` carries `operatorLocale` in compact and full answers.
@@ -883,9 +886,16 @@ In `bridgeReport` (`src/lib/mcp/bindings.ts:2565`) and its schema
   because an empty report would clear an owed outcome with nothing in the log;
   every other problem is a warning.
 - **Id scoping**: the stored id becomes `bridgeReportId(project + "\0" + key)`
-  when the project resolves; `covers` is stored as scoped ids. The verbatim
-  `key` that decision-class rows keep for the attention queue is unchanged. The
-  tick computes the same `scopedReportId`.
+  when the project resolves; `covers` is stored as scoped ids. The project is
+  the caller's folded through the project aliases (`canonicalOrchestratorProject`)
+  before it scopes, stores or picks the seat, because a seat recorded before its
+  folder changed key still carries the old key. The verbatim `key` that
+  decision-class rows keep for the attention queue is unchanged. The tick
+  computes the same `scopedReportId`, and also counts rows filed under an older
+  key of the project before the fold: it reads every manager row whose project
+  folds to the canonical one and checks a key under each project those rows
+  were filed under. A replay of the key finds a row filed under the caller's old
+  key too, and only a manager's replay re-sends a failed Telegram copy.
 - **Warnings** in the answer, `warnings: string[]`, empty when clean:
   - language: `proseLanguage(summary and items)` differs from
     `operatorLocale()` → "This report reads as Russian; the operator's

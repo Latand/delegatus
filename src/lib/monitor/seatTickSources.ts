@@ -662,7 +662,12 @@ function reportsInput(
   const port = sources.reports;
   if (!port) return undefined;
   try {
-    const manager = port.log().filter((report) => report.project === project && report.origin?.kind === "manager");
+    /* A row is the project's when its key folds to the project: a seat recorded
+       before its folder changed key filed under the old one, and those rows
+       still discharge what they covered. */
+    const manager = port.log().filter((report) => !!report.project && report.origin?.kind === "manager"
+      && (report.project === project || canonicalOrchestratorProject(report.project) === project));
+    const filedUnder = [...new Set([project, ...manager.map((report) => report.project!)])];
     const reportedIds = new Set<string>();
     let lastReportAt: string | null = null;
     let latestCoversOwedAt: string | null = null;
@@ -676,18 +681,16 @@ function reportsInput(
     const suggestions = port.suggestions();
     const read = new Set(conversations);
     const admissions = suggestions.admissions;
-    const oldest = admissions.reduce<string | null>((min, admission) => (!min || Date.parse(admission.at) < Date.parse(min) ? admission.at : min), null);
     return {
       bridgeReports: port.enabled(project),
       operatorLocale: port.operatorLocale(),
       lastReportAt,
       reportedIds: [...reportedIds],
-      reportIdFor: (key) => scopedReportId(project, key),
+      reportIdsFor: (key) => filedUnder.map((filed) => scopedReportId(filed, key)),
       latestCoversOwedAt,
       suggestionSets: suggestions.sets.filter((set) => read.has(set.conversationId)).map((set) => ({ conversationId: set.conversationId, setId: set.setId, at: set.at })),
       suggestionConversations: conversations,
       operatorAdmissions: admissions.filter((admission) => read.has(admission.conversationId)).map((admission) => ({ conversationId: admission.conversationId, at: admission.at })),
-      oldestAdmissionAt: oldest,
     };
   } catch {
     /* An unreadable log or store keeps no ledger this check: nothing is

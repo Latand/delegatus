@@ -2626,7 +2626,11 @@ async function bridgeReport(
   const coversOwed = args.coversOwed === true;
 
   const origin = attributionOf(dependencies);
-  const project = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
+  /* Folded through the project aliases once, here: the seat tick reads the log
+     under the canonical key, and a seat recorded before its folder changed key
+     still carries the old one as its conversation's project. */
+  const callerProject = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
+  const project = callerProject ? canonicalOrchestratorProject(callerProject) : null;
   /* #2146: the operator turned this project's reports off. An answer, not an
      error: the caller did nothing wrong, and nothing is stored. */
   if (project && !bridgeReportsEnabled(project)) {
@@ -2640,12 +2644,16 @@ async function bridgeReport(
 
   /* A replay stores nothing. Its one job is a Telegram copy whose send failed
      retryably: the row's stored HTML is re-sent byte for byte, and this call's
-     own arguments are ignored (§5.5). */
+     own arguments are ignored (§5.5). Only the manager's own replay re-sends:
+     the post goes out under the caller's capability and attribution. A row
+     filed under the caller's old project key before it was folded is still
+     the same report. */
   const reportId = scopedReportId(project, key);
-  const existing = findBridgeReport(reportId);
+  const existing = findBridgeReport(reportId)
+    ?? (callerProject && callerProject !== project ? findBridgeReport(scopedReportId(callerProject, key)) : null);
   if (existing) {
     const telegram = existing.telegram && existing.telegram.state === "failed" && existing.origin?.kind === "manager"
-      && isRetryableReportSend(existing.telegram.code)
+      && origin.kind === "manager" && isRetryableReportSend(existing.telegram.code)
       ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
       : existing.telegram ?? null;
     /* `alreadyRecorded`, because the tool service's envelope owns `replayed`

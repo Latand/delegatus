@@ -14,7 +14,8 @@ const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-bridge-report-shape-"
 const OLD_STATE = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 
-const { readBridgeReportLog, resetBridgeCollectionsForTests, scopedReportId } = await import("@/lib/bridge/store");
+const { appendBridgeReports, readBridgeReportLog, resetBridgeCollectionsForTests, scopedReportId } = await import("@/lib/bridge/store");
+const { persistProjectAliases, resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
 const { recordDeploySnapshot, resetTaskChangeCollectionsForTests } = await import("@/lib/bridge/taskChanges");
 const { resetProjectSettingsForTests, setBridgeReports, setReportTelegram } = await import("@/lib/projects/settings");
 const { TelegramBotError, TelegramBotService, productionTelegramBotDependencies } = await import("@/lib/telegram/bot/service");
@@ -74,11 +75,11 @@ async function sendThroughBot(input: ReportTelegramSend) {
   }
 }
 
-function serviceAs(attribution: CallerAttribution, project = PROJECT) {
+function serviceAs(attribution: CallerAttribution, project = PROJECT, seatProject = project) {
   const bindings = viewerMcpBindings(undefined, undefined, {
     callerAttribution: () => attribution,
     callerProject: () => project,
-    authorizedSeats: () => [{ conversationId: MANAGER.conversationId!, path: null, project }],
+    authorizedSeats: () => [{ conversationId: MANAGER.conversationId!, path: null, project: seatProject }],
     operatorLocale: () => locale,
     operatorTimeZone: () => "Europe/Kyiv",
     publicDenyList: () => ({ accounts: ["account-b"], people: ["Person Bee"], local: [], projects: [{ repository: "someone/other-repo", names: ["other-repo"] }] }),
@@ -111,6 +112,7 @@ beforeEach(async () => {
   resetBridgeCollectionsForTests();
   resetTaskChangeCollectionsForTests();
   resetProjectSettingsForTests();
+  resetProjectAliasesForTests();
   locale = "en";
   tasks = [];
   transport = new FakeBotTransport();
@@ -171,6 +173,30 @@ test("two projects filing the same key get two rows: ids are scoped by project",
   ]);
   const again = await file({ key: "digest:2026-09-25T15:30", summary: "again" });
   expect(again.alreadyRecorded).toBe(true);
+});
+
+test("a seat whose conversation still carries the project's old key files under the canonical key, and a row filed under the old key is its replay", async () => {
+  /* The folder had no origin when the seat was recorded, and the origin added
+     later made the repository key; the alias joins the two. */
+  const OLD = "repo-project-a-before-origin";
+  expect(persistProjectAliases([{ source: OLD, target: PROJECT, displayName: "Project A" }])).toBe(true);
+  const aliased = serviceAs(MANAGER, OLD, PROJECT);
+  const answer = await aliased.callTool("bridge_report", {
+    clientRequestId: "rep-aliased", class: "completed", key: "deploy:aaaaaaaa:succeeded",
+    summary: "Deploy aaaaaaaa is on prod.", covers: ["lane:L1:completed"], coversOwed: true,
+  }) as ReportAnswer;
+  expect(answer.recorded).toBe(true);
+  const row = readBridgeReportLog().reports[0]!;
+  expect(row.project).toBe(PROJECT);
+  expect(row.id).toBe(scopedReportId(PROJECT, "deploy:aaaaaaaa:succeeded"));
+  expect(row.covers).toEqual([scopedReportId(PROJECT, "lane:L1:completed")]);
+  expect(row.targetSeatConversationId).toBe(MANAGER.conversationId);
+
+  /* Filed before the fold: the same key under the old project is already recorded. */
+  appendBridgeReports([{ key: "digest:2026-09-25T15:30", class: "status", at: NOW.toISOString(), origin: MANAGER, project: OLD, targetSeatConversationId: null, body: "One lane running." }]);
+  const replay = await aliased.callTool("bridge_report", { clientRequestId: "rep-aliased-2", key: "digest:2026-09-25T15:30", class: "status", summary: "One lane running." }) as ReportAnswer;
+  expect(replay.alreadyRecorded).toBe(true);
+  expect(readBridgeReportLog().reports).toHaveLength(2);
 });
 
 test("a report in another language than the interface warns; none while the interface language is unknown", async () => {
@@ -274,6 +300,21 @@ test("a rate-limited post is re-sent on replay byte for byte, under a new reques
   expect(sends).toHaveLength(2);
   expect(sends[1]!.params.text).toBe(stored);
   expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "sent", attempts: 2, html: stored });
+});
+
+test("a worker replaying the manager's key after a failed send re-sends nothing", async () => {
+  await connectTeamChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  transport.script("sendMessage", refused(429, "Too Many Requests", { retryAfterSeconds: 3 }));
+  const first = await file({ key: "digest-worker-replay", summary: "One lane running." });
+  expect(first.destinations!.telegram).toMatchObject({ state: "failed", code: "rate_limited", retryable: true });
+
+  transport.script("sendMessage", ok({ message_id: 73, date: 102 }));
+  const replay = await file({ key: "digest-worker-replay", summary: "One lane running." }, WORKER);
+  expect(replay.alreadyRecorded).toBe(true);
+  expect(replay.destinations!.telegram).toMatchObject({ state: "failed", code: "rate_limited" });
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+  expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "failed", attempts: 1 });
 });
 
 test("a send that may already be posted is never re-sent", async () => {

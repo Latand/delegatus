@@ -6044,3 +6044,32 @@ test("a wake whose delivery was queued and is credited a check later is settled 
   expect(third.sent).toHaveLength(1);
   expect(third.sent[0]!.text).not.toContain("Report owed");
 });
+
+test("a report the seat filed under the project's old key, before the key was folded, discharges the owed outcome", async () => {
+  const { scopedReportId } = await import("@/lib/bridge/store");
+  const { persistProjectAliases, resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
+  const OLD = `${PROJECT}-before-origin`;
+  expect(persistProjectAliases([{ source: OLD, target: PROJECT, displayName: "Project" }])).toBe(true);
+  try {
+    const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "report-ledger-")), "seat-tick.json");
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 6 * MINUTE).toISOString(), accounting: undefined }, stateFile);
+    const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
+    const first = harness({ ...reportDeploys, pipelines: [settledLane], stateFile });
+    first.deps.sources!.reports = reportPort(() => log);
+    await runSeatTickCheck(PROJECT, first.deps);
+    expect(readSeatTickState(PROJECT, stateFile).reportsOwed!.map((entry) => entry.key).sort()).toEqual(["deploy:dddddddd:succeeded", "lane:pipeline_l:completed"]);
+
+    /* The row as bridge_report stored it before the fix: the raw project and an
+       id scoped by it, with no coversOwed to clear everything at once. */
+    log.push({ id: scopedReportId(OLD, "deploy:dddddddd:succeeded"), seq: 1, at: new Date(NOW + 2 * MINUTE).toISOString(), class: "completed", body: "", project: OLD, origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" }, covers: [scopedReportId(OLD, "lane:pipeline_l:completed")] });
+    const second = harness({ ...reportDeploys, pipelines: [settledLane, ...OPEN_LANE], stateFile, now: NOW + 5 * MINUTE });
+    second.deps.sources!.reports = reportPort(() => log);
+    await runSeatTickCheck(PROJECT, second.deps);
+    const row = readSeatTickState(PROJECT, stateFile);
+    expect(row.reportsOwed).toEqual([]);
+    expect(row.reportSeenAt).toBe(log[0]!.at);
+  } finally {
+    fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), { force: true });
+    resetProjectAliasesForTests();
+  }
+});

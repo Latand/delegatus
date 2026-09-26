@@ -1001,8 +1001,9 @@ export interface SeatTickReportsInput {
   /** Project-scoped ids of the project's manager reports and of every key
       they name in `covers`. */
   reportedIds: readonly string[];
-  /** The project-scoped id a report filed under `key` gets. */
-  reportIdFor: (key: string) => string;
+  /** The ids a report filed under `key` may carry: scoped by the project, and
+      by every older key of the project a manager report was filed under. */
+  reportIdsFor: (key: string) => readonly string[];
   /** The newest `coversOwedAt` among the project's manager reports. */
   latestCoversOwedAt: string | null;
   /** The current reply-suggestion set of each conversation read: the seat's
@@ -1014,8 +1015,6 @@ export interface SeatTickReportsInput {
   /** Operator messages the suggestions store recorded, for the same
       conversations. */
   operatorAdmissions: readonly { conversationId: string; at: string }[];
-  /** The oldest admission the store still holds, across all conversations. */
-  oldestAdmissionAt: string | null;
 }
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */

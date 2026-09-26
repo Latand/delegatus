@@ -42,12 +42,11 @@ function reports(over: Partial<SeatTickReportsInput> = {}): SeatTickReportsInput
     operatorLocale: "uk",
     lastReportAt: null,
     reportedIds: [],
-    reportIdFor: idFor,
+    reportIdsFor: (key) => [idFor(key)],
     latestCoversOwedAt: null,
     suggestionSets: [],
     suggestionConversations: [SEAT_A],
     operatorAdmissions: [],
-    oldestAdmissionAt: null,
     ...over,
   };
 }
@@ -255,7 +254,7 @@ test("answered, then re-offered: set A appended at 13:15, the operator answers a
   expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_a"]);
   state = seatTickDecision(input({
     now: at("13:45"), state,
-    reports: reports({ suggestionSets: [b], operatorAdmissions: [{ conversationId: SEAT_A, at: iso(at("13:40")) }], oldestAdmissionAt: iso(at("13:40")) }),
+    reports: reports({ suggestionSets: [b], operatorAdmissions: [{ conversationId: SEAT_A, at: iso(at("13:40")) }] }),
   })).state;
   expect(state.asksOwed).toEqual([]);
 });
@@ -268,14 +267,6 @@ test("re-offered without an answer: ask:A stays owed, and B is owed once it is t
   expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_a"]);
   state = seatTickDecision(input({ now: T0 + 30 * MINUTE, state, reports: reports({ suggestionSets: [b] }) })).state;
   expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_a", "ask:rsg_b"]);
-});
-
-test("an ask whose conversation shows no admission since it stays owed, even when the store's oldest admission is newer", () => {
-  const a = setAt("rsg_a", T0);
-  const b = setAt("rsg_b", T0 + 20 * MINUTE);
-  let state = seatTickDecision(input({ now: T0 + 15 * MINUTE, reports: reports({ suggestionSets: [a] }) })).state;
-  state = seatTickDecision(input({ now: T0 + 25 * MINUTE, state, reports: reports({ suggestionSets: [b], oldestAdmissionAt: iso(T0 + 10 * MINUTE) }) })).state;
-  expect(state.asksOwed!.map((ask) => ask.key)).toContain("ask:rsg_a");
 });
 
 test("an ask left by seat A stays owed after the seat rotates to B, read from A's conversation, and clears when its report lands", () => {
@@ -424,7 +415,6 @@ function replayDay(seatReports: boolean): DayOutcome {
         latestCoversOwedAt: reportState.some((entry) => entry.coversOwed) ? iso(Math.max(...reportState.filter((entry) => entry.coversOwed).map((entry) => entry.at))) : null,
         suggestionSets: current ? [{ conversationId: SEAT_A, setId: current.setId, at: iso(current.at) }] : [],
         operatorAdmissions: admissions.map((at) => ({ conversationId: SEAT_A, at: iso(at) })),
-        oldestAdmissionAt: admissions.length ? iso(admissions[0]!) : null,
       }),
     });
     const decision = seatTickDecision(check);
