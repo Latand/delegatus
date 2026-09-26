@@ -29,6 +29,7 @@ import { PushBell } from "./PushBell";
 import { ResourcesFooter } from "./ResourcesFooter";
 import { fmtAge } from "./utils";
 import { Z } from "@/components/layers";
+import { useTeamView } from "@/components/team/teamClient";
 
 /**
  * Asks the rail to open the create-project form it already owns (issue #1162).
@@ -363,9 +364,21 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
  * ones — LanguageToggle, AccessQrButton and PushBell keep their own behaviour;
  * this only gives them labels and a place to live.
  */
+/** Ends this browser's member session and goes to the sign-in page. */
+async function signOutMember(): Promise<void> {
+  try {
+    await fetch("/api/team/session/sign-out", { method: "POST" });
+  } finally {
+    window.location.replace("/sign-in");
+  }
+}
+
 function RailHeaderMenu() {
   const { t, locale } = useLocale();
   const [open, setOpen] = useState(false);
+  /* Passive: the app's session guard loads the team view once per page. */
+  const team = useTeamView({ load: false });
+  const teamMe = team?.mode === "team" ? team.me : null;
   const [push, setPush] = useState({ supported: false, enabled: false });
   const ref = useRef<HTMLDivElement | null>(null);
   const onPushStatus = useCallback((status: { supported: boolean; enabled: boolean }) => setPush(status), []);
@@ -475,6 +488,24 @@ function RailHeaderMenu() {
           >
             {t("activity.menu")}
           </a>
+          {/* Members, who did what and sessions (sign-in-and-team §6.9). */}
+          <a
+            href="/team"
+            data-rail-menu-team=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            {t("team.menu")}
+          </a>
+          {teamMe ? (
+            <button
+              type="button"
+              data-rail-menu-sign-out=""
+              className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-secondary hover:bg-sunken hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              onClick={() => { setOpen(false); void signOutMember(); }}
+            >
+              {t("team.signOut", { name: teamMe.name })}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

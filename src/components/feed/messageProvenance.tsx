@@ -4,6 +4,8 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 
 import type { DeliveredMessageOccurrence, DeliveredMessageProvenance, MandateDelivery } from "@/lib/runtime/messageOrigin";
 import { messageOriginRole } from "@/lib/runtime/messageOrigin";
+import { structuredUserReferenceKey } from "@/lib/runtime/codexStructuredUserText";
+import { isMemberColor, type MessageSender } from "@/lib/team/contract";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { assignDeliveredOccurrences, candidateDigests, occurrenceCandidate } from "./deliveredOccurrences";
@@ -70,6 +72,17 @@ export interface ProvenanceLookup {
    * id, it is "not yet"; after that it is whatever they said.
    */
   messagePending(engineMessageId: string | null | undefined): boolean;
+  /**
+   * WHO sent a human message (sign-in-and-team §6.7): the member the team
+   * recorded against the submission this row is the record of, reached by
+   * the same identities the binding above uses — the Codex marker's delivery
+   * token, the Claude ledger's submission id. Null on a solo install, for a
+   * message sent before the team existed, and for anything unproven: the row
+   * then draws no sender line.
+   */
+  senderFor(item: Item): MessageSender | null;
+  /** The same answer for a submission this browser holds by its own id. */
+  senderForSubmission(submissionId: string | null | undefined): MessageSender | null;
 }
 
 export const NO_PROVENANCE: ProvenanceLookup = {
@@ -77,6 +90,8 @@ export const NO_PROVENANCE: ProvenanceLookup = {
   submissionFor: () => null,
   submissionPending: () => false,
   messagePending: () => false,
+  senderFor: () => null,
+  senderForSubmission: () => null,
 };
 const ProvenanceContext = createContext<ProvenanceLookup>(NO_PROVENANCE);
 export const MessageProvenanceProvider = ProvenanceContext.Provider;
@@ -92,6 +107,8 @@ interface PathProvenance {
   /** `dedup token → submission id`, straight from the registry's own record
       of which client message id admitted which delivery operation. */
   submissions: Record<string, string>;
+  /** `submission id → sender`, from the team's record of who sent what. */
+  senders: Record<string, MessageSender>;
 }
 
 /* Browser-wide, so a revisited conversation answers from memory and a pane
@@ -170,6 +187,19 @@ function parseSubmissions(value: unknown): Record<string, string> {
     if (!DEDUP_TOKEN.test(token)) continue;
     const submissionId = parseSubmissionId(id);
     if (submissionId) parsed[token] = submissionId;
+  }
+  return parsed;
+}
+
+function parseSenders(value: unknown): Record<string, MessageSender> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const parsed: Record<string, MessageSender> = {};
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!parseSubmissionId(id) || !entry || typeof entry !== "object") continue;
+    const { memberId, name, color, initials } = entry as Record<string, unknown>;
+    if (typeof memberId !== "string" || typeof name !== "string" || !name.trim() || name.length > 120) continue;
+    if (!isMemberColor(color) || typeof initials !== "string" || initials.length > 8) continue;
+    parsed[id] = { memberId, name, color, initials };
   }
   return parsed;
 }
@@ -327,17 +357,30 @@ function lookupFor(
   const messagePending = (id: string | null | undefined) =>
     Boolean(id) && settledMessages !== undefined && !settledMessages.has(id!) && !(data && id! in data.messages);
   if (!data) return { ...NO_PROVENANCE, submissionPending: pending, messagePending };
+  const forItem = (item: Item): DeliveredMessageProvenance | null => {
+    if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId) {
+      const byId = data.messages[item.deliveredMessage.engineMessageId];
+      if (byId) return byId;
+    }
+    return assignment.get(item) ?? null;
+  };
+  const senderForSubmission = (id: string | null | undefined) => (id ? data.senders[id] ?? null : null);
   return {
-    forItem: (item) => {
-      if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId) {
-        const byId = data.messages[item.deliveredMessage.engineMessageId];
-        if (byId) return byId;
-      }
-      return assignment.get(item) ?? null;
-    },
+    forItem,
     submissionFor: (dedup) => (dedup ? data.submissions[dedup] ?? null : null),
     submissionPending: pending,
     messagePending,
+    senderFor: (item) => {
+      if (item.structuredUserRef && !item.structuredUserRef.startsWith("h.")) {
+        const token = structuredUserReferenceKey(item.structuredUserRef);
+        if (token && data.submissions[token]) return senderForSubmission(data.submissions[token]);
+        /* A queued message's record names its version's delivery key, which
+           no row is filed under; the route names its sender by the token. */
+        if (token && data.senders[token]) return data.senders[token];
+      }
+      return senderForSubmission(forItem(item)?.submissionId);
+    },
+    senderForSubmission,
   };
 }
 
@@ -351,6 +394,7 @@ export function provenanceLookupFor(
     messages?: ProvenanceMap;
     occurrences?: readonly DeliveredMessageOccurrence[];
     submissions?: Record<string, string>;
+    senders?: Record<string, MessageSender>;
     /** The path's evidence is still being read; see
         {@link ProvenanceLookup.submissionPending}. */
     resolving?: boolean;
@@ -359,7 +403,7 @@ export function provenanceLookupFor(
 ): ProvenanceLookup {
   const occurrences = [...(data.occurrences ?? [])];
   return lookupFor(
-    { messages: data.messages ?? {}, occurrences, submissions: data.submissions ?? {} },
+    { messages: data.messages ?? {}, occurrences, submissions: data.submissions ?? {}, senders: data.senders ?? {} },
     assignDeliveredOccurrences(items, occurrences),
     Boolean(data.resolving),
   );
@@ -443,7 +487,7 @@ export function useDeliveredMessageProvenance(
       try {
         const res = await fetch(`/api/log/provenance?path=${encodeURIComponent(path)}`);
         if (!res.ok) return;
-        const json = (await res.json()) as { messages?: unknown; occurrences?: unknown; submissions?: unknown };
+        const json = (await res.json()) as { messages?: unknown; occurrences?: unknown; submissions?: unknown; senders?: unknown };
         const previous = provenanceCache.get(path);
         const merged: PathProvenance = {
           messages: { ...(previous?.messages ?? {}), ...parseProvenanceMessages(json.messages) },
@@ -452,6 +496,8 @@ export function useDeliveredMessageProvenance(
              the registry compacting it later must not unbind a row the
              operator is already looking at. */
           submissions: { ...(previous?.submissions ?? {}), ...parseSubmissions(json.submissions) },
+          /* The latest answer wins: a rename reads on the next fetch. */
+          senders: { ...(previous?.senders ?? {}), ...parseSenders(json.senders) },
         };
         provenanceCache.set(path, merged);
         if (!alive) return;
@@ -481,7 +527,10 @@ export function useDeliveredMessageProvenance(
      the lookup only changes identity — re-rendering every memoized row — when
      a row's resolution actually changed. */
   const submissionsKey = useMemo(
-    () => Object.keys(data?.submissions ?? {}).sort().join("\n"),
+    () => [
+      ...Object.keys(data?.submissions ?? {}).sort(),
+      ...Object.entries(data?.senders ?? {}).map(([id, sender]) => `${id}=${sender.memberId}:${sender.name}:${sender.color}`).sort(),
+    ].join("\n"),
     [data],
   );
   const assignmentKey = useMemo(() => {

@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { deliverAnswer, DeliveryError, type AnswerInput, type PaneIo } from "@/lib/answer/driver";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { recordConversationEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
 import { pendingQuestionFor, recordedToolResult } from "@/lib/scanner/questions";
@@ -128,6 +129,10 @@ async function deliver(
   const pending = state.pending;
   const target = await dependencies.resolveTarget(state.entry.pid!);
   if (target === null) return NextResponse.json({ error: "no active tmux pane for answering", noPane: true }, { status: 409 });
+  /* Who answered (sign-in-and-team §7.1): a person needs a member in team mode. */
+  const actor = teamActor(req);
+  const anonymous = refuseAnonymous(actor);
+  if (anonymous) return anonymous as NextResponse<RouteResponse>;
   if (directOperatorActivityAuthority(req).ok) {
     try {
       dependencies.recordOperatorActivity({
@@ -149,6 +154,7 @@ async function deliver(
   try {
     const label = await dependencies.deliverAnswer(paneIo, target, pending, body);
     const recorded = await dependencies.confirmAnswered(state.entry, toolUseId);
+    recordConversationEvent({ actor, action: "question.answered", path: transcriptPath });
     if (recorded) return NextResponse.json({ ok: true, answer: recorded || label });
     /* Enter was pressed and `deliverAnswer` returned: the answer is in the
        pane, only the transcript's confirmation is missing. */

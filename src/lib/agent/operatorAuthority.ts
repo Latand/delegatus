@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
+import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { agentRegistry } from "@/lib/agent/registry";
-import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+
+export { internalServiceHeaders, type InternalViewerService } from "@/lib/agent/callerClaims";
 
 /**
  * "Is this the operator, or an agent?" — for the decisions only the operator may make.
@@ -29,10 +31,6 @@ export type OperatorAuthority =
 /* Shape of a per-conversation spawn capability, used only to decide whether the
    registry is worth asking about the presented value. */
 const AGENT_CAPABILITY = /^[A-Za-z0-9_-]{43}$/;
-const INTERNAL_SERVICE_HEADER = "x-llv-internal-service";
-const INTERNAL_SERVICE_TAG = /^[a-f0-9]{64}$/;
-const INTERNAL_SERVICES = ["monitor", "mcp", "orchestrator"] as const;
-export type InternalViewerService = typeof INTERNAL_SERVICES[number];
 
 type ConversationResolver = (digest: string) => string | null;
 
@@ -109,35 +107,9 @@ const SERVICE_REFUSED: OperatorAuthority = {
   error: "background Viewer activity is outside direct operator activity",
 };
 
-function internalServiceTag(service: InternalViewerService): string {
-  return crypto.createHmac("sha256", ensureOperatorSpawnCapability())
-    .update(`llv-internal-service-v1\0${service}`)
-    .digest("hex");
-}
-
-/** A server-verifiable lane marker for Viewer-owned HTTP producers. */
-export function internalServiceHeaders(service: InternalViewerService): Record<string, string> {
-  return { [INTERNAL_SERVICE_HEADER]: `${service}.${internalServiceTag(service)}` };
-}
-
-function internalServiceClaim(request: Pick<NextRequest, "headers">): "absent" | "valid" | "invalid" {
-  const value = request.headers.get(INTERNAL_SERVICE_HEADER)?.trim() ?? "";
-  if (!value) return "absent";
-  const separator = value.indexOf(".");
-  const service = value.slice(0, separator) as InternalViewerService;
-  const tag = value.slice(separator + 1);
-  if (!(INTERNAL_SERVICES as readonly string[]).includes(service) || !INTERNAL_SERVICE_TAG.test(tag)) return "invalid";
-  try {
-    const expected = internalServiceTag(service);
-    return crypto.timingSafeEqual(Buffer.from(tag), Buffer.from(expected)) ? "valid" : "invalid";
-  } catch {
-    return "invalid";
-  }
-}
-
 /** Classifies direct activity while leaving the product authority gate intact. */
 export function directOperatorActivityAuthority(request: Pick<NextRequest, "headers">): OperatorAuthority {
-  if (internalServiceClaim(request) === "valid") return SERVICE_REFUSED;
+  if (internalServiceClaim(request).claim === "valid") return SERVICE_REFUSED;
   return requireOperatorAuthority(request);
 }
 

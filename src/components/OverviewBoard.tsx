@@ -19,6 +19,7 @@ import { FolderPlus, Search } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { activityMobileMenuEntry } from "./activity/menuEntry";
+import { teamMobileMenuEntry } from "./team/menuEntry";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { openOnboarding } from "./onboarding/useOnboarding";
@@ -278,6 +279,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
           { kind: "divider", key: "d-setup" },
           activityMobileMenuEntry(t, mobileNav),
+          teamMobileMenuEntry(t, mobileNav),
           ...onboardingMobileMenuEntries(t, close),
           selfUpdateMobileMenuEntry(t, close),
         ];

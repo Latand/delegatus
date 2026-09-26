@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { appDirIn } from "../bin/appDir.mjs";
+import { probeHeadersFrom } from "../bin/internalService.mjs";
 import { processIdentityStatus } from "../src/lib/processIdentity";
 
 import type {
@@ -490,7 +491,8 @@ async function probeRoutes(
   reportPhase?: (phase: string) => void,
 ): Promise<ViewerHealthEvidence> {
   const token = serviceToken(candidate);
-  const requests = viewerHealthRequestPlan(endpoint, token);
+  const probeHeaders = probeHeadersFrom(stateDir);
+  const requests = viewerHealthRequestPlan(endpoint, token, probeHeaders);
   const root = await fetchStatus(requests.root.url, requests.root.headers);
   const authenticated = requests.authenticated ? await fetchStatus(requests.authenticated.url, requests.authenticated.headers) : null;
   const unauthorized = requests.unauthorized ? await fetchStatus(requests.unauthorized.url, requests.unauthorized.headers) : null;
@@ -508,7 +510,7 @@ async function probeRoutes(
   const assets = await Promise.all(paths.map(async (asset) => ({ path: asset, status: (await fetchStatus(`${endpoint}${asset}`)).status })));
   let expectedAssetsMatch = true;
   if (expectedAssetsEndpoint) {
-    const expectedRequests = viewerHealthRequestPlan(expectedAssetsEndpoint, token);
+    const expectedRequests = viewerHealthRequestPlan(expectedAssetsEndpoint, token, probeHeaders);
     const expectedRequest = expectedRequests.authenticated ?? expectedRequests.root;
     const expectedRoot = await fetchStatus(expectedRequest.url, expectedRequest.headers);
     expectedAssetsMatch = JSON.stringify(referencedAssets(expectedRoot.text)) === JSON.stringify(paths);

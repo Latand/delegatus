@@ -27,10 +27,14 @@ const { executeSpawnRequest, productionSpawnCommandDependencies } = await import
 const { ensureOperatorSpawnCapability } = await import("@/lib/agent/operatorCapability");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");
 const { POST } = await import("@/app/api/spawn/route");
+const { teamActor } = await import("@/lib/team/actor");
+const { claimInstall } = await import("@/lib/team/members");
+const { resetTeamStoreForTests, teamStore } = await import("@/lib/team/store");
 
 import type { NextRequest } from "next/server";
 
 afterAll(() => {
+  resetTeamStoreForTests();
   fs.rmSync(SANDBOX, { recursive: true, force: true });
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = OLD_STATE;
@@ -89,35 +93,37 @@ function capturingRegistry(): { profiles: Record<string, unknown>[]; displays: u
   const displays: unknown[] = [];
   const requests: Record<string, unknown>[] = [];
   let next = 0;
+  const beginSpawnRequest = (request: { launchProfile: Record<string, unknown>; launchDisplay?: unknown }) => {
+    profiles.push(request.launchProfile);
+    displays.push(request.launchDisplay ?? null);
+    requests.push(request as unknown as Record<string, unknown>);
+    next += 1;
+    return {
+      kind: "created" as const,
+      receipt: {
+        launchId: `launch_${next}`,
+        conversationId: null,
+        parentConversationId: null,
+        parentSource: null,
+        artifactPath: null,
+        target: null,
+        pane: null,
+        engine: "codex",
+        transport: null,
+        state: "failed",
+        verifiedHost: null,
+        error: "account unavailable",
+        launchProfile: request.launchProfile,
+      },
+    };
+  };
   const registry = {
     conversation: () => null,
     conversationForPath: () => null,
     supersedenceConflict: () => null,
     spawnReceiptForClientAttempt: () => null,
-    beginSpawnRequest: (request: { launchProfile: Record<string, unknown>; launchDisplay?: unknown }) => {
-      profiles.push(request.launchProfile);
-      displays.push(request.launchDisplay ?? null);
-      requests.push(request as unknown as Record<string, unknown>);
-      next += 1;
-      return {
-        kind: "created" as const,
-        receipt: {
-          launchId: `launch_${next}`,
-          conversationId: null,
-          parentConversationId: null,
-          parentSource: null,
-          artifactPath: null,
-          target: null,
-          pane: null,
-          engine: "codex",
-          transport: null,
-          state: "failed",
-          verifiedHost: null,
-          error: "account unavailable",
-          launchProfile: request.launchProfile,
-        },
-      };
-    },
+    beginSpawnRequest,
+    beginSpawnRequestAsync: async (request: Parameters<typeof beginSpawnRequest>[0]) => beginSpawnRequest(request),
     failSpawn: () => undefined,
     failStructuredSpawn: () => undefined,
     readOnlySnapshot: () => ({ receipts: {} }),
@@ -192,4 +198,41 @@ test("the report class decides the whole capability surface admission reserves",
   const plainProfile = plain.profiles[0] as { mcpServers: string[]; plugins: string[] };
   expect(plainProfile.plugins).toEqual(["computer-use"]);
   expect(plain.displays[0]).not.toBeNull();
+});
+
+test("a scheduled report still launches once the install has a team", async () => {
+  /* The defect this covers: the report launch carries the operator spawn
+     capability and no cookie. Before, `teamActor` could not name it, so in
+     team mode it came out anonymous and every scheduled report answered 401
+     before admission. The capability is a Viewer process's; it names a service. */
+  claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
+  try {
+    const request = reportLaunchRequest({});
+    expect(teamActor({ headers: request.headers, cookies: { get: () => undefined } } as never)).toEqual({ kind: "service", service: "viewer" });
+
+    const captured = capturingRegistry();
+    const response = await executeSpawnRequest(reportLaunchRequest({
+      engine: "codex",
+      cwd: SANDBOX,
+      accountId: "account-pinned",
+      title: REPORT_TITLE,
+      clientAttemptId: `telegram-report-team-${REPORT_RUN_ID}`,
+      project: TELEGRAM_REPORT_PROJECT,
+      ["prompt"]: `${REPORT_TITLE}\n\nThe operator's own brief.`,
+    }), {
+      ...productionSpawnCommandDependencies,
+      registry: () => captured.registry,
+      assertStructuredRuntime: () => undefined,
+      resolveHealthySpawnAccount: async () => { throw new Error("no healthy account"); },
+      ...reportSpawnOverrides(() => true),
+    } as unknown as typeof productionSpawnCommandDependencies);
+    expect(response.status).not.toBe(401);
+    expect(captured.profiles.length).toBe(1);
+
+    /* A cookie-less caller without the capability is still anonymous. */
+    expect(teamActor({ headers: new Headers({ ["sec-fetch-site"]: "same-origin" }), cookies: { get: () => undefined } } as never)).toEqual({ kind: "anonymous" });
+  } finally {
+    resetTeamStoreForTests();
+    fs.rmSync(path.join(SANDBOX, "state", "team"), { recursive: true, force: true });
+  }
 });

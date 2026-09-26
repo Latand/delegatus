@@ -27,7 +27,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { decodeCodexStructuredUserText as decodeStructuredUserWire } from "./codexStructuredUserText";
 import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
-import { deliveryDedupToken } from "./deliveryDedup";
+import { deliveryDedupToken, nativeQueueDeliveryKey } from "./deliveryDedup";
 import { CodexReplayFrameReducer, ReplayFrameOverflowError, sanitizeCodexImageFrame, shrinkReducedReplayFrame, type ImageSink, type ReplayFrameBudgets } from "./codexImageFrames";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
@@ -1624,7 +1624,7 @@ export class CodexAppServerHost implements EngineHost {
           ...version.images.map(image => ({ type: "localImage" as const, path: this.resolveImagePath(image) })),
           { type: "text", text: encodeCodexStructuredUserText(version.text,
             version.images.length ? version.contentDigest : undefined, version.selectedContext, version.origin ?? { kind: "operator" },
-            codexDeliveryDedup(`${entry.entryId}-v${version.revision}`)) },
+            codexDeliveryDedup(nativeQueueDeliveryKey(entry.entryId, version.revision))) },
         ];
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),

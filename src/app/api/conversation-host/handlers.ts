@@ -33,6 +33,7 @@ import { pathAllowed } from "@/lib/scanner/roots";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
 import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
+import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type MessageAuthorClaim } from "@/lib/team";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import { materializeStructuredTerminal } from "@/lib/runtime/structuredTerminal";
 import { attachmentsAreOrphaned, structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
@@ -297,7 +298,15 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
 
   const explicitAction = typeof body.action === "string" ? body.action : "";
   if (dependencies.conversationActions.includes(explicitAction)) {
-    if (explicitAction === "dialog-key" || explicitAction === "permission") {
+    /* Answering an agent's question is a person acting: in team mode it
+       needs a member, and the audit names them (sign-in-and-team §7.1). */
+    const answering = explicitAction === "dialog-key" || explicitAction === "permission";
+    const person = answering ? teamActor(req) : null;
+    if (person) {
+      const anonymous = refuseAnonymous(person);
+      if (anonymous) return anonymous;
+    }
+    if (answering) {
       const clientMessageId = typeof body.clientMessageId === "string" ? body.clientMessageId.trim().slice(0, 128) : "";
       const target = { pid, hasPid, filePath, conversationId };
       try {
@@ -331,6 +340,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
       ...(typeof body.decision === "string" ? { decision: body.decision } : {}),
       ...(typeof body.requestId === "string" && body.requestId.trim() ? { requestId: body.requestId.trim() } : {}),
     });
+    if (person && result.status < 400) recordConversationEvent({ actor: person, action: "question.answered", conversationId, path: filePath });
     return NextResponse.json(result.body, { status: result.status });
   }
 
@@ -406,6 +416,14 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   const origin = parseMessageOrigin((body as { origin?: unknown }).origin);
 
   const clientMessageId = typeof body.clientMessageId === "string" ? body.clientMessageId.trim().slice(0, 128) : "";
+  /* Who is sending (sign-in-and-team §7.1). In team mode a person's message
+     needs a member session; the refusal comes before anything is recorded or
+     delivered. The member is stamped against the client message id the feed
+     already joins every delivered record to, and only once the delivery
+     below admitted this submission (`claimMessageAuthor`). */
+  const sender = teamActor(req);
+  const anonymousSend = refuseAnonymous(sender);
+  if (anonymousSend) return anonymousSend;
   const operatorTarget = { pid, hasPid, filePath, conversationId };
   /* Stamped before the message is accepted, so the compare-and-clear below
      retires the set that was standing when the operator pressed send and
@@ -437,6 +455,17 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
        leaves whatever has been offered since alone. */
     retireReplySuggestionsOnOperatorMessage(operatorAction.conversationId, acceptedAt, clientMessageId);
   }
+  const authoredConversation = operatorAction.conversationId || conversationId || null;
+  const authorClaim: MessageAuthorClaim | null = operatorAction.byOperator
+    ? claimMessageAuthor({
+      actor: sender,
+      clientMessageId,
+      conversationId: authoredConversation,
+      text,
+      path: filePath,
+      priorSubmission: () => dependencies.priorSubmission(authoredConversation ?? "", clientMessageId),
+    })
+    : null;
 
   /* The attachments hit disk HERE, after every early refusal above — a rejected
      request never orphans bytes — and the paths ride the delivered text the way
@@ -480,6 +509,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     });
     if (structured) {
       await releaseAttachments(structuredAttachmentOutcome(structured));
+      if (structured.ok) settleMessageAuthor(authorClaim);
       const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
       return NextResponse.json({ ...response, ...attachmentField() }, { status });
     }
@@ -505,5 +535,6 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     ? "accepted"
     : outcome.actuation === "started" ? "uncertain" : "refused");
   if (!outcome.ok) return respond(outcome);
+  settleMessageAuthor(authorClaim);
   return NextResponse.json({ ...outcome, ...attachmentField() });
 }

@@ -104,6 +104,8 @@ const snapshot = {
 };
 
 let completedFiles: Array<Record<string, unknown>> = [{ path: PATHNAME }];
+/* Submission ids the delivery record already holds (sign-in-and-team §7.1). */
+let knownSubmissions: string[] = [];
 
 beforeAll(() => {
   fs.mkdirSync(path.dirname(PATHNAME), { recursive: true });
@@ -182,6 +184,7 @@ beforeAll(() => {
     },
     resolveTmuxAttach: async () => attachResolution as never,
     tmuxEndpointDescriptor: () => endpoint,
+    priorSubmission: (_conversationId, clientMessageId) => (knownSubmissions.includes(clientMessageId) ? "admitted" : "not-executed"),
   });
 });
 
@@ -1155,5 +1158,42 @@ test("/api/tmux still refuses a message whose target evidence conflicts, corrupt
   } finally {
     operatorActivityRecorder = null;
     fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+/* Last in the file: it claims a team in this suite's state directory, and it
+   removes the team again before it returns. */
+test("sign-in-and-team: a member is named only on a message the delivery admitted as new", async () => {
+  const { messageSenders } = await import("@/lib/team");
+  const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
+  const { MEMBER_COOKIE } = await import("@/lib/team/sessions");
+  const { existingTeamStore, resetTeamStoreForTests, teamStore, teamStoreFile } = await import("@/lib/team/store");
+  const DESKTOP = { surface: "desktop" as const, browser: "chrome" as const };
+  resetTeamStoreForTests();
+  const store = teamStore();
+  const mira = claimInstall(store, "Mira", DESKTOP);
+  const oleh = redeemJoin(store, createInvite(store, mira.member, null).code, "Oleh", DESKTOP);
+  const asOleh = { cookie: `${MEMBER_COOKIE}=${oleh.cookie}` };
+  const send = (clientMessageId: string) => POST(post({ path: PATHNAME, conversationId: "conversation_team", text: "hello", clientMessageId }, asOleh));
+  const sent = () => existingTeamStore()!.events({ limit: 10, actions: ["message.sent"] });
+  try {
+    delivery = async () => ({ ok: false, outcome: "failed", error: "fixture host refused", status: 409 });
+    expect((await send("refused-1")).status).toBe(409);
+    expect(messageSenders(["refused-1"])).toEqual({});
+    expect(sent()).toEqual([]);
+
+    delivery = async () => ({ ok: true, outcome: "delivered-to-live", target: "agents:4.0" });
+    knownSubmissions = ["task-send-1"];
+    expect((await send("task-send-1")).status).toBe(200);
+    expect(messageSenders(["task-send-1"])).toEqual({});
+    expect(sent()).toEqual([]);
+
+    expect((await send("oleh-1")).status).toBe(200);
+    expect(messageSenders(["oleh-1"])["oleh-1"]?.name).toBe("Oleh");
+    expect(sent().map((event) => event.actor)).toEqual([{ kind: "member", memberId: oleh.member.id }]);
+  } finally {
+    knownSubmissions = [];
+    resetTeamStoreForTests();
+    fs.rmSync(path.dirname(teamStoreFile()), { recursive: true, force: true });
   }
 });

@@ -339,6 +339,40 @@ at the foot of the sidebar.
   them. The session stays on this machine. The same panel can have an agent
   write a daily report on the chats you pick.
 
+## Team
+
+One Delegatus can be shared by a team, with each person signed in as themselves.
+Until someone sets a team up, nothing changes: a Delegatus used by one
+person has no sign-in page and no names.
+
+- **Set up.** Open the ⋯ menu → **Team** and press **Set me as owner**. From
+  then on, anyone else who reaches this Delegatus is asked to sign in. The
+  access key (phone access, `LLV_TOKEN`) still decides who can reach it at
+  all.
+- **Invite.** **Team → Invite** makes a link that works once, for seven days.
+  The person opens it, types their name and is in.
+- **Sign in on another device** with a passkey (on a named HTTPS address, or
+  on `localhost`), through the install's Telegram bot, or by approving it
+  from a device that is already signed in. The phone QR in the ⋯ menu signs
+  the phone in as you.
+- **Who did what.** The chat shows the sender's name above each person's
+  message. **Team → Activity** lists who sent messages, answered questions,
+  started agents and changed tasks. Agents read the same names through the
+  MCP tools.
+- **Revoke** a member from their row; every session of theirs ends at once.
+  To take away their access entirely, also rotate the key (`--new-token`).
+
+If the owner loses every signed-in device, run this on the machine itself:
+
+```bash
+delegatus team recover --origin https://your-delegatus.example
+# Docker: docker compose exec viewer bun-container bin/cli.mjs team recover --origin https://your-delegatus.example
+```
+
+It prints a one-time owner link that works for 15 minutes.
+`delegatus team revoke-sessions` signs everyone out everywhere. The design and
+its reasoning are in [docs/design/sign-in-and-team.md](docs/design/sign-in-and-team.md).
+
 <a id="connect-an-orchestrator-through-mcp"></a>
 
 ## MCP server for agents

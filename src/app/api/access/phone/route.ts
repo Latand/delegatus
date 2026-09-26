@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { currentTailnetUrl, disablePhoneAccess, enablePhoneAccess, viewerPortFor, type AccessResponse, type PhoneActionFailure, type PhoneFailureCode } from "@/lib/access/phoneAccess";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { accessKeyWithheld } from "@/lib/team";
 import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -36,6 +37,11 @@ const FAILURE_STATUS: Record<PhoneFailureCode, number> = {
 export async function POST(req: NextRequest): Promise<NextResponse<AccessResponse | PhoneActionFailure | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
+  /* Turning the gate on answers with the key as a cookie, and turning it off
+     opens the install: on a team install both are the owner's. */
+  if (accessKeyWithheld(req)) {
+    return NextResponse.json({ error: "only the owner can change phone access", code: "owner_required" }, { status: 403 });
+  }
 
   let body: { action?: unknown };
   try {

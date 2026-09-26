@@ -213,11 +213,15 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500 } =
  * server whose chunks are missing (the self-update prototype's first build
  * found exactly that), and the operator's next click needs those chunks.
  * Resolves with null when both answer, else with what did not.
+ *
+ * `headers` carries the `probe` service tag (`probeHeadersFrom`): on a team
+ * install the page is shown only to a member, and the tag is how the
+ * launcher's own probe reads it (sign-in-and-team §4.2).
  */
-export async function probePageAndChunk(port, timeoutMs = 5_000) {
+export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}) {
   try {
     const signal = AbortSignal.timeout(timeoutMs);
-    const page = await fetch(`http://127.0.0.1:${port}/`, { signal, redirect: "manual" });
+    const page = await fetch(`http://127.0.0.1:${port}/`, { signal, redirect: "manual", headers });
     const html = page.status === 200 ? await page.text() : (await page.body?.cancel(), "");
     if (page.status !== 200) return `GET / answered ${page.status}`;
     const chunk = /["'](\/_next\/static\/[^"'?#]+\.js)["']/.exec(html)?.[1];
