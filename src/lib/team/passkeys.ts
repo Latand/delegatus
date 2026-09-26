@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -10,8 +12,8 @@ import { PRODUCT_NAME } from "@/lib/brand";
 
 import type { Member } from "./contract";
 import { appendTeamEvent } from "./events";
-import { challengeIsOpen, issueChallenge, TeamError, type Device, type SignedIn } from "./members";
-import { mintSession } from "./sessions";
+import { challengeIsOpen, issueChallenge, newChallengeId, TeamError, type Device, type SignedIn } from "./members";
+import { mintSession, sha256Hex } from "./sessions";
 import type { StoredPasskey, TeamStore } from "./store";
 
 /*
@@ -128,14 +130,58 @@ export async function registerPasskey(
   return passkey;
 }
 
-export async function passkeySignInOptions(store: TeamStore, rp: RelyingParty, nowMs = Date.now()) {
+/*
+ * A sign-in request is opened by someone nobody knows yet, so storing one per
+ * request let a flood push a person's out while they were still at their
+ * authenticator. Instead the request travels sealed in its own id: the
+ * WebAuthn challenge, the host and the moment it expires, under a key this
+ * process made at start. Nothing is written until a passkey answers it; the
+ * answer then records the challenge as used, so it signs in once. A restart
+ * voids the key, and with it only ceremonies still in their two minutes.
+ */
+interface SealedSignIn {
+  challenge: string;
+  rpId: string;
+  origin: string;
+  expiresAt: number;
+}
+
+const SIGN_IN_KEY = Symbol.for("llv.team.passkeySignInKey");
+
+function signInKey(): Buffer {
+  const holder = globalThis as unknown as Record<symbol, Buffer | undefined>;
+  return holder[SIGN_IN_KEY] ??= crypto.randomBytes(32);
+}
+
+function signInMac(body: string): string {
+  return crypto.createHmac("sha256", signInKey()).update(body).digest("base64url");
+}
+
+function sealSignIn(fields: SealedSignIn): string {
+  const body = `p_${Buffer.from(JSON.stringify(fields)).toString("base64url")}`;
+  return `${body}.${signInMac(body)}`;
+}
+
+function openSignIn(id: unknown, nowMs: number): SealedSignIn | null {
+  if (typeof id !== "string" || id.length > 2048) return null;
+  const [body, mac, extra] = id.split(".");
+  if (!body?.startsWith("p_") || !mac || extra !== undefined) return null;
+  const expected = Buffer.from(signInMac(body));
+  const given = Buffer.from(mac);
+  if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return null;
+  try {
+    const fields = JSON.parse(Buffer.from(body.slice(2), "base64url").toString("utf8")) as SealedSignIn;
+    return typeof fields.challenge === "string" && typeof fields.rpId === "string" && typeof fields.origin === "string"
+      && typeof fields.expiresAt === "number" && fields.expiresAt > nowMs ? fields : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function passkeySignInOptions(rp: RelyingParty, nowMs = Date.now()) {
   const options = await generateAuthenticationOptions({ rpID: rp.rpId, userVerification: "required", timeout: PASSKEY_TTL_MS });
-  const { challenge } = issueChallenge(store, {
-    kind: "passkey",
-    ttlMs: PASSKEY_TTL_MS,
-    payload: { purpose: "sign-in", challenge: options.challenge, rpId: rp.rpId, origin: rp.origin },
-  }, nowMs);
-  return { id: challenge.id, options };
+  const id = sealSignIn({ challenge: options.challenge, rpId: rp.rpId, origin: rp.origin, expiresAt: nowMs + PASSKEY_TTL_MS });
+  return { id, options };
 }
 
 export async function signInWithPasskey(
@@ -146,8 +192,8 @@ export async function signInWithPasskey(
   device: Device,
   nowMs = Date.now(),
 ): Promise<SignedIn> {
-  const challenge = typeof id === "string" ? store.challenge(id) : null;
-  if (!challengeIsOpen(challenge, nowMs) || challenge.kind !== "passkey" || challenge.payload?.purpose !== "sign-in" || challenge.payload.rpId !== rp.rpId) {
+  const sealed = openSignIn(id, nowMs);
+  if (!sealed || sealed.rpId !== rp.rpId || sealed.origin !== rp.origin) {
     throw new TeamError("passkey_expired", "the passkey request expired; try again", 410);
   }
   const passkey = typeof response?.id === "string" ? store.passkey(response.id) : null;
@@ -159,7 +205,7 @@ export async function signInWithPasskey(
   try {
     verification = await verifyAuthenticationResponse({
       response,
-      expectedChallenge: challenge.payload.challenge,
+      expectedChallenge: sealed.challenge,
       expectedOrigin: rp.origin,
       expectedRPID: rp.rpId,
       requireUserVerification: true,
@@ -175,7 +221,14 @@ export async function signInWithPasskey(
   }
   if (!verification.verified) throw new TeamError("passkey_rejected", "the passkey could not be verified", 401);
   return store.transaction(() => {
-    if (!store.consumeChallenge(challenge.id, new Date(nowMs).toISOString())) throw new TeamError("passkey_expired", "the passkey request expired; try again", 410);
+    const used = sha256Hex(sealed.challenge);
+    if (store.challengeBySecret(used)) throw new TeamError("passkey_expired", "the passkey request expired; try again", 410);
+    const at = new Date(nowMs).toISOString();
+    store.insertChallenge({
+      id: newChallengeId(), kind: "passkey", secretHash: used, userCode: null, memberId: member.id, createdBy: null,
+      createdAt: at, expiresAt: new Date(sealed.expiresAt).toISOString(), consumedAt: at, attempts: 0, invitedName: null,
+      result: null, requester: null, payload: { purpose: "sign-in", rpId: rp.rpId },
+    });
     /* A counter that went backwards was already refused by the library (a
        cloned authenticator); synced passkeys report 0 and pass untouched. */
     store.usePasskey(passkey.id, verification.authenticationInfo.newCounter, new Date(nowMs).toISOString());

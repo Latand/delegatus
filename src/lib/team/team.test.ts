@@ -35,7 +35,7 @@ import { appendTeamEvent, messageTextDigest, recordTeamEvent } from "./events";
 import { messageSenders, recordAuthors, subjectAuthorship } from "./index";
 import { MEMBER_COOKIE, requestSession, sessionIsLive, teamMode, verifySessionValue } from "./sessions";
 import { existingTeamStore, resetTeamStoreForTests, SESSION_IDLE_MS, teamStore, teamStoreFile } from "./store";
-import { startTelegram } from "./telegramSignIn";
+import { handleTelegramStart, startTelegram, telegramState } from "./telegramSignIn";
 
 /*
  * The team module against a real SQLite file in a throw-away state directory:
@@ -205,6 +205,94 @@ describe("approving a device", () => {
     expect(store.countOpenKeylessChallenges("telegram", new Date(now + 2).toISOString())).toBe(OPEN_SIGN_IN_REQUEST_LIMIT);
     /* Thousands, so a flood has to keep up a real rate to push anyone out. */
     expect(OPEN_SIGN_IN_REQUEST_LIMIT).toBeGreaterThanOrEqual(1000);
+  });
+
+  /* Security review of the rebased head, P2: dropping the oldest let one
+     client push a waiting person's code out in 17 s, well inside the 20-60 s
+     it takes to carry the code to a signed-in device. */
+  test("a request its device keeps polling survives a flood of newer unpolled requests", () => {
+    const store = teamStore();
+    const mira = claimInstall(store, "Mira", DESKTOP).member;
+    const now = Date.now();
+    const waiting = startApproval(store, PHONE, now);
+    expect(challengeForRequester(store, waiting.challenge.id, waiting.proof, "approval", now + 1)).not.toBeNull();
+    const flooded = store.transaction(() => {
+      const opened = [];
+      for (let n = 0; n < OPEN_SIGN_IN_REQUEST_LIMIT + 8; n += 1) opened.push(startApproval(store, PHONE, now + 2).challenge.id);
+      return opened;
+    });
+
+    const polled = challengeForRequester(store, waiting.challenge.id, waiting.proof, "approval", now + 3);
+    expect(polled).not.toBeNull();
+    expect(approvalState(store, polled!, now + 3).state).toBe("waiting");
+    confirmApproval(store, mira, waiting.challenge.id, true, now + 3);
+    expect(completeApproval(store, store.challenge(waiting.challenge.id)!, PHONE, now + 3).member.id).toBe(mira.id);
+    /* The flood pushed out its own never-polled requests instead. */
+    expect(store.countOpenKeylessChallenges("approval", new Date(now + 3).toISOString())).toBe(OPEN_SIGN_IN_REQUEST_LIMIT - 1);
+    expect(flooded.slice(0, 9).every((id) => store.challenge(id) === null)).toBe(true);
+  });
+
+  test("a Telegram request whose holder pressed Start survives the same flood", () => {
+    const store = teamStore();
+    claimInstall(store, "Mira", DESKTOP);
+    const now = Date.now();
+    const asked = startTelegram(store, "sign-in", null, PHONE, null, now);
+    expect(handleTelegramStart(store, { id: 4242, first_name: "Oleh" }, asked.link, now + 1)).not.toBeNull();
+    store.transaction(() => {
+      for (let n = 0; n < OPEN_SIGN_IN_REQUEST_LIMIT + 8; n += 1) startTelegram(store, "sign-in", null, PHONE, null, now + 2);
+    });
+
+    const held = challengeForRequester(store, asked.challenge.id, asked.proof, "telegram", now + 3);
+    expect(held).not.toBeNull();
+    expect(telegramState(store, held!, now + 3).state).toBe("code_sent");
+  });
+
+  test("a store written before polls and Start holders were kept gains both and evicts by them", async () => {
+    const { Database } = await import("bun:sqlite");
+    fs.mkdirSync(path.dirname(teamStoreFile()), { recursive: true });
+    const old = new Database(teamStoreFile(), { create: true });
+    old.exec(`CREATE TABLE challenges (id TEXT PRIMARY KEY, kind TEXT NOT NULL, secret_hash TEXT NOT NULL UNIQUE, user_code TEXT,
+      member_id TEXT, created_by TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0, invited_name TEXT, result_json TEXT, requester_json TEXT, payload_json TEXT);
+      CREATE INDEX challenges_keyless_waiting ON challenges(kind, created_at)
+        WHERE member_id IS NULL AND created_by IS NULL AND result_json IS NULL AND consumed_at IS NULL;`);
+    old.close();
+
+    const store = teamStore();
+    const now = Date.now();
+    const waiting = startApproval(store, PHONE, now);
+    expect(challengeForRequester(store, waiting.challenge.id, waiting.proof, "approval", now + 1)).not.toBeNull();
+    const other = startApproval(store, PHONE, now + 2);
+    expect(store.evictKeylessChallenges("approval", 1)).toBe(1);
+    expect(store.challenge(waiting.challenge.id)).not.toBeNull();
+    expect(store.challenge(other.challenge.id)).toBeNull();
+    resetTeamStoreForTests();
+    const reopened = new Database(teamStoreFile(), { readonly: true });
+    const indexes = reopened.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'challenges'").all().map((row) => row.name);
+    reopened.close();
+    expect(indexes).toContain("challenges_keyless_evictable");
+    expect(indexes).not.toContain("challenges_keyless_waiting");
+  });
+
+  test("eviction takes never-polled requests first, oldest first, then the least recently polled", () => {
+    const store = teamStore();
+    const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+    for (const id of ["a", "b", "c", "d"]) {
+      store.insertChallenge({
+        id, kind: "approval", secretHash: `hash-${id}`, userCode: null, memberId: null, createdBy: null,
+        createdAt: at({ a: 0, b: 1, c: 2, d: 3 }[id]!), expiresAt: at(APPROVAL_TTL_MS), consumedAt: null,
+        attempts: 0, invitedName: null, result: null, requester: null, payload: null,
+      });
+    }
+    store.touchChallenge("b", at(10));
+    store.touchChallenge("a", at(20));
+    const alive = () => ["a", "b", "c", "d"].filter((id) => store.challenge(id));
+    expect(store.evictKeylessChallenges("approval", 3)).toBe(1);
+    expect(alive()).toEqual(["a", "b", "d"]);
+    expect(store.evictKeylessChallenges("approval", 2)).toBe(1);
+    expect(alive()).toEqual(["a", "b"]);
+    expect(store.evictKeylessChallenges("approval", 1)).toBe(1);
+    expect(alive()).toEqual(["a"]);
   });
 });
 

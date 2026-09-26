@@ -35,9 +35,10 @@ import {
  */
 
 const SCHEMA_VERSION = 1;
-/* A request nobody signed in opened and nobody has answered; the partial
-   index `challenges_keyless_waiting` covers exactly these rows. */
-const KEYLESS_WAITING = "member_id IS NULL AND created_by IS NULL AND result_json IS NULL AND consumed_at IS NULL";
+/* A request nobody signed in opened, nobody has answered, and no Telegram
+   account has pressed Start on: the ones a flood can push out. The partial
+   index `challenges_keyless_evictable` covers exactly these rows. */
+const KEYLESS_WAITING = "member_id IS NULL AND created_by IS NULL AND result_json IS NULL AND consumed_at IS NULL AND start_holder IS NULL";
 export const SESSION_IDLE_MS = 30 * 24 * 3_600_000;
 export const SESSION_ABSOLUTE_MS = 180 * 24 * 3_600_000;
 export const EVENT_RETENTION_MS = 90 * 24 * 3_600_000;
@@ -171,6 +172,12 @@ function challengeFrom(row: Row): Challenge {
   };
 }
 
+/** The Telegram account that pressed Start on a request, which the payload
+    records; kept in its own column so eviction can pass such a request by. */
+function startHolder(challenge: Challenge): string | null {
+  return challenge.kind === "telegram" ? challenge.payload?.telegramUserId ?? null : null;
+}
+
 function passkeyFrom(row: Row): StoredPasskey {
   return {
     id: String(row.id),
@@ -271,12 +278,10 @@ export class TeamStore {
           invited_name TEXT,
           result_json TEXT,
           requester_json TEXT,
-          payload_json TEXT
+          payload_json TEXT,
+          polled_at TEXT,
+          start_holder TEXT
         );
-        CREATE INDEX IF NOT EXISTS challenges_user_code ON challenges(user_code);
-        CREATE INDEX IF NOT EXISTS challenges_kind_expiry ON challenges(kind, expires_at);
-        CREATE INDEX IF NOT EXISTS challenges_keyless_waiting ON challenges(kind, created_at)
-          WHERE member_id IS NULL AND created_by IS NULL AND result_json IS NULL AND consumed_at IS NULL;
         CREATE TABLE IF NOT EXISTS passkeys (
           id TEXT PRIMARY KEY,
           member_id TEXT NOT NULL,
@@ -314,6 +319,18 @@ export class TeamStore {
           text_digest TEXT
         );
         CREATE INDEX IF NOT EXISTS message_authors_conversation ON message_authors(conversation_id, at);
+      `);
+      /* A store from before the eviction order knew polls and Start holders
+         gains both columns; the index they order by replaces the old one. */
+      const columns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(challenges)").all().map((column) => column.name));
+      for (const column of ["polled_at", "start_holder"]) {
+        if (!columns.has(column)) db.exec(`ALTER TABLE challenges ADD COLUMN ${column} TEXT`);
+      }
+      db.exec(`
+        DROP INDEX IF EXISTS challenges_keyless_waiting;
+        CREATE INDEX IF NOT EXISTS challenges_user_code ON challenges(user_code);
+        CREATE INDEX IF NOT EXISTS challenges_kind_expiry ON challenges(kind, expires_at);
+        CREATE INDEX IF NOT EXISTS challenges_keyless_evictable ON challenges(kind, polled_at, created_at) WHERE ${KEYLESS_WAITING};
       `);
       const version = db.query<{ value: string }, []>("SELECT value FROM meta WHERE key = 'schema'").get();
       if (!version) db.query("INSERT INTO meta(key, value) VALUES ('schema', ?)").run(String(SCHEMA_VERSION));
@@ -428,12 +445,13 @@ export class TeamStore {
 
   insertChallenge(challenge: Challenge): void {
     this.db.query(`INSERT INTO challenges(id, kind, secret_hash, user_code, member_id, created_by, created_at, expires_at, consumed_at,
-      attempts, invited_name, result_json, requester_json, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      attempts, invited_name, result_json, requester_json, payload_json, start_holder) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       challenge.id, challenge.kind, challenge.secretHash, challenge.userCode, challenge.memberId, challenge.createdBy,
       challenge.createdAt, challenge.expiresAt, challenge.consumedAt, challenge.attempts, challenge.invitedName,
       challenge.result ? JSON.stringify(challenge.result) : null,
       challenge.requester ? JSON.stringify(challenge.requester) : null,
       challenge.payload ? JSON.stringify(challenge.payload) : null,
+      startHolder(challenge),
     );
   }
 
@@ -476,20 +494,35 @@ export class TeamStore {
     ).get(kind, nowIso)?.n ?? 0;
   }
 
-  /** Deletes all but the newest `keep` of those requests, and says how many
-      went. */
-  dropOldestKeylessChallenges(kind: ChallengeKind, nowIso: string, keep: number): number {
+  /** Deletes all but `keep` of those requests, and says how many went. The
+      ones kept are those their device polled most recently; a request never
+      polled goes before any polled one, the oldest of them first, and an
+      expired one goes the same way. A person waiting on a code polls every
+      few seconds, so pushing theirs out takes thousands of requests between
+      two of their polls. Both statements walk the partial index in eviction
+      order, so a full bound costs a count and the rows it removes. */
+  evictKeylessChallenges(kind: ChallengeKind, keep: number): number {
+    const waiting = this.db.query<{ n: number }, [string]>(
+      `SELECT COUNT(*) AS n FROM challenges WHERE kind = ? AND ${KEYLESS_WAITING}`,
+    ).get(kind)?.n ?? 0;
+    if (waiting <= keep) return 0;
     return this.db.query(`DELETE FROM challenges WHERE id IN (SELECT id FROM challenges WHERE kind = ? AND ${KEYLESS_WAITING}
-      AND expires_at > ? ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)`).run(kind, nowIso, keep).changes;
+      ORDER BY polled_at, created_at, rowid LIMIT ?)`).run(kind, waiting - keep).changes;
+  }
+
+  /** Records that the requester presented its proof just now. */
+  touchChallenge(id: string, at: string): void {
+    this.db.query("UPDATE challenges SET polled_at = ? WHERE id = ?").run(at, id);
   }
 
   updateChallenge(challenge: Challenge): void {
     this.db.query(`UPDATE challenges SET member_id = ?, expires_at = ?, consumed_at = ?, attempts = ?, result_json = ?,
-      requester_json = ?, payload_json = ? WHERE id = ?`).run(
+      requester_json = ?, payload_json = ?, start_holder = ? WHERE id = ?`).run(
       challenge.memberId, challenge.expiresAt, challenge.consumedAt, challenge.attempts,
       challenge.result ? JSON.stringify(challenge.result) : null,
       challenge.requester ? JSON.stringify(challenge.requester) : null,
       challenge.payload ? JSON.stringify(challenge.payload) : null,
+      startHolder(challenge),
       challenge.id,
     );
   }

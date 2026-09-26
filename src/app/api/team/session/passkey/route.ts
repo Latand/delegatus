@@ -20,7 +20,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (body.step === "verify") {
       return respondSignedIn(req, await signInWithPasskey(store, body.id, body.response as never, rp, device(req)));
     }
-    return teamJson(await passkeySignInOptions(store, rp));
+    return teamJson(await passkeySignInOptions(rp));
   } catch (error) {
     return teamErrorResponse(error);
   }

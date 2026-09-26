@@ -34,14 +34,20 @@ export const INVITE_TTL_MS = 7 * 24 * 3_600_000;
 export const APPROVAL_TTL_MS = 10 * 60_000;
 export const HANDOFF_TTL_MS = 10 * 60_000;
 export const RECOVERY_TTL_MS = 15 * 60_000;
-/* How many requests nobody signed in opened (device approvals, Telegram and
-   passkey sign-ins) may wait unanswered at once, per kind. Anyone who reaches
-   the address can open one, so without a bound a script fills the store
-   within a code's lifetime. Past it the oldest waiting request is dropped and
-   the new one opens: refusing the new one instead let a flood of a few
-   requests a second lock every signed-out member out, while this bound makes
-   a flood keep up thousands of requests per code lifetime to push a real
-   person's code out. A request a member already answered is never dropped. */
+/* How many requests nobody signed in opened (device approvals and Telegram
+   sign-ins) may wait unanswered at once, per kind. Anyone who reaches the
+   address can open one, so without a bound a script fills the store within a
+   code's lifetime. Past it one waiting request is dropped and the new one
+   opens: refusing the new one instead let a flood of a few requests a second
+   lock every signed-out member out. The one dropped is the one its device
+   polled least recently, a never-polled one first (`evictKeylessChallenges`):
+   a person's waiting card polls every few seconds, so pushing their code out
+   takes this many requests between two of their polls, not within the
+   minute it takes them to carry the code to another device. Dropping the
+   oldest instead fell to one client in 17 s. A request a member already
+   answered, one a Telegram account pressed Start on, and one a signed-in
+   member or the owner opened are never dropped. Passkey sign-in stores
+   nothing until it succeeds (passkeys.ts), so it is outside the bound. */
 export const OPEN_SIGN_IN_REQUEST_LIMIT = 4096;
 const APPROVAL_GUESS_LIMIT = 5;
 const APPROVAL_GUESS_WINDOW_MS = 10 * 60_000;
@@ -69,7 +75,7 @@ export function newMemberId(): string {
   return `m_${crypto.randomBytes(16).toString("hex")}`;
 }
 
-function newChallengeId(): string {
+export function newChallengeId(): string {
   return `c_${crypto.randomBytes(16).toString("hex")}`;
 }
 
@@ -229,7 +235,7 @@ export function issueChallenge(store: TeamStore, input: {
   };
   store.pruneChallenges(nowMs);
   const keyless = input.kind !== "recovery" && !challenge.memberId && !challenge.createdBy;
-  if (keyless) store.dropOldestKeylessChallenges(input.kind, challenge.createdAt, OPEN_SIGN_IN_REQUEST_LIMIT - 1);
+  if (keyless) store.evictKeylessChallenges(input.kind, OPEN_SIGN_IN_REQUEST_LIMIT - 1);
   store.insertChallenge(challenge);
   return { challenge, code };
 }
@@ -239,14 +245,18 @@ export function challengeIsOpen(challenge: Challenge | null, nowMs: number): cha
 }
 
 /** A challenge by its public id, checked against the proof its requester
-    holds. The id alone never completes anything. */
-export function challengeForRequester(store: TeamStore, id: string, proof: unknown, kind: ChallengeKind): Challenge | null {
+    holds. The id alone never completes anything. A proof that matches marks
+    the request polled now, which is what keeps it from being evicted while
+    its device waits. */
+export function challengeForRequester(store: TeamStore, id: string, proof: unknown, kind: ChallengeKind, nowMs = Date.now()): Challenge | null {
   if (typeof proof !== "string" || !/^[A-Za-z0-9_-]{16,64}$/.test(proof)) return null;
   const challenge = store.challenge(id);
   if (!challenge || challenge.kind !== kind) return null;
   const expected = Buffer.from(challenge.secretHash);
   const given = Buffer.from(sha256Hex(proof));
-  return expected.length === given.length && crypto.timingSafeEqual(expected, given) ? challenge : null;
+  if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return null;
+  store.touchChallenge(challenge.id, iso(nowMs));
+  return challenge;
 }
 
 /* ---- the owner's claim ---------------------------------------------------- */
