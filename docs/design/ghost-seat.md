@@ -753,6 +753,29 @@ it lives:
   a spawn, so it has no lineage edge and the seat tick never lists it as a
   child. A note that failed to land is re-sent by the next sweep under the
   same key. The tick test pins the other half: a live deputy is never woken.
+- **A ghost takes no message after its ask.** Every delivery path refuses a
+  conversation a deputy record names, live or ended, with
+  `deputy_conversation_closed` and the seat's id: the structured admission
+  every send, steer and injection goes through, the conversation-host route
+  before its legacy resume, and the `resume` and `compact` actions. The one
+  message admitted is the ghost route's own, under the key derived from the
+  record, while the record is pending. Interrupt, kill and answers still reach
+  the ghost. So a worker's report never revives an ended ghost, a live one
+  never gets a second turn under the seat's authority, and the ask is the only
+  message its block ever answers.
+- **What a ghost spawns is the seat's child.** A spawn from a deputy's
+  capability records the seat as its parent, so the seat tick harvests the
+  child and its report goes to the seat; the deputy stays the launch's
+  authenticated origin. MCP spawn recovery reads the same parent.
+- **Trimming a record keeps the ghost a ghost.** Past the history cap the
+  oldest ended record is replaced by a short row (its conversation id,
+  transcript and seat) kept without a cap, so the lists, the scanner's
+  demotion, the seat's task bands, the delivery fence and the spawn parent
+  still see it.
+- **One ask per key at a time.** Overlapping calls under one
+  `clientRequestId` join the call already running, so the fork and the
+  delivery happen once. A record another process wrote under the key after
+  the first read is finished as a replay.
 - **A pending record that answered ends `done`.** If the route process dies
   between the delivery and marking the record active, the sweep reads a
   pending record that has a conversation the same way as an active one, so it

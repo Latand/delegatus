@@ -109,15 +109,35 @@ export interface OrchestratorDeputy {
   error: string | null;
 }
 
+/** What a trimmed record leaves on file. The full record goes once the
+    history passes its cap; its conversation stays a ghost's for good, so the
+    lists keep hiding it, deliveries stay refused and a spawn from it still
+    belongs to its seat. Kept uncapped: three short strings per ask. */
+export interface RetiredDeputyRef {
+  deputyConversationId: string | null;
+  artifactPath: string | null;
+  seatConversationId: string;
+}
+
 interface DeputyFile {
   schemaVersion: number;
   deputies: OrchestratorDeputy[];
+  retired: RetiredDeputyRef[];
 }
 
 const deputiesFile = () => statePath("orchestrator-deputies.json");
 
 function emptyFile(): DeputyFile {
-  return { schemaVersion: ORCHESTRATOR_DEPUTIES_SCHEMA_VERSION, deputies: [] };
+  return { schemaVersion: ORCHESTRATOR_DEPUTIES_SCHEMA_VERSION, deputies: [], retired: [] };
+}
+
+function normalizeRetired(value: unknown): RetiredDeputyRef | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Partial<RetiredDeputyRef>;
+  if (typeof row.seatConversationId !== "string" || !row.seatConversationId) return null;
+  const deputyConversationId = stringOrNull(row.deputyConversationId);
+  const artifactPath = stringOrNull(row.artifactPath);
+  return deputyConversationId || artifactPath ? { deputyConversationId, artifactPath, seatConversationId: row.seatConversationId } : null;
 }
 
 function strings(value: unknown): string[] {
@@ -213,6 +233,10 @@ export function readDeputyFileOrNull(): DeputyFile | null {
       const deputy = normalizeDeputy(candidate);
       if (deputy) file.deputies.push(deputy);
     }
+    for (const candidate of Array.isArray(parsed.retired) ? parsed.retired : []) {
+      const retired = normalizeRetired(candidate);
+      if (retired) file.retired.push(retired);
+    }
     return file;
   } catch {
     return null;
@@ -235,8 +259,13 @@ function trimHistory(file: DeputyFile): void {
   const ended = file.deputies.filter((deputy) => deputy.state === "ended");
   const excess = ended.length - DEPUTY_HISTORY_CAP;
   if (excess <= 0) return;
-  const drop = new Set(ended.slice(0, excess).map((deputy) => deputy.askId));
+  const dropped = ended.slice(0, excess);
+  const drop = new Set(dropped.map((deputy) => deputy.askId));
   file.deputies = file.deputies.filter((deputy) => !drop.has(deputy.askId));
+  for (const deputy of dropped) {
+    if (!deputy.deputyConversationId && !deputy.artifactPath) continue;
+    file.retired.push({ deputyConversationId: deputy.deputyConversationId, artifactPath: deputy.artifactPath, seatConversationId: deputy.seatConversationId });
+  }
 }
 
 /** Read, change and write the file under the lock the seat record uses. An
@@ -381,23 +410,94 @@ export function deputiesForSeatIn(
   return [...live, ...ended].sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt));
 }
 
-/** Every conversation and transcript a deputy record names, for the lists
-    that must leave them out (§5 "hidden from lists"). Null when the record
-    cannot be read. */
+/** Every conversation and transcript a deputy record names, trimmed ones
+    included, for the lists that must leave them out (§5 "hidden from lists").
+    Null when the record cannot be read. */
 export function deputyConversationRefs(): { conversationIds: string[]; paths: string[] } | null {
   const file = readDeputyFileOrNull();
   if (!file) return null;
-  return deputyConversationRefsIn(file.deputies);
+  return deputyConversationRefsIn(file.deputies, file.retired);
 }
 
-export function deputyConversationRefsIn(deputies: readonly OrchestratorDeputy[]): { conversationIds: string[]; paths: string[] } {
+export function deputyConversationRefsIn(
+  deputies: readonly Pick<OrchestratorDeputy, "deputyConversationId" | "artifactPath">[],
+  retired: readonly RetiredDeputyRef[] = [],
+): { conversationIds: string[]; paths: string[] } {
   const conversationIds = new Set<string>();
   const paths = new Set<string>();
-  for (const deputy of deputies) {
+  for (const deputy of [...deputies, ...retired]) {
     if (deputy.deputyConversationId) conversationIds.add(deputy.deputyConversationId);
     if (deputy.artifactPath) paths.add(deputy.artifactPath);
   }
   return { conversationIds: [...conversationIds], paths: [...paths] };
+}
+
+/** The delivery key of the deputy's one message; stable across retries. */
+export function deputyMessageKey(askId: string): string {
+  return `deputy_ask_${crypto.createHash("sha256").update(askId).digest("hex").slice(0, 40)}`;
+}
+
+/** The deputy (or the trimmed trace of one) that names a conversation, by its
+    id or by its transcript path. */
+export function deputyNamingIn(
+  file: Pick<DeputyFile, "deputies" | "retired">,
+  target: { conversationId?: string | null; path?: string | null },
+): { seatConversationId: string; deputy: OrchestratorDeputy | null } | null {
+  const conversationId = target.conversationId?.trim() || null;
+  const artifactPath = target.path?.trim() ? path.resolve(target.path.trim()) : null;
+  if (!conversationId && !artifactPath) return null;
+  const names = (row: Pick<OrchestratorDeputy, "deputyConversationId" | "artifactPath">) =>
+    (conversationId !== null && row.deputyConversationId === conversationId)
+    || (artifactPath !== null && row.artifactPath !== null && path.resolve(row.artifactPath) === artifactPath);
+  const deputy = file.deputies.find(names);
+  if (deputy) return { seatConversationId: deputy.seatConversationId, deputy };
+  const retired = file.retired.find(names);
+  return retired ? { seatConversationId: retired.seatConversationId, deputy: null } : null;
+}
+
+export const DEPUTY_CONVERSATION_CLOSED = "deputy_conversation_closed";
+
+export interface DeputyDeliveryRefusal {
+  code: typeof DEPUTY_CONVERSATION_CLOSED;
+  error: string;
+  status: 409;
+  seatConversationId: string;
+}
+
+/** A deputy answers its one ask and takes nothing after it (§4 "one job"):
+    any message to a conversation a deputy record names is refused, live or
+    ended, and points at the seat instead. The only message admitted is the
+    ghost route's own first one, under the key derived from the record, while
+    the record is still pending. An unreadable deputy file refuses nothing: it
+    already stops every new deputy, and failing closed here would stop every
+    send on the machine. */
+export function deputyDeliveryRefusal(
+  target: { conversationId?: string | null; path?: string | null; clientMessageId?: string | null },
+  file: Pick<DeputyFile, "deputies" | "retired"> | null = readDeputyFileOrNull(),
+): DeputyDeliveryRefusal | null {
+  if (!file) return null;
+  const named = deputyNamingIn(file, target);
+  if (!named) return null;
+  const deputy = named.deputy;
+  if (deputy && deputy.state === "pending" && target.clientMessageId?.trim() === deputyMessageKey(deputy.askId)) return null;
+  return {
+    code: DEPUTY_CONVERSATION_CLOSED,
+    error: `this conversation is the orchestrator's parallel self for one ask and takes no further messages; send to the orchestrator instead (send_message_to_orchestrator, seat ${named.seatConversationId})`,
+    status: 409,
+    seatConversationId: named.seatConversationId,
+  };
+}
+
+/** Who a spawn's parent is when the caller may be a deputy: its seat, so what
+    the ghost starts is the seat's child and the seat tick harvests it (§4:
+    the seat owns everything, a ghost is one of its hands). Any other caller
+    is its own parent. */
+export function spawnParentForCaller(
+  callerConversationId: string,
+  file: Pick<DeputyFile, "deputies" | "retired"> | null = readDeputyFileOrNull(),
+): string {
+  if (!file) return callerConversationId;
+  return deputyNamingIn(file, { conversationId: callerConversationId })?.seatConversationId ?? callerConversationId;
 }
 
 /** {@link deputyPrincipal} over the durable records, read per call so a

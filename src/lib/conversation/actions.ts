@@ -8,6 +8,7 @@ import {
   resumeConversation,
   type DeliveryOutcome,
 } from "@/lib/delivery";
+import { DEPUTY_CONVERSATION_CLOSED, deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { dispatchStructuredControl } from "@/lib/runtime/structuredControls";
 
@@ -38,6 +39,7 @@ type ConversationActionBody =
   | { ok: true; structured: true; target: string; outcome: "withdrawn"; withdrawn: string | null }
   | { ok: true; structured: true; target: string; operationId: string; receipt: { operationId: string; status: string } }
   | { ok: false; outcome: "failed"; code: typeof BRANCH_SHARED_HOST_CODE; error: string }
+  | { ok: false; outcome: "failed"; code: typeof DEPUTY_CONVERSATION_CLOSED; error: string; seatConversationId: string }
   | { error: string };
 
 export type ConversationActionResult = { status: number; body: ConversationActionBody };
@@ -101,6 +103,18 @@ export async function applyConversationAction(
   }
   const conversation = byId ?? byPath;
   const transcriptPath = conversation?.generations.at(-1)?.path ?? request.transcriptPath;
+
+  /* A resume or a compaction starts a turn, and a seat's deputy has had its
+     one (docs/design/ghost-seat.md §4). Interrupt, kill and answers stay. */
+  if (request.action === "resume" || request.action === "compact") {
+    const refusal = deputyDeliveryRefusal({ conversationId: conversation?.id ?? request.conversationId, path: transcriptPath });
+    if (refusal) {
+      return {
+        status: refusal.status,
+        body: { ok: false, outcome: "failed", code: refusal.code, error: refusal.error, seatConversationId: refusal.seatConversationId },
+      };
+    }
+  }
 
   if (request.action === "kill" && branchSharesRootHost(registry, conversation)) {
     return {

@@ -11,6 +11,7 @@ import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { advanceConversationMigration, deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
+import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import type { HeldDelivery, HeldDeliveryCommand, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
@@ -85,7 +86,7 @@ export type StructuredMessageResult =
      Without it a hold was the one acceptance a caller could never ask about
      afterwards, which put `queued` back at the end of the story. */
   | { ok: true; structured: true; target: string | null; outcome: "held"; operationId: string; spawned?: boolean }
-  | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true };
+  | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true; code?: string; seatConversationId?: string };
 
 export interface StructuredMessageDependencies {
   /** The actuation section a caller already holds for this conversation (the migration drain), handed down
@@ -810,6 +811,11 @@ export async function enqueueStructuredMessage(
   request: StructuredMessageRequest,
   dependencies: StructuredMessageDependencies = {},
 ): Promise<StructuredMessageResult | null> {
+  /* A seat's deputy takes its one ask and nothing after it, whoever sends and
+     whether it is live or ended (docs/design/ghost-seat.md §4). Refused before
+     anything is reserved, so no host is resumed for it. */
+  const deputyRefusal = deputyDeliveryRefusal(request);
+  if (deputyRefusal) return { ok: false, structured: true, outcome: "failed", ...deputyRefusal };
   if (!(dependencies.enabled ?? structuredHostsEnabled)()) return null;
   const imageAdmission = admitRuntimeImagePayload({ images: request.images ?? [] });
   if (imageAdmission.error) {

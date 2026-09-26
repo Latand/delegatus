@@ -183,3 +183,43 @@ test("the voice gateway's ask is recorded and delivered as the agent message it 
   expect(deputyDeliveryOrigin(origin)).toEqual({ kind: "agent", role: "gateway" });
   expect(deputyDeliveryOrigin({ kind: "operator" })).toEqual({ kind: "operator" });
 });
+
+test("two overlapping calls under one key fork once and deliver once", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  /* The first call is held at the busy check, before its record exists, so the
+     second one's pre-read finds nothing: the race the key has to close. */
+  const { ports: held, calls } = ports({ seatBusy: async () => { await gate; return true; } });
+  const first = askOrchestratorInParallel(ask, held);
+  const second = askOrchestratorInParallel(ask, held);
+  release();
+  const [one, two] = await Promise.all([first, second]);
+  expect(one).toMatchObject({ ok: true, replayed: false });
+  expect(two).toMatchObject({ ok: true, replayed: true });
+  expect(one.ok && two.ok && one.askId === two.askId).toBe(true);
+  expect(calls.forks).toHaveLength(1);
+  expect(calls.delivered).toHaveLength(1);
+  expect(readDeputies()).toHaveLength(1);
+  expect(readDeputies()[0]!.state).toBe("active");
+});
+
+test("a record another process wrote under the key after the pre-read is finished as a replay, not begun again", async () => {
+  /* The pre-read misses (the store answers empty), then begin finds the key:
+     the ask was already delivered and marked active by its first caller. */
+  const { ports: first } = ports();
+  const done = await askOrchestratorInParallel(ask, first);
+  expect(done.ok).toBe(true);
+  const { ports: late, calls } = ports({
+    store: {
+      read: () => [],
+      begin: beginDeputy,
+      recordFork: () => { throw new Error("no second fork"); },
+      activate: () => { throw new Error("no second activation"); },
+      end: () => { throw new Error("no end"); },
+    },
+  });
+  const replay = await askOrchestratorInParallel(ask, late);
+  expect(replay).toMatchObject({ ok: true, replayed: true, deputyConversationId: "conversation_ghost" });
+  expect(calls.forks).toEqual([]);
+  expect(calls.delivered).toEqual([]);
+});

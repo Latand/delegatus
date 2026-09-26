@@ -8,6 +8,7 @@ import type { RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 import {
   activateDeputy,
   beginDeputy,
+  deputyMessageKey,
   endDeputy,
   readDeputies,
   recordDeputyFork,
@@ -97,10 +98,7 @@ export function deputySessionId(askId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${(8 | (parseInt(hex[16]!, 16) & 3)).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-/** The delivery key of the deputy's one message; stable across retries. */
-export function deputyMessageKey(askId: string): string {
-  return `deputy_ask_${crypto.createHash("sha256").update(askId).digest("hex").slice(0, 40)}`;
-}
+export { deputyMessageKey };
 
 const defaultStore = {
   read: readDeputies,
@@ -122,7 +120,30 @@ function refusal(code: AskInParallelRefusal, error: string, status: number, askI
   return { ok: false, code, error, status, ...(askId ? { askId } : {}) };
 }
 
-export async function askOrchestratorInParallel(input: AskInParallelInput, ports: DeputyCommandPorts): Promise<AskInParallelResult> {
+/* Overlapping calls under one key join the call already running, so one ask
+   forks once and delivers once: the second would otherwise read the pending
+   record the first just wrote and race it to the same fork destination. On
+   globalThis because each route bundle carries its own copy of this module. */
+const IN_FLIGHT_KEY = Symbol.for("llv.orchestrator.deputyAsksInFlight");
+function asksInFlight(): Map<string, Promise<AskInParallelResult>> {
+  const holder = globalThis as typeof globalThis & { [IN_FLIGHT_KEY]?: Map<string, Promise<AskInParallelResult>> };
+  return holder[IN_FLIGHT_KEY] ??= new Map();
+}
+
+export function askOrchestratorInParallel(input: AskInParallelInput, ports: DeputyCommandPorts): Promise<AskInParallelResult> {
+  const key = typeof input.clientRequestId === "string" ? input.clientRequestId.trim().slice(0, 128) : "";
+  if (!key) return askOnce(input, ports);
+  const inFlight = asksInFlight();
+  const running = inFlight.get(key);
+  if (running) return running.then((result) => result.ok ? { ...result, replayed: true } : result);
+  const started = askOnce(input, ports).finally(() => {
+    if (inFlight.get(key) === started) inFlight.delete(key);
+  });
+  inFlight.set(key, started);
+  return started;
+}
+
+async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Promise<AskInParallelResult> {
   const store = ports.store ?? defaultStore;
   const text = typeof input.text === "string" ? input.text.trim() : "";
   const images = input.images ?? [];
@@ -143,6 +164,7 @@ export async function askOrchestratorInParallel(input: AskInParallelInput, ports
     return refusal("seat_not_claude", "asking in parallel works for a Claude seat only in this version", 409);
   }
   let deputy: OrchestratorDeputy;
+  let replayed = replay !== null;
   if (replay) {
     deputy = replay;
   } else {
@@ -162,6 +184,9 @@ export async function askOrchestratorInParallel(input: AskInParallelInput, ports
     if (begun.kind === "limit") {
       return refusal("deputy_limit", "the orchestrator's parallel self is already working on another message; wait for it to finish", 409, begun.deputy.askId);
     }
+    /* A record written under this key after the pre-read (another process)
+       is the same ask: finished from the step it reached, like any replay. */
+    replayed = begun.kind === "replay";
     deputy = begun.deputy;
   }
   if (deputy.state === "ended") {
@@ -237,5 +262,5 @@ export async function askOrchestratorInParallel(input: AskInParallelInput, ports
     deputy = store.activate(deputy.askId, ports.now()) ?? deputy;
   }
   ports.watch();
-  return { ok: true, askId: deputy.askId, deputyConversationId: deputy.deputyConversationId!, replayed: replay !== null, deputy };
+  return { ok: true, askId: deputy.askId, deputyConversationId: deputy.deputyConversationId!, replayed, deputy };
 }

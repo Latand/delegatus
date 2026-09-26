@@ -15,7 +15,7 @@ import {
   failOrchestratorSeatIntent,
   orchestratorSeatFor,
 } from "@/lib/orchestrator/seats";
-import { beginDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
+import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import * as taskStore from "@/lib/tasks/store";
 
 import { POST as rotatePost } from "../rotate/route";
@@ -191,6 +191,23 @@ test("the seat read carries the active seat's deputies and every deputy's refs",
   expect(body.deputies![0]).toMatchObject({ askId: begun.deputy.askId, deputyConversationId: "conversation_ghost", forkBytes: 2048, ask: { text: "file a task" } });
   expect(body.deputies![0]).not.toHaveProperty("clientRequestId");
   expect(body.all.deputies).toEqual({ conversationIds: ["conversation_ghost"], paths: ["/seats/ghost.jsonl"] });
+});
+
+/* The history cap trims the oldest full records; the refs that keep a ghost's
+   conversation out of the task bands must outlive it, or the seat's hidden
+   task returns as a board card on the 101st ask. */
+test("the seat read keeps naming a deputy whose full record the history cap trimmed", async () => {
+  for (let index = 0; index <= DEPUTY_HISTORY_CAP; index += 1) {
+    const begun = beginDeputy({ project: "proj-a", seatConversationId: "conversation_seat", seatEpoch: 1, seatPath: "/seats/a.jsonl", clientRequestId: `ask-${index}`, ask: { text: "file a task", images: 0, sender: null } });
+    if (begun.kind !== "begun") throw new Error("deputy did not begin");
+    recordDeputyFork(begun.deputy.askId, { deputyConversationId: `conversation_ghost_${index}`, artifactPath: `/seats/ghost-${index}.jsonl`, forkRecordCount: 1 });
+    endDeputy(begun.deputy.askId, { outcome: "done" });
+  }
+  const response = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?scope=all"));
+  const body = await response.json() as { all: { deputies?: { conversationIds: string[]; paths: string[] } } | null };
+  expect(body.all?.deputies?.conversationIds).toContain("conversation_ghost_0");
+  expect(body.all?.deputies?.paths).toContain("/seats/ghost-0.jsonl");
+  expect(body.all?.deputies?.conversationIds).toHaveLength(DEPUTY_HISTORY_CAP + 1);
 });
 
 /*

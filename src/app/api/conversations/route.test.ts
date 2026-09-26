@@ -6,7 +6,7 @@ import path from "node:path";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
-import { beginDeputy, endDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
+import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, readDeputies, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { writeSessionTitle } from "@/lib/session/titleStore";
@@ -442,6 +442,49 @@ test("the orchestrator's parallel selves leave no row in the page or in list_con
     const listed = await tools.list_conversations({ project: "ghost-project" }) as { conversations: Array<{ transcriptPath: string; conversationId: string | null }> };
     expect(listed.conversations.map((row) => row.transcriptPath)).toEqual([seat]);
     expect(listed.conversations.some((row) => row.conversationId === ghost.id)).toBe(false);
+  } finally {
+    fs.rmSync(path.join(sandbox, "orchestrator-deputies.json"), { force: true });
+  }
+});
+
+test("a parallel self stays out of the page after the history cap trims its record", async () => {
+  const transcript = (name: string) => {
+    const pathname = path.join(sandbox, `${name}.jsonl`);
+    fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: `Words of ${name}` } }) + "\n");
+    return pathname;
+  };
+  const seat = transcript("capped-seat");
+  const oldest = transcript("capped-ghost-0");
+  replaceConversationCatalog([seat, oldest].map((pathname) => {
+    const stat = fs.statSync(pathname);
+    return {
+      path: pathname,
+      root: "claude-projects" as const,
+      name: path.basename(pathname),
+      project: "capped-project",
+      title: "Orchestrator · parallel self",
+      firstPrompt: "",
+      engine: "claude" as const,
+      kind: "session",
+      fmt: "claude" as const,
+      mtime: stat.mtimeMs / 1000,
+      size: stat.size,
+    };
+  }));
+  try {
+    for (let index = 0; index <= DEPUTY_HISTORY_CAP; index += 1) {
+      const begun = beginDeputy({ project: "capped-project", seatConversationId: "conversation_seat", seatEpoch: 1, seatPath: seat, clientRequestId: `capped-${index}`, ask: { text: "file a task", images: 0, sender: null } });
+      if (begun.kind !== "begun") throw new Error("deputy did not begin");
+      recordDeputyFork(begun.deputy.askId, {
+        deputyConversationId: `conversation_capped_${index}`,
+        artifactPath: index === 0 ? oldest : path.join(sandbox, "elsewhere", `capped-${index}.jsonl`),
+        forkRecordCount: 1,
+      });
+      endDeputy(begun.deputy.askId, { outcome: "done" });
+    }
+    expect(readDeputies().some((deputy) => deputy.artifactPath === oldest)).toBe(false);
+    const page = await (await GET(new Request("http://127.0.0.1/api/conversations?project=capped-project"))).json() as { items: Array<{ path: string }> };
+    expect(page.items.map((item) => item.path)).toEqual([seat]);
   } finally {
     fs.rmSync(path.join(sandbox, "orchestrator-deputies.json"), { force: true });
   }

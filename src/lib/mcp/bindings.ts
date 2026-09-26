@@ -102,7 +102,7 @@ import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTi
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
-import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies } from "@/lib/orchestrator/deputies";
+import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
@@ -5837,13 +5837,16 @@ async function recoverSpawn(
     return { outcome: "unknown", evidence: "spawn-receipt", reason: "more than one launch receipt claims this key; the match is ambiguous", ids: {}, ...(legacy ? { ownership: "unknown" as const } : {}) };
   }
   const receipt = receipts[0]!;
+  /* A deputy's launch is parented to its seat (docs/design/ghost-seat.md §4),
+     so the parent that proves this caller's ownership is the seat's. */
+  const callerParent = binding.caller.conversationId !== null ? spawnParentForCaller(binding.caller.conversationId) : null;
   const ownership = legacy
-    ? (binding.caller.conversationId !== null && receipt.parentConversationId === binding.caller.conversationId ? "established" : "unknown")
+    ? (callerParent !== null && receipt.parentConversationId === callerParent ? "established" : "unknown")
     : undefined;
   if (legacy && ownership !== "established") {
     return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "no durable evidence establishes the owner of this launch", ids: {}, ownership: "unknown" };
   }
-  if ((receipt.parentConversationId !== null && receipt.parentConversationId !== binding.caller.conversationId)
+  if ((receipt.parentConversationId !== null && receipt.parentConversationId !== callerParent)
     || (binding.target.identity && path.resolve(receipt.cwd) !== binding.target.identity)
     || (typeof args?.prompt === "string" && receipt.launchDisplay && receipt.launchDisplay.prompt !== args.prompt)) {
     return { outcome: "unknown", evidence: "spawn-receipt", reason: "the durable launch owner or payload contradicts the bound request", ids: {}, ownership: "unknown" };

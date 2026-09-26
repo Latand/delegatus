@@ -3494,3 +3494,48 @@ test("one recovered session cannot mark an unfinished startup pass ready", async
     expect(status.didStructuredHostStartupFail()).toBe(true);
   } finally { registry.close(); }
 });
+
+/* docs/design/ghost-seat.md §4: a seat's deputy takes its one ask and nothing
+   after it. Any later message — a worker's report, another agent's send, the
+   operator's composer — is refused before a registry read or a host is
+   touched, so an ended ghost is never resumed and a live one never gets a
+   second turn. Only the ghost route's own keyed first message passes. */
+test("a message to a seat's deputy is refused before anything is reserved or resumed", async () => {
+  const { beginDeputy, recordDeputyFork, activateDeputy, endDeputy, deputyMessageKey } = await import("@/lib/orchestrator/deputies");
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(sandbox, "deputy-state-"));
+  try {
+    const begun = beginDeputy({
+      project: "proj-ghost", seatConversationId: "conversation_seat", seatEpoch: 1, seatPath: "/sessions/seat.jsonl",
+      clientRequestId: "ask-1", ask: { text: "file a task", images: 0, sender: null },
+    });
+    if (begun.kind !== "begun") throw new Error("deputy did not begin");
+    const askId = begun.deputy.askId;
+    recordDeputyFork(askId, { deputyConversationId: conversationId, artifactPath, forkRecordCount: 2 });
+    let touched = 0;
+    const untouched = {
+      enabled: () => true,
+      client: () => { touched += 1; throw new Error("reached the host"); },
+      registry: () => { touched += 1; throw new Error("reached the registry"); },
+    } as const;
+    const send = (clientMessageId: string, target: { conversationId?: string; path: string } = { conversationId, path: "" }) =>
+      enqueueStructuredMessage({ ...target, clientMessageId, text: "worker report" }, untouched);
+
+    /* Pending: the route's own first message is admitted to the delivery path… */
+    await expect(send(deputyMessageKey(askId))).rejects.toThrow("reached the registry");
+    touched = 0;
+    /* …and nothing else is. */
+    expect(await send("mcp_send_worker")).toMatchObject({ ok: false, code: "deputy_conversation_closed", status: 409, seatConversationId: "conversation_seat" });
+    activateDeputy(askId);
+    expect(await send("mcp_send_worker")).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
+    expect(await send(deputyMessageKey(askId))).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
+    endDeputy(askId, { outcome: "done" });
+    expect(await send("mcp_send_worker")).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
+    /* Addressed by transcript alone, as `/api/tmux` may be. */
+    expect(await send("mcp_send_worker", { path: artifactPath })).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
+    expect(touched).toBe(0);
+  } finally {
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDir;
+  }
+});

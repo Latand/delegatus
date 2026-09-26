@@ -33,6 +33,7 @@ import { pathAllowed } from "@/lib/scanner/roots";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
 import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
+import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import { materializeStructuredTerminal } from "@/lib/runtime/structuredTerminal";
 import { attachmentsAreOrphaned, structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileAdmissionResult } from "@/lib/inboxFiles";
@@ -364,6 +365,19 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     const parsed = reconfigurationFromBody(file.engine, body);
     if (!parsed.value) return NextResponse.json({ error: parsed.error ?? "invalid configuration" }, { status: 400 });
     return respond(await dependencies.reconfigureConversation(filePath, parsed.value, { actor }));
+  }
+
+  /* A seat's deputy takes no message after its one ask (docs/design/ghost-seat.md
+     §4). The structured path refuses it too; this also covers the legacy
+     resume below, before any attachment is written. */
+  const deputyRefusal = deputyDeliveryRefusal({
+    conversationId,
+    path: filePath,
+    clientMessageId: typeof body.clientMessageId === "string" ? body.clientMessageId.slice(0, 128) : null,
+  });
+  if (deputyRefusal) {
+    const { status, ...refusal } = deputyRefusal;
+    return NextResponse.json({ ok: false, outcome: "failed", ...refusal }, { status });
   }
 
   const text = typeof body.text === "string" ? body.text : "";

@@ -19,6 +19,7 @@ import { RuntimeHostUnavailableError, type RuntimeHostClient } from "@/lib/runti
 import { recoverPendingStructuredSpawns, terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
+import { beginDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import { authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, spawnLineageSelectorForCaller } from "./admission";
 import { POST } from "./route";
 
@@ -3993,4 +3994,59 @@ test("Astra and Sol orchestrator spawns carry top-tier effort and images into th
       else process.env[key] = saved[key];
     }
   }
+});
+
+/* docs/design/ghost-seat.md §4: the seat owns everything and a ghost is one of
+   its hands. A spawn from the seat's deputy is the seat's child — the lineage
+   edge the seat tick harvests names the seat — while the deputy stays the
+   authenticated actor. */
+test("a seat deputy's spawn is parented to the seat and keeps the deputy as its actor", () => {
+  const store = registry();
+  const seat = store.ensureConversation("claude", "/sessions/seat-0a1b2c3d.jsonl", "claude-test");
+  const capability = "D".repeat(43);
+  const begunGhost = store.beginSpawnRequest({
+    engine: "claude",
+    cwd: "/repo",
+    spawnCapabilityDigest: crypto.createHash("sha256").update(capability).digest("hex"),
+    launchProfile: { title: "Orchestrator · parallel self" },
+  });
+  if (begunGhost.kind !== "created") throw new Error("expected create");
+  const ghostId = begunGhost.receipt.conversationId;
+  const ghostPath = "/sessions/ghost-4e5f6a7b.jsonl";
+  const settled = store.settleSpawn(begunGhost.receipt.launchId, {
+    key: { engine: "claude", sessionId: "4e5f6a7b-0000-\x34000-8000-000000000001" },
+    artifactPath: ghostPath,
+    cwd: "/repo",
+    accountId: "claude-test",
+    status: "live",
+    host: null,
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  expect(settled.kind).toBe("settled");
+  const deputy = beginDeputy({
+    project: "proj-ghost", seatConversationId: seat.id, seatEpoch: 1, seatPath: seat.generations[0]!.path,
+    clientRequestId: `spawn-parent-${ghostId}`, ask: { text: "start a reviewer", images: 0, sender: null },
+  });
+  if (deputy.kind !== "begun") throw new Error("deputy did not begin");
+  recordDeputyFork(deputy.deputy.askId, { deputyConversationId: ghostId, artifactPath: ghostPath, forkRecordCount: 1 });
+
+  const request = new NextRequest("http://127.0.0.1:8898/api/spawn", { headers: { "x-llv-spawn-capability": capability } });
+  const caller = authenticatedAgentSpawnCaller(request, undefined, store);
+  expect(caller).toEqual({ kind: "agent", conversationId: ghostId, liveChildrenCap: 20, parentConversationId: seat.id });
+  if ("error" in caller || caller.kind !== "agent") throw new Error("expected the deputy as an agent caller");
+  const lineage = resolveSpawnLineage(spawnLineageSelectorForCaller(caller, { role: "builder" }), store);
+  expect(lineage.parent?.conversationId).toBe(seat.id);
+
+  const child = store.beginSpawnRequest({
+    engine: "claude",
+    cwd: "/repo",
+    parentConversationId: lineage.parent!.conversationId,
+    parentSource: "inferred-caller",
+    origin: { kind: "agent", conversationId: caller.conversationId },
+    launchProfile: { title: "Reviewer" },
+  });
+  if (child.kind !== "created") throw new Error("expected create");
+  expect(store.snapshot().lineageEdges[child.receipt.conversationId]?.parentConversationId).toBe(seat.id);
 });
