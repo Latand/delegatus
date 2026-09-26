@@ -17,10 +17,10 @@ import {
   CODEX_TERRA_MODEL,
 } from "@/lib/agent/models";
 
-import type { BuilderVariantId, RoleConfig, RoleEngine, RoleId } from "./types";
+import type { RoleConfig, RoleEngine, RoleId, RoleVariantId } from "./types";
 
-/** One row of the agent mapping: a role, or one of the builder's variants. */
-export type EquivalentRow = { roleId: RoleId; variant?: BuilderVariantId };
+/** One row of the agent mapping: a role, or one of its variants. */
+export type EquivalentRow = { roleId: RoleId; variant?: RoleVariantId };
 
 // GPT-6 Luna misses details a fix or a cleanup needs, so it lands one tier up.
 const CODEX_TO_CLAUDE: Record<string, string> = {
@@ -43,8 +43,10 @@ const CLAUDE_TO_CODEX: Record<string, string> = {
 const OPUS_HIGH: RoleConfig = { engine: "claude", model: "opus", effort: "high" };
 
 /** Per row, the runtime on each target engine. Moving to Claude, every row runs
-    Opus high except the fix round and the cleaner; moving to Codex, only the
-    rows that live on Claude by default have an approved target. */
+    Opus high except the fix round, the cleaner and the small-change and docs
+    rows; moving to Codex, only the rows that live on Claude by default (and the
+    trivial reviewer, which lives on Luna) have an approved target. No row that
+    Sonnet may not run (orchestrator, architect, reviewer, verifier) lands on it. */
 const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
   claude: {
     orchestrator: OPUS_HIGH,
@@ -53,6 +55,9 @@ const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
     builder: OPUS_HIGH,
     "builder:frontend": OPUS_HIGH,
     "builder:apply-fixes": { engine: "claude", model: "opus", effort: "medium" },
+    "builder:trivial": { engine: "claude", model: "sonnet", effort: "high" },
+    "builder:docs": { engine: "claude", model: "opus", effort: "medium" },
+    "reviewer:trivial": { engine: "claude", model: "opus", effort: "medium" },
     architect: OPUS_HIGH,
     cleaner: { engine: "claude", model: "sonnet", effort: "high" },
     "prod-auditor": OPUS_HIGH,
@@ -62,6 +67,9 @@ const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
     orchestrator: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
     architect: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "high" },
     "builder:frontend": { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "high" },
+    "builder:trivial": { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "high" },
+    "builder:docs": { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
+    "reviewer:trivial": { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "high" },
   },
 };
 

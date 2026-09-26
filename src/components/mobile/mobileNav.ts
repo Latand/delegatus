@@ -42,7 +42,7 @@ export type MobileScreen =
   /* The orchestrator's report log (#2146), one tap from its conversation. */
   | { kind: "reports" };
 export type MobileScreenKind = MobileScreen["kind"];
-const SHEET_NAMES = ["projects", "attention", "menu", "host", "search", "seat", "rotate", "tick", "switch", "model", "stage", "row", "links", "card", "status", "lane", "hidden", "tasks"] as const;
+const SHEET_NAMES = ["projects", "attention", "menu", "host", "search", "seat", "rotate", "tick", "reports", "switch", "model", "stage", "row", "links", "card", "status", "lane", "hidden", "tasks"] as const;
 export type MobileSheetName = (typeof SHEET_NAMES)[number];
 /** How the current state was reached; the shell picks its transition from it. */
 export type MobileNavMotion = "load" | "push" | "pop" | "switch" | "sheet" | "act";

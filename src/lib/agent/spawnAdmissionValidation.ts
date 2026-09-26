@@ -12,6 +12,8 @@ import {
   type SpawnCommandDependencies,
 } from "@/lib/agent/spawnCommand";
 import { resolveSpawnRole } from "@/lib/roles/registry";
+import { spawnSizingRefusal, type Briefer } from "@/lib/roles/sizing";
+import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 type SpawnValidationDependencies = Pick<SpawnCommandDependencies, "registry">;
@@ -63,10 +65,15 @@ export async function executeSpawnAdmissionValidation(
      allowed to write a fence. A stranger may learn only the ordinary refusal,
      never burn another caller's downstream key. This precedes the lineage
      refusal below, which now fences (#1641). */
+  let briefer: Briefer = { kind: "operator" };
   if (isAgentInitiatedSpawn(req)) {
     let caller: ReturnType<typeof authenticatedAgentSpawnCaller>;
     try {
-      caller = authenticatedAgentSpawnCaller(req, body.src, dependencies.registry());
+      const registry = dependencies.registry();
+      caller = authenticatedAgentSpawnCaller(req, body.src, registry);
+      if (!("error" in caller) && caller.kind === "agent") {
+        briefer = { kind: "agent", runtime: conversationRuntime(registry.readOnlySnapshot(), caller.conversationId) };
+      }
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 503 });
     }
@@ -88,6 +95,11 @@ export async function executeSpawnAdmissionValidation(
      lineage one, and both must answer with the same durable fence. */
   const reviewsError = mandatoryReviewsError(role.value?.role ?? null, body);
   if (reviewsError) return refusal(body, reviewsError, dependencies);
+  /* The sizing rules, exactly as `/api/spawn` applies them. */
+  if (briefer.kind === "agent") {
+    const sizing = spawnSizingRefusal({ role: role.value, engine: body.engine, model: body.model, briefer });
+    if (sizing) return refusal(body, sizing, dependencies);
+  }
 
   return NextResponse.json({ admissible: true, fenced: false });
 }

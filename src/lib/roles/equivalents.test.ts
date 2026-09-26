@@ -44,3 +44,19 @@ test("with Claude out, the orchestrator, the architect and the frontend builder 
   /* A row with no approved target keeps the model-to-model mapping. */
   expect(equivalentConfig({ engine: "claude", model: "sonnet", effort: "xhigh" }, "codex", { roleId: "reviewer" })).toEqual({ engine: "codex", model: "gpt-6-sol", effort: "xhigh" });
 });
+
+/* docs/design/model-sizing-tiers.md §6: the new rows, and no row Sonnet may
+   not run lands on it when it moves engine. */
+test("the small-change and docs rows have approved targets, and no denied row lands on Sonnet", () => {
+  expect(equivalentConfig({ engine: "codex", model: "gpt-6-luna", effort: "high" }, "claude", { roleId: "reviewer", variant: "trivial" })).toEqual({ engine: "claude", model: "opus", effort: "medium" });
+  expect(equivalentConfig({ engine: "claude", model: "opus", effort: "medium" }, "codex", { roleId: "reviewer", variant: "trivial" })).toEqual({ engine: "codex", model: "gpt-6-luna", effort: "high" });
+  expect(equivalentConfig({ engine: "claude", model: "sonnet", effort: "high" }, "codex", { roleId: "builder", variant: "trivial" })).toEqual({ engine: "codex", model: "gpt-6-luna", effort: "high" });
+  expect(equivalentConfig({ engine: "codex", model: "gpt-6-luna", effort: "high" }, "claude", { roleId: "builder", variant: "trivial" })).toEqual({ engine: "claude", model: "sonnet", effort: "high" });
+  expect(equivalentConfig({ engine: "claude", model: "opus", effort: "medium" }, "codex", { roleId: "builder", variant: "docs" })).toEqual({ engine: "codex", model: "gpt-6-astra", effort: "medium" });
+  expect(equivalentConfig({ engine: "codex", model: "gpt-6-astra", effort: "medium" }, "claude", { roleId: "builder", variant: "docs" })).toEqual({ engine: "claude", model: "opus", effort: "medium" });
+  for (const row of [{ roleId: "orchestrator" }, { roleId: "architect" }, { roleId: "reviewer" }, { roleId: "reviewer", variant: "trivial" }, { roleId: "verifier" }] as const) {
+    for (const model of ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-astra"]) {
+      expect({ row, model: equivalentConfig({ engine: "codex", model, effort: "medium" }, "claude", row).model }).toEqual({ row, model: "opus" });
+    }
+  }
+});

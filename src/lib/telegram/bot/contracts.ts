@@ -37,6 +37,7 @@ export type TelegramBotErrorCode =
   | "bot_not_connected"
   | "token_rejected"
   | "chat_unknown"
+  | "chat_reference_invalid"
   | "chat_not_allowed"
   | "bot_not_in_chat"
   | "alias_invalid"

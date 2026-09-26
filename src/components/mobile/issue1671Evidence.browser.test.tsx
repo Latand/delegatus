@@ -4236,3 +4236,217 @@ browserTest("permission row: the headline truncates, the age stays, and Allow on
   fs.writeFileSync(path.join(PERMISSION_EVIDENCE, "permission-row.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 300_000);
+
+/*
+ * Each orchestrator sets its own project's reports (orchestrator-reports
+ * §5.6.1) over a post-only bot (`?bot=postonly`: another program owns its
+ * updates through a webhook). On the desktop the seat row's Reports chip opens
+ * the section; on the phone the seat sheet's Reports row opens its sheet. Each
+ * case switches Telegram on, which writes nothing, adds a group by id in the
+ * picker, which selects it, saves it for this project alone, then opens the
+ * bot panel's overview and moves another project in place, which writes that
+ * project alone. At 1440 and 390, en and uk. Gated: the section and the panel
+ * stay inside the window with nothing scrolling sideways, the phone's buttons
+ * are 44 px tall, and every write names only its own project. The closed
+ * desktop chip names the setting in both states and the chat by its title
+ * (the fixture's two groups have 20-character aliases that share a prefix);
+ * the phone's way in, the seat sheet's Reports row, is framed first; the
+ * overview carries the public-group warning above its lines.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "telegram per orchestrator"
+ *
+ * Frames go to `$LLV_TELEGRAM_REPORTS_OUT` (default
+ * `.artifacts/telegram-per-orchestrator`), readings to
+ * `evidence/telegram-bot/per-orchestrator.json`.
+ */
+browserTest("telegram per orchestrator: the seat's Reports section, a chat added by id, and the overview", async () => {
+  const out = path.resolve(process.env.LLV_TELEGRAM_REPORTS_OUT ?? ".artifacts/telegram-per-orchestrator");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(BOT_EVIDENCE, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = [
+    { viewport: { width: 1_440, height: 900 }, phone: false, lang: "en" },
+    { viewport: { width: 1_440, height: 900 }, phone: false, lang: "uk" },
+    { viewport: { width: 390, height: 844 }, phone: true, lang: "en" },
+    { viewport: { width: 390, height: 844 }, phone: true, lang: "uk" },
+  ] as const;
+  /* What a surface holds: its box against the window, sideways scroll, and
+     the phone's short buttons. */
+  const readSurface = (page: Page, selector: string) => page.evaluate(({ selector }) => {
+    const node = document.querySelector<HTMLElement>(selector);
+    if (!node) return null;
+    const rect = node.getBoundingClientRect();
+    const buttons = [...node.querySelectorAll<HTMLElement>("button, input, select")].filter((element) => element.getBoundingClientRect().height > 0);
+    return {
+      box: { left: Math.round(rect.left), top: Math.round(rect.top), right: Math.round(rect.right), bottom: Math.round(rect.bottom) },
+      viewport: { width: innerWidth, height: innerHeight },
+      sideways: node.scrollWidth - node.clientWidth,
+      short: buttons.filter((element) => element.getBoundingClientRect().height < 43.5).map((element) => `${element.tagName.toLowerCase()} ${(element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 40)} ${Math.round(element.getBoundingClientRect().height)}`),
+      text: node.innerText,
+    };
+  }, { selector });
+  try {
+    for (const { viewport, phone, lang } of cases) {
+      const key = `${phone ? "phone" : "desktop"}-${viewport.width}-${lang}`;
+      const context = await browser.newContext({ viewport, colorScheme: "light", deviceScaleFactor: 2, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+      const check = (label: string, reading: Awaited<ReturnType<typeof readSurface>>) => {
+        if (!reading) { failures.push(`${key} ${label}: not shown`); return; }
+        const { box, viewport: window } = reading;
+        if (box.left < -1 || box.right > window.width + 1) failures.push(`${key} ${label}: leaves the window sideways ${JSON.stringify(box)}`);
+        if (reading.sideways > 0) failures.push(`${key} ${label}: scrolls ${reading.sideways} px sideways`);
+        if (phone && reading.short.length) failures.push(`${key} ${label}: controls under 44 px: ${JSON.stringify(reading.short)}`);
+      };
+      let page: Page | null = null;
+      try {
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${base}/?kanban=1&bot=postonly`);
+        const body = phone ? "[data-testid=mobile-seat-reports-sheet] [data-seat-reports-body]" : "[data-seat-reports-popover]";
+        const label = lang === "uk" ? "Звіти" : "Reports";
+        /* The closed chip: its name, its value and its tooltip, framed on the
+           seat row. */
+        const readChip = async (frame: string) => {
+          const chip = page!.locator("[data-seat-reports-chip]").first();
+          const reading = await chip.evaluate((node) => ({
+            state: node.getAttribute("data-seat-reports-chip"),
+            label: node.querySelector<HTMLElement>("[data-seat-reports-label]")?.innerText ?? null,
+            face: node.querySelector<HTMLElement>("[data-seat-reports-face]")?.innerText ?? null,
+            faceWhole: (() => { const face = node.querySelector<HTMLElement>("[data-seat-reports-face]"); return face ? face.scrollWidth <= face.clientWidth : null; })(),
+            title: node.getAttribute("title"),
+            row: (() => {
+              const controls = node.closest("[data-orchestrator-controls]");
+              const rects = controls ? [...controls.children].map((child) => child.getBoundingClientRect()).filter((rect) => rect.width > 0 && rect.height > 0) : [];
+              /* One line: every control shares some height with every other. */
+              const oneLine = Math.max(...rects.map((rect) => rect.top)) < Math.min(...rects.map((rect) => rect.bottom));
+              return { lines: oneLine ? 1 : 2, controls: rects.map((rect) => ({ left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) })), right: Math.round(Math.max(...rects.map((rect) => rect.right))), host: Math.round(node.closest("[data-orchestrator-incumbent]")?.getBoundingClientRect().right ?? 0) };
+            })(),
+          }));
+          const row = await page!.locator("[data-orchestrator-incumbent]").first().boundingBox();
+          if (row) await page!.screenshot({ path: path.join(out, frame), clip: { x: Math.max(0, row.x - 12), y: Math.max(0, row.y - 12), width: Math.min(viewport.width - Math.max(0, row.x - 12), row.width + 24), height: row.height + 24 } });
+          return reading;
+        };
+        let seatSheet: unknown = null;
+        let chipLog: Awaited<ReturnType<typeof readChip>> | null = null;
+        if (phone) {
+          await page.locator("[data-mobile2-seat-controls]").first().click({ timeout: 15_000 });
+          await page.waitForSelector('[data-mobile2-open="seat-reports"]', { timeout: 10_000 });
+          await pause(page, 600);
+          seatSheet = await page.locator('[data-mobile2-open="seat-reports"]').evaluate((node) => {
+            const rect = node.getBoundingClientRect();
+            return { text: (node as HTMLElement).innerText, box: { top: Math.round(rect.top), bottom: Math.round(rect.bottom), width: Math.round(rect.width), height: Math.round(rect.height) }, controls: document.querySelectorAll('[data-mobile2-open="seat-reports"]').length, reportLogButtons: document.querySelectorAll('[data-mobile2-open="reports"]').length };
+          });
+          const row = seatSheet as { text: string; box: { height: number }; controls: number };
+          if (!row.text.includes(label)) failures.push(`${key}: the seat sheet's Reports row reads ${JSON.stringify(row.text)}`);
+          if (row.box.height < 44) failures.push(`${key}: the seat sheet's Reports row is ${row.box.height} px tall`);
+          if (row.controls !== 1) failures.push(`${key}: ${row.controls} controls carry data-mobile2-open="seat-reports"`);
+          await page.screenshot({ path: path.join(out, `${key}-0-seat-sheet.png`) });
+          await page.locator('[data-mobile2-open="seat-reports"]').click({ timeout: 10_000 });
+        } else {
+          /* The fixture's attention toasts arrive over the seat row; each is
+             put away first, as the operator would. */
+          await page.waitForSelector("[data-seat-reports-chip]", { timeout: 15_000 });
+          await pause(page, 1_500);
+          for (let round = 0; round < 5 && await page.locator("[data-attention-toast-dismiss]").count(); round += 1) {
+            await page.locator("[data-attention-toast-dismiss]").first().click().catch(() => {});
+            await pause(page, 400);
+          }
+          chipLog = await readChip(`${key}-0-chip-log.png`);
+          if (chipLog.state !== "log" || chipLog.label !== label || chipLog.face !== (lang === "uk" ? "Журнал" : "Log")) failures.push(`${key}: the closed log-only chip reads ${JSON.stringify(chipLog)}`);
+          if (chipLog.row.lines !== 1 || chipLog.row.right > chipLog.row.host + 1) failures.push(`${key}: the seat row's controls wrap or spill ${JSON.stringify(chipLog.row)}`);
+          await page.locator("[data-seat-reports-chip]").first().click({ timeout: 15_000 });
+        }
+        await page.waitForSelector(`${body} [data-seat-reports-switch]`, { timeout: 10_000 });
+        await pause(page, 600);
+        const off = await readSurface(page, body);
+        check("section off", off);
+        await page.screenshot({ path: path.join(out, `${key}-1-seat-reports-off.png`) });
+
+        await page.locator(`${body} [data-seat-reports-switch]`).click();
+        await pause(page, 600);
+        const picker = await readSurface(page, body);
+        check("picker", picker);
+        const writesAfterOn = await page.evaluate(() => (window as unknown as { evidence: { reportWrites: unknown[] } }).evidence.reportWrites.length);
+        if (writesAfterOn !== 0) failures.push(`${key}: switching Telegram on wrote ${writesAfterOn} time(s)`);
+        await page.screenshot({ path: path.join(out, `${key}-2-seat-reports-picker.png`) });
+
+        await page.evaluate((selector) => { document.querySelectorAll<HTMLDetailsElement>(`${selector} details`).forEach((details) => { details.open = true; }); }, body);
+        await page.locator(`${body} [data-telegram-add-chat-input]`).fill("-1000000000606");
+        await page.locator(`${body} [data-telegram-add-chat-submit]`).click();
+        await page.waitForSelector(`${body} [data-telegram-add-chat-added="atlas-design-reviews"]`, { timeout: 5_000 });
+        await pause(page, 400);
+        const selected = await page.locator(`${body} [data-seat-reports-chat="atlas-design-reviews"]`).getAttribute("aria-checked");
+        if (selected !== "true") failures.push(`${key}: the chat added by id is not selected (${selected})`);
+        await page.locator(`${body} [data-telegram-add-chat-added]`).scrollIntoViewIfNeeded();
+        const added = await readSurface(page, body);
+        check("added by id", added);
+        await page.screenshot({ path: path.join(out, `${key}-3-add-by-id.png`) });
+
+        await page.locator(`${body} [data-seat-reports-save]`).click();
+        await page.waitForSelector(`${body} [data-seat-reports-saved]`, { timeout: 5_000 });
+        await page.locator(`${body} [data-seat-reports-line]`).scrollIntoViewIfNeeded();
+        await pause(page, 400);
+        const line = await page.locator(`${body} [data-seat-reports-line]`).textContent();
+        await page.screenshot({ path: path.join(out, `${key}-4-saved.png`) });
+        const seatWrites = await page.evaluate(() => structuredClone((window as unknown as { evidence: { reportWrites: unknown[] } }).evidence.reportWrites));
+        const expectedSeat = [{ project: "atlas", reportTelegram: { chat: "atlas-design-reviews", name: "Atlas" } }];
+        if (JSON.stringify(seatWrites) !== JSON.stringify(expectedSeat)) failures.push(`${key}: the seat wrote ${JSON.stringify(seatWrites)}`);
+
+        await page.keyboard.press("Escape");
+        await pause(page, 400);
+        let chipChat: Awaited<ReturnType<typeof readChip>> | null = null;
+        let rowChat: string | null = null;
+        if (phone) {
+          rowChat = await page.locator('[data-mobile2-open="seat-reports"]').innerText({ timeout: 5_000 }).catch(() => null);
+          if (!rowChat?.includes("Design review")) failures.push(`${key}: the seat sheet's Reports row reads ${JSON.stringify(rowChat)} after the save`);
+          await page.keyboard.press("Escape");
+          await pause(page, 300);
+        } else {
+          chipChat = await readChip(`${key}-4b-chip-chat.png`);
+          if (chipChat.state !== "chat" || chipChat.label !== label || chipChat.face !== "Design review" || !chipChat.faceWhole || !chipChat.title?.includes("Design review")) failures.push(`${key}: the closed chat chip reads ${JSON.stringify(chipChat)}`);
+          if (chipChat.row.lines !== 1 || chipChat.row.right > chipChat.row.host + 1) failures.push(`${key}: the seat row's controls wrap or spill ${JSON.stringify(chipChat.row)}`);
+        }
+        await openTelegramPanel(page, phone, lang);
+        await page.evaluate(() => document.querySelector("[data-telegram-project-reports]")?.scrollIntoView({ block: "center" }));
+        await pause(page, 500);
+        const panelSelector = '[role="dialog"][aria-label="Telegram"]';
+        const overview = await readSurface(page, "[data-telegram-project-reports]");
+        const warning = await page.evaluate(() => {
+          const node = document.querySelector<HTMLElement>("[data-telegram-project-reports-warning]");
+          const first = document.querySelector<HTMLElement>("[data-telegram-project-report]");
+          return node && first ? { text: node.innerText, above: node.getBoundingClientRect().bottom <= first.getBoundingClientRect().top } : null;
+        });
+        if (!warning?.above) failures.push(`${key}: the overview's public-group warning is missing or under the lines ${JSON.stringify(warning)}`);
+        const panel = await readSurface(page, panelSelector);
+        check("overview panel", panel ? { ...panel, short: phone ? (overview?.short ?? []) : [] } : null);
+        await page.screenshot({ path: path.join(out, `${key}-5-overview.png`) });
+        const lines = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-telegram-project-report]")].map((node) => ({ project: node.dataset.telegramProjectReport, value: node.querySelector<HTMLSelectElement>("select")?.value.replace(/\u0000/g, "") ?? null })));
+        const expectedLines = [{ project: "atlas", value: "atlas-design-reviews" }, { project: "-projects-ledger", value: "team-reports" }, { project: "-projects-mesh", value: "log-only" }];
+        if (JSON.stringify(lines) !== JSON.stringify(expectedLines)) failures.push(`${key}: the overview reads ${JSON.stringify(lines)}`);
+        await page.locator('[data-telegram-project-report="-projects-ledger"] select').selectOption("atlas-design-reviews");
+        await pause(page, 600);
+        const allWrites = await page.evaluate(() => structuredClone((window as unknown as { evidence: { reportWrites: unknown[] } }).evidence.reportWrites));
+        const expectedAll = [...expectedSeat, { project: "-projects-ledger", reportTelegram: { chat: "atlas-design-reviews", name: "Ledger" } }];
+        if (JSON.stringify(allWrites) !== JSON.stringify(expectedAll)) failures.push(`${key}: the overview wrote ${JSON.stringify(allWrites)}`);
+        await page.screenshot({ path: path.join(out, `${key}-6-overview-switched.png`) });
+        if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+        results.push({ key, viewport, lang, seatSheet, chipLog, off, picker, added, line, chipChat, rowChat, overview, warning, lines, writes: allWrites });
+      } catch (error) {
+        failures.push(`${key}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        await page?.screenshot({ path: path.join(out, `${key}-failed.png`) }).catch(() => {});
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(BOT_EVIDENCE, "per-orchestrator.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

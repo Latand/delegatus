@@ -152,8 +152,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 675.5,
-        "height": 434.3
+        "bottom": 723.5,
+        "height": 482.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -184,7 +184,7 @@
         32,
         32
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nNot reporting to Telegram: reports go to the log only until you pick a chat for this project.\n\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nNot reporting to Telegram: reports go to the log only until you pick a chat for this project.\n\nTeam Reports\nteam-reports\nLog only, no Telegram\nAdd a chat by id\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "unchosen-1280-uk": {
       "viewport": {
@@ -202,8 +202,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 675.5,
-        "height": 434.3
+        "bottom": 723.5,
+        "height": 482.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -234,7 +234,7 @@
         32,
         32
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nЗвіти не надсилаються в Telegram: вони йдуть лише в журнал, доки ви не оберете чат для цього проєкту.\n\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nЗвіти не надсилаються в Telegram: вони йдуть лише в журнал, доки ви не оберете чат для цього проєкту.\n\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nДодати чат за id\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "unchosen-390-en": {
       "viewport": {
@@ -252,8 +252,8 @@
         "left": 16,
         "top": 155.2,
         "right": 374,
-        "bottom": 650,
-        "height": 494.8
+        "bottom": 710,
+        "height": 554.8
       },
       "sideways": 0,
       "current": "telegram",
@@ -284,7 +284,7 @@
         44,
         44
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nNot reporting to Telegram: reports go to the log only until you pick a chat for this project.\n\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nNot reporting to Telegram: reports go to the log only until you pick a chat for this project.\n\nTeam Reports\nteam-reports\nLog only, no Telegram\nAdd a chat by id\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "unchosen-390-uk": {
       "viewport": {
@@ -302,8 +302,8 @@
         "left": 16,
         "top": 174,
         "right": 374,
-        "bottom": 668.8,
-        "height": 494.8
+        "bottom": 728.8,
+        "height": 554.8
       },
       "sideways": 0,
       "current": "telegram",
@@ -334,7 +334,7 @@
         44,
         44
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nЗвіти не надсилаються в Telegram: вони йдуть лише в журнал, доки ви не оберете чат для цього проєкту.\n\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nЗвіти не надсилаються в Telegram: вони йдуть лише в журнал, доки ви не оберете чат для цього проєкту.\n\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nДодати чат за id\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "several-1280-en": {
       "viewport": {
@@ -352,8 +352,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 669,
-        "height": 427.8
+        "bottom": 717,
+        "height": 475.8
       },
       "sideways": 0,
       "current": "telegram",
@@ -388,7 +388,7 @@
         32,
         32
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nNot reporting to Telegram: reports go to the log only until you pick a chat for this project.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nLog only, no Telegram\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nNot reporting to Telegram: reports go to the log only until you pick a chat for this project.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nLog only, no Telegram\nAdd a chat by id\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "several-1280-uk": {
       "viewport": {
@@ -406,8 +406,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 669,
-        "height": 427.8
+        "bottom": 717,
+        "height": 475.8
       },
       "sideways": 0,
       "current": "telegram",
@@ -442,7 +442,7 @@
         32,
         32
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nЗвіти не надсилаються в Telegram: вони йдуть лише в журнал, доки ви не оберете чат для цього проєкту.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nЛише журнал, без Telegram\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nЗвіти не надсилаються в Telegram: вони йдуть лише в журнал, доки ви не оберете чат для цього проєкту.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nЛише журнал, без Telegram\nДодати чат за id\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "several-390-en": {
       "viewport": {
@@ -460,8 +460,8 @@
         "left": 16,
         "top": 155.2,
         "right": 374,
-        "bottom": 631.5,
-        "height": 476.3
+        "bottom": 691.5,
+        "height": 536.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -496,7 +496,7 @@
         44,
         44
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nNot reporting to Telegram: reports go to the log only until you pick a chat for this project.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nLog only, no Telegram\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nNot reporting to Telegram: reports go to the log only until you pick a chat for this project.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nLog only, no Telegram\nAdd a chat by id\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "several-390-uk": {
       "viewport": {
@@ -514,8 +514,8 @@
         "left": 16,
         "top": 174,
         "right": 374,
-        "bottom": 650.3,
-        "height": 476.3
+        "bottom": 710.3,
+        "height": 536.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -550,7 +550,7 @@
         44,
         44
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nЗвіти не надсилаються в Telegram: вони йдуть лише в журнал, доки ви не оберете чат для цього проєкту.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nЛише журнал, без Telegram\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nЗвіти не надсилаються в Telegram: вони йдуть лише в журнал, доки ви не оберете чат для цього проєкту.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nЛише журнал, без Telegram\nДодати чат за id\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "chosen-1280-en": {
       "viewport": {
@@ -568,8 +568,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 682.5,
-        "height": 441.3
+        "bottom": 730.5,
+        "height": 489.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -600,7 +600,7 @@
         32,
         32
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now\nLog only, no Telegram\nAdd a chat by id\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "chosen-1280-uk": {
       "viewport": {
@@ -618,8 +618,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 682.5,
-        "height": 441.3
+        "bottom": 730.5,
+        "height": 489.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -650,7 +650,7 @@
         32,
         32
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз\nЛише журнал, без Telegram\nДодати чат за id\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "chosen-390-en": {
       "viewport": {
@@ -668,8 +668,8 @@
         "left": 16,
         "top": 155.2,
         "right": 374,
-        "bottom": 640.5,
-        "height": 485.3
+        "bottom": 700.5,
+        "height": 545.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -700,7 +700,7 @@
         44,
         44
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now\nLog only, no Telegram\nAdd a chat by id\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "chosen-390-uk": {
       "viewport": {
@@ -718,8 +718,8 @@
         "left": 16,
         "top": 174,
         "right": 374,
-        "bottom": 659.3,
-        "height": 485.3
+        "bottom": 719.3,
+        "height": 545.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -750,7 +750,7 @@
         44,
         44
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз\nЛише журнал, без Telegram\nДодати чат за id\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "refused-1280-en": {
       "viewport": {
@@ -768,8 +768,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 793.7,
-        "height": 552.5
+        "bottom": 841.7,
+        "height": 600.5
       },
       "sideways": 0,
       "current": "telegram",
@@ -806,7 +806,7 @@
         32,
         32
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nDesign Lounge\ndesign-lounge\nIn use now\nAgents may not post in this chat now, so reports reach the log only. Allow it, or pick another chat.\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\n\nOrchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat\n\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nDesign Lounge\ndesign-lounge\nIn use now\nAgents may not post in this chat now, so reports reach the log only. Allow it, or pick another chat.\nTeam Reports\nteam-reports\nLog only, no Telegram\nAdd a chat by id\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\n\nOrchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat\n\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "refused-1280-uk": {
       "viewport": {
@@ -824,8 +824,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 793.7,
-        "height": 552.5
+        "bottom": 841.7,
+        "height": 600.5
       },
       "sideways": 0,
       "current": "telegram",
@@ -862,7 +862,7 @@
         32,
         32
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nDesign Lounge\ndesign-lounge\nВикористовується зараз\nАгентам зараз не можна писати в цей чат, тож звіти лишаються лише в журналі. Дозвольте його або оберіть інший чат.\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\n\nЗвіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат\n\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nDesign Lounge\ndesign-lounge\nВикористовується зараз\nАгентам зараз не можна писати в цей чат, тож звіти лишаються лише в журналі. Дозвольте його або оберіть інший чат.\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nДодати чат за id\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\n\nЗвіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат\n\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "refused-390-en": {
       "viewport": {
@@ -880,8 +880,8 @@
         "left": 16,
         "top": 155.2,
         "right": 374,
-        "bottom": 769.5,
-        "height": 614.3
+        "bottom": 829.5,
+        "height": 674.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -918,7 +918,7 @@
         44,
         44
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nDesign Lounge\ndesign-lounge\nIn use now\nAgents may not post in this chat now, so reports reach the log only. Allow it, or pick another chat.\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\n\nOrchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat\n\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nDesign Lounge\ndesign-lounge\nIn use now\nAgents may not post in this chat now, so reports reach the log only. Allow it, or pick another chat.\nTeam Reports\nteam-reports\nLog only, no Telegram\nAdd a chat by id\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\n\nOrchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat\n\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "refused-390-uk": {
       "viewport": {
@@ -936,8 +936,8 @@
         "left": 16,
         "top": 174,
         "right": 374,
-        "bottom": 788.3,
-        "height": 614.3
+        "bottom": 848.3,
+        "height": 674.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -974,7 +974,7 @@
         44,
         44
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nDesign Lounge\ndesign-lounge\nВикористовується зараз\nАгентам зараз не можна писати в цей чат, тож звіти лишаються лише в журналі. Дозвольте його або оберіть інший чат.\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\n\nЗвіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат\n\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nDesign Lounge\ndesign-lounge\nВикористовується зараз\nАгентам зараз не можна писати в цей чат, тож звіти лишаються лише в журналі. Дозвольте його або оберіть інший чат.\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nДодати чат за id\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\n\nЗвіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат\n\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     }
   },
   "failures": []

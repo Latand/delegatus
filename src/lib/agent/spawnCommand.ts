@@ -64,6 +64,9 @@ import type { ApiError } from "@/lib/types";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 import { sourceCwdStatus } from "@/app/api/spawn/sourceCwd";
+import { spawnSizingRefusal } from "@/lib/roles/sizing";
+import { launchRuntimeLabel, variantForParams } from "@/lib/roles/paramConfig";
+import { conversationRuntime } from "./conversationRuntime";
 import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, mandatoryReviewsError, spawnLineageSelectorForCaller, type AuthenticatedSpawnCaller } from "@/app/api/spawn/admission";
 import { spawnAccountErrorResponse } from "@/app/api/spawn/accountError";
 import { attributeNamedAccountChoice } from "@/lib/accounts/accountOverrides";
@@ -308,6 +311,19 @@ export async function executeSpawnRequest(
   if (!role.ok) return refuse(role.error);
   const reviewsError = mandatoryReviewsError(role.value?.role ?? null, body);
   if (reviewsError) return refuse(reviewsError);
+  /* docs/design/model-sizing-tiers.md §2: an authenticated agent is judged by
+     the runtime it runs on; the operator (no capability, or the operator's own)
+     is the authority. MCP spawns are judged in the MCP binding, which knows the
+     calling agent; they reach this route on the operator capability. */
+  if (authenticatedCaller?.kind === "agent" && registryForCaller) {
+    const sizing = spawnSizingRefusal({
+      role: role.value,
+      engine: body.engine,
+      model: body.model,
+      briefer: { kind: "agent", runtime: conversationRuntime(registryForCaller.readOnlySnapshot(), authenticatedCaller.conversationId) },
+    });
+    if (sizing) return refuse(sizing);
+  }
   /* Reviewer isolation (#393): reviewer/verifier launch profiles always carry
      allowSubagents:false, so every engine denies native multi-agent tools on
      fresh launch, resume, and restart adoption. Even the operator lane cannot
@@ -931,8 +947,17 @@ export async function executeSpawnRequest(
        — this journal is now the ONLY thing that makes an out-of-pool launch
        visible, so a state directory that cannot be written to would otherwise
        let the crossing happen behind a perfectly ordinary spawn response. */
+    /* A role launch states which model runs (docs/design/model-sizing-tiers.md §3). */
+    const runtime = role.value ? launchRuntimeLabel({
+      roleId: role.value.role,
+      variant: variantForParams(role.value.role, role.value.params),
+      engine,
+      model: selectedModel.model,
+      effort: reasoning.effort ?? null,
+      explicit: role.value.explicitRuntime,
+    }) : null;
     const withAccountOverride = (body: SpawnResponse): SpawnResponse =>
-      (accountOverride ? { ...body, accountOverride } : body);
+      ({ ...body, ...(accountOverride ? { accountOverride } : {}), ...(runtime ? { runtime } : {}) });
     let queuedReceipt = begun.receipt;
     if (queuedUntil && queuedTitle && requestedAccountId) {
       const existingQueue = begun.receipt.queuedPinnedSpawn;

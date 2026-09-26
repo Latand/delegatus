@@ -16,7 +16,9 @@ import {
   RECEIVING_NOTES,
   RETRYABLE_TELEGRAM_BOT_CODES,
   TELEGRAM_BOT_LIMITS,
+  suggestChatAlias,
   validBotToken,
+  validChatAlias,
   validTelegramChatId,
   type TelegramBotAgentChat,
   type TelegramBotAttribution,
@@ -29,7 +31,7 @@ import {
   type TelegramBotSendAnswer,
   type TelegramBotStatusPayload,
 } from "./contracts";
-import { TelegramBotStore, type BotRow, type ChatRow, type TgUpdate, type TgUser } from "./store";
+import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate, type TgUser } from "./store";
 import {
   createBotApiTransport,
   removeBotToken,
@@ -182,6 +184,48 @@ function sendFailure(result: Extract<BotCallResult, { ok: false }>, chat: ChatRo
   }
   if (result.status !== null && result.status >= 500) return new TelegramBotError("telegram_failed", `Telegram failed to handle the request${detail}`);
   return new TelegramBotError("bad_request", `Telegram refused the message${detail}`);
+}
+
+const MEMBER_STATUSES: ReadonlySet<string> = new Set(["creator", "administrator", "member", "restricted", "left", "kicked"]);
+
+/** What the operator typed to name a chat, as `getChat` takes it: a numeric
+    id, or an @username (a public group or channel). Null for anything else. */
+export function chatReference(value: unknown): number | string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const id = validTelegramChatId(value);
+  if (id !== null) return Number.isSafeInteger(Number(id)) ? Number(id) : null;
+  const trimmed = String(value).trim().replace(/^(?:https?:\/\/)?t\.me\//i, "@");
+  const username = /^@?([A-Za-z][A-Za-z0-9_]{3,31})$/.exec(trimmed)?.[1];
+  return username ? `@${username}` : null;
+}
+
+/** An alias for a chat added by id: its title's slug, else `chat-<id tail>`,
+    with a number after it while another chat holds it. */
+function freeAlias(store: TelegramBotStore, chat: TgChat, chatId: string): string {
+  const base = suggestChatAlias(chatTitleOf(chat)) || `chat-${chatId.replace(/^-/, "").slice(-6)}`;
+  for (let index = 1; index < 100; index += 1) {
+    const candidate = index === 1 ? base : `${base.slice(0, 28)}-${index}`;
+    const holder = store.resolveChat(candidate);
+    if (!holder || holder.chatId === chatId || holder.alias !== candidate) return candidate;
+  }
+  return `chat-${chatId.replace(/^-/, "").slice(-6)}`;
+}
+
+function chatTitleOf(chat: TgChat): string {
+  return chat.title ?? ([chat.first_name, chat.last_name].filter(Boolean).join(" ") || chat.username || "");
+}
+
+/** Telegram's refusal of a `getChat`, as one of our codes. */
+function lookupFailure(result: Extract<BotCallResult, { ok: false }>): TelegramBotError {
+  if (result.kind === "unreachable" || result.kind === "network_failed") return new TelegramBotError("network_failed", "Telegram could not be reached");
+  if (result.kind === "timed_out") return new TelegramBotError("timed_out", "Telegram did not answer in time");
+  if (result.status === 429) {
+    return new TelegramBotError("rate_limited", `Telegram is rate-limiting this bot; retry after ${result.retryAfterSeconds ?? 1} s`, { retryAfterSeconds: result.retryAfterSeconds ?? 1 });
+  }
+  if (result.status === 401 || result.status === 404) return new TelegramBotError("token_rejected", "Telegram rejected the bot token; the operator must paste a new one in the Telegram panel");
+  if (result.status === 403) return new TelegramBotError("bot_not_in_chat", "the bot is not a member of that chat; add it to the chat first");
+  if (result.status !== null && result.status >= 500) return new TelegramBotError("telegram_failed", "Telegram failed to handle the request");
+  return new TelegramBotError("chat_unknown", "Telegram knows no chat by that id or username that this bot can see; add the bot to the chat first");
 }
 
 export class TelegramBotService {
@@ -376,6 +420,79 @@ export class TelegramBotService {
     if (outcome === "alias_invalid") throw new TelegramBotError("alias_invalid", "an alias is 1–32 lowercase letters, digits, - or _, starting with a letter or digit, and not digits alone");
     if (outcome === "alias_taken") throw new TelegramBotError("alias_taken", "another chat already has that alias");
     return this.status();
+  }
+
+  /**
+   * Adds a chat the operator names by its id (`-100…` for a group) or its
+   * @username, and allows agents to post in it, without the bot having
+   * received a single update from it. The bot may be post-only: another
+   * program can own its updates through a webhook, and a chat it joined then
+   * never reaches Delegatus by itself. Telegram's `getChat` proves the chat
+   * exists and names it, and `getChatMember` for the bot's own id says whether
+   * the bot is still in it; nothing reads the chat's messages. The alias is the
+   * one given, else the chat's current one, else one built from its title.
+   */
+  async addChat(reference: unknown, alias?: unknown): Promise<{ status: TelegramBotStatusPayload; chat: string; chatId: string }> {
+    const store = this.connectedStore();
+    const target = chatReference(reference);
+    if (target === null) {
+      throw new TelegramBotError("chat_reference_invalid", "name the chat by its numeric id (a group's starts with -100) or its @username");
+    }
+    const wanted = typeof alias === "string" && alias.trim() !== "" ? alias.trim().toLowerCase() : null;
+    if (wanted !== null && !validChatAlias(wanted)) {
+      throw new TelegramBotError("alias_invalid", "an alias is 1–32 lowercase letters, digits, - or _, starting with a letter or digit, and not digits alone");
+    }
+    const transport = this.transport();
+    if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected; the operator connects one in the Telegram panel");
+    let found = await transport.call<TgChat>("getChat", { chat_id: target });
+    if (!found.ok && found.migrateToChatId) found = await transport.call<TgChat>("getChat", { chat_id: Number(found.migrateToChatId) });
+    if (!found.ok) throw lookupFailure(found);
+    const chat = found.result;
+    const chatId = chat && validTelegramChatId(chat.id);
+    if (!chat || chatId === null || typeof chat.type !== "string") throw new TelegramBotError("telegram_failed", "Telegram answered without the chat");
+    let botStatus: TelegramBotMemberStatus | null = null;
+    if (chat.type !== "private") {
+      const member = await transport.call<{ status?: string }>("getChatMember", { chat_id: Number(chatId), user_id: Number(this.storedBotId()) });
+      if (member.ok && typeof member.result?.status === "string" && MEMBER_STATUSES.has(member.result.status)) {
+        botStatus = member.result.status as TelegramBotMemberStatus;
+      }
+    }
+    if (botStatus === "left" || botStatus === "kicked") {
+      throw new TelegramBotError("bot_not_in_chat", `the bot is not a member of ${chat.title ?? "that chat"}; add it to the chat first`);
+    }
+    const known = store.chat(chatId);
+    const holder = wanted !== null ? store.resolveChat(wanted) : null;
+    if (wanted !== null && holder?.alias === wanted && holder.chatId !== chatId) {
+      throw new TelegramBotError("alias_taken", "another chat already has that alias");
+    }
+    store.recordLookedUpChat(chat, botStatus, this.deps.now());
+    const chosen = wanted ?? known?.alias ?? freeAlias(store, chat, chatId);
+    const outcome = store.setChatSettings(chatId, { alias: chosen, postAllowed: true });
+    if (outcome === "alias_taken") throw new TelegramBotError("alias_taken", "another chat already has that alias");
+    if (outcome !== "ok") throw new TelegramBotError("chat_unknown", "no such chat");
+    return { status: this.status(), chat: chosen, chatId };
+  }
+
+  /**
+   * The operator's test post to a chat agents may post in: one silent message
+   * straight through the Bot API. It is not an agent's post, so it is neither
+   * attributed nor recorded as the chat's last post, and no reply is read.
+   */
+  async testPost(reference: unknown, text: string): Promise<{ status: TelegramBotStatusPayload; sentAt: string }> {
+    const store = this.connectedStore();
+    const chat = this.resolveChat(store, reference);
+    const refusal = postRefusal(chat);
+    if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
+    const transport = this.transport();
+    if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected; the operator connects one in the Telegram panel");
+    const params = { chat_id: Number(chat.chatId), text, disable_notification: true };
+    let result = await transport.call<TgSent>("sendMessage", params);
+    if (!result.ok && result.migrateToChatId) {
+      store.migrateChat(chat.chatId, result.migrateToChatId);
+      result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(result.migrateToChatId) });
+    }
+    if (!result.ok) throw sendFailure(result, chat);
+    return { status: this.status(), sentAt: this.deps.now().toISOString() };
   }
 
   /** Local only: Telegram's `logOut` moves a bot to a local Bot API server,

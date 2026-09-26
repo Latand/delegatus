@@ -138,6 +138,10 @@ test("create_pipeline answers an acknowledgement, and get_pipeline still reads t
   const createdDigests = { ...created.stageDigests };
   expectNoBodies(created);
   expect(JSON.stringify(created)).not.toContain("promptScaffold");
+  /* docs/design/model-sizing-tiers.md §3: which model each stage runs, and the
+     one line a seat quotes in its launch message. */
+  expect((created.stages as { role: unknown; variant: unknown }[]).map((stage) => [stage.role, stage.variant])).toEqual([[null, null], [null, null]]);
+  expect((created as unknown as { runtimeLine: string }).runtimeLine).toBe("build: codex/gpt-6-astra/medium · verify: codex/gpt-6-astra/medium");
   // Includes the delivery ownership acknowledgement already present on main.
   expect(bytes(created)).toBeLessThan(1_600);
 

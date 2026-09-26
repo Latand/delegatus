@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import { PROCESS_CLEANUP_MARKER } from "./defaults";
 import { defaultRoleParameterValue } from "./parameters";
+import { variantForParams } from "./paramConfig";
 import { listRoles, resolveRole, resolveSpawnRole, roleScaffoldBody } from "./registry";
 
 test("role registry exposes the frozen eight role ids and campaign-ready orchestrator config", () => {
@@ -75,7 +76,7 @@ test("role registry rejects unknown and missing required parameters with bounded
      self-correct instead of reading the registry source. */
   expect(resolveRole("reviewer", { lens: "all", unexpected: true })).toEqual({
     ok: false,
-    error: "unknown role parameter: unexpected (reviewer accepts: diffSource, lens, mode, parallelN)",
+    error: "unknown role parameter: unexpected (reviewer accepts: diffSource, lens, mode, parallelN, size)",
   });
   expect(resolveRole("verifier", {})).toEqual({
     ok: false,
@@ -194,4 +195,44 @@ test("orchestrator spawn defaults omitted maxWorkers to three and preserves expl
   const explicit = resolveSpawnRole({ role: "orchestrator", roleParams: { maxWorkers: 1 } });
   if (!explicit.ok || !explicit.value) throw new Error("expected resolved orchestrator role");
   expect(explicit.value.scaffold).toContain("Maximum workers: 1");
+});
+
+/* docs/design/model-sizing-tiers.md §1: one precedence, trivial > frontend >
+   docs > apply-fixes, stated once and read by every caller. */
+test("variantForParams orders trivial over frontend over docs over apply-fixes, per role", () => {
+  expect(variantForParams("builder", { size: "trivial", domain: "frontend", mode: "apply-fixes" })).toBe("trivial");
+  expect(variantForParams("builder", { size: "normal", domain: "frontend", mode: "apply-fixes" })).toBe("frontend");
+  expect(variantForParams("builder", { domain: "docs", mode: "apply-fixes" })).toBe("docs");
+  expect(variantForParams("builder", { domain: "general", mode: "apply-fixes" })).toBe("apply-fixes");
+  expect(variantForParams("builder", { domain: "general", mode: "plain", size: "normal" })).toBeNull();
+  expect(variantForParams("reviewer", { size: "trivial", lens: "all" })).toBe("trivial");
+  expect(variantForParams("reviewer", { size: "normal" })).toBeNull();
+  expect(variantForParams("architect", { size: "trivial" })).toBeNull();
+});
+
+test("the small-change and docs variants ship their runtime, and only builder and reviewer take size", () => {
+  expect(resolveRole("builder", { size: "trivial", domain: "frontend" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "sonnet", effort: "high" } } });
+  expect(resolveRole("builder", { domain: "docs" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "opus", effort: "medium" } } });
+  /* A writing lane's fix round stays on Claude: docs wins over apply-fixes. */
+  expect(resolveRole("builder", { domain: "docs", mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "opus", effort: "medium" } } });
+  expect(resolveRole("reviewer", { diffSource: "#1", size: "trivial" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "high" } } });
+  expect(resolveRole("builder", { size: "normal" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-astra", effort: "medium" } } });
+  /* A trivial UI tweak keeps the frontend scaffold guidance, which is keyed on domain. */
+  const trivialFrontend = resolveRole("builder", { size: "trivial", domain: "frontend" });
+  expect(trivialFrontend.ok && trivialFrontend.value.prompt).toContain("UI/frontend implementation guidance");
+  for (const role of ["architect", "orchestrator", "verifier"]) {
+    const resolved = resolveRole(role, { size: "trivial", claims: "x" });
+    expect(resolved.ok).toBe(false);
+    expect(!resolved.ok && resolved.error).toContain("unknown role parameter: size");
+  }
+  expect(resolveRole("builder", { size: "tiny" })).toEqual({ ok: false, error: "invalid role parameter: size" });
+});
+
+test("spawn role resolution says whether the request moved the runtime off the role's row", () => {
+  const row = resolveSpawnRole({ role: "builder", roleParams: { size: "trivial" } });
+  expect(row).toMatchObject({ ok: true, value: { role: "builder", explicitRuntime: false, params: { size: "trivial" }, config: { engine: "claude", model: "sonnet" } } });
+  const same = resolveSpawnRole({ role: "builder", roleParams: { size: "trivial" }, model: "sonnet", effort: "low" });
+  expect(same).toMatchObject({ ok: true, value: { explicitRuntime: false, config: { effort: "low" } } });
+  const moved = resolveSpawnRole({ role: "builder", engine: "claude", model: "sonnet" });
+  expect(moved).toMatchObject({ ok: true, value: { explicitRuntime: true, config: { engine: "claude", model: "sonnet" } } });
 });

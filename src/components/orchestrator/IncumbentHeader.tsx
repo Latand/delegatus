@@ -13,6 +13,7 @@ import type { LaunchAccountCatalog } from "@/components/draft/AgentLaunchControl
 
 import type { IncumbentContext, OrchestratorIncumbent } from "./incumbent";
 import { ROTATION_CONTEXT_PERCENT } from "./seatState";
+import { SeatReportsChip } from "./SeatReports";
 import { SeatTickChip } from "./SeatTickChip";
 
 /**
@@ -33,6 +34,10 @@ import { SeatTickChip } from "./SeatTickChip";
  * belongs beside who holds it rather than in a panel of its own, and mounting
  * it here reaches both hosts of this row at once: the dock and the kanban
  * seat's inline header.
+ *
+ * Where the project's reports go (docs/design/orchestrator-reports.md §5.6)
+ * is set on the same row, from its own chip before the tick's: each
+ * orchestrator's project picks its own Telegram group.
  */
 export function IncumbentHeader({
   project,
@@ -149,6 +154,7 @@ export function IncumbentHeader({
             meter and the stale-mandate chip were drawn over this group and
             Stop host. */}
         <span className="ml-auto flex shrink-0 items-center gap-2" data-orchestrator-controls>
+          <SeatReportsChip project={project} projectName={projectName} />
           <SeatTickChip project={project} projectName={projectName} />
           <button
             type="button"

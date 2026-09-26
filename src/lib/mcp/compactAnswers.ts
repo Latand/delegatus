@@ -16,7 +16,8 @@ import type { AgentLivenessRecord, AgentLivenessSnapshot } from "@/lib/lifecycle
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { clampChars, clampLine } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
-import type { Pipeline, PipelineStageAttempt, PipelineStageReport } from "@/lib/pipelines/types";
+import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineStageReport } from "@/lib/pipelines/types";
+import { launchRuntimeLabel, variantForParams } from "@/lib/roles/paramConfig";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { modelTierWindows, type LimitWindow } from "@/lib/types";
 
@@ -30,6 +31,7 @@ const SUMMARY_CHARS = 2_000;
  * digests a guarded graph edit names next — what `create_pipeline` answers.
  */
 export function pipelineAcknowledgement(pipeline: Pipeline) {
+  const stages = (pipeline.stages ?? []).map((stage) => ({ stage, runtime: stageRuntime(stage) }));
   return {
     pipelineId: pipeline.id,
     state: pipeline.state,
@@ -39,14 +41,35 @@ export function pipelineAcknowledgement(pipeline: Pipeline) {
     taskIds: [...(pipeline.taskIds ?? [])],
     ...finishesTaskFields(pipeline),
     branch: pipeline.branch,
-    stages: (pipeline.stages ?? []).map((stage) => ({
+    stages: stages.map(({ stage, runtime }) => ({
       id: stage.id,
-      engine: stage.effectiveRole?.engine ?? stage.engine ?? null,
-      model: stage.effectiveRole?.model ?? stage.model ?? null,
-      effort: stage.effectiveRole?.effort ?? stage.effort ?? null,
+      role: runtime.roleId,
+      variant: runtime.variant,
+      engine: runtime.engine,
+      model: runtime.model,
+      effort: runtime.effort,
     })),
+    runtimeLine: stages.map(({ stage, runtime }) => `${stage.id}: ${launchRuntimeLabel(runtime)}`).join(" · "),
     stageDigests: stageDigests(pipeline.stages ?? []),
     graphDigest: graphDigest(pipeline.stages ?? []),
+  };
+}
+
+/**
+ * Which model a stage runs and where it came from (docs/design/model-sizing-tiers.md
+ * §3). A stage whose engine or model the request named is `(explicit)`: at
+ * create, those input fields are present only when the caller sent them, and a
+ * fix stage carries them only when its implementer did.
+ */
+function stageRuntime(stage: PipelineStage) {
+  const roleId = stage.effectiveRole?.roleId ?? stage.role?.roleId ?? null;
+  return {
+    roleId,
+    variant: variantForParams(roleId, stage.role?.params),
+    engine: stage.effectiveRole?.engine ?? stage.engine ?? "claude",
+    model: stage.effectiveRole?.model ?? stage.model ?? null,
+    effort: stage.effectiveRole?.effort ?? stage.effort ?? null,
+    explicit: stage.engine !== undefined || (stage.model !== undefined && stage.model !== null),
   };
 }
 

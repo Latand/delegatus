@@ -163,7 +163,7 @@ export function MobileSeatCard({
   /* WHICH of the card's sheets, when one is open: `seat` reads the seat as a
      bottom sheet, `rotate` is the fullscreen draft that replaces it, `tick` is
      the seat tick's own compact sheet (#1681). */
-  const openName = navState.sheet === "seat" || navState.sheet === "rotate" || navState.sheet === "tick" ? navState.sheet : null;
+  const openName = navState.sheet === "seat" || navState.sheet === "rotate" || navState.sheet === "tick" || navState.sheet === "reports" ? navState.sheet : null;
   const sheetOpen = openName !== null;
   /* The conversation the open rotate draft is replacing. Non-null IS the rotate
      mode, and matching it against the current seat is what closes the draft the
@@ -172,7 +172,7 @@ export function MobileSeatCard({
   /* Opening the rotate draft is a read first: see `openRotate`. */
   const [rotateOpening, setRotateOpening] = useState(false);
 
-  const openSheet = useCallback((name: "seat" | "rotate" | "tick", opening: SheetOpening) => {
+  const openSheet = useCallback((name: "seat" | "rotate" | "tick" | "reports", opening: SheetOpening) => {
     setArm(opening);
     nav.openSheet(name);
   }, [nav]);
@@ -435,6 +435,11 @@ export function MobileSeatCard({
     onOpen: () => openSheet("tick", { handoff: false, from: null }),
     onClose: () => openSheet("seat", { handoff: false, from: null }),
   };
+  /* The Reports sheet, the tick's way in and out. */
+  const reportsFlow: SeatTickFlow = {
+    onOpen: () => openSheet("reports", { handoff: false, from: null }),
+    onClose: () => openSheet("seat", { handoff: false, from: null }),
+  };
 
   /* The draft, opened by something other than the card — the board's footer
      invitation, a route restored onto it — is armed the way the card's own tap
@@ -499,6 +504,7 @@ export function MobileSeatCard({
       now={clock}
       rotate={rotateFlow}
       tick={tickFlow}
+      reports={reportsFlow}
       onConfirm={(payload) => void confirm(payload)}
       onRecheck={() => {
         void refresh();

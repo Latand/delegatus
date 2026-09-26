@@ -149,3 +149,21 @@ export function resolvePipelineRole(
     },
   };
 }
+
+/**
+ * Whether a stage's resolved runtime was set by hand rather than taken from its
+ * role's row (docs/design/model-sizing-tiers.md §2, R3): the engine or model
+ * differs from what the install's mapping gives this role and these params.
+ * Judged on the resolved values, so a fix stage that copied its implementer's
+ * runtime reads the same as its implementer.
+ */
+export function stageRuntimeIsExplicit(
+  stage: Pick<PipelineStage, "role" | "effectiveRole">,
+  lookup?: PipelineRoleLookup | null,
+): boolean {
+  const registry = lookup === undefined ? installedLookup : lookup;
+  const roleId = stage.effectiveRole.roleId ?? "builder";
+  const row = registry?.(roleId, stage.effectiveRole.roleId ? stage.role?.params : undefined) ?? null;
+  if (!row) return true;
+  return row.engine !== stage.effectiveRole.engine || (row.model ?? null) !== (stage.effectiveRole.model ?? null);
+}
