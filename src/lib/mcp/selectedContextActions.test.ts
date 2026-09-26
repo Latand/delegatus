@@ -16,6 +16,7 @@ import { viewerMcpBindings } from "./bindings";
 import { McpToolRefusal } from "./server";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
+import { retainProviderRedactionSecrets } from "@/lib/accounts/providerSecretRedaction";
 
 /**
  * #844 §7 through the MCP surface: a turn's selected-card reference is enough to
@@ -324,6 +325,47 @@ test("get_conversation reads a bounded tail of the selected card while every sca
   expect(result.tail.truncated).toBe(true);
   expect(counts.pathLookups).toBe(0);
   expect(counts.resolverCreations).toBe(2);
+});
+
+test("get_conversation raw tail removes an arbitrary provider credential from old diagnostics", async () => {
+  const token = "opaque-provider-secret-8427";
+  const headerValue = "private-provider-header-8427";
+  const home = path.join(path.dirname(process.env.LLV_STATE_DIR!), "accounts", "claude", "fixture");
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(home, ".provider-token"), token, { mode: 0o600 });
+  fs.writeFileSync(path.join(home, ".provider-headers"), JSON.stringify({ "x-provider-feature": headerValue }), { mode: 0o600 });
+  fs.writeFileSync(transcriptPath, [
+    JSON.stringify({ type: "system", subtype: "api_error", error: `denied ${token} ${headerValue}` }),
+    JSON.stringify({ type: "assistant", message: { content: "ordinary transcript text" } }),
+  ].join("\n") + "\n");
+  const { injected } = harness();
+  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const result = await bindings.get_conversation({
+    clientRequestId: "provider-tail-redaction", selectedContext: encodeSelectedContextRef(selectedRef()), tailLines: 2,
+  }) as { tail: { lines: string[] } };
+  const answer = JSON.stringify(result);
+  expect(answer).not.toContain(token);
+  expect(answer).not.toContain(headerValue);
+  expect(answer).toContain("ordinary transcript text");
+  fs.writeFileSync(path.join(home, ".provider-token"), "rotated-provider-secret-8427", { mode: 0o600 });
+  fs.rmSync(path.join(home, ".provider-headers"));
+  const afterRotation = await bindings.get_conversation({
+    clientRequestId: "provider-tail-after-rotation", selectedContext: encodeSelectedContextRef(selectedRef()), tailLines: 2,
+  });
+  expect(JSON.stringify(afterRotation)).not.toContain(token);
+  expect(JSON.stringify(afterRotation)).not.toContain(headerValue);
+  expect(JSON.stringify(afterRotation)).toContain("ordinary transcript text");
+  retainProviderRedactionSecrets([token, headerValue]);
+  fs.rmSync(path.join(home, ".provider-token"));
+  fs.writeFileSync(transcriptPath, JSON.stringify({ type: "assistant", message: {
+    content: `ordinary transcript text ${token} and ${headerValue}`,
+  } }) + "\n");
+  const afterRemoval = await bindings.get_conversation({
+    clientRequestId: "provider-tail-after-removal", selectedContext: encodeSelectedContextRef(selectedRef()), tailLines: 1,
+  });
+  expect(JSON.stringify(afterRemoval)).not.toContain(token);
+  expect(JSON.stringify(afterRemoval)).not.toContain(headerValue);
+  expect(JSON.stringify(afterRemoval)).toContain("ordinary transcript text");
 });
 
 test("the tail bound is the server's, however many lines the caller asks for", async () => {

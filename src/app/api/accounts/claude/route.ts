@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClaudeAccountError, UnsafeClaudeHomeError, cleanupOrphanedClaudeHomes, claudeAccountsMutationLocked, createManagedClaudeAccount, listClaudeAccounts, removeManagedClaudeAccount } from "@/lib/accounts/claude";
+import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClaudeAccountError, UnsafeClaudeHomeError, cleanupOrphanedClaudeHomes, claudeAccountsMutationLocked, createManagedClaudeAccount, listClaudeAccounts, listClaudeProviderModels, readClaudeProviderRuntime, removeManagedClaudeAccount, updateProviderClaudeAccount, validateClaudeProviderHeaders, validateClaudeProviderModelRoute, validateProviderConfig, type ClaudeProviderConfig } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
@@ -24,9 +24,73 @@ function accountResponse(account: { id: string; label: string; kind: "legacy" | 
   }, { status: 202 });
 }
 
+function providerInput(value: unknown): { config: ClaudeProviderConfig; token?: string; headers?: Record<string, string> } {
+  if (!value || typeof value !== "object") throw new Error("Invalid provider configuration");
+  const input = value as Record<string, unknown>;
+  const config = validateProviderConfig({
+    baseUrl: input.baseUrl as string,
+    model: input.model as string,
+    smallFastModel: input.smallFastModel === undefined || input.smallFastModel === "" ? null : input.smallFastModel as string,
+  });
+  if (input.token !== undefined && (typeof input.token !== "string" || input.token.length < 8 || input.token.length > 4096 || /[\r\n\u0000]/.test(input.token))) throw new Error("Invalid provider token");
+  const headers = input.headers === undefined ? undefined : validateClaudeProviderHeaders(input.headers as Record<string, string>);
+  return { config, token: input.token as string | undefined, headers };
+}
+
+export async function PATCH(req: NextRequest) {
+  const rejected = rejectCrossOrigin(req); if (rejected) return rejected;
+  let body: { id?: unknown; label?: unknown; provider?: unknown };
+  try { body = await req.json(); } catch { return failure(400, "invalid_json", "Invalid JSON"); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return failure(400, "invalid_json", "Invalid JSON object");
+  if (typeof body.id !== "string") return failure(400, "invalid_account", "Invalid account");
+  try {
+    const input = providerInput(body.provider);
+    const account = updateProviderClaudeAccount(body.id, input.config, input.token, body.label === undefined ? undefined : body.label as string, input.headers);
+    return NextResponse.json({ account: { id: account.id, label: account.label, provider: account.provider, authPresent: account.authPresent } });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Provider token is required when changing the base URL") return failure(400, "provider_token_required", error.message);
+    if (error instanceof Error && error.message === "OpenCode Go model must support Anthropic Messages") return failure(400, "model_route", error.message);
+    if (error instanceof UnknownClaudeAccountError) return failure(404, "unknown_account", "Provider account is unavailable");
+    if (error instanceof CorruptClaudeAccountsError || error instanceof UnsafeClaudeHomeError) return failure(409, "accounts_locked", "Provider account requires repair");
+    return failure(400, "invalid_provider", "Invalid provider configuration");
+  }
+}
+
 export async function POST(req: NextRequest) {
   const rejected = rejectCrossOrigin(req); if (rejected) return rejected;
-  let body: { label?: unknown; id?: unknown; action?: unknown }; try { body = await req.json() as { label?: unknown; id?: unknown; action?: unknown }; } catch { return failure(400, "invalid_json", "Invalid JSON"); }
+  let body: { label?: unknown; id?: unknown; action?: unknown; provider?: unknown }; try { body = await req.json() as typeof body; } catch { return failure(400, "invalid_json", "Invalid JSON"); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return failure(400, "invalid_json", "Invalid JSON object");
+  if (body.action === "provider-models") {
+    try {
+      const input = providerInput(body.provider);
+      const saved = typeof body.id === "string" ? listClaudeAccounts().find((account) => account.id === body.id && account.provider) : null;
+      if (!input.token && saved && input.config.baseUrl !== saved.provider!.baseUrl)
+        return failure(400, "provider_token_required", "Provider token is required when changing the base URL");
+      const sameEndpoint = saved?.provider?.baseUrl === input.config.baseUrl;
+      const runtime = sameEndpoint && saved ? readClaudeProviderRuntime(saved.home, saved.provider!) : null;
+      const token = input.token ?? runtime?.token ?? null;
+      if (!token) return failure(400, "invalid_provider", "Provider token is required");
+      const headers = input.headers ?? runtime?.headers ?? {};
+      return NextResponse.json({ models: await listClaudeProviderModels(input.config, token, headers) });
+    } catch (error) { return failure(502, "provider_models_unavailable", error instanceof Error && error.message === "Provider authentication failed" ? "Provider authentication failed" : "Provider model list unavailable"); }
+  }
+  if (body.provider !== undefined) {
+    if (typeof body.label !== "string") return failure(400, "invalid_label", "Account label must be a string");
+    try {
+      const input = providerInput(body.provider);
+      if (!input.token) return failure(400, "invalid_provider", "Provider token is required");
+      validateClaudeProviderModelRoute(input.config);
+      const models = await listClaudeProviderModels(input.config, input.token, input.headers);
+      const account = createManagedClaudeAccount(body.label, { config: input.config, token: input.token, headers: input.headers });
+      return NextResponse.json({ account: { id: account.id, label: account.label, kind: account.kind, authPresent: account.authPresent, provider: account.provider }, models }, { status: 201 });
+    } catch (error) {
+      if (error instanceof Error && error.message === "OpenCode Go model must support Anthropic Messages") return failure(400, "model_route", error.message);
+      if (error instanceof InvalidClaudeAccountLabelError) return failure(400, "invalid_label", "Invalid account label");
+      if (error instanceof CorruptClaudeAccountsError) return failure(409, "accounts_locked", "Claude accounts require registry repair");
+      if (error instanceof Error && error.message === "Provider authentication failed") return failure(401, "provider_auth_failed", "Provider authentication failed");
+      return failure(400, "invalid_provider", "Provider configuration or model list is unavailable");
+    }
+  }
   try {
     return await withAccountMutationLockAsync(async () => {
       if (body.action === "retry") {
@@ -36,6 +100,7 @@ export async function POST(req: NextRequest) {
           // the supervisor fences the login to that account's safe home.
           const account = listClaudeAccounts().find((candidate) => candidate.id === body.id);
           if (!account) throw new UnknownClaudeAccountError(body.id);
+          if (account.provider) return failure(409, "provider_account", "Edit the provider token in Accounts");
           const login = claudeLoginSupervisor.start(account.id);
           if (login.phase === "failed") return failure(503, login.result?.code ?? "start_failed", login.result?.message ?? "Claude login could not start");
           return accountResponse(account, login);
@@ -81,6 +146,7 @@ export async function DELETE(req: NextRequest) {
   const rejected = rejectCrossOrigin(req); if (rejected) return rejected;
   let body: { id?: unknown; force?: unknown; cleanupOrphans?: unknown };
   try { body = await req.json() as { id?: unknown; force?: unknown; cleanupOrphans?: unknown }; } catch { return failure(400, "invalid_json", "Invalid JSON"); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return failure(400, "invalid_json", "Invalid JSON object");
   if (body.cleanupOrphans === true) {
     if (body.id !== undefined) return failure(400, "invalid_request", "Cleanup accepts no account id");
     try { return NextResponse.json(cleanupOrphanedClaudeHomes()); }

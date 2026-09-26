@@ -3,8 +3,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { resolveBinary } from "@/lib/agent/cli";
-import { claudeManagedEnvironment, claudeSettingsPath } from "@/lib/accounts/claude";
+import { resolveBinary, resolveHostBinary } from "@/lib/agent/cli";
+import { claudeManagedEnvironment, claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt } from "@/lib/agent/spawnPolicy";
 import { procBackend } from "@/lib/proc";
@@ -284,6 +284,7 @@ export function reviewerCommand(
 ): BuiltHeadlessCommand {
   if (role.engine === "claude") {
     const sessionId = crypto.randomUUID();
+    const provider = claudeAccount ? claudeProviderForHome(claudeAccount.home) : null;
     /* Headless reviewers need approval-free command access for tests, builds,
        linters, and local diagnostics. The read-only rule lives in the prompt. */
     const args = [
@@ -295,17 +296,24 @@ export function reviewerCommand(
       "--session-id",
       sessionId,
     ];
-    if (role.model) args.push("--model", role.model);
+    if (provider) args.push("--model", role.model === "haiku" && provider.smallFastModel ? provider.smallFastModel : provider.model);
+    else if (role.model) args.push("--model", role.model);
     if (role.effort) args.push("--effort", role.effort);
     const settings = claudeAccount
       ? applyClaudeSpawnPolicy(claudeAccount.home, {
+        providerAccount: Boolean(provider),
         baseSettingsPath: claudeAccount.managed ? claudeSettingsPath() : null,
         profileId: `headless-${sessionId}`,
       }).settingsPath
       : null;
     if (settings) args.push("--settings", settings);
     const baseEnv = claudeAccount?.managed ? claudeManagedEnvironment(claudeAccount.home) : process.env;
-    return { command: resolveBinary("claude"), args, env: reviewerEnvironment(baseEnv, spawnCapability), stdin: null, outputPath: null, sessionId, reviewerPath: claudeTranscriptPath(cwd, sessionId, claudeAccount?.projectsDir) };
+    return { command: provider ? "bun" : resolveBinary("claude"),
+      args: provider ? [claudeProviderLauncherPath(claudeAccount!.home), "--home", claudeAccount!.home,
+        "--base-url", provider.baseUrl, "--default-model", provider.model, "--small-model", provider.smallFastModel ?? "",
+        "--header-names", JSON.stringify(provider.customHeaderNames ?? []), "--", resolveHostBinary("claude"), ...args] : args,
+      env: reviewerEnvironment(baseEnv, spawnCapability), stdin: null, outputPath: null, sessionId,
+      reviewerPath: claudeTranscriptPath(cwd, sessionId, claudeAccount?.projectsDir) };
   }
   /* --json turns stdout into a JSONL event stream whose first events carry
      the session/thread id — a structured contract instead of parsing the

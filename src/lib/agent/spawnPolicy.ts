@@ -399,6 +399,7 @@ export function applyClaudeSpawnPolicy(
   options: {
     allowSubagents?: boolean;
     baseSettingsPath?: string | null;
+    providerAccount?: boolean;
     profileId?: string;
     cwd?: string;
     mcpServers?: readonly string[];
@@ -415,7 +416,18 @@ export function applyClaudeSpawnPolicy(
   const sourceSettings = sourceExists
     ? readSettings(sourceSettingsPath)
     : options.baseSettingsPath ? readSettings(options.baseSettingsPath) : {};
-  const settings = sourceExists ? {} : sourceSettings;
+  const settings = sourceExists ? {} : { ...sourceSettings };
+  if (options.providerAccount) {
+    // --settings outranks process env. Keep the owner's hooks and UI settings,
+    // while refusing endpoint, credential and model overrides from shared JSON.
+    const sourceEnv = record(settings.env);
+    if (sourceEnv) {
+      settings.env = Object.fromEntries(Object.entries(sourceEnv).filter(([name]) =>
+        !name.startsWith("ANTHROPIC_") && name !== "CLAUDE_CODE_OAUTH_TOKEN"));
+    }
+    delete settings.apiKeyHelper;
+    delete settings.model;
+  }
   if (!options.allowSubagents && sourceSettings.disableAllHooks === true) {
     throw new Error("Claude settings disableAllHooks prevents the Viewer spawn policy from enforcing native sub-agent denial");
   }

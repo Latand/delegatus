@@ -1,6 +1,9 @@
-import { claudeEnvPrefix } from "@/lib/agent/cli";
+import crypto from "node:crypto";
 
-import { listClaudeAccounts } from "./claude";
+import { claudeEnvPrefix } from "@/lib/agent/cli";
+import { applyClaudeSpawnPolicy } from "@/lib/agent/spawnPolicy";
+
+import { claudeProviderForHome, claudeSettingsPath, listClaudeAccounts } from "./claude";
 import { listCodexAccounts } from "./codex";
 
 export class TerminalAccountUnavailableError extends Error {
@@ -22,7 +25,16 @@ function shellQuote(value: string): string {
  */
 export function accountTerminalCommand(engine: "claude" | "codex", account: { kind: "legacy" | "managed"; home: string }): string {
   if (engine === "claude") {
-    return account.kind === "managed" ? `${claudeEnvPrefix(account.home)} claude` : "claude";
+    if (account.kind !== "managed") return "claude";
+    const provider = claudeProviderForHome(account.home);
+    if (!provider) return `${claudeEnvPrefix(account.home)} claude`;
+    const sessionId = crypto.randomUUID();
+    const policy = applyClaudeSpawnPolicy(account.home, {
+      providerAccount: true, allowSubagents: true, profileId: `terminal-${sessionId}`,
+      baseSettingsPath: claudeSettingsPath(), mcpServers: ["viewer"],
+    });
+    return `${claudeEnvPrefix(account.home)} claude --session-id ${shellQuote(sessionId)} --model ${shellQuote(provider.model)}`
+      + ` --settings ${shellQuote(policy.settingsPath)} --strict-mcp-config --mcp-config ${shellQuote(policy.mcpConfigPath)}`;
   }
   const store = account.kind === "managed" ? " -c cli_auth_credentials_store=file" : "";
   return `env -u LLV_TOKEN CODEX_HOME=${shellQuote(account.home)} codex${store}`;

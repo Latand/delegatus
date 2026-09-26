@@ -14,6 +14,9 @@ import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { claudeProviderForHome, readClaudeProviderRuntime, UnsafeClaudeHomeError } from "@/lib/accounts/claude";
+import { startClaudeProviderRelay } from "./claudeProviderRelay";
+import { providerCredentialRevision } from "@/lib/accounts/claudeProviderHealth";
 
 import type {
   DeliveryReceipt,
@@ -220,6 +223,8 @@ export interface ClaudeStreamBrokerHostOptions {
   permissionMode?: string;
   tools?: string[];
   env?: NodeJS.ProcessEnv;
+  /** Only the resolved provider account may forward its Anthropic endpoint. */
+  providerAccount?: boolean;
   forwardGitHubConfig?: boolean;
   releaseCleanup?: () => void;
   requestTimeoutMs?: number;
@@ -390,11 +395,18 @@ function subscriptionEnv(
   source: NodeJS.ProcessEnv,
   claudeConfigDir?: string,
   forwardGitHubConfig = false,
+  providerAccount = false,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { NODE_ENV: source.NODE_ENV };
   for (const name of CHILD_ENV_ALLOWLIST) if (source[name] !== undefined) env[name] = source[name];
   if (forwardGitHubConfig && source.GH_CONFIG_DIR !== undefined) env.GH_CONFIG_DIR = source.GH_CONFIG_DIR;
   if (claudeConfigDir) env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+  if (providerAccount) {
+    for (const name of ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"] as const) {
+      if (source[name] !== undefined) env[name] = source[name];
+    }
+    if (!env.ANTHROPIC_BASE_URL || !env.ANTHROPIC_AUTH_TOKEN || !env.ANTHROPIC_MODEL) throw new Error("Claude provider account is incomplete");
+  }
   /* The commands this agent runs resolve their own config and state root, not
      the operator's (#1905). The account home above and the Viewer MCP server's
      own environment are what keep pointing at the real installation. */
@@ -699,17 +711,45 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       options.env ?? process.env,
       options.claudeConfigDir,
       options.forwardGitHubConfig === true,
+      options.providerAccount === true,
     );
     let auth: ClaudeAuthStatus;
     try {
-      auth = await (options.readAuthStatus?.() ?? claudeCliAuthStatus(binary, env, options.cwd));
+      auth = options.providerAccount
+        ? { loggedIn: true, authMethod: "provider", subscriptionType: null }
+        : await (options.readAuthStatus?.() ?? claudeCliAuthStatus(binary, env, options.cwd));
     } catch (error) {
       options.releaseCleanup?.();
       throw error;
     }
-    if (!auth.loggedIn || auth.authMethod !== "claude.ai" || !auth.subscriptionType) {
+    if (!auth.loggedIn || (!options.providerAccount && (auth.authMethod !== "claude.ai" || !auth.subscriptionType))) {
       options.releaseCleanup?.();
       throw new Error("Claude stream hosting requires a claude.ai subscription login");
+    }
+    let relay: Awaited<ReturnType<typeof startClaudeProviderRelay>> | null = null;
+    if (options.providerAccount) {
+      try {
+        let headers: Record<string, string> = {};
+        if (options.claudeConfigDir) {
+          try {
+            const runtime = readClaudeProviderRuntime(options.claudeConfigDir,
+              claudeProviderForHome(options.claudeConfigDir) ?? undefined);
+            if (runtime.config.baseUrl !== env.ANTHROPIC_BASE_URL || runtime.token !== env.ANTHROPIC_AUTH_TOKEN
+              || runtime.config.model !== env.ANTHROPIC_MODEL
+              || (runtime.config.smallFastModel ?? undefined) !== env.ANTHROPIC_SMALL_FAST_MODEL)
+              throw new UnsafeClaudeHomeError();
+            headers = runtime.headers;
+          } catch (error) { if (!options.spawnProcess) throw error; }
+        }
+        relay = await startClaudeProviderRelay({
+          baseUrl: env.ANTHROPIC_BASE_URL!, token: env.ANTHROPIC_AUTH_TOKEN!, sessionId,
+          headers,
+          ...(options.claudeConfigDir ? { healthHome: options.claudeConfigDir,
+            credentialRevision: providerCredentialRevision(options.claudeConfigDir) } : {}),
+        });
+        env.ANTHROPIC_BASE_URL = relay.baseUrl;
+        env.ANTHROPIC_AUTH_TOKEN = relay.alias;
+      } catch (error) { options.releaseCleanup?.(); throw error; }
     }
     const args = [
       "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -725,20 +765,25 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (disallowedTools.length > 0) args.push("--disallowedTools", disallowedTools.join(","));
     if (options.claudeConfigDir) {
       const profileId = `structured-${crypto.createHash("sha256").update(sessionId).digest("hex").slice(0, 24)}`;
-      const settings = applyClaudeSpawnPolicy(options.claudeConfigDir, {
-        allowSubagents: options.allowSubagents,
-        baseSettingsPath: options.spawnPolicyBaseSettingsPath,
-        profileId,
-        cwd: options.cwd,
-        mcpServers: options.mcpServers,
-        mcpStatePath: options.mcpStatePath,
-        viewerTransport: viewerMcpTransportForLaunch(env),
-      });
+      let settings: ReturnType<typeof applyClaudeSpawnPolicy>;
+      try {
+        settings = applyClaudeSpawnPolicy(options.claudeConfigDir, {
+          allowSubagents: options.allowSubagents,
+          baseSettingsPath: options.spawnPolicyBaseSettingsPath,
+          providerAccount: options.providerAccount,
+          profileId,
+          cwd: options.cwd,
+          mcpServers: options.mcpServers,
+          mcpStatePath: options.mcpStatePath,
+          viewerTransport: viewerMcpTransportForLaunch(env),
+        });
+      } catch (error) { relay?.close(); options.releaseCleanup?.(); throw error; }
       args.push(
         "--settings", settings.settingsPath,
         "--strict-mcp-config", "--mcp-config", settings.mcpConfigPath,
       );
     } else args.push("--strict-mcp-config");
+    if (options.providerAccount) args.push("--setting-sources", "");
     if (resume) args.push("--resume", sessionId);
     else args.push("--session-id", sessionId);
     if (options.model) args.push("--model", options.model);
@@ -755,10 +800,14 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         detached: true,
       });
     } catch (error) {
+      relay?.close();
       options.releaseCleanup?.();
       throw error;
     }
-    const host = new ClaudeStreamBrokerHost(child, { sessionId }, auth, options);
+    child.once("close", () => relay?.close());
+    const host = new ClaudeStreamBrokerHost(child, { sessionId }, auth, {
+      ...options, releaseCleanup: () => { relay?.close(); options.releaseCleanup?.(); },
+    });
     try {
       host.restore();
       host.reconcileTranscript(options.readTranscript

@@ -273,14 +273,16 @@ function AccountLimitsBlock({ account, engine, quota, now, busy, disabled, wideL
   );
 }
 
-type RowState = "active" | "needsLogin" | "pending" | "idle";
+type RowState = "active" | "needsLogin" | "error" | "pending" | "idle";
 
 function authHealth(account: AccountOption): AccountAuthHealth {
+  if (account.provider && (!account.authPresent || account.authHealth === "signed_out")) return "error";
   return account.authHealth ?? (account.authPresent ? "unknown" : "signed_out");
 }
 
 function rowState(account: AccountOption, activeId: string): RowState {
   if (account.loginPending) return "pending";
+  if (account.provider && authHealth(account) === "error") return "error";
   if (!account.authPresent || authHealth(account) === "signed_out") return "needsLogin";
   if (account.id === activeId) return "active";
   return "idle";
@@ -297,6 +299,7 @@ function StateChip({ state }: { state: RowState }) {
     );
   }
   if (state === "needsLogin") return <span className="shrink-0 text-[10px] font-semibold" style={{ color: NEEDS_LOGIN_COLOR }}>{t("accounts.needsLogin")}</span>;
+  if (state === "error") return <span className="shrink-0 text-[10px] font-semibold text-danger">{t("accounts.provider.credentialError")}</span>;
   if (state === "active") return <span className="shrink-0 text-[10px] font-semibold text-muted">{t("accounts.active")}</span>;
   return null;
 }
@@ -309,7 +312,7 @@ function AuthIdentity({ account }: { account: AccountOption }) {
     <span className="flex min-w-0 items-center gap-1 text-[9.5px] font-medium text-muted">
       <code className="truncate font-mono" title={account.id}>{account.id}</code>
       {account.plan ? <Badge tone="neutral" className="px-1.5 py-0 text-[9px]">{account.plan}</Badge> : null}
-      <Badge tone={tone} className="px-1.5 py-0 text-[9px]">{t(AUTH_HEALTH_KEY[health])}</Badge>
+      <Badge tone={tone} className="px-1.5 py-0 text-[9px]">{t(account.provider && health === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[health])}</Badge>
     </span>
   );
 }
@@ -322,7 +325,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
   const state = rowState(account, activeId);
   const isActive = account.id === activeId;
   const tint = engineTintOf(engine);
-  const usable = account.authPresent && authHealth(account) !== "signed_out" && !account.loginPending;
+  const usable = account.authPresent && authHealth(account) !== "signed_out" && (!account.provider || authHealth(account) !== "error") && !account.loginPending;
   const selectionDisabled = disabled || !usable;
   // Removal moves the home into the shared archive, so the first click arms it
   // and only a second, explicit confirm runs it. Escape or ten quiet seconds
@@ -751,6 +754,72 @@ function RemovalOutcome({ state, phone = false }: { state: EngineAccountsState; 
   }
 }
 
+/** The token stays in this form until submission and is never put in a row or URL. */
+function ClaudeProviderEditor({ state, account, phone = false }: { state: EngineAccountsState; account?: AccountOption; phone?: boolean }) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState(account?.label ?? "");
+  const [baseUrl, setBaseUrl] = useState(account?.provider?.baseUrl ?? "https://opencode.ai/zen/go");
+  const [token, setToken] = useState("");
+  const [model, setModel] = useState(account?.provider?.model ?? "qwen3.8-max");
+  const [smallFastModel, setSmallFastModel] = useState(account ? account.provider?.smallFastModel ?? "" : "qwen3.8-flash");
+  const [headerLines, setHeaderLines] = useState("");
+  const [clearHeaders, setClearHeaders] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const headers = Object.fromEntries(headerLines.split("\n").filter((line) => line.trim()).map((line) => {
+    const colon = line.indexOf(":");
+    if (colon < 1) return ["", ""];
+    return [line.slice(0, colon).trim(), line.slice(colon + 1).trim()];
+  }));
+  const provider = { baseUrl, model: model || "model-for-list", smallFastModel, ...(token ? { token } : {}),
+    ...(!account || headerLines.trim() || clearHeaders ? { headers } : {}) };
+  const request = async (action: "provider-models" | "save") => {
+    setBusy(true); setError("");
+    try {
+      const response = await fetch("/api/accounts/claude", {
+        method: action === "save" && account ? "PATCH" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(action === "provider-models"
+          ? { action, id: account?.id, provider }
+          : { id: account?.id, label, provider: { ...provider, model } }),
+      });
+      const body = await response.json() as { error?: string; models?: string[] | null; account?: { id?: string } };
+      if (!response.ok) { setError(body.error ?? t("accounts.provider.error")); return; }
+      if (action === "provider-models") { setModels(body.models ?? []); return; }
+      const selectNew = !account && !state.accounts.some((candidate) => candidate.id === state.active && candidate.authPresent);
+      setToken(""); setHeaderLines(""); setClearHeaders(false); setOpen(false); await state.refresh();
+      if (selectNew && body.account?.id) await state.select(body.account.id);
+    } catch { setError(t("accounts.provider.error")); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className={phone ? "px-3 pb-2" : "border-t border-border px-3 py-2"} data-claude-provider-editor={account?.id ?? "new"}>
+      <button type="button" className="min-h-11 text-[11px] font-semibold text-accent underline underline-offset-2 sm:min-h-6" onClick={() => setOpen(!open)}>
+        {account ? t("accounts.provider.edit") : t("accounts.provider.add")}
+      </button>
+      {open ? <div className="mt-2 grid gap-2">
+        <input aria-label={t("accounts.provider.name")} placeholder={t("accounts.provider.name")} value={label} onChange={(event) => setLabel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
+        <input aria-label={t("accounts.provider.url")} placeholder="https://opencode.ai/zen/go" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
+        <input aria-label={t("accounts.provider.token")} type={"password"} autoComplete="off" placeholder={account ? t("accounts.provider.keepToken") : t("accounts.provider.token")} value={token} onChange={(event) => setToken(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
+        <input aria-label={t("accounts.provider.model")} list={`claude-provider-models-${account?.id ?? "new"}`} placeholder={t("accounts.provider.model")} value={model} onChange={(event) => setModel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
+        <input aria-label={t("accounts.provider.smallModel")} list={`claude-provider-models-${account?.id ?? "new"}`} placeholder={t("accounts.provider.smallModel")} value={smallFastModel} onChange={(event) => setSmallFastModel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
+        <textarea aria-label={t("accounts.provider.headers")} placeholder={t("accounts.provider.headersHint")} value={headerLines} onChange={(event) => setHeaderLines(event.target.value)} className="min-h-16 w-full rounded border border-border bg-canvas px-2 py-1 text-xs" />
+        {account?.provider?.customHeaderNames?.length ? <div className="text-[11px] text-muted">{t("accounts.provider.savedHeaders")}: {account.provider.customHeaderNames.join(", ")}</div> : null}
+        {account?.provider?.customHeaderNames?.length ? <label className="flex items-center gap-2 text-[11px] text-muted"><input type="checkbox" checked={clearHeaders} onChange={(event) => setClearHeaders(event.target.checked)} />{t("accounts.provider.clearHeaders")}</label> : null}
+        {baseUrl.replace(/\/$/, "") === "https://opencode.ai/zen/go" ? <div className="text-[11px] text-muted">{t("accounts.provider.goModels")}</div> : null}
+        <datalist id={`claude-provider-models-${account?.id ?? "new"}`}>{models.map((id) => <option key={id} value={id} />)}</datalist>
+        <div className="flex gap-2">
+          <button type="button" disabled={busy || !baseUrl || (!account && !token)} onClick={() => void request("provider-models")} className="min-h-11 rounded border border-border px-2 py-1 text-xs disabled:opacity-50 sm:min-h-8">{t("accounts.provider.loadModels")}</button>
+          <button type="button" disabled={busy || !label.trim() || !baseUrl || !model || (!account && !token)} onClick={() => void request("save")} className="min-h-11 rounded border border-border px-2 py-1 text-xs font-semibold disabled:opacity-50 sm:min-h-8">{t("accounts.provider.save")}</button>
+        </div>
+        {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
+      </div> : null}
+    </div>
+  );
+}
+
 /**
  * Unified, engine-parameterized Accounts panel. Symmetric for Claude and Codex:
  * account list with capacity chips, direct active-account selection, clear
@@ -895,8 +964,7 @@ export function AccountsPanel({
                 const showLimits = account.authPresent || Boolean(quota.session || quota.weekly || quota.tiers.length);
                 return (
                   <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} disabled={mutation !== null} removing={state.removing === account.id} refusal={rowRefusal(state, account.id)} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
-                    {showLimits ? (
-                      <AccountLimitsBlock
+                    {showLimits ? account.provider ? <div className="px-3 pb-2 pl-[30px] text-[10px] text-muted">{t("accounts.provider.limitsUnknown")}</div> : <AccountLimitsBlock
                         account={account}
                         engine={engine}
                         quota={quota}
@@ -906,9 +974,9 @@ export function AccountsPanel({
                         wideLabels={wideLabels}
                         onRefresh={() => void state.refreshLimits(account.id)}
                         onUseReset={() => void state.useResetCredit(account.id)}
-                      />
-                    ) : null}
-                    {engine === "claude" ? <ClaudeLoginRow key={account.login?.operationId ?? account.id} account={account} state={state} loginBusy={loginBusy} /> : null}
+                      /> : null}
+                    {engine === "claude" && account.provider ? <ClaudeProviderEditor state={state} account={account} /> : null}
+                    {engine === "claude" && !account.provider ? <ClaudeLoginRow key={account.login?.operationId ?? account.id} account={account} state={state} loginBusy={loginBusy} /> : null}
                   </AccountRow>
                 );
               })}
@@ -928,6 +996,7 @@ export function AccountsPanel({
                 {t("accounts.confirmAdd")}
               </button>
             </form>
+            {engine === "claude" ? <ClaudeProviderEditor state={state} /> : null}
             <div className="flex justify-end border-t border-border px-3 py-1.5">
               <button
                 type="button"
@@ -991,11 +1060,12 @@ export function AccountsPanel({
  * untouched: this is the phone's layout over the same account store.
  */
 
-export type MobileAccountState = "active" | "ready" | "needsSignIn" | "pending";
+export type MobileAccountState = "active" | "ready" | "needsSignIn" | "error" | "pending";
 
 const MOBILE_STATE_OF: Record<RowState, MobileAccountState> = {
   pending: "pending",
   needsLogin: "needsSignIn",
+  error: "error",
   active: "active",
   idle: "ready",
 };
@@ -1024,7 +1094,7 @@ export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { lef
     account, and Codex runs its device login for any account, Main included
     (#2166): signing in the account you have never asks for a second one. */
 function mobileSignInAvailable(engine: "claude" | "codex", account: AccountOption): boolean {
-  return engine === "claude" || account.kind === "managed" || account.kind === "legacy";
+  return !account.provider && (engine === "claude" || account.kind === "managed" || account.kind === "legacy");
 }
 
 /** Codex keeps its device-login contract on the accounts route (`action:
@@ -1075,10 +1145,11 @@ function planLabel(plan: string | null | undefined, t: TFunction): string | null
   return t("mobile2.accounts.plan", { plan: trimmed.charAt(0).toUpperCase() + trimmed.slice(1) });
 }
 
-const MOBILE_BADGE: Record<"success" | "neutral" | "warning", string> = {
+const MOBILE_BADGE: Record<"success" | "neutral" | "warning" | "danger", string> = {
   success: "bg-success-soft text-success",
   neutral: "bg-sunken text-muted",
   warning: "bg-warning-soft text-warning",
+  danger: "bg-danger-soft text-danger",
 };
 
 function MobileBadge({ tone, children }: { tone: keyof typeof MOBILE_BADGE; children: React.ReactNode }) {
@@ -1138,6 +1209,7 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
           {state === "active" ? <MobileBadge tone="success">{t("accounts.active")}</MobileBadge> : null}
           {state === "ready" ? <MobileBadge tone="neutral">{t("mobile2.accounts.ready")}</MobileBadge> : null}
           {state === "needsSignIn" ? <MobileBadge tone="warning">{t("accounts.needsLogin")}</MobileBadge> : null}
+          {state === "error" ? <MobileBadge tone="danger">{t("accounts.provider.credentialError")}</MobileBadge> : null}
           {state === "pending" ? (
             <MobileBadge tone="neutral">
               <Loader2 className="h-[11px] w-[11px] animate-spin motion-reduce:animate-none" aria-hidden />
@@ -1149,7 +1221,7 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
           {plan ? <span className="min-w-0 truncate">{plan}</span> : null}
           {plan && checked ? <span aria-hidden className="shrink-0 opacity-60">·</span> : null}
           {checked ? <span className="min-w-0 truncate">{t("mobile2.accounts.checked", { time: checked })}</span> : null}
-          {!plan && !checked ? <span className="min-w-0 truncate">{t(AUTH_HEALTH_KEY[authHealth(account)])}</span> : null}
+          {!plan && !checked ? <span className="min-w-0 truncate">{t(account.provider && authHealth(account) === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[authHealth(account)])}</span> : null}
         </span>
       </span>
       {corner ? <MobileCorner corner={corner} t={t} /> : null}
@@ -1231,6 +1303,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
         {engine === "claude" && state === "needsSignIn" && account.login?.result?.status === "failure"
           ? <ClaudeLoginRow key={account.login.operationId} account={account} state={engineState} loginBusy={loginBusy} />
           : null}
+        {engine === "claude" && account.provider ? <ClaudeProviderEditor state={engineState} account={account} phone /> : null}
         {rowRefusal(engineState, account.id, true)}
       </div>
     );
@@ -1248,7 +1321,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
       <div className={rowClass}>
         <MobileAccountHead account={account} engine={engine} state={state} quota={quota} t={t} />
       </div>
-      <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className="flex flex-col gap-[5px] pr-2 pt-0.5">
+      {account.provider ? <div className="py-1 text-label text-muted">{t("accounts.provider.limitsUnknown")}</div> : <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className="flex flex-col gap-[5px] pr-2 pt-0.5">
         {rows.length === 0 ? <div className="text-label text-muted">{t("mobile2.accounts.noReading")}</div> : null}
         {rows.map(({ key, label, window }) => {
           const w = window.value;
@@ -1267,7 +1340,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
             </div>
           );
         })}
-      </dl>
+      </dl>}
       {engine === "codex" ? (
         <div data-account-reset-credits={account.id} className={`pr-2 pt-1 text-label ${canRedeem ? "font-semibold text-primary" : "text-muted"}`}>
           {resets === null
@@ -1278,7 +1351,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
           {resets !== null && resets.availableCount > 0 && resets.expiresAt !== null ? ` · ${t("accounts.resetsExpire", { at: formatResetClock(resets.expiresAt, now) })}` : null}
         </div>
       ) : null}
-      <div className="mt-0.5 flex items-center gap-1">
+      {!account.provider ? <div className="mt-0.5 flex items-center gap-1">
         <button
           type="button"
           data-account-refresh-limits={account.id}
@@ -1305,7 +1378,8 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
             {t("accounts.useReset")}
           </button>
         ) : null}
-      </div>
+      </div> : null}
+      {engine === "claude" && account.provider ? <ClaudeProviderEditor state={engineState} account={account} phone /> : null}
       {rowRefusal(engineState, account.id, true)}
     </div>
   );
@@ -1445,6 +1519,7 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
         </div>
       ) : null}
       <MobileAddAccountRow state={state} engineName={engineName} loginBusy={loginBusy} />
+      {engine === "claude" ? <ClaudeProviderEditor state={state} phone /> : null}
     </section>
   );
 }

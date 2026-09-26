@@ -7,7 +7,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
-import { claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
+import { claudeProviderForHome, claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
 import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
@@ -902,6 +902,7 @@ export async function executeSpawnRequest(
       const profileId = path.basename(spec.transcript ?? "", ".jsonl");
       if (isManagedClaudeHome(account.home)) prepareManagedClaudeSpawnHome(account.home, cwd);
       applyClaudeSpawnPolicy(account.home, {
+        providerAccount: Boolean(claudeProviderForHome(account.home)),
         allowSubagents: body.allowSubagents === true,
         baseSettingsPath: isManagedClaudeHome(account.home) ? claudeSettingsPath() : null,
         profileId,

@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 
 import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts } from "@/lib/accounts/codex";
-import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts } from "@/lib/accounts/claude";
+import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts, readClaudeProviderRuntime } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
+import { providerCredentialChangedAt, readProviderMessageHealth } from "@/lib/accounts/claudeProviderHealth";
 import { engineCliPresence } from "@/lib/accounts/engineConnection";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
@@ -14,7 +15,7 @@ import {
 } from "@/lib/accounts/projectBindings";
 import { agentRegistry } from "@/lib/agent/registry";
 import { projectAliasSnapshot } from "@/lib/projects/aliases";
-import { accountProjection, liveFreshObservation } from "@/lib/accounts/accountProjection";
+import { accountProjection, currentObservation, liveFreshObservation } from "@/lib/accounts/accountProjection";
 import { AUTO_BALANCE_THRESHOLD } from "@/lib/accounts/migration/quotaPolicy";
 import type { MigrationEngine } from "@/lib/accounts/migration/contracts";
 
@@ -138,10 +139,22 @@ export async function GET() {
   const claudeLogins = claudeLoginSupervisor.forAccounts(claudeAccountList.map((account) => account.id));
   const claudeAccounts = claudeAccountList.map((account) => {
     const login = claudeLogins.get(account.id) ?? null;
+    let providerHeadersSafe = true;
+    if (account.provider) { try { readClaudeProviderRuntime(account.home, account.provider); } catch { providerHeadersSafe = false; } }
+    const providerObservation = claudeObservations[account.id];
+    const credentialChangedAt = account.provider ? providerCredentialChangedAt(account.home) : null;
+    const providerObservedNow = currentObservation(providerObservation, now)
+      && (credentialChangedAt === null || Date.parse(providerObservation!.authCheckedAt) > credentialChangedAt);
+    const messages = account.provider && providerHeadersSafe ? readProviderMessageHealth(account.home) : null;
+    const providerAuthState = !account.authPresent || !providerHeadersSafe ? "error"
+      : messages ? messages.state
+        : providerObservedNow && ["provider authentication failed", "provider credentials require repair", "provider Messages authentication failed"].includes(providerObservation?.provenance.reason ?? "") ? "error"
+          : providerObservedNow && providerObservation?.authenticated ? "authenticated" : "unknown";
     return {
       id: account.id,
       label: account.label,
       kind: account.kind,
+      ...(account.provider ? { provider: account.provider } : {}),
       authPresent: account.authPresent,
       loginPending: login ? LIVE_CLAUDE_LOGIN_PHASES.has(login.phase) : false,
       loginState: account.authPresent ? "authenticated" : "idle",
@@ -151,6 +164,9 @@ export async function GET() {
       // A denied or unavailable store cannot prove that credentials are absent.
       // Keep durable live auth evidence authoritative in either direction.
       ...accountProjection(claudeObservations[account.id], account.authPresent || account.credentialState === "unknown", now),
+      ...(account.provider ? { auth: { state: providerAuthState, method: "provider", email: null, plan: null,
+        checkedAt: messages ? new Date(messages.checkedAt).toISOString() : providerObservedNow ? providerObservation?.authCheckedAt ?? null : null },
+        limits: { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null }, effective: null } : {}),
       login,
     };
   });

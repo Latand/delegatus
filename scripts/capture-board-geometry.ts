@@ -909,6 +909,7 @@ function healthAnswer(state: HealthState): unknown {
 }
 
 async function captureOnboarding(): Promise<void> {
+  const providerOnly = process.env.BOARD_CAPTURE_CASE === "provider-account";
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
   for (const dir of [REPO_DIR, OUT_DIR, BIN_DIR, path.join(HOME, ".claude"), path.join(BASE, "git-home"), path.join(BASE, "tmp", `claude-${process.getuid?.() ?? 1000}`), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions")]) fs.mkdirSync(dir, { recursive: true });
@@ -924,7 +925,7 @@ async function captureOnboarding(): Promise<void> {
 
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const report: Record<string, unknown> = { commit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim(), case: "onboarding" };
+  const report: Record<string, unknown> = { commit: captureCommit(), case: providerOnly ? "provider-account" : "onboarding" };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const tailscale = createTailscaleStub({ root: BASE });
@@ -952,14 +953,14 @@ async function captureOnboarding(): Promise<void> {
       stdio: ["ignore", "inherit", "inherit"],
     });
     await waitForServer(baseUrl, server);
-    await waitForBoard(baseUrl, false);
+    const { project } = await waitForBoard(baseUrl, false);
     const first = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: unknown };
     must(first.marker === null, `a first run with only engine transcripts answered marker ${JSON.stringify(first.marker)}; the guide would not open`);
     report.firstRunMarker = first.marker;
     browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
-    for (const viewport of ONBOARDING_VIEWPORTS) {
-      for (const colorScheme of ["light", "dark"] as const) {
+    for (const viewport of (providerOnly ? ONBOARDING_VIEWPORTS.filter((item) => item.width === 1280 || item.width === 390) : ONBOARDING_VIEWPORTS)) {
+      for (const colorScheme of (providerOnly ? ["light"] : ["light", "dark"]) as Array<"light" | "dark">) {
         for (const locale of ["en", "uk"] as const) {
           const tag = `${viewport.tag}-${colorScheme}-${locale}`;
           const frames: Record<string, unknown> = {};
@@ -983,6 +984,18 @@ async function captureOnboarding(): Promise<void> {
             localStorage.setItem("llvSound", "0");
           }, locale);
           const page = await context.newPage();
+          if (providerOnly) await page.route("**/api/accounts", async (route) => {
+            const response = await route.fetch();
+            const body = await response.json() as { claude?: { accounts?: Record<string, unknown>[] } };
+            body.claude?.accounts?.push({
+              id: "provider-fixture", label: "Provider", kind: "managed", authPresent: true,
+              auth: { state: "authenticated", method: "provider", email: null, plan: null, checkedAt: null },
+              loginPending: false, loginState: "authenticated", attemptState: null, deviceAuth: null,
+              limits: { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null },
+              provider: { baseUrl: "https://opencode.ai/zen/go", model: "fixture-large", smallFastModel: "fixture-small" },
+            });
+            await route.fulfill({ response, json: body });
+          });
           const shot = async (name: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void) => {
             await page.waitForTimeout(350);
             const reading = await page.evaluate(measureOnboarding, viewport.phone);
@@ -996,7 +1009,8 @@ async function captureOnboarding(): Promise<void> {
             for (const label of reading.roleLabels) must(!label.clipped, `${tag} ${name}: role label "${label.text}" is clipped at ${label.w}px`);
             for (const button of reading.footerButtons) must(!button.clipped && button.inside, `${tag} ${name}: footer button "${button.text}" is clipped or outside the footer`);
             must(reading.segmentOverflow <= 0, `${tag} ${name}: an engine control overflows its cell by ${reading.segmentOverflow}px`);
-            must(reading.smallTargets.length === 0, `${tag} ${name}: targets under 44px: ${reading.smallTargets.join("; ")}`);
+            if (providerOnly) report[`${tag}:${name}:otherSmallTargets`] = reading.smallTargets;
+            else must(reading.smallTargets.length === 0, `${tag} ${name}: targets under 44px: ${reading.smallTargets.join("; ")}`);
             check(reading);
           };
 
@@ -1018,6 +1032,99 @@ async function captureOnboarding(): Promise<void> {
             await shot("engines-one-connected", (r) => {
               must(r.engines.claude === "connected" && r.engines.codex === "missing", `${tag}: with a Codex credential and no Codex command the engines read ${JSON.stringify(r.engines)}`);
             });
+
+            if (providerOnly) {
+              const guideForm = async (selector: string, name: string) => {
+                const fields = page.locator(`${selector} input:not([type="checkbox"]), ${selector} textarea, ${selector} button`);
+                const readings = [];
+                for (let index = 0; index < await fields.count(); index++) {
+                  await fields.nth(index).scrollIntoViewIfNeeded();
+                  readings.push(await fields.nth(index).evaluate((node) => {
+                    const r = node.getBoundingClientRect();
+                    return { x: r.x, y: r.y, w: r.width, h: r.height };
+                  }));
+                }
+                must(readings.length >= 8 && readings.every((r) => r.w >= 44 && r.h >= (viewport.phone ? 44 : 24)
+                  && r.x >= -1 && r.x + r.w <= viewport.width + 1 && r.y >= -1 && r.y + r.h <= viewport.height + 1),
+                `${tag} ${name}: setup-guide provider controls are clipped or unreachable: ${JSON.stringify(readings)}`);
+                await shot(name, () => {});
+              };
+              const selector = '[data-onboarding-accounts="claude"] [data-claude-provider-editor="new"]';
+              await page.locator(`${selector} button`).first().click();
+              await page.locator(`${selector} input`).first().waitFor();
+              await guideForm(selector, "engines-provider-form");
+              const geometry = await page.locator(selector).evaluate((node) => ({
+                fields: [...node.querySelectorAll("input,button")].map((field) => {
+                  const rect = field.getBoundingClientRect();
+                  return { width: rect.width, height: rect.height, left: rect.left, right: rect.right };
+                }),
+                overflow: node.scrollWidth - node.clientWidth,
+              }));
+              must(geometry.overflow <= 1 && geometry.fields.every((field) => field.width >= 44 && (viewport.phone ? field.height >= 44 : field.height >= 24) && field.left >= 0 && field.right <= viewport.width + 1), `${tag}: provider controls overflow or collapse: ${JSON.stringify(geometry)}`);
+              await page.locator(`${selector} button`).first().click();
+              const edit = '[data-onboarding-accounts="claude"] [data-claude-provider-editor="provider-fixture"]';
+              await page.locator(`${edit} button`).first().click();
+              await guideForm(edit, "engines-provider-edit");
+              const editGeometry = await page.locator(edit).evaluate((node) => ({
+                fields: [...node.querySelectorAll("input,button")].map((field) => {
+                  const rect = field.getBoundingClientRect();
+                  return { width: rect.width, height: rect.height, left: rect.left, right: rect.right };
+                }),
+                overflow: node.scrollWidth - node.clientWidth,
+              }));
+              must(editGeometry.overflow <= 1 && editGeometry.fields.every((field) => field.width >= 44 && (viewport.phone ? field.height >= 44 : field.height >= 24) && field.left >= 0 && field.right <= viewport.width + 1), `${tag}: provider edit controls overflow or collapse: ${JSON.stringify(editGeometry)}`);
+              /* The Accounts screen has a separate scroll/fixed-position layout.
+                 Walk its own add and edit controls after leaving the guide. */
+              await page.locator('[data-onboarding-dialog] button[title]').last().click();
+              await page.waitForSelector('[data-onboarding-dialog]', { state: "detached" });
+              await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded" });
+              if (viewport.phone) {
+                await page.waitForSelector('[data-mobile2-bar]');
+                await page.click('[data-mobile2-bar] [data-mobile2-open="menu"]');
+                await page.click('[data-mobile2-menu-row="accounts"]');
+                await page.waitForSelector('[data-mobile2-accounts]');
+              } else {
+                await page.waitForSelector('[data-kanban-board] header.bar');
+                await page.locator('button[aria-haspopup="dialog"][aria-label*="Claude"]').first().click();
+                await page.waitForSelector('[role="dialog"] [data-claude-provider-editor="new"]');
+              }
+              const accountRoot = viewport.phone ? '[data-mobile2-accounts-engine="claude"]' : '[role="dialog"]';
+              const accountShot = async (name: string, editor: string) => {
+                const controls = page.locator(`${accountRoot} ${editor} input:not([type="checkbox"]), ${accountRoot} ${editor} textarea, ${accountRoot} ${editor} button`);
+                const count = await controls.count();
+                must(count >= 8, `${tag} ${name}: only ${count} editor controls rendered`);
+                const readings = [];
+                for (let index = 0; index < count; index++) {
+                  await controls.nth(index).scrollIntoViewIfNeeded();
+                  readings.push(await controls.nth(index).evaluate((node) => {
+                    const r = node.getBoundingClientRect();
+                    return { x: r.x, y: r.y, w: r.width, h: r.height };
+                  }));
+                }
+                const bounds = await page.locator(accountRoot).first().evaluate((node) => {
+                  const r = node.getBoundingClientRect();
+                  return { x: r.x, y: r.y, w: r.width, h: r.height, overflowX: node.scrollWidth - node.clientWidth };
+                });
+                must(bounds.x >= -1 && bounds.x + bounds.w <= viewport.width + 1 && bounds.overflowX <= 1
+                  && (viewport.phone || (bounds.y >= -1 && bounds.y + bounds.h <= viewport.height + 1)),
+                  `${tag} ${name}: Accounts frame overflows: ${JSON.stringify(bounds)}`);
+                must(readings.every((r) => r.w >= 44 && r.h >= (viewport.phone ? 44 : 24) && r.x >= -1 && r.x + r.w <= viewport.width + 1 && r.y >= -1 && r.y + r.h <= viewport.height + 1),
+                  `${tag} ${name}: editor controls are clipped or unreachable: ${JSON.stringify(readings)}`);
+                frames[name] = { bounds, controls: readings };
+                await page.screenshot({ path: path.join(OUT_DIR, `${tag}-${name}.png`),
+                  ...(viewport.phone ? {} : { clip: { x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h } }) });
+              };
+              const accountNew = '[data-claude-provider-editor="new"]';
+              await page.locator(`${accountRoot} ${accountNew} > button`).click();
+              await accountShot("accounts-provider-add", accountNew);
+              await page.locator(`${accountRoot} ${accountNew} > button`).click();
+              const accountEdit = '[data-claude-provider-editor="provider-fixture"]';
+              await page.locator(`${accountRoot} ${accountEdit} > button`).click();
+              await accountShot("accounts-provider-edit", accountEdit);
+              report[tag] = frames;
+              await context.close();
+              continue;
+            }
 
             /* 2. The mapping: six roles and two variants sit on Codex, which is not connected. */
             await openStep("agents");
@@ -1648,12 +1755,12 @@ async function captureOnboarding(): Promise<void> {
     process.exitCode = 1;
     console.error(`onboarding acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log("onboarding acceptance passed at 1440, 1280 and 390, light and dark, English and Ukrainian.");
+    console.log(providerOnly ? "provider account form rendered at 1280 and 390 in English and Ukrainian." : "onboarding acceptance passed at 1440, 1280 and 390, light and dark, English and Ukrainian.");
   }
 }
 
 async function main(): Promise<void> {
-  if (process.env.BOARD_CAPTURE_CASE === "onboarding") {
+  if (process.env.BOARD_CAPTURE_CASE === "onboarding" || process.env.BOARD_CAPTURE_CASE === "provider-account") {
     await captureOnboarding();
     return;
   }

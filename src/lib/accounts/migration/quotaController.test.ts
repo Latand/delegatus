@@ -5,6 +5,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 import type { CodexAccount } from "@/lib/accounts/codex";
+import type { ClaudeAccount } from "@/lib/accounts/claude";
 
 import type { QuotaProbePort } from "./quotaController";
 
@@ -20,6 +21,26 @@ afterAll(() => {
   if (PREVIOUS_STATE === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = PREVIOUS_STATE;
   fs.rmSync(QUOTA_SANDBOX, { recursive: true, force: true });
+});
+
+test("controller keeps a successful provider authentication with unknown limits", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-quota-tick-"));
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const account: ClaudeAccount = { id: "provider", label: "Provider", kind: "managed", home: path.join(root, "account"),
+      projectsDir: path.join(root, "account", "projects"), authPresent: true, createdAt: 1,
+      provider: { baseUrl: "http://127.0.0.1:9876", model: "fixture-model", smallFastModel: null } };
+    const controller = new QuotaController(registry, {
+      list: () => [account], active: () => account.id, credentialIdentity: () => "unchanged-fixture",
+      async probe(engine, candidate, now) {
+        return { engine, accountId: candidate.id, authenticated: true, authCheckedAt: now, limits: null,
+          provenance: { source: "unavailable", reason: "provider limits unknown", staleSince: null }, observedAt: now };
+      },
+    });
+    await controller.tick("claude");
+    expect(registry.snapshot().quotaObservations.claude.provider).toMatchObject({ authenticated: true, limits: null,
+      provenance: { reason: "provider limits unknown" } });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("quota probes wait behind account deletion mutations", async () => {

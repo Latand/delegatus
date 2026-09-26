@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { accountForSpawn, codexHomeOwningSessionPath, isManagedCodexHome } from "@/lib/accounts/codex";
-import { claudeSettingsPath, claudeTranscriptOwnership, isManagedClaudeHome, legacyClaudeHome } from "@/lib/accounts/claude";
+import { claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, claudeTranscriptOwnership, isManagedClaudeHome, legacyClaudeHome } from "@/lib/accounts/claude";
 import { homeDirectory } from "@/lib/platformHome";
 import { isUnderClaudeSubagentsDir } from "@/lib/scanner/claudeNative";
 import { telegramSessionReaderPath } from "@/lib/telegram/packaging";
@@ -212,8 +212,21 @@ function telegramScopedCommand(command: string, mcpServers: readonly string[]): 
 }
 
 export function claudeEnvPrefix(home: string, mcpServers: readonly string[] = []): string {
-  const unsets = mcpServers.includes("telegram") ? CLAUDE_SHADOWED_ENV : [...CLAUDE_SHADOWED_ENV, TELEGRAM_CONNECTOR_TOKEN_ENV];
-  return `env ${unsets.map((key) => `-u ${key}`).join(" ")} CLAUDE_CONFIG_DIR=${shellQuote(home)}`;
+  const provider = claudeProviderForHome(home);
+  const unsets = [
+    ...CLAUDE_SHADOWED_ENV,
+    ...(mcpServers.includes("telegram") ? [] : [TELEGRAM_CONNECTOR_TOKEN_ENV]),
+    ...(provider ? ["ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_CUSTOM_HEADERS"] : []),
+  ];
+  const providerEnv = provider
+    ? ` bun ${shellQuote(claudeProviderLauncherPath(home))} --home ${shellQuote(home)} --base-url ${shellQuote(provider.baseUrl)} --default-model ${shellQuote(provider.model)} --small-model ${shellQuote(provider.smallFastModel ?? "")} --header-names ${shellQuote(JSON.stringify(provider.customHeaderNames ?? []))} --`
+    : "";
+  return `env ${unsets.map((key) => `-u ${key}`).join(" ")} CLAUDE_CONFIG_DIR=${shellQuote(home)}${providerEnv}`;
+}
+
+function providerLaunchModel(home: string, requested: string | null | undefined): string | null {
+  const provider = claudeProviderForHome(home);
+  return provider ? requested === "haiku" && provider.smallFastModel ? provider.smallFastModel : provider.model : requested ?? null;
 }
 
 function codexEnvPrefix(home: string, mcpServers: readonly string[]): string {
@@ -333,13 +346,15 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     else if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", permissionMode);
     args.push("--session-id", sid);
-    if (options.model) args.push("--model", options.model);
+    const launchModel = providerLaunchModel(options.claudeConfigDir ?? legacyClaudeHome(), options.model);
+    if (launchModel) args.push("--model", launchModel);
     if (options.effort) args.push("--effort", options.effort);
     const managed = Boolean(options.claudeConfigDir && isManagedClaudeHome(options.claudeConfigDir));
     const installedPolicy = options.claudeConfigDir
       ? options.deferClaudeSpawnPolicy
         ? claudeSpawnPolicyPaths(options.claudeConfigDir, sid)
         : applyClaudeSpawnPolicy(options.claudeConfigDir, {
+          providerAccount: Boolean(claudeProviderForHome(options.claudeConfigDir)),
           allowSubagents: options.allowSubagents,
           cwd,
           mcpServers,
@@ -522,6 +537,7 @@ export function resumeSpecForSession(
   if (engine === "claude") {
     const managed = isManagedClaudeHome(home);
     const policy = applyClaudeSpawnPolicy(home, {
+      providerAccount: Boolean(claudeProviderForHome(home)),
       allowSubagents: options.allowSubagents,
       baseSettingsPath: managed ? claudeSettingsPath() : null,
       profileId: `resume-${sessionId}`,
@@ -539,7 +555,7 @@ export function resumeSpecForSession(
       args.push("--dangerously-skip-permissions");
     }
     pushClaudePolicyArgs(args, policy);
-    const launchModel = normalizeClaudeLaunchModel(options.model);
+    const launchModel = providerLaunchModel(home, normalizeClaudeLaunchModel(options.model));
     if (launchModel) args.push("--model", launchModel);
     if (options.effort) args.push("--effort", options.effort);
     args.push("--resume", sessionId);

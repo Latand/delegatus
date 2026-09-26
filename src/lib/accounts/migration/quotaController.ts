@@ -3,8 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 
-import { activeClaudeAccountId, listClaudeAccounts, type ClaudeAccount } from "@/lib/accounts/claude";
+import { activeClaudeAccountId, listClaudeAccounts, listSavedClaudeProviderModels, readClaudeProviderToken, UnsafeClaudeHomeError, type ClaudeAccount } from "@/lib/accounts/claude";
 import { realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
+import { readProviderMessageHealth } from "@/lib/accounts/claudeProviderHealth";
 import { accountProbeIdentity, claudeProbeCredentialIdentity, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { activeCodexAccountId, listCodexAccounts, type CodexAccount } from "@/lib/accounts/codex";
 import { activeCopilotAccountId, copilotSignedInUser, listCopilotAccounts, type CopilotAccount } from "@/lib/accounts/copilot";
@@ -96,10 +97,36 @@ export function durableQuotaObservation(observation: QuotaObservation, bootId: s
  * predate.
  */
 export async function claudeQuotaObservation(
-  account: Pick<ClaudeAccount, "id" | "home">,
+  account: Pick<ClaudeAccount, "id" | "home" | "provider" | "authPresent">,
   now: number,
   options: QuotaProbeOptions & { authStatus?: (home: string) => Promise<{ loggedIn: boolean; indeterminate?: boolean }> } = {},
 ): Promise<QuotaObservation> {
+  if (account.provider) {
+    const token = readClaudeProviderToken(account.home);
+    let authenticated = false;
+    let indeterminate = false;
+    let reason = token ? "provider limits unknown" : "provider credential unavailable";
+    if (token) {
+      try {
+        const models = await listSavedClaudeProviderModels(account);
+        if (models === null) indeterminate = true;
+        else authenticated = true;
+      }
+      catch (error) {
+        if (error instanceof UnsafeClaudeHomeError) { authenticated = false; reason = "provider credentials require repair"; }
+        else if (error instanceof Error && error.message === "Provider authentication failed") { authenticated = false; reason = "provider authentication failed"; }
+        else indeterminate = true;
+      }
+    }
+    const messages = readProviderMessageHealth(account.home);
+    if (messages?.state === "error") { authenticated = false; reason = "provider Messages authentication failed"; }
+    else if (messages?.state === "authenticated") { authenticated = true; reason = "provider limits unknown"; }
+    else if (indeterminate) throw new Error("quota-auth-indeterminate");
+    return {
+      engine: "claude", accountId: account.id, authenticated, authCheckedAt: now, limits: null,
+      provenance: { source: "unavailable", reason, staleSince: null }, observedAt: now,
+    };
+  }
   const status = options.authStatus ?? realClaudeLoginPorts.status;
   const auth = await status(account.home).catch(() => ({ loggedIn: false, indeterminate: true }));
   /* An indeterminate status read observed nothing about the account —
@@ -133,7 +160,7 @@ const productionProbe: QuotaProbePort = {
   list: (engine) => engine === "claude" ? listClaudeAccounts() : engine === "codex" ? listCodexAccounts() : listCopilotAccounts(),
   active: (engine) => engine === "claude" ? activeClaudeAccountId() : engine === "codex" ? activeCodexAccountId() : activeCopilotAccountId() ?? "",
   credentialIdentity: (engine, account) => engine === "claude"
-    ? claudeProbeCredentialIdentity(account.home)
+    ? (account as ClaudeAccount).provider ? accountProbeIdentity(account) : claudeProbeCredentialIdentity(account.home)
     : engine === "copilot" ? copilotProbeIdentity(account as CopilotAccount) : accountProbeIdentity(account),
   async probe(engine, account, now, options) {
     if (engine === "claude") return await claudeQuotaObservation(account as ClaudeAccount, now, options);
@@ -301,7 +328,8 @@ export class QuotaController {
         // Another read may have committed while this one waited for its provider.
         if (previous && Date.parse(previous.authCheckedAt) > now) continue;
         const observation = result.observation;
-        if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot"
+        const providerWithUnknownLimits = engine === "claude" && "provider" in account && Boolean(account.provider);
+        if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && !providerWithUnknownLimits
           || (previous?.limits && Date.parse(previous.observedAt) > observation.observedAt)))) {
           observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? (observation?.limits ? "quota-probe-older" : "quota-probe-empty"), now));
         } else {

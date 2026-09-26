@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { claudeAccountForSpawn, listClaudeAccounts } from "@/lib/accounts/claude";
+import { claudeAccountForSpawn, listClaudeAccounts, listSavedClaudeProviderModels, readClaudeProviderRuntime, UnsafeClaudeHomeError } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
+import { readProviderMessageHealth } from "@/lib/accounts/claudeProviderHealth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,7 +13,24 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!account) return NextResponse.json({ error: "unknown Claude account" }, { status: 404 });
   const fresh = req.nextUrl.searchParams.get("fresh") === "1";
   let auth = { state: account.credentialState === "unknown" ? "unknown" : account.authPresent ? "authenticated" : "signed_out", method: null as string | null, email: null as string | null, plan: null as string | null, checkedAt: null as string | null };
-  if (fresh) {
+  if (account.provider) {
+    let headersSafe = true;
+    try { readClaudeProviderRuntime(account.home, account.provider); } catch { headersSafe = false; }
+    auth = { ...auth, state: account.authPresent && headersSafe ? "unknown" : "error", method: "provider" };
+    if (fresh && account.authPresent && headersSafe) {
+      try {
+        const models = await listSavedClaudeProviderModels(account);
+        if (models !== null) auth = { ...auth, state: "authenticated" };
+      }
+      catch (error) { auth = { ...auth, state: error instanceof UnsafeClaudeHomeError || error instanceof Error && error.message === "Provider authentication failed" ? "error" : "unknown" }; }
+      auth.checkedAt = new Date().toISOString();
+    }
+    if (account.authPresent && headersSafe) {
+      const messages = readProviderMessageHealth(account.home);
+      if (messages) auth = { ...auth, state: messages.state, checkedAt: new Date(messages.checkedAt).toISOString() };
+    }
+  }
+  else if (fresh) {
     try {
       const status = await realClaudeLoginPorts.status(claudeAccountForSpawn(id).home);
       auth = status.indeterminate
