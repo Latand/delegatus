@@ -22,7 +22,7 @@ import { useLocale } from "@/lib/i18n";
 import { requestFilesRefresh } from "@/lib/filesEvents";
 import { STREAM_RECONNECTED_EVENT } from "@/hooks/runtimeBus";
 import { applySpawnedConversationSnapshot } from "@/hooks/useFiles";
-import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "@/lib/roles/paramConfig";
+import { shippedVariantConfig, variantForParams } from "@/lib/roles/paramConfig";
 import { defaultRoleParameterValues } from "@/lib/roles/parameters";
 import type { RoleDefinition } from "@/lib/roles/types";
 import type { FileEntry } from "@/lib/types";
@@ -470,29 +470,25 @@ export function DraftAgentPane({
     const next = { ...roleParams, [key]: value };
     setRoleParams(next);
     const selected = roles.find((role) => role.id === roleId);
-    if (selected?.id !== "builder") return;
+    if (!selected) return;
     /* The variants come from the catalog, so the install's agent mapping
-       (#1876) reaches the draft exactly as it reaches the registry. */
-    if (next.domain === "frontend") {
-      const frontend = selected.variants?.frontend ?? BUILDER_FRONTEND_CONFIG;
-      setEngine(frontend.engine);
-      setModel(frontend.model);
-      setEffort(frontend.effort);
-      setSpeed("");
-      return;
-    }
-    if (next.mode === "apply-fixes") {
-      const fixes = selected.variants?.["apply-fixes"] ?? BUILDER_APPLY_FIXES_CONFIG;
-      setEngine(fixes.engine);
-      setModel(fixes.model);
-      setEffort(fixes.effort);
-      return;
-    }
-    /* Plain/general mode falls back to the server-merged config so a saved
-       role override is honored, matching selectRole below. */
-    setEngine(selected.config.engine);
-    setModel(selected.config.model);
-    setEffort(selected.config.effort);
+       (#1876) reaches the draft exactly as it reaches the registry; the
+       precedence is the registry's own (variantForParams). */
+    const variant = variantForParams(selected.id, next);
+    /* Only a change of variant moves the runtime: a lens, a diff source or a
+       parallel count leaves the one the operator picked. A role with no
+       variants keeps whatever runtime the draft shows. */
+    if (variant === variantForParams(selected.id, roleParams)) return;
+    if (!variant && !selected.variants) return;
+    const config = variant
+      ? selected.variants?.[variant] ?? shippedVariantConfig(selected.id, variant) ?? selected.config
+      /* Plain/general mode falls back to the server-merged config so a saved
+         role override is honored, matching selectRole below. */
+      : selected.config;
+    setEngine(config.engine);
+    setModel(config.model);
+    setEffort(config.effort);
+    if (variant && config.engine === "claude") setSpeed("");
   };
   const setDeployConfirm = (value: string) => {
     setDeployConfirmState(value);

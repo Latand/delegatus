@@ -7,6 +7,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { headCwd } from "@/lib/agent/transcript";
 import { livePaneTarget } from "@/lib/delivery";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
+import { launchSizingRefusal } from "@/lib/roles/sizing";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { isShellCommand } from "@/lib/status";
 import { killPane, paneInfo } from "@/lib/tmux";
@@ -37,6 +38,23 @@ function validateRole(value: unknown): RoleConfig | null {
 }
 
 /**
+ * R1 for a flow reviewer (docs/design/model-sizing-tiers.md §2). The flow
+ * engine launches its reviewer itself, never through a spawn seam, so the role
+ * is judged where an agent writes it. The operator's own writes pass, and R1
+ * needs no briefer runtime, so the agent is judged without one.
+ */
+function flowReviewerSizingRefusal(reviewer: RoleConfig, actor: PauseResumeActor | null): string | null {
+  if (actor?.kind !== "agent") return null;
+  return launchSizingRefusal({
+    roleId: "reviewer",
+    params: undefined,
+    config: { engine: reviewer.engine, model: reviewer.model },
+    explicitRuntime: true,
+    briefer: { kind: "agent", runtime: null },
+  });
+}
+
+/**
  * Merges a partial role override (issue #118 on-canvas stage controls) onto the
  * flow's current role config, field by field: engine must stay claude/codex,
  * model/effort blank out to the engine default. Returns null on an invalid
@@ -45,6 +63,7 @@ function validateRole(value: unknown): RoleConfig | null {
 function roleOverrideFromRequest(
   current: RoleConfig,
   patch: unknown,
+  actor: PauseResumeActor | null = null,
 ): { role: RoleConfig } | { error: string } {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) return { error: "invalid reviewer role override" };
   const p = patch as Partial<RoleConfig>;
@@ -62,7 +81,10 @@ function roleOverrideFromRequest(
     next.effort = typeof p.effort === "string" && p.effort.trim() ? p.effort.trim() : null;
   }
   /* This override controls a future reviewer launch. Frozen round snapshots do
-     not pass through here when they resume or replay. */
+     not pass through here when they resume or replay. R1 is judged before the
+     catalog, so a dated `claude-sonnet-5` reads as Sonnet, not as a typo. */
+  const sizing = flowReviewerSizingRefusal(next, actor);
+  if (sizing) return { error: sizing };
   if (next.model) {
     const validation = validateLaunchModel(next.engine, next.model);
     if ("error" in validation) return validation;
@@ -132,7 +154,14 @@ export function normalizeFlowSpec(value: unknown): { ok: true; spec?: string } |
   return spec ? { ok: true, spec } : { ok: true };
 }
 
-export async function createFlowFromRequest(req: CreateFlowRequest, entries: FileEntry[]): Promise<{ flow?: Flow; error?: string; status?: number }> {
+/** `actor` is who asked for the flow: the operator by default. A pipeline's
+    review-loop stage creates its flow as the Viewer, after the stage itself was
+    judged at pipeline create. */
+export async function createFlowFromRequest(
+  req: CreateFlowRequest,
+  entries: FileEntry[],
+  actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
+): Promise<{ flow?: Flow; error?: string; status?: number }> {
   const normalizedSpec = normalizeFlowSpec(req.spec);
   if (!normalizedSpec.ok) {
     return { error: "spec must be a string", status: 400 };
@@ -153,6 +182,8 @@ export async function createFlowFromRequest(req: CreateFlowRequest, entries: Fil
   }
   const roles = rolesFromRequest(req);
   if (!roles) return { error: "invalid flow roles or preset", status: 400 };
+  const sizing = flowReviewerSizingRefusal(roles.reviewer, actor);
+  if (sizing) return { error: sizing, status: 400 };
   if (roles.reviewer.model) {
     const validation = validateLaunchModel(roles.reviewer.engine, roles.reviewer.model);
     if ("error" in validation) return { error: validation.error, status: 400 };
@@ -546,7 +577,7 @@ export function patchFlow(
        reseated in place, so it is not overridable here (see PatchFlowRequest). */
     const patch = req.roles && typeof req.roles === "object" && !Array.isArray(req.roles) ? req.roles.reviewer : undefined;
     if (patch === undefined) return { error: "reviewer role override is required", status: 400 };
-    const override = roleOverrideFromRequest(flow.roles.reviewer, patch);
+    const override = roleOverrideFromRequest(flow.roles.reviewer, patch, actor);
     if ("error" in override) return { error: override.error, status: 400 };
     const merged = override.role;
     flow.roles = { ...flow.roles, reviewer: merged };

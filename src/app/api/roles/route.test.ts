@@ -28,16 +28,47 @@ beforeEach(() => fs.rmSync(file, { force: true }));
 
 test("roles route returns all merged role definitions with scaffold previews and shipped runtimes", async () => {
   const body = await (await GET()).json() as Catalog;
-  expect(body.schemaVersion).toBe(2);
+  expect(body.schemaVersion).toBe(3);
   expect(body.roles).toHaveLength(8);
   expect(body.roles[0]).toMatchObject({ id: "orchestrator" });
   expect(body.roles.find((role) => role.id === "deployer")?.promptPreview).toContain("blue/green");
   const builder = body.roles.find((role) => role.id === "builder")!;
   expect(builder.variants).toEqual({
+    trivial: { engine: "claude", model: "sonnet", effort: "high" },
     frontend: { engine: "claude", model: "opus", effort: "high" },
+    docs: { engine: "claude", model: "opus", effort: "medium" },
     "apply-fixes": { engine: "codex", model: "gpt-5.6-terra", effort: "low" },
   });
   expect(builder.shipped.variants).toEqual(builder.variants);
+  const reviewer = body.roles.find((role) => role.id === "reviewer")!;
+  expect(reviewer.variants).toEqual({ trivial: { engine: "codex", model: "gpt-6-luna", effort: "high" } });
+  expect(reviewer.shipped.variants).toEqual(reviewer.variants);
+  expect((body as Catalog & { resets: unknown[] }).resets).toEqual([]);
+});
+
+/* docs/design/model-sizing-tiers.md §5: a reset row is answered until the
+   operator writes that row, and §2 R1 is the mapping writer's refusal. */
+test("GET answers the rows a retirement reset, and a write to the row clears it", async () => {
+  const from = { engine: "claude", model: "opus", effort: "xhigh" };
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, overrides: {}, retirements: { "2026-09-builder-frontend-opus-xhigh": { at: "2026-09-27T08:00:00.000Z", reset: { row: "builder:frontend", from } } } }));
+  const before = await (await GET()).json() as { resets: unknown[] };
+  expect(before.resets).toEqual([{ id: "2026-09-builder-frontend-opus-xhigh", row: "builder:frontend", from, at: "2026-09-27T08:00:00.000Z" }]);
+  const restored = await put({ overrides: { builder: { variants: { frontend: from } } } });
+  expect(restored.status).toBe(200);
+  expect((await restored.json() as { resets: unknown[] }).resets).toEqual([]);
+  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+    schemaVersion: 2,
+    overrides: { builder: { variants: { frontend: from } } },
+    retirements: { "2026-09-builder-frontend-opus-xhigh": { at: "2026-09-27T08:00:00.000Z" } },
+  });
+});
+
+test("PUT refuses Sonnet or Haiku on the reviewer, the architect, the orchestrator or the verifier, in words", async () => {
+  const refused = await put({ overrides: { reviewer: { variants: { trivial: { engine: "claude", model: "sonnet", effort: "high" } } } } });
+  expect(refused.status).toBe(400);
+  expect((await refused.json() as { error: string }).error).toBe("reviewer: Sonnet and Haiku do not run orchestrator, architect, reviewer or verifier work; name an Opus-class model or use the role's row.");
+  expect((await put({ overrides: { architect: { config: { engine: "claude", model: "haiku", effort: "high" } } } })).status).toBe(400);
+  expect(fs.existsSync(file)).toBe(false);
 });
 
 test("GET marks a malformed registry degraded while showing the shipped catalog", async () => {

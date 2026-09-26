@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1121,4 +1121,27 @@ test("runtime-host completes predecessor cleanup only after acquiring the single
   expect(fenceAt).toBeGreaterThanOrEqual(0);
   expect(cleanupAt).toBeGreaterThan(fenceAt);
   expect(recoveryAt).toBeGreaterThan(cleanupAt);
+});
+
+/* docs/design/model-sizing-tiers.md §5: stale role mapping rows are reset by
+   the release that owns traffic, before its pipeline controller launches from
+   them, and a failure there stops no controller. */
+test("the role mapping retirement pass runs with the serving release, first, and its failure stops nothing", async () => {
+  const started: string[] = [];
+  const loaders = (retire: () => unknown) => ({
+    loadFlowPipelineController: async () => ({ startFlowPipelineController: () => { started.push("pipelines"); } }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => { started.push("account"); } }),
+    loadRoleMappingRetirements: async () => ({ applyRoleMappingRetirements: retire }),
+  });
+  await startCurrentReleaseControllers({ LLV_ACCOUNT_CONTROLLER_DISABLED: "1" }, loaders(() => { started.push("retire"); return { state: "unchanged" }; }));
+  expect(started).toEqual(["retire", "pipelines"]);
+
+  started.length = 0;
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await startCurrentReleaseControllers({ LLV_ACCOUNT_CONTROLLER_DISABLED: "1" }, loaders(() => { throw new Error("refused"); }));
+  } finally {
+    logged.mockRestore();
+  }
+  expect(started).toEqual(["pipelines"]);
 });

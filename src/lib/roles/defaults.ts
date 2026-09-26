@@ -1,6 +1,6 @@
 import { CODEX_ASTRA_MODEL, CODEX_TERRA_MODEL } from "@/lib/agent/models";
 
-import type { RoleDefinition } from "./types";
+import type { RoleDefinition, RoleParameter } from "./types";
 
 const REVIEW_FENCES = [
   "Read-only mode: edits, staging, commits, pushes, service restarts, and GitHub comments are prohibited.",
@@ -37,6 +37,17 @@ export const PROCESS_CLEANUP_MARKER = "stop only the processes you started yours
 const PROCESS_CLEANUP_RULE =
   `Process cleanup: ${PROCESS_CLEANUP_MARKER}, each by the PID you recorded when you started it. Never stop anything by port, name or pattern — no fuser -k, no lsof piped into kill, no pkill, no killall — because a match can be the operator's own long-running process. A port that is already in use is a reason to pick another port, never a reason to free it; a probe or stub server binds port 0 and reads the assigned port back.`;
 
+// docs/design/model-sizing-tiers.md §1: the small-change tier. Builder and
+// reviewer only, so any other role refuses size as an unknown parameter.
+const SIZE_PARAMETER: RoleParameter = {
+  key: "size",
+  label: "Size",
+  description: "trivial: a few lines of UI, copy, one flag or label, precisely briefed by an Opus-class agent. It runs a lighter model.",
+  kind: "select",
+  default: "normal",
+  options: ["normal", "trivial"],
+};
+
 export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "orchestrator",
@@ -70,6 +81,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "lens", label: "Lens", description: "Review lens.", kind: "select", options: ["correctness", "over-engineering", "silent-failure", "test-coverage", "scope", "prod-ops", "standards+spec", "code-smells", "all"] },
       { key: "mode", label: "Mode", description: "Reviewer context mode.", kind: "select", options: ["fresh"] },
       { key: "parallelN", label: "Parallel passes", description: "Independent review passes.", kind: "integer", min: 1, max: 8 },
+      SIZE_PARAMETER,
     ],
     promptScaffold: `You are a fresh-context Reviewer. Inspect {{diffSource}} with lens {{lens}}. Run {{parallelN}} independent pass(es), preserving their axes. Report the reviewed SHA. State plainly when GitHub or DNS access was unavailable. Classify any gate blocked by sandbox limits as an environmental note and keep it out of code findings. Run TypeScript checks with bunx tsc --noEmit --incremental false so they do not need a tsbuildinfo write in the checkout. Return severity-ranked findings with file:line evidence, or exactly NO FINDINGS when the diff is clean. Every finding is an actionable fix plan: clear problem statement, how to show it fails (a command, an input or a test that goes red), fix intent, constraints, and acceptance criteria. A fixable defect is a fail verdict however partial your confidence in the call is, and needs_decision is for a choice only a human can make: a PR that calls a premise unverified, assumed or synthetic is one, never a pass. No copy-paste code unless absolutely necessary. ${SEARCH_PRIOR_CONVERSATIONS} ${HUMAN_IN_THE_LOOP} ${REVIEW_FRAME_RULES} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: REVIEW_FENCES,
@@ -94,7 +106,8 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     config: { engine: "codex", model: CODEX_ASTRA_MODEL, effort: "medium" },
     parameters: [
       { key: "mode", label: "Mode", description: "Implementation discipline.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
-      { key: "domain", label: "Domain", description: "Product domain for the implementation.", kind: "select", options: ["general", "frontend"] },
+      { key: "domain", label: "Domain", description: "Product domain for the implementation. docs is README, docs and public text, which stays on Claude.", kind: "select", options: ["general", "frontend", "docs"] },
+      SIZE_PARAMETER,
     ],
     promptScaffold: `You are a Builder in {{mode}} mode. Implement the scoped product directive with focused checks. You are done when every acceptance criterion in the pinned specification holds at your final commit and the checks you ran pass; a finish line the stage prompt names governs over this one. Keep changes within the assigned file ownership, run a self-review, and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; Delegatus opens that in its preview. ${SEARCH_PRIOR_CONVERSATIONS} ${HUMAN_IN_THE_LOOP} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Product source changes stay inside the assigned scope.", "A deployment requires a Deployer role and explicit operator approval."],

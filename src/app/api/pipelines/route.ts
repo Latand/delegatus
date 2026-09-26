@@ -6,7 +6,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { conversationAgentRole, isSpawnDeniedRole, reviewerOriginSpawnGuidance, type SpawnRejectionCode } from "@/lib/agent/spawnAdmission";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { createPipelineFromRequest, getPipelines } from "@/lib/pipelines/engine";
+import { createPipelineFromRequest, getPipelines, type PipelineBriefer } from "@/lib/pipelines/engine";
 import type { CreatePipelineRequest, Pipeline, PipelineRepoPreflightErrorCode, PipelinesResponse } from "@/lib/pipelines/types";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { selectPipelineListRecords } from "@/lib/pipelines/listProjection";
@@ -77,14 +77,18 @@ export async function GET(req: NextRequest): Promise<NextResponse<PipelinesRespo
     authenticated capability lane and a declared reviewer `src` are both
     rejected; external callers without a capability keep the #341 contract.
     Registry admission independently rejects every stage launch of any
-    reviewer-created container, so this route check is defense in depth. */
-function pipelineOriginRejection(req: NextRequest, body: CreatePipelineRequest): NextResponse<PipelineApiError> | null {
-  if (!isAgentInitiatedSpawn(req)) return null;
+    reviewer-created container, so this route check is defense in depth.
+    An admitted request answers who briefed it, for the sizing rules. */
+function pipelineOrigin(req: NextRequest, body: CreatePipelineRequest): NextResponse<PipelineApiError> | PipelineBriefer {
+  if (!isAgentInitiatedSpawn(req)) return { kind: "operator" };
   const registry = agentRegistry();
   const capability = req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)?.trim();
   if (capability) {
     const caller = authenticatedAgentSpawnCaller(req, body.src, registry);
     if ("error" in caller) return NextResponse.json({ error: caller.error }, { status: caller.status ?? 403 });
+    /* The sizing rules judge the authenticated conversation; the operator's
+       own capability is the operator (docs/design/model-sizing-tiers.md §2). */
+    if (caller.kind === "operator") return { kind: "operator" };
     if (caller.kind === "agent") {
       const role = conversationAgentRole(registry.readOnlySnapshot(), caller.conversationId);
       if (isSpawnDeniedRole(role)) {
@@ -97,8 +101,9 @@ function pipelineOriginRejection(req: NextRequest, body: CreatePipelineRequest):
         }
         body.src = derivedPath;
       }
+      return { kind: "agent", conversationId: caller.conversationId };
     }
-    return null;
+    return { kind: "operator" };
   }
   const srcPath = typeof body.src === "string" && body.src.trim() ? body.src.trim() : null;
   const srcConversation = srcPath ? registry.conversationForPath(srcPath) : null;
@@ -108,7 +113,8 @@ function pipelineOriginRejection(req: NextRequest, body: CreatePipelineRequest):
       return NextResponse.json({ error: reviewerOriginSpawnGuidance(role), code: "reviewer_origin_spawn" }, { status: 403 });
     }
   }
-  return null;
+  /* An external caller without a capability is judged by its `src` creator. */
+  return { kind: "agent", conversationId: null };
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; pipeline: Pipeline } | PipelineApiError>> {
@@ -123,11 +129,12 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
   try {
-    const originRejection = pipelineOriginRejection(req, body);
-    if (originRejection) return originRejection;
+    const origin = pipelineOrigin(req, body);
+    if (origin instanceof NextResponse) return origin;
     const result = await createPipelineFromRequest(body, undefined, {
       allowOperatorDraftWithoutLineage: !isAgentInitiatedSpawn(req),
       queueWhenBusy: true,
+      briefer: origin,
     });
     if (!result.pipeline) return NextResponse.json({
       error: result.error ?? "could not create pipeline",

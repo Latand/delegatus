@@ -128,6 +128,8 @@ import { completedFileScan } from "@/lib/scanner/scanCache";
 import { readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
 import { listRoles, resolveSpawnRole } from "@/lib/roles/registry";
+import { spawnSizingRefusal } from "@/lib/roles/sizing";
+import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
 import { readSpawnAdmissionFence, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import type { RuntimeHostRequestHealth } from "@/lib/runtime/client";
@@ -1288,8 +1290,43 @@ export function requestAttentionOperationKey(clientRequestId: string): string {
   return mcpOperationId("request_attention", clientRequestId);
 }
 
-async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
+/**
+ * The sizing rules for an MCP spawn (docs/design/model-sizing-tiers.md §2).
+ * The dispatch reaches /api/spawn on the operator capability, so the route
+ * cannot tell who briefed it; this binding knows the calling agent and judges
+ * the launch by that agent's runtime before anything is dispatched.
+ */
+function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "registrySnapshot">): void {
+  const roleId = text(args.role);
+  const role = roleId
+    ? resolveSpawnRole({ role: roleId, roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams, engine: args.engine, model: args.model, effort: args.effort })
+    : null;
+  /* An unresolvable role is the route's to refuse, with its own words. */
+  if (role && !role.ok) return;
+  /* An agent whose runtime cannot be read is judged as one: it may not brief
+     a trivial lane, and every other rule still applies. */
+  let runtime: ReturnType<typeof conversationRuntime> = null;
+  try {
+    const conversationId = attributionOf(dependencies).conversationId ?? (text(args.parentConversationId) || null);
+    runtime = conversationRuntime(dependencies.registrySnapshot(), conversationId);
+  } catch {
+    runtime = null;
+  }
+  const refusal = spawnSizingRefusal({
+    role: role?.ok ? role.value : null,
+    engine: args.engine,
+    model: args.model,
+    briefer: { kind: "agent", runtime },
+  });
+  if (refusal) throw new McpToolRefusal(refusal, { violations: [{ field: roleId ? "roleParams" : "model", message: refusal, expected: "size=trivial on a brief from an Opus-class agent, or the role's own row" }] });
+}
+
+async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   validateExplicitMcpLaunchModel(args);
+  /* Judged on every dispatch, with or without a persisted binding: the service
+     calls a recoverable spawn with one on each first dispatch, and a replay is
+     answered from the receipt without reaching this function. */
+  if (dependencies) refuseMcpSpawnSizing(args, dependencies);
   /* #1490: the persisted downstream key wins over a recomputation — it is the
      key the claim was bound to and the one recovery will look up. */
   const clientAttemptId = context?.binding?.downstreamKey ?? spawnAttemptId(requestId(args));
@@ -1329,6 +1366,7 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     launchId: result.launchId,
     state: result.state,
     initialMessage: result.initialMessage,
+    ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
   };
 }
 
@@ -1536,12 +1574,16 @@ function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipel
 
 const PIPELINE_CREATION_QUEUED_NOTE = "Pipeline state is not writable right now (a Viewer deployment is handing over, or the store is busy), so this pipeline is queued under the pipelineId above. The serving release stores and starts it on its next controller pass; get_pipeline answers once it is stored. Do not create it again.";
 
-async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolPayload> {
+async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
   if (context?.dispatch) context.dispatch.attempted = true;
+  /* Every MCP caller is an agent; the sizing rules judge the attributed
+     conversation, and the create's `src` creator when attribution names none. */
+  const briefer = { kind: "agent" as const, conversationId: dependencies ? attributionOf(dependencies).conversationId : null };
   const result = await createPipelineFromRequest(request as CreatePipelineRequest, undefined, {
     creationRequest: { key: `create_pipeline:${requestId(args)}`, digest: requestDigest("create_pipeline", request) },
     queueWhenBusy: true,
+    briefer,
   });
   if (!result.pipeline) {
     if (context?.dispatch) context.dispatch.attempted = false;
@@ -4011,7 +4053,9 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
     ? await dependencies.cancelRound(flowId)
     : action === "close"
       ? await dependencies.closeFlow(flowId)
-      : action === "pause" || action === "resume"
+      /* set-roles carries the actor so the sizing rules judge the agent's
+         reviewer (docs/design/model-sizing-tiers.md §2). */
+      : action === "pause" || action === "resume" || action === "set-roles"
         ? dependencies.patchFlow(flowId, request, pauseResumeActorOf(dependencies))
         : dependencies.patchFlow(flowId, request);
   if (!result.flow) throw new Error(result.error ?? "could not update flow");
@@ -5834,12 +5878,12 @@ export function viewerMcpBindings(
       return { rows: (conversations ?? []) as Record<string, unknown>[], meta, upstream: typeof nextCursor === "string" ? nextCursor : null };
     }, fullAnswer(args));
   return {
-    spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context),
+    spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
     create_task: (args) => createBoardTask(args, domainDependencies),
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: (args, context) => unadmittedOnStoreBusy(() => createPipeline(args, context)),
+    create_pipeline: (args, context) => unadmittedOnStoreBusy(() => createPipeline(args, context, domainDependencies)),
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
       { authorizeReceipt: (args: McpToolArgs) => {

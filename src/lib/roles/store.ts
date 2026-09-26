@@ -7,20 +7,18 @@ import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 
 import { ROLE_DEFAULTS } from "./defaults";
-import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "./paramConfig";
-import { BUILDER_VARIANT_IDS, ROLE_IDS, type BuilderVariantId, type RegistryRoleDefinitions, type RoleConfig, type RoleDefinition, type RoleId, type RoleOverride, type RoleOverridesFile, type RoleRegistryHealth, type RoleRegistrySnapshot } from "./types";
+import { ROLE_VARIANT_DEFAULTS, shippedVariantConfig } from "./paramConfig";
+import { mappingRowRefusal } from "./sizing";
+import { ROLE_IDS, ROLE_VARIANT_IDS, SCHEMA_2_VARIANT_IDS, type RegistryRoleDefinitions, type RoleConfig, type RoleDefinition, type RoleId, type RoleMappingReset, type RoleMappingRetirementRecord, type RoleOverride, type RoleOverridesFile, type RoleRegistryHealth, type RoleRegistrySnapshot, type RoleVariantId, type VariantRoleId } from "./types";
 
-/** The newest schema this build reads and writes. A file without builder
-    variants is still written as 1 (see RoleOverridesFile). */
-export const ROLE_OVERRIDES_SCHEMA_VERSION = 2;
+/** The newest schema this build reads and writes. A file is written at the
+    lowest schema that holds its rows (see RoleOverridesFile). */
+export const ROLE_OVERRIDES_SCHEMA_VERSION = 3;
 const ROLE_REGISTRY_REVISION_VERSION = 1;
-const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2];
+const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2, 3];
 
 /** Shipped runtime of each builder variant; a saved variant mapping merges over it. */
-export const BUILDER_VARIANT_DEFAULTS: Record<BuilderVariantId, RoleConfig> = {
-  frontend: BUILDER_FRONTEND_CONFIG,
-  "apply-fixes": BUILDER_APPLY_FIXES_CONFIG,
-};
+export const BUILDER_VARIANT_DEFAULTS = ROLE_VARIANT_DEFAULTS.builder;
 
 /** Hard cap for any persisted prompt scaffold, shared with the pipeline store
     so a value that saves is always a value that loads. */
@@ -33,9 +31,10 @@ export class RoleStoreError extends Error {
   }
 }
 
-const overridesFile = () => statePath("role-presets.json");
+export const roleOverridesFile = () => statePath("role-presets.json");
+const overridesFile = roleOverridesFile;
 
-function atomicWriteJson(filePath: string, value: unknown): void {
+export function atomicWriteJson(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const temp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.tmp`);
   fs.writeFileSync(temp, JSON.stringify(value, null, 2) + "\n", "utf8");
@@ -56,8 +55,16 @@ function isPartialConfig(value: unknown): value is Partial<RoleConfig> {
   return true;
 }
 
-function isVariantId(value: string): value is BuilderVariantId {
-  return (BUILDER_VARIANT_IDS as readonly string[]).includes(value);
+function hasVariants(id: string): id is VariantRoleId {
+  return Object.hasOwn(ROLE_VARIANT_IDS, id);
+}
+
+function isVariantOf(id: string, value: string): value is RoleVariantId {
+  return hasVariants(id) && (ROLE_VARIANT_IDS[id] as readonly string[]).includes(value);
+}
+
+function isAnyVariantId(value: string): boolean {
+  return Object.values(ROLE_VARIANT_IDS).some((ids) => (ids as readonly string[]).includes(value));
 }
 
 function isOverride(value: unknown): value is RoleOverride {
@@ -69,7 +76,7 @@ function isOverride(value: unknown): value is RoleOverride {
   if (override.variants !== undefined) {
     if (!override.variants || typeof override.variants !== "object" || Array.isArray(override.variants)) return false;
     for (const [key, variant] of Object.entries(override.variants)) {
-      if (!isVariantId(key) || !isPartialConfig(variant)) return false;
+      if (!isAnyVariantId(key) || !isPartialConfig(variant)) return false;
     }
   }
   return true;
@@ -90,10 +97,28 @@ function isCompatibleOverride(id: RoleId, override: RoleOverride): boolean {
   const defaults = ROLE_DEFAULTS.find((role) => role.id === id)!;
   if (!isCompatibleConfig(id, { ...defaults.config, ...override.config })) return false;
   if (override.variants === undefined) return true;
-  /* Variants belong to the builder's parameter combinations; no other role has them. */
-  if (id !== "builder") return false;
+  /* Variants belong to the parameter combinations of the builder and the
+     reviewer; no other role has them, and each role only its own. */
+  if (!hasVariants(id)) return false;
   return Object.entries(override.variants).every(([key, variant]) =>
-    isCompatibleConfig(`${id}.${key}`, { ...BUILDER_VARIANT_DEFAULTS[key as BuilderVariantId], ...variant }));
+    isVariantOf(id, key) && isCompatibleConfig(`${id}.${key}`, { ...shippedVariantConfig(id, key)!, ...variant }));
+}
+
+/* The retirement journal is advisory: a malformed entry is dropped on read
+   rather than taking the whole registry down (§5). */
+function readRetirements(value: unknown): Record<string, RoleMappingRetirementRecord> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out: Record<string, RoleMappingRetirementRecord> = {};
+  for (const [id, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const record = raw as { at?: unknown; reset?: unknown };
+    if (typeof record.at !== "string") continue;
+    const reset = record.reset as { row?: unknown; from?: unknown } | undefined;
+    out[id] = reset && typeof reset === "object" && typeof reset.row === "string" && isFullConfig(reset.from)
+      ? { at: record.at, reset: { row: reset.row, from: { engine: reset.from.engine, model: reset.from.model, effort: reset.from.effort } } }
+      : { at: record.at };
+  }
+  return out;
 }
 
 export function loadRoleOverrides(): RoleOverridesFile {
@@ -121,28 +146,65 @@ export function loadRoleOverrides(): RoleOverridesFile {
     if (!isRoleId(id) || !isOverride(override) || !isCompatibleOverride(id, override)) throw new RoleStoreError(`invalid role override: ${id}`);
     overrides[id] = override;
   }
-  return { schemaVersion: schemaVersionFor(overrides), overrides };
+  const retirements = readRetirements(raw.retirements);
+  return { schemaVersion: schemaVersionFor(overrides), overrides, ...(retirements ? { retirements } : {}) };
 }
 
-function schemaVersionFor(overrides: Partial<Record<RoleId, RoleOverride>>): 1 | 2 {
-  return Object.values(overrides).some((override) => override?.variants !== undefined) ? 2 : 1;
+function schemaVersionFor(overrides: Partial<Record<RoleId, RoleOverride>>): 1 | 2 | 3 {
+  const variantKeys = Object.values(overrides).flatMap((override) => override?.variants ? Object.keys(override.variants) : []);
+  const anyVariants = Object.values(overrides).some((override) => override?.variants !== undefined);
+  if (!anyVariants) return 1;
+  /* A newer variant, or any variant on a role other than the builder, is
+     schema 3, so an older build refuses the file instead of misreading it. */
+  const reviewerVariants = overrides.reviewer?.variants !== undefined;
+  return reviewerVariants || variantKeys.some((key) => !SCHEMA_2_VARIANT_IDS.includes(key)) ? 3 : 2;
 }
 
-export function saveRoleOverrides(overrides: Partial<Record<RoleId, RoleOverride>>): void {
+/** Write the overrides, keeping the retirement journal. `retirements`
+    undefined keeps whatever the file holds now. */
+export function saveRoleOverrides(
+  overrides: Partial<Record<RoleId, RoleOverride>>,
+  retirements?: Record<string, RoleMappingRetirementRecord>,
+): void {
   for (const [id, override] of Object.entries(overrides)) {
     if (!isRoleId(id) || !isOverride(override) || !isCompatibleOverride(id, override)) throw new RoleStoreError(`invalid role override: ${id}`);
   }
-  atomicWriteJson(overridesFile(), { schemaVersion: schemaVersionFor(overrides), overrides });
+  const journal = retirements ?? storedRetirements();
+  atomicWriteJson(overridesFile(), {
+    schemaVersion: schemaVersionFor(overrides),
+    overrides,
+    ...(journal && Object.keys(journal).length ? { retirements: journal } : {}),
+  });
+}
+
+function storedRetirements(): Record<string, RoleMappingRetirementRecord> | undefined {
+  try {
+    return readRetirements((JSON.parse(fs.readFileSync(overridesFile(), "utf8")) as { retirements?: unknown }).retirements);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The mapping row key a retirement names: `builder`, `builder:frontend`. */
+export function mappingRowKey(roleId: RoleId, variant?: RoleVariantId | null): string {
+  return variant ? `${roleId}:${variant}` : roleId;
+}
+
+/** The resets still shown to the operator: rows a retirement set back to the
+    default that nobody has touched since. */
+export function roleMappingResets(file: Pick<RoleOverridesFile, "retirements">): RoleMappingReset[] {
+  return Object.entries(file.retirements ?? {}).flatMap(([id, record]) =>
+    record.reset ? [{ id, row: record.reset.row, from: record.reset.from, at: record.at }] : []);
 }
 
 /** One role's runtime mapping as `PUT /api/roles` carries it: a full config sets
     the row, `null` resets it to the shipped value, an absent key leaves it. */
 export type RoleMappingPatch = {
   config?: RoleConfig | null;
-  variants?: Partial<Record<BuilderVariantId, RoleConfig | null>>;
+  variants?: Partial<Record<RoleVariantId, RoleConfig | null>>;
 };
 
-function sameConfig(left: RoleConfig, right: RoleConfig): boolean {
+export function sameConfig(left: RoleConfig, right: RoleConfig): boolean {
   return left.engine === right.engine && left.model === right.model && left.effort === right.effort;
 }
 
@@ -165,13 +227,21 @@ export function parseRoleMappingPatch(raw: unknown): Partial<Record<RoleId, Role
       if (entry.config !== null && !isFullConfig(entry.config)) return `overrides.${id}.config must be { engine, model, effort } or null`;
       row.config = entry.config as RoleConfig | null;
     }
+    if (row.config) {
+      const refusal = mappingRowRefusal(id, row.config);
+      if (refusal) return refusal;
+    }
     if (entry.variants !== undefined) {
-      if (id !== "builder") return `overrides.${id}.variants: only builder has variants`;
-      if (!entry.variants || typeof entry.variants !== "object" || Array.isArray(entry.variants)) return "overrides.builder.variants must be an object";
+      if (!hasVariants(id)) return `overrides.${id}.variants: only builder and reviewer have variants`;
+      if (!entry.variants || typeof entry.variants !== "object" || Array.isArray(entry.variants)) return `overrides.${id}.variants must be an object`;
       row.variants = {};
       for (const [key, variant] of Object.entries(entry.variants as Record<string, unknown>)) {
-        if (!isVariantId(key)) return `unknown builder variant: ${key}`;
-        if (variant !== null && !isFullConfig(variant)) return `overrides.builder.variants.${key} must be { engine, model, effort } or null`;
+        if (!isVariantOf(id, key)) return `unknown ${id} variant: ${key}`;
+        if (variant !== null && !isFullConfig(variant)) return `overrides.${id}.variants.${key} must be { engine, model, effort } or null`;
+        if (variant !== null) {
+          const refusal = mappingRowRefusal(id, variant);
+          if (refusal) return refusal;
+        }
         row.variants[key] = variant as RoleConfig | null;
       }
     }
@@ -200,8 +270,9 @@ export function applyRoleMappingPatch(
     }
     if (change.variants !== undefined) {
       const variants = { ...row.variants };
-      for (const [key, variant] of Object.entries(change.variants) as [BuilderVariantId, RoleConfig | null][]) {
-        if (variant === null || sameConfig(variant, BUILDER_VARIANT_DEFAULTS[key])) delete variants[key];
+      for (const [key, variant] of Object.entries(change.variants) as [RoleVariantId, RoleConfig | null][]) {
+        const shippedVariant = shippedVariantConfig(id, key);
+        if (variant === null || (shippedVariant && sameConfig(variant, shippedVariant))) delete variants[key];
         else variants[key] = { engine: variant.engine, model: variant.model, effort: variant.effort };
       }
       if (Object.keys(variants).length) row.variants = variants;
@@ -213,10 +284,26 @@ export function applyRoleMappingPatch(
   return next;
 }
 
-/** Read, patch, validate and write the mapping in one step; answers the merged catalog. */
+/** The rows a patch writes, as mapping row keys. */
+function patchedRows(patch: Partial<Record<RoleId, RoleMappingPatch>>): Set<string> {
+  const rows = new Set<string>();
+  for (const [id, change] of Object.entries(patch) as [RoleId, RoleMappingPatch][]) {
+    if (change.config !== undefined) rows.add(mappingRowKey(id));
+    for (const key of Object.keys(change.variants ?? {}) as RoleVariantId[]) rows.add(mappingRowKey(id, key));
+  }
+  return rows;
+}
+
+/** Read, patch, validate and write the mapping in one step; answers the merged
+    catalog. A write to a row a retirement reset clears that reset's notice,
+    and the retirement stays applied. */
 export function saveRoleMapping(patch: Partial<Record<RoleId, RoleMappingPatch>>): RoleDefinition[] {
-  const next = applyRoleMappingPatch(loadRoleOverrides().overrides, patch);
-  saveRoleOverrides(next);
+  const stored = loadRoleOverrides();
+  const next = applyRoleMappingPatch(stored.overrides, patch);
+  const touched = patchedRows(patch);
+  const retirements = Object.fromEntries(Object.entries(stored.retirements ?? {}).map(([id, record]) =>
+    [id, record.reset && touched.has(record.reset.row) ? { at: record.at } : record]));
+  saveRoleOverrides(next, retirements);
   return mergeRoleDefinitions(next);
 }
 
@@ -227,11 +314,9 @@ export function mergeRoleDefinitions(overrides: Partial<Record<RoleId, RoleOverr
       ...role,
       config: { ...role.config, ...override?.config },
       promptScaffold: override?.promptScaffold ?? role.promptScaffold,
-      ...(role.id === "builder" ? {
-        variants: {
-          frontend: { ...BUILDER_VARIANT_DEFAULTS.frontend, ...override?.variants?.frontend },
-          "apply-fixes": { ...BUILDER_VARIANT_DEFAULTS["apply-fixes"], ...override?.variants?.["apply-fixes"] },
-        },
+      ...(hasVariants(role.id) ? {
+        variants: Object.fromEntries((ROLE_VARIANT_IDS[role.id] as readonly RoleVariantId[]).map((key) =>
+          [key, { ...shippedVariantConfig(role.id, key)!, ...override?.variants?.[key] }])),
       } : {}),
     };
   });
@@ -257,17 +342,18 @@ function registryRevision(overrides: Partial<Record<RoleId, RoleOverride>>): str
     overrides,
     shipped: ROLE_DEFAULTS.map(({ id, config }) => ({ id, config })),
     shippedBuilderVariants: BUILDER_VARIANT_DEFAULTS,
+    shippedReviewerVariants: ROLE_VARIANT_DEFAULTS.reviewer,
   };
   return `roles-${ROLE_REGISTRY_REVISION_VERSION}-${createHash("sha256").update(canonicalJson(content)).digest("hex").slice(0, 20)}`;
 }
 
-function registrySnapshot(overrides: Partial<Record<RoleId, RoleOverride>>, health: RoleRegistryHealth): RoleRegistrySnapshot {
-  return { roles: mergeRoleDefinitions(overrides), revision: registryRevision(overrides), health };
+function registrySnapshot(overrides: Partial<Record<RoleId, RoleOverride>>, health: RoleRegistryHealth, resets: RoleMappingReset[] = []): RoleRegistrySnapshot {
+  return { roles: mergeRoleDefinitions(overrides), revision: registryRevision(overrides), health, resets };
 }
 
 export function loadRoleRegistrySnapshot(): RoleRegistrySnapshot {
-  const { overrides } = loadRoleOverrides();
-  return registrySnapshot(overrides, { state: "healthy" });
+  const file = loadRoleOverrides();
+  return registrySnapshot(file.overrides, { state: "healthy" }, roleMappingResets(file));
 }
 
 export function loadRoleRegistrySnapshotOrDefaults(): RoleRegistrySnapshot {
@@ -287,7 +373,7 @@ export function loadRoleDefinitionsOrDefaults(): RegistryRoleDefinitions {
   const snapshot = loadRoleRegistrySnapshotOrDefaults();
   const roles = snapshot.roles as RegistryRoleDefinitions;
   Object.defineProperty(roles, "registry", {
-    value: { revision: snapshot.revision, health: snapshot.health },
+    value: { revision: snapshot.revision, health: snapshot.health, resets: snapshot.resets ?? [] },
     enumerable: false,
   });
   return roles;

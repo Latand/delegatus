@@ -1,14 +1,24 @@
 import { effortScale } from "@/lib/agent/efforts";
 import { validateLaunchModel } from "@/lib/agent/models";
 
-import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "./paramConfig";
+import { configForVariant } from "./paramConfig";
 import { defaultRoleParameterValue } from "./parameters";
 import { loadRoleDefinitions } from "./store";
 import type { ResolvedRole, RoleConfig, RoleDefinition, RoleId, RoleParamValues } from "./types";
 
 type ExplicitRoleConfig = Partial<RoleConfig>;
 type RoleResolution = { ok: true; value: ResolvedRole } | { ok: false; error: string };
-type SpawnRoleResolution = { ok: true; value: { config: RoleConfig; scaffold: string; role: RoleId } | null } | { ok: false; error: string };
+type SpawnRoleResolution = {
+  ok: true;
+  value: {
+    config: RoleConfig;
+    scaffold: string;
+    role: RoleId;
+    params: RoleParamValues;
+    /** The request's engine or model moved the runtime off the role's row. */
+    explicitRuntime: boolean;
+  } | null;
+} | { ok: false; error: string };
 
 function boundedText(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -91,13 +101,10 @@ function promptWithFences(definition: RoleDefinition, params: RoleParamValues): 
   return roleScaffoldBody(definition, params) + roleFenceBlock(definition);
 }
 
-/** The runtime a role runs on for these parameters. The builder's two variants
-    read the install's mapping (#1876) over their shipped values. */
+/** The runtime a role runs on for these parameters. A variant row
+    (`variantForParams`) reads the install's mapping (#1876) over its shipped value. */
 export function configForParams(definition: RoleDefinition, params: RoleParamValues): RoleConfig {
-  if (definition.id !== "builder") return definition.config;
-  if (params.domain === "frontend") return definition.variants?.frontend ?? BUILDER_FRONTEND_CONFIG;
-  if (params.mode === "apply-fixes") return definition.variants?.["apply-fixes"] ?? BUILDER_APPLY_FIXES_CONFIG;
-  return definition.config;
+  return configForVariant(definition, params);
 }
 
 function resolveConfig(definition: RoleDefinition, params: RoleParamValues, explicit: ExplicitRoleConfig): { ok: true; value: RoleConfig } | { ok: false; error: string } {
@@ -153,5 +160,6 @@ export function resolveSpawnRole(body: { role?: unknown; roleParams?: unknown; c
   if (resolved.value.requiresDeploymentConfirmation && body.confirm !== "deploy") {
     return { ok: false, error: "deployer requires confirm: deploy" };
   }
-  return { ok: true, value: { config: resolved.value.config, scaffold: resolved.value.prompt, role: resolved.value.definition.id } };
+  const explicitRuntime = resolved.value.config.engine !== base.value.config.engine || resolved.value.config.model !== base.value.config.model;
+  return { ok: true, value: { config: resolved.value.config, scaffold: resolved.value.prompt, role: resolved.value.definition.id, params: resolved.value.params, explicitRuntime } };
 }
