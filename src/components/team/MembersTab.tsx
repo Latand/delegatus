@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AccessQrImage, AccessQrLink } from "@/components/AccessQrButton";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import { MEMBER_COLOR_HEX, MEMBER_COLORS, type MemberColor, type TeamView } from "@/lib/team/contract";
+import { passkeyFeedback, passkeyFeedbackText, passkeyUnavailableText } from "@/lib/team/passkeyFeedback";
 
 import { MemberAvatar } from "./MemberAvatar";
 import { errorText, TelegramCodeForm, type TelegramState } from "./SignInCard";
@@ -311,17 +312,20 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
   const owner = view.me?.role === "owner";
   const [name, setName] = useState(member.name);
   const [error, setError] = useState<string | null>(null);
+  const [passkeyNote, setPasskeyNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [supportsPasskeys, setSupportsPasskeys] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const [passkeys, setPasskeys] = useState<{ available: boolean; passkeys: PasskeyRow[] } | null>(null);
+  const [passkeys, setPasskeys] = useState<{ available: boolean; address?: string | null; passkeys: PasskeyRow[] } | null>(null);
   const [telegram, setTelegram] = useState<{ id: string; proof: string; url: string; codeSent?: boolean } | null>(null);
 
   const loadPasskeys = useCallback(async () => {
     if (!self) return;
-    const answer = await teamRequest<{ available: boolean; passkeys: PasskeyRow[] }>("/api/team/passkeys");
+    const answer = await teamRequest<{ available: boolean; address?: string | null; passkeys: PasskeyRow[] }>("/api/team/passkeys");
     if (answer.ok) setPasskeys(answer.body);
   }, [self]);
   useEffect(() => { void loadPasskeys(); }, [loadPasskeys]);
+  useEffect(() => { setSupportsPasskeys(typeof window.PublicKeyCredential === "function"); }, []);
 
   const patch = async (body: Record<string, unknown>) => {
     setBusy(true);
@@ -376,19 +380,29 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
   const addPasskey = async () => {
     setBusy(true);
     setError(null);
+    setPasskeyNote(null);
     try {
       const options = await teamRequest<{ id: string; options: unknown }>("/api/team/passkeys", { body: { step: "options" } });
       if (!options.ok) return setError(errorText(t, options));
       const { startRegistration } = await import("@simplewebauthn/browser");
       let response;
+      const startedAt = Date.now();
       try {
         response = await startRegistration({ optionsJSON: options.body.options as never });
-      } catch {
+      } catch (cause) {
+        const feedback = passkeyFeedback(cause, "registration", {
+          elapsedMs: Date.now() - startedAt,
+          timeoutMs: (options.body.options as { timeout?: number }).timeout,
+        });
+        if (feedback.tone === "note") setPasskeyNote(passkeyFeedbackText(t, feedback));
+        else setError(passkeyFeedbackText(t, feedback, passkeys?.address, window.location.origin));
         return;
       }
       const saved = await teamRequest("/api/team/passkeys", { body: { step: "verify", id: options.body.id, response } });
       if (!saved.ok) return setError(errorText(t, saved));
       await Promise.all([loadPasskeys(), refreshTeamView()]);
+    } catch {
+      setError(t("team.passkey.failed"));
     } finally {
       setBusy(false);
     }
@@ -469,13 +483,14 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
                 <button type="button" className={BUTTON.text} onClick={() => void removePasskey(passkey.id)}>{t("team.passkey.remove")}</button>
               </div>
             ))}
-            {passkeys.available ? (
+            {passkeys.available && supportsPasskeys ? (
               <button type="button" disabled={busy} className={`${BUTTON.small} self-start`} onClick={() => void addPasskey()} data-team-add-passkey="">
                 <KeyRound className="h-3.5 w-3.5" aria-hidden />{t("team.passkey.add")}
               </button>
             ) : (
-              <p className="text-label leading-snug text-muted">{t("team.passkey.unavailable")}</p>
+              <p className="text-label leading-snug text-muted" data-passkey-unavailable="">{passkeys.available ? t("team.passkey.browserUnsupportedRegistration") : passkeyUnavailableText(t, passkeys.address)}</p>
             )}
+            {passkeyNote ? <p className="text-label text-muted" role="status" data-passkey-note="">{passkeyNote}</p> : null}
           </div>
         ) : null}
 

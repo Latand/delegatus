@@ -128,6 +128,19 @@ export function requestHostName(req: NextRequest): string {
   return (req.headers.get("host") ?? req.nextUrl.host).replace(/:\d+$/, "");
 }
 
+/** A configured HTTPS name to suggest when this request's address cannot use passkeys. */
+export function passkeyAddress(): string | null {
+  const configured = process.env.LLV_TS_URL;
+  if (!configured) return null;
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== "https:" || url.username || url.password || !relyingPartyFor(url.host, true)) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
 export async function publicInfo(req: NextRequest): Promise<TeamPublicInfo> {
   const store = existingTeamStore();
   const mode = store?.hasActiveOwner() ? "team" : "solo";
@@ -137,7 +150,7 @@ export async function publicInfo(req: NextRequest): Promise<TeamPublicInfo> {
     methods: {
       approval: true,
       telegram: mode === "team" ? await telegramBot() : { available: false, botUsername: null },
-      passkey: { available: mode === "team" && relyingParty(req) !== null },
+      passkey: { available: mode === "team" && relyingParty(req) !== null, address: passkeyAddress() },
     },
   };
 }

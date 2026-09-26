@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { crossOrigin, device, readJson, relyingParty, requireMember, teamErrorResponse, teamJson } from "@/lib/team/http";
+import { crossOrigin, device, passkeyAddress, readJson, relyingParty, requireMember, teamErrorResponse, teamJson } from "@/lib/team/http";
 import { passkeyRegistrationOptions, registerPasskey, removePasskey } from "@/lib/team/passkeys";
 
 export const runtime = "nodejs";
@@ -16,6 +16,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const rp = relyingParty(req);
     return teamJson({
       available: rp !== null,
+      address: passkeyAddress(),
       passkeys: authed.store.passkeysFor(authed.live.member.id).map((passkey) => ({
         id: passkey.id,
         label: passkey.label,
