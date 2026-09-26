@@ -46,6 +46,8 @@ const CHUNK_BYTES = 1024 * 1024;
 const MAX_LINE_BYTES = 48 * 1024 * 1024;
 
 const states = new Map<string, TranscriptState>();
+/** The pass each transcript is running, which the next one waits for. */
+const passes = new Map<string, Promise<unknown>>();
 
 function remember(path: string, state: TranscriptState): void {
   states.delete(path);
@@ -83,8 +85,24 @@ function indexLine(state: TranscriptState, text: string, offset: number): void {
 /**
  * Advances one transcript's index by at most `budget` bytes and answers how
  * many bytes it read. `complete` is false while bytes remain.
+ *
+ * One pass at a time per transcript: a pass keeps its offset, its pending
+ * Reads and its keys across awaits, so a second pass over the same bytes
+ * would find a Read the first already paired and index its picture again
+ * under another key. A caller that arrives mid-pass waits for it and then
+ * continues from where it stopped.
  */
-async function advance(path: string, budget: number): Promise<{ read: number; complete: boolean }> {
+function advance(path: string, budget: number): Promise<{ read: number; complete: boolean }> {
+  const run = (passes.get(path) ?? Promise.resolve()).then(() => advanceNow(path, budget));
+  const settled = run.catch(() => {});
+  passes.set(path, settled);
+  void settled.then(() => {
+    if (passes.get(path) === settled) passes.delete(path);
+  });
+  return run;
+}
+
+async function advanceNow(path: string, budget: number): Promise<{ read: number; complete: boolean }> {
   let stat;
   try {
     stat = await fs.stat(path);
@@ -224,4 +242,5 @@ export async function readInlineImage(path: string, offset: number, ordinal: num
 /** Test seam: forget every transcript. */
 export function resetTranscriptIndex(): void {
   states.clear();
+  passes.clear();
 }

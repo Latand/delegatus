@@ -277,3 +277,14 @@ test("an evidence image opens from the tailnet origin the phone uses", async () 
   expect(phone.status).toBe(200);
   expect(phone.headers.get("content-type")).toBe("image/png");
 });
+
+test("a .png link in an evidence root to a home file that is no image is refused", async () => {
+  const evidence = fs.mkdtempSync(path.join(sandbox, "evidence-"));
+  process.env.LLV_EVIDENCE_ROOTS = evidence;
+  const notes = write(".env", "private home notes\n");
+  const link = path.join(evidence, "leak.png");
+  fs.symlinkSync(notes, link);
+  const res = await GET(request({ path: link }));
+  expect(res.status).toBe(403);
+  expect(await errorCode(res)).toBe("access-denied");
+});

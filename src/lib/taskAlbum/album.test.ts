@@ -9,7 +9,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { markTaskAlbumSeen, readTaskAlbum, readTaskAlbumImage, taskAlbumSummaries, type TaskAlbumDeps } from "./album";
 import { fileAlbumSeenStore } from "./seen";
 import type { TaskAlbumWorld } from "./sources";
-import { resetTranscriptIndex } from "./transcriptIndex";
+import { indexTranscripts, resetTranscriptIndex, transcriptImages } from "./transcriptIndex";
 
 /* A 1×1 PNG, as an agent's Read result carries it. */
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -137,6 +137,15 @@ test("a symlink under an evidence root that leads out of the roots is left out",
   expect(page.items).toEqual([]);
 });
 
+test("a .png link in an evidence root to a home file that is no image is left out", async () => {
+  const notes = path.join(home, ".env");
+  fs.writeFileSync(notes, "private home notes\n");
+  const link = path.join(evidence, "leak.png");
+  fs.symlinkSync(notes, link);
+  const page = await readTaskAlbum("task-a", {}, deps([task("task-a", [transcript("t", [claudeSays(`Look at ${link}`, 1)])])]));
+  expect(page.items).toEqual([]);
+});
+
 test("pasted bytes and a Read whose file is gone are served from the transcript", async () => {
   const gone = path.join(evidence, "deleted.png");
   const lines = [
@@ -250,4 +259,41 @@ test("the seen mark is clamped to now, and a missing one falls back to it", () =
   expect(markTaskAlbumSeen("task-a", Date.parse(at(50)), world, now)).toBe(now);
   expect(markTaskAlbumSeen("task-b", "soon", world, now)).toBe(now);
   expect(markTaskAlbumSeen("task-c", undefined, world, now)).toBe(now);
+});
+
+test("two index passes at once over a Read split across a chunk index its picture once", async () => {
+  const shot = png(evidence, "shot.png");
+  const [use, result] = claudeRead("toolu_split", shot, 2);
+  /* The padding puts the end of the Read's tool_use a few bytes before the
+     1 MiB chunk boundary, so its tool_result is paired in the next chunk. */
+  const chunk = 1024 * 1024;
+  const padding = claudeSays("x".repeat(chunk - use!.length - 16 - claudeSays("", 1).length), 1);
+  expect(padding.length + 1 + use!.length + 1).toBeLessThan(chunk);
+  expect(padding.length + 1 + use!.length + 1).toBeGreaterThan(chunk - 32);
+  const file = transcript("split", [padding, use!, result!]);
+
+  const sequential = await indexTranscripts([file], 64 * chunk);
+  expect(sequential.complete).toBe(true);
+  const once = transcriptImages(file).map((image) => image.key);
+  expect(once).toEqual([`f:${shot}`]);
+
+  resetTranscriptIndex();
+  const both = await Promise.all([indexTranscripts([file], 64 * chunk), indexTranscripts([file], 64 * chunk)]);
+  expect(both.every((pass) => pass.complete)).toBe(true);
+  expect(transcriptImages(file).map((image) => image.key)).toEqual(once);
+});
+
+test("an inline picture request reads no transcript bytes the album has not indexed", async () => {
+  const lines = [JSON.stringify({ type: "user", timestamp: at(1), message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: OTHER_PNG } }] } })];
+  const world = deps([task("task-a", [transcript("t", lines)])]);
+  const id = (await readTaskAlbum("task-a", {}, world)).items[0]!.id;
+
+  resetTranscriptIndex();
+  expect(await readTaskAlbumImage("task-a", id, world)).toBeNull();
+  const untouched = await readTaskAlbum("task-a", { budget: 0 }, world);
+  expect(untouched.indexing).toBe(true);
+  expect(untouched.items).toEqual([]);
+
+  expect((await readTaskAlbum("task-a", {}, world)).items.map((item) => item.id)).toEqual([id]);
+  expect((await readTaskAlbumImage("task-a", id, world))?.data.equals(Buffer.from(OTHER_PNG, "base64"))).toBe(true);
 });

@@ -51,17 +51,32 @@ export function isEvidenceImage(pathname: string): boolean {
   return EVIDENCE_IMAGE_RE.test(pathname);
 }
 
+/** Which root admits a path: home, or an evidence root for a raster image. */
+export type Admission = "home" | "evidence";
+
 /**
- * Whether a path may be read. The home root admits every previewable
- * artifact; an evidence root admits raster images only. Callers check the
- * lexical path and then the realpath against the realpathed roots
- * (`realAllowedRoots`), so a symlink under either root never leads out of the
- * allowed set, and a link out of home into an evidence root still reads only
- * an image.
+ * Whether a path may be read, and under which root. The home root admits
+ * every previewable artifact; an evidence root admits raster images only.
+ * Callers check the path as written here, then its realpath with
+ * `realpathAdmitted`.
  */
-export function allowedUnder(candidate: string, roots: AllowedRoots): boolean {
-  if (underRoot(candidate, roots.home)) return true;
-  return isEvidenceImage(candidate) && roots.evidence.some((root) => underRoot(candidate, root));
+export function admittedAs(candidate: string, roots: AllowedRoots): Admission | null {
+  if (underRoot(candidate, roots.home)) return "home";
+  return isEvidenceImage(candidate) && roots.evidence.some((root) => underRoot(candidate, root)) ? "evidence" : null;
+}
+
+/**
+ * Whether a path's realpath stays inside what the path as written was
+ * admitted as, against the realpathed roots (`realAllowedRoots`). A home path
+ * may resolve into either root, so a link out of home into an evidence root
+ * still reads only an image. A path only an evidence root admitted must
+ * resolve to an image under an evidence root: `/var/tmp` is world-writable, and
+ * a link planted there must not read a home file the home root would serve.
+ */
+export function realpathAdmitted(lexical: Admission, real: string, roots: AllowedRoots): boolean {
+  const resolved = admittedAs(real, roots);
+  if (lexical === "home") return resolved !== null;
+  return isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root));
 }
 
 export interface AllowedRoots {

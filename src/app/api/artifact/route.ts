@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
 import { artifactEtag, artifactLimits, dispositionFilename, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
-import { allowedUnder, lexicalAllowedRoots, realAllowedRoots, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -95,7 +95,8 @@ export async function GET(req: NextRequest): Promise<NextResponse<FailBody> | Ne
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
 
   const abs = resolveLocal(raw);
-  if (!allowedUnder(abs, lexicalAllowedRoots())) return fail("access-denied", "path is outside the allowed roots");
+  const admission = admittedAs(abs, lexicalAllowedRoots());
+  if (!admission) return fail("access-denied", "path is outside the allowed roots");
 
   const classified = classifyArtifact(abs);
   if (!classified) return fail("unsupported", "not a previewable artifact type");
@@ -111,7 +112,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<FailBody> | Ne
   } catch {
     return fail("not-found", "file not found");
   }
-  if (!allowedUnder(real, await realAllowedRoots())) return fail("access-denied", "path is outside the allowed roots");
+  if (!realpathAdmitted(admission, real, await realAllowedRoots())) return fail("access-denied", "path is outside the allowed roots");
 
   /* O_NOFOLLOW: realpath resolved every link above; a symlink appearing at the
      final component between then and now is a race, refused. O_NONBLOCK keeps

@@ -46,3 +46,19 @@ test("a picture outside the roots, or a link out of one, is refused", async () =
   expect((await GET(request(outside))).status).toBe(403);
   expect((await GET(request(link))).status).toBe(403);
 });
+
+test("a .png link in an evidence root to a home file that is no image is refused", async () => {
+  const notes = path.join(home, ".env");
+  fs.writeFileSync(notes, "private home notes\n");
+  const link = path.join(evidence, "leak.png");
+  fs.symlinkSync(notes, link);
+  const res = await GET(request(link));
+  expect(res.status).toBe(403);
+  expect(await res.text()).not.toContain("private home notes");
+});
+
+test("a file whose bytes are no image is refused whatever its extension says", async () => {
+  const renamed = path.join(home, "notes.png");
+  fs.writeFileSync(renamed, "plain text\n");
+  expect((await GET(request(renamed))).status).toBe(415);
+});

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { allowedUnder, lexicalAllowedRoots, realAllowedRoots, resolveLocal, type AllowedRoots } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, realAllowedRoots, realpathAdmitted, resolveLocal, type AllowedRoots } from "@/lib/artifact/localFile";
 
 import type { AlbumVia } from "./extract";
 import type { AlbumSeenStore } from "./seen";
@@ -75,10 +75,11 @@ async function drawableFile(pathname: string, lexical: AllowedRoots, real: () =>
   const cached = fileChecks.get(pathname);
   if (cached && Date.now() - cached.at < STAT_TTL_MS) return cached.ok;
   let ok = false;
-  if (allowedUnder(pathname, lexical)) {
+  const admission = admittedAs(pathname, lexical);
+  if (admission) {
     try {
       const resolved = await fs.realpath(pathname);
-      ok = allowedUnder(resolved, await real()) && (await fs.stat(resolved)).isFile();
+      ok = realpathAdmitted(admission, resolved, await real()) && (await fs.stat(resolved)).isFile();
     } catch {
       ok = false;
     }
@@ -209,9 +210,11 @@ export async function taskAlbumSummaries(taskIds: readonly string[], deps: TaskA
   return out;
 }
 
-/** The bytes of one of a task's inline pictures, by the id its album gave it. */
+/** The bytes of one of a task's inline pictures, by the id its album gave it.
+    It looks the id up among what the album already indexed and reads no
+    transcript bytes itself: a grid of thumbnails is one request each. */
 export async function readTaskAlbumImage(taskId: string, imageId: string, deps: TaskAlbumDeps): Promise<{ media: string; data: Buffer } | null> {
-  const { collected } = await collect(taskId, deps, ALBUM_INDEX_BUDGET);
+  const { collected } = await collect(taskId, deps, 0);
   const entry = collected.find(({ image }) => albumImageId(image.key) === imageId);
   if (!entry?.image.inline) return null;
   return readInlineImage(entry.transcriptPath, entry.image.inline.offset, entry.image.inline.ordinal);
