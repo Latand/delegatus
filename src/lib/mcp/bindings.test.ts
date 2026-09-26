@@ -918,9 +918,9 @@ test("a member's identical turn keeps its name beside a real agent delivery on e
     const memberAt = new Date(Date.parse(agentAt) - 30_000).toISOString();
     store.recordMessageAuthor({ clientMessageId: `${engine}-member-seam`, conversationId: conversation.id, memberId: member.id,
       at: memberAt, textDigest: messageTextDigest(text) });
-    const line = (at: string, id: string) => engine === "claude"
-      ? { type: "user", uuid: id, timestamp: at, message: { role: "user", content: text } }
-      : { type: "response_item", timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } };
+    const line = (at: string, id: string, content = text) => engine === "claude"
+      ? { type: "user", uuid: id, timestamp: at, message: { role: "user", content } }
+      : { type: "response_item", timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text: content }] } };
     fs.writeFileSync(transcriptPath, [line(memberAt, "member-turn"), line(agentAt, "agent-turn")].map((row) => JSON.stringify(row)).join("\n") + "\n");
     const pinnedTranscript = (candidate: string) => {
       if (candidate !== transcriptPath) return undefined;
@@ -944,8 +944,37 @@ test("a member's identical turn keeps its name beside a real agent delivery on e
       const both = await bindings.conversation_messages({ clientRequestId: `${engine}-${tag}-both`, conversationId: conversation.id, limit: 2, roles });
       expect(messageRecords(both).map((record) => record.author)).toEqual([expectedAgent, expect.objectContaining({ kind: "member", name: "Mira" })]);
     }
+    const suffixAt = new Date(Date.parse(agentAt) + 60 * 60_000).toISOString();
+    const suffix = line(suffixAt, "later", `Later update ${"z".repeat(2_000)}`);
+    const anchor = line(new Date(Date.parse(agentAt) + 30_000).toISOString(), "anchor", "Anchor before growth");
+    fs.appendFileSync(transcriptPath, `${JSON.stringify(anchor)}\n`);
+    const olderCursors = [];
+    for (const roles of [undefined, ["user"]]) {
+      const page = await bindings.conversation_messages({ clientRequestId: `${engine}-${roles ? "filtered" : "plain"}-anchor`,
+        conversationId: conversation.id, roles, limit: 1 });
+      expect(messageRecords(page)[0]?.text).toBe("Anchor before growth");
+      olderCursors.push({ roles, cursor: page.cursor });
+    }
+    fs.appendFileSync(transcriptPath, `${JSON.stringify(suffix)}\n`.repeat(10_000));
+    expect(fs.statSync(transcriptPath).size).toBeGreaterThan(20 * 1024 * 1024);
+    for (const { roles, cursor } of olderCursors) {
+      const tag = roles ? "filtered" : "plain";
+      for (const maxChars of [1, 4_000]) {
+        const agentPage = await bindings.conversation_messages({ clientRequestId: `${engine}-${tag}-${maxChars}-old-agent`,
+          conversationId: conversation.id, roles, cursor, limit: 1, maxChars });
+        const memberPage = await bindings.conversation_messages({ clientRequestId: `${engine}-${tag}-${maxChars}-old-member`,
+          conversationId: conversation.id, roles, cursor: agentPage.cursor, limit: 1, maxChars });
+        const bothPage = await bindings.conversation_messages({ clientRequestId: `${engine}-${tag}-${maxChars}-old-both`,
+          conversationId: conversation.id, roles, cursor, limit: 2, maxChars });
+        expect(messageRecords(agentPage)[0]?.author).toEqual(expectedAgent);
+        expect(messageRecords(memberPage)[0]?.author).toMatchObject({ kind: "member", name: "Mira" });
+        expect(messageRecords(bothPage).map((record) => record.author)).toEqual([
+          expectedAgent, expect.objectContaining({ kind: "member", name: "Mira" }),
+        ]);
+      }
+    }
   }
-}, 30_000);
+}, 60_000);
 
 test("conversation_messages refuses unsupported roots and stale cursors with typed codes", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-conversation-message-refusals-"));
