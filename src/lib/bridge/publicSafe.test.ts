@@ -43,9 +43,11 @@ const FOUND: readonly [string, string][] = [
   ["Bearer abcdefghijklmnop1234 leaked", "secret"],
 ];
 
-test.each(FOUND)("%p is private (%p)", (text, kind) => {
-  expect(privateClasses(text, DENY)).toContain(kind as never);
-});
+for (const [text, kind] of FOUND) {
+  test(`${JSON.stringify(text)} is private (${kind})`, () => {
+    expect(privateClasses(text, DENY)).toContain(kind as never);
+  });
+}
 
 const CLEAN: readonly string[] = [
   "release 1.5.0 is on prod and npm is still catching up",
@@ -60,6 +62,8 @@ const CLEAN: readonly string[] = [
   "реліз 1.5.0 на проді, npm ще оновлює версію",
 ];
 
-test.each(CLEAN)("%p is left alone", (text) => {
-  expect(privateClasses(text, DENY)).toEqual([]);
-});
+for (const text of CLEAN) {
+  test(`${JSON.stringify(text)} is left alone`, () => {
+    expect(privateClasses(text, DENY)).toEqual([]);
+  });
+}

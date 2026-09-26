@@ -12,7 +12,9 @@ import {
   type SeatTickOwnLaneInput,
   type SeatTickProjectState,
   type SeatTickReportsInput,
+  type SeatTickPipelineInput,
   type SeatTickVerdict,
+  type SeatTickWakeCommit,
 } from "./types";
 
 /*
@@ -116,7 +118,7 @@ test("a report under the deploy's key clears the deploy only; the next wake stil
   const next = seatTickDecision(input({
     now: later,
     state: first,
-    pipelines: [{ id: "pipeline_open", title: "open lane", state: "active", updatedAt: iso(later), stageActivity: null, stageId: "build" }],
+    pipelines: [{ id: "pipeline_open", title: "open lane", state: "active" as const, updatedAt: iso(later), stageActivity: null, stageId: "build" }],
     reports: reports({ lastReportAt: iso(T0 + MINUTE), reportedIds: [idFor("deploy:aaaaaaaa:succeeded")] }),
   }));
   expect(next.state.reportsOwed!.map((entry) => entry.key)).toEqual(["lane:pipeline_l1:completed"]);
@@ -149,7 +151,7 @@ test("each failed attempt of one commit is owed under its own key", () => {
 
 test("lane events, a review verdict among them, wake the seat and are owed nothing", () => {
   const verdict: SeatTickEventInput = { seq: 9, at: iso(T0 - MINUTE), type: "stage_failed", summary: "review round 1: REQUEST_CHANGES", pipelineId: "pipeline_l1", pipelineTerminal: false };
-  const decision = seatTickDecision(input({ events: [verdict], pipelines: [{ id: "pipeline_l1", title: "lane", state: "active", updatedAt: iso(T0), stageActivity: null, stageId: "review" }] }));
+  const decision = seatTickDecision(input({ events: [verdict], pipelines: [{ id: "pipeline_l1", title: "lane", state: "active" as const, updatedAt: iso(T0), stageActivity: null, stageId: "review" }] }));
   const wake = wakeOf(decision);
   expect(wake.reasons.map((reason) => reason.kind)).toEqual(["lane-event"]);
   expect(wake.reportLines).toBeUndefined();
@@ -193,7 +195,7 @@ test("a wake credited late: a coversOwed report filed after it reached the seat 
 
 test("the owed list is bounded: past 64 the oldest go and the wake says how many", () => {
   let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7 };
-  const plan = { proposal: false, reasons: [], fingerprint: "f", eventsThrough: 0, children: [] } as const;
+  const plan: SeatTickWakeCommit = { proposal: false, reasons: [], fingerprint: "f", eventsThrough: 0, children: [] };
   for (let index = 0; index < SEAT_TICK_REPORTS_OWED_LIMIT + 3; index += 1) {
     state = seatTickWakeCommit(state, { ...plan, reportsOwed: [{ key: `lane:l${index}:completed`, label: `lane l${index} completed` }] }, T0 + index);
   }
@@ -303,7 +305,7 @@ test("owed outcomes survive a rotation and a tick switched off, and asks are sti
 
 /* ── The digest ─────────────────────────────────────────────────────────── */
 
-const OPEN = [{ id: "pipeline_open", title: "open lane", state: "active", updatedAt: iso(T0), stageActivity: null, stageId: "build" }];
+const OPEN: SeatTickPipelineInput[] = [{ id: "pipeline_open", title: "open lane", state: "active", updatedAt: iso(T0), stageActivity: null, stageId: "build" }];
 
 test("an interval wake asks for a digest when the board moved and nothing was reported for an interval", () => {
   const decision = seatTickDecision(input({ pipelines: OPEN, reports: reports({ lastReportAt: iso(T0 - 90 * MINUTE) }) }));

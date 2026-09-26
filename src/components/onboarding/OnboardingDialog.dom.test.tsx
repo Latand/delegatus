@@ -30,6 +30,7 @@ Object.assign(globalThis, {
   navigator: dom.navigator,
   Node: dom.Node,
   HTMLElement: dom.HTMLElement,
+  HTMLInputElement: dom.HTMLInputElement,
   Event: dom.Event,
   KeyboardEvent: dom.KeyboardEvent,
   MouseEvent: dom.MouseEvent,
@@ -37,8 +38,15 @@ Object.assign(globalThis, {
   CustomEvent: dom.CustomEvent,
   localStorage: dom.localStorage,
   matchMedia: matchMediaStub,
-  fetch: (input: string | URL | Request) => {
+  fetch: (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
+    requests.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null });
+    if (url.includes("/api/telegram/bot")) return json({ bot: botStatus });
+    if (url.includes("/api/projects/settings")) {
+      if (init?.method === "PUT") return json({ ok: true, reportTelegram: (JSON.parse(String(init.body)) as { reportTelegram: unknown }).reportTelegram });
+      return json({ ok: true, reportTelegram: null, reportNameSuggestion: nameSuggestion });
+    }
+    if (url.includes("/api/onboarding")) return json({ marker: null });
     if (url.includes("/api/roles")) return json({ schemaVersion: 2, roles: [] });
     if (url.includes("/api/transcribe/backend")) return json({ backend: "local", lockedByEnv: false, options: [] });
     if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
@@ -48,6 +56,12 @@ Object.assign(globalThis, {
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
 });
+
+/* Every request the guide made, and what the bot panel's status read answers:
+   the Telegram step's cases set it (docs/design/orchestrator-reports.md §5.6). */
+const requests: { url: string; method: string; body: Record<string, unknown> | null }[] = [];
+let nameSuggestion: string | null = "Widgets";
+let botStatus: unknown = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
 
 /* What `/api/accounts` answers; the orchestrator step's cases set it. */
 const signedIn = (id: string, label: string) => ({ id, label, kind: "legacy", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null, auth: { state: "authenticated" } });
@@ -137,17 +151,18 @@ test("an engine whose command is missing reads Not installed even with a credent
   host.remove();
 });
 
-test("#2166: three numbered steps, then Agents, Phone, Voice and Check under Later, counted to three", () => {
+test("#2166: four numbered steps with the optional Telegram one, then Agents, Phone, Voice and Check under Later, counted to four", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} onClose={() => {}} />));
   const steps = Array.from(host.querySelectorAll("[data-onboarding-step]")).map((element) => element.getAttribute("data-onboarding-step"));
-  expect(steps).toEqual(["engines", "project", "orchestrator", "agents", "phone", "voice", "check"]);
+  expect(steps).toEqual(["engines", "project", "telegram", "orchestrator", "agents", "phone", "voice", "check"]);
   expect(Array.from(host.querySelectorAll("[data-step-mark=later]")).length).toBe(4);
   expect(host.textContent).toContain("Later, any time");
   expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
-  expect(host.textContent).toContain("Step 1 of 3");
+  expect(host.textContent).toContain("Step 1 of 4");
+  expect(host.textContent).toContain("Telegram (optional)");
   /* Copilot sits beside Claude and Codex. */
   expect(host.querySelector("[data-onboarding-engine=copilot]")).not.toBeNull();
   flushSync(() => root.unmount());
@@ -158,10 +173,10 @@ test("#2166: a six-step marker with Engines done lands on Project; the Tour is g
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, orchestrator: null, agents: "done", phone: null, voice: null, check: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: null, voice: null, check: null } } as const;
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-step=project]")?.getAttribute("aria-current")).toBe("step");
-  expect(host.textContent).toContain("Step 2 of 3");
+  expect(host.textContent).toContain("Step 2 of 4");
   expect(host.textContent).toContain("Pick the project it will work on");
   expect(host.querySelector("[data-onboarding-step=tour]")).toBeNull();
   flushSync(() => root.unmount());
@@ -347,6 +362,127 @@ test("the guide's title names Delegatus and its last step creates the orchestrat
       flushSync(() => root.unmount());
       host.remove();
     }
+  } finally {
+    setLocale("en");
+  }
+});
+
+/* docs/design/orchestrator-reports.md §5.6: the optional "Reports to Telegram"
+   step, built from the bot panel's own pieces. Chats and names are invented. */
+
+const PROJECTS = [{ project: "widgets", name: "widgets", cwd: "/work/widgets", conversations: 2 }];
+const chatView = (over: Record<string, unknown>) => ({
+  chatId: "-100101", title: "Team Reports", type: "supergroup", username: null, isForum: false, member: true, alias: "team-reports",
+  postAllowed: true, postable: true, seesAllMessages: false, readdToApply: false, lastMessageAt: null, lastPostAt: null, lastPostBy: null, storedMessages: 0, ...over,
+});
+const connectedBot = (chats: unknown[]) => ({
+  connected: true, bot: { name: "Report Bot", username: "report_test_bot", canReadAllGroupMessages: false, canJoinGroups: true },
+  receiving: "polling", lastUpdateAt: null, lastCheckedAt: null, chats, limits: [],
+});
+
+function renderTelegramStep(onClose: (outcome: string, steps?: unknown) => void = () => {}) {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="telegram" marker={null} projects={PROJECTS} currentProject="widgets" onClose={onClose} />));
+  return { host, done: () => { flushSync(() => root.unmount()); host.remove(); } };
+}
+
+test("with no bot connected the step shows the bot panel's token form, and Skip leaves reports bridge-only", async () => {
+  requests.length = 0;
+  botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  const { host, done } = renderTelegramStep();
+  await until(() => (host.textContent ?? "").includes("paste the token BotFather gave you"));
+  expect(host.textContent).toContain("Step 3 of 4");
+  expect(host.querySelector("input[type=password]")).not.toBeNull();
+  expect(host.textContent).toContain("reports carry no private information, and they are posted silently, with no links");
+  flushSync(() => (host.querySelector("[data-onboarding-telegram-skip]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current")).toBe("step");
+  expect(host.querySelector("[data-onboarding-step=telegram]")?.textContent).toContain("skipped");
+  expect(requests.filter((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")).toEqual([]);
+  expect(requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "skipped" } }))).toBe(true);
+  done();
+});
+
+test("a connected bot lists the chats that accept posts, allows another in place, prefills the name and requires it, and Use this writes the destination", async () => {
+  requests.length = 0;
+  botStatus = connectedBot([chatView({}), chatView({ chatId: "-100202", title: "Lounge", alias: null, postAllowed: false, postable: false })]);
+  const { host, done } = renderTelegramStep();
+  await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")) && (host.querySelector<HTMLInputElement>("[data-onboarding-report-name]")?.value ?? "") === "Widgets");
+  expect(host.textContent).toContain("Bot: Report Bot");
+  expect(host.querySelector("[data-onboarding-report-chat=log-only]")).not.toBeNull();
+  /* The chat the bot may not post to yet has the panel's own switch. */
+  const allow = host.querySelector("[role=switch]") as HTMLButtonElement;
+  expect(allow.getAttribute("aria-label")).toContain("Lounge");
+  flushSync(() => allow.click());
+  await until(() => requests.some((request) => request.url.endsWith("/api/telegram/bot") && request.method === "POST"));
+  expect(requests.find((request) => request.method === "POST")!.body).toEqual({ action: "chat", chatId: "-100202", alias: "lounge", postAllowed: true });
+
+  const save = host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement;
+  expect(save.disabled).toBe(true);
+  flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
+  flushSync(() => (host.querySelector("[data-onboarding-telegram-save]") as HTMLElement).click());
+  await until(() => Boolean(host.querySelector("[data-onboarding-report-saved]")));
+  expect(requests.find((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")!.body).toEqual({ project: "widgets", reportTelegram: { chat: "team-reports", name: "Widgets" } });
+  expect(host.querySelector("[data-onboarding-report-saved]")?.textContent).toBe("Reports go to the log and to team-reports.");
+  expect(requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "done" } }))).toBe(true);
+  done();
+});
+
+test("with no GitHub name to suggest, a chosen chat needs a name before it can be used", async () => {
+  nameSuggestion = null;
+  botStatus = connectedBot([chatView({})]);
+  try {
+    const { host, done } = renderTelegramStep();
+    await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")));
+    flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
+    expect(host.querySelector<HTMLInputElement>("[data-onboarding-report-name]")!.value).toBe("");
+    expect(host.querySelector("[data-onboarding-report-name]")!.getAttribute("aria-invalid")).toBe("true");
+    expect((host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement).disabled).toBe(true);
+    expect(host.textContent).toContain("Required with a chat: a folder name stays on this computer.");
+    /* Log only needs no name. */
+    flushSync(() => (host.querySelector("[data-onboarding-report-chat=log-only]") as HTMLElement).click());
+    expect((host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement).disabled).toBe(false);
+    done();
+  } finally {
+    nameSuggestion = "Widgets";
+  }
+});
+
+test("a skipped Telegram step is settled: the guide never reopens on it", () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: "skipped", orchestrator: null, agents: null, phone: null, voice: null, check: null } } as const;
+  flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
+  expect(host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current")).toBe("step");
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("Continue on the Telegram step without choosing anything is a skip, and writes no destination", async () => {
+  requests.length = 0;
+  botStatus = connectedBot([chatView({})]);
+  const { host, done } = renderTelegramStep();
+  await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")));
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current")).toBe("step");
+  expect(requests.filter((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")).toEqual([]);
+  expect(requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "skipped" } }))).toBe(true);
+  done();
+});
+
+test("the Telegram step reads in Ukrainian", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  setLocale("uk");
+  try {
+    botStatus = connectedBot([chatView({})]);
+    const { host, done } = renderTelegramStep();
+    await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=log-only]")));
+    expect(host.textContent).toContain("Надсилати звіти ще й у Telegram");
+    expect(host.textContent).toContain("Лише журнал, без Telegram");
+    expect(host.textContent).toContain("Назва у звітах");
+    done();
   } finally {
     setLocale("en");
   }

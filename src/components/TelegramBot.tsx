@@ -20,7 +20,7 @@ import { ActionButton, ConfirmingAction } from "./TelegramControls";
 
 type Key = Parameters<TFunction>[0];
 
-const ERROR_KEYS: Record<string, Key> = {
+export const ERROR_KEYS: Record<string, Key> = {
   invalid_token: "telegram.bot.err.invalid_token",
   not_a_bot: "telegram.bot.err.not_a_bot",
   bot_already_connected: "telegram.bot.err.bot_already_connected",
@@ -59,7 +59,7 @@ const inputClass = "h-11 min-w-0 rounded-[8px] border border-border bg-canvas px
  * chat is one tap. The alias field appears once posting is on, to rename, or
  * while off when the title suggests nothing.
  */
-function ChatRow({ chat, botSeesAll, busy, onSave }: { chat: TelegramBotChatView; botSeesAll: boolean; busy: boolean; onSave: (chatId: string, alias: string, postAllowed: boolean) => void }) {
+export function ChatRow({ chat, botSeesAll, busy, onSave }: { chat: TelegramBotChatView; botSeesAll: boolean; busy: boolean; onSave: (chatId: string, alias: string, postAllowed: boolean) => void }) {
   const { t } = useLocale();
   const saved = chat.alias ?? "";
   const [alias, setAlias] = useState(saved);
@@ -158,7 +158,7 @@ function ChatRow({ chat, botSeesAll, busy, onSave }: { chat: TelegramBotChatView
 }
 
 /** The token field. Uncontrolled, and emptied before the request starts. */
-function TokenForm({ busy, onConnect }: { busy: boolean; onConnect: (token: string) => void }) {
+export function TokenForm({ busy, onConnect }: { busy: boolean; onConnect: (token: string) => void }) {
   const { t } = useLocale();
   const tokenRef = useRef<HTMLInputElement>(null);
   return (

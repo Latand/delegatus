@@ -11,7 +11,7 @@ import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { OnboardingMarker } from "@/lib/onboarding/marker";
-import { ONBOARDING_GUIDE_STEP_IDS, ONBOARDING_LATER_STEP_IDS, ONBOARDING_STEP_IDS, type OnboardingGuideStepId, type OnboardingStepId, type OnboardingStepState } from "@/lib/onboarding/steps";
+import { ONBOARDING_GUIDE_STEP_IDS, ONBOARDING_LATER_STEP_IDS, ONBOARDING_OPTIONAL_STEP_IDS, ONBOARDING_STEP_IDS, type OnboardingGuideStepId, type OnboardingStepId, type OnboardingStepState } from "@/lib/onboarding/steps";
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
@@ -20,12 +20,14 @@ import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./Eng
 import { OrchestratorStep } from "./OrchestratorStep";
 import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
 import { ProjectStep, type GuideProject } from "./ProjectStep";
+import { TelegramReportsStep } from "./TelegramReportsStep";
 import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboarding";
 import { VoiceStep } from "./VoiceStep";
 
 /**
- * The setup guide (#1876, design §2–§3; #2166 §2.1): three numbered steps,
- * Engines, Project and Orchestrator, that end on a running orchestrator.
+ * The setup guide (#1876, design §2–§3; #2166 §2.1): numbered steps, Engines,
+ * Project, Reports to Telegram (optional, docs/design/orchestrator-reports.md
+ * §5.6) and Orchestrator, that end on a running orchestrator.
  * Agents, Phone, Voice and Check stay in the same dialog under "Later, any
  * time": unnumbered, opened from the list, never part of Back or Continue.
  * Nothing is gated: every step closes by Escape, ✕ or "Close, finish later",
@@ -43,6 +45,7 @@ function isGuideStep(id: OnboardingStepId): id is OnboardingGuideStepId {
 const STEP_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   engines: "onboarding.step.engines",
   project: "onboarding.step.project",
+  telegram: "onboarding.step.telegram",
   orchestrator: "onboarding.step.orchestrator",
   agents: "onboarding.step.agents",
   phone: "onboarding.step.phone",
@@ -53,6 +56,7 @@ const STEP_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
 const HEADING_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   engines: "onboarding.engines.heading",
   project: "onboarding.project.heading",
+  telegram: "onboarding.telegram.heading",
   orchestrator: "onboarding.orchestrator.heading",
   agents: "onboarding.agents.heading",
   phone: "onboarding.phone.heading",
@@ -65,6 +69,7 @@ const HEADING_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
 const LEAD_KEY: Record<OnboardingStepId, Parameters<TFunction>[0] | null> = {
   engines: "onboarding.engines.lead",
   project: "onboarding.project.lead",
+  telegram: "onboarding.telegram.lead",
   orchestrator: "orchPanel.intro",
   agents: "onboarding.agents.lead",
   phone: "onboarding.phone.lead",
@@ -107,9 +112,12 @@ function useNow(): number {
   return now;
 }
 
-/** The first of the three guide steps that is not done. */
+const OPTIONAL: readonly OnboardingStepId[] = ONBOARDING_OPTIONAL_STEP_IDS;
+
+/** The first guide step that is not settled: done, or skipped when the step is
+    optional, so a skipped optional step never reopens the guide on itself. */
 export function firstOpenStep(marker: Pick<OnboardingMarker, "steps"> | null): OnboardingGuideStepId {
-  return GUIDE.find((step) => marker?.steps[step] !== "done") ?? GUIDE[0]!;
+  return GUIDE.find((step) => marker?.steps[step] !== "done" && !(OPTIONAL.includes(step) && marker?.steps[step] === "skipped")) ?? GUIDE[0]!;
 }
 
 /** The project the Project step starts on: the one the guide opened over when
@@ -256,8 +264,16 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
     mark(id, "skipped");
     backToGuide();
   };
+  /* Whether the Telegram step wrote a destination; leaving it by Continue
+     without one is a skip, which writes nothing (§5.6). */
+  const telegramSaved = useRef(false);
   const next = () => {
     if (current === "project" && !chosen) {
+      goTo("orchestrator");
+      return;
+    }
+    if (current === "telegram" && !telegramSaved.current) {
+      mark("telegram", "skipped");
       goTo("orchestrator");
       return;
     }
@@ -322,6 +338,12 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
     <VoiceStep onSkip={() => skipLater("voice")} onGoEngines={() => goTo("engines")} />
   ) : current === "project" ? (
     <ProjectStep projects={projects} chosen={chosen} onChoose={choose} onCreate={onCreateProject} />
+  ) : current === "telegram" ? (
+    <TelegramReportsStep
+      project={chosen}
+      onSaved={() => { telegramSaved.current = true; markDone("telegram"); }}
+      onSkip={() => { mark("telegram", "skipped"); goTo("orchestrator"); }}
+    />
   ) : current === "orchestrator" ? (
     <OrchestratorStep
       project={chosen}
@@ -381,7 +403,8 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
      the footer's button steps back to a border. */
   const stepOwnsPrimary = (current === "check" && checkOwnsPrimary)
     || (current === "phone" && (phoneState === "ready" || phoneState === "serving-other" || phoneState === "exposed"))
-    || current === "orchestrator";
+    || current === "orchestrator"
+    || current === "telegram";
   const counter = guideStep ? t("onboarding.stepCounter", { n: guideIndex + 1, total: GUIDE.length }) : t("onboarding.later");
   const bordered = "border border-border bg-card text-primary hover:bg-sunken";
   const filled = "bg-brand text-on-brand hover:opacity-90";
