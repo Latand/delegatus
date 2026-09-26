@@ -30,8 +30,8 @@ pinned, unedited. It carries no credentials and no personal data.
 >   accounts; sign-in should work there as well as on the operator's own
 >   machine.
 > - Open question the operator raised: should team features live in a closed
->   edition (a fork kept in sync with the open-source core) while the
->   open-source Delegatus stays single-user, as a business model? Decide and
+>   edition (a fork kept in sync with the OSS core) while the
+>   OSS Delegatus stays single-user, as a business model? Decide and
 >   explain. Whatever you decide, build the module now in this repository
 >   behind a clean boundary (its own directory / module seam) so it can move to
 >   a closed edition later without a rewrite, and say what that move would
@@ -1426,7 +1426,7 @@ Not a closed edition, and not a fork. Reasons:
    sync with a repository that lands several merges a day is a permanent
    rebase job. The operator's stated goal is a tool for their team and a team
    dashboard; the business model was raised as a question.
-2. **Team features are the adoption story.** A single-user open-source
+2. **Team features are the adoption story.** A single-user OSS
    Delegatus competes with every terminal multiplexer; a team one is the
    thing worth installing on a shared box. Withholding it from the public
    repository withholds the reason to try the product.
