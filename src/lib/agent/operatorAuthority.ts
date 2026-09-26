@@ -141,6 +141,19 @@ export function directOperatorActivityAuthority(request: Pick<NextRequest, "head
   return requireOperatorAuthority(request);
 }
 
+/**
+ * Whether a composer request is the operator's own words: direct operator
+ * activity that a browser sent. A browser stamps every fetch with
+ * `sec-fetch-site`, and a same-origin one is a Viewer page; a script holding
+ * the operator's token sends none. Such a script (an agent relaying over ssh
+ * to another host's Viewer) used to be recorded as the operator and counted
+ * as the operator's hours (docs/design/worktime-matches-zvit.md, G2). It is
+ * still admitted; it is only attributed as what it is.
+ */
+export function operatorBrowserRequest(request: Pick<NextRequest, "headers">): boolean {
+  return directOperatorActivityAuthority(request).ok && request.headers.get("sec-fetch-site") === "same-origin";
+}
+
 /** Who a request says it is. `operator` is the local browser — anything that
     named no conversation; `agent` is a caller that named itself with the
     conversation capability the registry issued it. */

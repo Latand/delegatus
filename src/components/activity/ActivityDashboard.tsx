@@ -600,6 +600,7 @@ function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; 
       <div className="mt-2 flex flex-col gap-1.5 text-[12px] leading-relaxed text-secondary">
         <p>{t(windowsOnly ? "activity.counted.methodWindows" : "activity.counted.methodEpisodes", { window: params.windowMin, break: params.breakMin })}</p>
         <p>{t(params.rounding === "half-hour" ? "activity.counted.halfHour" : "activity.counted.clockHour")}</p>
+        <p>{t("activity.counted.parallel")}</p>
         <p>{t("activity.counted.operatorOnly")}</p>
         <p>{t("activity.counted.agent")}</p>
         <p>

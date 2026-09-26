@@ -4,10 +4,12 @@ import {
   admitInboxFilePayload, InboxFileConflictError, inboxFileBatchToken, inboxFilePaths, inboxFileText,
   settleInboxFiles, stageInboxFiles, withInboxBatch, type InboxFileUpload, type StagedInboxFiles,
 } from "@/lib/inboxFiles";
+import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { structuredDeliveryHostForConversation } from "./structuredDeliveryController";
 import type { NativeQueueSnapshot } from "./nativeCodexQueue";
 import { parseRuntimeCommand } from "./commands";
+import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { structuredHostsEnabled } from "./flags";
 import { admitRuntimeImagePayload, type RuntimeImageAdmissionResult } from "./runtimeImageAdmission";
@@ -68,8 +70,9 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
     const payload = body as Record<string, unknown>;
     /* #1117: this route is the operator's own composer surface, exactly as
        `/api/runtime/send` is, so authorship is stamped HERE and never read off
-       the body — a queued message keeps the same provenance a sent one has. */
-    body = { ...payload, origin: { kind: "operator" } };
+       the body — a queued message keeps the same provenance a sent one has,
+       the operator's only from a Viewer page. */
+    body = { ...payload, origin: operatorBrowserRequest(request) ? { kind: "operator" } : API_CLIENT_ORIGIN };
     if (Array.isArray(payload.images) && payload.images.some((image) => image && typeof image === "object" && "base64" in image)) {
       const admitted = dependencies.admitImages(payload.images);
       if (admitted.error) return NextResponse.json({ error: admitted.error.error }, { status: admitted.error.status });

@@ -8,13 +8,14 @@ import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { withConversationActuation } from "@/lib/deliveryActuation";
 import { structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileUpload, StagedInboxFiles } from "@/lib/inboxFiles";
-import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 import { RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { parseRuntimeCommand } from "./commands";
+import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { runtimePresentationReceipt, type RuntimeOperationKind } from "./contracts";
 import { runtimeEventsEnabled, runtimeEventsRolledBack, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "./flags";
 import { readEvidence, type Evidence } from "./evidence";
@@ -259,7 +260,7 @@ async function dispatchRuntimeCommand(
   }
   const client = dependencies.client();
   try {
-    const byOperator = directOperatorActivityAuthority(request).ok;
+    const byOperator = operatorBrowserRequest(request);
     if ((command.kind === "send" || command.kind === "steer" || command.kind === "inject" || command.kind === "answer")
       && byOperator
       && dependencies.recordOperatorActivity) {
@@ -312,8 +313,10 @@ async function dispatchRuntimeCommand(
         ...(command.runtime ? { runtime: command.runtime } : {}),
         ...(command.selectedContext ? { selectedContext: command.selectedContext } : {}),
         /* #1117: this route is the operator's own composer surface, so
-           authorship is stamped HERE, server-side — never read off the body. */
-        origin: { kind: "operator" },
+           authorship is stamped HERE, server-side — never read off the body.
+           Only a Viewer page is the operator; any other caller is admitted
+           the same and attributed as a client of the API. */
+        origin: byOperator ? { kind: "operator" } : API_CLIENT_ORIGIN,
       }, {
         enabled: dependencies.structuredEnabled ?? (() => structuredHostsEnabled()),
         client: () => client,

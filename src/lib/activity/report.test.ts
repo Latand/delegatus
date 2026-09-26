@@ -139,6 +139,27 @@ describe("GET /api/activity?project=: the page filtered to one project", () => {
   });
 });
 
+describe("GET /api/activity: projects worked in parallel each count their own hours", () => {
+  test("a project's page and row read its own hours; the page's total reads the hour once", async () => {
+    /* The client asks every ten minutes from 10:00 and harbor five minutes
+       after each: each covers 40 minutes of the hour on its own. */
+    const inputs = [
+      ...["10:00", "10:10", "10:20", "10:30"].map((hhmm) => input("2026-09-22", hhmm, CLIENT_OLD, "stage")),
+      ...["10:05", "10:15", "10:25", "10:35"].map((hhmm) => input("2026-09-22", hhmm, HARBOR)),
+    ];
+    const deps = dependencies([source("pull", "read", [ALWAYS])], inputs, []);
+    const all = await get("range=7d", deps);
+    expect(row(all, CLIENT).humanHours).toBe(1);
+    expect(row(all, HARBOR).humanHours).toBe(1);
+    expect(all.totals.humanHours).toBe(1);
+    for (const project of [CLIENT, HARBOR]) {
+      const scoped = await get(`range=7d&project=${project}`, deps);
+      expect(scoped.totals.humanHours).toBe(1);
+      expect(scoped.days.find((day) => day.date === "2026-09-22")!.humanHours).toBe(1);
+    }
+  });
+});
+
 describe("a listed host whose agent turns never arrived", () => {
   const client = (body: ActivityResponse) => row(body, CLIENT);
 
