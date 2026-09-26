@@ -162,7 +162,7 @@ import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
-import { bridgeReportsEnabled, mergeOnReviewEnabled, reportHeaderName, reportTelegram } from "@/lib/projects/settings";
+import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, reportTelegramChoice, type EffectiveReportTelegram } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -709,6 +709,10 @@ export interface ViewerMcpDomainDependencies {
   /** Posts a report's Telegram copy (§5.5). Optional: production posts through
       the Viewer's bot agent route with the caller's capability. */
   sendReportTelegram?(input: ReportTelegramSend): Promise<ReportTelegramSendOutcome>;
+  /** The aliases of the chats the bot may post in, which decide the report
+      destination of a project that never chose one (§5.6). Optional:
+      production reads the Viewer's bot agent route. */
+  reportChats?(): Promise<readonly string[]>;
   /** Reads a project's seat tick row without writing one. Optional: production
       peeks the tick's own store. */
   peekTickState?(project: string): SeatTickProjectState;
@@ -2672,6 +2676,7 @@ async function bridgeReport(
   let storedBody: string;
   let telegramCopy: { chat: string; html: string } | null = null;
   if (origin.kind === "manager") {
+    const destination = project ? await reportDestination(project, dependencies, control) : null;
     const deployKey = [key, ...covers].find((entry) => entry.startsWith("deploy:")) ?? null;
     const tasks = deployKey && project ? deployReportTaskChanges(project, deployKey, dependencies) : null;
     if (deployKey && project && !tasks) warnings.push("No task changes are listed: this deploy has no board snapshot to compare, because it settled before snapshots existed or aged out.");
@@ -2686,7 +2691,7 @@ async function bridgeReport(
       sections,
       legacyBody: hasSections ? null : body,
       taskChanges: tasks,
-      deny: dependencies.publicDenyList ? dependencies.publicDenyList(project) : await productionPublicDenyList(project, control),
+      deny: dependencies.publicDenyList ? dependencies.publicDenyList(project) : await productionPublicDenyList(project, control, destination !== null),
     });
     if (rendered.empty) {
       const scrubbed = Object.keys(rendered.dropped).length > 0;
@@ -2701,7 +2706,6 @@ async function bridgeReport(
     const language = languageMismatchWarning("report", [summary, ...Object.values(sections).flat(), hasSections ? "" : body].join("\n"), locale);
     if (language) warnings.push(language);
     storedBody = renderPlain(rendered.cut);
-    const destination = project ? reportTelegram(project) : null;
     if (destination) {
       telegramCopy = { chat: destination.chat, html: renderTelegram(rendered.cut, knownPullRequests(project!)) };
     }
@@ -2776,6 +2780,34 @@ function reportDestinations(seq: number, telegram: BridgeReportTelegram | null):
 function isRetryableReportSend(code: string | null | undefined): boolean {
   return !!code && code !== "send_uncertain" && code !== "send_partial"
     && RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode);
+}
+
+/**
+ * Where a project's reports go besides the bridge (§5.6): the chat the
+ * operator chose, or for a project that never chose, the bot's one allowed
+ * chat. An unreadable bot answers as no allowed chat, so such a project stays
+ * bridge-only.
+ */
+async function reportDestination(
+  project: string,
+  dependencies: ViewerMcpDomainDependencies,
+  control: ViewerControlDependencies | null,
+): Promise<EffectiveReportTelegram | null> {
+  /* A chat the operator chose, or "Log only", never needs the bot's list. */
+  if (reportTelegramChoice(project)) return effectiveReportTelegram(project, []);
+  let chats: readonly string[] = [];
+  try {
+    chats = dependencies.reportChats ? await dependencies.reportChats() : await productionReportChats(control);
+  } catch {
+    chats = [];
+  }
+  return effectiveReportTelegram(project, chats);
+}
+
+async function productionReportChats(control: ViewerControlDependencies | null): Promise<string[]> {
+  if (!control?.get) return [];
+  const answer = await readViewerControl(control, "/api/telegram/bot/agent?op=chats") as { chats?: { chat?: unknown; postAllowed?: unknown }[] };
+  return (answer.chats ?? []).filter((entry) => entry.postAllowed === true && typeof entry.chat === "string").map((entry) => entry.chat as string);
 }
 
 /**
@@ -2876,7 +2908,7 @@ function knownPullRequests(project: string): PullRequestLookup {
  * host name, the people the bot has seen in its allowlisted chats, and the
  * other projects in repository form. Every source fails soft to nothing.
  */
-async function productionPublicDenyList(project: string | null, control: ViewerControlDependencies | null): Promise<PublicDenyList> {
+async function productionPublicDenyList(project: string | null, control: ViewerControlDependencies | null, postsToTelegram: boolean): Promise<PublicDenyList> {
   const accounts: string[] = [];
   const collect = (list: () => readonly { id: string; label: string }[]) => {
     try {
@@ -2896,7 +2928,7 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
   }
   /* The bot's people are read only for a project that posts to a bot chat:
      a bridge-only project shares nothing with the bot's chats. */
-  const people = control && project && reportTelegram(project) ? await telegramPeople(control) : [];
+  const people = control && project && postsToTelegram ? await telegramPeople(control) : [];
   const projects: { repository: string | null; names: string[] }[] = [];
   try {
     const own = project ? canonicalOrchestratorProject(project) : null;
@@ -3136,11 +3168,17 @@ function compactOrchestratorSeat(seat: OrchestratorSeat | null): Record<string, 
   return { ...rest, mandateLength: mandate.length, roleTableLength: roleTable?.length ?? null };
 }
 
-function reportFields(project: string, dependencies: ViewerMcpDomainDependencies): { operatorLocale: "en" | "uk" | null; reportTelegram: { chat: string; name: string } | null } {
-  const destination = reportTelegram(project);
+/** `reportTelegram` is where reports go besides the log, as `bridge_report`
+    posts them: `source` says whether the operator chose the chat or it is the
+    bot's one allowed chat for a project that never chose. */
+async function reportFields(
+  project: string,
+  dependencies: ViewerMcpDomainDependencies,
+  control: ViewerControlDependencies | null,
+): Promise<{ operatorLocale: "en" | "uk" | null; reportTelegram: EffectiveReportTelegram | null }> {
   return {
     operatorLocale: dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale(),
-    reportTelegram: destination ? { chat: destination.chat, name: destination.name } : null,
+    reportTelegram: await reportDestination(project, dependencies, control),
   };
 }
 
@@ -3156,7 +3194,7 @@ function reportFields(project: string, dependencies: ViewerMcpDomainDependencies
  * the MCP client refuses. The default keeps what a seat asks this tool for and
  * counts the history; full:true returns every record whole.
  */
-async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, control: ViewerControlDependencies | null): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
   const full = fullAnswer(args);
   const { active, pending, history } = orchestratorSeatFor(project);
@@ -3165,7 +3203,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     project,
     mergeOnReview: mergeOnReviewEnabled(project),
     bridgeReports: bridgeReportsEnabled(project),
-    ...reportFields(project, dependencies),
+    ...await reportFields(project, dependencies, control),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: pending,
     /* Terminalized pending intents (#878), oldest first: what was attempted
@@ -3190,7 +3228,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     bridgeReports: bridgeReportsEnabled(project),
     /* docs/design/orchestrator-reports.md §4.2, §5.6: the language reports
        and task text are written in, and where reports go besides the log. */
-    ...reportFields(project, dependencies),
+    ...await reportFields(project, dependencies, control),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: compactOrchestratorSeat(pending),
     intentHistoryCount: history.length,
@@ -5877,7 +5915,7 @@ export function viewerMcpBindings(
     dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),
-    get_orchestrator: (args) => getOrchestrator(args, domainDependencies),
+    get_orchestrator: (args, context) => getOrchestrator(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     /* `async` rather than `Promise.resolve(...)`: this binding refuses by
        throwing, and a synchronous throw out of a binding call is not the
        rejected promise every caller here handles. */

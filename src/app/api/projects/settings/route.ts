@@ -4,18 +4,22 @@ import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { canonicalProject, recordedProjectRemote } from "@/lib/projects/aliases";
+import { viewerPostableReportChats } from "@/lib/projects/reportDestination";
 import {
   bridgeReportsSetting,
   mergeOnReviewSetting,
+  effectiveReportTelegram,
   REPORT_NAME_MAX_CHARS,
-  reportTelegram,
+  reportHeaderName,
+  reportTelegramChoice,
   repositoryReportName,
   setBridgeReports,
   setMergeOnReview,
   setReportTelegram,
   type BridgeReportsSetting,
+  type EffectiveReportTelegram,
   type MergeOnReviewSetting,
-  type ReportTelegramSetting,
+  type ReportTelegramChoice,
 } from "@/lib/projects/settings";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { telegramBotService } from "@/lib/telegram/bot/service";
@@ -31,9 +35,21 @@ export interface ProjectSettingsResponse {
   project: string;
   mergeOnReview: MergeOnReviewSetting;
   bridgeReports: BridgeReportsSetting;
-  /** Where reports go besides the bridge log, null for bridge-only
-      (docs/design/orchestrator-reports.md §5.6). */
-  reportTelegram: ReportTelegramSetting | null;
+  /** What the operator chose for reports besides the bridge log
+      (docs/design/orchestrator-reports.md §5.6): a chat, "Log only"
+      (`chat: null`), or null when they never chose. */
+  reportTelegram: ReportTelegramChoice | null;
+  /** Where reports actually go besides the log: the chosen chat, or for a
+      project that never chose, the bot's one allowed chat. Null for the log
+      only. */
+  reportDestination: EffectiveReportTelegram | null;
+  /** How many chats the bot may post in, so the step can ask for a pick when
+      there are several and nothing was chosen. */
+  postableChats: number;
+  /** The name reports carry in the bot's one allowed chat while the project
+      has not chosen (`reportHeaderName`): the GitHub repository's, else the
+      display name. Null once the operator chose. */
+  reportFallbackName: string | null;
   /** The name the setup step prefills: the GitHub repository's, capitalised. */
   reportNameSuggestion: string | null;
   /** `<owner>/<repo>` of the project's recorded remote, null without one. */
@@ -42,12 +58,17 @@ export interface ProjectSettingsResponse {
 
 function answer(project: string): ProjectSettingsResponse {
   const key = canonicalProject(project);
+  const postable = viewerPostableReportChats();
+  const choice = reportTelegramChoice(key);
   return {
     ok: true,
     project: key,
     mergeOnReview: mergeOnReviewSetting(key),
     bridgeReports: bridgeReportsSetting(key),
-    reportTelegram: reportTelegram(key),
+    reportTelegram: choice,
+    reportDestination: effectiveReportTelegram(key, postable),
+    postableChats: postable.length,
+    reportFallbackName: choice ? null : reportHeaderName(key),
     reportNameSuggestion: repositoryReportName(key),
     github: githubRepositoryOfRemote(recordedProjectRemote(key)),
   };

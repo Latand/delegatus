@@ -23,9 +23,13 @@
       "current": "telegram",
       "heading": "Send reports to Telegram too",
       "chats": [],
+      "asking": false,
       "allowSwitches": [],
       "tokenField": true,
       "name": null,
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": null,
       "buttonHeights": [
         32
       ],
@@ -54,9 +58,13 @@
       "current": "telegram",
       "heading": "Надсилати звіти ще й у Telegram",
       "chats": [],
+      "asking": false,
       "allowSwitches": [],
       "tokenField": true,
       "name": null,
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": null,
       "buttonHeights": [
         32
       ],
@@ -85,9 +93,13 @@
       "current": "telegram",
       "heading": "Send reports to Telegram too",
       "chats": [],
+      "asking": false,
       "allowSwitches": [],
       "tokenField": true,
       "name": null,
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": null,
       "buttonHeights": [
         44
       ],
@@ -116,15 +128,19 @@
       "current": "telegram",
       "heading": "Надсилати звіти ще й у Telegram",
       "chats": [],
+      "asking": false,
       "allowSwitches": [],
       "tokenField": true,
       "name": null,
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": null,
       "buttonHeights": [
         44
       ],
       "text": "Підключіть бота, щоб надсилати звіти: вставте токен від BotFather. Ті самі налаштування є в панелі Telegram унизу.\n\nПідключити бота\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nПропустити"
     },
-    "chats-1280-en": {
+    "fallback-1280-en": {
       "viewport": {
         "width": 1280,
         "height": 800
@@ -140,8 +156,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 651,
-        "height": 409.8
+        "bottom": 682.5,
+        "height": 441.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -149,27 +165,33 @@
       "chats": [
         {
           "chat": "team-reports",
-          "checked": "false"
+          "checked": "true",
+          "inUse": "only-allowed-chat"
         },
         {
           "chat": "log-only",
-          "checked": "false"
+          "checked": "false",
+          "inUse": null
         }
       ],
+      "asking": false,
       "allowSwitches": [
         "Agents may post: Design Lounge"
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": "Reports in this chat carry “Atlas” now. Change it here to use another name.",
+      "refused": null,
+      "saveDisabled": false,
       "buttonHeights": [
-        58,
+        71.8,
         41.5,
         32,
         32
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now: the only chat agents may post in\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nReports in this chat carry “Atlas” now. Change it here to use another name.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
-    "chats-1280-uk": {
+    "fallback-1280-uk": {
       "viewport": {
         "width": 1280,
         "height": 800
@@ -185,8 +207,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 651,
-        "height": 409.8
+        "bottom": 682.5,
+        "height": 441.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -194,27 +216,33 @@
       "chats": [
         {
           "chat": "team-reports",
-          "checked": "false"
+          "checked": "true",
+          "inUse": "only-allowed-chat"
         },
         {
           "chat": "log-only",
-          "checked": "false"
+          "checked": "false",
+          "inUse": null
         }
       ],
+      "asking": false,
       "allowSwitches": [
         "Агентам можна писати: Design Lounge"
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": "Звіти в цьому чаті зараз мають назву «Atlas». Змініть її тут, щоб узяти іншу.",
+      "refused": null,
+      "saveDisabled": false,
       "buttonHeights": [
-        58,
+        71.8,
         41.5,
         32,
         32
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз: єдиний чат, куди агентам можна писати\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nЗвіти в цьому чаті зараз мають назву «Atlas». Змініть її тут, щоб узяти іншу.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
-    "chats-390-en": {
+    "fallback-390-en": {
       "viewport": {
         "width": 390,
         "height": 844
@@ -230,8 +258,8 @@
         "left": 16,
         "top": 155.2,
         "right": 374,
-        "bottom": 609,
-        "height": 453.8
+        "bottom": 640.5,
+        "height": 485.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -239,27 +267,33 @@
       "chats": [
         {
           "chat": "team-reports",
-          "checked": "false"
+          "checked": "true",
+          "inUse": "only-allowed-chat"
         },
         {
           "chat": "log-only",
-          "checked": "false"
+          "checked": "false",
+          "inUse": null
         }
       ],
+      "asking": false,
       "allowSwitches": [
         "Agents may post: Design Lounge"
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": "Reports in this chat carry “Atlas” now. Change it here to use another name.",
+      "refused": null,
+      "saveDisabled": false,
       "buttonHeights": [
-        62,
+        75.8,
         45.5,
         44,
         44
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now: the only chat agents may post in\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nReports in this chat carry “Atlas” now. Change it here to use another name.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
-    "chats-390-uk": {
+    "fallback-390-uk": {
       "viewport": {
         "width": 390,
         "height": 844
@@ -275,8 +309,8 @@
         "left": 16,
         "top": 174,
         "right": 374,
-        "bottom": 627.8,
-        "height": 453.8
+        "bottom": 673.1,
+        "height": 499
       },
       "sideways": 0,
       "current": "telegram",
@@ -284,25 +318,251 @@
       "chats": [
         {
           "chat": "team-reports",
-          "checked": "false"
+          "checked": "true",
+          "inUse": "only-allowed-chat"
         },
         {
           "chat": "log-only",
-          "checked": "false"
+          "checked": "false",
+          "inUse": null
         }
       ],
+      "asking": false,
       "allowSwitches": [
         "Агентам можна писати: Design Lounge"
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": "Звіти в цьому чаті зараз мають назву «Atlas». Змініть її тут, щоб узяти іншу.",
+      "refused": null,
+      "saveDisabled": false,
       "buttonHeights": [
-        62,
+        89.5,
         45.5,
         44,
         44
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз: єдиний чат, куди агентам можна писати\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nЗвіти в цьому чаті зараз мають назву «Atlas». Змініть її тут, щоб узяти іншу.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+    },
+    "several-1280-en": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 682.7,
+        "height": 441.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "design-lounge",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "log-only",
+          "checked": "false",
+          "inUse": "chosen"
+        }
+      ],
+      "asking": true,
+      "allowSwitches": [],
+      "tokenField": false,
+      "name": "Atlas",
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": true,
+      "buttonHeights": [
+        58,
+        58,
+        55.3,
+        32,
+        32
+      ],
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nAgents may post in several chats: pick one. Until then reports go to the log only.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nLog only, no Telegram\nIn use now\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+    },
+    "several-1280-uk": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 682.7,
+        "height": 441.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "design-lounge",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "log-only",
+          "checked": "false",
+          "inUse": "chosen"
+        }
+      ],
+      "asking": true,
+      "allowSwitches": [],
+      "tokenField": false,
+      "name": "Atlas",
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": true,
+      "buttonHeights": [
+        58,
+        58,
+        55.3,
+        32,
+        32
+      ],
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nАгентам можна писати в кілька чатів: оберіть один. Доти звіти йдуть лише в журнал.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nЛише журнал, без Telegram\nВикористовується зараз\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+    },
+    "several-390-en": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 155.2,
+        "right": 374,
+        "bottom": 645.2,
+        "height": 490
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "design-lounge",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "log-only",
+          "checked": "false",
+          "inUse": "chosen"
+        }
+      ],
+      "asking": true,
+      "allowSwitches": [],
+      "tokenField": false,
+      "name": "Atlas",
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": true,
+      "buttonHeights": [
+        62,
+        62,
+        59.3,
+        44,
+        44
+      ],
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\n\nAgents may post in several chats: pick one. Until then reports go to the log only.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nLog only, no Telegram\nIn use now\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+    },
+    "several-390-uk": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 174,
+        "right": 374,
+        "bottom": 664.1,
+        "height": 490
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "design-lounge",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "log-only",
+          "checked": "false",
+          "inUse": "chosen"
+        }
+      ],
+      "asking": true,
+      "allowSwitches": [],
+      "tokenField": false,
+      "name": "Atlas",
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": true,
+      "buttonHeights": [
+        62,
+        62,
+        59.3,
+        44,
+        44
+      ],
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\n\nАгентам можна писати в кілька чатів: оберіть один. Доти звіти йдуть лише в журнал.\n\nTeam Reports\nteam-reports\nDesign Lounge\ndesign-lounge\nЛише журнал, без Telegram\nВикористовується зараз\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "chosen-1280-en": {
       "viewport": {
@@ -320,8 +580,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 668.7,
-        "height": 427.5
+        "bottom": 682.5,
+        "height": 441.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -329,25 +589,31 @@
       "chats": [
         {
           "chat": "team-reports",
-          "checked": "true"
+          "checked": "true",
+          "inUse": "chosen"
         },
         {
           "chat": "log-only",
-          "checked": "false"
+          "checked": "false",
+          "inUse": null
         }
       ],
+      "asking": false,
       "allowSwitches": [
         "Agents may post: Design Lounge"
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": false,
       "buttonHeights": [
-        58,
+        71.8,
         41.5,
         32,
         32
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "chosen-1280-uk": {
       "viewport": {
@@ -365,8 +631,8 @@
         "left": 405,
         "top": 241.2,
         "right": 1075,
-        "bottom": 668.7,
-        "height": 427.5
+        "bottom": 682.5,
+        "height": 441.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -374,25 +640,31 @@
       "chats": [
         {
           "chat": "team-reports",
-          "checked": "true"
+          "checked": "true",
+          "inUse": "chosen"
         },
         {
           "chat": "log-only",
-          "checked": "false"
+          "checked": "false",
+          "inUse": null
         }
       ],
+      "asking": false,
       "allowSwitches": [
         "Агентам можна писати: Design Lounge"
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": false,
       "buttonHeights": [
-        58,
+        71.8,
         41.5,
         32,
         32
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "chosen-390-en": {
       "viewport": {
@@ -410,8 +682,8 @@
         "left": 16,
         "top": 155.2,
         "right": 374,
-        "bottom": 626.7,
-        "height": 471.5
+        "bottom": 640.5,
+        "height": 485.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -419,25 +691,31 @@
       "chats": [
         {
           "chat": "team-reports",
-          "checked": "true"
+          "checked": "true",
+          "inUse": "chosen"
         },
         {
           "chat": "log-only",
-          "checked": "false"
+          "checked": "false",
+          "inUse": null
         }
       ],
+      "asking": false,
       "allowSwitches": [
         "Agents may post: Design Lounge"
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": false,
       "buttonHeights": [
-        62,
+        75.8,
         45.5,
         44,
         44
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "chosen-390-uk": {
       "viewport": {
@@ -455,8 +733,8 @@
         "left": 16,
         "top": 174,
         "right": 374,
-        "bottom": 645.6,
-        "height": 471.5
+        "bottom": 659.3,
+        "height": 485.3
       },
       "sideways": 0,
       "current": "telegram",
@@ -464,25 +742,259 @@
       "chats": [
         {
           "chat": "team-reports",
-          "checked": "true"
+          "checked": "true",
+          "inUse": "chosen"
         },
         {
           "chat": "log-only",
-          "checked": "false"
+          "checked": "false",
+          "inUse": null
         }
       ],
+      "asking": false,
       "allowSwitches": [
         "Агентам можна писати: Design Lounge"
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
+      "refused": null,
+      "saveDisabled": false,
       "buttonHeights": [
+        75.8,
+        45.5,
+        44,
+        44
+      ],
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+    },
+    "refused-1280-en": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 793.7,
+        "height": 552.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [
+        {
+          "chat": "design-lounge",
+          "checked": "true",
+          "inUse": "chosen"
+        },
+        {
+          "chat": "team-reports",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "log-only",
+          "checked": "false",
+          "inUse": null
+        }
+      ],
+      "asking": false,
+      "allowSwitches": [
+        "Agents may post: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "nameInUse": null,
+      "refused": "Agents may not post in this chat now, so reports reach the log only. Allow it, or pick another chat.",
+      "saveDisabled": true,
+      "buttonHeights": [
+        85.5,
+        58,
+        41.5,
+        32,
+        32
+      ],
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nDesign Lounge\ndesign-lounge\nIn use now\nAgents may not post in this chat now, so reports reach the log only. Allow it, or pick another chat.\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\n\nOrchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat\n\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+    },
+    "refused-1280-uk": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 793.7,
+        "height": 552.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [
+        {
+          "chat": "design-lounge",
+          "checked": "true",
+          "inUse": "chosen"
+        },
+        {
+          "chat": "team-reports",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "log-only",
+          "checked": "false",
+          "inUse": null
+        }
+      ],
+      "asking": false,
+      "allowSwitches": [
+        "Агентам можна писати: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "nameInUse": null,
+      "refused": "Агентам зараз не можна писати в цей чат, тож звіти лишаються лише в журналі. Дозвольте його або оберіть інший чат.",
+      "saveDisabled": true,
+      "buttonHeights": [
+        85.5,
+        58,
+        41.5,
+        32,
+        32
+      ],
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nDesign Lounge\ndesign-lounge\nВикористовується зараз\nАгентам зараз не можна писати в цей чат, тож звіти лишаються лише в журналі. Дозвольте його або оберіть інший чат.\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\n\nЗвіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат\n\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+    },
+    "refused-390-en": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 155.2,
+        "right": 374,
+        "bottom": 769.5,
+        "height": 614.3
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [
+        {
+          "chat": "design-lounge",
+          "checked": "true",
+          "inUse": "chosen"
+        },
+        {
+          "chat": "team-reports",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "log-only",
+          "checked": "false",
+          "inUse": null
+        }
+      ],
+      "asking": false,
+      "allowSwitches": [
+        "Agents may post: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "nameInUse": null,
+      "refused": "Agents may not post in this chat now, so reports reach the log only. Allow it, or pick another chat.",
+      "saveDisabled": true,
+      "buttonHeights": [
+        103.3,
         62,
         45.5,
         44,
         44
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nDesign Lounge\ndesign-lounge\nIn use now\nAgents may not post in this chat now, so reports reach the log only. Allow it, or pick another chat.\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\n\nOrchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat\n\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+    },
+    "refused-390-uk": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 174,
+        "right": 374,
+        "bottom": 788.3,
+        "height": 614.3
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [
+        {
+          "chat": "design-lounge",
+          "checked": "true",
+          "inUse": "chosen"
+        },
+        {
+          "chat": "team-reports",
+          "checked": "false",
+          "inUse": null
+        },
+        {
+          "chat": "log-only",
+          "checked": "false",
+          "inUse": null
+        }
+      ],
+      "asking": false,
+      "allowSwitches": [
+        "Агентам можна писати: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "nameInUse": null,
+      "refused": "Агентам зараз не можна писати в цей чат, тож звіти лишаються лише в журналі. Дозвольте його або оберіть інший чат.",
+      "saveDisabled": true,
+      "buttonHeights": [
+        103.3,
+        62,
+        45.5,
+        44,
+        44
+      ],
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nDesign Lounge\ndesign-lounge\nВикористовується зараз\nАгентам зараз не можна писати в цей чат, тож звіти лишаються лише в журналі. Дозвольте його або оберіть інший чат.\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\n\nЗвіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат\n\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     }
   },
   "failures": []
