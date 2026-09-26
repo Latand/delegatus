@@ -97,6 +97,7 @@ type GrantDecisions = {
   receiptKeys: Map<string, Set<string>>;
   conversationByEntryKey: Map<string, Set<string>>;
   conversationByPath: Map<string, Set<string>>;
+  childGrantSources: Map<string, { parentId: string; launchId: string }>;
 };
 type GrantProfileRow = { launchProfile?: { mcpServers?: string[] } | null; generations?: { launchProfile?: { mcpServers?: string[] } }[] };
 
@@ -121,7 +122,7 @@ function recordGrantDecisions(
   const decisions: GrantDecisions = {
     revision, stamp, changeId, rows,
     sourceTargets: new Map(), entryPaths: new Map(), receiptConversations: new Map(), receiptKeys: new Map(),
-    conversationByEntryKey: new Map(), conversationByPath: new Map(),
+    conversationByEntryKey: new Map(), conversationByPath: new Map(), childGrantSources: new Map(),
   };
   for (const collection of ["entries", "receipts", "conversations"] as const) {
     for (const [key, row] of Object.entries(file[collection] as Record<string, GrantProfileRow>)) {
@@ -135,6 +136,7 @@ function recordGrantDecisions(
   }
   for (const [key, row] of Object.entries(file.conversations)) indexGrantSource(decisions, "conversations", key, row);
   for (const [key, row] of Object.entries(file.lineageEdges)) indexGrantSource(decisions, "lineageEdges", key, row);
+  for (const [key, row] of Object.entries(file.lineageEdges)) indexChildGrantSources(decisions, key, row);
   return decisions;
 }
 
@@ -188,6 +190,34 @@ function indexGrantSource(decisions: GrantDecisions, collection: "conversations"
   }
   decisions.sourceTargets.set(source, targets);
   return targets;
+}
+
+/** A child's decision also reads its seat and admitting receipt. Mirror the
+    child's targets onto both sources so a keyed cache cannot outlive either
+    revocation, including a raw SQLite commit without a revision bump. */
+function indexChildGrantSources(decisions: GrantDecisions, childId: string, edge: RegistryFile["lineageEdges"][string]): void {
+  const parentId = edge.parentConversationId;
+  const launchId = edge.evidence?.launchId;
+  if (!parentId || !launchId || parentId === childId) {
+    decisions.childGrantSources.delete(childId);
+    return;
+  }
+  decisions.childGrantSources.set(childId, { parentId, launchId });
+  syncChildGrantTargets(decisions, childId);
+}
+
+function syncChildGrantTargets(decisions: GrantDecisions, childId: string): void {
+  const sources = decisions.childGrantSources.get(childId);
+  if (!sources) return;
+  const edgeSource = grantDecisionKey("lineageEdges", childId);
+  const targets = decisions.sourceTargets.get(edgeSource) ?? new Set<string>();
+  for (const target of decisions.sourceTargets.get(grantDecisionKey("conversations", childId)) ?? []) targets.add(target);
+  decisions.sourceTargets.set(edgeSource, targets);
+  for (const target of targets) {
+    addIndexedTarget(decisions.sourceTargets, grantDecisionKey("conversations", sources.parentId), target);
+    addIndexedTarget(decisions.sourceTargets, grantDecisionKey("lineageEdges", sources.parentId), target);
+    addIndexedTarget(decisions.sourceTargets, grantDecisionKey("receipts", sources.launchId), target);
+  }
 }
 
 /** Gives one row what the assembled decision gave it, but only when the row is
@@ -267,7 +297,9 @@ export interface SqliteRegistryStoreOptions {
       no file-mode changes. A preview uses it to see the registry without
       performing any of a writer's startup work. */
   readOnly?: boolean;
-  normalize(value: unknown): RegistryFile;
+  /** Row mode applies structural bounds while deferring the grant decision
+      until SQLite has assembled the receipt, edge and parent attestations. */
+  normalize(value: unknown, mode?: { deferStoredGrantDecision: true }): RegistryFile;
   /** Grant bound for the assembled-snapshot rebound below, matching whatever
       `normalize` enforces. Production omits both; a test supplies a policy that
       HAS a grantable connector, because the shipped bound has none and an empty
@@ -348,7 +380,8 @@ function trackMutableJson<T>(
 
 export class SqliteAgentRegistryStore {
   private readonly db: BunDatabase;
-  private readonly normalize: (value: unknown) => RegistryFile;
+  private readonly normalize: (value: unknown, mode?: { deferStoredGrantDecision: true }) => RegistryFile;
+  private readonly normalizePartial: (value: unknown) => RegistryFile;
   private readonly onWriterWait: ((durationMs: number) => void) | undefined;
   private readonly maxMutationAttempts: number;
   private readonly writerClock: () => number;
@@ -397,6 +430,7 @@ export class SqliteAgentRegistryStore {
     if (!sqlite) throw new Error("SQLite registry modes require the Bun runtime");
     const { Database } = sqlite;
     this.normalize = options.normalize;
+    this.normalizePartial = (value) => options.normalize(value, { deferStoredGrantDecision: true });
     this.onWriterWait = options.onWriterWait;
     this.maxMutationAttempts = options.maxMutationAttempts ?? 2;
     if (!Number.isInteger(this.maxMutationAttempts) || this.maxMutationAttempts < 1) {
@@ -1086,6 +1120,9 @@ export class SqliteAgentRegistryStore {
        materialized because a snapshot is by definition complete. */
     for (const collection of ROW_COLLECTIONS) void snapshot.file[collection];
     for (const field of META_FIELDS) void snapshot.file[field];
+    /* The eager loader materializes collections without per-row accessors.
+       Decide only now, with the complete receipt/edge/parent evidence present. */
+    reboundAssembledMcpGrants(snapshot.file, this.mcpGrantPolicy);
     return snapshot;
   }
 
@@ -1227,7 +1264,7 @@ export class SqliteAgentRegistryStore {
           const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
           input[collection] = storedValue;
           if (collection === "deliveryOperationOwners") input.heldDeliveries = file.heldDeliveries;
-          value = this.normalize(input)[collection] as typeof value;
+          value = this.normalizePartial(input)[collection] as typeof value;
           if (trackMutations) {
             const rowProxies = new Map<string, WeakMap<object, object>>();
             value = new Proxy(value as Record<string, unknown>, {
@@ -1311,7 +1348,7 @@ export class SqliteAgentRegistryStore {
                 const delivery = owner?.deliveryId ? file.heldDeliveries[owner.deliveryId] : undefined;
                 if (delivery) input.heldDeliveries = { [delivery.id]: delivery };
               }
-              const normalized = this.normalize(input)[collection] as Record<string, unknown>;
+              const normalized = this.normalizePartial(input)[collection] as Record<string, unknown>;
               if (!Object.hasOwn(normalized, key)) return undefined;
               rows[key] = normalized[key];
             }
@@ -1336,7 +1373,7 @@ export class SqliteAgentRegistryStore {
             const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
             input[collection] = unloaded;
             if (collection === "deliveryOperationOwners") input.heldDeliveries = file.heldDeliveries;
-            const normalized = this.normalize(input)[collection] as Record<string, unknown>;
+            const normalized = this.normalizePartial(input)[collection] as Record<string, unknown>;
             for (const [key, row] of Object.entries(normalized)) {
               // Owner normalization can synthesize rows from held deliveries.
               // Those defaults must preserve the transaction's loaded evidence
@@ -1600,14 +1637,19 @@ export class SqliteAgentRegistryStore {
       const value = JSON.parse(raw) as unknown;
       if (collection === "conversations" || collection === "lineageEdges") {
         for (const target of indexGrantSource(previous, collection, key, value)) rows.delete(target);
+        if (collection === "lineageEdges") indexChildGrantSources(previous, key, value as RegistryFile["lineageEdges"][string]);
+        else syncChildGrantTargets(previous, key);
       } else if (collection === "entries") {
         const entry = value as RegistryFile["entries"][string];
         addIndexedTarget(previous.entryPaths, entry.artifactPath, source);
         for (const conversationId of previous.conversationByPath.get(entry.artifactPath) ?? []) {
           addIndexedTarget(previous.sourceTargets, grantDecisionKey("conversations", conversationId), source);
+          syncChildGrantTargets(previous, conversationId);
         }
       } else if (collection === "receipts") {
         indexReceipt(previous, key, value as RegistryFile["receipts"][string]);
+        const receipt = value as RegistryFile["receipts"][string];
+        if (receipt.conversationId) syncChildGrantTargets(previous, receipt.conversationId);
       }
     }
     this.grantDecisions = {

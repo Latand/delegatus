@@ -15,8 +15,9 @@
  *
  *  - nothing outside {@link GRANTABLE_MCP_SERVERS} can ever be granted, so no
  *    caller can widen a session to "every configured MCP server";
- *  - a request can only narrow the policy default, never widen it, so a
- *    delegated session cannot inherit a grant through a spawn chain.
+ *  - a delegated session starts at the Viewer baseline. A connected
+ *    operator-owned seat may explicitly grant Telegram to one child; that
+ *    decision is attested by the seat, its lineage edge and launch receipt.
  *
  * `viewer` is the exception that stays force-included on every path: it is the
  * orchestration surface the board itself depends on, not a grant.
@@ -47,8 +48,7 @@ export const GRANTABLE_MCP_SERVERS: readonly string[] = Object.freeze(["viewer",
 export const OPERATOR_ROOT_MCP_SERVERS: readonly string[] = Object.freeze([...GRANTABLE_MCP_SERVERS]);
 
 /** What a delegated session (subagent, builder, reviewer, pipeline helper)
-    receives: the baseline and nothing more. A delegated launch that asks for a
-    connector is not an error — the grant simply is not its to take. */
+    receives by default: the baseline and nothing more. */
 export const DELEGATED_MCP_SERVERS: readonly string[] = Object.freeze([...DEFAULT_SPAWN_MCP_SERVERS]);
 
 /**
@@ -212,6 +212,10 @@ export function mcpServersForScheduledReport(
  * correct answer for a record whose origin nobody can attest to.
  */
 export function storedSessionOriginFor(input: SessionOriginInput): SessionOrigin {
+  /* A seat is an operator-owned depth-zero launch even though its role is a
+     preset. A delegated orchestrator still has a parent or positive depth. */
+  if (input.agentRole === "orchestrator" && input.delegationDepth === 0 && !input.parentConversationId
+    && input.origin?.kind !== "agent") return "operator-root";
   if (sessionOriginFor(input) === "delegated") return "delegated";
   if (input.origin?.kind === "operator") return "operator-root";
   return input.delegationDepth === 0 ? "operator-root" : "delegated";
@@ -228,9 +232,14 @@ export function storedSessionOriginFor(input: SessionOriginInput): SessionOrigin
  * that proves it is one.
  */
 export function mcpServersForStoredSession(
-  input: SessionOriginInput & { requested?: readonly string[] | null },
+  input: SessionOriginInput & { requested?: readonly string[] | null; telegramSeatGrant?: boolean },
   policy: McpGrantPolicy = MCP_GRANT_POLICY,
 ): string[] {
+  /* Only the registry admission or the independent receipt/lineage decision
+     may set this flag. The list itself is still bounded here. */
+  if (input.telegramSeatGrant === true && storedSessionOriginFor(input) === "delegated") {
+    return withViewer((input.requested ?? []).filter((name) => name === "telegram" && policy.grantable.includes(name)));
+  }
   return mcpServersForSession({ origin: storedSessionOriginFor(input), requested: input.requested }, policy);
 }
 
@@ -255,18 +264,22 @@ type StoredEntry = {
   launchProfile?: { mcpServers: string[] } | null;
 };
 type StoredReceipt = {
+  launchId?: string;
   conversationId?: string | null;
   agentRole?: string | null;
   delegationDepth?: number | null;
   parentConversationId?: string | null;
   key?: { engine: string; sessionId: string } | null;
   launchProfile?: { mcpServers: string[] } | null;
+  telegramSeatGrant?: boolean;
 };
 type StoredLineageEdge = {
+  childConversationId?: string;
   parentConversationId?: string | null;
+  source?: string;
   /** Which launch the edge was written for. Admission (#393) records it, and it
       lives on the EDGE, so a receipt cannot choose which edge names it. */
-  evidence?: { launchId?: string | null } | null;
+  evidence?: { launchId?: string | null; telegramSeatGrant?: boolean } | null;
 };
 export interface StoredGrantFile {
   conversations: Record<string, StoredConversation>;
@@ -355,6 +368,31 @@ interface StoredGrantOwnership {
   conversationOrigins: Map<string, SessionOrigin>;
 }
 
+/** The separate lineage edge and the operator-owned seat attest an explicit
+ * child grant. A profile alone cannot turn an ordinary delegated child into a
+ * Telegram user on a later read. */
+export function storedTelegramSeatGrantFor(
+  file: StoredGrantFile,
+  childId: string,
+  policy: McpGrantPolicy = MCP_GRANT_POLICY,
+): boolean {
+  const edge = file.lineageEdges?.[childId];
+  const launchId = edge?.evidence?.launchId;
+  const parentId = edge?.parentConversationId;
+  if (!launchId || !parentId || parentId === childId || edge?.source !== "viewer-spawn"
+    || edge.childConversationId !== childId || edge.evidence?.telegramSeatGrant !== true) return false;
+  const receipt = file.receipts?.[launchId];
+  const parent = file.conversations[parentId];
+  if (!receipt?.telegramSeatGrant || receipt.launchId !== launchId || receipt.conversationId !== childId
+    || receipt.parentConversationId !== parentId || !parent
+    || parent.agentRole !== "orchestrator" || parent.delegationDepth !== 0) return false;
+  const parentGeneration = parent.generations.at(-1);
+  if (!parentGeneration || parentGeneration.launchProfile.parentConversationId) return false;
+  const parentEdge = file.lineageEdges?.[parentId];
+  return decideStoredGrant(parent, parentGeneration, policy,
+    Boolean(parentEdge?.parentConversationId && parentEdge.parentConversationId !== parentId), false).includes("telegram");
+}
+
 function storedGrantOwnership(
   file: StoredGrantFile,
   policy: McpGrantPolicy,
@@ -374,7 +412,8 @@ function storedGrantOwnership(
     }));
     for (const generation of conversation.generations) {
       const rowKey = generationEntryRowKey(conversation.engine, generation);
-      const granted = decideStoredGrant(conversation, generation, policy, lineageDelegated);
+      const granted = decideStoredGrant(conversation, generation, policy, lineageDelegated,
+        storedTelegramSeatGrantFor(file, conversationId, policy));
       if (decideGenerations && !sameGrant(generation.launchProfile.mcpServers, granted)) {
         generation.launchProfile.mcpServers = granted;
       }
@@ -541,6 +580,7 @@ function receiptAttestations(file: StoredGrantFile, ownership: StoredGrantOwners
  * leave the attacker the door beside it.
  */
 function receiptGrant(
+  file: StoredGrantFile,
   attestations: Map<string, Set<SessionOrigin>>,
   launchId: string,
   receipt: StoredReceipt,
@@ -553,7 +593,9 @@ function receiptGrant(
   });
   const attested = attestations.get(launchId);
   if (attested && (attested.size > 1 || !attested.has(described))) return null;
-  return mcpServersForSession({ origin: described, requested: receipt.launchProfile!.mcpServers }, policy);
+  return mcpServersForStoredSession({ agentRole: receipt.agentRole, delegationDepth: receipt.delegationDepth,
+    parentConversationId: receipt.parentConversationId, requested: receipt.launchProfile!.mcpServers,
+    telegramSeatGrant: receipt.conversationId ? storedTelegramSeatGrantFor(file, receipt.conversationId, policy) : false }, policy);
 }
 
 function reboundGrants<T extends StoredGrantFile>(file: T, policy: McpGrantPolicy, assembled: boolean): T {
@@ -572,7 +614,7 @@ function reboundGrants<T extends StoredGrantFile>(file: T, policy: McpGrantPolic
   for (const [launchId, receipt] of Object.entries(file.receipts ?? {})) {
     const stored = receipt.launchProfile?.mcpServers;
     if (!stored || isBaselineGrant(stored)) continue;
-    const granted = receiptGrant(attestations, launchId, receipt, policy) ?? DEFAULT_SPAWN_MCP_SERVERS;
+    const granted = receiptGrant(file, attestations, launchId, receipt, policy) ?? DEFAULT_SPAWN_MCP_SERVERS;
     if (!sameGrant(stored, granted)) receipt.launchProfile!.mcpServers = [...granted];
   }
   return file;
@@ -585,6 +627,7 @@ function decideStoredGrant(
   /** Whether a lineage edge — a row outside this conversation — records it as
       somebody's child. */
   lineageDelegated: boolean,
+  telegramSeatGrant: boolean,
 ): string[] {
   const stored = generation.launchProfile.mcpServers;
   /* Every read walks this, so the overwhelmingly common baseline profile skips
@@ -601,7 +644,9 @@ function decideStoredGrant(
      root shape is exactly how such a row gets written. Deny rather than believe
      whichever copy is more convenient. */
   if (lineageDelegated && origin !== "delegated") return [...DEFAULT_SPAWN_MCP_SERVERS];
-  return mcpServersForSession({ origin, requested: stored }, policy);
+  return mcpServersForStoredSession({ parentConversationId: generation.launchProfile.parentConversationId,
+    agentRole: conversation.agentRole, delegationDepth: conversation.delegationDepth,
+    requested: stored, telegramSeatGrant }, policy);
 }
 
 /**

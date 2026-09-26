@@ -7,6 +7,7 @@ import {
 } from "@/lib/agent/spawnPolicy";
 import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
 import { grantedPlugins } from "@/lib/agent/pluginAllowlist";
+import { operatorTelegramCodexEntry } from "@/lib/runtime/telegramConnectorEnv";
 
 type JsonObject = Record<string, unknown>;
 const MCP_APPROVAL_MODES = new Set(["auto", "prompt", "writes", "approve"]);
@@ -73,7 +74,9 @@ export function headlessCodexThreadConfig(
 ): JsonObject {
   const config = record(record(configRead)?.config);
   const servers = record(config?.mcp_servers);
-  if (!config || !servers) throw new Error("config/read returned no MCP server table");
+  if (!config || !servers) throw new Error(mcpServers?.includes("telegram")
+    ? "telegram MCP effective config is unavailable"
+    : "config/read returned no MCP server table");
   /* The grant bound is enforced again here (issue #739): the thread's enable
      table is materialized from the re-validated list, so a launch profile
      edited by hand cannot turn a server on for this thread. */
@@ -84,9 +87,16 @@ export function headlessCodexThreadConfig(
   /* The environment pin belongs to a stdio launcher only; an account that
      registers the Viewer over HTTP keeps that shape whatever the flag says. */
   const viewerStdio = !viewerOverHttp && (viewerMissing || typeof configuredViewer.command === "string");
-  const materializedServers = viewerMissing && enabled.has("viewer")
+  const withViewer = viewerMissing && enabled.has("viewer")
     ? { ...servers, viewer: viewerOverHttp ? viewerMcpHttpCodexEntry() : viewerMcpServerEntry() }
     : servers;
+  const configuredTelegram = record(servers.telegram);
+  if (enabled.has("telegram") && configuredTelegram?.command) {
+    throw new Error("telegram MCP account definition conflicts with operator connector");
+  }
+  const materializedServers = enabled.has("telegram")
+    ? { ...withViewer, telegram: operatorTelegramCodexEntry() }
+    : withViewer;
   /* The plugin subsystem is off for every session that holds no grant, which
      is the default. A grant turns it on for THIS thread only — never for the
      app-server, never in the operator's configuration. */
@@ -103,7 +113,8 @@ export function headlessCodexThreadConfig(
         /* A replacement app-server must receive the launch definition again.
            Its predecessor owned the stdio child, so an enable flag alone
            leaves a resumed thread with no connector process to call (#1346). */
-        ...(name === "viewer" ? withoutUnsetFields(server as JsonObject) : {}),
+        ...(name === "viewer" || (name === "telegram" && enabled.has("telegram"))
+          ? withoutUnsetFields(server as JsonObject) : {}),
         /* The thread runs under the agent's own config and state root
            (#1905); the Viewer server keeps the real ones, so the MCP link
            still finds this machine's release. A value already configured for

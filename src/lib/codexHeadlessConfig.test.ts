@@ -2,6 +2,19 @@ import { expect, test } from "bun:test";
 
 import { viewerMcpHttpCodexEntry, viewerMcpServerEntry, viewerMcpServerEnv } from "./agent/spawnPolicy";
 import { codexViewerOverHttp, headlessCodexThreadConfig } from "./codexHeadlessConfig";
+import { telegramMcpUrl } from "./telegram/packaging";
+
+test("a granted Codex thread materializes the operator Telegram connector when account registration is missing", () => {
+  const config = headlessCodexThreadConfig({ config: { mcp_servers: {} } }, false, ["viewer", "telegram"]);
+  expect((config.mcp_servers as Record<string, unknown>).telegram).toMatchObject({
+    url: telegramMcpUrl(), bearer_token_env_var: "LLV_TELEGRAM_MCP_TOKEN", enabled: true,
+  });
+  expect(() => headlessCodexThreadConfig({ config: { mcp_servers: {
+    telegram: { command: "another-connector" },
+  } } }, false, ["viewer", "telegram"])).toThrow("telegram MCP account definition conflicts with operator connector");
+  expect(() => headlessCodexThreadConfig({ config: {} }, false, ["viewer", "telegram"]))
+    .toThrow("telegram MCP effective config is unavailable");
+});
 
 test("headless Codex threads allow only the registered Viewer MCP server", () => {
   expect(headlessCodexThreadConfig({

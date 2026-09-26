@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt, viewerMcpHttpUrl, viewerMcpServerEnv, viewerMcpTransport, viewerMcpTransportForLaunch, NATIVE_MULTI_AGENT_HOOK_MATCHER, NATIVE_MULTI_AGENT_TOOLS, NATIVE_SUBAGENT_DENY_MESSAGE, prepareManagedClaudeSpawnHome, viewerMcpServerEntry, VIEWER_SPAWN_PROMPT_FENCE } from "./spawnPolicy";
+import { telegramMcpUrl } from "@/lib/telegram/packaging";
 
 const homes: string[] = [];
 const TELEGRAM_HEADERS = {
@@ -342,6 +343,20 @@ test("an ungranted server in a stored allowlist never reaches the Claude MCP con
     url: "http://127.0.0.1:8809/mcp",
     headers: TELEGRAM_HEADERS,
   });
+});
+
+test("a granted Claude launch materializes Telegram before a new managed account is registered", () => {
+  const accountHome = home();
+  const installed = applyClaudeSpawnPolicy(accountHome, {
+    profileId: "telegram-before-refresh", cwd: "/repo", mcpServers: ["viewer", "telegram"],
+  });
+  const config = JSON.parse(fs.readFileSync(installed.mcpConfigPath, "utf8")) as {
+    mcpServers: Record<string, unknown>;
+  };
+  expect(config.mcpServers.telegram).toMatchObject({
+    type: "http", url: telegramMcpUrl(), headers: TELEGRAM_HEADERS,
+  });
+  expect(fs.existsSync(path.join(accountHome, ".claude.json"))).toBe(false);
 });
 
 test("allowSubagents uses an isolated profile while the denied profile stays enforced", () => {

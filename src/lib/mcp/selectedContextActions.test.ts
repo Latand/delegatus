@@ -361,3 +361,14 @@ test("a transcript outside the scanner roots is never tailed", async () => {
 
   expect(error.details).toMatchObject({ code: "selected_conversation_outside_roots", conversationId: SELECTED_ID });
 });
+
+test("an absent child transcript explains how to retry after materialization", async () => {
+  fs.rmSync(transcriptPath);
+  const { injected } = harness({ pathAllowed: false });
+  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const error = await refusal(bindings.get_conversation({
+    clientRequestId: "read-pending-child", conversationId: SELECTED_ID, tailLines: 4,
+  }));
+  expect(error.details).toMatchObject({ code: "selected_conversation_transcript_absent", conversationId: SELECTED_ID });
+  expect(error.message).toContain("retry conversation_messages");
+});

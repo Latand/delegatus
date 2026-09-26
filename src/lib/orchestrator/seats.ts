@@ -83,6 +83,8 @@ export interface OrchestratorSeat {
   model?: string | null;
   /** False only for persisted rows written before runtime identity freezing. */
   runtimeIdentityFrozen?: boolean;
+  /** Connector selection frozen with this spawn intent for idempotent replay. */
+  telegramGrant?: boolean;
   /** The mandate text delivered (active) or to be delivered (pending). */
   mandate: string;
   /** The role table (#1880) rendered from the live registry when this intent
@@ -251,6 +253,7 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
     engine,
     model,
     runtimeIdentityFrozen,
+    ...(typeof seat.telegramGrant === "boolean" ? { telegramGrant: seat.telegramGrant } : {}),
     mandate: seat.mandate,
     ...(typeof seat.roleTable === "string" ? { roleTable: seat.roleTable } : {}),
     promptVersion: typeof seat.promptVersion === "number" && Number.isInteger(seat.promptVersion) ? seat.promptVersion : null,
@@ -727,6 +730,7 @@ export function beginOrchestratorSeatIntent(input: {
   conversationId?: string | null;
   engine?: string | null;
   model?: string | null;
+  telegramGrant?: boolean;
   promptVersion?: number | null;
   /** Who triggered this designation, resolved from the request by the caller —
       never read off a caller-supplied body, so attribution cannot be dictated. */
@@ -773,6 +777,7 @@ export function beginOrchestratorSeatIntent(input: {
       engine: input.engine?.trim() || null,
       model: input.model?.trim() || null,
       runtimeIdentityFrozen: Boolean(input.engine?.trim() && input.model?.trim()),
+      ...(typeof input.telegramGrant === "boolean" ? { telegramGrant: input.telegramGrant } : {}),
       mandate: input.mandate,
       ...(typeof input.roleTable === "string" ? { roleTable: input.roleTable } : {}),
       promptVersion: input.promptVersion ?? null,
