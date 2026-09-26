@@ -189,7 +189,7 @@ function NoticeRow({ row, now, onOpen, onClear }: { row: MobileNoticeRow; now: n
   );
 }
 
-function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; now: number; current: boolean; onOpen: () => void }) {
+export function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; now: number; current: boolean; onOpen: () => void }) {
   const { t } = useLocale();
   const title = cleanTitle(item.file.title, 90);
   const decision = decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
@@ -244,7 +244,7 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
   );
 }
 
-function PipelineRow({ row, current, onOpen }: { row: MobileBoardPipelineRow; current: boolean; onOpen?: () => void }) {
+export function PipelineRow({ row, current, onOpen }: { row: MobileBoardPipelineRow; current: boolean; onOpen?: () => void }) {
   const { t } = useLocale();
   const stageName = row.stageRef ? stageCardLabel(t, row.stageRef, stageLatestAttemptPlace(row.pipeline, row.stageRef.id)).toLocaleLowerCase() : "";
   const meta = [

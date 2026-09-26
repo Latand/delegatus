@@ -11622,3 +11622,67 @@ describe("a task's album: every picture its agents made, one click from the card
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("needs-you options: renders for the operator to pick from", () => {
+  /*
+   * docs/design/needs-you-options.md §4: each direction for the needs-you
+   * chip, drawn over the real Viewer from the product's own rows, closed and
+   * open, at 1440×900 and 390×844, in uk, over
+   * `src/components/attention/needsYouOptions.fixture.tsx`. The frames are for
+   * the operator's eyes and go outside the repository:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "needs-you options"
+   *
+   * NEEDS_YOU_OPTIONS_OUT overrides where they go.
+   */
+  const OUT = process.env.NEEDS_YOU_OPTIONS_OUT?.trim()
+    || path.join(process.env.HOME ?? "/tmp", "Pictures/delegatus-review/needs-you-options");
+  const DESKTOP = { width: 1440, height: 900 } as const;
+  const PHONE = { width: 390, height: 844 } as const;
+  interface Frame { option: string; name: string; phone: boolean; query: string }
+  const frames: Frame[] = [];
+  for (const option of ["today", "a", "b", "c"]) {
+    for (const phone of [false, true]) {
+      for (const open of [false, true]) {
+        frames.push({ option, phone, name: `${phone ? "390x844" : "1440x900"}-${open ? "open" : "closed"}`, query: `option=${option}${open ? "&open=1" : ""}` });
+      }
+    }
+  }
+  frames.push({ option: "a", phone: false, name: "1440x900-overview-closed", query: "option=a&overview=1" });
+  frames.push({ option: "a", phone: false, name: "1440x900-overview-open", query: "option=a&overview=1&open=1" });
+  frames.push({ option: "b", phone: false, name: "1440x900-seat-beside-open", query: "option=b&open=1&seat=beside" });
+  /* The fallback the options doc names for that width: the panel as today's popover. */
+  frames.push({ option: "b", phone: false, name: "1440x900-seat-beside-overlay", query: "option=b&open=1&seat=beside&panel=overlay" });
+
+  browserTest("every option, closed and open, at both viewports", async () => {
+    const work = path.resolve(".artifacts/needs-you-options");
+    fs.mkdirSync(work, { recursive: true });
+    const server = await serveEvidenceFixture(work, "src/components/attention/needsYouOptions.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const only = process.env.NEEDS_YOU_OPTIONS_ONLY?.split(",").filter(Boolean) ?? [];
+    const failures: string[] = [];
+    try {
+      for (const frame of frames) {
+        if (only.length && !only.some((entry) => `${frame.option}/${frame.name}`.includes(entry))) continue;
+        const opened = await openFixture(browser, `${server.base}?${frame.query}`, frame.phone ? PHONE : DESKTOP, "light", "uk", "reduce", frame.phone);
+        try {
+          await opened.page.waitForSelector("[data-needs-you-mockup-ready]", { state: "attached", timeout: 15_000 });
+          await opened.page.waitForTimeout(900);
+          const file = path.join(OUT, frame.option, `${frame.name}.png`);
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          await opened.page.screenshot({ path: file });
+          if (opened.pageErrors.length) failures.push(`${frame.option}/${frame.name}: ${opened.pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${frame.option}/${frame.name}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
