@@ -82,3 +82,16 @@ test("the bot panel names the projects whose reports go to each chat, and why", 
   setReportTelegram(PROJECT, null, "operator");
   expect(withReportDestinations(status([chat({})]), [PROJECT]).chats[0]!.reports).toBeUndefined();
 });
+
+/* A chosen chat switched off in the bot panel stays the destination, which
+   records its refused posts; the panel keeps its line on that chat, marked
+   refused, and does not re-route to the one allowed chat. */
+test("a chosen chat that refuses posts keeps its reports line, marked refused", () => {
+  setReportTelegram(PROJECT, { chat: "design-lounge", name: "Atlas" }, "operator");
+  const lounge = chat({ chatId: "-1000000000202", title: "Design Lounge", alias: "design-lounge", postAllowed: false, postable: false });
+  const panel = withReportDestinations(status([chat({}), lounge]), [PROJECT]);
+  expect(panel.chats[1]!.reports).toEqual([{ name: "Atlas", onlyAllowedChat: false, refused: true }]);
+  expect(panel.chats[0]!.reports).toBeUndefined();
+  const gone = withReportDestinations(status([chat({}), { ...lounge, member: false }]), [PROJECT]);
+  expect(gone.chats[1]!.reports).toEqual([{ name: "Atlas", onlyAllowedChat: false, refused: true }]);
+});

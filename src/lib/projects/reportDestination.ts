@@ -35,8 +35,9 @@ function seatProjects(): string[] {
 /**
  * The bot panel's status with each chat's reports: the name of every project
  * with a seat whose reports go there, and whether it goes there only because
- * it is the one chat agents may post in. Only seats file manager reports, so
- * a project without one is not listed.
+ * it is the one chat agents may post in. A chosen chat that agents may not
+ * post in now stays the destination, so it keeps its line, marked refused.
+ * Only seats file manager reports, so a project without one is not listed.
  */
 export function withReportDestinations(status: TelegramBotStatusPayload, projects: readonly string[] = seatProjects()): TelegramBotStatusPayload {
   if (!status.connected || status.chats.length === 0 || projects.length === 0) return status;
@@ -54,8 +55,12 @@ export function withReportDestinations(status: TelegramBotStatusPayload, project
     ...status,
     chats: status.chats.map((chat) => {
       const reports = destinations
-        .filter((destination) => chat.postable && (destination.chat === chat.alias || destination.chat === chat.chatId))
-        .map((destination) => ({ name: destination.name, onlyAllowedChat: destination.source === "only-allowed-chat" }));
+        .filter((destination) => destination.chat === chat.alias || destination.chat === chat.chatId)
+        .map((destination) => ({
+          name: destination.name,
+          onlyAllowedChat: destination.source === "only-allowed-chat",
+          ...(chat.postable ? {} : { refused: true as const }),
+        }));
       return reports.length ? { ...chat, reports } : chat;
     }),
   };

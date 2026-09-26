@@ -554,6 +554,41 @@ test("a stored Log only starts on Log only, in use, even with one allowed chat",
   }
 });
 
+/* The operator chose a chat, then switched posting off in the bot panel: the
+   Viewer still addresses that chat, so the step shows it chosen and in use,
+   says posts are refused, and Save cannot write it again. */
+test("a chosen chat that refuses posts stays chosen and in use, cannot be saved again, and a pick moves Save on", async () => {
+  requests.length = 0;
+  botStatus = connectedBot([chatView({}), chatView({ chatId: "-100202", title: "Design Lounge", alias: "design-lounge", postAllowed: false, postable: false })]);
+  reportSettings = { reportTelegram: { chat: "design-lounge", name: "Atlas", changedAt: "2026-09-26T10:00:00.000Z", changedBy: "operator" }, reportDestination: { chat: "design-lounge", name: "Atlas", source: "chosen" }, postableChats: 1 };
+  try {
+    const { host, done } = renderTelegramStep();
+    await until(() => host.querySelector("[data-onboarding-report-chat=design-lounge]")?.getAttribute("aria-checked") === "true");
+    const lounge = host.querySelector("[data-onboarding-report-chat=design-lounge]") as HTMLButtonElement;
+    expect(lounge.disabled).toBe(true);
+    expect(lounge.textContent).toContain("Design Lounge");
+    expect(lounge.querySelector("[data-onboarding-report-in-use]")?.getAttribute("data-onboarding-report-in-use")).toBe("chosen");
+    expect(lounge.querySelector("[data-onboarding-report-refused]")?.textContent).toBe("Agents may not post in this chat now, so reports reach the log only. Allow it, or pick another chat.");
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("false");
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports] [data-onboarding-report-in-use]")).toBeNull();
+    expect(host.querySelector<HTMLInputElement>("[data-onboarding-report-name]")!.value).toBe("Atlas");
+    const save = host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    flushSync(() => save.click());
+    expect(requests.some((request) => request.method === "PUT")).toBe(false);
+    /* The switch to allow it again is right there. */
+    expect((host.querySelector("[role=switch]") as HTMLElement).getAttribute("aria-label")).toContain("Design Lounge");
+    flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("true");
+    expect(lounge.getAttribute("aria-checked")).toBe("false");
+    expect(lounge.querySelector("[data-onboarding-report-in-use]")).not.toBeNull();
+    expect(save.disabled).toBe(false);
+    done();
+  } finally {
+    reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 0 };
+  }
+});
+
 test("with no GitHub name to suggest, a chosen chat needs a name before it can be used", async () => {
   nameSuggestion = null;
   botStatus = connectedBot([chatView({}), chatView({ chatId: "-100202", title: "Lounge", alias: "lounge" })]);

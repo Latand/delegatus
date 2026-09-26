@@ -1042,9 +1042,14 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   bot is a member and may post), so allowing a chat inside the step moves the
   in-use marker and the prompt to pick at once; while the fallback is in use
   the name field holds `reportFallbackName` and its hint says reports carry
-  that name now. The bot panel names on each chat the projects
-  with a seat whose reports go there, and says when that is only because it
-  is the one allowed chat.
+  that name now. A chosen chat that agents may no longer post in (its switch
+  turned off, its alias changed, the bot gone) stays the destination, with no
+  re-route to the fallback: the step lists it chosen and in use, disabled,
+  with a line to allow it or pick another, and Save stays off until the
+  operator picks a chat that accepts posts or "Log only". The bot panel names
+  on each chat the projects with a seat whose reports go there, says when
+  that is only because it is the one allowed chat, and on a chosen chat that
+  refuses posts says the reports reach the log only.
 - **Header name**, used by both copies and resolved by
   `reportHeaderName(project)` in `src/lib/projects/settings.ts`:
   `reportTelegram.name` when the operator set one; else the project's GitHub

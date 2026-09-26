@@ -23,7 +23,10 @@ import type { GuideProject } from "./ProjectStep";
  * That state is worked out on every render from the operator's stored choice
  * and the bot status the step holds, by the server's rule
  * (`effectiveReportTelegram` over the chats the bot is in and may post in), so
- * allowing or stopping a chat right here moves it at once.
+ * allowing or stopping a chat right here moves it at once. A chosen chat that
+ * agents may not post in now is still where the Viewer addresses reports, so
+ * it stays in the list, chosen and in use, but it cannot be picked or saved
+ * again until the operator allows it or picks another.
  */
 
 const LOG_ONLY = "\u0000log-only";
@@ -108,6 +111,10 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   const postable = members.filter((chat) => chat.postable && chat.alias);
   const notYet = members.filter((chat) => !(chat.postable && chat.alias));
   const inUse = settings && status ? destinationInUse(settings, postable.map((chat) => chat.alias!)) : null;
+  /* The chosen chat when it refuses posts now: the switch was turned off, the
+     alias changed, or the bot left. */
+  const refused = inUse && inUse.value !== LOG_ONLY && !postable.some((chat) => chat.alias === inUse.value) ? inUse.value : null;
+  const refusedChat = refused ? status?.chats.find((chat) => chat.alias === refused || chat.chatId === refused) ?? null : null;
   /* A project that never chose starts on where its reports go now, which is
      nothing when several chats accept posts: the operator picks. A pick of a
      chat that no longer accepts posts is gone with its radio. */
@@ -119,7 +126,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   const name = typedName ?? (settings?.reportTelegram?.name || fallbackName || settings?.reportNameSuggestion || "");
   const chatChosen = choice !== null && choice !== LOG_ONLY;
   const nameMissing = chatChosen && name.trim() === "";
-  const canSave = choice !== null && !nameMissing && !saving;
+  const canSave = choice !== null && choice !== refused && !nameMissing && !saving;
 
   const save = async () => {
     if (!canSave) return;
@@ -150,15 +157,17 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   const radio = (value: string, label: string, detail: string | null) => {
     const on = choice === value;
     const used = inUse?.value === value;
+    const refusing = value === refused;
     return (
       <button
         key={value}
         type="button"
         role="radio"
         aria-checked={on}
+        disabled={refusing}
         data-onboarding-report-chat={value === LOG_ONLY ? "log-only" : value}
         onClick={() => { setPicked(value); setSaved(undefined); }}
-        className={`flex w-full items-center gap-3 rounded-[10px] border px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:py-3 ${on ? "border-accent/50 bg-accent-soft/50" : "border-border bg-card hover:bg-sunken"}`}
+        className={`flex w-full items-center gap-3 rounded-[10px] border px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed max-sm:py-3 ${on ? "border-accent/50 bg-accent-soft/50" : "border-border bg-card hover:bg-sunken"}`}
       >
         <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border-2 ${on ? "border-accent" : "border-strong"}`}>
           {on ? <span className="h-2 w-2 rounded-full bg-accent" /> : null}
@@ -170,6 +179,9 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
             <span data-onboarding-report-in-use={onlyAllowedChat && value !== LOG_ONLY ? "only-allowed-chat" : "chosen"} className="text-caption font-semibold leading-snug text-accent">
               {onlyAllowedChat && value !== LOG_ONLY ? t("onboarding.telegram.inUseOnly") : t("onboarding.telegram.inUse")}
             </span>
+          ) : null}
+          {refusing ? (
+            <span data-onboarding-report-refused="" className="text-caption leading-snug text-warning">{t("onboarding.telegram.refused")}</span>
           ) : null}
         </span>
       </button>
@@ -201,6 +213,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
             <div className="text-label font-semibold uppercase tracking-[0.06em] text-muted">{t("onboarding.telegram.choose")}</div>
             {asking ? <p data-onboarding-report-asking="" className="text-ui leading-snug text-secondary">{t("onboarding.telegram.pickOne")}</p> : null}
             <div role="radiogroup" aria-label={t("onboarding.telegram.choose")} className="flex flex-col gap-2">
+              {refused ? radio(refused, refusedChat?.title ?? refused, refused) : null}
               {postable.map((chat) => radio(chat.alias!, chat.title, chat.alias))}
               {radio(LOG_ONLY, t("onboarding.telegram.logOnly"), null)}
             </div>
