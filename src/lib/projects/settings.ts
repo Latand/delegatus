@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { projectDisplayName } from "@/lib/displayNames";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { canonicalProject, projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
 
 /*
  * Per-project settings (#2187 §4.1, docs/design/merge-policy-and-task-finishing.md).
@@ -30,14 +32,32 @@ export type BridgeReportsSetting = ProjectSwitchSetting;
 
 type StoredSwitch = { enabled: boolean; changedAt: string; changedBy: string };
 
+/**
+ * Where the project's manager reports go besides the bridge log
+ * (docs/design/orchestrator-reports.md §3.6, §5.6): one allowlisted bot chat,
+ * chosen by the operator in the setup guide, and the name report headers
+ * carry. Absent means bridge-only.
+ */
+export interface ReportTelegramSetting {
+  /** The bot chat's alias. */
+  chat: string;
+  /** The project's name in report headers; never a local folder name. */
+  name: string;
+  changedAt: string;
+  changedBy: string;
+}
+
 interface ProjectSettingsEntry {
   mergeOnReview?: StoredSwitch;
   /** #2146: whether the project's orchestrator files bridge reports and the
       voice relay delivers them. Absent reads as on. */
   bridgeReports?: StoredSwitch;
+  reportTelegram?: ReportTelegramSetting;
 }
 
-type ProjectSwitchName = keyof ProjectSettingsEntry;
+type ProjectSwitchName = "mergeOnReview" | "bridgeReports";
+
+export const REPORT_NAME_MAX_CHARS = 60;
 
 interface ProjectSettingsFile {
   schemaVersion: 1;
@@ -61,6 +81,14 @@ function switchOf(value: unknown): StoredSwitch | null {
   return { enabled: record.enabled, changedAt: record.changedAt, changedBy: record.changedBy };
 }
 
+function reportTelegramOf(value: unknown): ReportTelegramSetting | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.chat !== "string" || !record.chat.trim() || typeof record.name !== "string" || !record.name.trim()) return null;
+  if (typeof record.changedAt !== "string" || typeof record.changedBy !== "string") return null;
+  return { chat: record.chat, name: record.name, changedAt: record.changedAt, changedBy: record.changedBy };
+}
+
 /** A malformed setting reads as its default; the entry's other setting keeps its value. */
 function entryOf(value: unknown): ProjectSettingsEntry | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -69,6 +97,8 @@ function entryOf(value: unknown): ProjectSettingsEntry | null {
     const stored = switchOf((value as Record<string, unknown>)[name]);
     if (stored) entry[name] = stored;
   }
+  const telegram = reportTelegramOf((value as Record<string, unknown>).reportTelegram);
+  if (telegram) entry.reportTelegram = telegram;
   return entry;
 }
 
@@ -166,6 +196,69 @@ export function setMergeOnReview(project: string, enabled: boolean, changedBy: s
 /** Turn the project's bridge reports on or off (#2146). Null on a failed write. */
 export function setBridgeReports(project: string, enabled: boolean, changedBy: string, now: string = new Date().toISOString()): BridgeReportsSetting | null {
   return setSwitch("bridgeReports", project, enabled, changedBy, now);
+}
+
+/** The project's Telegram report destination, or null for bridge-only. */
+export function reportTelegram(project: string): ReportTelegramSetting | null {
+  const projects = readProjects();
+  const key = project.trim();
+  const stored = projects[canonicalProject(key)]?.reportTelegram ?? projects[key]?.reportTelegram;
+  return stored ? { ...stored } : null;
+}
+
+/**
+ * Set or clear the project's Telegram report destination. The caller has
+ * already checked the operator's authority and the chat against the bot's
+ * allowlist; this only stores. Null on a failed write.
+ */
+export function setReportTelegram(
+  project: string,
+  value: { chat: string; name: string } | null,
+  changedBy: string,
+  now: string = new Date().toISOString(),
+): ReportTelegramSetting | null | false {
+  const key = canonicalProject(project.trim());
+  if (!key) return false;
+  const projects = { ...readProjects() };
+  const entry = { ...projects[key] };
+  if (value) {
+    entry.reportTelegram = { chat: value.chat.trim(), name: value.name.trim().slice(0, REPORT_NAME_MAX_CHARS), changedAt: now, changedBy };
+  } else {
+    delete entry.reportTelegram;
+  }
+  projects[key] = entry;
+  if (!writeProjects(projects)) return false;
+  return entry.reportTelegram ? { ...entry.reportTelegram } : null;
+}
+
+/** The GitHub repository's name, capitalised, when the project has a GitHub
+    remote: "Delegatus" for `<owner>/delegatus`. */
+export function repositoryReportName(project: string): string | null {
+  const repository = githubRepositoryOfRemote(recordedProjectRemote(canonicalProject(project.trim())));
+  const name = repository?.split("/")[1]?.trim();
+  return name ? name.charAt(0).toUpperCase() + name.slice(1) : null;
+}
+
+/**
+ * The name a report header carries (docs/design/orchestrator-reports.md §5.6):
+ * the name the operator set with the Telegram destination; else the GitHub
+ * repository's name capitalised; else the project's display name. The last can
+ * be a local folder name, which is acceptable only because a project without a
+ * Telegram destination posts nowhere but the bridge.
+ */
+export function reportHeaderName(project: string): string {
+  const key = canonicalProject(project.trim());
+  const set = reportTelegram(key)?.name?.trim();
+  if (set) return set;
+  const repository = repositoryReportName(key);
+  if (repository) return repository;
+  let displayName: string | undefined;
+  try {
+    displayName = projectAliasSnapshot().displayNames[key];
+  } catch {
+    displayName = undefined;
+  }
+  return projectDisplayName(key, displayName);
 }
 
 export function resetProjectSettingsForTests(): void {

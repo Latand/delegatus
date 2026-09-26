@@ -1,0 +1,489 @@
+{
+  "readings": {
+    "none-1280-en": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 455.7,
+        "height": 214.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [],
+      "allowSwitches": [],
+      "tokenField": true,
+      "name": null,
+      "buttonHeights": [
+        32
+      ],
+      "text": "Connect a bot to post reports: paste the token BotFather gave you. The Telegram panel in the footer holds the same settings.\n\nConnect bot\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nSkip"
+    },
+    "none-1280-uk": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 455.7,
+        "height": 214.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [],
+      "allowSwitches": [],
+      "tokenField": true,
+      "name": null,
+      "buttonHeights": [
+        32
+      ],
+      "text": "Підключіть бота, щоб надсилати звіти: вставте токен від BotFather. Ті самі налаштування є в панелі Telegram унизу.\n\nПідключити бота\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nПропустити"
+    },
+    "none-390-en": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 155.2,
+        "right": 374,
+        "bottom": 405.7,
+        "height": 250.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [],
+      "allowSwitches": [],
+      "tokenField": true,
+      "name": null,
+      "buttonHeights": [
+        44
+      ],
+      "text": "Connect a bot to post reports: paste the token BotFather gave you. The Telegram panel in the footer holds the same settings.\n\nConnect bot\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nSkip"
+    },
+    "none-390-uk": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 174,
+        "right": 374,
+        "bottom": 424.5,
+        "height": 250.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [],
+      "allowSwitches": [],
+      "tokenField": true,
+      "name": null,
+      "buttonHeights": [
+        44
+      ],
+      "text": "Підключіть бота, щоб надсилати звіти: вставте токен від BotFather. Ті самі налаштування є в панелі Telegram унизу.\n\nПідключити бота\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nПропустити"
+    },
+    "chats-1280-en": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 651,
+        "height": 409.8
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "false"
+        },
+        {
+          "chat": "log-only",
+          "checked": "false"
+        }
+      ],
+      "allowSwitches": [
+        "Agents may post: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "buttonHeights": [
+        58,
+        41.5,
+        32,
+        32
+      ],
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+    },
+    "chats-1280-uk": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 651,
+        "height": 409.8
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "false"
+        },
+        {
+          "chat": "log-only",
+          "checked": "false"
+        }
+      ],
+      "allowSwitches": [
+        "Агентам можна писати: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "buttonHeights": [
+        58,
+        41.5,
+        32,
+        32
+      ],
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+    },
+    "chats-390-en": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 155.2,
+        "right": 374,
+        "bottom": 609,
+        "height": 453.8
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "false"
+        },
+        {
+          "chat": "log-only",
+          "checked": "false"
+        }
+      ],
+      "allowSwitches": [
+        "Agents may post: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "buttonHeights": [
+        62,
+        45.5,
+        44,
+        44
+      ],
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+    },
+    "chats-390-uk": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 174,
+        "right": 374,
+        "bottom": 627.8,
+        "height": 453.8
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "false"
+        },
+        {
+          "chat": "log-only",
+          "checked": "false"
+        }
+      ],
+      "allowSwitches": [
+        "Агентам можна писати: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "buttonHeights": [
+        62,
+        45.5,
+        44,
+        44
+      ],
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+    },
+    "chosen-1280-en": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 668.7,
+        "height": 427.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "true"
+        },
+        {
+          "chat": "log-only",
+          "checked": "false"
+        }
+      ],
+      "allowSwitches": [
+        "Agents may post: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "buttonHeights": [
+        58,
+        41.5,
+        32,
+        32
+      ],
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+    },
+    "chosen-1280-uk": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "dialog": {
+        "left": 180,
+        "top": 80,
+        "right": 1100,
+        "bottom": 720,
+        "height": 640
+      },
+      "step": {
+        "left": 405,
+        "top": 241.2,
+        "right": 1075,
+        "bottom": 668.7,
+        "height": 427.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "true"
+        },
+        {
+          "chat": "log-only",
+          "checked": "false"
+        }
+      ],
+      "allowSwitches": [
+        "Агентам можна писати: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "buttonHeights": [
+        58,
+        41.5,
+        32,
+        32
+      ],
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+    },
+    "chosen-390-en": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 155.2,
+        "right": 374,
+        "bottom": 626.7,
+        "height": 471.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Send reports to Telegram too",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "true"
+        },
+        {
+          "chat": "log-only",
+          "checked": "false"
+        }
+      ],
+      "allowSwitches": [
+        "Agents may post: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "buttonHeights": [
+        62,
+        45.5,
+        44,
+        44
+      ],
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+    },
+    "chosen-390-uk": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dialog": {
+        "left": 0,
+        "top": 0,
+        "right": 390,
+        "bottom": 844,
+        "height": 844
+      },
+      "step": {
+        "left": 16,
+        "top": 174,
+        "right": 374,
+        "bottom": 645.6,
+        "height": 471.5
+      },
+      "sideways": 0,
+      "current": "telegram",
+      "heading": "Надсилати звіти ще й у Telegram",
+      "chats": [
+        {
+          "chat": "team-reports",
+          "checked": "true"
+        },
+        {
+          "chat": "log-only",
+          "checked": "false"
+        }
+      ],
+      "allowSwitches": [
+        "Агентам можна писати: Design Lounge"
+      ],
+      "tokenField": false,
+      "name": "Atlas",
+      "buttonHeights": [
+        62,
+        45.5,
+        44,
+        44
+      ],
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+    }
+  },
+  "failures": []
+}

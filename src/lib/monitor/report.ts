@@ -257,6 +257,10 @@ export function seatTickWakeMessage(input: {
   /** The seat's delivered mandate states the contract (#2030); otherwise the
       wake carries its clauses. */
   mandateCarriesContract?: boolean;
+  /** Reports owed, asks owed and a digest due
+      (docs/design/orchestrator-reports.md §5.1). They ride the reserved tail,
+      so the length bound never cuts them. */
+  reportLines?: readonly string[];
 }): string {
   const lines = [
     `Seat tick — ${input.project}.`,
@@ -300,6 +304,7 @@ export function seatTickWakeMessage(input: {
     lines.push("", "Signals:", ...input.signals.map((signal) => `- ${signal.label}`));
   }
   return boundedSeatTickMessage(lines, [
+    ...(input.reportLines && input.reportLines.length > 0 ? ["", "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
     ...seatTickContractLines(input.mandateCarriesContract === true),
   ]);

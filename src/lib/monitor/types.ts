@@ -325,6 +325,10 @@ export type SeatTickVerdict =
     /** Evidence this check could not read (#1298). The reasons above stand
         without it; this is what the wake says it could not see. */
     gaps: SeatTickEvidenceGap[];
+    /** The report lines the wake carries in its reserved tail
+        (docs/design/orchestrator-reports.md §5.1): reports owed, asks owed,
+        a digest due. Absent or empty when nothing is owed. */
+    reportLines?: string[];
   }
   /** No work, and the proposal slot is due. */
   | { kind: "proactive"; detail: string }
@@ -833,6 +837,10 @@ export interface SeatTickWakeCommit {
       wake shows the note again unless the seat actually received it. Absent
       on a plan written before this field existed, which records nothing. */
   noteShown?: string | null;
+  /** The settled outcomes this wake announces, each under the key its report
+      must carry (docs/design/orchestrator-reports.md §5.1). A landing records
+      them as owed; a wake that never landed announced nothing. */
+  reportsOwed?: { key: string; label: string }[];
 }
 
 /**
@@ -944,6 +952,70 @@ export const SEAT_TICK_CHILDREN_SHOWN_LIMIT = 64;
 /** Settled deployment history has its own bounded announcement window. Lane
     announcements instead live for the lane's entire eligibility window. */
 export const SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT = 64;
+
+/**
+ * A settled outcome the report log has not received yet
+ * (docs/design/orchestrator-reports.md §5.1): a deploy the seat started, or a
+ * lane of the seat's that completed, failed or parked, announced by a wake
+ * that reached the seat. Kept, under the key its report must carry, until a
+ * manager report with that key, naming it in `covers`, or filed with
+ * `coversOwed` after this wake reached the seat, is in the log.
+ */
+export interface SeatTickReportOwed {
+  key: string;
+  /** How the wake names it: "deploy 1c41d361 succeeded". */
+  label: string;
+  /** When the wake that announced it reached the seat. */
+  receivedAt: string;
+}
+
+/** A reply-suggestion set, the seat's marker of an ask, that no question or
+    blocked report under its key has answered (§5.1). */
+export interface SeatTickAskOwed {
+  key: string;
+  setId: string;
+  conversationId: string;
+  /** When the set was offered. */
+  at: string;
+}
+
+/** Owed outcomes one project's row keeps; past it the oldest are dropped and
+    counted (§5.1). */
+export const SEAT_TICK_REPORTS_OWED_LIMIT = 64;
+/** Owed asks one project's row keeps. */
+export const SEAT_TICK_ASKS_OWED_LIMIT = 16;
+
+/**
+ * What the report log and the reply suggestions say, read once per check
+ * (§5.1). Absent on a check whose sources cannot read them, which records and
+ * asks for nothing, exactly as with bridge reports off.
+ */
+export interface SeatTickReportsInput {
+  /** The project's Bridge reports setting. Off: nothing is recorded and no
+      report line is written. */
+  bridgeReports: boolean;
+  /** The operator's interface language, or null until a client reported it. */
+  operatorLocale: "en" | "uk" | null;
+  /** `at` of the newest manager report of the project. */
+  lastReportAt: string | null;
+  /** Project-scoped ids of the project's manager reports and of every key
+      they name in `covers`. */
+  reportedIds: readonly string[];
+  /** The ids a report filed under `key` may carry: scoped by the project, and
+      by every older key of the project a manager report was filed under. */
+  reportIdsFor: (key: string) => readonly string[];
+  /** The newest `coversOwedAt` among the project's manager reports. */
+  latestCoversOwedAt: string | null;
+  /** The current reply-suggestion set of each conversation read: the seat's
+      and every conversation named in `asksOwed`. A conversation absent here
+      has no set: the operator answered and it was retired. */
+  suggestionSets: readonly { conversationId: string; setId: string; at: string }[];
+  /** Conversations whose sets were read, present or not. */
+  suggestionConversations: readonly string[];
+  /** Operator messages the suggestions store recorded, for the same
+      conversations. */
+  operatorAdmissions: readonly { conversationId: string; at: string }[];
+}
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
@@ -1074,6 +1146,19 @@ export interface SeatTickProjectState {
       refusal, or null/absent when there is none. See
       {@link SeatTickRefusalRun}. */
   refusals?: SeatTickRefusalRun | null;
+  /** Settled outcomes a landed wake announced that the report log has not
+      received yet (§5.1). The project's, so a successor inherits them. */
+  reportsOwed?: SeatTickReportOwed[];
+  /** Owed outcomes dropped past the bound, which the wake states. */
+  reportsOwedDropped?: number;
+  /** The newest manager report this tick has observed, and the board
+      fingerprint the digest compares against (§5.1). */
+  reportSeenAt?: string | null;
+  reportFingerprint?: string | null;
+  /** The board fingerprint of the previous check. */
+  checkFingerprint?: string | null;
+  /** Asks the seat made in its chat with no report under their key. */
+  asksOwed?: SeatTickAskOwed[];
 }
 
 /**
@@ -1176,6 +1261,9 @@ export interface SeatTickCheckInput {
       (#1275). A project nobody has configured reads the defaults, which are
       exactly the behaviour that shipped before the settings existed. */
   settings: EffectiveSeatTickSettings;
+  /** The report log and the asks (docs/design/orchestrator-reports.md §5.1).
+      Absent reads as bridge reports off. */
+  reports?: SeatTickReportsInput;
 }
 
 /** A card the check owes the board, identified by its `monitor-ref:` value so a

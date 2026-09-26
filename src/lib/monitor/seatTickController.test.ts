@@ -5940,3 +5940,136 @@ test("a lane the operator paused is not the seat's work: no stall, no interval w
   expect(record).toMatchObject({ verdict: "quiet" });
   expect(rig.sent).toHaveLength(0);
 });
+
+/* ---------------------------------------------------------------------------
+ * The report ledger through the controller (docs/design/orchestrator-reports.md
+ * §5.1, §3.8): deploy snapshots are taken in the pass before anything is
+ * decided or sent, the lifecycle projection runs before the journal is read,
+ * and a wake credited a check late is settled by a coversOwed report filed
+ * before the credit.
+ * ------------------------------------------------------------------------- */
+
+const REPORT_SHA = "dddddddd".padEnd(40, "7");
+const reportDeploys = {
+  seatDeployments: [{ deploymentId: "deploy-d", conversationId: CONVERSATION }],
+  deployments: { "deploy-d": { phase: "succeeded", terminal: true, revision: REPORT_SHA } },
+};
+const settledLane = { id: "pipeline_l", state: "completed", createdAt: new Date(NOW - 90 * MINUTE).toISOString(), movedAt: new Date(NOW - 3 * MINUTE).toISOString(), src: CONVERSATION };
+
+function reportPort(log: () => import("@/lib/bridge/types").BridgeReportV1[]) {
+  return {
+    log,
+    enabled: () => true,
+    operatorLocale: () => "uk" as const,
+    suggestions: () => ({ sets: [], admissions: [] }),
+  };
+}
+
+test("deploy snapshots are taken in the pass before the decision and the send, whether or not a wake goes out", async () => {
+  const order: string[] = [];
+  const rig = harness({ ...reportDeploys, state: { lastWakeAt: new Date(NOW - 6 * MINUTE).toISOString() } });
+  rig.deps.sources!.recordDeploySnapshots = (project) => { order.push(`snapshot:${project}`); };
+  const deliver = rig.deps.deliver!;
+  rig.deps.deliver = async (message) => { order.push("send"); return deliver(message); };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(order).toEqual([`snapshot:${PROJECT}`, "send"]);
+
+  const quiet = harness({ state: RECENT });
+  const seen: string[] = [];
+  quiet.deps.sources!.recordDeploySnapshots = (project) => { seen.push(project); };
+  expect((await runSeatTickCheck(PROJECT, quiet.deps))!.verdict).toBe("quiet");
+  expect(seen).toEqual([PROJECT]);
+});
+
+test("the lifecycle projection runs over the pipelines before the journal is paged", async () => {
+  const order: string[] = [];
+  const rig = harness({ pipelines: OPEN_LANE, state: { ...OVERDUE, eventsThrough: 0 } });
+  const journal = rig.deps.sources!.lifecycleJournal;
+  rig.deps.sources!.refreshLifecycle = (pipelines) => { order.push(`refresh:${pipelines.length}`); };
+  rig.deps.sources!.lifecycleJournal = () => { order.push("journal"); return journal(); };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(order.slice(0, 2)).toEqual(["refresh:1", "journal"]);
+});
+
+test("every terminal deployment in the ledger gets a snapshot, the operator's and a rotated seat's included, once each", async () => {
+  const { snapshotSettledDeploys } = await import("./seatTickSources");
+  const { projectSnapshots, resetTaskChangeCollectionsForTests } = await import("@/lib/bridge/taskChanges");
+  resetTaskChangeCollectionsForTests();
+  const status = (deploymentId: string, phase: string, terminal: boolean) => ({
+    deploymentId, revision: REPORT_SHA, phase, terminal, updatedAt: new Date(NOW - MINUTE).toISOString(),
+  });
+  /* No seat record is read: an operator's deploy and one a predecessor seat
+     started are both only in the ledger. */
+  const ledger = { state: "ok" as const, value: [status("deploy-operator", "succeeded", true), status("deploy-seat-a", "failed", true), status("deploy-running", "promoting", false)] as never };
+  const project = `${PROJECT}-snapshots`;
+  expect(snapshotSettledDeploys(project, ledger, () => [])).toBe(2);
+  expect(snapshotSettledDeploys(project, ledger, () => [])).toBe(0);
+  expect(projectSnapshots(project).map((snapshot) => snapshot.deploymentId).sort()).toEqual(["deploy-operator", "deploy-seat-a"]);
+});
+
+test("a wake whose delivery was queued and is credited a check later is settled by a coversOwed report filed before the credit", async () => {
+  const { scopedReportId } = await import("@/lib/bridge/store");
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "report-ledger-")), "seat-tick.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 6 * MINUTE).toISOString(), accounting: undefined }, stateFile);
+  const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
+
+  const first = harness({ ...reportDeploys, pipelines: [settledLane], stateFile });
+  first.deps.sources!.reports = reportPort(() => log);
+  const record = await runSeatTickCheck(PROJECT, { ...first.deps, deliver: async (message) => { first.sent.push(message); return HELD; } });
+  expect(record!.delivery!.outcome).toBe("held");
+  const text = first.sent[0]!.text;
+  expect(text).toContain("Bridge reports:");
+  expect(text).toContain("- Report owed, in Ukrainian, before this turn ends: deploy dddddddd succeeded");
+  expect(text).toContain("File one report with key deploy:dddddddd:succeeded and coversOwed: true.");
+
+  /* The seat got the wake a minute after it was sent and filed one report
+     with coversOwed two minutes later; the check that credits the wake runs
+     five minutes after the first. */
+  const filedAt = new Date(NOW + 3 * MINUTE).toISOString();
+  log.push({ id: scopedReportId(PROJECT, "deploy:dddddddd:succeeded"), seq: 1, at: filedAt, class: "completed", body: "", project: PROJECT, origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" }, coversOwedAt: filedAt });
+  const second = harness({ ...reportDeploys, pipelines: [settledLane, ...OPEN_LANE], stateFile, now: NOW + 5 * MINUTE });
+  second.deps.sources!.reports = reportPort(() => log);
+  second.deps.sources!.wakeState = async () => ({
+    state: "landed",
+    evidence: { operationId: null, record: { state: "delivered", reason: null, resend: null, settledAt: new Date(NOW + MINUTE).toISOString() }, journal: "unasked" },
+  }) as never;
+  await runSeatTickCheck(PROJECT, second.deps);
+  const row = readSeatTickState(PROJECT, stateFile);
+  expect(row.reportsOwed).toEqual([]);
+
+  /* The next wake carries no owed line. */
+  const third = harness({ pipelines: OPEN_LANE, stateFile, now: NOW + 70 * MINUTE });
+  third.deps.sources!.reports = reportPort(() => log);
+  await runSeatTickCheck(PROJECT, third.deps);
+  expect(third.sent).toHaveLength(1);
+  expect(third.sent[0]!.text).not.toContain("Report owed");
+});
+
+test("a report the seat filed under the project's old key, before the key was folded, discharges the owed outcome", async () => {
+  const { scopedReportId } = await import("@/lib/bridge/store");
+  const { persistProjectAliases, resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
+  const OLD = `${PROJECT}-before-origin`;
+  expect(persistProjectAliases([{ source: OLD, target: PROJECT, displayName: "Project" }])).toBe(true);
+  try {
+    const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "report-ledger-")), "seat-tick.json");
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 6 * MINUTE).toISOString(), accounting: undefined }, stateFile);
+    const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
+    const first = harness({ ...reportDeploys, pipelines: [settledLane], stateFile });
+    first.deps.sources!.reports = reportPort(() => log);
+    await runSeatTickCheck(PROJECT, first.deps);
+    expect(readSeatTickState(PROJECT, stateFile).reportsOwed!.map((entry) => entry.key).sort()).toEqual(["deploy:dddddddd:succeeded", "lane:pipeline_l:completed"]);
+
+    /* The row as bridge_report stored it before the fix: the raw project and an
+       id scoped by it, with no coversOwed to clear everything at once. */
+    log.push({ id: scopedReportId(OLD, "deploy:dddddddd:succeeded"), seq: 1, at: new Date(NOW + 2 * MINUTE).toISOString(), class: "completed", body: "", project: OLD, origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" }, covers: [scopedReportId(OLD, "lane:pipeline_l:completed")] });
+    const second = harness({ ...reportDeploys, pipelines: [settledLane, ...OPEN_LANE], stateFile, now: NOW + 5 * MINUTE });
+    second.deps.sources!.reports = reportPort(() => log);
+    await runSeatTickCheck(PROJECT, second.deps);
+    const row = readSeatTickState(PROJECT, stateFile);
+    expect(row.reportsOwed).toEqual([]);
+    expect(row.reportSeenAt).toBe(log[0]!.at);
+  } finally {
+    fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), { force: true });
+    resetProjectAliasesForTests();
+  }
+});

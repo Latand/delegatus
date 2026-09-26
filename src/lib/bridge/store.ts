@@ -50,6 +50,8 @@ import {
   type BridgeReportInput,
   type BridgeReportLogV1,
   type BridgeReportOrigin,
+  type BridgeReportTelegram,
+  type BridgeReportTelegramState,
   type BridgeReportV1,
   type CanonicalSeatConversationId,
 } from "./types";
@@ -131,6 +133,17 @@ export function bridgeReportId(key: string): string {
 }
 
 /**
+ * A report's id, scoped by its project (docs/design/orchestrator-reports.md
+ * §1.9). The tick gives keys like `digest:2026-09-25T15:30` to every project
+ * it checks in one pass, and an id hashed from the key alone made the second
+ * project's report a "replay" of the first. A report no project resolves for
+ * keeps the unscoped id.
+ */
+export function scopedReportId(project: string | null | undefined, key: string): string {
+  return project ? bridgeReportId(`${project}\0${key}`) : bridgeReportId(key);
+}
+
+/**
  * Bodies are prose the gateway may read aloud, so unlike a lifecycle summary
  * this keeps the manager's own line structure. What it does not keep: secrets,
  * and anything past the byte cap.
@@ -177,6 +190,22 @@ function normalizeOrigin(value: unknown): BridgeReportOrigin | undefined {
   };
 }
 
+function normalizeTelegram(value: unknown): BridgeReportTelegram | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Partial<BridgeReportTelegram>;
+  if (typeof raw.chat !== "string" || typeof raw.html !== "string" || typeof raw.at !== "string") return undefined;
+  if (raw.state !== "pending" && raw.state !== "sent" && raw.state !== "failed" && raw.state !== "uncertain") return undefined;
+  return {
+    chat: raw.chat,
+    html: raw.html,
+    state: raw.state,
+    ...(Array.isArray(raw.messageIds) ? { messageIds: raw.messageIds.filter((id): id is number => Number.isInteger(id)) } : {}),
+    ...(typeof raw.code === "string" ? { code: raw.code } : {}),
+    attempts: Number.isInteger(raw.attempts) && (raw.attempts as number) >= 0 ? raw.attempts as number : 0,
+    at: raw.at,
+  };
+}
+
 function normalizeReport(value: unknown): BridgeReportV1 | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Partial<BridgeReportV1>;
@@ -205,6 +234,9 @@ function normalizeReport(value: unknown): BridgeReportV1 | null {
     ...(project !== undefined ? { project } : {}),
     ...(targetSeatConversationId !== undefined ? { targetSeatConversationId } : {}),
     ...(typeof candidate.correlatesDirective === "string" ? { correlatesDirective: candidate.correlatesDirective } : {}),
+    ...(Array.isArray(candidate.covers) ? { covers: candidate.covers.filter((id): id is string => typeof id === "string") } : {}),
+    ...(typeof candidate.coversOwedAt === "string" ? { coversOwedAt: candidate.coversOwedAt } : {}),
+    ...(normalizeTelegram(candidate.telegram) ? { telegram: normalizeTelegram(candidate.telegram) } : {}),
   };
 }
 
@@ -780,8 +812,11 @@ export function appendBridgeReports(
     const appended: BridgeReportV1[] = [];
     let skipped = 0;
     for (const input of inputs) {
-      const id = bridgeReportId(input.key);
-      if (known.has(id)) {
+      const project = typeof input.project === "string" ? input.project : null;
+      const id = scopedReportId(project, input.key);
+      /* A row filed before ids were scoped carries the key's unscoped id, and a
+         late replay of it is still a replay. */
+      if (known.has(id) || (project !== null && known.has(bridgeReportId(input.key)))) {
         skipped += 1;
         continue;
       }
@@ -807,6 +842,11 @@ export function appendBridgeReports(
           }
           : {}),
         ...(input.correlatesDirective ? { correlatesDirective: input.correlatesDirective } : {}),
+        ...(input.covers?.length ? { covers: [...new Set(input.covers.map((key) => scopedReportId(project, key)))] } : {}),
+        ...(input.coversOwed ? { coversOwedAt: input.at } : {}),
+        ...(input.telegram
+          ? { telegram: { chat: input.telegram.chat, html: input.telegram.html, state: "pending" as const, attempts: 0, at: input.at } }
+          : {}),
       };
       file.reports.push(report);
       appended.push(report);
@@ -815,6 +855,37 @@ export function appendBridgeReports(
     trimToCapacity(file, readBridgeChannel()?.managerReportCursor ?? 0);
     return { result: { appended, skipped }, changed: true };
   });
+}
+
+/**
+ * What became of a report's Telegram copy (docs/design/orchestrator-reports.md
+ * §5.5). Only the delivery fields move; the stored HTML never changes, so a
+ * retry re-sends exactly what was prepared beside the bridge row. Null when
+ * the row is gone or carries no Telegram copy.
+ */
+export function recordBridgeReportTelegram(
+  id: string,
+  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; at: string; attempted?: boolean },
+): BridgeReportV1 | null {
+  return mutateLog((file) => {
+    const report = file.reports.find((candidate) => candidate.id === id);
+    if (!report?.telegram) return { result: null, changed: false };
+    const { code: _previous, ...held } = report.telegram;
+    report.telegram = {
+      ...held,
+      state: outcome.state,
+      ...(outcome.messageIds?.length ? { messageIds: [...outcome.messageIds] } : held.messageIds ? { messageIds: held.messageIds } : {}),
+      ...(outcome.code ? { code: outcome.code } : {}),
+      attempts: held.attempts + (outcome.attempted === false ? 0 : 1),
+      at: outcome.at,
+    };
+    return { result: structuredClone(report), changed: true };
+  });
+}
+
+/** The stored row for an id, or null. */
+export function findBridgeReport(id: string): BridgeReportV1 | null {
+  return readBridgeReportLog().reports.find((report) => report.id === id) ?? null;
 }
 
 /**

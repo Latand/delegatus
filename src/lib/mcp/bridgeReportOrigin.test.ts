@@ -67,11 +67,16 @@ test("a worker's report is recorded with its server-derived origin and a visible
   expect(row.body).toBe("[builder conversation_builder — not the manager] stage settled");
 });
 
-test("the manager's report carries the manager origin and its body untouched — the one manager voice", async () => {
+test("the manager's report carries the manager origin and no attribution prefix — the one manager voice", async () => {
   await serviceAs(MANAGER).callTool("bridge_report", report());
   const row = readBridgeReportLog().reports[0]!;
   expect(row.origin).toEqual({ kind: "manager", conversationId: "conversation_mgr", role: "orchestrator" });
-  expect(row.body).toBe("stage settled");
+  /* The seat's report is rendered by the Viewer (docs/design/orchestrator-reports.md
+     §3.2): a header, the summary, the sections. Its own words are all there,
+     and nothing leads them but the header. */
+  expect(row.body).toStartWith("🕒 ");
+  expect(row.body).not.toContain("not the manager");
+  expect(row.body).toContain("\nstage settled\n");
 });
 
 test("a caller-written manager label cannot precede the server's attribution", async () => {

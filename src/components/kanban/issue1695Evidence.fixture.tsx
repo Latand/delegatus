@@ -114,6 +114,27 @@ const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW;
    instead). What the walk writes is kept in sessionStorage, so a reload reads
    it back as the server would. */
 const ORCH_WALK = SCENARIO === "orchestrator-first-walk";
+/* docs/design/orchestrator-reports.md §5.6: the setup guide's optional
+   "Reports to Telegram" step over the bot panel's own routes. `bot=none` has
+   no bot connected; `bot=chats` a bot in one chat that accepts posts and one
+   it may not post to yet; `bot=chosen` the same with the project's reports
+   already going to the first. The chats are invented. */
+const TELEGRAM_STEP = SCENARIO === "telegram-reports";
+const TELEGRAM_BOT = new URLSearchParams(location.search).get("bot") ?? "none";
+const telegramChat = (over: Record<string, unknown>) => ({
+  chatId: "-1000000000101", title: "Team Reports", type: "supergroup", username: null, isForum: false, member: true, alias: "team-reports",
+  postAllowed: true, postable: true, seesAllMessages: false, readdToApply: false, lastMessageAt: null, lastPostAt: null, lastPostBy: null, storedMessages: 0, ...over,
+});
+const TELEGRAM_BOT_STATUS = TELEGRAM_BOT === "none"
+  ? { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] }
+  : {
+    connected: true, bot: { name: "Report Bot", username: "report_test_bot", canReadAllGroupMessages: false, canJoinGroups: true },
+    receiving: "polling", lastUpdateAt: null, lastCheckedAt: null, limits: [],
+    chats: [telegramChat({}), telegramChat({ chatId: "-1000000000202", title: "Design Lounge", alias: null, postAllowed: false, postable: false })],
+  };
+const REPORT_TELEGRAM: { chat: string; name: string; changedAt: string; changedBy: string } | null = TELEGRAM_BOT === "chosen"
+  ? { chat: "team-reports", name: "Atlas", changedAt: new Date().toISOString(), changedBy: "operator" }
+  : null;
 const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet" || ORCH_FIRST_OVERVIEW;
 const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
 const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
@@ -1642,6 +1663,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
+        /* The Telegram step is chosen per project, so the guide needs one with a folder. */
+        ...(TELEGRAM_STEP ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
     const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } }, ...(workLinks ? { workLinks } : {}) });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
@@ -1680,6 +1703,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths, focusedPath: body.focusedPath ?? null });
     return json({ ok: true });
   }
+  if (TELEGRAM_STEP && url.pathname === "/api/telegram/bot") return json({ bot: TELEGRAM_BOT_STATUS });
+  if (TELEGRAM_STEP && url.pathname === "/api/onboarding") {
+    return json({ marker: { schemaVersion: 1, completedAt: iso(2 * MIN), dismissedAt: null, reason: null, steps: { engines: "done", project: "done" }, lastHealth: null, walk: "done" }, seatTickCheckMinutes: 5 });
+  }
   /* #2187 §6: the project's merge setting, as the settings route answers it. */
   if (url.pathname === "/api/projects/settings") {
     if (method === "PUT") {
@@ -1693,6 +1720,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       project: PROJECT,
       mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       bridgeReports: { enabled: BRIDGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
+      reportTelegram: REPORT_TELEGRAM,
+      reportNameSuggestion: "Atlas",
       github: "acme/atlas",
     });
   }

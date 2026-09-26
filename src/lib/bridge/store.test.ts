@@ -7,6 +7,7 @@ import {
   acknowledgeBridgeReports,
   appendBridgeReports,
   bridgeReportId,
+  scopedReportId,
   bridgeReportLogPath,
   drainBridgeReports,
   openBridgeChannel,
@@ -114,7 +115,7 @@ test("a manager retry under one key yields one seq and one log entry (§7.5)", (
   expect(retry.skipped).toBe(1);
   const log = readBridgeReportLog();
   expect(log.reports).toHaveLength(1);
-  expect(log.reports[0]!.id).toBe(bridgeReportId("deploy-settled"));
+  expect(log.reports[0]!.id).toBe(scopedReportId("repo-project-a", "deploy-settled"));
   expect(log.lastSeq).toBe(1);
 });
 
@@ -133,7 +134,7 @@ test("a decision request keeps the caller's key verbatim; other classes keep non
   /* A class that never enters the queue is identified by its hashed id alone,
      exactly as it was before the field existed. */
   expect(appended.appended[1]!.key).toBeUndefined();
-  expect(appended.appended[1]!.id).toBe(bridgeReportId("stage-7-progress"));
+  expect(appended.appended[1]!.id).toBe(scopedReportId("repo-project-a", "stage-7-progress"));
 });
 
 test("a long report key is accepted for every class, exactly as it was before #1168", () => {
@@ -269,7 +270,7 @@ test("a legacy confirmation_request row still reads, sheds its authorization pay
 
   /* Appends after the legacy row keep working, and only the new row drains. */
   appendBridgeReports([report("after-legacy")]);
-  expect(drainBridgeReports().reports.map((entry) => entry.id)).toEqual([bridgeReportId("after-legacy")]);
+  expect(drainBridgeReports().reports.map((entry) => entry.id)).toEqual([scopedReportId("repo-project-a", "after-legacy")]);
   expect(persistedBridgeReportRowsText()).not.toContain("nonce-legacy");
 });
 

@@ -11067,3 +11067,111 @@ describe("#1856 undo and redo on the desktop board", () => {
     expect(failures).toEqual([]);
   }, 240_000);
 });
+
+describe("orchestrator reports: the setup guide's optional Reports to Telegram step", () => {
+  /*
+   * docs/design/orchestrator-reports.md §5.6: the real Viewer over
+   * `?scenario=telegram-reports`, the guide opened on its Telegram step, with
+   * no bot connected, with a bot in a chat that accepts posts and one it may
+   * not post to yet, and with the project's reports already going to the
+   * first. Desktop 1280 × 800 and a phone at 390 × 844 (coarse pointer), en
+   * and uk. Gated: the dialog and the step stay inside the window, nothing in
+   * the step scrolls sideways, the phone's own buttons are 44 px tall, and each
+   * state shows what it should.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "Reports to Telegram"
+   *
+   * Readings go to `evidence/orchestrator-reports/telegram-step.json`; frames
+   * to `LLV_REPORTS_OUT` or `.artifacts/orchestrator-reports/`, never committed.
+   */
+  const OUT = path.resolve(process.env.LLV_REPORTS_OUT ?? ".artifacts/orchestrator-reports");
+  const EVIDENCE = path.resolve("evidence/orchestrator-reports");
+  const FRAMES = [
+    { label: "1280-en", width: 1280, height: 800, lang: "en", touch: false },
+    { label: "1280-uk", width: 1280, height: 800, lang: "uk", touch: false },
+    { label: "390-en", width: 390, height: 844, lang: "en", touch: true },
+    { label: "390-uk", width: 390, height: 844, lang: "uk", touch: true },
+  ] as const;
+  const STATES = ["none", "chats", "chosen"] as const;
+
+  browserTest("Reports to Telegram: no bot, a bot with chats, a chat chosen; desktop and phone; en and uk", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "llv-reports-step-")));
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const state of STATES) {
+        for (const frame of FRAMES) {
+          const label = `${state}-${frame.label}`;
+          const opened = await openFixture(browser, `${server.base}?scenario=telegram-reports&bot=${state}#p=atlas`, { width: frame.width, height: frame.height }, "light", frame.lang, "no-preference", frame.touch);
+          const { page } = opened;
+          try {
+            await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main", { timeout: 30_000 });
+            await page.waitForTimeout(1_000);
+            await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "telegram" } })));
+            await page.waitForSelector("[data-onboarding-telegram]", { state: "visible", timeout: 10_000 });
+            await page.waitForTimeout(state === "none" ? 500 : 1_200);
+            const reading = await page.evaluate(() => {
+              const round = (value: number) => Math.round(value * 10) / 10;
+              const box = (node: Element | null) => {
+                if (!node) return null;
+                const rect = node.getBoundingClientRect();
+                return { left: round(rect.left), top: round(rect.top), right: round(rect.right), bottom: round(rect.bottom), height: round(rect.height) };
+              };
+              const step = document.querySelector<HTMLElement>("[data-onboarding-telegram]")!;
+              const scroller = step.closest<HTMLElement>(".overflow-y-auto");
+              const buttons = [...step.querySelectorAll<HTMLElement>("[data-onboarding-telegram-save], [data-onboarding-telegram-skip], [data-onboarding-report-chat]")];
+              return {
+                viewport: { width: innerWidth, height: innerHeight },
+                dialog: box(document.querySelector("[data-onboarding-dialog]")),
+                step: box(step),
+                sideways: scroller ? scroller.scrollWidth - scroller.clientWidth : null,
+                current: document.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current") ?? null,
+                heading: document.querySelector("[data-onboarding-dialog] h2")?.textContent ?? null,
+                chats: [...step.querySelectorAll<HTMLElement>("[data-onboarding-report-chat]")].map((node) => ({ chat: node.dataset.onboardingReportChat, checked: node.getAttribute("aria-checked") })),
+                allowSwitches: [...step.querySelectorAll("[role=switch]")].map((node) => node.getAttribute("aria-label")),
+                tokenField: Boolean(step.querySelector("input[type=password]")),
+                name: step.querySelector<HTMLInputElement>("[data-onboarding-report-name]")?.value ?? null,
+                buttonHeights: buttons.map((node) => round(node.getBoundingClientRect().height)),
+                text: step.innerText,
+              };
+            });
+            readings[label] = reading;
+            await page.screenshot({ path: path.join(OUT, `telegram-step-${label}.png`) });
+            const { viewport, dialog, step } = reading;
+            if (reading.current !== "telegram") failures.push(`${label}: the guide opened on ${reading.current}`);
+            if (!dialog || dialog.left < -0.5 || dialog.top < -0.5 || dialog.right > viewport.width + 0.5 || dialog.bottom > viewport.height + 0.5) failures.push(`${label}: the dialog ${JSON.stringify(dialog)} leaves the window`);
+            if (!step || step.left < -0.5 || step.right > viewport.width + 0.5) failures.push(`${label}: the step ${JSON.stringify(step)} leaves the window`);
+            if (reading.sideways != null && reading.sideways > 0) failures.push(`${label}: the step scrolls ${reading.sideways} px sideways`);
+            if (frame.touch && reading.buttonHeights.some((height) => height < 44)) failures.push(`${label}: a button is shorter than 44 px: ${JSON.stringify(reading.buttonHeights)}`);
+            const expected = frame.lang === "uk" ? "Надсилати звіти ще й у Telegram" : "Send reports to Telegram too";
+            if (reading.heading !== expected) failures.push(`${label}: the heading reads ${JSON.stringify(reading.heading)}`);
+            if (state === "none" && !reading.tokenField) failures.push(`${label}: no token field with no bot connected`);
+            if (state === "none" && (reading.name !== null || reading.chats.length > 0)) failures.push(`${label}: with no bot there is something to choose: ${JSON.stringify({ name: reading.name, chats: reading.chats })}`);
+            if (state !== "none") {
+              if (JSON.stringify(reading.chats.map((chat) => chat.chat)) !== JSON.stringify(["team-reports", "log-only"])) failures.push(`${label}: the choices are ${JSON.stringify(reading.chats)}`);
+              if (reading.allowSwitches.length !== 1 || !String(reading.allowSwitches[0]).includes("Design Lounge")) failures.push(`${label}: the chat the bot may not post to has no switch: ${JSON.stringify(reading.allowSwitches)}`);
+              if (reading.name !== "Atlas") failures.push(`${label}: the name reads ${JSON.stringify(reading.name)}`);
+              const checked = reading.chats.find((chat) => chat.checked === "true")?.chat ?? null;
+              if (state === "chosen" && checked !== "team-reports") failures.push(`${label}: the chosen chat is not selected (${checked})`);
+              if (state === "chats" && checked !== null) failures.push(`${label}: a chat is selected before any was chosen (${checked})`);
+            }
+            if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await opened.context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "telegram-step.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});

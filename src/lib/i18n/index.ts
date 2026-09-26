@@ -15,14 +15,21 @@ export type MessageKey = keyof typeof en;
 const DICTS: Record<Locale, Dictionary> = { en, uk };
 const STORAGE_KEY = "llv_lang";
 
-function detectLocale(): Locale {
-  if (typeof window === "undefined") return "en";
+/** The language this browser keeps, or null when it keeps none. */
+function storedLocale(): Locale | null {
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved === "en" || saved === "uk") return saved;
   } catch {
-    /* private mode / disabled storage: fall through to navigator */
+    /* private mode / disabled storage */
   }
+  return null;
+}
+
+function detectLocale(): Locale {
+  if (typeof window === "undefined") return "en";
+  const saved = storedLocale();
+  if (saved) return saved;
   const nav = typeof navigator !== "undefined" ? navigator.language : "";
   return nav.toLowerCase().startsWith("uk") ? "uk" : "en";
 }
@@ -43,6 +50,9 @@ export function getLocale(): Locale {
   return current;
 }
 
+/** Show `next` in this browser and keep it as the boot cache. Tells nobody:
+    fixtures and tests call it to render a language, and only the operator's
+    own choice, {@link chooseLocale}, reaches the server. */
 export function setLocale(next: Locale) {
   hydrated = true;
   if (next === current) return;
@@ -54,6 +64,93 @@ export function setLocale(next: Locale) {
   }
   if (typeof document !== "undefined") document.documentElement.lang = next;
   for (const listener of listeners) listener();
+}
+
+/**
+ * The operator's choice from the language toggle. Besides this browser it is
+ * written to the server (docs/design/orchestrator-reports.md §4.2), because
+ * agents write reports and board task text in the interface language and the
+ * server is the only place they can read it from.
+ */
+export function chooseLocale(next: Locale) {
+  setLocale(next);
+  void writeOperatorSettings({ locale: next, source: "chosen", ...clientTimeZone() });
+}
+
+const OPERATOR_SETTINGS_URL = "/api/operator/settings";
+
+function clientTimeZone(): { timeZone?: string } {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return zone ? { timeZone: zone } : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeOperatorSettings(body: Record<string, unknown>): Promise<void> {
+  if (typeof fetch !== "function") return;
+  try {
+    await fetch(OPERATOR_SETTINGS_URL, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    /* The next toggle, or the next page load, writes it again. */
+  }
+}
+
+let operatorLocaleSynced = false;
+
+/** Forget this page's language state, as a fresh page load would. */
+export function resetLocaleForTests(): void {
+  operatorLocaleSynced = false;
+  hydrated = false;
+  current = "en";
+}
+
+/**
+ * Once per page load, after the app has mounted: adopt the server's language
+ * when it differs from what this browser shows and another device chose it,
+ * or, when the server has none yet, report what this browser shows as
+ * `detected`. A language the server only detected never replaces one this
+ * browser keeps: until the server learned the language, the toggle was the
+ * only writer of storage, so a kept language is the operator's own choice and
+ * is written back as `chosen`. The time zone is reported either way. Storage
+ * stays the boot cache, so the first paint never waits on this.
+ */
+export async function syncOperatorLocale(): Promise<void> {
+  if (operatorLocaleSynced || typeof window === "undefined" || typeof fetch !== "function") return;
+  operatorLocaleSynced = true;
+  const shown = getLocale();
+  let server: Locale | null = null;
+  let serverDetected = false;
+  let serverTimeZone: string | null = null;
+  try {
+    const response = await fetch(OPERATOR_SETTINGS_URL, { cache: "no-store" });
+    if (!response.ok) return;
+    const body = await response.json() as { locale?: { value?: unknown; source?: unknown } | null; timeZone?: { value?: unknown } | null };
+    const value = body.locale?.value;
+    server = value === "en" || value === "uk" ? value : null;
+    serverDetected = body.locale?.source === "detected";
+    serverTimeZone = typeof body.timeZone?.value === "string" ? body.timeZone.value : null;
+  } catch {
+    return;
+  }
+  const zone = clientTimeZone();
+  const zoneChanged = zone.timeZone !== undefined && zone.timeZone !== serverTimeZone;
+  const kept = storedLocale();
+  if (server && serverDetected && kept) {
+    await writeOperatorSettings({ locale: kept, source: "chosen", ...zone });
+    return;
+  }
+  if (server && server !== shown && !serverDetected) setLocale(server);
+  if (!server) {
+    await writeOperatorSettings({ locale: shown, source: "detected", ...zone });
+  } else if (zoneChanged) {
+    await writeOperatorSettings(zone);
+  }
 }
 
 function subscribe(listener: () => void): () => void {
@@ -89,10 +186,10 @@ export function translate(
 export type TFunction = (key: MessageKey, params?: Record<string, string | number>) => string;
 
 /** Reactive locale + translator. Components re-render when the locale flips. */
-export function useLocale(): { locale: Locale; t: TFunction; setLocale: (l: Locale) => void } {
+export function useLocale(): { locale: Locale; t: TFunction; setLocale: (l: Locale) => void; chooseLocale: (l: Locale) => void } {
   const locale = useSyncExternalStore(subscribe, getLocale, () => "en" as Locale);
   /* One function per locale: a component that lists `t` among a memo's inputs rebuilds only when the language
      changes, never on every render. */
   const t = useCallback<TFunction>((key, params) => translate(locale, key, params), [locale]);
-  return { locale, t, setLocale };
+  return { locale, t, setLocale, chooseLocale };
 }

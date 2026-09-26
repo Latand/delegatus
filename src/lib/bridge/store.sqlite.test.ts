@@ -14,6 +14,7 @@ import {
   BridgeStateCorruptError,
   bridgeChannelPath,
   bridgeReportId,
+  scopedReportId,
   bridgeReportLogPath,
   checkpointBridgeRollbackMirrorsForDemotion,
   drainBridgeReports,
@@ -193,7 +194,7 @@ describe("replay dedupe", () => {
     appendBridgeReports(Array.from({ length: BRIDGE_REPORT_CAPACITY + 3 }, (_, index) => report(`fill-${index}`)));
     const log = readBridgeReportLog();
     expect(log.reports).toHaveLength(BRIDGE_REPORT_CAPACITY);
-    expect(log.retired).toContain(bridgeReportId("fresh"));
+    expect(log.retired).toContain(scopedReportId(SCOPE.project, "fresh"));
     resetBridgeCollectionsForTests();
     expect(appendBridgeReports([report("fresh")])).toMatchObject({ appended: [], skipped: 1 });
     expect(appendBridgeReports([report("fill-0")])).toMatchObject({ appended: [], skipped: 1 });
@@ -205,7 +206,7 @@ describe("replay dedupe", () => {
     const before = readBridgeReportLog().retired;
     resetBridgeCollectionsForTests();
     expect(readBridgeReportLog().retired).toEqual(before);
-    expect(before[0]).toBe(bridgeReportId("r-0"));
+    expect(before[0]).toBe(scopedReportId(SCOPE.project, "r-0"));
   });
 });
 

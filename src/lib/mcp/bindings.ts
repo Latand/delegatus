@@ -73,7 +73,19 @@ import { isLifecycleEventType } from "@/lib/lifecycle/vocabulary";
 import { recordBridgeDirectiveAnswer, recordBridgeDirectivePendingAnswer, recordManagerReport } from "@/lib/bridge/service";
 import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/lib/bridge/directive";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
-import { isBridgeReportClass, type CanonicalSeatConversationId } from "@/lib/bridge/types";
+import { isBridgeReportClass, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
+import { findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
+import { type PublicDenyList } from "@/lib/bridge/publicSafe";
+import { renderPlain, renderReport, type TaskChanges } from "@/lib/bridge/reportRender";
+import { SEAT_SECTION_IDS, type SeatSectionId } from "@/lib/bridge/reportWords";
+import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
+import { renderTelegram, type PullRequestLookup } from "@/lib/bridge/telegramReport";
+import { projectDisplayName } from "@/lib/displayNames";
+import { forgeCacheView } from "@/lib/forge/cache";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
+import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
+import { projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
 import {
   applySeatTickNoteLineEdits,
   applySeatTickSettingsChange,
@@ -88,9 +100,10 @@ import {
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
+import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
-import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
 import { projectSuccessionFor } from "@/lib/projects/succession";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -149,7 +162,7 @@ import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
-import { bridgeReportsEnabled, mergeOnReviewEnabled } from "@/lib/projects/settings";
+import { bridgeReportsEnabled, mergeOnReviewEnabled, reportHeaderName, reportTelegram } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -685,6 +698,20 @@ export interface ViewerMcpDomainDependencies {
       the same MCP operation already raised. Optional so partial harnesses
       fall back to the shared attention file. */
   findAttentionByOperation?(operationKey: string): AttentionRequestV1 | null;
+  /** The operator's interface language and time zone
+      (docs/design/orchestrator-reports.md §4.2). Optional so harnesses fall
+      back to the operator settings file. */
+  operatorLocale?(): "en" | "uk" | null;
+  operatorTimeZone?(): string | null;
+  /** The names a report is scrubbed of (§5.5). Optional: production reads the
+      account registry, the bot's chats and the project catalog. */
+  publicDenyList?(project: string | null): PublicDenyList;
+  /** Posts a report's Telegram copy (§5.5). Optional: production posts through
+      the Viewer's bot agent route with the caller's capability. */
+  sendReportTelegram?(input: ReportTelegramSend): Promise<ReportTelegramSendOutcome>;
+  /** Reads a project's seat tick row without writing one. Optional: production
+      peeks the tick's own store. */
+  peekTickState?(project: string): SeatTickProjectState;
   /** Validated per-project manager seats (fail-closed — see
       `@/lib/orchestrator/authority`), for project-scoped directive routing.
       Optional so partial harnesses fall back to the production resolver. */
@@ -1399,7 +1426,20 @@ async function messageReceipt(args: McpToolArgs): Promise<McpToolPayload> {
   return { ...receipt };
 }
 
-async function createBoardTask(args: McpToolArgs): Promise<McpToolPayload> {
+/**
+ * Board task text is written in the operator's interface language
+ * (docs/design/orchestrator-reports.md §3.5, §5.3). A text in another language
+ * is stored as sent, with a warning; `details` is agent-facing and never
+ * checked. Nothing is said while the interface language is not known yet.
+ */
+function taskTextLanguageWarnings(value: unknown, dependencies?: ViewerMcpDomainDependencies): { warnings?: string[] } {
+  if (typeof value !== "string" || !value.trim()) return {};
+  const locale = dependencies?.operatorLocale ? dependencies.operatorLocale() : operatorLocale();
+  const warning = languageMismatchWarning("task text", value, locale);
+  return warning ? { warnings: [warning] } : {};
+}
+
+async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const input: CreateTaskInput = {
     ...args,
     placement: args.placement ?? "unplaced",
@@ -1413,7 +1453,7 @@ async function createBoardTask(args: McpToolArgs): Promise<McpToolPayload> {
     };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
-  return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay, ...(result.notes ? { notes: result.notes } : {}) };
+  return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay, ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 
 /**
@@ -1443,7 +1483,7 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD", field: "refine", status: result.status });
   const byId = new Map(result.tasks.map((task) => [task.id, task] as const));
-  return { refined: result.refined, changedFields: [...new Set(Object.values(changes).flat())], changedFieldsByTask: changes, tasks: result.refined.map((entry) => {
+  return { ...taskTextLanguageWarnings(text, dependencies), refined: result.refined, changedFields: [...new Set(Object.values(changes).flat())], changedFieldsByTask: changes, tasks: result.refined.map((entry) => {
     const task = byId.get(entry.taskId)!;
     return fullAnswer(args) ? task : compactTask(task);
   }), omittedRecordCount: fullAnswer(args) ? 0 : result.refined.length, readMore: "get_task(taskId) or update_task with full:true returns the full task." };
@@ -1462,7 +1502,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
-  return { ...taskAcknowledgement(result.task, args, changedFields), ...(result.notes ? { notes: result.notes } : {}) };
+  return { ...taskAcknowledgement(result.task, args, changedFields), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 
 /**
@@ -2554,23 +2594,43 @@ async function deployExactSha(
 /**
  * The channel the user hears from, callable from EVERY session (B+ item 3).
  *
- * Deliberately thin: everything that makes a report safe — the 2 KB bound, the
- * secret redaction, the idempotent key, the monotonic seq — lives in the store, so
- * this cannot weaken any of it by being called differently. What it does own is
- * the ORIGIN LABEL, derived server-side from the durable caller identity and
- * stored on the row. A non-orchestrator report additionally gets a visible
- * attribution prefix in its body, ahead of anything the caller wrote, so the
- * gateway can never mistake it for — or speak it as — the manager's voice.
+ * What makes a report safe — the 2 KB bound, the secret redaction, the
+ * idempotent key, the monotonic seq — lives in the store, so this cannot
+ * weaken any of it by being called differently. What it owns is the ORIGIN
+ * LABEL, derived server-side from the durable caller identity and stored on
+ * the row, and, for the designated orchestrator's own reports, the report's
+ * shape (docs/design/orchestrator-reports.md §5.2): the seat passes a summary
+ * and sections, and the Viewer renders the header, the time, the headings and
+ * the deploy's task changes, scrubs private information, fits the size, and
+ * posts the same report to the project's Telegram chat when there is one. A
+ * non-orchestrator report keeps a visible attribution prefix ahead of anything
+ * the caller wrote, so the gateway can never mistake it for — or speak it as —
+ * the manager's voice, and it goes to the bridge only.
  */
-function bridgeReport(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+async function bridgeReport(
+  args: McpToolArgs,
+  dependencies: ViewerMcpDomainDependencies,
+  control: ViewerControlDependencies | null,
+): Promise<McpToolPayload> {
   const key = required(args, "key");
   const reportClass = text(args.class);
   if (!isBridgeReportClass(reportClass)) throw new Error("class must be one of the bridge report classes");
+  const summary = text(args.summary);
+  const sections = reportSectionsArg(args.sections);
   const body = text(args.body);
-  if (!body) throw new Error("body is required");
+  const hasSections = Object.values(sections).some((items) => items.length > 0);
+  if (!summary && !hasSections && !body) throw new Error("summary and sections are required (or, from an older caller, body)");
+  const covers = Array.isArray(args.covers)
+    ? [...new Set(args.covers.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "").map((entry) => entry.trim()))].slice(0, 64)
+    : [];
+  const coversOwed = args.coversOwed === true;
 
   const origin = attributionOf(dependencies);
-  const project = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
+  /* Folded through the project aliases once, here: the seat tick reads the log
+     under the canonical key, and a seat recorded before its folder changed key
+     still carries the old one as its conversation's project. */
+  const callerProject = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
+  const project = callerProject ? canonicalOrchestratorProject(callerProject) : null;
   /* #2146: the operator turned this project's reports off. An answer, not an
      error: the caller did nothing wrong, and nothing is stored. */
   if (project && !bridgeReportsEnabled(project)) {
@@ -2582,11 +2642,76 @@ function bridgeReport(args: McpToolArgs, dependencies: ViewerMcpDomainDependenci
     ? seats.find((seat) => seat.project === project)
     : undefined;
 
-  /* The visible attribution is SERVER-composed and leads the body, so whatever
-     a caller writes inside its own text appears after the authoritative label. */
-  const attributedBody = origin.kind === "manager"
-    ? body
-    : `[${origin.kind === "gateway" ? "voice gateway" : origin.role ?? "agent"}${origin.conversationId ? ` ${origin.conversationId}` : ""} — not the manager] ${body}`;
+  /* A replay stores nothing. Its one job is a Telegram copy whose send failed
+     retryably: the row's stored HTML is re-sent byte for byte, and this call's
+     own arguments are ignored (§5.5). Only the manager's own replay re-sends:
+     the post goes out under the caller's capability and attribution. A row
+     filed under the caller's old project key before it was folded is still
+     the same report. */
+  const reportId = scopedReportId(project, key);
+  const existing = findBridgeReport(reportId)
+    ?? (callerProject && callerProject !== project ? findBridgeReport(scopedReportId(callerProject, key)) : null);
+  if (existing) {
+    const telegram = existing.telegram && existing.telegram.state === "failed" && existing.origin?.kind === "manager"
+      && origin.kind === "manager" && isRetryableReportSend(existing.telegram.code)
+      ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
+      : existing.telegram ?? null;
+    /* `alreadyRecorded`, because the tool service's envelope owns `replayed`
+       (a replay of the same clientRequestId). */
+    return {
+      recorded: false,
+      alreadyRecorded: true,
+      seq: existing.seq,
+      reportId: existing.id,
+      destinations: reportDestinations(existing.seq, telegram),
+    };
+  }
+
+  const locale = dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale();
+  const warnings: string[] = [];
+  let storedBody: string;
+  let telegramCopy: { chat: string; html: string } | null = null;
+  if (origin.kind === "manager") {
+    const deployKey = [key, ...covers].find((entry) => entry.startsWith("deploy:")) ?? null;
+    const tasks = deployKey && project ? deployReportTaskChanges(project, deployKey, dependencies) : null;
+    if (deployKey && project && !tasks) warnings.push("No task changes are listed: this deploy has no board snapshot to compare, because it settled before snapshots existed or aged out.");
+    const rendered = renderReport({
+      class: reportClass,
+      deploy: deployKey !== null,
+      name: project ? reportHeaderName(project) : "Delegatus",
+      at: new Date(),
+      locale,
+      timeZone: dependencies.operatorTimeZone ? dependencies.operatorTimeZone() : operatorTimeZone(),
+      summary,
+      sections,
+      legacyBody: hasSections ? null : body,
+      taskChanges: tasks,
+      deny: dependencies.publicDenyList ? dependencies.publicDenyList(project) : await productionPublicDenyList(project, control),
+    });
+    if (rendered.empty) {
+      const scrubbed = Object.keys(rendered.dropped).length > 0;
+      throw new McpToolRefusal(
+        scrubbed
+          ? "Nothing is left after removing private information; refile without it."
+          : "Nothing is left to report: every item was empty or too long; refile with a summary and short items.",
+        { code: "report_empty_after_scrub", retryable: false, warnings: rendered.warnings },
+      );
+    }
+    warnings.push(...rendered.warnings);
+    const language = languageMismatchWarning("report", [summary, ...Object.values(sections).flat(), hasSections ? "" : body].join("\n"), locale);
+    if (language) warnings.push(language);
+    storedBody = renderPlain(rendered.cut);
+    const destination = project ? reportTelegram(project) : null;
+    if (destination) {
+      telegramCopy = { chat: destination.chat, html: renderTelegram(rendered.cut, knownPullRequests(project!)) };
+    }
+  } else {
+    /* The visible attribution is SERVER-composed and leads the body, so
+       whatever a caller writes inside its own text appears after the
+       authoritative label. */
+    const own = body || [summary, ...Object.values(sections).flat()].filter(Boolean).join("\n");
+    storedBody = `[${origin.kind === "gateway" ? "voice gateway" : origin.role ?? "agent"}${origin.conversationId ? ` ${origin.conversationId}` : ""} — not the manager] ${own}`;
+  }
 
   const appended = recordManagerReport({
     key,
@@ -2595,19 +2720,220 @@ function bridgeReport(args: McpToolArgs, dependencies: ViewerMcpDomainDependenci
     origin,
     project,
     targetSeatConversationId: targetSeat?.conversationId ?? null,
-    body: attributedBody,
+    body: storedBody,
     correlatesDirective: text(args.correlatesDirective) || null,
+    covers,
+    coversOwed,
+    telegram: telegramCopy,
   });
 
   /* A replay under the same key appends nothing, and says so rather than pretending
      to have delivered a second report. */
-  if (!appended) return { recorded: false, replayed: true };
+  if (!appended) return { recorded: false, alreadyRecorded: true };
+  const telegram = appended.telegram
+    ? await postReportTelegram(appended.id, appended.telegram.chat, appended.telegram.html, `bridge-report:${appended.id}`, dependencies, control)
+    : null;
   return {
     recorded: true,
     replayed: false,
     seq: appended.seq,
     reportId: appended.id,
+    warnings,
+    destinations: reportDestinations(appended.seq, telegram),
   };
+}
+
+function reportSectionsArg(value: unknown): Record<SeatSectionId, string[]> {
+  const sections = {} as Record<SeatSectionId, string[]>;
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  for (const id of SEAT_SECTION_IDS) {
+    const items = record[id];
+    sections[id] = Array.isArray(items)
+      ? items.filter((item): item is string => typeof item === "string" && item.trim() !== "").slice(0, 32)
+      : [];
+  }
+  return sections;
+}
+
+function reportDestinations(seq: number, telegram: BridgeReportTelegram | null): Record<string, unknown> {
+  return {
+    bridge: { seq },
+    ...(telegram
+      ? {
+        telegram: {
+          chat: telegram.chat,
+          state: telegram.state,
+          ...(telegram.messageIds?.length ? { messageIds: telegram.messageIds } : {}),
+          ...(telegram.code ? { code: telegram.code, retryable: isRetryableReportSend(telegram.code) } : {}),
+        },
+      }
+      : {}),
+  };
+}
+
+/** Codes a replay of the same key may re-send on. `send_uncertain` is never
+    one: a second public post is worse than a missing one. */
+function isRetryableReportSend(code: string | null | undefined): boolean {
+  return !!code && code !== "send_uncertain" && code !== "send_partial"
+    && RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode);
+}
+
+/**
+ * Post a report's stored Telegram copy through the bot service, silently and
+ * as HTML, attributed to the calling seat and idempotent under the given
+ * request id, and record the outcome on the row. A failed post never loses
+ * the report: the bridge row stays either way.
+ */
+async function postReportTelegram(
+  reportId: string,
+  chat: string,
+  html: string,
+  clientRequestId: string,
+  dependencies: ViewerMcpDomainDependencies,
+  control: ViewerControlDependencies | null,
+): Promise<BridgeReportTelegram | null> {
+  const send = dependencies.sendReportTelegram ?? ((input: ReportTelegramSend) => productionSendReportTelegram(input, control));
+  let outcome: ReportTelegramSendOutcome;
+  try {
+    outcome = await send({ chat, html, clientRequestId });
+  } catch (error) {
+    outcome = { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
+  }
+  const at = new Date().toISOString();
+  return recordBridgeReportTelegram(reportId, outcome.ok
+    ? { state: "sent", messageIds: outcome.messageIds, at }
+    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, at })?.telegram ?? null;
+}
+
+export interface ReportTelegramSend {
+  chat: string;
+  html: string;
+  clientRequestId: string;
+}
+
+export type ReportTelegramSendOutcome =
+  | { ok: true; messageIds: number[] }
+  | { ok: false; code: string; message?: string };
+
+async function productionSendReportTelegram(input: ReportTelegramSend, control: ViewerControlDependencies | null): Promise<ReportTelegramSendOutcome> {
+  if (!control) return { ok: false, code: "telegram_failed", message: "no Viewer control is available to post through" };
+  try {
+    const result = await dispatchControl(control)("/api/telegram/bot/agent", {
+      op: "send",
+      clientRequestId: input.clientRequestId,
+      chat: input.chat,
+      text: input.html,
+      format: "html",
+      silent: true,
+    }, callerCapabilityHeaders()) as { messageIds?: unknown };
+    const messageIds = Array.isArray(result?.messageIds) ? result.messageIds.filter((id): id is number => Number.isInteger(id)) : [];
+    return { ok: true, messageIds };
+  } catch (error) {
+    if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
+      return { ok: false, code: error.details.code, message: error.message };
+    }
+    return { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * The task changes a deploy report lists (§3.8), from the key the tick gave:
+ * `deploy:<sha8>:succeeded` names the newest snapshot of that commit that
+ * succeeded, `deploy:<sha8>:failed:<attempt8>` the failed attempt whose
+ * deployment id starts with `<attempt8>`.
+ */
+function deployReportTaskChanges(project: string, deployKey: string, dependencies: ViewerMcpDomainDependencies): TaskChanges | null {
+  const [, sha8, outcome, attempt8] = deployKey.split(":");
+  if (!sha8) return null;
+  try {
+    const snapshots = projectSnapshots(project);
+    const snapshot = outcome === "failed"
+      ? snapshots.filter((entry) => entry.sha8 === sha8 && entry.state !== "succeeded" && (!attempt8 || entry.deploymentId.startsWith(attempt8))).at(-1)
+      : snapshots.filter((entry) => entry.sha8 === sha8 && entry.state === "succeeded").at(-1);
+    if (!snapshot) return null;
+    const tasks = dependencies.listTaskRecords?.() ?? dependencies.loadTasks();
+    return deployTaskChanges(project, snapshot.deploymentId, tasks);
+  } catch {
+    return null;
+  }
+}
+
+/** The pull requests the forge cache knows for the project's repository, so
+    the Telegram copy writes them as "PR N"; any other `#N` stays as it is. */
+function knownPullRequests(project: string): PullRequestLookup {
+  try {
+    const repository = githubRepositoryOfRemote(recordedProjectRemote(project));
+    const view = repository ? forgeCacheView().repository(repository) : null;
+    return view ? { has: (number) => view.pr(number) !== undefined } : { has: () => false };
+  } catch {
+    return { has: () => false };
+  }
+}
+
+/**
+ * What the scrubber looks for by name (§5.5), read at call time: every account
+ * id and label, the OS user name, the home directory's name and the machine's
+ * host name, the people the bot has seen in its allowlisted chats, and the
+ * other projects in repository form. Every source fails soft to nothing.
+ */
+async function productionPublicDenyList(project: string | null, control: ViewerControlDependencies | null): Promise<PublicDenyList> {
+  const accounts: string[] = [];
+  const collect = (list: () => readonly { id: string; label: string }[]) => {
+    try {
+      for (const account of list()) accounts.push(account.id, account.label);
+    } catch {
+      // An unreadable registry contributes nothing.
+    }
+  };
+  collect(listClaudeAccounts);
+  collect(listCodexAccounts);
+  collect(listCopilotAccounts);
+  const local: string[] = [];
+  try {
+    local.push(os.userInfo().username, path.basename(os.homedir()), os.hostname().split(".")[0] ?? "");
+  } catch {
+    // Nothing to add.
+  }
+  /* The bot's people are read only for a project that posts to a bot chat:
+     a bridge-only project shares nothing with the bot's chats. */
+  const people = control && project && reportTelegram(project) ? await telegramPeople(control) : [];
+  const projects: { repository: string | null; names: string[] }[] = [];
+  try {
+    const own = project ? canonicalOrchestratorProject(project) : null;
+    const keys = new Set<string>();
+    for (const seat of activeOrchestratorSeats()) keys.add(canonicalOrchestratorProject(seat.project));
+    const aliases = projectAliasSnapshot();
+    for (const key of Object.keys(aliases.displayNames)) keys.add(canonicalOrchestratorProject(key));
+    for (const key of keys) {
+      if (key === own) continue;
+      const repository = githubRepositoryOfRemote(recordedProjectRemote(key));
+      projects.push({
+        repository,
+        names: [repository?.split("/")[1] ?? "", projectDisplayName(key, aliases.displayNames[key])].filter(Boolean),
+      });
+    }
+  } catch {
+    // An unreadable catalog contributes nothing.
+  }
+  return { accounts, people, local, projects };
+}
+
+async function telegramPeople(control: ViewerControlDependencies): Promise<string[]> {
+  const people = new Set<string>();
+  try {
+    const chats = await readViewerControl(control, "/api/telegram/bot/agent?op=chats") as { chats?: { chat?: unknown; postAllowed?: unknown }[] };
+    for (const chat of (chats.chats ?? []).filter((entry) => entry.postAllowed === true && typeof entry.chat === "string").slice(0, 4)) {
+      const page = await readViewerControl(control, `/api/telegram/bot/agent?${new URLSearchParams({ op: "messages", chat: chat.chat as string, limit: "100", maxChars: "1" })}`) as { messages?: { from?: { name?: unknown; username?: unknown } | null; fromName?: unknown; fromUsername?: unknown }[] };
+      for (const message of page.messages ?? []) {
+        for (const value of [message.from?.name, message.from?.username, message.fromName, message.fromUsername]) {
+          if (typeof value === "string" && value.trim()) people.add(value.replace(/^@/, "").trim());
+        }
+      }
+    }
+  } catch {
+    // No bot, or no answer: nobody to look for.
+  }
+  return [...people];
 }
 
 /**
@@ -2810,6 +3136,14 @@ function compactOrchestratorSeat(seat: OrchestratorSeat | null): Record<string, 
   return { ...rest, mandateLength: mandate.length, roleTableLength: roleTable?.length ?? null };
 }
 
+function reportFields(project: string, dependencies: ViewerMcpDomainDependencies): { operatorLocale: "en" | "uk" | null; reportTelegram: { chat: string; name: string } | null } {
+  const destination = reportTelegram(project);
+  return {
+    operatorLocale: dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale(),
+    reportTelegram: destination ? { chat: destination.chat, name: destination.name } : null,
+  };
+}
+
 /**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
@@ -2831,6 +3165,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     project,
     mergeOnReview: mergeOnReviewEnabled(project),
     bridgeReports: bridgeReportsEnabled(project),
+    ...reportFields(project, dependencies),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: pending,
     /* Terminalized pending intents (#878), oldest first: what was attempted
@@ -2853,6 +3188,9 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     mergeOnReview: mergeOnReviewEnabled(project),
     /* #2146: whether this project's bridge reports are on; off, file none. */
     bridgeReports: bridgeReportsEnabled(project),
+    /* docs/design/orchestrator-reports.md §4.2, §5.6: the language reports
+       and task text are written in, and where reports go besides the log. */
+    ...reportFields(project, dependencies),
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: compactOrchestratorSeat(pending),
     intentHistoryCount: history.length,
@@ -3045,6 +3383,15 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     changed = true;
   }
 
+  /* A seat that switches its tick off or slows it stops being asked for
+     reports (docs/design/orchestrator-reports.md §5.4). The answer names
+     what the tick still owes and asks for the report the operator will read
+     while nothing wakes the seat. The setting is applied as asked. */
+  const beforeInterval = effectiveSeatTickSettings(current, Date.now(), SEAT_TICK_WAKE_INTERVAL_MS).wakeIntervalMs;
+  const afterInterval = effectiveSeatTickSettings(settings, Date.now(), SEAT_TICK_WAKE_INTERVAL_MS).wakeIntervalMs;
+  const quieted = changed && (change.enabled === false || afterInterval > beforeInterval);
+  const reportAsk = quieted && bridgeReportsEnabled(project) ? seatTickReportAsk(project, dependencies) : {};
+
   const verbose = args.verbose === true || args.full === true;
   const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
@@ -3057,6 +3404,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       changedFields: Object.keys(change),
       monitorPromptLength: storedPrompt?.length ?? 0,
       ...(own === project ? {} : { project, scope: "other-project", callerProject: own }),
+      ...reportAsk,
     });
   }
 
@@ -3110,7 +3458,26 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
        row and no surface carried it. This says which attempt holds the
        project's wakes, since when and when it lapses on its own. */
     ...fenceAnswer,
+    ...reportAsk,
   });
+}
+
+/** What the tick owes the report log for a project, and the report to file
+    now that nothing will ask for it (§5.4). */
+function seatTickReportAsk(project: string, dependencies: ViewerMcpDomainDependencies): Record<string, unknown> {
+  let state: SeatTickProjectState;
+  try {
+    state = (dependencies.peekTickState ?? peekSeatTickState)(project);
+  } catch {
+    return {};
+  }
+  const owed = (state.reportsOwed ?? []).map((entry) => entry.key);
+  const asks = (state.asksOwed ?? []).map((entry) => entry.key);
+  return {
+    reportsOwed: owed,
+    ...(asks.length > 0 ? { askOwed: asks } : {}),
+    reportReminder: "Nothing will ask you for reports while the tick is off or slowed. File a report now: what you are waiting on (a question or blocked report when it is the operator), and the owed outcomes above.",
+  };
 }
 
 /** The schedule a project nobody configured runs on — the fields a restore
@@ -5004,6 +5371,12 @@ function suggestReplies(args: McpToolArgs, dependencies: ViewerMcpDomainDependen
          converges on the same record instead of minting a twin. */
       operationKey: mcpOperationId("suggest_replies", requestId(args)),
     });
+    /* An ask made only in the chat is lost to an operator who is away
+       (docs/design/orchestrator-reports.md §5.4): the seat tick owes a
+       question report for it, and the answer says so at the moment of asking. */
+    const seatProject = origin.kind === "manager"
+      ? seats.find((seat) => seat.conversationId === origin.conversationId)?.project ?? null
+      : null;
     return {
       recorded: true,
       conversationId,
@@ -5011,6 +5384,9 @@ function suggestReplies(args: McpToolArgs, dependencies: ViewerMcpDomainDependen
       at: recorded.set.at,
       replies: recorded.set.replies.length,
       replaced: recorded.replaced,
+      ...(seatProject && bridgeReportsEnabled(seatProject)
+        ? { reminder: `If the operator is away, they learn this ask only from a question report: file one with key ask:${recorded.set.setId} and the ask in the decision section.` }
+        : {}),
     };
   } catch (error) {
     /* A refused set names the rule it broke and leaves the previous one
@@ -5453,7 +5829,7 @@ export function viewerMcpBindings(
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
-    create_task: createBoardTask,
+    create_task: (args) => createBoardTask(args, domainDependencies),
     update_task: (args) => updateBoardTask(args, domainDependencies),
     create_pipeline: (args, context) => unadmittedOnStoreBusy(() => createPipeline(args, context)),
     pipeline_action: Object.assign(
@@ -5499,7 +5875,7 @@ export function viewerMcpBindings(
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     suggest_replies: (args) => Promise.resolve(suggestReplies(args, domainDependencies)),
     dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
-    bridge_report: (args) => Promise.resolve(bridgeReport(args, domainDependencies)),
+    bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     get_orchestrator: (args) => getOrchestrator(args, domainDependencies),
     /* `async` rather than `Promise.resolve(...)`: this binding refuses by
