@@ -48,6 +48,23 @@ export function BarIslandSlot() {
   return setSlot ? <div ref={setSlot} className="bar-slot" data-bar-island-slot="" style={{ display: "contents" }} /> : null;
 }
 
+const BoardPaneContext = createContext<((pane: HTMLElement | null) => void) | null>(null);
+
+/**
+ * Where the board's columns are, for the Viewer's needs-you panel: it docks
+ * beside the board only while the columns keep room, and the columns' own
+ * pane is what a seat open beside them and the Tasks panel take their width
+ * out of. The kanban board hands its pane in when it mounts.
+ */
+export function BoardPaneProvider({ onPane, children }: { onPane: (pane: HTMLElement | null) => void; children: ReactNode }) {
+  return <BoardPaneContext.Provider value={onPane}>{children}</BoardPaneContext.Provider>;
+}
+
+/** The ref the board puts on its pane. */
+export function useBoardPaneRef(): ((pane: HTMLElement | null) => void) | undefined {
+  return useContext(BoardPaneContext) ?? undefined;
+}
+
 /** At or above this bar width the controls carry their labels and the account switches sit in
     the bar; below it they are icons and the accounts move into ⋯. Measured on a seeded home, the
     uk labels with two account switches and a short project name need about 1 640 px of bar

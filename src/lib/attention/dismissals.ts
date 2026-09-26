@@ -31,6 +31,9 @@ import {
  *    reply-suggestions store. A new dismissal replaces the old one;
  *  - a lane's is its own `dismissedAt`/`dismissedBy` (#1671), which the phone
  *    queue, the group hide and the seat monitor already read;
+ *  - an orchestrator's decision request is resolved in the bridge report log
+ *    itself (`resolvedAsks`), which is the record the report log's tick
+ *    writes too, so the two surfaces are one action on one record;
  *  - a task has none: dismissing a task dismisses what is on it.
  *
  * A dismissal hides only what its maker saw, so nothing here ever has to be
@@ -262,6 +265,8 @@ export interface DismissalPorts {
   /** Stamp or clear a lane. `drawnMovedAt`, when stated, is the movement the
       card drew; a lane that moved since answers `moved` and is not stamped. */
   setPipelineDismissal(pipelineId: string, dismiss: boolean, by: DismissedBy, drawnMovedAt?: number | null): Promise<PipelinePatchResult>;
+  /** Resolve decision requests in the report log, or take the mark back. */
+  resolveReports(seqs: readonly number[], resolve: boolean, by: DismissedBy, at: string): { resolved: number[]; alreadyClear: number[]; unknown: number[] };
 }
 
 export interface DismissOptions {
@@ -305,7 +310,11 @@ function parseSubject(value: unknown): DismissalSubjectRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new DismissalError("INVALID_TARGET", "a subject must be an object");
   const subject = value as Record<string, unknown>;
   if (subject.kind === "pipeline") return parsePipeline(subject);
-  if (subject.kind !== "conversation") throw new DismissalError("INVALID_TARGET", "a subject is a conversation or a pipeline");
+  if (subject.kind === "report") {
+    if (!Number.isInteger(subject.seq) || (subject.seq as number) < 1) throw new DismissalError("INVALID_TARGET", "a report needs its seq");
+    return { kind: "report", seq: subject.seq as number };
+  }
+  if (subject.kind !== "conversation") throw new DismissalError("INVALID_TARGET", "a subject is a conversation, a pipeline or a report");
   const conversationId = optionalId(subject.conversationId, "conversationId");
   const path = optionalId(subject.path, "path");
   if (!conversationId && !path) throw new DismissalError("INVALID_TARGET", "a conversation needs its conversationId or its path");
@@ -335,7 +344,7 @@ export function parseDismissalTarget(value: unknown, options: { allowSubjects: b
   const target = value as Record<string, unknown>;
   switch (target.kind) {
     case "conversation":
-      return parseSubject(target);
+      return parseSubject({ ...target, kind: "conversation" }) as Extract<DismissalTarget, { kind: "conversation" }>;
     case "pipeline":
       return parsePipeline(target);
     case "task":
@@ -500,6 +509,13 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
     (result.moved ? changed : dismissed).push(answer);
   }
 
+  const reports = [...new Set(requested.flatMap((request) => (request.kind === "report" ? [request.seq] : [])))];
+  if (reports.length) {
+    const outcome = ports.resolveReports(reports, !undo, by, at);
+    dismissed.push(...outcome.resolved.map((seq): DismissalSubject => ({ kind: "report", seq })));
+    alreadyClear.push(...outcome.alreadyClear.map((seq): DismissalSubject => ({ kind: "report", seq })));
+  }
+
   if (!dismissed.length && !alreadyClear.length && !changed.length) {
     throw new DismissalError("NOTHING_TO_DISMISS", "the target names nothing that can need the operator");
   }
@@ -509,11 +525,12 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
 /** Production ports, loaded on first use so this module stays free of the
     engine's import graph until a dismissal is actually written. */
 async function productionDismissalPorts(): Promise<DismissalPorts> {
-  const [{ agentRegistry }, { loadTasks }, { getPipeline, setPipelineDismissal }, { loadPipelinesForList }] = await Promise.all([
+  const [{ agentRegistry }, { loadTasks }, { getPipeline, setPipelineDismissal }, { loadPipelinesForList }, { resolveBridgeAsks }] = await Promise.all([
     import("@/lib/agent/registry"),
     import("@/lib/tasks/store"),
     import("@/lib/pipelines/engine"),
     import("@/lib/pipelines/store"),
+    import("@/lib/bridge/store"),
   ]);
   const registry = agentRegistry();
   return {
@@ -530,5 +547,6 @@ async function productionDismissalPorts(): Promise<DismissalPorts> {
     pipelines: () => loadPipelinesForList(),
     pipeline: (pipelineId) => getPipeline(pipelineId) ?? null,
     setPipelineDismissal: (pipelineId, dismiss, by, drawnMovedAt) => setPipelineDismissal(pipelineId, dismiss, by, undefined, drawnMovedAt),
+    resolveReports: (seqs, resolve, by, at) => resolveBridgeAsks(seqs, { by, at, undo: !resolve }),
   };
 }

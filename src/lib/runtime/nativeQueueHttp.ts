@@ -6,9 +6,13 @@ import {
 } from "@/lib/inboxFiles";
 import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { claimMessageAuthor, refuseAnonymous, settleMessageAuthor, teamActor } from "@/lib/team";
+import type { TeamActor } from "@/lib/team/contract";
 import { structuredDeliveryHostForConversation } from "./structuredDeliveryController";
 import type { NativeQueueSnapshot } from "./nativeCodexQueue";
 import { parseRuntimeCommand } from "./commands";
+import type { RuntimeOperationResult } from "./contracts";
+import { nativeQueueDeliveryKey } from "./deliveryDedup";
 import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { structuredHostsEnabled } from "./flags";
@@ -55,6 +59,11 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
       return NextResponse.json({ error: "native queue history is unavailable" }, { status: 503 });
     }
   }
+  /* Who is acting (sign-in-and-team §7.1): a queued message is a message, so
+     in team mode a person needs a member session here exactly as on a send. */
+  const person = teamActor(request);
+  const anonymous = refuseAnonymous(person);
+  if (anonymous) return anonymous as NextResponse;
   let command: ReturnType<typeof parseRuntimeCommand>;
   let body: unknown;
   try { body = await request.json(); }
@@ -114,6 +123,7 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
     try {
       const result = await client.command(command);
       outcome = result.receipt.status === "rejected" ? "refused" : "accepted";
+      stampQueuedAuthor(person, command, result);
       if (result.receipt.status === "queued" || result.receipt.status === "pending") dependencies.kick();
       return NextResponse.json(result, { status: result.receipt.status === "rejected" ? 409 : 202 });
     } catch (error) {
@@ -142,4 +152,29 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
     }
     return admit(staged);
   });
+}
+
+/**
+ * A member's queued words are stamped with the member (sign-in-and-team §7.1).
+ *
+ * The record Codex writes when the entry is finally sent names the version it
+ * carried — `dedup=sha256(<entry>-v<revision>)` — so the author is recorded
+ * under that version's key, and the provenance route turns the key back into
+ * the token the feed reads. The key exists only once the host has admitted
+ * the add or edit (the host mints the entry id), so the claim is taken here,
+ * after admission: a fresh admission names an id nothing else can hold, and a
+ * replay or a refusal claims nothing.
+ */
+function stampQueuedAuthor(person: TeamActor, command: ReturnType<typeof parseRuntimeCommand>, result: RuntimeOperationResult): void {
+  if (command.kind !== "native-queue" || (command.action !== "add" && command.action !== "update")) return;
+  if (result.receipt.status === "rejected") return;
+  const entry = result.receipt.nativeQueue;
+  if (!entry || typeof command.text !== "string") return;
+  settleMessageAuthor(claimMessageAuthor({
+    actor: person,
+    clientMessageId: nativeQueueDeliveryKey(entry.entryId, entry.revision),
+    conversationId: command.conversationId,
+    text: command.text,
+    priorSubmission: () => (result.replayed ? "admitted" : "not-executed"),
+  }));
 }

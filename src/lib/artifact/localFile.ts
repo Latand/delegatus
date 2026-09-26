@@ -1,11 +1,12 @@
 import type { promises as fsp } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import { homeDirectory } from "@/lib/platformHome";
 
 /*
  * Local-file plumbing shared by the artifact routes (/api/artifact and the
- * report frame beneath it): the allowed root, lexical containment and the
+ * report frame beneath it): the allowed roots, lexical containment and the
  * bounded, abortable stream over one pinned descriptor.
  */
 
@@ -28,6 +29,71 @@ export function resolveLocal(raw: string): string {
 
 export function underRoot(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(root + path.sep);
+}
+
+/* Where agents write rendered evidence outside the home directory (#2084):
+   stage specs keep rasters out of the repository and the config root, so
+   renders land under `/var/tmp/<lane>/`. `LLV_EVIDENCE_ROOTS` (a `:`-separated
+   list of absolute directories) replaces the default for an install whose
+   agents write elsewhere. */
+const DEFAULT_EVIDENCE_ROOTS = ["/var/tmp"];
+
+export function evidenceRoots(): string[] {
+  const configured = process.env.LLV_EVIDENCE_ROOTS;
+  const roots = configured === undefined ? DEFAULT_EVIDENCE_ROOTS : configured.split(":");
+  return roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root));
+}
+
+/** SVG is a document; an evidence root serves rasters and nothing else. */
+const EVIDENCE_IMAGE_RE = /\.(?:png|jpe?g|gif|webp|avif|bmp)$/i;
+
+export function isEvidenceImage(pathname: string): boolean {
+  return EVIDENCE_IMAGE_RE.test(pathname);
+}
+
+/** Which root admits a path: home, or an evidence root for a raster image. */
+export type Admission = "home" | "evidence";
+
+/**
+ * Whether a path may be read, and under which root. The home root admits
+ * every previewable artifact; an evidence root admits raster images only.
+ * Callers check the path as written here, then its realpath with
+ * `realpathAdmitted`.
+ */
+export function admittedAs(candidate: string, roots: AllowedRoots): Admission | null {
+  if (underRoot(candidate, roots.home)) return "home";
+  return isEvidenceImage(candidate) && roots.evidence.some((root) => underRoot(candidate, root)) ? "evidence" : null;
+}
+
+/**
+ * Whether a path's realpath stays inside what the path as written was
+ * admitted as, against the realpathed roots (`realAllowedRoots`). A home path
+ * may resolve into either root, so a link out of home into an evidence root
+ * still reads only an image. A path only an evidence root admitted must
+ * resolve to an image under an evidence root: `/var/tmp` is world-writable, and
+ * a link planted there must not read a home file the home root would serve.
+ */
+export function realpathAdmitted(lexical: Admission, real: string, roots: AllowedRoots): boolean {
+  const resolved = admittedAs(real, roots);
+  if (lexical === "home") return resolved !== null;
+  return isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root));
+}
+
+export interface AllowedRoots {
+  home: string;
+  evidence: string[];
+}
+
+export function lexicalAllowedRoots(): AllowedRoots {
+  return { home: homeRoot(), evidence: evidenceRoots() };
+}
+
+/** The same roots with symlinks resolved; a root that does not exist is dropped. */
+export async function realAllowedRoots(): Promise<AllowedRoots> {
+  const real = async (root: string) => fs.realpath(root).catch(() => null);
+  const home = (await real(homeRoot())) ?? homeRoot();
+  const evidence = (await Promise.all(evidenceRoots().map(real))).filter((root): root is string => root !== null);
+  return { home, evidence };
 }
 
 /**

@@ -19,6 +19,7 @@ import { FolderPlus, Search } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { activityMobileMenuEntry } from "./activity/menuEntry";
+import { teamMobileMenuEntry } from "./team/menuEntry";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { openOnboarding } from "./onboarding/useOnboarding";
@@ -58,6 +59,9 @@ interface Props {
   placesKnown?: boolean;
   /** Attention clock owned by Viewer — keeps summary badges in step with the queue. */
   now: number;
+  /** Each project's needs-you count, from the one queue the header and the
+      panel read, so the badge here carries the panel section's number. */
+  needsYouCounts?: ReadonlyMap<string, number>;
   /** Consecutive `/api/files` failures (issue #696). Above zero the board is
       showing an unconfirmed catalog, so the idle empty-state copy is a lie. */
   catalogFailures?: number;
@@ -89,7 +93,7 @@ const NO_FLOWS: Flow[] = [];
  * that used to live here was a second, smaller board beside the real one, and
  * the rail already lists the projects it listed.
  */
-export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, cached = false, placesKnown = loaded, now, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null, onOpenConversation }: Props) {
+export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, cached = false, placesKnown = loaded, now, needsYouCounts, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null, onOpenConversation }: Props) {
   const { t, locale } = useLocale();
   const isMobile = useIsMobile();
   const mobileNav = useMobileNavStore();
@@ -101,8 +105,8 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
   const reconnecting = reach.kind === "reconnecting";
   const degraded = catalogFailures > 0;
   const allSummaries = useMemo(
-    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames),
-    [files, now, workflows, projectCatalog, pipelines, projectDisplayNames],
+    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts),
+    [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
   const summaries = useMemo(
     () => allSummaries.filter((summary) => !archivedProjects.has(summary.project)),
@@ -275,6 +279,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
           { kind: "divider", key: "d-setup" },
           activityMobileMenuEntry(t, mobileNav),
+          teamMobileMenuEntry(t, mobileNav),
           ...onboardingMobileMenuEntries(t, close),
           selfUpdateMobileMenuEntry(t, close),
         ];

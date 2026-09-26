@@ -4,19 +4,24 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { needsDecisionPipelineRows } from "@/components/mobile/mobileBoardModel";
+import { translate, type TFunction } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
 import { buildAttentionQueue } from "../attention";
 import { buildMobileAttentionQueue } from "./attentionQueue";
 import { MobileAttentionSheet } from "./MobileAttentionSheet";
+import { needsYouLaneLine } from "./needsYouPanel";
+
+const t: TFunction = (key, params) => translate("en", key, params);
 
 /*
  * The Needs-you sheet (mobile v2 lane 8, #1439; README §4.1, §4.6): one list
- * of conversations and `needs_decision` pipelines, «Needs you · n» in the
- * header, «Next ›» beside it when there is more than one item — skipping the
- * item on screen and wrapping — rows that name the decision, and nothing at
- * zero but the empty line.
+ * of conversations and `needs_decision` pipelines, «Waiting for you · n» in the
+ * header with «Dismiss all n» beside it and no «Next ›»
+ * (docs/design/needs-you-options.md, option B), rows that name the agent's
+ * role and the decision and carry «Dismiss», a section per project when the
+ * sheet lists more than one, and nothing at zero but the empty line.
  */
 
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
@@ -93,26 +98,34 @@ const FILES = [
 const PIPELINES = [pipeline("pipeline_atlas_p2", "Fast conversation switching", "needs_decision", NOW - 3_600), pipeline("pipeline_atlas_p1", "Board status projection", "running", NOW - 60)];
 const entries = () => buildMobileAttentionQueue(buildAttentionQueue(FILES, NOW, PROJECT), needsDecisionPipelineRows(PIPELINES, PROJECT, NOW));
 
-test("the sheet lists conversations and needs_decision pipelines as one list under «Needs you · n», rows naming the decision", () => {
+test("the sheet lists conversations and needs_decision pipelines as one list under «Waiting for you · n», rows naming the decision", () => {
   const host = mount(<MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
   const sheet = q(host, '[data-mobile2-sheet="attention"]')!;
   expect(sheet).not.toBeNull();
-  expect(sheet.getAttribute("aria-label")).toBe("Needs you · 3");
-  expect(q(host, "h2")!.textContent).toBe("Needs you · 3");
+  expect(sheet.getAttribute("aria-label")).toBe("Waiting for you · 3");
+  expect(q(host, "h2")!.textContent).toBe("Waiting for you · 3");
 
+  /* Oldest wait first, the lane among the conversations: it parked an hour ago. */
   const rows = qa(host, "[data-attention-row]");
-  expect(rows.map((row) => row.getAttribute("data-mobile2-go"))).toEqual(["chat", "chat", null]);
-  expect(rows[0]!.textContent).toContain("Implement the export endpoint");
-  expect(rows[0]!.querySelector("[data-attention-decision]")!.textContent).toBe("a question");
-  expect(rows[0]!.textContent).toContain("9m");
-  expect(rows[0]!.textContent).toContain("gpt-5.6");
-  expect(rows[0]!.querySelector('[data-mobile2-engine="codex"]')).not.toBeNull();
-  expect(rows[1]!.querySelector("[data-attention-decision]")!.textContent).toBe("plan approval");
-  /* The pipeline row: the board's words, prefixed with what it is. */
-  expect(rows[2]!.getAttribute("data-mobile2-pipeline-row")).toBe("pipeline_atlas_p2");
-  expect(rows[2]!.textContent).toContain("Fast conversation switching");
-  expect(rows[2]!.querySelector("[data-attention-decision]")!.textContent).toBe("pipeline · stage 3/5 · review · failed · 2 findings");
-  expect(rows[2]!.textContent).toContain("1h");
+  expect(rows.map((row) => row.getAttribute("data-mobile2-go"))).toEqual([null, "chat", "chat"]);
+  expect(rows[1]!.textContent).toContain("Implement the export endpoint");
+  expect(rows[1]!.querySelector("[data-attention-decision]")!.textContent).toBe("a question");
+  expect(rows[1]!.textContent).toContain("9m");
+  expect(rows[1]!.textContent).toContain("gpt-5.6");
+  expect(rows[1]!.querySelector('[data-mobile2-engine="codex"]')).not.toBeNull();
+  expect(rows[2]!.querySelector("[data-attention-decision]")!.textContent).toBe("plan approval");
+  /* The lane row reads the desktop panel's words for the same lane
+     (`needsYouLaneLine`); its wait gives way to an ellipsis, its age never does. */
+  expect(rows[0]!.getAttribute("data-mobile2-pipeline-row")).toBe("pipeline_atlas_p2");
+  expect(rows[0]!.textContent).toContain("Fast conversation switching");
+  const laneLine = rows[0]!.querySelector("[data-attention-decision]")!;
+  expect(laneLine.textContent).toBe(needsYouLaneLine(t, PIPELINES.find((pipeline) => pipeline.id === "pipeline_atlas_p2")!));
+  expect(laneLine.className).toContain("truncate");
+  expect(laneLine.className).not.toContain("shrink-0");
+  const laneAge = rows[0]!.querySelector("[data-attention-age]")!;
+  /* The desktop panel's words for the same wait (`fmtAge`), minutes up to 90. */
+  expect(laneAge.textContent).toBe("60m ago");
+  expect(laneAge.className).toContain("shrink-0");
   /* Every row is a 44 px target. */
   for (const row of rows) expect(row.className).toContain("min-h-11");
 });
@@ -138,50 +151,77 @@ test("a conversation row opens through the host; a pipeline row is inert until t
   expect(pipelines).toEqual(["pipeline_atlas_p2"]);
 });
 
-test("«Next ›» skips the item on screen and wraps, over both kinds once pipelines can be opened", () => {
-  const opened: string[] = [];
-  const props = { now: NOW, onOpenConversation: (item: { file: FileEntry }) => opened.push(item.file.path), onOpenPipeline: (row: { id: string }) => opened.push(row.id), onClose: () => {} };
-  /* From the board: the head. */
-  let host = mount(<MobileAttentionSheet entries={entries()} {...props} screen={{ kind: "board" }} />);
-  const next = q(host, "[data-attention-next]")!;
-  expect(next.className).toContain("min-h-11");
-  expect(next.getAttribute("aria-label")).toBe("Open the next one that needs you");
-  click(next);
-  for (const root of roots) flushSync(() => root.unmount());
-  roots = [];
-  /* From the first conversation: the second; from the second: the pipeline;
-     from the pipeline: wraps to the first. */
-  for (const screen of [{ kind: "chat" as const, id: "/p/export.jsonl" }, { kind: "chat" as const, id: "/p/migrate.jsonl" }, { kind: "pipeline" as const, id: "pipeline_atlas_p2" }]) {
-    host = mount(<MobileAttentionSheet entries={entries()} {...props} screen={screen} />);
-    click(q(host, "[data-attention-next]"));
-    for (const root of roots) flushSync(() => root.unmount());
-    roots = [];
-  }
-  expect(opened).toEqual(["/p/export.jsonl", "/p/migrate.jsonl", "pipeline_atlas_p2", "/p/export.jsonl"]);
-});
-
-test("without a pipeline opener «Next ›» walks the conversations only, and the row on screen is marked current", () => {
-  const opened: string[] = [];
-  const host = mount(<MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={(item) => opened.push(item.file.path)} onClose={() => {}} screen={{ kind: "chat", id: "/p/migrate.jsonl" }} />);
+test("there is no «Next ›»: the header carries «Dismiss all» instead, and the row on screen is marked current", () => {
+  const calls: Array<{ subjects: unknown; undo: boolean }> = [];
+  const dismiss = (async (_target: unknown, subjects: unknown, options: { undo?: boolean }) => {
+    calls.push({ subjects, undo: options.undo === true });
+    return { ok: true, outcome: { dismissed: [], alreadyClear: [], changed: [], at: "", by: { kind: "operator" }, undo: false } };
+  }) as never;
+  const host = mount(<MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "chat", id: "/p/migrate.jsonl" }} dismiss={dismiss} />);
+  expect(q(host, "[data-attention-next]")).toBeNull();
   expect(q(host, '[data-mobile2-conversation="/p/migrate.jsonl"]')!.getAttribute("aria-current")).toBe("true");
   expect(q(host, '[data-mobile2-conversation="/p/export.jsonl"]')!.getAttribute("aria-current")).toBeNull();
-  /* After the last conversation the pipeline has no door yet, so Next wraps
-     to the first conversation instead of stepping into nowhere. */
-  click(q(host, "[data-attention-next]"));
-  expect(opened).toEqual(["/p/export.jsonl"]);
+  const all = q(host, "[data-needs-you-dismiss-all]")!;
+  expect(all.className).toContain("min-h-11");
+  click(all);
+  expect(calls).toHaveLength(1);
+  expect((calls[0]!.subjects as Array<{ kind: string }>).map((subject) => subject.kind)).toEqual(["conversation", "conversation", "pipeline"]);
 });
 
-test("one item shows no «Next ›», and zero items show the empty line under a bare «Needs you»", () => {
+test("every row names its agent's role with the role's emblem, and «Dismiss» clears that row alone", () => {
+  const calls: Array<{ subjects: unknown }> = [];
+  const dismiss = (async (_target: unknown, subjects: unknown) => {
+    calls.push({ subjects });
+    return { ok: true, outcome: { dismissed: [], alreadyClear: [], changed: [], at: "", by: { kind: "operator" }, undo: false } };
+  }) as never;
+  const files = [
+    { ...FILES[0]!, durableLineage: { kind: "spawn", role: "builder", parentConversationId: null, reviewsConversationId: null, memberships: [] } } as FileEntry,
+    FILES[1]!,
+  ];
+  const list = buildMobileAttentionQueue(buildAttentionQueue(files, NOW, PROJECT), needsDecisionPipelineRows(PIPELINES, PROJECT, NOW));
+  const host = mount(<MobileAttentionSheet entries={list} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} pipelines={PIPELINES} dismiss={dismiss} />);
+  const roles = qa(host, "[data-needs-you-row]").map((row) => row.querySelector("[data-role-tag]")?.getAttribute("data-role"));
+  expect(roles).toEqual(["reviewer", "builder", "neutral"]);
+  expect(q(host, '[data-role-tag="builder"]')!.textContent).toBe("Builder");
+  click(q(host, '[data-needs-you-dismiss="pipeline_atlas_p2"]'));
+  expect(calls).toHaveLength(1);
+  expect(calls[0]!.subjects).toEqual([{ kind: "pipeline", pipelineId: "pipeline_atlas_p2", laneMovedAt: expect.any(Number) }]);
+});
+
+test("across projects the sheet is sectioned, the project on screen first, each section with its own «Dismiss n»", () => {
+  const calls: Array<{ subjects: unknown }> = [];
+  const dismiss = (async (_target: unknown, subjects: unknown) => {
+    calls.push({ subjects });
+    return { ok: true, outcome: { dismissed: [], alreadyClear: [], changed: [], at: "", by: { kind: "operator" }, undo: false } };
+  }) as never;
+  const other = conversation("/q/other.jsonl", "Another project's question", NOW - 30, { project: "borealis" });
+  const list = buildMobileAttentionQueue(buildAttentionQueue([other, ...FILES], NOW), []);
+  const host = mount(<MobileAttentionSheet entries={list} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} current={PROJECT} projectNames={{ borealis: "Borealis" }} dismiss={dismiss} />);
+  const sections = qa(host, "[data-needs-you-section]");
+  expect(sections.map((section) => section.getAttribute("data-needs-you-section"))).toEqual([PROJECT, "borealis"]);
+  expect(sections[1]!.textContent).toContain("Borealis");
+  /* The sheet's «Dismiss all n» and a section's «Dismiss n» never read alike. */
+  const head = q(host, "[data-needs-you-dismiss-all]")!.textContent;
+  const own = q(host, '[data-needs-you-dismiss-section="borealis"]')!.textContent;
+  expect(head).toBe(`Dismiss all ${list.length}`);
+  expect(own).toBe("Dismiss 1");
+  click(q(host, '[data-needs-you-dismiss-section="borealis"]'));
+  expect((calls[0]!.subjects as Array<{ path: string }>).map((subject) => subject.path)).toEqual(["/q/other.jsonl"]);
+  /* A section folds under its header. */
+  flushSync(() => click(q(host, `[data-needs-you-fold="${PROJECT}"]`)));
+  expect(q(host, `[data-needs-you-section="${PROJECT}"] [data-needs-you-row]`) === null).toBe(true);
+});
+
+test("one item counts one, and zero items show the empty line under a bare «Waiting for you» with nothing to dismiss", () => {
   const one = buildMobileAttentionQueue(buildAttentionQueue([FILES[0]!], NOW, PROJECT), []);
   let host = mount(<MobileAttentionSheet entries={one} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
-  expect(q(host, "[data-attention-next]")).toBeNull();
-  expect(q(host, "h2")!.textContent).toBe("Needs you · 1");
+  expect(q(host, "h2")!.textContent).toBe("Waiting for you · 1");
   for (const root of roots) flushSync(() => root.unmount());
   roots = [];
 
   host = mount(<MobileAttentionSheet entries={[]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
-  expect(q(host, "h2")!.textContent).toBe("Needs you");
-  expect(q(host, "[data-attention-next]")).toBeNull();
+  expect(q(host, "h2")!.textContent).toBe("Waiting for you");
+  expect(q(host, "[data-needs-you-dismiss-all]")).toBeNull();
   expect(q(host, "[data-mobile2-attention-empty]")!.textContent).toBe("Nothing needs you.");
   expect(qa(host, "[data-attention-row]")).toHaveLength(0);
 });
@@ -209,9 +249,54 @@ test("a permission row puts its long headline on a truncated line of its own and
   expect(decision.className).toContain("min-w-0");
   expect(decision.className).not.toContain("shrink-0");
   const age = row.querySelector("[data-attention-age]")!;
-  expect(age.textContent).toBe("3m");
+  expect(age.textContent).toBe("3m ago");
   expect(age.parentElement!.contains(decision)).toBe(false);
   expect(age.parentElement!.textContent).toContain("opus");
   expect(q(host, "[data-permission-allow]")).not.toBeNull();
   expect(q(host, "[data-permission-deny]")).not.toBeNull();
+});
+
+test("an agent that asked the operator in prose is a row with its role, its own sentence on a line of its own, and «Dismiss» clears that ask", () => {
+  const calls: Array<{ subjects: unknown }> = [];
+  const dismiss = (async (_target: unknown, subjects: unknown) => {
+    calls.push({ subjects });
+    return { ok: true, outcome: { dismissed: [], alreadyClear: [], changed: [], at: "", by: { kind: "operator" }, undo: false } };
+  }) as never;
+  const askId = "ask:conversation_explore:claude:msg-7";
+  const gist = "Keep the per-format presets, or fold them into one «Export» button?";
+  const file = conversation("/p/explore.jsonl", "Export formats", NOW - 420, {
+    engine: "claude", fmt: "claude", model: "opus", pendingQuestion: null, conversationId: "conversation_explore",
+    durableLineage: { kind: "spawn", role: "architect", parentConversationId: null, reviewsConversationId: null, memberships: [] },
+    operatorAsk: { id: askId, messageAt: (NOW - 420) * 1000, gist },
+  } as unknown as Partial<FileEntry>);
+  const host = mount(<MobileAttentionSheet entries={buildMobileAttentionQueue(buildAttentionQueue([file], NOW, PROJECT), [])} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} dismiss={dismiss} />);
+  const row = q(host, `[data-needs-you-row="${askId}"]`)!;
+  expect(row.querySelector("[data-role-tag]")!.getAttribute("data-role")).toBe("architect");
+  expect(row.querySelector("[data-role-tag]")!.textContent).toBe("Architect");
+  expect(row.textContent).toContain("Export formats");
+  const decision = row.querySelector("[data-attention-decision]")!;
+  expect(decision.textContent).toBe(`asks you: ${gist}`);
+  /* The sentence has its own line; the age stays on the meta line. */
+  const age = row.querySelector("[data-attention-age]")!;
+  expect(age.textContent).toBe("7m ago");
+  expect(age.parentElement!.contains(decision)).toBe(false);
+  click(q(host, `[data-needs-you-dismiss="${askId}"]`));
+  expect(calls[0]!.subjects).toEqual([{ kind: "conversation", conversationId: "conversation_explore", path: "/p/explore.jsonl", reasonId: askId, reason: "ask" }]);
+});
+
+test("an ask row never mounts permission buttons, even when its conversation also holds a permission request", () => {
+  const askId = "ask:conversation_explore:claude:msg-8";
+  const file = conversation("/p/explore.jsonl", "Export formats", NOW - 420, {
+    engine: "claude", fmt: "claude", model: "opus", pendingQuestion: null, conversationId: "conversation_explore",
+    operatorAsk: { id: askId, messageAt: (NOW - 420) * 1000, gist: "Fold the presets into one button?" },
+  } as unknown as Partial<FileEntry>);
+  const queue = buildMobileAttentionQueue(buildAttentionQueue([file], NOW, PROJECT), []);
+  /* Today permission outranks ask, so the queue never builds this pair; the
+     row must not lean on that precedence to keep Allow/Deny off an ask. */
+  file.pendingPermission = { id: "request-9", tool: "Bash", command: "ls", reason: "", reasonType: "safetyCheck", since: new Date((NOW - 60) * 1000).toISOString() } as FileEntry["pendingPermission"];
+  const host = mount(<MobileAttentionSheet entries={queue} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
+  const row = q(host, `[data-needs-you-row="${askId}"]`)!;
+  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("asks you: Fold the presets into one button?");
+  expect(q(host, "[data-permission-actions]")).toBeNull();
+  expect(q(host, "[data-permission-allow]")).toBeNull();
 });

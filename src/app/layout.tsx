@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { PRODUCT_NAME } from "@/lib/brand";
 
+import { TeamSessionGuard } from "@/components/team/TeamSessionGuard";
 import { ROLE_FRAME_BOOT_SCRIPT } from "@/lib/roleFrames";
 
 export const metadata: Metadata = {
@@ -32,6 +33,7 @@ export default function RootLayout({
       </head>
       <body className="h-dvh overflow-hidden font-sans text-[15px]">
         {children}
+        <TeamSessionGuard />
       </body>
     </html>
   );

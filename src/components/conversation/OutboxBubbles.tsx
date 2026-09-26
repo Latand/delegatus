@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 
 import { Loader2 } from "@/components/icons";
 import { UserMessageRow } from "@/components/feed/UserMessageRow";
+import { useMessageProvenance } from "@/components/feed/messageProvenance";
+import { useMeAsSender } from "@/components/team/teamClient";
 import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 import { refreshRuntime } from "@/hooks/useRuntime";
 import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
@@ -129,6 +131,12 @@ export function ConversationMessageRow({
 }) {
   const coarse = useCoarsePointer();
   const [open, setOpen] = useState(false);
+  /* Who sent it, in a team (sign-in-and-team §6.7). The row is this browser's
+     own submission, so until the feed's record names its member, it is the
+     member this browser is signed in as. */
+  const provenance = useMessageProvenance();
+  const me = useMeAsSender();
+  const sender = provenance.senderForSubmission(entry?.id) ?? me;
   /* The transcript's own record IS arrival: once it is here, nothing about the
      delivery is unresolved and the row reads exactly like every other message
      in the conversation. The local entry is still consulted for what only it
@@ -306,6 +314,7 @@ export function ConversationMessageRow({
   return (
     <UserMessageRow
       text={text}
+      sender={sender}
       selectedContext={selectedContext}
       bubbleFooter={attachments ? (
         /* What the submission actually carried, in ONE presentation from the

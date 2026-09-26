@@ -1467,7 +1467,9 @@ function instant(value: string | null | undefined): number {
  * - An ask is the seat's current suggestion set, owed once it is ten minutes
  *   old with no operator message since. It is discharged by a report under
  *   `ask:<setId>`, by its set being retired (the operator answered), or by an
- *   operator message in that conversation at or after the ask. A set replaced
+ *   operator message in that conversation at or after the ask; a question the
+ *   operator resolved in the report log counts as such a message, at the
+ *   moment it was resolved (`seatTickSources` folds it in). A set replaced
  *   by a newer one with no message between stays owed.
  * - The digest remembers the fingerprint of the check BEFORE the newest report
  *   was seen, so a board change between that check and the report still

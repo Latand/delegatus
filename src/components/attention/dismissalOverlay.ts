@@ -44,8 +44,17 @@ interface PipelineEntry {
   until: number;
 }
 
+interface ReportEntry {
+  /** Resolved, or taken back by an undo. */
+  resolved: boolean;
+  until: number;
+}
+
 const conversations = new Map<string, ConversationEntry>();
 const pipelines = new Map<string, PipelineEntry>();
+/* An orchestrator's decision request, by its seq: the needs-you row and the
+   report log's tick read this one layer, so both change on the same click. */
+const reports = new Map<number, ReportEntry>();
 const listeners = new Set<() => void>();
 let version = 0;
 
@@ -68,6 +77,7 @@ function conversationKey(subject: { conversationId?: string | null; path?: strin
 function drop(now: number): void {
   for (const [key, entry] of conversations) if (entry.until <= now) conversations.delete(key);
   for (const [key, entry] of pipelines) if (entry.until <= now) pipelines.delete(key);
+  for (const [key, entry] of reports) if (entry.until <= now) reports.delete(key);
 }
 
 /** Layer a dismissal (or its undo) over what the board draws, now. `local`
@@ -75,6 +85,10 @@ function drop(now: number): void {
 export function layerDismissal(subjects: readonly DismissalSubjectRequest[], mark: { at: string; by: DismissedBy } | null, local: boolean, nowMs = Date.now()): void {
   const until = nowMs + OVERLAY_TTL_MS;
   for (const subject of subjects) {
+    if (subject.kind === "report") {
+      reports.set(subject.seq, { resolved: mark !== null, until });
+      continue;
+    }
     if (subject.kind === "pipeline") {
       pipelines.set(subject.pipelineId, { dismissedAt: mark?.at ?? null, dismissedBy: mark?.by ?? null, drawn: subject.laneMovedAt, local, until });
       continue;
@@ -94,7 +108,8 @@ function atLeast(at: string, floor: number): string {
 /** Take a layer off again: the request was refused. */
 export function unlayerDismissal(subjects: readonly DismissalSubjectRequest[]): void {
   for (const subject of subjects) {
-    if (subject.kind === "pipeline") pipelines.delete(subject.pipelineId);
+    if (subject.kind === "report") reports.delete(subject.seq);
+    else if (subject.kind === "pipeline") pipelines.delete(subject.pipelineId);
     else {
       const key = conversationKey(subject);
       if (key) conversations.delete(key);
@@ -114,16 +129,23 @@ export function overlayDismissals(
   /* An expired layer goes quietly: the next poll re-renders anyway, and a
      store read during render must not change what it answers. */
   drop(nowMs);
-  if (!conversations.size && !pipelines.size) return null;
+  if (!conversations.size && !pipelines.size && !reports.size) return null;
   const sameMark = (a: AttentionDismissalMark | null | undefined, b: AttentionDismissalMark | null) =>
     (a?.at ?? null) === (b?.at ?? null);
-  const nextFiles = conversations.size
+  const nextFiles = conversations.size || reports.size
     ? files.map((file) => {
-      const entry = conversations.get(file.conversationId ?? "") ?? conversations.get(file.path);
-      if (!entry || sameMark(file.attentionDismissal, entry.mark)) return file;
+      const entry = conversations.size ? conversations.get(file.conversationId ?? "") ?? conversations.get(file.path) : undefined;
+      const asks = reports.size ? unresolvedAsks(file) : null;
+      if ((!entry || sameMark(file.attentionDismissal, entry.mark)) && !asks) return file;
       const next = { ...file };
-      delete next.attentionDismissal;
-      if (entry.mark) next.attentionDismissal = entry.mark;
+      if (entry && !sameMark(file.attentionDismissal, entry.mark)) {
+        delete next.attentionDismissal;
+        if (entry.mark) next.attentionDismissal = entry.mark;
+      }
+      if (asks) {
+        next.bridgeAsks = asks;
+        next.bridgeAsk = asks.at(-1) ?? null;
+      }
       return next;
     })
     : [...files];
@@ -138,6 +160,27 @@ export function overlayDismissals(
     })
     : [...lanes];
   return { files: nextFiles, pipelines: nextPipelines };
+}
+
+/** A seat's open asks without the ones resolved on this device, or null when
+    none of them is layered. */
+function unresolvedAsks(file: FileEntry): NonNullable<FileEntry["bridgeAsks"]> | null {
+  const asks = file.bridgeAsks ?? (file.bridgeAsk ? [file.bridgeAsk] : []);
+  if (!asks.some((ask) => ask.seq !== undefined && reports.get(ask.seq)?.resolved)) return null;
+  return asks.filter((ask) => !(ask.seq !== undefined && reports.get(ask.seq)?.resolved));
+}
+
+/** Whether a decision request was resolved (true) or taken back (false) on
+    this device and the server has not been heard from since; undefined when
+    nothing is layered for it. The report log reads its ticks through this. */
+export function layeredReportResolution(seq: number, nowMs = Date.now()): boolean | undefined {
+  const entry = reports.get(seq);
+  return entry && entry.until > nowMs ? entry.resolved : undefined;
+}
+
+/** Re-render on every layer change; the value is only a version. */
+export function useDismissalLayerVersion(): number {
+  return useSyncExternalStore(subscribe, () => version, () => 0);
 }
 
 /** The Viewer's one read: the polled files and lanes with pending dismissals
@@ -203,10 +246,12 @@ export async function sendDismissal(
 }
 
 function subjectKey(subject: DismissalSubject): string {
+  if (subject.kind === "report") return `report:${subject.seq}`;
   return subject.kind === "pipeline" ? `pipeline:${subject.pipelineId}` : `conversation:${subject.conversationId}`;
 }
 
 function requestKey(subject: DismissalSubjectRequest): string {
+  if (subject.kind === "report") return `report:${subject.seq}`;
   return subject.kind === "pipeline" ? `pipeline:${subject.pipelineId}` : `conversation:${subject.conversationId ?? subject.path ?? ""}`;
 }
 
@@ -214,5 +259,6 @@ function requestKey(subject: DismissalSubjectRequest): string {
 export function resetDismissalOverlayForTests(): void {
   conversations.clear();
   pipelines.clear();
+  reports.clear();
   notify();
 }

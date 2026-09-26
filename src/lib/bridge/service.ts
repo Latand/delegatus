@@ -7,10 +7,11 @@ import { bridgeReportsEnabled } from "@/lib/projects/settings";
 import { readEvidenceSync, type Evidence } from "@/lib/runtime/evidence";
 import { sendReceiptFor } from "@/lib/runtime/sendSettlement";
 import { rootIdentity as readRootIdentity } from "@/lib/root/store";
+import { readReplySuggestionsFile } from "@/lib/suggestions/store";
 
 import type { BridgeAsk } from "@/lib/types";
 
-import { openBridgeAsks, type OpenBridgeAskOptions } from "./asks";
+import { bridgeQuestions, openBridgeAsks, type BridgeQuestion, type OpenBridgeAskOptions } from "./asks";
 import {
   acknowledgeBridgeReports,
   appendBridgeReports,
@@ -78,49 +79,100 @@ export function recordManagerReport(input: BridgeReportInput): BridgeReportV1 | 
 export { recordBridgeDirectiveAnswer, recordBridgeDirectivePendingAnswer };
 
 /**
- * The open ask of every orchestrator seat, for the surface that shows the
- * operator what needs them (#1168).
+ * The evidence outside the log that settles a question: whether a parked
+ * directive answer was delivered, and whether the operator has written to the
+ * seat since. Read lazily, once per call, and failable like every other fence
+ * in this path.
+ *
+ * #1131: a directive the runtime only ACCEPTED parked its answer against the
+ * send's operation id, and the durable delivery record is what says whether
+ * that send ever arrived. Read here rather than in the pure projection, and
+ * read fresh on each call, because the answer to "did it arrive" changes
+ * without the log changing — once per call and only if the log has a parked
+ * answer to resolve.
+ *
+ * Letting that read throw was a conversion once, and the worst-shaped one on
+ * this surface: the exception escaped the whole projection into the
+ * fail-closed catch, so ONE unreadable delivery record answered `no open asks`
+ * for every seat in every project, retiring decision requests nobody had
+ * answered. Only `delivered` may clear an ask, so an unreadable record leaves
+ * it standing exactly as a dropped send does, and the memo keeps a failed read
+ * failed for the rest of the call. The operator's messages come from the
+ * reply-suggestion store's admissions, the moment each operator message to a
+ * conversation was first accepted; an unreadable store answers "not since".
+ */
+function questionEvidence(canonical: (id: string) => string): Pick<OpenBridgeAskOptions, "deliveredOperation" | "operatorWroteSince"> {
+  let deliveries: Evidence<RegistryFile> | null = null;
+  let written: Map<string, number> | null = null;
+  return {
+    deliveredOperation: (operationId) => {
+      deliveries ??= readEvidenceSync(
+        () => agentRegistry().readOnlySnapshot(),
+        "the durable delivery record is unavailable",
+      );
+      return deliveries.readable
+        && sendReceiptFor(deliveries.value, operationId)?.state === "delivered";
+    },
+    operatorWroteSince: (seat, atMs) => {
+      if (!written) {
+        written = new Map();
+        try {
+          for (const admission of readReplySuggestionsFile().admissions) {
+            const at = Date.parse(admission.at);
+            if (!Number.isFinite(at)) continue;
+            const key = canonical(admission.conversationId);
+            written.set(key, Math.max(written.get(key) ?? Number.NEGATIVE_INFINITY, at));
+          }
+        } catch {
+          /* no evidence: nothing is answered by it */
+        }
+      }
+      return (written.get(seat) ?? Number.NEGATIVE_INFINITY) >= atMs;
+    },
+  };
+}
+
+/**
+ * The open questions of every orchestrator seat, for the surface that shows
+ * the operator what needs them (#1168).
  *
  * Deliberately outside the drain: it opens no channel, hands out no batch and
  * moves no cursor, because the whole point is that a blocked manager reaches
  * the operator with the voice gateway switched off. Read-only and fail-closed —
- * an unreadable log costs the ask and never the files poll that asked for it.
+ * an unreadable log costs the asks and never the files poll that asked for it.
  */
 export function bridgeAsksForSeats(
   options: Omit<OpenBridgeAskOptions, "now"> & { now?: Date } = {},
-): ReadonlyMap<string, BridgeAsk> {
-  /* #1131: a directive the runtime only ACCEPTED parked its answer against the
-     send's operation id, and the durable delivery record is what says whether
-     that send ever arrived. Read here rather than in the pure projection, and
-     read fresh on each call, because the answer to "did it arrive" changes
-     without the log changing — once per call and only if the log has a parked
-     answer to resolve.
-
-     Failable like every other fence in this path, and the only one of them that
-     is synchronous — which is exactly how it got missed. Letting it throw was a
-     conversion too, and the worst-shaped one on this surface: the exception
-     escaped the whole projection into the fail-closed catch below, so ONE
-     unreadable delivery record answered `no open asks` for every seat in every
-     project, retiring decision requests nobody had answered. Only `delivered`
-     may clear an ask, so an unreadable record leaves it standing exactly as a
-     dropped send does — and the memo keeps a failed read failed for the rest of
-     the call rather than re-reading a store that is down once per parked ref. */
-  let deliveries: Evidence<RegistryFile> | null = null;
+): ReadonlyMap<string, BridgeAsk[]> {
   try {
     return openBridgeAsks(readBridgeReportLog(), {
-      deliveredOperation: (operationId) => {
-        deliveries ??= readEvidenceSync(
-          () => agentRegistry().readOnlySnapshot(),
-          "the durable delivery record is unavailable",
-        );
-        return deliveries.readable
-          && sendReceiptFor(deliveries.value, operationId)?.state === "delivered";
-      },
+      ...questionEvidence(options.canonicalConversationId ?? ((id) => id)),
       ...options,
       now: options.now ?? new Date(),
     });
   } catch {
     return new Map();
+  }
+}
+
+/**
+ * One project's decision requests with where each stands, for the report log's
+ * ticks (#2146). The same projection {@link bridgeAsksForSeats} reads, so a
+ * question the log shows open is exactly one the needs-you panel lists.
+ * Fail-closed to no questions: the log still shows every row, untickable.
+ */
+export function bridgeQuestionsForProject(
+  inProject: (project: string) => boolean,
+  options: Omit<OpenBridgeAskOptions, "now"> & { now?: Date } = {},
+): BridgeQuestion[] {
+  try {
+    return bridgeQuestions(readBridgeReportLog(), {
+      ...questionEvidence(options.canonicalConversationId ?? ((id) => id)),
+      ...options,
+      now: options.now ?? new Date(),
+    }).filter((question) => inProject(question.report.project!));
+  } catch {
+    return [];
   }
 }
 

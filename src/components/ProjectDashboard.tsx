@@ -62,6 +62,7 @@ import { MobileFocusView } from "./mobile/MobileFocusView";
 import { MobileHostSheet } from "./mobile/MobileHostSheet";
 import { MobileSeatCard } from "./mobile/MobileSeatCard";
 import { activityMobileMenuEntry } from "./activity/menuEntry";
+import { teamMobileMenuEntry } from "./team/menuEntry";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
 import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
@@ -2044,6 +2045,7 @@ function ProjectDashboardView({
         onSelect: () => mobileNav.openSheet("host"),
       },
       activityMobileMenuEntry(t, mobileNav),
+      teamMobileMenuEntry(t, mobileNav),
       { kind: "divider", key: "d2" },
     );
     entries.push(

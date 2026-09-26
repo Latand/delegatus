@@ -69,7 +69,7 @@ export function reportLogFixturePage(url: URL, options: {
   seeded ??= { now: Date.now(), entries: seededReports(Date.now()) };
   const all = options.empty ? [] : seeded.entries;
   const revision = `fixture:${all[0]?.seq ?? 0}`;
-  const base = { ok: true as const, project: options.project, bridgeReports: options.enabled, github: options.github, revision };
+  const base = { ok: true as const, project: options.project, bridgeReports: options.enabled, github: options.github, revision, questions: { open: [], resolved: [] } };
   const beforeRaw = url.searchParams.get("before");
   const before = beforeRaw === null ? Number.POSITIVE_INFINITY : Number(beforeRaw);
   if (url.searchParams.get("since") === revision && beforeRaw === null) return { ...base, unchanged: true, entries: [], nextBefore: null };

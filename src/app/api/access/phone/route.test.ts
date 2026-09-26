@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { PhoneGateRefusal, restorePhoneAccessGate, type AccessResponse, type PhoneActionFailure } from "@/lib/access/phoneAccess";
+import { internalServiceHeaders, spawnCapabilityDigest } from "@/lib/agent/callerClaims";
+import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { statePath } from "@/lib/configDir";
+import { claimInstall, createInvite, redeemJoin } from "@/lib/team/members";
+import { MEMBER_COOKIE } from "@/lib/team/sessions";
+import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { gatePhoneAccessBeforeServing } from "@/lib/viewerInstrumentation";
 import { proxy } from "@/proxy";
 import { viewerCandidateGateKey } from "@/runtime-host/candidateContainer";
@@ -670,5 +675,70 @@ describe("a deploy's probes authenticate against a release gated by phone access
     dockerInstall();
     expect(await restorePhoneAccessGate()).toBe("off");
     expect(viewerCandidateGateKey(composeConfig)).toBeNull();
+  });
+});
+
+/* Security review of #2243, P1: on a team install every signed-in member read
+   the tailnet link with the access key in it, and could press "enable" to be
+   handed the key as a cookie. The key outlives a membership, so on a team
+   install it is the owner's alone. */
+describe("on a team install the access key is the owner's", () => {
+  const KEY = "c".repeat(32);
+  let owner = "";
+  let member = "";
+  let teamState = "";
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  beforeEach(() => {
+    teamState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-phone-access-team-"));
+    setEnv("LLV_STATE_DIR", teamState);
+    resetTeamStoreForTests();
+    const store = teamStore();
+    const claimed = claimInstall(store, "Mira", { surface: "desktop", browser: "chrome" });
+    owner = claimed.cookie;
+    member = redeemJoin(store, createInvite(store, claimed.member, null).code, "Oleh", { surface: "phone", browser: "safari" }).cookie;
+    setEnv("LLV_TOKEN", KEY);
+    setEnv("LLV_TS_URL", `https://${STUB_DNS_NAME}/?k=${KEY}`);
+  });
+  afterEach(() => {
+    resetTeamStoreForTests();
+    setEnv("LLV_STATE_DIR", previousStateDir);
+    fs.rmSync(teamState, { recursive: true, force: true });
+  });
+
+  const as = (cookie: string, init: { method?: string; body?: string } = {}) => new NextRequest(`http://127.0.0.1:${PORT}/api/access${init.method ? "/phone" : ""}`, {
+    method: init.method ?? "GET",
+    headers: { host: `127.0.0.1:${PORT}`, cookie: `${MEMBER_COOKIE}=${cookie}`, "content-type": "application/json" },
+    body: init.body,
+  });
+
+  test("a member reads the address without the key, and the owner reads the link", async () => {
+    const memberRead = await (await GET(as(member))).json() as AccessResponse;
+    expect(memberRead.tailnetUrl).toBe(`https://${STUB_DNS_NAME}/`);
+    const ownerRead = await (await GET(as(owner))).json() as AccessResponse;
+    expect(ownerRead.tailnetUrl).toBe(`https://${STUB_DNS_NAME}/?k=${KEY}`);
+  });
+
+  test("an agent reads the address without the key, and a Viewer service still reads the link", async () => {
+    const agentCapability = "a".repeat(43);
+    setCallerConversationResolverForTests((digest) => (digest === spawnCapabilityDigest(agentCapability) ? "conversation_agent" : null));
+    try {
+      const read = (headers: Record<string, string>) => GET(new NextRequest(`http://127.0.0.1:${PORT}/api/access`, { headers: { host: `127.0.0.1:${PORT}`, ...headers } }));
+      const agentRead = await (await read({ "x-llv-spawn-capability": agentCapability })).json() as AccessResponse;
+      expect(agentRead.tailnetUrl).toBe(`https://${STUB_DNS_NAME}/`);
+      const serviceRead = await (await read(internalServiceHeaders("mcp"))).json() as AccessResponse;
+      expect(serviceRead.tailnetUrl).toBe(`https://${STUB_DNS_NAME}/?k=${KEY}`);
+    } finally {
+      setCallerConversationResolverForTests(null);
+    }
+  });
+
+  test("a member cannot turn phone access on or off, and is handed no key", async () => {
+    for (const action of ["enable", "disable"]) {
+      const response = await POST(as(member, { method: "POST", body: JSON.stringify({ action }) }));
+      expect(response.status).toBe(403);
+      expect(response.headers.get("set-cookie") ?? "").not.toContain(KEY);
+    }
+    expect(stub.calls().filter((call) => call.startsWith("serve"))).toEqual([]);
+    expect(process.env.LLV_TOKEN).toBe(KEY);
   });
 });

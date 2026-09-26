@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { claudeMessageProvenance, type DeliveredMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
+import { deliveryDedupToken, NATIVE_QUEUE_DELIVERY_KEY } from "@/lib/runtime/deliveryDedup";
 import type { DeliveredMessageOccurrence } from "@/lib/runtime/messageOrigin";
 import { submissionIdentities } from "@/lib/runtime/submissionIdentity";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { conversationMessageSenders, messageSenders } from "@/lib/team";
+import type { MessageSender } from "@/lib/team/contract";
 import { pathAllowed } from "@/lib/scanner/roots";
 import type { ApiError } from "@/lib/types";
 
@@ -27,6 +32,14 @@ export interface MessageProvenanceResponse {
       the binding depends on the delivered TEXT. Empty when the registry
       cannot answer, and a row with no entry here binds as it did before. */
   submissions: Record<string, string>;
+  /** `submission id → sender` for the submissions this answer names
+      (sign-in-and-team §6.7): which member sent each human message, resolved
+      from the team's own record at read time. Empty on a solo install and
+      for any message sent before a team existed. A queued message is named
+      under its record's dedup token instead: its per-version delivery key is
+      not a submission any row is filed under, so it stays out of
+      `submissions`. */
+  senders: Record<string, MessageSender>;
 }
 
 /**
@@ -42,12 +55,48 @@ export function GET(req: NextRequest): NextResponse<MessageProvenanceResponse | 
   if (!path || !pathAllowed(path)) {
     return NextResponse.json({ error: "path not allowed" }, { status: 403 });
   }
+  const messages = claudeMessageProvenance(path);
+  const occurrences = deliveredMessageOccurrences(path);
+  const submissions = submissionIdentities(path);
+  const ids = [
+    ...Object.values(messages).flatMap((entry) => (entry.submissionId ? [entry.submissionId] : [])),
+    ...occurrences.flatMap((entry) => (entry.submissionId ? [entry.submissionId] : [])),
+    ...Object.values(submissions),
+  ];
   return NextResponse.json(
-    {
-      messages: claudeMessageProvenance(path),
-      occurrences: deliveredMessageOccurrences(path),
-      submissions: submissionIdentities(path),
-    },
+    { messages, occurrences, submissions, senders: { ...queuedSenders(path), ...messageSenders(ids, conversationScope(path)) } },
     { headers: { "Cache-Control": "no-store" } },
   );
+}
+
+/** `dedup token → sender` for the queued messages members sent into the
+    conversation `path` belongs to (sign-in-and-team §7.1). */
+function queuedSenders(path: string): Record<string, MessageSender> {
+  try {
+    const lookup = readOnlyConversationLookupFromSnapshot(agentRegistry().readOnlySnapshot());
+    const conversation = lookup.conversationForPath(path);
+    if (!conversation) return {};
+    const senders: Record<string, MessageSender> = {};
+    for (const [key, sender] of Object.entries(conversationMessageSenders(conversation.id))) {
+      if (NATIVE_QUEUE_DELIVERY_KEY.test(key)) senders[deliveryDedupToken(key)] = sender;
+    }
+    return senders;
+  } catch {
+    return {};
+  }
+}
+
+/** Whether an author row's conversation is the one `path` belongs to. A sender
+    is named only on the conversation the member sent into (sign-in-and-team
+    §7.1); a path the registry cannot place names nobody. */
+function conversationScope(path: string): (conversationId: string) => boolean {
+  try {
+    const lookup = readOnlyConversationLookupFromSnapshot(agentRegistry().readOnlySnapshot());
+    const conversation = lookup.conversationForPath(path);
+    if (!conversation) return () => false;
+    return (conversationId) => conversationId.startsWith("conversation_")
+      && lookup.canonicalConversationId(conversationId as ViewerConversationId) === conversation.id;
+  } catch {
+    return () => false;
+  }
 }

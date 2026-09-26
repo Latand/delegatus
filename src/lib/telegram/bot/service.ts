@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { teamTelegramHook } from "@/lib/team";
 
 import { ensureTelegramStateDir, UnsafeTelegramSessionError } from "../sessionStore";
 
@@ -30,7 +31,7 @@ import {
   type TelegramBotSendAnswer,
   type TelegramBotStatusPayload,
 } from "./contracts";
-import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate } from "./store";
+import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate, type TgUser } from "./store";
 import {
   createBotApiTransport,
   removeBotToken,
@@ -75,6 +76,8 @@ export interface TelegramBotDependencies {
   now(): Date;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   conversationTitle(conversationId: string): string | null;
+  /** The team module's `/start <code>` hook: the reply to send, or null. */
+  signInHook?(input: { from: TgUser | undefined; chatType: string; text: string | undefined }): string | null;
 }
 
 export type PollStep = { next: "continue"; delayMs: number } | { next: "stop" };
@@ -578,6 +581,7 @@ export class TelegramBotService {
       const updates = Array.isArray(result.result) ? result.result : [];
       const applied = store.applyUpdates(updates, now);
       if (applied.maxUpdateId !== null) this.offset = applied.maxUpdateId + 1;
+      await this.answerSignIns(transport, updates, signal);
       const botId = Number(this.storedBotId());
       for (const chatId of applied.needsMembership) {
         const member = await transport.call<{ status?: string }>("getChatMember", { chat_id: Number(chatId), user_id: botId }, { signal });
@@ -608,6 +612,26 @@ export class TelegramBotService {
     }
     store.setReceiving("network_error");
     return { next: "continue", delayMs: this.nextBackoff() };
+  }
+
+  /**
+   * Sign-in through the bot (sign-in-and-team §5.3). A private `/start <code>`
+   * is handed to the team module — `from` and the text only —
+   * and the bot answers in that chat with what happened. The message itself
+   * was stored above like any other; a failed reply is only a reply.
+   */
+  private async answerSignIns(transport: BotTransport, updates: readonly TgUpdate[], signal: AbortSignal): Promise<void> {
+    for (const update of updates) {
+      const message = update.message;
+      if (!message || message.chat.type !== "private" || !message.text?.startsWith("/start")) continue;
+      const reply = this.deps.signInHook?.({ from: message.from, chatType: message.chat.type, text: message.text }) ?? null;
+      if (!reply || signal.aborted) continue;
+      try {
+        await transport.call("sendMessage", { chat_id: message.chat.id, text: reply }, { signal });
+      } catch {
+        /* the sign-in page still shows the outcome */
+      }
+    }
   }
 
   /* ---- the agent surface ----------------------------------------------- */
@@ -841,6 +865,7 @@ export function productionTelegramBotDependencies(): TelegramBotDependencies {
       }
       signal.addEventListener("abort", done, { once: true });
     }),
+    signInHook: (input) => teamTelegramHook(input),
     conversationTitle: (conversationId) => {
       const conversation = agentRegistry().conversation(conversationId as Parameters<ReturnType<typeof agentRegistry>["conversation"]>[0]);
       const title = conversation?.generations.at(-1)?.launchProfile.title;

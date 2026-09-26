@@ -1,5 +1,4 @@
 import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardModel";
-import type { MobileScreen } from "@/components/mobile/mobileNav";
 import { overviewPipelineRows } from "@/components/mobile/overviewPhone";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
@@ -10,15 +9,17 @@ import { buildAttentionQueue, type AttentionItem } from "../attention";
  * The phone's ONE attention list (issue #1439, lane 8; docs/design/mobile-v2/
  * README.md §4.1, §4.6): conversations waiting on the operator and pipelines
  * in `needs_decision`, as one ordered list. The bar's badge counts it, the
- * Needs-you sheet lists it, the sheet's «Next ›» walks it — three entries to
- * one queue, so none of them can promise an item another cannot reach. The
- * desktop island reads the same list since #2129 (`buildNeedsYouQueue`).
+ * Needs-you sheet lists it — two entries to one queue, so neither can promise
+ * an item the other cannot reach. The desktop control and its panel read the
+ * same list since #2129 (`buildNeedsYouQueue`); since option B of
+ * docs/design/needs-you-options.md nothing walks it but the N key, over the
+ * project on screen.
  *
  * Pure on purpose. The conversation half is `buildAttentionQueue`'s answer,
  * already scoped and ordered (blocked before stalled, oldest signal first);
  * the pipeline half is `needsDecisionPipelineRows`, the same rows the board's
  * Needs-you section renders. This module only joins them, in the order the
- * board shows them, and answers "which one is next from here".
+ * board shows them.
  */
 
 export type MobileAttentionEntry =
@@ -40,7 +41,7 @@ export function buildMobileAttentionQueue(
 
 /**
  * Everything that needs the operator, in every project (#2129): the ONE list
- * the desktop island counts, lists and walks with «Next ›», and the one the
+ * the desktop control counts and its panel lists by project, and the one the
  * phone's ⚠ badge slices by the project behind it. Parked lanes are the second
  * authority (docs/design/needs-attention.md §1) and ride beside the
  * conversations, so a lane the card names counts in the header too, and a lane
@@ -64,32 +65,4 @@ export const laneFocusId = (path: string): string | null => (path.startsWith(LAN
 /** The project an entry belongs to. */
 export function attentionEntryProject(entry: MobileAttentionEntry): string {
   return entry.kind === "conversation" ? entry.item.project : entry.row.pipeline.project;
-}
-
-/** Whether `entry` is what the screen on top of the stack shows: the
-    conversation screen is keyed by the transcript path, the pipeline screen
-    by the pipeline id. */
-export function isCurrentAttentionEntry(entry: MobileAttentionEntry, screen: MobileScreen | null): boolean {
-  if (!screen) return false;
-  if (entry.kind === "conversation") return screen.kind === "chat" && screen.id === entry.item.file.path;
-  return screen.kind === "pipeline" && screen.id === entry.row.id;
-}
-
-/**
- * The entry «Next ›» goes to from `screen`: the one after the item the
- * operator is looking at, wrapping past the end; the first (or, backward, the
- * last) when the screen shows none of them. The item on screen is never the
- * answer — with a single entry, and that entry open, there is nowhere to go
- * and the sheet has no Next to offer.
- */
-export function nextMobileAttention(
-  entries: readonly MobileAttentionEntry[],
-  screen: MobileScreen | null,
-  dir: 1 | -1 = 1,
-): MobileAttentionEntry | null {
-  if (!entries.length) return null;
-  const here = entries.findIndex((entry) => isCurrentAttentionEntry(entry, screen));
-  if (here === -1) return dir === 1 ? entries[0]! : entries[entries.length - 1]!;
-  const target = (here + dir + entries.length) % entries.length;
-  return target === here ? null : entries[target]!;
 }

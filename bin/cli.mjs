@@ -44,6 +44,7 @@ import {
   selfUpdatePaths,
   watchRestartRequests,
 } from "./self-update-supervisor.mjs";
+import { probeHeadersFrom } from "./internalService.mjs";
 import { findLegacySystemdUnits, legacySystemdNotice } from "./legacySystemd.mjs";
 import { linkSkills } from "./skillLinks.mjs";
 
@@ -971,6 +972,17 @@ async function prepareRuntime(options) {
 }
 
 async function main() {
+  /* `delegatus team …` (sign-in-and-team §5.5): the host's recovery of a
+     team's sign-in. It touches the team file only and starts nothing. */
+  if (process.argv[2] === "team") {
+    const packageRoot = findPackageRoot(cliDir);
+    const { runTeamCommand } = await import("./team.mjs");
+    process.exitCode = await runTeamCommand(process.argv.slice(3), {
+      stateDirectory: cliRuntimeHostConfig(packageRoot).stateDirectory,
+      port: DEFAULT_PORT,
+    });
+    return;
+  }
   const options = parseArgs(process.argv.slice(2));
   /* Phone access turned on from the setup guide is remembered as a file; its
      presence stands for --tailscale. */
@@ -1176,7 +1188,7 @@ async function main() {
         const handle = launchWeb(release, true);
         try {
           await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
-          const page = await probePageAndChunk(options.port);
+          const page = await probePageAndChunk(options.port, undefined, probeHeadersFrom(runtimeHostConfig.stateDirectory));
           if (page) throw new Error(page);
           handle.state.restarting = false;
           if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");

@@ -189,6 +189,11 @@ export function buildProjectSummaries(
   projectCatalog: ProjectCatalogEntry[] = [],
   pipelines: Pipeline[] = [],
   projectDisplayNames: Readonly<Record<string, string>> = {},
+  /** Each project's needs-you count (`needsYouCounts` over the one queue the
+      header and the panel read). Given, it is the attention count, so the
+      rail's ⏸, the panel's section and the header carry one number; a
+      dismissed lane or a paused one no longer counts. */
+  needsYou?: ReadonlyMap<string, number>,
 ): ProjectSummary[] {
   const map = new Map<string, ProjectSummary>();
   const summaryFor = (key: string, displayName = projectDisplayName(key)): ProjectSummary => {
@@ -234,6 +239,9 @@ export function buildProjectSummaries(
     if (pipeline.state === "needs_decision" || pipeline.state === "needs_review" || pipeline.state === "paused") summary.attentionCount += 1;
     summary.smt = Math.max(summary.smt, (Date.parse(pipeline.createdAt) || 0) / 1000);
   }
+  if (needsYou) {
+    for (const summary of map.values()) summary.attentionCount = needsYou.get(summary.project) ?? 0;
+  }
   return [...map.values()].sort((a, b) => {
     const al = a.attentionCount > 0;
     const bl = b.attentionCount > 0;
@@ -256,6 +264,21 @@ export function partitionCrownedSummaries<T extends { project: string }>(
   const rest: T[] = [];
   for (const row of rows) (crowned.has(row.project) ? pinned : rest).push(row);
   return { crowned: pinned, rest };
+}
+
+/**
+ * The projects in the order the rail lists them: crowned, then the rest, then
+ * the archive. The needs-you panel orders its sections by it, so the two
+ * columns on either side of the board read the projects the same way down.
+ */
+export function railProjectOrder(
+  summaries: readonly ProjectSummary[],
+  crowned: ReadonlySet<string>,
+  archived: ReadonlySet<string>,
+): string[] {
+  const active = summaries.filter((summary) => !archived.has(summary.project));
+  const { crowned: pinned, rest } = partitionCrownedSummaries(active, crowned);
+  return [...pinned, ...rest, ...summaries.filter((summary) => archived.has(summary.project))].map((summary) => summary.project);
 }
 
 export interface BranchColumn {

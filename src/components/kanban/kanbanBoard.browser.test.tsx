@@ -11386,3 +11386,604 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("a task's album: every picture its agents made, one click from the card", () => {
+  /*
+   * The album button sits in a task card's foot with the picture count and a
+   * dot while some are new; it opens the album, newest first and grouped by
+   * stage or conversation, each group naming its source with a link to it and
+   * each new picture marked; a picture opens in the feed's full-screen viewer
+   * and its arrows step through the album. The phone's task screen carries
+   * the same entry as a row, and the album takes the whole phone screen.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t album
+   *
+   * Frames go to TASK_ALBUM_PNG_DIR (default `.artifacts/task-album/`);
+   * readings to `evidence/task-album/readings.json`.
+   */
+  browserTest("the card's album button, the album at 1440 and 390, and the viewer opened from it — en and uk", async () => {
+    const out = path.resolve(".artifacts/task-album");
+    const pngDir = process.env.TASK_ALBUM_PNG_DIR ?? out;
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/task-album", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const url = `${server.base}?album=1`;
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const albumReading = (page: Page) => page.evaluate(() => {
+      const album = document.querySelector<HTMLElement>("[data-task-album]")!;
+      const dialog = album.querySelector<HTMLElement>("[role=dialog]")!;
+      const body = album.querySelector<HTMLElement>("[data-album-body]")!;
+      const rect = dialog.getBoundingClientRect();
+      return {
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        dialog: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+        backdrop: getComputedStyle(album).backgroundColor,
+        sideways: body.scrollWidth - body.clientWidth,
+        groups: [...album.querySelectorAll<HTMLElement>("[data-album-group]")].map((group) => ({
+          label: group.querySelector("h3")?.textContent ?? null,
+          link: group.querySelector("[data-album-source]")?.getAttribute("href") ?? null,
+          items: [...group.querySelectorAll<HTMLElement>("[data-album-item]")].map((tile) => tile.dataset.albumItem),
+        })),
+        fresh: [...album.querySelectorAll<HTMLElement>("[data-album-item-new='1']")].map((tile) => tile.dataset.albumItem),
+        /* How each tile's thumbnail draws: its border colour and whether it
+           carries the corner mark. New tiles must differ without any text. */
+        thumbs: [...album.querySelectorAll<HTMLElement>("[data-album-item]")].map((tile) => {
+          const thumb = tile.querySelector<HTMLElement>(":scope > button")!;
+          const style = getComputedStyle(thumb);
+          return { id: tile.dataset.albumItem, isNew: tile.dataset.albumItemNew === "1", border: style.borderTopColor, ring: style.boxShadow, mark: Boolean(thumb.querySelector("[data-album-new-mark]")) };
+        }),
+        accent: (() => { const probe = document.createElement("span"); probe.style.color = "var(--color-accent)"; document.body.appendChild(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; })(),
+        newCount: album.querySelector("[data-album-new-count]")?.textContent ?? null,
+        /* Tiles overlapping one another, or wider than the dialog. */
+        tileOverlaps: (() => {
+          const tiles = [...album.querySelectorAll<HTMLElement>("[data-album-item] > button")].map((tile) => tile.getBoundingClientRect());
+          let overlaps = 0;
+          for (let i = 0; i < tiles.length; i += 1) for (let j = i + 1; j < tiles.length; j += 1) {
+            const a = tiles[i]!, b = tiles[j]!;
+            if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps += 1;
+          }
+          return overlaps;
+        })(),
+        tileWidths: [...album.querySelectorAll<HTMLElement>("[data-album-item] > button")].map((tile) => Math.round(tile.getBoundingClientRect().width)),
+        closeSize: (() => { const close = album.querySelector<HTMLElement>("[data-album-close]")!.getBoundingClientRect(); return [Math.round(close.width), Math.round(close.height)]; })(),
+      };
+    });
+    /* Checks both widths share: the new tiles and only they are drawn
+       differently, and no heading carries a bare number after its stage. */
+    const albumMarks = (label: string, album: Awaited<ReturnType<typeof albumReading>>) => {
+      for (const thumb of album.thumbs) {
+        const accented = thumb.border === album.accent;
+        if (thumb.isNew !== accented || thumb.isNew !== thumb.mark || thumb.isNew !== (thumb.ring !== "none")) failures.push(`${label}: tile ${thumb.id} (new=${thumb.isNew}) draws ${JSON.stringify(thumb)} against accent ${album.accent}`);
+      }
+      for (const group of album.groups) if (/^[^·]+ · \d/.test(group.label ?? "")) failures.push(`${label}: the heading «${group.label}» reads as a count`);
+    };
+    const viewerReading = (page: Page) => page.evaluate(() => {
+      const text = (selector: string) => document.querySelector(selector)?.textContent ?? null;
+      const clipped = (selector: string) => { const element = document.querySelector<HTMLElement>(selector); return element ? element.scrollWidth > element.clientWidth + 1 : null; };
+      const toolbar = document.querySelector("[data-lightbox-position]")!.parentElement!;
+      return {
+        position: text("[data-lightbox-position]"),
+        caption: text("[data-lightbox-caption] > span:first-child"),
+        detail: text("[data-lightbox-detail]"),
+        captionClipped: clipped("[data-lightbox-caption] > span:first-child"),
+        detailClipped: clipped("[data-lightbox-detail]"),
+        buttons: [...toolbar.querySelectorAll("button")].map((button) => { const rect = button.getBoundingClientRect(); return [Math.round(rect.width), Math.round(rect.height)]; }),
+      };
+    });
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        /* Desktop. */
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, "light", lang);
+          try {
+            const button = page.locator(`${card("t-search")} [data-album-button="t-search"]`);
+            await button.waitFor({ timeout: 30_000 });
+            await page.locator(card("t-search")).scrollIntoViewIfNeeded();
+            await page.locator(card("t-search")).screenshot({ path: path.join(pngDir, `${label}-card.png`) });
+            const cardReading = await page.evaluate(() => {
+              const cardElement = document.querySelector<HTMLElement>('[data-kanban-board] .card[data-id="task:t-search"]')!;
+              const albumButton = cardElement.querySelector<HTMLElement>("[data-album-button]")!;
+              const foot = cardElement.querySelector<HTMLElement>(".foot")!;
+              const box = (element: Element) => { const rect = element.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }; };
+              const siblings = [...foot.children].filter((child) => child !== albumButton && child.getBoundingClientRect().width > 0 && !child.classList.contains("spacer")).map(box);
+              const own = box(albumButton);
+              return {
+                text: albumButton.textContent,
+                fresh: albumButton.dataset.albumFresh,
+                dot: Boolean(albumButton.querySelector(".album-dot")),
+                insideCard: own.left >= box(cardElement).left - 0.5 && own.right <= box(cardElement).right + 0.5,
+                overlapsFoot: siblings.some((other) => own.left < other.right - 0.5 && other.left < own.right - 0.5 && own.top < other.bottom - 0.5 && other.top < own.bottom - 0.5),
+                newText: albumButton.querySelector("[data-album-card-new]")?.textContent ?? null,
+                /* The foot keeps one line: every visible child shares the album button's line. */
+                footLines: new Set([...foot.children].filter((child) => child.getBoundingClientRect().width > 0 && !child.classList.contains("spacer")).map((child) => { const rect = child.getBoundingClientRect(); return Math.round((rect.top + rect.bottom) / 2); })).size,
+                exportFresh: document.querySelector<HTMLElement>('[data-album-button="t-export"]')?.dataset.albumFresh ?? null,
+                buttonsOnBoard: document.querySelectorAll("[data-album-button]").length,
+              };
+            });
+            readings[`${label}-card`] = cardReading;
+            const newWords = lang === "en" ? "3 new" : "3 нові";
+            if (!cardReading.text?.startsWith("7") || cardReading.newText !== newWords || cardReading.fresh !== "1" || !cardReading.dot) failures.push(`${label}: the card button reads ${JSON.stringify(cardReading)}`);
+            if (!cardReading.insideCard || cardReading.overlapsFoot) failures.push(`${label}: the card button leaves the card or overlaps the foot: ${JSON.stringify(cardReading)}`);
+            if (cardReading.footLines !== 1) failures.push(`${label}: the card foot wraps onto ${cardReading.footLines} lines`);
+            if (cardReading.exportFresh !== "0") failures.push(`${label}: the seen album still reads as new`);
+            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons on the board, expected the two tasks with pictures`);
+
+            await button.click();
+            await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
+            await page.waitForTimeout(400);
+            await page.screenshot({ path: path.join(pngDir, `${label}-album.png`) });
+            const album = await albumReading(page);
+            readings[`${label}-album`] = album;
+            const order = album.groups.flatMap((group) => group.items);
+            if (JSON.stringify(order) !== JSON.stringify(["a1", "a2", "a3", "a4", "a5", "a6", "a7"])) failures.push(`${label}: the album order is ${JSON.stringify(order)}`);
+            if (JSON.stringify(album.fresh) !== JSON.stringify(["a1", "a2", "a3"])) failures.push(`${label}: the new pictures are ${JSON.stringify(album.fresh)}`);
+            if (album.groups.some((group) => !group.link?.startsWith("#c="))) failures.push(`${label}: a group has no link to its conversation`);
+            if (album.sideways > 0 || album.tileOverlaps) failures.push(`${label}: the grid scrolls sideways (${album.sideways}) or overlaps (${album.tileOverlaps})`);
+            if (album.dialog.right > album.viewport.width || album.dialog.bottom > album.viewport.height) failures.push(`${label}: the album leaves the window`);
+            if (album.backdrop === "rgba(0, 0, 0, 0)") failures.push(`${label}: the album does not dim the board behind it`);
+            albumMarks(label, album);
+            const cardAfter = await page.evaluate(() => document.querySelector<HTMLElement>('[data-album-button="t-search"]')?.dataset.albumFresh ?? null);
+            if (cardAfter !== "0") failures.push(`${label}: the card's new dot did not clear after opening`);
+
+            await page.locator("[data-album-item='a1'] > button").click();
+            await page.waitForSelector("[data-lightbox-position]", { timeout: 5_000 });
+            await page.keyboard.press("ArrowRight");
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}-viewer.png`) });
+            const viewer = await viewerReading(page);
+            readings[`${label}-viewer`] = viewer;
+            const position = viewer.position;
+            if (viewer.caption !== "after-swap-phone-390.png" || !viewer.detail?.includes(lang === "en" ? "attempt 2" : "спроба 2")) failures.push(`${label}: the viewer's caption reads ${JSON.stringify(viewer)}`);
+            if (position?.trim() !== "2 / 7") failures.push(`${label}: the viewer's arrow went to ${position}`);
+            await page.keyboard.press("Escape");
+            if (!await page.locator("[data-task-album]").count()) failures.push(`${label}: Escape in the viewer closed the album too`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+        /* Phone. */
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(500);
+            const phoneCard = page.locator('[data-phone-card="task:t-search"]').first();
+            await phoneCard.scrollIntoViewIfNeeded();
+            await phoneCard.click();
+            const row = page.locator('[data-phone-task-album="t-search"]');
+            await row.waitFor({ timeout: 10_000 });
+            await row.scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(pngDir, `${label}-task-screen.png`) });
+            const rowReading = await row.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return { text: element.textContent, fresh: element.getAttribute("data-album-fresh"), height: Math.round(rect.height), right: rect.right, width: window.innerWidth };
+            });
+            readings[`${label}-row`] = rowReading;
+            if (rowReading.fresh !== "1" || rowReading.height < 44 || rowReading.right > rowReading.width) failures.push(`${label}: the task screen's album row reads ${JSON.stringify(rowReading)}`);
+            await row.click();
+            await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
+            await page.waitForTimeout(400);
+            await page.screenshot({ path: path.join(pngDir, `${label}-album.png`) });
+            const album = await albumReading(page);
+            readings[`${label}-album`] = album;
+            if (album.dialog.left !== 0 || album.dialog.top !== 0 || round(album.dialog.right) !== 390) failures.push(`${label}: the album does not take the phone screen: ${JSON.stringify(album.dialog)}`);
+            if (album.sideways > 0 || album.tileOverlaps) failures.push(`${label}: the grid scrolls sideways (${album.sideways}) or overlaps (${album.tileOverlaps})`);
+            if (album.closeSize.some((size) => size < 44)) failures.push(`${label}: the close button is ${JSON.stringify(album.closeSize)}`);
+            albumMarks(label, album);
+            /* The header's «N new» brings the first new tile back from the bottom. */
+            await page.evaluate(() => { const body = document.querySelector<HTMLElement>("[data-album-body]")!; body.scrollTop = body.scrollHeight; });
+            await page.waitForTimeout(150);
+            await page.locator("button[data-album-new-count]").click();
+            await page.waitForTimeout(700);
+            const jump = await page.evaluate(() => {
+              const body = document.querySelector<HTMLElement>("[data-album-body]")!.getBoundingClientRect();
+              const first = document.querySelector<HTMLElement>("[data-album-item-new='1'] > button")!;
+              const rect = first.getBoundingClientRect();
+              const button = document.querySelector<HTMLElement>("button[data-album-new-count]")!.getBoundingClientRect();
+              return { inView: rect.top >= body.top - 0.5 && rect.bottom <= body.bottom + 0.5, focused: document.activeElement === first, button: [Math.round(button.width), Math.round(button.height)] };
+            });
+            readings[`${label}-jump`] = jump;
+            if (!jump.inView || !jump.focused || jump.button[1]! < 44) failures.push(`${label}: «N new» did not bring the first new tile into view: ${JSON.stringify(jump)}`);
+            await page.evaluate(() => { document.querySelector<HTMLElement>("[data-album-body]")!.scrollTop = 0; });
+            await page.waitForTimeout(150);
+            await page.locator("[data-album-item='a2'] > button").click();
+            await page.waitForSelector("[data-lightbox-position]", { timeout: 5_000 });
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}-viewer.png`) });
+            const viewer = await viewerReading(page);
+            readings[`${label}-viewer`] = viewer;
+            /* On the phone the source takes its own line: the name, the stage and the age all read in full. */
+            if (viewer.caption !== "after-swap-phone-390.png" || !viewer.detail?.includes(lang === "en" ? "attempt 2" : "спроба 2") || !/\d/.test(viewer.detail.split("·").at(-1) ?? "") || viewer.captionClipped || viewer.detailClipped) failures.push(`${label}: the viewer's caption reads ${JSON.stringify(viewer)}`);
+            if (viewer.buttons.some(([width, height]) => width! < 44 || height! < 44)) failures.push(`${label}: a viewer toolbar button is under 44px: ${JSON.stringify(viewer.buttons)}`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync("evidence/task-album/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
+describe("needs-you panel: renders and readings over the real Viewer", () => {
+  /*
+   * docs/design/needs-you-options.md, option B, as built: the header control,
+   * the panel docked and floating, a dismissal with its Undo, a project's
+   * «Dismiss all», the report log's question ticks, and the phone's sheet and
+   * report screen, over `src/components/attention/needsYouPanel.fixture.tsx`
+   * at 1440×900 and 390×844 in uk and en. The frames are for the operator's
+   * eyes and go outside the repository; the readings each frame is checked
+   * against are committed under evidence/needs-you-panel/.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "needs-you panel"
+   *
+   * NEEDS_YOU_PANEL_OUT overrides where the frames go.
+   */
+  const OUT = process.env.NEEDS_YOU_PANEL_OUT?.trim()
+    || path.join(process.env.HOME ?? "/tmp", "Pictures/delegatus-review/needs-you-b");
+  const DESKTOP = { width: 1440, height: 900 } as const;
+  const PHONE = { width: 390, height: 844 } as const;
+  type Page = Awaited<ReturnType<typeof openFixture>>["page"];
+
+  const chipCount = (page: Page) => page.evaluate(() => Number((document.querySelector("[data-attention-count]")?.textContent ?? "").replace(/\D+/g, "")));
+  const panelReading = (page: Page) => page.evaluate(() => {
+    const panel = document.querySelector("[data-needs-you-panel]");
+    const rows = [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-row]")];
+    return {
+      placement: panel?.getAttribute("data-needs-you-panel") ?? null,
+      title: panel?.querySelector("[data-needs-you-title]")?.textContent ?? null,
+      sections: [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]")].map((section) => [
+        section.getAttribute("data-needs-you-section"),
+        Number(section.querySelector("[data-needs-you-section-count]")?.textContent ?? "0"),
+        section.hasAttribute("data-folded"),
+      ]),
+      roles: rows.map((row) => row.getAttribute("data-needs-you-role")),
+      rowsWithoutTag: rows.filter((row) => !row.querySelector("[data-role-tag] .role-tag-emblem svg")).length,
+      tagColours: [...new Set(rows.map((row) => {
+        const emblem = row.querySelector(".role-tag-emblem") as HTMLElement | null;
+        return emblem ? `${row.getAttribute("data-needs-you-role")}:${getComputedStyle(emblem).backgroundColor}` : "";
+      }))],
+      next: document.querySelectorAll("[data-attention-next]").length,
+      title_: document.title,
+    };
+  });
+  /* The header bar's project name, whole or cut, and the rail's project order.
+     Whole is the name's ink against its box, unrounded: Chrome draws the
+     ellipsis for a fraction of a pixel that `scrollWidth` and `clientWidth`
+     both round away. */
+  const barReading = (page: Page) => page.evaluate(() => {
+    const name = document.querySelector('[data-bar="project"] [data-bar-group="where"] h1') as HTMLElement | null;
+    const flip = [...document.querySelectorAll("[data-flip-key]")].map((row) => row.getAttribute("data-flip-key") ?? "");
+    const range = document.createRange();
+    if (name) range.selectNodeContents(name);
+    const ink = name ? range.getBoundingClientRect().width : null;
+    const box = name ? name.getBoundingClientRect().width : null;
+    return { name: name?.textContent ?? null, whole: ink !== null && box !== null ? ink <= box : null, ink, box, rail: flip.filter((key) => !key.startsWith("__")) };
+  });
+  /* The phone sheet's geometry: every row's age inside its line and its row,
+     a cut wait ending in an ellipsis, and every section header's name, count
+     and «Dismiss n» on screen and apart. */
+  const sheetGeometry = (page: Page) => page.evaluate(() => {
+    const sheet = document.querySelector('[data-mobile2-sheet="attention"]')!;
+    const width = document.documentElement.clientWidth;
+    const rows = [...sheet.querySelectorAll("[data-needs-you-row]")].map((row) => {
+      const box = row.querySelector("[data-attention-row]")!.getBoundingClientRect();
+      const age = row.querySelector("[data-attention-age]");
+      const line = age?.parentElement ?? null;
+      const decision = row.querySelector("[data-attention-decision]") as HTMLElement | null;
+      const ageBox = age?.getBoundingClientRect() ?? null;
+      const lineBox = line?.getBoundingClientRect() ?? null;
+      const cut = decision ? decision.scrollWidth > decision.clientWidth : false;
+      return {
+        id: row.getAttribute("data-needs-you-row"),
+        age: age?.textContent ?? null,
+        ageInside: Boolean(ageBox && lineBox && ageBox.right <= lineBox.right + 0.5 && ageBox.right <= box.right + 0.5 && ageBox.left >= lineBox.left - 0.5),
+        decision: decision?.textContent ?? null,
+        cut,
+        ellipsis: !cut || (decision ? getComputedStyle(decision).textOverflow === "ellipsis" : false),
+      };
+    });
+    const sections = [...sheet.querySelectorAll("[data-needs-you-section]")].map((section) => {
+      const fold = section.querySelector("[data-needs-you-fold]")!;
+      const name = fold.querySelector(".truncate") as HTMLElement;
+      const count = section.querySelector("[data-needs-you-section-count]")!.getBoundingClientRect();
+      const dismiss = section.querySelector("[data-needs-you-dismiss-section]")!;
+      const button = dismiss.getBoundingClientRect();
+      const nameBox = name.getBoundingClientRect();
+      return {
+        project: section.getAttribute("data-needs-you-section"),
+        folded: section.hasAttribute("data-folded"),
+        count: Number(section.querySelector("[data-needs-you-section-count]")!.textContent),
+        dismiss: dismiss.textContent,
+        onScreen: [nameBox, count, button].every((box) => box.left >= 0 && box.right <= width && box.width > 0),
+        apart: nameBox.right <= count.left + 0.5 && count.right <= button.left + 0.5,
+        nameWhole: name.scrollWidth <= name.clientWidth,
+      };
+    });
+    return {
+      title: sheet.querySelector("h2")?.textContent ?? null,
+      head: sheet.querySelector("[data-needs-you-dismiss-all]")?.textContent ?? null,
+      rows,
+      sections,
+    };
+  });
+  const shot = async (page: Page, lang: string, name: string) => {
+    const file = path.join(OUT, lang, `${name}.png`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: file });
+  };
+
+  browserTest("the panel, its dismissals, the report log's ticks and the phone, in uk and en", async () => {
+    const work = path.resolve(".artifacts/needs-you-panel");
+    fs.mkdirSync(work, { recursive: true });
+    const server = await serveEvidenceFixture(work, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const check = (frame: string, ok: boolean, what: string) => { if (!ok) failures.push(`${frame}: ${what}`); };
+    const desktopAges = new Map<string, string>();
+    /* The fixture pins its clock at each load; every epoch second in a reading
+       (a wait's start, an id that carries one) is written as its distance from
+       that clock, which is the same on every run. */
+    let fixtureNow = 0;
+    const relative = <T,>(value: T): T => JSON.parse(JSON.stringify(value), (_key, item: unknown) => {
+      const near = (epoch: number) => Math.abs(fixtureNow - epoch) < 30 * 86_400;
+      if (typeof item === "number" && near(item)) return `now-${fixtureNow - item}`;
+      if (typeof item === "string") return item.replace(/\b1\d{9}\b/g, (digits) => (near(Number(digits)) ? `now-${fixtureNow - Number(digits)}` : digits));
+      return item;
+    }) as T;
+    const open = async (query: string, lang: "uk" | "en", phone = false) => {
+      const opened = await openFixture(browser, `${server.base}?lang=${lang}${query}`, phone ? PHONE : DESKTOP, "light", lang, "reduce", phone);
+      await opened.page.waitForSelector(phone ? "[data-mobile2-bar]" : "[data-attention-count]", { timeout: 20_000 });
+      await opened.page.waitForTimeout(700);
+      fixtureNow = await opened.page.evaluate(() => (window as unknown as { __needsYouFixtureNow?: number }).__needsYouFixtureNow ?? 0);
+      /* The fixture's first poll raises an arrival toast; it is closed with
+         its own ×, as the operator would, so it covers nothing in a frame. */
+      const toast = opened.page.locator("[data-attention-toast-dismiss]");
+      if (await toast.count()) await toast.first().click();
+      return opened;
+    };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        /* Closed: the quiet control, no Next. */
+        let opened = await open("", lang);
+        try {
+          const count = await chipCount(opened.page);
+          readings[`${lang}/desktop-closed`] = relative({ count, next: await opened.page.locator("[data-attention-next]").count(), title: await opened.page.title() });
+          check(`${lang}/desktop-closed`, count === 10, `the control counts ${count}, expected every project's 10`);
+          check(`${lang}/desktop-closed`, (await opened.page.locator("[data-attention-next]").count()) === 0, "a Next is drawn");
+          check(`${lang}/desktop-closed`, (await opened.page.title()).startsWith("(10) "), "the tab title lost the global count");
+          await shot(opened.page, lang, "1440x900-closed");
+        } finally { await opened.context.close(); }
+
+        /* Open: docked beside the board, grouped by project, a role on every row. */
+        opened = await open("&open=1", lang);
+        try {
+          const reading = await panelReading(opened.page);
+          check(`${lang}/desktop-open-docked`, reading.placement === "docked", `placement ${reading.placement}`);
+          check(`${lang}/desktop-open-docked`, reading.sections[0]?.[0] === "delegatus" && reading.sections.length === 3, `sections ${JSON.stringify(reading.sections)}`);
+          check(`${lang}/desktop-open-docked`, reading.rowsWithoutTag === 0, `${reading.rowsWithoutTag} rows without a role emblem`);
+          check(`${lang}/desktop-open-docked`, new Set(reading.roles).size >= 3, `roles ${JSON.stringify(reading.roles)}`);
+          /* The project name stays whole with the panel docked beside the board. */
+          const bar = await barReading(opened.page);
+          readings[`${lang}/desktop-open-docked`] = relative({ ...reading, bar });
+          check(`${lang}/desktop-open-docked`, bar.whole === true && bar.name === "delegatus", `the bar's project name is cut: ${JSON.stringify(bar)}`);
+          /* After the project on screen, the sections follow the rail. */
+          const others = reading.sections.map((section) => section[0] as string).slice(1);
+          check(`${lang}/desktop-open-docked`, JSON.stringify(others) === JSON.stringify(bar.rail.filter((project) => others.includes(project))), `sections ${JSON.stringify(others)} against the rail ${JSON.stringify(bar.rail)}`);
+          /* The head's «Dismiss all N» and a section's «Dismiss n» read differently. */
+          const labels = await opened.page.evaluate(() => [
+            document.querySelector("[data-needs-you-panel] [data-needs-you-dismiss-all]")?.textContent ?? "",
+            document.querySelector("[data-needs-you-panel] [data-needs-you-dismiss-section]")?.textContent ?? "",
+          ]);
+          readings[`${lang}/desktop-dismiss-labels`] = relative(labels);
+          check(`${lang}/desktop-open-docked`, labels[0] !== labels[1] && /10/.test(labels[0]!), `head and section read ${JSON.stringify(labels)}`);
+          /* «Asks you»: the architect that asked in prose is a row of its
+             project, its role on it and its own sentence as the line. */
+          const askRow = await opened.page.evaluate(() => {
+            const fixture = (window as unknown as { __needsYouFixtureAsk?: { id: string; gist: string } }).__needsYouFixtureAsk!;
+            const row = document.querySelector(`[data-needs-you-panel] [data-needs-you-section="delegatus"] [data-needs-you-row="${CSS.escape(fixture.id)}"]`);
+            return {
+              gist: fixture.gist,
+              role: row?.getAttribute("data-needs-you-role") ?? null,
+              tag: row?.querySelector("[data-role-tag]")?.textContent ?? null,
+              emblem: Boolean(row?.querySelector("[data-role-tag] .role-tag-emblem svg")),
+              title: row?.querySelector("[data-needs-you-title-line]")?.textContent ?? null,
+              line: row?.querySelector("[data-attention-decision]")?.textContent ?? null,
+            };
+          });
+          readings[`${lang}/desktop-ask-row`] = relative(askRow);
+          const askLine = translate(lang, "attention.decisionAskNamed", { ask: askRow.gist });
+          check(`${lang}/desktop-ask-row`, askRow.role === "architect" && askRow.emblem && askRow.tag === translate(lang, "roleCopy.architect.name" as never) && askRow.line === askLine, `the ask row reads ${JSON.stringify(askRow)}`);
+          await shot(opened.page, lang, "1440x900-open-docked");
+          /* Every section open, to show every role. */
+          for (const project of ["shop-web", "tg-bot"]) {
+            const fold = opened.page.locator(`[data-needs-you-panel] [data-needs-you-section="${project}"][data-folded] [data-needs-you-fold]`);
+            if (await fold.count()) await fold.click();
+          }
+          const all = await panelReading(opened.page);
+          check(`${lang}/desktop-open-all-sections`, new Set(all.roles).size >= 5, `roles ${JSON.stringify(all.roles)}`);
+          check(`${lang}/desktop-open-all-sections`, all.roles.length === 10, `${all.roles.length} rows`);
+          /* Oldest wait first in every section, lanes among the conversations. */
+          const since = await opened.page.evaluate(() => [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]")].map((section) => ({
+            project: section.getAttribute("data-needs-you-section"),
+            ages: [...section.querySelectorAll("[data-needs-you-row]")].map((row) => [row.getAttribute("data-needs-you-row"), (row.querySelector("[data-attention-age]")?.textContent ?? "").replace(/^·\s*/, "")]),
+            since: [...section.querySelectorAll("[data-needs-you-row]")].map((row) => Number(row.getAttribute("data-needs-you-since"))),
+          })));
+          readings[`${lang}/desktop-open-all-sections`] = relative({ ...all, ages: since });
+          for (const [id, age] of since.flatMap((section) => section.ages)) desktopAges.set(`${lang}/${id}`, age!);
+          for (const section of since) {
+            check(`${lang}/desktop-open-all-sections`, section.since.every((value, index) => index === 0 || value >= section.since[index - 1]!), `${section.project} not oldest first: ${JSON.stringify(section)}`);
+          }
+          await shot(opened.page, lang, "1440x900-open-all-sections");
+        } finally { await opened.context.close(); }
+
+        /* Floating over the board. */
+        opened = await open("&open=1&placement=overlay", lang);
+        try {
+          const reading = await panelReading(opened.page);
+          readings[`${lang}/desktop-open-overlay`] = relative(reading);
+          check(`${lang}/desktop-open-overlay`, reading.placement === "overlay", `placement ${reading.placement}`);
+          await shot(opened.page, lang, "1440x900-open-overlay");
+        } finally { await opened.context.close(); }
+
+        /* The phone: the bar, then the sheet. */
+        opened = await open("", lang, true);
+        try {
+          await shot(opened.page, lang, "390x844-closed");
+          await opened.page.locator('[data-mobile2-open="attention"]').click();
+          await opened.page.waitForSelector('[data-mobile2-sheet="attention"]', { timeout: 10_000 });
+          const phone = await opened.page.evaluate(() => ({
+            rows: [...document.querySelectorAll('[data-mobile2-sheet="attention"] [data-needs-you-row]')].map((row) => row.getAttribute("data-needs-you-role")),
+            dismiss: document.querySelectorAll('[data-mobile2-sheet="attention"] [data-needs-you-dismiss]').length,
+            next: document.querySelectorAll("[data-attention-next]").length,
+          }));
+          readings[`${lang}/phone-sheet`] = relative(phone);
+          check(`${lang}/phone-sheet`, phone.next === 0, "the sheet draws a Next");
+          check(`${lang}/phone-sheet`, phone.rows.length === 6 && phone.dismiss === 6, `rows ${JSON.stringify(phone)}`);
+          check(`${lang}/phone-sheet`, !phone.rows.includes(null), "a row without a role");
+          const geometry = await sheetGeometry(opened.page);
+          readings[`${lang}/phone-sheet-geometry`] = relative(geometry);
+          for (const row of geometry.rows) {
+            check(`${lang}/phone-sheet`, row.ageInside, `${row.id}: the age «${row.age}» leaves its row`);
+            check(`${lang}/phone-sheet`, row.ellipsis, `${row.id}: a cut wait without an ellipsis`);
+          }
+          const phoneAsk = geometry.rows.find((row) => row.id?.startsWith("ask:"));
+          check(`${lang}/phone-sheet`, Boolean(phoneAsk && phoneAsk.decision?.startsWith(translate(lang, "needs.ask"))), `the phone's ask row reads ${JSON.stringify(phoneAsk)}`);
+          await shot(opened.page, lang, "390x844-sheet");
+        } finally { await opened.context.close(); }
+
+        /* The phone's Overview: every project in its own section, one folded. */
+        opened = await open("&overview=1", lang, true);
+        try {
+          await opened.page.locator('[data-mobile2-open="attention"]').click();
+          await opened.page.waitForSelector('[data-mobile2-sheet="attention"] [data-needs-you-section]', { timeout: 10_000 });
+          await opened.page.locator('[data-mobile2-sheet="attention"] [data-needs-you-fold="shop-web"]').click();
+          const geometry = await sheetGeometry(opened.page);
+          readings[`${lang}/phone-sheet-overview`] = relative(geometry);
+          check(`${lang}/phone-sheet-overview`, geometry.sections.length === 3, `sections ${JSON.stringify(geometry.sections)}`);
+          check(`${lang}/phone-sheet-overview`, geometry.sections.some((section) => section.folded), "no folded section");
+          for (const section of geometry.sections) {
+            check(`${lang}/phone-sheet-overview`, section.onScreen && section.apart && section.nameWhole, `${section.project}: header ${JSON.stringify(section)}`);
+            check(`${lang}/phone-sheet-overview`, section.dismiss !== geometry.head, `${section.project}: «${section.dismiss}» reads like the head's «${geometry.head}»`);
+          }
+          for (const row of geometry.rows) {
+            /* One item reads the same wait on the phone as on the desktop panel. */
+            const desktop = desktopAges.get(`${lang}/${row.id}`);
+            check(`${lang}/phone-sheet-overview`, desktop === undefined || desktop === row.age, `${row.id}: the phone reads «${row.age}», the desktop panel «${desktop}»`);
+            check(`${lang}/phone-sheet-overview`, row.ageInside, `${row.id}: the age «${row.age}» leaves its row`);
+            check(`${lang}/phone-sheet-overview`, row.ellipsis, `${row.id}: a cut wait without an ellipsis`);
+          }
+          await shot(opened.page, lang, "390x844-sheet-overview");
+        } finally { await opened.context.close(); }
+      }
+
+      /* uk: the seat beside the board leaves no room, so the panel floats. */
+      let opened = await open("&open=1&seat=beside", "uk");
+      try {
+        const reading = await panelReading(opened.page);
+        readings["uk/desktop-seat-beside"] = relative(reading);
+        check("uk/desktop-seat-beside", reading.placement === "overlay", `placement ${reading.placement}`);
+        await shot(opened.page, "uk", "1440x900-seat-beside-open");
+      } finally { await opened.context.close(); }
+
+      /* uk: «Dismiss», «Dismiss all» on a project, Undo, and a poll between. */
+      opened = await open("&open=1", "uk");
+      try {
+        const page = opened.page;
+        const first = page.locator('[data-needs-you-panel] [data-needs-you-section="delegatus"] [data-needs-you-dismiss]').first();
+        const firstId = await first.getAttribute("data-needs-you-dismiss");
+        await first.click();
+        await page.waitForTimeout(300);
+        const afterOne = { count: await chipCount(page), panel: await panelReading(page), gone: await page.locator(`[data-needs-you-row="${firstId}"]`).count() === 0 };
+        readings["uk/desktop-dismiss-one"] = relative(afterOne);
+        check("uk/desktop-dismiss-one", afterOne.count === 9 && afterOne.gone, `after one dismissal: ${JSON.stringify(afterOne)}`);
+        check("uk/desktop-dismiss-one", (await page.locator("[data-needs-you-undo]").count()) === 1, "no Undo after a dismissal");
+        await shot(page, "uk", "1440x900-dismissed-one-undo");
+        await page.locator('[data-needs-you-dismiss-section="shop-web"]').click();
+        await page.waitForTimeout(300);
+        const afterSection = { count: await chipCount(page), sections: (await panelReading(page)).sections };
+        readings["uk/desktop-dismiss-section"] = relative(afterSection);
+        check("uk/desktop-dismiss-section", afterSection.count === 7 && !afterSection.sections.some((section) => section[0] === "shop-web"), `after shop-web's Dismiss all: ${JSON.stringify(afterSection)}`);
+        await shot(page, "uk", "1440x900-dismissed-section");
+        /* A poll later the server's record still holds. */
+        await page.evaluate(() => window.dispatchEvent(new Event("llv:files-changed")));
+        await page.waitForTimeout(800);
+        check("uk/desktop-dismiss-section", (await chipCount(page)) === 7, "the dismissal did not survive a poll");
+        await page.locator("[data-needs-you-undo]").click();
+        await page.waitForTimeout(500);
+        const undone = await chipCount(page);
+        readings["uk/desktop-undo"] = relative({ count: undone });
+        check("uk/desktop-undo", undone === 9, `Undo brought the count to ${undone}, expected 9`);
+      } finally { await opened.context.close(); }
+
+      /* uk and en: the report log beside the seat, a question ticked there
+         leaving the panel too. */
+      for (const lang of ["uk", "en"] as const) {
+        opened = await open("&seat=beside", lang);
+        try {
+          const page = opened.page;
+          const toggle = page.locator("[data-report-log-toggle]").first();
+          if (await toggle.count()) await toggle.click();
+          await page.waitForSelector("[data-report-log-entries]", { timeout: 10_000 });
+          const log = () => page.evaluate(() => ({
+            open: document.querySelector("[data-report-open-count]")?.getAttribute("data-report-open-count") ?? null,
+            ticks: [...document.querySelectorAll("[data-report-entry]")].map((entry) => [entry.getAttribute("data-report-entry"), entry.getAttribute("data-report-question")]),
+          }));
+          const before = { ...(await log()), count: await chipCount(page) };
+          readings[`${lang}/report-log`] = relative(before);
+          check(`${lang}/report-log`, before.open === "2", `open questions ${before.open}`);
+          await shot(page, lang, "1440x900-report-log");
+          if (lang === "uk") {
+            await page.locator('[data-report-resolve="1204"]').check();
+            await page.waitForTimeout(400);
+            const after = { ...(await log()), count: await chipCount(page) };
+            readings["uk/report-log-ticked"] = relative(after);
+            check("uk/report-log-ticked", after.open === "1" && after.count === before.count - 1, `after the tick: ${JSON.stringify(after)} from ${JSON.stringify(before)}`);
+            await page.locator("[data-attention-count]").click();
+            await page.waitForTimeout(300);
+            check("uk/report-log-ticked", (await page.locator('[data-needs-you-row="report-merge-order"]').count()) === 0, "the ticked question is still on the panel");
+            await shot(page, "uk", "1440x900-report-log-ticked-panel");
+          }
+        } finally { await opened.context.close(); }
+      }
+
+      /* uk: the phone's report screen with its ticks. */
+      opened = await open("", "uk", true);
+      try {
+        /* In-app, as the phone's menu gets there: a pasted `#reports` link
+           is what the unknown-link notice is for. */
+        await opened.page.evaluate(() => { location.hash = "#reports"; });
+        await opened.page.waitForSelector('[data-report-log][data-report-log-variant="screen"] [data-report-log-entries]', { timeout: 10_000 });
+        await shot(opened.page, "uk", "390x844-report-log");
+      } finally { await opened.context.close(); }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const evidence = path.resolve("evidence/needs-you-panel/readings.json");
+    fs.mkdirSync(path.dirname(evidence), { recursive: true });
+    fs.writeFileSync(evidence, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});

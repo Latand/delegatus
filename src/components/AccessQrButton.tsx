@@ -8,6 +8,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale } from "@/lib/i18n";
 import { Z } from "@/components/layers";
 import { openOnboarding } from "@/components/onboarding/useOnboarding";
+import { useTeamView } from "@/components/team/teamClient";
 
 type LoadState = { status: "idle" } | { status: "ready"; url: string } | { status: "unavailable" } | { status: "error" };
 
@@ -92,10 +93,29 @@ export function AccessQrButton() {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<LoadState>({ status: "idle" });
   const panelRef = useRef<HTMLDivElement>(null);
+  /* In a team the QR signs the phone in as this member too (sign-in-and-team
+     §5.2): a ten-minute hand-off link on the address the phone can reach.
+     Only the owner's carries the access key; a member's phone gets in by the
+     session the link mints (§9). */
+  const team = useTeamView({ load: false });
+  const handoff = team?.mode === "team" && team.me !== null;
 
   useEffect(() => {
     if (!open || state.status !== "idle") return;
     let cancelled = false;
+    if (handoff) {
+      fetch("/api/team/session/handoff", { method: "POST" })
+        .then((res) => res.json() as Promise<{ url?: string }>)
+        .then((json) => {
+          if (!cancelled) setState(json.url ? { status: "ready", url: json.url } : { status: "error" });
+        })
+        .catch(() => {
+          if (!cancelled) setState({ status: "error" });
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
     fetch("/api/access")
       .then((res) => res.json() as Promise<{ tailnetUrl?: string | null }>)
       .then((json) => {
@@ -108,7 +128,7 @@ export function AccessQrButton() {
     return () => {
       cancelled = true;
     };
-  }, [open, state.status]);
+  }, [open, state.status, handoff]);
 
   useEffect(() => {
     if (!open) return;

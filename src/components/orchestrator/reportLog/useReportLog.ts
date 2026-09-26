@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getRuntimeBus, isRuntimeUiEnabled } from "@/hooks/runtimeBus";
 import { filesPollCadence } from "@/hooks/useFiles";
 import type { ReportLogAsk } from "@/lib/asks/types";
-import type { ReportLogEntry, ReportLogPage } from "@/lib/bridge/reportLog";
+import type { ReportLogEntry, ReportLogPage, ReportLogQuestions } from "@/lib/bridge/reportLog";
 import { documentHidden } from "@/lib/client/hiddenTraffic";
 
 import { noteBridgeReportsSetting } from "./bridgeReportsSetting";
@@ -35,7 +35,12 @@ export interface ReportLogRead {
   olderAsks: boolean;
   loadingOlder: boolean;
   loadOlder: () => void;
+  /** The project's decision requests as the needs-you panel reads them:
+      replaced whole on every page, never merged, so a tick follows the record. */
+  questions: ReportLogQuestions;
 }
+
+const NO_QUESTIONS: ReportLogQuestions = { open: [], resolved: [] };
 
 function pageUrl(project: string, params: Record<string, string | number>): string {
   const query = new URLSearchParams({ project, limit: String(REPORT_LOG_PAGE) });
@@ -71,6 +76,7 @@ export function useReportLog(project: string, active: boolean, initial?: ReportL
   const [bridgeReports, setBridgeReports] = useState<boolean | null>(initial?.bridgeReports ?? null);
   const [github, setGithub] = useState<string | null>(initial?.github ?? null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [questions, setQuestions] = useState<ReportLogQuestions>(() => initial?.questions ?? NO_QUESTIONS);
   const held = useRef({ entries, asks, nextBefore, asksBefore, revision: initial?.revision ?? null as string | null, project });
 
   const refresh = useCallback(async () => {
@@ -89,6 +95,7 @@ export function useReportLog(project: string, active: boolean, initial?: ReportL
     setGithub(page.github);
     held.current.revision = page.revision;
     if (page.unchanged) return;
+    if (page.questions) setQuestions(page.questions);
     const merged = mergeNewest(held.current.entries, held.current.nextBefore, page);
     held.current.entries = merged.entries;
     held.current.nextBefore = merged.nextBefore;
@@ -180,5 +187,6 @@ export function useReportLog(project: string, active: boolean, initial?: ReportL
     olderAsks: asksBefore !== null,
     loadingOlder,
     loadOlder,
+    questions,
   };
 }

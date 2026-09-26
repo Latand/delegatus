@@ -113,3 +113,16 @@ export function sha256Hex(value: string): string {
 export function deliveryDedupToken(operationId: string): string {
   return sha256Hex(operationId);
 }
+
+/**
+ * The key a native-queue delivery is stamped under: one per version of an
+ * entry, so an edited message's record names the version that was sent. Its
+ * token is `deliveryDedupToken(nativeQueueDeliveryKey(...))`, and the queue
+ * route records a member's authorship under the key itself.
+ */
+export function nativeQueueDeliveryKey(entryId: string, revision: number): string {
+  return `${entryId}-v${revision}`;
+}
+
+/** Whether a submission id has the shape of a native-queue delivery key. */
+export const NATIVE_QUEUE_DELIVERY_KEY = /^[A-Za-z0-9_:.-]+-v[1-9][0-9]*$/;

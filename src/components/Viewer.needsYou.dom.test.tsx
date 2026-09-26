@@ -20,8 +20,12 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * waiting on anyone, and one lane in `needs_decision` on the ledger task. The
  * card, its column and the phone's ⚠ badge have always counted that lane; the
  * desktop island read 0 beside them. Both counters now read the one list, so
- * the lane counts 1 on each, a dismissal takes it off both, and the island's
- * «Next ›» and its popover land on the card that holds the lane.
+ * the lane counts 1 on each, a dismissal takes it off both, and a row of the
+ * needs-you panel lands on the card that holds the lane. Since option B of
+ * docs/design/needs-you-options.md there is no «Next ›» in the header: the
+ * panel lists every project's rows under their project and only a click on a
+ * row moves the operator; the rail's ⏸ reads the panel's grouping and the tab
+ * title keeps the global count.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -276,6 +280,21 @@ async function press(key: string): Promise<void> {
 /** Whether the board's convergence has seeded `path` as a root. */
 const seeded = (path: string) => boardWrites.some((mutation) => mutation.kind === "reconcile-roots" && mutation.roots.includes(path));
 const filterControl = (host: HTMLElement) => host.querySelector("[data-attention-filter]");
+/** The rail's ⏸ for a project, 0 when its row shows none. */
+const railPause = (host: HTMLElement, name: string) => {
+  for (const button of host.querySelectorAll("button")) {
+    if (!(button.textContent ?? "").includes(name)) continue;
+    const badge = [...button.querySelectorAll("span")].find((span) => (span.textContent ?? "").trim().startsWith("⏸"));
+    if (badge) return Number((badge.textContent ?? "").replace("⏸", "").trim());
+  }
+  return 0;
+};
+/** Open the panel from the header control. */
+async function openPanel(host: HTMLElement): Promise<void> {
+  if (host.querySelector("[data-needs-you-panel]")) return;
+  await click(host.querySelector("[data-attention-count]"));
+  await until(() => Boolean(host.querySelector("[data-needs-you-panel]")));
+}
 const card = (host: HTMLElement, id: string) => host.querySelector(`.card[data-id="${id}"]`) as HTMLElement | null;
 /** Whether keyboard focus sits on the card: where «Next ›» and N land. */
 const focused = (host: HTMLElement, id: string) => {
@@ -292,37 +311,52 @@ test("desktop: a lane parked on a decision counts 1 on the island, in the tab ti
   expect(card(host, LEDGER_CARD)?.getAttribute("data-attention")).toBe("needs");
   expect(host.querySelector('.column[data-status="assigned"] .needs.num')?.getAttribute("data-count")).toBe("1");
 
-  /* The popover lists it in the card's own words, and the row opens its card. */
-  await click(host.querySelector("[data-attention-count]"));
+  /* The rail reads the same grouping. */
+  expect(railPause(host, LEDGER)).toBe(1);
+
+  /* The panel lists it under its project, in the card's own words, with the
+     role of the stage it stopped on, and the row opens its card. */
+  await openPanel(host);
+  /* The test window lays nothing out, so the board has no width to dock
+     beside: the panel floats under the control, as it does short of room. */
+  expect(host.querySelector("[data-needs-you-panel]")!.getAttribute("data-needs-you-panel")).toBe("overlay");
+  expect(host.querySelector(`[data-needs-you-section="${LEDGER}"]`)!.textContent).toContain("acme-ledger");
   const row = host.querySelector(`[data-attention-lane="${LANE}"]`) as HTMLElement | null;
   expect(row).not.toBeNull();
   expect(row!.textContent).toContain("Reconcile the ledger export");
-  expect(row!.textContent).toContain("acme-ledger");
   expect(row!.querySelector("[data-attention-decision]")?.textContent).toContain(en("needs.laneDecision"));
+  expect(host.querySelector(`[data-needs-you-row="${LANE}"]`)!.getAttribute("data-needs-you-role")).toBe("builder");
   await click(row);
-  expect(host.querySelector(`[data-attention-lane="${LANE}"]`)).toBeNull();
   await until(() => focused(host, LEDGER_CARD));
   expect(card(host, LEDGER_CARD)!.classList.contains("flash")).toBe(true);
+  /* Floating, it steps aside for what it opened. */
+  expect(host.querySelector("[data-needs-you-panel]")).toBeNull();
 });
 
-test("desktop: «Next ›» from another project's board switches to the lane's project and lands on its card", async () => {
+test("desktop: the header offers no Next; from another project's board the panel shows the lane under its own project, and only its row switches", async () => {
   const host = await mountOn(ATLAS);
-  /* The island is global: the atlas board shows the ledger lane's count. */
+  /* The count is global, as the panel behind it is. */
   expect(islandCount(host)).toBe(1);
+  expect(host.querySelector("[data-attention-next]")).toBeNull();
 
-  await click(host.querySelector("[data-attention-next]"));
+  await openPanel(host);
+  expect(dom.localStorage.getItem("llvProject")).toBe(ATLAS);
+  const section = host.querySelector(`[data-needs-you-section="${LEDGER}"]`)!;
+  /* Another project's section starts folded; its count is there. */
+  expect(section.hasAttribute("data-folded")).toBe(true);
+  expect(section.querySelector("[data-needs-you-section-count]")!.textContent).toBe("1");
+  await click(host.querySelector(`[data-needs-you-fold="${LEDGER}"]`));
+  await click(host.querySelector(`[data-attention-lane="${LANE}"]`));
   await until(() => focused(host, LEDGER_CARD));
   expect(dom.localStorage.getItem("llvProject")).toBe(LEDGER);
-  expect(card(host, LEDGER_CARD)!.classList.contains("flash")).toBe(true);
 });
 
-test("desktop: «Next ›» on the lane's own board lands on its card", async () => {
-  const host = await mountOn(LEDGER);
-  expect(focused(host, LEDGER_CARD)).toBe(false);
-
-  await click(host.querySelector("[data-attention-next]"));
-  await until(() => focused(host, LEDGER_CARD));
-  expect(card(host, LEDGER_CARD)!.classList.contains("flash")).toBe(true);
+test("desktop: the N key on another project's board stays on that board", async () => {
+  const host = await mountOn(ATLAS);
+  await press("n");
+  await act(async () => { await Bun.sleep(60); });
+  expect(dom.localStorage.getItem("llvProject")).toBe(ATLAS);
+  expect(host.querySelector("[data-kanban-board]")).not.toBeNull();
 });
 
 test("desktop: the N key walks the same list and reaches the lane", async () => {
@@ -334,7 +368,8 @@ test("desktop: the N key walks the same list and reaches the lane", async () => 
 
 test("desktop: after a jump to the lane the board still seeds a conversation the next scan brings", async () => {
   const host = await mountOn(LEDGER);
-  await click(host.querySelector("[data-attention-next]"));
+  await openPanel(host);
+  await click(host.querySelector(`[data-attention-lane="${LANE}"]`));
   await until(() => focused(host, LEDGER_CARD));
 
   /* The lane's focus request stays behind once its card is revealed; it must
@@ -374,7 +409,25 @@ test("desktop: a lane dismissed on its card leaves the island's count with the c
   await until(() => islandCount(host) === 0);
   expect(posted).toHaveLength(1);
   expect(dom.document.title).toBe(PRODUCT_NAME);
-  expect(host.querySelector("[data-attention-next]")).toBeNull();
+  expect(railPause(host, LEDGER)).toBe(0);
+});
+
+test("desktop: «Dismiss» on the panel's row clears the lane from the header, the tab title, the rail and the panel at once, and Undo brings it back", async () => {
+  const host = await mountOn(LEDGER);
+  await openPanel(host);
+  await click(host.querySelector(`[data-needs-you-dismiss="${LANE}"]`));
+  await until(() => islandCount(host) === 0);
+  expect(posted).toHaveLength(1);
+  expect((posted[0]!.target as { subjects: Array<{ kind: string; pipelineId: string }> }).subjects[0]).toMatchObject({ kind: "pipeline", pipelineId: LANE });
+  expect(dom.document.title).toBe(PRODUCT_NAME);
+  expect(railPause(host, LEDGER)).toBe(0);
+  expect(host.querySelector(`[data-needs-you-row="${LANE}"]`)).toBeNull();
+
+  await click(host.querySelector("[data-needs-you-undo]"));
+  await until(() => islandCount(host) === 1);
+  expect((posted[1] as { undo?: boolean }).undo).toBe(true);
+  expect(dom.document.title).toBe(`(1) ${PRODUCT_NAME}`);
+  expect(railPause(host, LEDGER)).toBe(1);
 });
 
 test("desktop: a lane already dismissed for this decision counts 0", async () => {

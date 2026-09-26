@@ -18,9 +18,20 @@ export interface ViewerHealthRequestPlan {
   capability: ViewerHealthRequest;
 }
 
-export function viewerHealthRequestPlan(endpoint: string, token: string | null): ViewerHealthRequestPlan {
+/**
+ * `probeHeaders` is the `probe` service tag (`probeHeadersFrom` in
+ * `bin/internalService.mjs`). On a team install the identity gate refuses a
+ * read that names no member, and without a token no bearer can vouch for the
+ * probe either; the tag is what lets the candidate's own page be read then
+ * (sign-in-and-team §4.2). It rides every probe that expects a 200.
+ */
+export function viewerHealthRequestPlan(
+  endpoint: string,
+  token: string | null,
+  probeHeaders: Record<string, string> = {},
+): ViewerHealthRequestPlan {
   const remoteHeaders = { "x-forwarded-for": "203.0.113.10" };
-  const authenticatedHeaders = token ? { ...remoteHeaders, authorization: `Bearer ${token}` } : {};
+  const authenticatedHeaders = { ...probeHeaders, ...(token ? { ...remoteHeaders, authorization: `Bearer ${token}` } : {}) };
   return {
     /* Every probe whose expectation is a 200 carries whatever credentials the
        candidate requires of it. Once a token is configured, every request
@@ -30,7 +41,7 @@ export function viewerHealthRequestPlan(endpoint: string, token: string | null):
        nothing to carry, and a plain 200 remains the proof that the Viewer
        serves its own root. `unauthorized` below is the one probe left
        uncredentialed, because the refusal is what it asserts. */
-    root: { url: `${endpoint}/`, headers: token ? { authorization: `Bearer ${token}` } : {} },
+    root: { url: `${endpoint}/`, headers: { ...probeHeaders, ...(token ? { authorization: `Bearer ${token}` } : {}) } },
     authenticated: token
       ? { url: `${endpoint}/`, headers: authenticatedHeaders }
       : null,

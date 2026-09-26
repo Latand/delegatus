@@ -185,6 +185,22 @@ function ownTempRoots(env: NodeJS.ProcessEnv = process.env): string[] {
   return [...new Set(roots.filter((root): root is string => root !== null && root !== "/"))];
 }
 
+/** The roots this process can remove anything from. A container that mounts
+    the host's `/var/tmp` read-only (the evidence the image routes serve,
+    #2084) sees it as its own temp root; every removal there would fail with
+    EROFS and every size walk would run twice, so it is left to the host
+    namespace's own `/var/tmp`, which the sweep reaches through an agent. */
+export function writableRoots(roots: string[], check: (root: string) => void = (root) => fs.accessSync(root, fs.constants.W_OK | fs.constants.X_OK)): string[] {
+  return roots.filter((root) => {
+    try {
+      check(root);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** The roots one sweep visits: this process's temp dirs and scratch directory,
     and `/tmp` and `/var/tmp` of every other mount namespace a Delegatus agent
     runs in. */
@@ -395,7 +411,7 @@ export async function runTempSweep(env: NodeJS.ProcessEnv = process.env): Promis
   }
   const scratch = realDirectory(statePath("scratch"));
   const scan = scanProcesses();
-  const roots = sweepRoots(scan, [...ownTempRoots(env), ...(scratch ? [scratch] : [])]);
+  const roots = sweepRoots(scan, writableRoots([...ownTempRoots(env), ...(scratch ? [scratch] : [])]));
   const report = await sweepStaleTempDirs({ maxAgeMs, scan, roots, worktrees });
   recordTempSweep(report);
   const { young, inUse, worktree, deferred } = report.kept;

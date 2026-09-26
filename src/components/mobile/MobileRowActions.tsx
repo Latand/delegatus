@@ -46,7 +46,7 @@ import { ROW_ACTION_TONE, type MobileRowAction } from "./MobileSwipeRow";
  * after the row was drawn is not cleared at all, and the row says so.
  */
 function dismissRow(subject: DismissalSubjectRequest, text: string, failed: (error: string) => string, changed: string): void {
-  const target: DismissalTarget = subject;
+  const target: DismissalTarget = subject.kind === "report" ? { kind: "subjects", subjects: [subject] } : subject;
   showReceipt(text, { kind: "undo", run: () => void sendDismissal(target, [subject], { undo: true, surface: "phone" }) });
   void sendDismissal(target, [subject], { surface: "phone" }).then((result) => {
     if (!result.ok) showReceipt(failed(result.error), null, { error: true });

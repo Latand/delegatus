@@ -19,9 +19,10 @@ import { statePath } from "@/lib/configDir";
 import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
+import { resolvedQuestionAnswers } from "@/lib/bridge/asks";
 import { readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
-import type { BridgeReportV1 } from "@/lib/bridge/types";
+import type { BridgeReportV1, BridgeResolvedAskV1 } from "@/lib/bridge/types";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
@@ -484,6 +485,9 @@ export interface SeatTickSources {
       no report ledger, as with bridge reports off. */
   reports?: {
     log: () => readonly BridgeReportV1[];
+    /** The decision requests the operator resolved (a tick in the report log
+        or «Dismiss» on the needs-you row). Absent: none. */
+    resolved?: () => readonly BridgeResolvedAskV1[];
     enabled: (project: string) => boolean;
     operatorLocale: () => "en" | "uk" | null;
     suggestions: () => Pick<ReplySuggestionsFileV1, "sets" | "admissions">;
@@ -600,6 +604,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     },
     reports: {
       log: () => readBridgeReportLog().reports,
+      resolved: () => readBridgeReportLog().resolvedAsks ?? [],
       enabled: (project) => bridgeReportsEnabled(project),
       operatorLocale: () => operatorLocale(),
       suggestions: () => readReplySuggestionsFile(),
@@ -680,7 +685,10 @@ function reportsInput(
     const conversations = [...new Set([...(seat ? [seat.conversationId] : []), ...(state.asksOwed ?? []).map((ask) => ask.conversationId)])];
     const suggestions = port.suggestions();
     const read = new Set(conversations);
-    const admissions = suggestions.admissions;
+    /* A question the operator resolved is a question they answered: it
+       counts as an operator message in the seat it was asked from, at the
+       moment it was resolved. */
+    const admissions = [...suggestions.admissions, ...resolvedQuestionAnswers(manager, port.resolved?.() ?? [])];
     return {
       bridgeReports: port.enabled(project),
       operatorLocale: port.operatorLocale(),

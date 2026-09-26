@@ -1,4 +1,5 @@
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
+import { agentRegistry } from "@/lib/agent/registry";
 import { canonicalTranscriptTarget, readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { applyConversationAction, CONVERSATION_ACTIONS } from "@/lib/conversation/actions";
 import { deliverConversationMessage, reconfigureConversation } from "@/lib/delivery";
@@ -14,6 +15,7 @@ import {
   resolveTmuxAttach,
   tmuxEndpointDescriptor,
 } from "@/lib/tmux";
+import type { PriorSubmission } from "@/lib/team";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 export interface ConversationHostDependencies {
@@ -38,6 +40,9 @@ export interface ConversationHostDependencies {
   recordDirectOperatorWakatimeActivity: typeof recordDirectOperatorWakatimeActivity;
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest: typeof recordOperatorRequest;
+  /** What the delivery record knows about a submission id before a send
+      (sign-in-and-team §7.1); `admitted` when it cannot say. */
+  priorSubmission(conversationId: string, clientMessageId: string): PriorSubmission;
 }
 
 const productionDependencies: ConversationHostDependencies = {
@@ -64,6 +69,13 @@ const productionDependencies: ConversationHostDependencies = {
   tmuxEndpointDescriptor,
   recordDirectOperatorWakatimeActivity,
   recordOperatorRequest,
+  priorSubmission: (conversationId, clientMessageId) => {
+    try {
+      return agentRegistry().deliveryAdmissionForKey(conversationId, clientMessageId).outcome;
+    } catch {
+      return "admitted";
+    }
+  },
 };
 
 let testDependencies: Partial<ConversationHostDependencies> | null = null;

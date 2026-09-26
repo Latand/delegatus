@@ -17,7 +17,9 @@ import {
   recordBridgeDirectiveAnswer,
   recordManagerReport as recordBridgeReport,
 } from "./service";
-import { appendBridgeReports, drainBridgeReports, openBridgeChannel, readBridgeChannel, readBridgeReportLog } from "./store";
+import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
+
+import { appendBridgeReports, drainBridgeReports, openBridgeChannel, readBridgeChannel, readBridgeReportLog, resolveBridgeAsks } from "./store";
 import type { BridgeReportInput } from "./types";
 
 /**
@@ -303,18 +305,40 @@ test("a blocked report becomes an open ask for its seat, with the gateway never 
   const asks = bridgeAsksForSeats({ now: NOW });
   /* #1168: the item is identified by the REPORT KEY the caller filed under,
      which survives the round trip through the durable log. */
-  expect(asks.get(SCOPE.seatConversationId)).toEqual({ id: "lane-9-blocked", at: NOW.toISOString() });
+  expect(asks.get(SCOPE.seatConversationId)?.map(({ id, at, body }) => ({ id, at, body }))).toEqual([
+    { id: "lane-9-blocked", at: NOW.toISOString(), body: "cannot proceed: the lane needs a base branch" },
+  ]);
   /* No channel file was created and no cursor moved: the queue reads the log,
      never the gateway's position in it. */
   expect(readBridgeChannel(SCOPE)).toBeNull();
 });
 
-test("the seat's own later report clears the ask without any directive", () => {
+test("the seat's own later report leaves its question asking; the operator resolving it clears it, and Undo brings it back", () => {
   sandbox();
-  recordManagerReport({ key: "lane-9-blocked", class: "blocked", at: NOW.toISOString(), body: "cannot proceed" });
-  expect(bridgeAsksForSeats({ now: NOW }).size).toBe(1);
-
+  const blocked = recordManagerReport({ key: "lane-9-blocked", class: "blocked", at: NOW.toISOString(), body: "cannot proceed" })!;
   recordManagerReport({ key: "lane-9-progress", class: "status", at: NOW.toISOString(), body: "moving again" });
+  expect(bridgeAsksForSeats({ now: NOW }).get(SCOPE.seatConversationId)?.map((ask) => ask.id)).toEqual(["lane-9-blocked"]);
+
+  const by = { kind: "operator" as const, surface: "desktop" as const };
+  expect(resolveBridgeAsks([blocked.seq], { by, at: NOW.toISOString() })).toEqual({ resolved: [blocked.seq], alreadyClear: [], unknown: [] });
+  expect(bridgeAsksForSeats({ now: NOW }).size).toBe(0);
+  /* Durable: the report log itself carries the resolution. */
+  expect(readBridgeReportLog().resolvedAsks).toEqual([{ seq: blocked.seq, at: NOW.toISOString(), by }]);
+  /* A second resolve changes nothing; a status row cannot be resolved. */
+  expect(resolveBridgeAsks([blocked.seq, blocked.seq + 1], { by, at: NOW.toISOString() })).toEqual({ resolved: [], alreadyClear: [blocked.seq], unknown: [blocked.seq + 1] });
+
+  expect(resolveBridgeAsks([blocked.seq], { by, at: NOW.toISOString(), undo: true }).resolved).toEqual([blocked.seq]);
+  expect(bridgeAsksForSeats({ now: NOW }).get(SCOPE.seatConversationId)?.map((ask) => ask.id)).toEqual(["lane-9-blocked"]);
+});
+
+test("an operator message to the seat after a question answers it", () => {
+  sandbox();
+  recordManagerReport({ key: "lane-9-question", class: "question", at: NOW.toISOString(), body: "which base?" });
+  expect(bridgeAsksForSeats({ now: NOW }).size).toBe(1);
+  /* Before the question: no answer. */
+  retireReplySuggestionsOnOperatorMessage(SCOPE.seatConversationId, new Date(NOW.getTime() - 60_000), "message-before");
+  expect(bridgeAsksForSeats({ now: NOW }).size).toBe(1);
+  retireReplySuggestionsOnOperatorMessage(SCOPE.seatConversationId, new Date(NOW.getTime() + 60_000), "message-after");
   expect(bridgeAsksForSeats({ now: NOW }).size).toBe(0);
 });
 
@@ -431,7 +455,7 @@ test("re-appending the same report key produces no second ask", () => {
 
   const asks = bridgeAsksForSeats({ now: NOW });
   expect(asks.size).toBe(1);
-  expect(asks.get(SCOPE.seatConversationId)?.id).toBe(input.key);
+  expect(asks.get(SCOPE.seatConversationId)?.map((ask) => ask.id)).toEqual([input.key]);
   expect(first).not.toBeNull();
 });
 
