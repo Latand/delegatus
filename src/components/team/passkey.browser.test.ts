@@ -229,6 +229,29 @@ browserTest("production team pages register, sign out, sign in, and explain pass
     expect(await plain.page.locator('[data-sign-in-method="passkey"]').count()).toBe(0);
     await plain.context.close();
 
+    for (const [scheme, loopbackOrigin] of [
+      ["http", `http://localhost:${backendPort}`],
+      ["https", `https://localhost:${tlsPort}`],
+    ] as const) {
+      for (const [locale, width] of [["en", 390], ["uk", 1440]] as const) {
+        const loopback = await pageFor(browser, locale, width);
+        await loopback.page.goto(`${loopbackOrigin}/sign-in`);
+        await waitForText(loopback.page.locator("[data-passkey-unavailable]"), translate(locale, "team.passkey.unavailableAt", { address: origin }));
+        expect(await loopback.page.locator('[data-sign-in-method="passkey"]').count()).toBe(0);
+        await loopback.page.screenshot({ path: path.join(SHOTS, `sign-in-localhost-${scheme}-${width}-${locale}.png`) });
+        await loopback.context.addCookies([{
+          name: signedInCookie.name, value: signedInCookie.value, url: loopbackOrigin,
+          secure: scheme === "https", sameSite: "Lax",
+        }]);
+        await loopback.page.goto(`${loopbackOrigin}/team`);
+        await loopback.page.locator("[data-team-member-open]").first().click();
+        await waitForText(loopback.page.locator("[data-team-dialog=member] [data-passkey-unavailable]"), translate(locale, "team.passkey.unavailableAt", { address: origin }));
+        expect(await loopback.page.locator("[data-team-add-passkey]").count()).toBe(0);
+        await loopback.page.screenshot({ path: path.join(SHOTS, `profile-localhost-${scheme}-${width}-${locale}.png`) });
+        await loopback.context.close();
+      }
+    }
+
     const unsupported = await pageFor(browser, "en", 390);
     await unsupported.context.addInitScript(() => { Object.defineProperty(window, "PublicKeyCredential", { configurable: true, value: undefined }); });
     await unsupported.page.goto(`${origin}/sign-in`);

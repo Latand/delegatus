@@ -40,14 +40,14 @@ function hostWithoutPort(host: string): string {
   return index === -1 ? host : host.slice(0, index);
 }
 
-/** The relying party a request can use, or null where WebAuthn cannot work:
-    an IP address, or a plain-HTTP origin other than localhost. */
+/** The relying party a request can use, or null for an IP address, loopback
+    name, or plain-HTTP origin. */
 export function relyingPartyFor(hostHeader: string | null, https: boolean): RelyingParty | null {
   const host = hostHeader?.trim().toLowerCase() ?? "";
   if (!host) return null;
   const name = hostWithoutPort(host);
-  if (!name || IPV4.test(name) || name.includes(":")) return null;
-  if (!https && name !== "localhost") return null;
+  if (!name || name === "localhost" || name.endsWith(".localhost") || IPV4.test(name) || name.includes(":")) return null;
+  if (!https) return null;
   return { rpId: name, origin: `${https ? "https" : "http"}://${host}` };
 }
 
