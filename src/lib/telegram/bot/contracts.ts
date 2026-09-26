@@ -138,12 +138,10 @@ export type TelegramBotChatView = {
   lastPostAt: string | null;
   lastPostBy: { conversationId: string; title: string | null } | { unidentified: true } | null;
   storedMessages: number;
-  /** The projects whose orchestrator reports go to this chat, by their name
-      in report headers; `onlyAllowedChat` when the project never chose and
-      this is the one chat agents may post in; `refused` when the project
-      chose this chat and agents may not post in it now, so its reports
-      reach the log only. Absent when none. */
-  reports?: { name: string; onlyAllowedChat: boolean; refused?: true }[];
+  /** The projects whose operator chose this chat for their orchestrator
+      reports, by their name in report headers; `refused` when agents may not
+      post in it now, so those reports reach the log only. Absent when none. */
+  reports?: { name: string; refused?: true }[];
 };
 
 export type TelegramBotIdentity = {

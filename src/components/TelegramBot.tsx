@@ -150,14 +150,9 @@ export function ChatRow({ chat, botSeesAll, busy, onSave }: { chat: TelegramBotC
       ) : null}
       {showField && !posting && draft === "" ? <p className="pr-1.5 text-[10px] leading-snug text-muted">{t("telegram.bot.aliasHint")}</p> : null}
       {visibility ? <p className="pr-1.5 text-[10px] leading-snug text-muted">{visibility}</p> : null}
-      {chat.reports?.some((entry) => !entry.onlyAllowedChat && !entry.refused) ? (
+      {chat.reports?.some((entry) => !entry.refused) ? (
         <p data-telegram-chat-reports="chosen" className="pr-1.5 text-[10px] font-semibold leading-snug text-accent">
-          {t("telegram.bot.reports", { names: chat.reports.filter((entry) => !entry.onlyAllowedChat && !entry.refused).map((entry) => entry.name).join(", ") })}
-        </p>
-      ) : null}
-      {chat.reports?.some((entry) => entry.onlyAllowedChat) ? (
-        <p data-telegram-chat-reports="only-allowed-chat" className="pr-1.5 text-[10px] font-semibold leading-snug text-accent">
-          {t("telegram.bot.reportsOnly", { names: chat.reports.filter((entry) => entry.onlyAllowedChat).map((entry) => entry.name).join(", ") })}
+          {t("telegram.bot.reports", { names: chat.reports.filter((entry) => !entry.refused).map((entry) => entry.name).join(", ") })}
         </p>
       ) : null}
       {chat.reports?.some((entry) => entry.refused) ? (

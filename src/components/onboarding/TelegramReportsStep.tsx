@@ -16,17 +16,14 @@ import type { GuideProject } from "./ProjectStep";
  * so there is no second path to the bot: the token form when no bot is
  * connected, the chats that accept posts as choices, and the panel's own
  * switch for a chat the bot is in but may not post to yet. "Log only" is
- * always a choice, and Skip writes nothing. The choice where reports go now
- * is preselected and marked in use: for a project that never chose, that is
- * the bot's one allowed chat, since the operator already picked it in the
- * bot panel; with several such chats nothing is preselected and the step asks.
- * That state is worked out on every render from the operator's stored choice
- * and the bot status the step holds, by the server's rule
- * (`effectiveReportTelegram` over the chats the bot is in and may post in), so
- * allowing or stopping a chat right here moves it at once. A chosen chat that
- * agents may not post in now is still where the Viewer addresses reports, so
- * it stays in the list, chosen and in use, but it cannot be picked or saved
- * again until the operator allows it or picks another.
+ * always a choice, and Skip writes nothing. The operator's stored choice is
+ * preselected and marked in use. A project that never chose posts to no chat,
+ * however many chats the bot may post in (`effectiveReportTelegram`): the step
+ * says it is not reporting to Telegram, and nothing is preselected or marked
+ * in use until the operator picks. A chosen chat that agents may not post in
+ * now is still where the Viewer addresses reports, so it stays in the list,
+ * chosen and in use, but it cannot be picked or saved again until the
+ * operator allows it or picks another.
  */
 
 const LOG_ONLY = "\u0000log-only";
@@ -36,12 +33,9 @@ export type TelegramReportsOutcome = { chat: string; name: string } | null;
 type ProjectReportSettings = {
   /** The operator's choice: a chat, "Log only" (`chat: null`), or null when never chosen. */
   reportTelegram: { chat: string | null; name?: string } | null;
-  /** Where reports go now besides the log, null for the log only. */
-  reportDestination: { chat: string; name: string; source: "chosen" | "only-allowed-chat" } | null;
+  /** Where reports go now besides the log: the chosen chat, else null. */
+  reportDestination: { chat: string; name: string; source: "chosen" } | null;
   reportNameSuggestion: string | null;
-  /** The name reports carry in the bot's one allowed chat for a project that
-      never chose: the GitHub repository's, else the project's display name. */
-  reportFallbackName: string | null;
 };
 
 function settingsOf(body: Partial<ProjectReportSettings>): ProjectReportSettings {
@@ -49,8 +43,6 @@ function settingsOf(body: Partial<ProjectReportSettings>): ProjectReportSettings
     reportTelegram: body.reportTelegram ?? null,
     reportDestination: body.reportDestination ?? null,
     reportNameSuggestion: body.reportNameSuggestion ?? null,
-    reportFallbackName: body.reportFallbackName
-      ?? (body.reportDestination?.source === "only-allowed-chat" ? body.reportDestination.name : null),
   };
 }
 
@@ -64,16 +56,10 @@ async function readSettings(project: string): Promise<ProjectReportSettings | nu
   }
 }
 
-/**
- * Where reports go now, as the Viewer decides it: the stored choice, or for a
- * project that never chose, the one chat the bot may post in. `asking` is a
- * project that never chose while several chats accept posts.
- */
-function destinationInUse(settings: ProjectReportSettings, postable: readonly string[]): { value: string; onlyAllowedChat: boolean; asking: boolean } {
+/** The operator's stored choice as a radio value, null when they never chose. */
+function destinationInUse(settings: ProjectReportSettings): string | null {
   const choice = settings.reportTelegram;
-  if (choice) return { value: choice.chat ?? LOG_ONLY, onlyAllowedChat: false, asking: false };
-  if (postable.length === 1) return { value: postable[0]!, onlyAllowedChat: true, asking: false };
-  return { value: LOG_ONLY, onlyAllowedChat: false, asking: postable.length > 1 };
+  return choice ? choice.chat ?? LOG_ONLY : null;
 }
 
 export function TelegramReportsStep({ project, onSaved, onSkip }: {
@@ -110,20 +96,20 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   const members = status?.chats.filter((chat) => chat.member) ?? [];
   const postable = members.filter((chat) => chat.postable && chat.alias);
   const notYet = members.filter((chat) => !(chat.postable && chat.alias));
-  const inUse = settings && status ? destinationInUse(settings, postable.map((chat) => chat.alias!)) : null;
+  const inUse = settings && status ? destinationInUse(settings) : null;
+  /* Settings read and nothing chosen: no chat receives reports yet. */
+  const notReporting = settings !== null && status !== null && inUse === null;
   /* The chosen chat when it refuses posts now: the switch was turned off, the
      alias changed, or the bot left. */
-  const refused = inUse && inUse.value !== LOG_ONLY && !postable.some((chat) => chat.alias === inUse.value) ? inUse.value : null;
+  const refused = inUse && inUse !== LOG_ONLY && !postable.some((chat) => chat.alias === inUse) ? inUse : null;
   const refusedChat = refused ? status?.chats.find((chat) => chat.alias === refused || chat.chatId === refused) ?? null : null;
-  /* A project that never chose starts on where its reports go now, which is
-     nothing when several chats accept posts: the operator picks. A pick of a
-     chat that no longer accepts posts is gone with its radio. */
+  /* The step starts on the stored choice; a project that never chose starts
+     on nothing, and the operator picks. A pick of a chat that no longer
+     accepts posts is gone with its radio. */
   const pickedLive = picked === LOG_ONLY || postable.some((chat) => chat.alias === picked) ? picked : null;
-  const choice = pickedLive ?? (inUse && !inUse.asking ? inUse.value : null);
-  /* The name in the field is the one reports carry now: the chosen chat's, or
-     in the bot's one allowed chat the fallback, else GitHub's to suggest. */
-  const fallbackName = inUse?.onlyAllowedChat ? settings?.reportFallbackName ?? null : null;
-  const name = typedName ?? (settings?.reportTelegram?.name || fallbackName || settings?.reportNameSuggestion || "");
+  const choice = pickedLive ?? inUse;
+  /* The name in the field is the chosen chat's, else GitHub's to suggest. */
+  const name = typedName ?? (settings?.reportTelegram?.name || settings?.reportNameSuggestion || "");
   const chatChosen = choice !== null && choice !== LOG_ONLY;
   const nameMissing = chatChosen && name.trim() === "";
   const canSave = choice !== null && choice !== refused && !nameMissing && !saving;
@@ -151,12 +137,9 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
     }
   };
 
-  const onlyAllowedChat = inUse?.onlyAllowedChat === true;
-  const asking = inUse?.asking === true;
-
   const radio = (value: string, label: string, detail: string | null) => {
     const on = choice === value;
-    const used = inUse?.value === value;
+    const used = inUse === value;
     const refusing = value === refused;
     return (
       <button
@@ -176,8 +159,8 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
           <span className="truncate text-body font-semibold text-primary">{label}</span>
           {detail ? <span className="truncate font-mono text-[11px] text-muted">{detail}</span> : null}
           {used ? (
-            <span data-onboarding-report-in-use={onlyAllowedChat && value !== LOG_ONLY ? "only-allowed-chat" : "chosen"} className="text-caption font-semibold leading-snug text-accent">
-              {onlyAllowedChat && value !== LOG_ONLY ? t("onboarding.telegram.inUseOnly") : t("onboarding.telegram.inUse")}
+            <span data-onboarding-report-in-use="chosen" className="text-caption font-semibold leading-snug text-accent">
+              {t("onboarding.telegram.inUse")}
             </span>
           ) : null}
           {refusing ? (
@@ -211,7 +194,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
           </div>
           <div className="flex flex-col gap-2">
             <div className="text-label font-semibold uppercase tracking-[0.06em] text-muted">{t("onboarding.telegram.choose")}</div>
-            {asking ? <p data-onboarding-report-asking="" className="text-ui leading-snug text-secondary">{t("onboarding.telegram.pickOne")}</p> : null}
+            {notReporting ? <p data-onboarding-report-not-reporting="" className="text-ui leading-snug text-secondary">{t("onboarding.telegram.notReporting")}</p> : null}
             <div role="radiogroup" aria-label={t("onboarding.telegram.choose")} className="flex flex-col gap-2">
               {refused ? radio(refused, refusedChat?.title ?? refused, refused) : null}
               {postable.map((chat) => radio(chat.alias!, chat.title, chat.alias))}
@@ -241,14 +224,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
               onChange={(event) => { setTypedName(event.target.value); setSaved(undefined); }}
               className={`h-11 rounded-[8px] border bg-canvas px-2.5 text-body outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-9 ${nameMissing ? "border-danger" : "border-border"}`}
             />
-            {/* While reports go to the one allowed chat, the hint names the
-                name they carry there now, which can be the project's name on
-                this computer. */}
-            {fallbackName ? (
-              <span data-onboarding-report-name-in-use="" className={`text-caption leading-snug ${nameMissing ? "text-danger" : "text-muted"}`}>
-                {t(settings?.reportNameSuggestion ? "onboarding.telegram.nameInUse" : "onboarding.telegram.nameInUseLocal", { name: fallbackName })}
-              </span>
-            ) : chatChosen ? <span className={`text-caption leading-snug ${nameMissing ? "text-danger" : "text-muted"}`}>{t("onboarding.telegram.nameHint")}</span> : null}
+            {chatChosen ? <span className={`text-caption leading-snug ${nameMissing ? "text-danger" : "text-muted"}`}>{t("onboarding.telegram.nameHint")}</span> : null}
           </label>
         </>
       )}
