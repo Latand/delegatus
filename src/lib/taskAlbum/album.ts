@@ -60,7 +60,7 @@ export interface TaskAlbumDeps {
 
 interface Collected {
   image: IndexedImage;
-  transcript: string;
+  transcriptPath: string;
   source: AlbumSource;
 }
 
@@ -101,7 +101,7 @@ async function collect(taskId: string, deps: TaskAlbumDeps, budget: number): Pro
   for (const transcript of transcripts) {
     for (const image of transcriptImages(transcript.path)) {
       const held = byKey.get(image.key);
-      if (!held || image.ts < held.image.ts) byKey.set(image.key, { image, transcript: transcript.path, source: transcript.source });
+      if (!held || image.ts < held.image.ts) byKey.set(image.key, { image, transcriptPath: transcript.path, source: transcript.source });
     }
   }
   return { collected: [...byKey.values()], indexing: !complete, read };
@@ -191,5 +191,5 @@ export async function readTaskAlbumImage(taskId: string, imageId: string, deps: 
   const { collected } = await collect(taskId, deps, ALBUM_INDEX_BUDGET);
   const entry = collected.find(({ image }) => albumImageId(image.key) === imageId);
   if (!entry?.image.inline) return null;
-  return readInlineImage(entry.transcript, entry.image.inline.offset, entry.image.inline.ordinal);
+  return readInlineImage(entry.transcriptPath, entry.image.inline.offset, entry.image.inline.ordinal);
 }
