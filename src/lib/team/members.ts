@@ -87,6 +87,35 @@ function requireName(value: unknown): string {
   return name;
 }
 
+/* A name is who the chat, the Activity tab and the MCP author line say sent
+   something, so no two people may hold the same one: compared without case,
+   spaces or compatibility forms, against every member, revoked ones too (their
+   past messages still carry the name). */
+function nameKey(name: string): string {
+  return name.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{Cf}]+/gu, "");
+}
+
+function nameTaken(store: TeamStore, name: string, exceptId: string | null): boolean {
+  const key = nameKey(name);
+  return store.members().some((member) => member.id !== exceptId && nameKey(member.name) === key);
+}
+
+export function requireFreeName(store: TeamStore, name: string, exceptId: string | null = null): string {
+  if (nameTaken(store, name, exceptId)) throw new TeamError("name_taken", "another member already has that name", 409);
+  return name;
+}
+
+/** A name nobody holds yet, for one the joiner did not type (a Telegram
+    first name): the name itself, or it followed by the first free number. */
+export function freeMemberName(store: TeamStore, name: string): string {
+  if (!nameTaken(store, name, null)) return name;
+  const base = [...name].slice(0, 56).join("");
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base} ${n}`;
+    if (!nameTaken(store, candidate, null)) return candidate;
+  }
+}
+
 function signIn(store: TeamStore, member: Member, method: SignInMethod, device: Device, nowMs: number, actor?: TeamActor): SignedIn {
   const { value, session } = mintSession(store, member.id, method, device, nowMs);
   appendTeamEvent(store, {
@@ -249,6 +278,7 @@ export function redeemJoin(store: TeamStore, code: unknown, nameInput: unknown, 
     if (challenge.kind === "invite") {
       const name = requireName(nameInput ?? challenge.invitedName);
       if (!store.hasActiveOwner()) throw new TeamError("link_invalid", "this install has no team", 410);
+      requireFreeName(store, name);
       if (!store.consumeChallenge(challenge.id, iso(nowMs))) throw new TeamError("link_invalid", "this link was already used", 410);
       const member: Member = {
         id: newMemberId(),
@@ -282,7 +312,7 @@ export function redeemJoin(store: TeamStore, code: unknown, nameInput: unknown, 
     if (owner && owner.status === "active") return signIn(store, owner, "recovery", device, nowMs);
     const member: Member = {
       id: newMemberId(),
-      name: requireName(nameInput),
+      name: requireFreeName(store, requireName(nameInput)),
       role: "owner",
       status: "active",
       color: nextMemberColor(store),
@@ -395,6 +425,7 @@ export function renameMember(store: TeamStore, actor: Member, target: Member, na
   if (name === target.name) return target;
   const next = { ...target, name };
   store.transaction(() => {
+    requireFreeName(store, name, target.id);
     store.updateMember(next);
     appendTeamEvent(store, {
       actor: { kind: "member", memberId: actor.id },
@@ -418,7 +449,8 @@ export function recolorMember(store: TeamStore, actor: Member, target: Member, c
 }
 
 /** Revoking never deletes: past attribution stays correct. Every live
-    session of the member ends in the same transaction. */
+    session of the member, and every open code that would sign them in, ends
+    in the same transaction. */
 export function revokeMember(store: TeamStore, owner: Member, target: Member, nowMs = Date.now()): Member {
   if (target.role === "owner") throw new TeamError("owner_protected", "the owner cannot be revoked", 409);
   if (target.status === "revoked") return target;
@@ -426,6 +458,9 @@ export function revokeMember(store: TeamStore, owner: Member, target: Member, no
   store.transaction(() => {
     store.updateMember(next);
     const ended = store.revokeSessionsOf(target.id, iso(nowMs));
+    /* A hand-off or approval issued before the revocation must not sign them
+       in after a restore: restoring gives back the membership, not the links. */
+    store.consumeChallengesOf(target.id, iso(nowMs));
     appendTeamEvent(store, { actor: { kind: "member", memberId: owner.id }, action: "member.revoked", subject: { kind: "member", id: target.id, title: target.name }, detail: { sessions: ended.length } }, nowMs);
   });
   return next;

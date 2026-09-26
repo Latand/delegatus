@@ -77,7 +77,7 @@ under §14, Deferred.
 
 | # | Decision | Why (short) |
 |---|---|---|
-| D1 | **Two layers, kept apart: the perimeter and the identity.** The perimeter (`LLV_TOKEN`, `?k=`, the tailnet, Caddy on the stage box) stays exactly as it is and keeps deciding who may reach the Viewer at all. Identity is a new, additive layer that says which **member** a browser is. | The perimeter is enforced in `src/proxy.ts` and fed by the runtime host's entries (#1549), which are byte-identical across releases and must stay stable. Replacing it with cookies would touch the host; adding a layer beside it touches nothing there. |
+| D1 | **Two layers, kept apart: the perimeter and the identity.** The perimeter (`LLV_TOKEN`, `?k=`, the tailnet, Caddy on the stage box) keeps deciding who may reach the Viewer at all. Identity is a new, additive layer that says which **member** a browser is. On a team install a live member session also satisfies the key, and the sign-in surface needs none, so the key never has to go to a teammate (A13). | The perimeter is enforced in `src/proxy.ts` and fed by the runtime host's entries (#1549), which are byte-identical across releases and must stay stable. Replacing it with cookies would touch the host; adding a layer beside it touches nothing there. |
 | D2 | **Two modes, decided by data: `solo` and `team`.** No members store → `solo`: every same-origin human request is the unnamed operator, exactly today. One owner in the store → `team`: every human request needs a member session. | "Keep single-user local use frictionless" is met by construction: a solo install has no members file and never sees a sign-in page, a prompt or a name field. |
 | D3 | **A member session is a cookie the browser keeps**, opaque, server-stored (hashed), revocable, 30 days idle / 180 days absolute. | #691 rounds 7–9 (`src/components/operatorCredential.ts`) were rejected because a fresh tab could not open the manager and a reload lost the credential. A cookie survives both and is pasted nowhere. |
 | D4 | **Four ways in, one of them always available.** (a) an invite link from the owner; (b) approve a new device from a signed-in one, with a short code; (c) Telegram, through the bot Delegatus already runs, by deep link (`t.me/<bot>?start=<code>`); (d) a passkey, where the origin is HTTPS on a real host. Plus (e) a recovery link printed by the host CLI. | (a)+(b) need no third party and no HTTPS, so they work on a laptop, in a tailnet and on the stage box. (c) gives a verified Telegram identity with zero registration per install and opens the notification channel. (d) is the strong self-serve credential the #20 gate already specified. (e) is the root of recovery, as in #20 §4.6. |
@@ -113,7 +113,7 @@ scope of §0; three entries narrow it and say where the rest went (A8, A9, A10).
 | A10 | **Presence comes from sessions**; `presenceStore` gains no `memberId`. "Online" means a live session was used in the last two minutes; "seen 2 h ago" counts ended sessions too, so a member who signed out still reads as seen. | §1 row `presenceStore.ts`, §6.9 | The session row already carries the time and the surface. A second writer into the presence mirror would have been a touch point for nothing. |
 | A11 | **The seam's one exception: `src/proxy.ts` imports `src/lib/team/gate.ts` directly.** `nullTeam` and the `TeamModule` interface live in `contract.ts`; every other touch point goes through `src/lib/team/index.ts`. | §11.1 | The proxy is its own bundle. Through `index.ts` it would pull `teamActor`, the agent registry and the rest of the server graph into the proxy. |
 | A12 | **`delegatus team recover` and `revoke-sessions` are `bin/team.mjs`**, which writes the two rows it needs straight into `team.sqlite` (`bun:sqlite` under Bun, `node:sqlite` under Node). | §5.5 | `bin/cli.mjs` is plain `.mjs`, and the published package ships only `bin`, `dist` and `vendor`, so the command cannot import the TypeScript store. `cli.team.test.ts` creates the store with the module, runs the command, and redeems the printed link through the module's own join code, so the two cannot drift apart. |
-| A13 | **Invite and hand-off links** use the request's own origin, or the tailnet's when the owner is on loopback. They carry `?k=` when `LLV_TOKEN` is set, exactly as the phone QR does. | §5.1, §5.2 | On the stage box a teammate who opens a bare `/join/<code>` is stopped by the perimeter before the join page exists. The key already travels this way in every shared link, and the proxy drops it from the address after setting its cookie. |
+| A13 | **Invite and hand-off links** use the request's own origin, or the tailnet's when the owner is on loopback. They carry no `?k=`; only the owner's own phone hand-off does, as the solo QR always has. On a team install the perimeter admits the sign-in surface (`/sign-in`, `/join/`, `/api/team/public`, `/api/team/session/*`, `/api/team/join/*`, the brand icons) without the key, and a live member session in place of it (`teamPerimeter` in `src/lib/team/gate.ts`); a keyless request with neither gets the identity gate's own answer, a sign-in redirect or 401 `member_required`. `GET /api/access` hands a member the tailnet address without the key, and only the owner may press phone access on or off. | §5.1, §5.2, §9 | The first build put the key in every invite and hand-off link, so a teammate on the stage box could get past the perimeter at all. But a bearer GET passes the identity gate (§4.2 rule 3), so whoever saw a link, a withdrawn one included, and every revoked member could read the whole install, credential files under the home directory included, until the key was rotated. A credential that outlives the membership must not go to a teammate, so the session became the teammate's way past the perimeter. |
 | A14 | **The sign-in pages' language switch changes this browser only** (`setLocale`). | §6.6 | The in-app toggle also writes the install-wide language that agents and reports read, and a visitor who is not signed in must not change it. |
 | A15 | **Losing a session is noticed by a watcher of `fetch` answers** in `TeamSessionGuard`, mounted in the root layout; `serverReach.ts` is unchanged. | §4.4 | It covers `/activity` and `/team` as well as the board, and it only reads a 401 whose body says `member_required`. Nothing is retried or changed. |
 | A16 | **Approval codes are throttled per approver**: five wrong codes in ten minutes stop that member from asking for ten minutes. | §3.3 `attempts` | A wrong code names no challenge, so there is nothing to void. What can be bounded is the one who is guessing. |
@@ -128,17 +128,17 @@ scope of §0; three entries narrow it and say where the rest went (A8, A9, A10).
 | A25 | **A queued message is stamped too.** `POST /api/runtime/queue` refuses an anonymous caller in team mode, and for an admitted `add` or `update` records the member under the entry version's delivery key (`<entry>-v<revision>`), the key Codex's delivered record names in its marker. `/api/log/provenance` names that sender under the record's token in `senders`, never in `submissions`, since no outbox row is filed under it. The claim is taken after admission because the host mints the entry id; a replay or a refusal records nothing. | §7.1, A22 | The composer queues a message whenever a Codex agent is busy, which is the usual case, and those messages reached the chat with no sender and left no `message.sent` in the audit. |
 | A26 | **The operator spawn capability names a Viewer service.** `teamActor` classifies a request presenting the operator's own spawn capability as `{ kind: "service" }`, as the gate already admits it. Only Viewer processes read that key; no browser holds it. | §3.6 | The scheduled Telegram report launches its agent in process with that capability and no cookie, so on a team install it resolved to `anonymous` and every scheduled report answered 401 before admission. Classifying the capability covers every in-process launcher, whether or not it also sends a service tag. |
 
-**The one residual, stated plainly (§9).** Rule 3 of §4.2 lets a request that
+**The key is the operator's (§9).** Rule 3 of §4.2 lets a request that
 authenticated with the perimeter key as `Authorization: Bearer` read without
 being a member: operator scripts, the MCP server of a session the Viewer did
 not start, and a browser on the runtime host's trusted local entry all read
-that way. Every teammate holds that key, because invite and hand-off links
-carry it (A13), and **a revoked member keeps it**. Revoking ends their sessions
-and every write, and a browser visit sends them to sign in; a script of theirs
-can still make bearer GETs until the key changes. To shut a person out
-entirely, rotate the key (`delegatus --new-token`, or a new `LLV_TOKEN` in a
-Docker install) and send the rest of the team a fresh link, or remove their
-Caddy password. The Revoke dialog says so.
+that way. No teammate is handed that key (A13): invite links, a member's
+hand-off link and a member's read of `/api/access` carry none, so revoking a
+member ends every way in the product gave them. Someone who holds the key some
+other way (the operator shared it, or they joined through a link from before
+A13) can still make bearer GETs until it changes; rotate it
+(`delegatus --new-token`, or a new `LLV_TOKEN` in a Docker install), or remove
+their Caddy password. The Revoke dialog says so.
 
 **What the build verified** is listed in the pull request: the model, flows,
 gate matrix, Telegram through the real poller, passkeys through a software
@@ -149,7 +149,7 @@ layers, the CLI, the sender line, and the stamp site's RED against the base.
 
 | Piece on main | What it does | What this design does with it |
 |---|---|---|
-| `src/proxy.ts` | The perimeter. With `LLV_TOKEN` set, every connection (loopback included, since #1503) presents the token: cookie `llv_auth`, `Authorization: Bearer`, or `?k=` which sets the cookie and redirects. The report frame path is exempt. | Untouched as the perimeter. Gains the identity gate after it (§4). |
+| `src/proxy.ts` | The perimeter. With `LLV_TOKEN` set, every connection (loopback included, since #1503) presents the token: cookie `llv_auth`, `Authorization: Bearer`, or `?k=` which sets the cookie and redirects. The report frame path is exempt. | Gains the identity gate after it (§4). On a team install a keyless request reaches the sign-in surface, and passes on a live member session (A13). |
 | `src/lib/agent/operatorAuthority.ts` | `callerConversationId(req)` names an agent by its spawn capability header; `requireOperatorAuthority` refuses agents; `directOperatorActivityAuthority` also refuses the internal service tag (`monitor`, `mcp`, `orchestrator`). "The operator is the local browser." | Kept. The new `teamActor(req)` (§3.6) is built on top: an agent stays an agent, a service stays a service, and what used to be "the operator" becomes "member X" in team mode. |
 | `src/lib/sameOrigin.ts` | CSRF gate: Host pinned to loopback + `LLV_TS_HOST`, Origin / Sec-Fetch-Site checked. | Kept on every mutation, including the new sign-in POSTs. |
 | `src/runtime-host/deploymentProxy.ts` (#1549) | The stable port's entries: an authenticated remote entry and a trusted local entry that injects the release key as `Bearer` for loopback-addressed requests. | Untouched. Its injected bearer is a perimeter fact; identity does not read the `Authorization` header (§4.2). |
@@ -580,9 +580,8 @@ After the token check passes (or when no token is configured), in team mode:
    and is `GET` or `HEAD` passes: operator scripts that read, and browsers on
    the runtime host's trusted local entry (which injects the bearer). Such a
    browser loads the page and is sent to `/sign-in` by its first write (rule
-   5 at the stamp site), never by the page load. Anyone holding the key reads
-   this way, a revoked member included (the residual under the As-built
-   table).
+   5 at the stamp site), never by the page load. Only the operator holds the
+   key on a team install: no link or reply hands it to a teammate (A13).
 4. A live `llv_member` cookie passes. The lookup is an in-process
    `Map<hash, {memberId, expiresAt, lastSeenAt}>` rebuilt when the
    `team_sessions` collection revision changes, so revocation is immediate
@@ -675,9 +674,11 @@ this is "my other device", never "someone else's".
 folded into a gesture the product already has. In team mode the rail menu's
 QR (`AccessQrButton`) asks `POST /api/team/session/handoff` for a 10-minute
 code bound to the current member and draws the tailnet URL as
-`https://<tailnet host>/join/<handoff code>?k=<token>`. One scan: the proxy
-consumes `?k=` and sets `llv_auth`, redirects to `/join/<code>`, and the join
-page redeems a `handoff` challenge by signing the phone in as that member. The
+`https://<tailnet host>/join/<handoff code>`, with `?k=<token>` on the
+owner's alone (A13). One scan: the perimeter admits `/join/` without the key
+(for the owner's link it consumes `?k=`, sets `llv_auth` and redirects to
+`/join/<code>`), and the join page redeems a `handoff` challenge by signing the
+phone in as that member, whose session is then their way past the perimeter. The
 setup guide's phone step draws the same QR. In solo mode the QR is unchanged.
 
 ### 5.3 Telegram, through the bot
@@ -686,9 +687,9 @@ Available when the Telegram bot is connected in the Telegram panel
 (`telegramBotService().status().connected`) and receiving.
 
 **Pressing Start is not consent.** A deep link can be forwarded, and asking
-someone to "press Start to check the bot" costs nothing. Anyone past the
-perimeter (every invitee, and a revoked member until the key is rotated, §9)
-can open `/sign-in`, copy the link and send it to the owner. When Start was
+someone to "press Start to check the bot" costs nothing. Anyone who reaches
+the address can open `/sign-in`, which a team install serves without the key
+(A13),, copy the link and send it to the owner. When Start was
 the whole proof, the owner pressing it signed the *sender's* browser in as the
 owner, and the "That's not me" button only ever appeared on the sender's own
 screen. The same shape bound a victim's Telegram to the sender's member
@@ -1212,8 +1213,8 @@ that ships this; the Activity tab's first day is that day.
 | Today | After this design |
 |---|---|
 | Laptop, no token: open `http://127.0.0.1:8899/` | Unchanged. Solo mode. |
-| Laptop, `--tailscale`: phone opens `https://<host>.ts.net/?k=…`, cookie set, done | Unchanged in solo mode. In team mode the QR carries `/join/<handoff>?k=…`: the phone is signed in as the scanning member in one scan. |
-| Shared box: Caddy password → `?k=` → the app | Perimeter unchanged. In team mode, after the `?k=` redirect the browser lands on `/sign-in`; a member signs in once per device and stays signed in. |
+| Laptop, `--tailscale`: phone opens `https://<host>.ts.net/?k=…`, cookie set, done | Unchanged in solo mode. In team mode the QR carries `/join/<handoff>` (with `?k=…` only on the owner's): the phone is signed in as the scanning member in one scan. |
+| Shared box: Caddy password → `?k=` → the app | Unchanged in solo mode. In team mode a teammate needs no key: the Caddy password, then `/sign-in` or their `/join/` link, and their session carries them past the perimeter from then on (A13). |
 | Runtime host trusted local entry (#1549): bearer injected for loopback-host requests | Unchanged. Reads pass the identity gate; the first write asks for sign-in. |
 | MCP server → routes with `Bearer` + spawn capability | Unchanged; agents are not members. The gate checks the capability against the registry (A20). |
 | Runtime host → `POST /api/pipelines/tick` | Carries the `controller` tag (A21); passes with or without a key. |
@@ -1264,12 +1265,14 @@ proxy knows.
 | Session fixation / replay | New value on every sign-in; unknown values never adopted; single-use challenges consumed inside the collection mutation. |
 | CSRF on sign-in and on every mutation | `rejectCrossOrigin` unchanged; `SameSite=Lax`; a cross-site POST cannot carry the cookie. |
 | A header as evidence (#1496) | The gate reads a cookie the browser keeps; a capability or service header passes only once verified against the registry or its HMAC (A20); no proxy-set trust header. |
-| A revoked member | Every session ends at once and every write is refused; a live event stream they had open closes within 30 s (A24). The member still holds the perimeter key from their invite link and can make bearer GETs until the key is rotated (`delegatus --new-token`, or a new `LLV_TOKEN`); the Revoke dialog says so. |
+| A revoked member | Every session ends at once and every read and write is refused; a live event stream they had open closes within 30 s (A24); a hand-off or device approval they made before the revocation stays void after a restore. No link or reply ever handed them the perimeter key (A13), so the session was their only way in. Someone who holds the key another way (shared by the operator, or from a link issued before A13) reads until it is rotated (`delegatus --new-token`, or a new `LLV_TOKEN`); the Revoke dialog says so. |
 | Claiming someone else's message | A sender is recorded only after the host admitted a submission whose id no delivery record and no author row knew, and is read back only on that conversation (A22). |
 | Guessing | Link codes are 128-bit; the approval code is 30 bits and voided after 5 wrong entries; the Telegram confirmation code is 20 bits and its request is voided on the fifth wrong entry; passkeys are not guessable. No persistent throttle store: a Viewer restart resets the small in-memory counters, which is acceptable for 10-minute codes. |
 | A stolen phone | Sessions tab → Sign out everywhere, or the owner revokes the member; both are immediate through the revision-keyed cache. |
 | Lost passkey and lost phone | Invite from the owner; for the owner, the host CLI. |
-| Leaked invite link | Single use, 7 days, withdrawable; the Members page shows who joined through it (`member.joined` names the invite). |
+| Leaked invite link | Single use, 7 days, withdrawable, and it carries no key, so a withdrawn or used link opens nothing but the sign-in pages; the Members page shows who joined through it (`member.joined` names the invite). |
+| The sign-in surface without the key | On a team install `/sign-in`, `/join/` and their endpoints answer anyone who reaches the address, so a device approval request can be raised by someone the team never invited. It grants nothing until a member types its code and confirms the device shown; the tailnet or Caddy in front still decides who reaches the address at all. |
+| Two people under one name | A member name is unique across the team, revoked members included, compared without case, spacing or invisible characters: a rename or an invite redemption to a taken name is refused (409 `name_taken`), and a Telegram first name that is taken gets a number. A colour may repeat; the palette has eight. |
 | Telegram link forwarded to someone else (the owner, a victim, an outsider) | Start grants nothing (§5.3): the bot tells whoever pressed it what is being asked and sends them a six-digit code, and only the requesting browser typing that code back signs in, links, or raises a join request. The browser's polling proof is a separate secret from the link. Five wrong codes void the request. The residue is a person persuaded to read the code out, which the bot's reply warns against. |
 | The bot token | Never leaves its transport closure; the hook receives `from` and `param`, never the transport. |
 | Same-uid local process | Unchanged and stated as before in `operatorAuthority.ts`: a process running as the operator's uid can read the browser's cookie jar; nothing in software on one uid closes that, and #691's five rounds established it. |

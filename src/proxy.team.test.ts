@@ -12,6 +12,11 @@ import { viewerHealthRequestPlan } from "@/runtime-host/deploymentHealth";
 import { claimInstall, createHandoff } from "@/lib/team/members";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
+import { POST as inviteRoute } from "@/app/api/team/invites/route";
+import { DELETE as withdrawRoute } from "@/app/api/team/invites/[id]/route";
+import { POST as joinRoute } from "@/app/api/team/join/[code]/route";
+import { PATCH as memberRoute } from "@/app/api/team/members/[id]/route";
+import { POST as handoffRoute } from "@/app/api/team/session/handoff/route";
 
 import { probeHeadersFrom } from "../bin/internalService.mjs";
 
@@ -65,9 +70,21 @@ describe("team install", () => {
     expect(new URL(response.headers.get("location")!).pathname).toBe("/sign-in");
   });
 
-  test("a member without the key is still stopped at the perimeter", () => {
+  test("a member's live session is their way past the perimeter, without the key", () => {
     const response = proxy(get("/api/files", { cookie: `${MEMBER_COOKIE}=${cookie}` }));
-    expect(response.status).toBe(403);
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  test("without the key or a session, the sign-in surface opens and nothing else does", () => {
+    for (const pathname of ["/sign-in", "/join/abcdefghijklmnop", "/api/team/public", "/api/team/session/approval", "/brand/mark.svg"]) {
+      expect([pathname, proxy(get(pathname)).headers.get("x-middleware-next")]).toEqual([pathname, "1"]);
+    }
+    const page = proxy(get("/", { "sec-fetch-mode": "navigate" }));
+    expect(page.status).toBe(307);
+    expect(new URL(page.headers.get("location")!).pathname).toBe("/sign-in");
+    for (const pathname of ["/api/files", "/api/artifact?path=~/.codex/auth.json", "/_next/image?url=%2Fapi%2Ffiles&w=64&q=75"]) {
+      expect([pathname, proxy(get(pathname)).status]).toEqual([pathname, 401]);
+    }
   });
 
   test("the key and a member together pass", () => {
@@ -226,5 +243,136 @@ describe("team install: first-party callers name themselves and are checked", ()
     test("a probe's tag opens no write", () => {
       expect(proxy(get("/api/pipelines", probeHeadersFrom(stateDir), "POST")).status).toBe(401);
     });
+  });
+});
+
+/* Security review of #2243, P1: invite and hand-off links carried the access
+   key, and a bearer GET passes the identity gate, so whoever saw a link (a
+   withdrawn one included) and every revoked member could read the whole
+   install. Every credential the product hands a teammate is collected here
+   the way their browser would collect it, and none of them may read. */
+describe("team install: no credential a teammate holds outlives the membership", () => {
+  const TAILNET = "dev.example.net";
+  const SECRETS: Array<[string, string]> = [
+    ["GET", "/api/artifact?path=~/.codex/auth.json"],
+    ["GET", "/api/logs/stream"],
+    ["GET", "/api/runtime/stream"],
+    ["GET", "/api/files"],
+    ["HEAD", "/api/artifact?path=~/.codex/auth.json"],
+  ];
+  let ownerCookie = "";
+  const previousHost = process.env.LLV_TS_HOST;
+  beforeEach(() => {
+    process.env.LLV_TS_HOST = TAILNET;
+    ownerCookie = claimInstall(teamStore(), "Mira", DESKTOP).cookie;
+  });
+  afterEach(() => {
+    if (previousHost === undefined) delete process.env.LLV_TS_HOST;
+    else process.env.LLV_TS_HOST = previousHost;
+  });
+
+  /** What a browser keeps from one response: its `llv_auth` / `llv_member` cookies. */
+  class Jar {
+    readonly keys = new Set<string>();
+    readonly cookies = new Map<string, string>();
+    link(url: string) {
+      const key = new URL(url).searchParams.get("k");
+      if (key) this.keys.add(key);
+    }
+    keep(response: Response) {
+      for (const header of response.headers.getSetCookie()) {
+        const [pair] = header.split(";");
+        const [name, value] = pair.split("=");
+        if (value) this.cookies.set(name.trim(), value.trim());
+      }
+    }
+    /* Every way the held material can be presented: as cookies, and each
+       value (a link's key, a cookie's) as a bearer. */
+    presentations(): Array<Record<string, string>> {
+      const cookie = [...this.cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+      const values = new Set([...this.keys, ...this.cookies.values()]);
+      return [
+        cookie ? { cookie } : {},
+        ...[...values].map((value) => ({ ...(cookie ? { cookie } : {}), authorization: `Bearer ${value}` })),
+      ];
+    }
+  }
+
+  function route(pathname: string, init: { method?: string; body?: unknown; cookie?: string } = {}): NextRequest {
+    return new NextRequest(`https://${TAILNET}${pathname}`, {
+      method: init.method ?? (init.body === undefined ? "GET" : "POST"),
+      headers: {
+        host: TAILNET,
+        ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+        ...(init.cookie ? { cookie: `${MEMBER_COOKIE}=${init.cookie}` } : {}),
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    });
+  }
+
+  /** Opens a link the way a browser does: through the proxy, following its redirect. */
+  function open(url: string, jar: Jar): void {
+    jar.link(url);
+    const target = new URL(url);
+    const first = proxy(get(`${target.pathname}${target.search}`, { "sec-fetch-mode": "navigate" }));
+    jar.keep(first);
+    if (first.status === 307) {
+      const next = new URL(first.headers.get("location")!);
+      jar.keep(proxy(get(`${next.pathname}${next.search}`, { "sec-fetch-mode": "navigate", ...jar.presentations()[0] })));
+    } else {
+      expect(first.headers.get("x-middleware-next")).toBe("1");
+    }
+  }
+
+  function expectNoRead(jar: Jar): void {
+    for (const presented of jar.presentations()) {
+      for (const [method, pathname] of SECRETS) {
+        const response = proxy(get(pathname, presented, method));
+        expect([method, pathname, Object.keys(presented).join("+"), response.headers.get("x-middleware-next") ?? response.status])
+          .toEqual([method, pathname, Object.keys(presented).join("+"), 401]);
+      }
+    }
+  }
+
+  test("the link of a withdrawn invite reads nothing", async () => {
+    const invite = await (await inviteRoute(route("/api/team/invites", { body: { name: "Ivan" }, cookie: ownerCookie }))).json() as { id: string; url: string };
+    expect(new URL(invite.url).searchParams.has("k")).toBe(false);
+    const jar = new Jar();
+    open(invite.url, jar);
+    expect((await withdrawRoute(route(`/api/team/invites/${invite.id}`, { method: "DELETE", cookie: ownerCookie }), { params: Promise.resolve({ id: invite.id }) })).status).toBe(200);
+    expectNoRead(jar);
+  });
+
+  test("a revoked member holding everything the product gave them is refused every read", async () => {
+    const jar = new Jar();
+    const invite = await (await inviteRoute(route("/api/team/invites", { body: { name: "Ivan" }, cookie: ownerCookie }))).json() as { url: string };
+    open(invite.url, jar);
+    const code = new URL(invite.url).pathname.split("/").at(-1)!;
+    const joined = await joinRoute(route(`/api/team/join/${code}`, { body: { name: "Ivan" } }), { params: Promise.resolve({ code }) });
+    expect(joined.status).toBe(200);
+    jar.keep(joined);
+    const memberCookie = jar.cookies.get(MEMBER_COOKIE)!;
+
+    /* While a member, the session alone reads, and the phone hand-off they
+       can ask for carries no key either. */
+    expect(proxy(get("/api/files", { cookie: `${MEMBER_COOKIE}=${memberCookie}` })).headers.get("x-middleware-next")).toBe("1");
+    const handoff = await (await handoffRoute(route("/api/team/session/handoff", { body: {}, cookie: memberCookie }))).json() as { url: string };
+    expect(new URL(handoff.url).searchParams.has("k")).toBe(false);
+    jar.link(handoff.url);
+
+    const memberId = teamStore().members().find((member) => member.name === "Ivan")!.id;
+    const revoked = await memberRoute(route(`/api/team/members/${memberId}`, { method: "PATCH", body: { status: "revoked" }, cookie: ownerCookie }), { params: Promise.resolve({ id: memberId }) });
+    expect(revoked.status).toBe(200);
+    expectNoRead(jar);
+  });
+
+  test("the owner's own phone hand-off keeps the key, as the solo QR does", async () => {
+    const handoff = await (await handoffRoute(route("/api/team/session/handoff", { body: {}, cookie: ownerCookie }))).json() as { url: string };
+    expect(new URL(handoff.url).searchParams.get("k")).toBe(TOKEN);
+  });
+
+  test("the operator's key still reads, and a member holding it still writes", () => {
+    expect(proxy(get("/api/artifact?path=~/.codex/auth.json", { authorization: `Bearer ${TOKEN}` })).headers.get("x-middleware-next")).toBe("1");
+    expect(proxy(get("/api/files", { cookie: `llv_auth=${TOKEN}; ${MEMBER_COOKIE}=${ownerCookie}` }, "POST")).headers.get("x-middleware-next")).toBe("1");
   });
 });

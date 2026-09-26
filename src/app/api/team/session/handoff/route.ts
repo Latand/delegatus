@@ -15,7 +15,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (authed instanceof NextResponse) return authed;
   try {
     const { challenge, code } = createHandoff(authed.store, authed.live.member);
-    return teamJson({ url: shareableLink(req, `/join/${code}`), expiresAt: challenge.expiresAt });
+    /* The owner's phone may carry the access key, as the solo QR does; a
+       member's never does, since the key would outlive their membership. */
+    const withAccessKey = authed.live.member.role === "owner";
+    return teamJson({ url: shareableLink(req, `/join/${code}`, { withAccessKey }), expiresAt: challenge.expiresAt });
   } catch (error) {
     return teamErrorResponse(error);
   }

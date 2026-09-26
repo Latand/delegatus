@@ -478,6 +478,20 @@ export class TeamStore {
     return this.db.query("UPDATE challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").run(at, id).changes === 1;
   }
 
+  /** Consumes every open challenge that would sign someone in as this
+      member: the hand-offs and Telegram links issued to them, and the device
+      approvals and Telegram sign-ins that already name them. */
+  consumeChallengesOf(memberId: string, at: string): number {
+    const open = this.db.query<Row, []>("SELECT * FROM challenges WHERE consumed_at IS NULL").all().map(challengeFrom);
+    let consumed = 0;
+    for (const challenge of open) {
+      const result = challenge.result;
+      const names = challenge.memberId === memberId || (result !== null && result.kind !== "denied" && result.memberId === memberId);
+      if (names && this.consumeChallenge(challenge.id, at)) consumed += 1;
+    }
+    return consumed;
+  }
+
   pruneChallenges(nowMs: number): void {
     this.db.query("DELETE FROM challenges WHERE expires_at < ?").run(new Date(nowMs - PRUNE_CHALLENGES_AFTER_MS).toISOString());
   }

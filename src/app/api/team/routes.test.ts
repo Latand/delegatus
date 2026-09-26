@@ -137,6 +137,20 @@ describe("two people on two devices", () => {
     ]);
   });
 
+  test("a member cannot take the owner's name", async () => {
+    const miraCookie = cookieOf(await claim(call("/api/team/claim", { body: { name: "Mira" } })));
+    const invite = await (await createInvite(call("/api/team/invites", { body: {}, cookie: miraCookie }))).json() as { url: string };
+    const code = new URL(invite.url).pathname.split("/").pop()!;
+    const olehCookie = cookieOf(await join(call(`/api/team/join/${code}`, { body: { name: "Oleh" } }), params({ code })));
+    const view = await (await team(call("/api/team", { cookie: olehCookie }))).json() as { me: { id: string }; members: Array<{ name: string; color: string }> };
+    const mira = view.members.find((member) => member.name === "Mira")!;
+    const renamed = await patchMember(call(`/api/team/members/${view.me.id}`, { method: "PATCH", body: { name: " mira ", color: mira.color }, cookie: olehCookie }), params({ id: view.me.id }));
+    expect(renamed.status).toBe(409);
+    expect(await renamed.json()).toMatchObject({ code: "name_taken" });
+    const after = await (await team(call("/api/team", { cookie: olehCookie }))).json() as { me: { name: string } };
+    expect(after.me.name).toBe("Oleh");
+  });
+
   test("signing out ends the session and clears the cookie", async () => {
     const cookie = cookieOf(await claim(call("/api/team/claim", { body: { name: "Mira" } })));
     const response = await signOut(call("/api/team/session/sign-out", { body: {}, cookie }));

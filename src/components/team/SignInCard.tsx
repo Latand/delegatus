@@ -49,6 +49,7 @@ export function errorText(t: TFunction, answer: Extract<ApiAnswer<unknown>, { ok
     case "passkey_expired": return t("team.error.passkeyFailed");
     case "telegram_taken": return t("team.error.telegramTaken");
     case "name_required": return t("team.error.nameRequired");
+    case "name_taken": return t("team.error.nameTaken");
     default: return t("team.error.generic");
   }
 }

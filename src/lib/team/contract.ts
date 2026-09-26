@@ -172,6 +172,8 @@ export interface MessageAuthorClaim {
 export interface TeamModule {
   teamMode(): TeamMode;
   teamActor(req: RequestHeaders): TeamActor;
+  /** Whether the access key must be kept from this caller: on a team install, anyone but the owner, agents and Viewer services. */
+  accessKeyWithheld(req: RequestHeaders): boolean;
   /** The 401 a human write gets in team mode without a session, or null. */
   refuseAnonymous(actor: TeamActor): Response | null;
   recordTeamEvent(input: {
@@ -205,6 +207,7 @@ export interface TeamModule {
 export const nullTeam: TeamModule = {
   teamMode: () => "solo",
   teamActor: () => ({ kind: "operator" }),
+  accessKeyWithheld: () => false,
   refuseAnonymous: () => null,
   recordTeamEvent: () => {},
   recordMessageAuthor: () => {},

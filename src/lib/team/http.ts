@@ -92,11 +92,13 @@ const LOOPBACK_HOST = /^(?:localhost|127\.\d+\.\d+\.\d+|\[::1\])(?::\d+)?$/i;
 
 /**
  * A link someone else can open: this request's origin, or the tailnet's when
- * the owner is on loopback (a link to 127.0.0.1 reaches nobody else). With an
- * access key configured the link carries it as `?k=`, exactly as the phone QR
- * does, so the perimeter lets the joiner through and then forgets the query.
+ * the owner is on loopback (a link to 127.0.0.1 reaches nobody else). It
+ * carries no access key: on a team install the perimeter lets anyone reach
+ * `/join/`, and the session the link mints is the joiner's way past it from
+ * then on (§9). The key would outlive the membership, so it goes into a link
+ * only when `withAccessKey` says the link is the owner's own (their phone QR).
  */
-export function shareableLink(req: NextRequest, pathname: string): string {
+export function shareableLink(req: NextRequest, pathname: string, { withAccessKey = false }: { withAccessKey?: boolean } = {}): string {
   const host = req.headers.get("host") ?? req.nextUrl.host;
   let base = requestOrigin(req);
   const tailnet = process.env.LLV_TS_URL;
@@ -105,7 +107,7 @@ export function shareableLink(req: NextRequest, pathname: string): string {
   }
   const url = new URL(pathname, base);
   const token = process.env.LLV_TOKEN;
-  if (token) url.searchParams.set("k", token);
+  if (token && withAccessKey) url.searchParams.set("k", token);
   return url.toString();
 }
 

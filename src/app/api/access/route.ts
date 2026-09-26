@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { currentTailnetUrl, readPhoneAccess, viewerPortFor, type AccessResponse } from "@/lib/access/phoneAccess";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { accessKeyWithheld } from "@/lib/team";
 import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -16,5 +17,18 @@ export async function GET(req: NextRequest): Promise<NextResponse<AccessResponse
   if (rejection) return rejection;
 
   const read = await readPhoneAccess(viewerPortFor(req.url));
-  return NextResponse.json({ tailnetUrl: currentTailnetUrl(), phone: read.phone, phoneError: read.error });
+  /* On a team install a member gets the address and never the key in it: the
+     key would outlive their membership, and their phone signs in instead. */
+  const tailnetUrl = currentTailnetUrl();
+  return NextResponse.json({ tailnetUrl: tailnetUrl && accessKeyWithheld(req) ? withoutAccessKey(tailnetUrl) : tailnetUrl, phone: read.phone, phoneError: read.error });
+}
+
+function withoutAccessKey(link: string): string | null {
+  try {
+    const url = new URL(link);
+    url.searchParams.delete("k");
+    return url.toString();
+  } catch {
+    return null;
+  }
 }

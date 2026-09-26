@@ -18,7 +18,9 @@ import {
   lookupApproval,
   previewJoin,
   redeemJoin,
+  recolorMember,
   renameMember,
+  restoreMember,
   revokeMember,
   startApproval,
   challengeForRequester,
@@ -196,6 +198,28 @@ describe("sessions and revocation", () => {
     expect(messageSenders(["msg-oleh-1"])["msg-oleh-1"]?.name).toBe("Oleh");
   });
 
+  /* Security review of #2243, P3: restoring a revoked member brought back
+     the hand-off links they made before the revocation, and a device they had
+     approved but not yet signed in. */
+  test("a hand-off or approval made before a revocation stays dead after a restore", () => {
+    const store = teamStore();
+    const mira = claimInstall(store, "Mira", DESKTOP).member;
+    const oleh = redeemJoin(store, createInvite(store, mira, null).code, "Oleh", PHONE).member;
+    const handoff = createHandoff(store, oleh);
+    const approval = startApproval(store, PHONE);
+    confirmApproval(store, oleh, lookupApproval(store, oleh, approval.challenge.userCode).id, true);
+    const held = challengeForRequester(store, approval.challenge.id, approval.proof, "approval")!;
+
+    const restored = restoreMember(store, mira, revokeMember(store, mira, oleh));
+    expect(restored.status).toBe("active");
+    expect(previewJoin(store, handoff.code)).toEqual({ valid: false });
+    expect(() => redeemJoin(store, handoff.code, undefined, PHONE)).toThrow(TeamError);
+    expect(approvalState(store, store.challenge(approval.challenge.id)!).state).toBe("expired");
+    expect(() => completeApproval(store, held, PHONE)).toThrow(TeamError);
+    /* What they make after the restore works as usual. */
+    expect(previewJoin(store, createHandoff(store, restored).code)).toMatchObject({ valid: true, kind: "handoff" });
+  });
+
   test("the owner cannot be revoked", () => {
     const store = teamStore();
     const mira = claimInstall(store, "Mira", DESKTOP).member;
@@ -216,6 +240,42 @@ describe("sessions and revocation", () => {
     store.recordMessageAuthor({ clientMessageId: "msg-1", conversationId: null, memberId: mira.id, at: new Date().toISOString(), textDigest: null });
     renameMember(store, mira, mira, "Mira K.");
     expect(messageSenders(["msg-1", "unknown"])).toEqual({ "msg-1": { memberId: mira.id, name: "Mira K.", color: mira.color, initials: "MK" } });
+  });
+
+  /* Security review of #2243, P3: a member could take another member's name
+     (the owner's included), and the chat, the Activity tab and the MCP author
+     line then showed two identical people. */
+  test("a name another member holds is refused, whatever its case or spacing", () => {
+    const store = teamStore();
+    const mira = claimInstall(store, "Mira Kovalenko", DESKTOP).member;
+    const oleh = redeemJoin(store, createInvite(store, mira, null).code, "Oleh", PHONE).member;
+    for (const taken of ["Mira Kovalenko", "mira kovalenko", "MiraKovalenko", "  MIRA   KOVALENKO ", "Mira\u200bKovalenko"]) {
+      let refusal: unknown = null;
+      try {
+        renameMember(store, oleh, oleh, taken);
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(TeamError);
+      expect(refusal).toMatchObject({ code: "name_taken", status: 409 });
+    }
+    expect(store.member(oleh.id)!.name).toBe("Oleh");
+    /* A colour is not a name: the palette repeats after eight people. */
+    expect(recolorMember(store, oleh, oleh, mira.color).color).toBe(mira.color);
+    /* One's own name in another case is still one's own. */
+    expect(renameMember(store, oleh, oleh, "OLEH").name).toBe("OLEH");
+  });
+
+  test("an invite cannot be redeemed under a name someone holds, a revoked member's included", () => {
+    const store = teamStore();
+    const mira = claimInstall(store, "Mira", DESKTOP).member;
+    expect(() => redeemJoin(store, createInvite(store, mira, null).code, "mira", PHONE)).toThrow("another member already has that name");
+    const oleh = redeemJoin(store, createInvite(store, mira, null).code, "Oleh", PHONE).member;
+    revokeMember(store, mira, oleh);
+    const invite = createInvite(store, mira, "Oleh");
+    expect(() => redeemJoin(store, invite.code, undefined, PHONE)).toThrow("another member already has that name");
+    /* The refusal leaves the link usable under another name. */
+    expect(redeemJoin(store, invite.code, "Oleh H.", PHONE).member.name).toBe("Oleh H.");
   });
 
   test("a sender is named only on the conversation the member sent into", () => {

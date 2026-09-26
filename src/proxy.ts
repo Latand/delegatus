@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 import { tokensMatch } from "@/lib/authToken";
-import { isTeamAuthPage, teamGate } from "@/lib/team/gate";
+import { isTeamAuthPage, teamGate, teamPerimeter } from "@/lib/team/gate";
 
 const AUTH_COOKIE = "llv_auth";
 const FRAME_PREFIX = "/api/artifact/frame/";
@@ -102,6 +102,13 @@ function perimeterCheck(request: NextRequest): PerimeterResult {
   if (queryToken !== null && tokensMatch(queryToken, token)) {
     return { response: redirectWithCookie(request, token), bearer: false };
   }
+
+  // On a team install a member's session is their way past the perimeter,
+  // and the sign-in pages are reachable without the key, so no link handed
+  // to a teammate carries it (docs/design/sign-in-and-team.md §9).
+  const team = teamPerimeter(request);
+  if (team === "admit") return PASS;
+  if (team) return { response: team, bearer: false };
 
   return { response: forbidden(request), bearer: false };
 }

@@ -7,6 +7,7 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 import { MEMBER_REQUIRED_CODE, type TeamActor } from "./contract";
 import { requestSession, teamMode, type LiveSession } from "./sessions";
+import { existingTeamStore } from "./store";
 
 /*
  * Who is acting (§3.6). Asked by every place that records a human action;
@@ -55,6 +56,23 @@ function operatorSpawnCapabilityPresented(req: ActorRequest): boolean {
     return matchesOperatorSpawnCapability(capability);
   } catch {
     return false;
+  }
+}
+
+/**
+ * Whether the access key must be kept from this caller (§9). On a team
+ * install the key is the operator's: the owner, the Viewer's own processes and
+ * the agents it runs may see it, and nobody else — a member would keep it
+ * after being revoked. An unreadable team store withholds it.
+ */
+export function accessKeyWithheld(req: ActorRequest): boolean {
+  try {
+    if (teamMode() !== "team") return false;
+    const actor = teamActor(req);
+    if (actor.kind === "agent" || actor.kind === "service") return false;
+    return actor.kind !== "member" || existingTeamStore()?.member(actor.memberId)?.role !== "owner";
+  } catch {
+    return true;
   }
 }
 

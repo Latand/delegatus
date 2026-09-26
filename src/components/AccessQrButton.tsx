@@ -94,8 +94,9 @@ export function AccessQrButton() {
   const [state, setState] = useState<LoadState>({ status: "idle" });
   const panelRef = useRef<HTMLDivElement>(null);
   /* In a team the QR signs the phone in as this member too (sign-in-and-team
-     §5.2): a ten-minute hand-off link on the address the phone can reach,
-     carrying the access key exactly as the plain link does. */
+     §5.2): a ten-minute hand-off link on the address the phone can reach.
+     Only the owner's carries the access key; a member's phone gets in by the
+     session the link mints (§9). */
   const team = useTeamView({ load: false });
   const handoff = team?.mode === "team" && team.me !== null;
 

@@ -137,6 +137,17 @@ describe("signing in through the bot", () => {
     expect(pendingJoinRequests(store)).toEqual([]);
   });
 
+  test("a Telegram first name someone already holds gets a number, and a typed one is refused", async () => {
+    const store = teamStore();
+    claimInstall(store, "oleh", DESKTOP);
+    const { challenge, link } = startTelegram(store, "sign-in", null, PHONE);
+    const [reply] = await deliver(started(OLEH, `/start ${link}`));
+    confirmTelegram(store, challenge, sentCode(reply));
+    const owner = store.owner()!;
+    expect(refused(() => answerJoinRequest(store, owner, challenge.id, true, "OLEH"))).toBe("name_taken");
+    expect(answerJoinRequest(store, owner, challenge.id, true, undefined)!.name).toBe("Oleh 2");
+  });
+
   test("a linked member signs in once the browser types back the code, and so does the link itself", async () => {
     const store = teamStore();
     const mira = claimInstall(store, "Mira", DESKTOP).member;

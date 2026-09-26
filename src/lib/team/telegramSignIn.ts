@@ -6,9 +6,11 @@ import { cleanMemberName, type Member } from "./contract";
 import { appendTeamEvent } from "./events";
 import {
   challengeIsOpen,
+  freeMemberName,
   issueChallenge,
   newMemberId,
   nextMemberColor,
+  requireFreeName,
   TeamError,
   type Device,
   type SignedIn,
@@ -436,7 +438,13 @@ export function answerJoinRequest(store: TeamStore, owner: Member, id: string, a
       return null;
     }
     if (store.memberByTelegram(result.telegramUserId)) throw new TeamError("telegram_taken", "that Telegram account is already a member", 409);
-    const name = cleanMemberName(nameInput) ?? cleanMemberName(result.firstName) ?? cleanMemberName(result.username) ?? "Telegram";
+    /* The owner's name is used as typed and refused if someone holds it; a
+       Telegram first name is the requester's own choice, so a taken one gets
+       a number rather than making a second person look like the first. */
+    const typed = cleanMemberName(nameInput);
+    const name = typed
+      ? requireFreeName(store, typed)
+      : freeMemberName(store, cleanMemberName(result.firstName) ?? cleanMemberName(result.username) ?? "Telegram");
     const member: Member = {
       id: newMemberId(),
       name,

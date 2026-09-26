@@ -40,6 +40,24 @@ export function isGateExempt(pathname: string): boolean {
   return EXEMPT_EXACT.has(pathname) || EXEMPT_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix));
 }
 
+/* What a signed-out person needs to reach without the access key, on a team
+   install: the sign-in and join pages and their endpoints, and the icons those
+   pages draw. Narrower than the gate's list on purpose: `/_next/` (the image
+   optimizer, HMR) stays behind the key, and the build's static files never
+   reach the proxy at all (its matcher skips `/_next/static`). */
+const PERIMETER_EXEMPT_PREFIXES = [
+  "/sign-in/",
+  "/join/",
+  "/api/team/public",
+  "/api/team/session/",
+  "/api/team/join/",
+  "/brand/",
+] as const;
+
+function isPerimeterExempt(pathname: string): boolean {
+  return pathname === "/sign-in" || EXEMPT_EXACT.has(pathname) || PERIMETER_EXEMPT_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
 function isNavigation(request: NextRequest): boolean {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
   if (request.headers.get("sec-fetch-mode") === "navigate") return true;
@@ -50,6 +68,50 @@ function isNavigation(request: NextRequest): boolean {
 export interface TeamGateContext {
   /** The perimeter admitted this request by `Authorization: Bearer`. */
   bearerAuthenticated: boolean;
+}
+
+/**
+ * The perimeter's question on a team install, asked only for a request that
+ * presented no access key: "admit" for the sign-in surface and for a browser
+ * with a live member session, and otherwise the answer a signed-out person
+ * gets from the identity gate (sign in, or 401 member_required, which every
+ * open tab already turns into the sign-in prompt). null means this is not a
+ * team install, and the key is required exactly as before.
+ *
+ * This is what keeps the key away from teammates (§9). A member reaches the
+ * Viewer by their session, so no invite or hand-off link has to carry `?k=`,
+ * and nothing a teammate was ever given outlives their membership: revoking
+ * the member ends the session, and the session was their only way in. The key
+ * stays with the operator — scripts, the trusted local entry, the owner's own
+ * phone — where a bearer read is a read of the operator's own install.
+ */
+export function teamPerimeter(request: NextRequest, nowMs = Date.now()): "admit" | NextResponse | null {
+  let store;
+  try {
+    store = existingTeamStore();
+    if (!store || !store.hasActiveOwner()) return null;
+  } catch {
+    return null;
+  }
+  if (isPerimeterExempt(request.nextUrl.pathname)) return "admit";
+  try {
+    if (verifySessionValue(store, request.cookies.get(MEMBER_COOKIE)?.value, nowMs)) return "admit";
+  } catch {
+    return null;
+  }
+  return signedOut(request);
+}
+
+function signedOut(request: NextRequest): NextResponse {
+  if (isNavigation(request)) {
+    const url = request.nextUrl.clone();
+    const next = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+    url.pathname = "/sign-in";
+    url.search = "";
+    if (next !== "/") url.searchParams.set("next", next);
+    return NextResponse.redirect(url, 307);
+  }
+  return NextResponse.json({ error: "sign in required", code: MEMBER_REQUIRED_CODE }, { status: 401 });
 }
 
 /** null = pass; otherwise the response to send instead. */
@@ -89,9 +151,9 @@ export function teamGate(request: NextRequest, context: TeamGateContext, nowMs =
 
   /* Operator scripts read with the perimeter key, and a browser on the
      runtime host's trusted local entry has it injected. None of them writes
-     as a person, so reads pass and the first write asks. Whoever holds the
-     key can read this way, a revoked member included; rotating the key
-     (`--new-token`) is what takes that back (§9). */
+     as a person, so reads pass and the first write asks. On a team install
+     the key is the operator's alone: no link a teammate receives carries it
+     (`teamPerimeter`), so this is never a teammate's way in (§9). */
   if (context.bearerAuthenticated && reads) return null;
 
   try {
@@ -100,13 +162,5 @@ export function teamGate(request: NextRequest, context: TeamGateContext, nowMs =
     return NextResponse.json({ error: "team sign-in is unavailable", code: "team_store_unavailable" }, { status: 503 });
   }
 
-  if (isNavigation(request)) {
-    const url = request.nextUrl.clone();
-    const next = `${pathname}${request.nextUrl.search}`;
-    url.pathname = "/sign-in";
-    url.search = "";
-    if (next !== "/") url.searchParams.set("next", next);
-    return NextResponse.redirect(url, 307);
-  }
-  return NextResponse.json({ error: "sign in required", code: MEMBER_REQUIRED_CODE }, { status: 401 });
+  return signedOut(request);
 }
