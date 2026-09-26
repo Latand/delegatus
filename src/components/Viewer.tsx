@@ -59,7 +59,7 @@ import type { MobileShellHost } from "./mobile/MobileShell";
 import { dropPendingSeatConfirmOutside, onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
 import { OverviewBoard } from "./OverviewBoard";
-import { BarIslandProvider } from "./ProjectBar";
+import { BarIslandProvider, BoardPaneProvider } from "./ProjectBar";
 import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { isChildConversation, OVERVIEW, projectKey } from "./projectModel";
@@ -936,16 +936,21 @@ function ViewerApp() {
     document.title = needsYou.length ? `(${needsYou.length}) ${PRODUCT_NAME}` : PRODUCT_NAME;
   }, [needsYou.length]);
 
-  /* The board's width, for whether the panel can dock beside it. */
+  /* The width the board's columns have, for whether the panel can dock
+     beside them: the kanban's own pane, which it hands in when it mounts (a
+     seat open beside the board and the Tasks panel take theirs out of it),
+     else the whole main column. Both are observed, so a window resize and a
+     seat moving to the side each re-measure. */
+  const [boardPane, setBoardPane] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    const element = mainRef.current;
+    const element = boardPane ?? mainRef.current;
     if (!element || typeof ResizeObserver !== "function") return;
     const apply = () => setSharedWidth(element.getBoundingClientRect().width + (dockedRef.current ? PANEL_WIDTH : 0));
     apply();
     const observer = new ResizeObserver(apply);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [isMobile]);
+  }, [isMobile, boardPane]);
   const panelDocked = !isMobile && panelOpen && panelPlacement === "docked" && panelRoom(sharedWidth);
   const panelFloating = !isMobile && panelOpen && !panelDocked;
   useLayoutEffect(() => {
@@ -1606,6 +1611,7 @@ function ViewerApp() {
             toast appears, so a new toast visually docks into it (D7). On the
             phone the badge lives in the board header and the toast docks in flow
             below (see the mobile banner), so this fixed anchor is desktop-only. */}
+        <BoardPaneProvider onPane={setBoardPane}>
         <BarIslandProvider island={isMobile ? null : (
           /* On a project, top-2 centres the 32px bar controls of the island in
              the board's one 48px header bar (#1801), whose right 236px are
@@ -1622,7 +1628,9 @@ function ViewerApp() {
             style={{ right: panelDocked ? PANEL_WIDTH + 16 : 16 }}
           >
             {attentionBadge}
-            {toastFile ? (
+            {/* A floating panel hangs where the toast would, and already
+                lists what the toast announces. */}
+            {toastFile && !panelFloating ? (
               <AttentionToast
                 file={toastFile}
                 mobile={false}
@@ -1697,6 +1705,7 @@ function ViewerApp() {
           />
         )}
         </BarIslandProvider>
+        </BoardPaneProvider>
       </main>
       {panelDocked ? panel("docked") : null}
       {/* Runtime connection pill — mounts the tab-wide bus and shows live /

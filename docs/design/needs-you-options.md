@@ -422,3 +422,55 @@ count (it is the only cross-project number a background tab can show).
   tests. A can keep it, since A keeps the walk.
 - **Changing the report log's contents beyond what the Asks-you lane adds.**
   Only C touches the log, and only by pinning a live section above it.
+
+## Built: option B
+
+The operator picked B. What shipped, and where it differs from the sketch
+above:
+
+- **The control.** «● Waiting N» (`attention.chip`) in the bar's outlined
+  style, pressed while the panel shows; the funnel (F) stays beside it as its
+  own bar control. The count is every project's, and so is the tab title. No
+  «Next» anywhere: the N key still walks the project on screen.
+- **The panel.** `AttentionPanel.tsx` over the one queue, cut by
+  `needsYouSections` (the project on screen first and open, the others folded
+  to their count and remembered). It docks beside the board while the board's
+  own pane keeps 760 px next to it (a seat open beside the board and the Tasks
+  panel take their width out of that pane, which the kanban board hands the
+  Viewer), and floats under the control otherwise, or when the operator picks
+  floating. Open state and placement are kept per device.
+- **Rows.** Each carries the role of the agent behind it (`RoleTag`: the
+  open-agents rail's emblem tile and the role's name in its ink, from the
+  existing `--rf-*` palette), its age, its title, the wait in the shared
+  vocabulary, «Dismiss», and a permission's «Allow once / Deny».
+- **Dismissal.** «Dismiss», a section's «Dismiss all», the head's «Dismiss
+  all» and Undo of the last one all go through the one needs-you dismissal
+  (`sendDismissal`, `POST /api/attention/dismissals`), so a row leaves the
+  header, the panel, the rail, the tab title and the phone at once and the
+  record is durable. A row whose cause is gone (the question answered, the
+  permission decided, the lane moved on) leaves on the next poll with no
+  dismissal.
+- **The orchestrator's questions.** Every open `question`/`blocked` report is
+  its own row, the question its title and the seat's role on it; the report
+  log shows each with a tick. A tick, «Dismiss» on the row and «Dismiss» on
+  the seat's card are one action (a `report` dismissal subject) on one record
+  (`resolvedAsks` in the bridge log): resolved in one place is resolved in
+  every place. The log dims resolved questions with a check and adds a bar:
+  the open count, prev/next between open questions, «Resolve all», and «Clear
+  resolved», which takes resolved rows out of this device's view. A question
+  also stops asking when a directive answers it, when the operator writes to
+  the seat after it, on a rotation, or after two hours; the manager filing
+  another report no longer retires it, since that allowed one open question
+  per project. The seat tick counts an operator's resolution as their answer
+  to an owed ask.
+- **Ride-alongs.** The rail's ⏸, the Overview's rows and the phone's project
+  sheet count `needsYouCounts` over the same queue, so a dismissed or paused
+  lane no longer counts there; the tab title keeps the global count.
+- **Phone.** The ⚠ sheet drops «Next ›», gains the role tag, «Dismiss» per
+  row with the receipt's Undo, «Dismiss all», and a section per project where
+  it lists more than one.
+- **Seam for "Asks you".** Not on main when this was built. Its `ask` reason
+  joins `ConversationReasonKind`; `decisionText` and `conversationNeedText`
+  are exhaustive switches, so adding it is where the compiler asks for the
+  row's words, and the row's role comes from the conversation as for any
+  other reason.

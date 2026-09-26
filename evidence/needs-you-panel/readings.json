@@ -1,0 +1,436 @@
+{
+  "readings": {
+    "uk/desktop-closed": {
+      "count": 9,
+      "next": 0,
+      "title": "(9) Delegatus"
+    },
+    "uk/desktop-open-docked": {
+      "placement": "docked",
+      "title": "Чекають на вас · 9",
+      "sections": [
+        [
+          "delegatus",
+          5,
+          false
+        ],
+        [
+          "shop-web",
+          2,
+          true
+        ],
+        [
+          "tg-bot",
+          2,
+          true
+        ]
+      ],
+      "roles": [
+        "orchestrator",
+        "reviewer",
+        "orchestrator",
+        "builder",
+        "reviewer"
+      ],
+      "rowsWithoutTag": 0,
+      "tagColours": [
+        "orchestrator:rgb(67, 56, 202)",
+        "reviewer:rgb(3, 105, 161)",
+        "builder:rgb(180, 83, 9)"
+      ],
+      "next": 0,
+      "title_": "(9) Delegatus"
+    },
+    "uk/desktop-open-all-sections": {
+      "placement": "docked",
+      "title": "Чекають на вас · 9",
+      "sections": [
+        [
+          "delegatus",
+          5,
+          false
+        ],
+        [
+          "shop-web",
+          2,
+          false
+        ],
+        [
+          "tg-bot",
+          2,
+          false
+        ]
+      ],
+      "roles": [
+        "orchestrator",
+        "reviewer",
+        "orchestrator",
+        "builder",
+        "reviewer",
+        "orchestrator",
+        "architect",
+        "verifier",
+        "builder"
+      ],
+      "rowsWithoutTag": 0,
+      "tagColours": [
+        "orchestrator:rgb(67, 56, 202)",
+        "reviewer:rgb(3, 105, 161)",
+        "builder:rgb(180, 83, 9)",
+        "architect:rgb(15, 118, 110)",
+        "verifier:rgb(21, 128, 61)"
+      ],
+      "next": 0,
+      "title_": "(9) Delegatus"
+    },
+    "uk/desktop-open-overlay": {
+      "placement": "overlay",
+      "title": "Чекають на вас · 9",
+      "sections": [
+        [
+          "delegatus",
+          5,
+          false
+        ],
+        [
+          "shop-web",
+          2,
+          true
+        ],
+        [
+          "tg-bot",
+          2,
+          true
+        ]
+      ],
+      "roles": [
+        "orchestrator",
+        "reviewer",
+        "orchestrator",
+        "builder",
+        "reviewer"
+      ],
+      "rowsWithoutTag": 0,
+      "tagColours": [
+        "orchestrator:rgb(67, 56, 202)",
+        "reviewer:rgb(3, 105, 161)",
+        "builder:rgb(180, 83, 9)"
+      ],
+      "next": 0,
+      "title_": "(9) Delegatus"
+    },
+    "uk/phone-sheet": {
+      "rows": [
+        "orchestrator",
+        "reviewer",
+        "orchestrator",
+        "builder",
+        "reviewer"
+      ],
+      "dismiss": 5,
+      "next": 0
+    },
+    "en/desktop-closed": {
+      "count": 9,
+      "next": 0,
+      "title": "(9) Delegatus"
+    },
+    "en/desktop-open-docked": {
+      "placement": "docked",
+      "title": "Waiting for you · 9",
+      "sections": [
+        [
+          "delegatus",
+          5,
+          false
+        ],
+        [
+          "shop-web",
+          2,
+          true
+        ],
+        [
+          "tg-bot",
+          2,
+          true
+        ]
+      ],
+      "roles": [
+        "orchestrator",
+        "reviewer",
+        "orchestrator",
+        "builder",
+        "reviewer"
+      ],
+      "rowsWithoutTag": 0,
+      "tagColours": [
+        "orchestrator:rgb(67, 56, 202)",
+        "reviewer:rgb(3, 105, 161)",
+        "builder:rgb(180, 83, 9)"
+      ],
+      "next": 0,
+      "title_": "(9) Delegatus"
+    },
+    "en/desktop-open-all-sections": {
+      "placement": "docked",
+      "title": "Waiting for you · 9",
+      "sections": [
+        [
+          "delegatus",
+          5,
+          false
+        ],
+        [
+          "shop-web",
+          2,
+          false
+        ],
+        [
+          "tg-bot",
+          2,
+          false
+        ]
+      ],
+      "roles": [
+        "orchestrator",
+        "reviewer",
+        "orchestrator",
+        "builder",
+        "reviewer",
+        "orchestrator",
+        "architect",
+        "verifier",
+        "builder"
+      ],
+      "rowsWithoutTag": 0,
+      "tagColours": [
+        "orchestrator:rgb(67, 56, 202)",
+        "reviewer:rgb(3, 105, 161)",
+        "builder:rgb(180, 83, 9)",
+        "architect:rgb(15, 118, 110)",
+        "verifier:rgb(21, 128, 61)"
+      ],
+      "next": 0,
+      "title_": "(9) Delegatus"
+    },
+    "en/desktop-open-overlay": {
+      "placement": "overlay",
+      "title": "Waiting for you · 9",
+      "sections": [
+        [
+          "delegatus",
+          5,
+          false
+        ],
+        [
+          "shop-web",
+          2,
+          true
+        ],
+        [
+          "tg-bot",
+          2,
+          true
+        ]
+      ],
+      "roles": [
+        "orchestrator",
+        "reviewer",
+        "orchestrator",
+        "builder",
+        "reviewer"
+      ],
+      "rowsWithoutTag": 0,
+      "tagColours": [
+        "orchestrator:rgb(67, 56, 202)",
+        "reviewer:rgb(3, 105, 161)",
+        "builder:rgb(180, 83, 9)"
+      ],
+      "next": 0,
+      "title_": "(9) Delegatus"
+    },
+    "en/phone-sheet": {
+      "rows": [
+        "orchestrator",
+        "reviewer",
+        "orchestrator",
+        "builder",
+        "reviewer"
+      ],
+      "dismiss": 5,
+      "next": 0
+    },
+    "uk/desktop-seat-beside": {
+      "placement": "overlay",
+      "title": "Чекають на вас · 9",
+      "sections": [
+        [
+          "delegatus",
+          5,
+          false
+        ],
+        [
+          "shop-web",
+          2,
+          true
+        ],
+        [
+          "tg-bot",
+          2,
+          true
+        ]
+      ],
+      "roles": [
+        "orchestrator",
+        "reviewer",
+        "orchestrator",
+        "builder",
+        "reviewer"
+      ],
+      "rowsWithoutTag": 0,
+      "tagColours": [
+        "orchestrator:rgb(67, 56, 202)",
+        "reviewer:rgb(3, 105, 161)",
+        "builder:rgb(180, 83, 9)"
+      ],
+      "next": 0,
+      "title_": "(9) Delegatus"
+    },
+    "uk/desktop-dismiss-one": {
+      "count": 8,
+      "panel": {
+        "placement": "docked",
+        "title": "Чекають на вас · 8",
+        "sections": [
+          [
+            "delegatus",
+            4,
+            false
+          ],
+          [
+            "shop-web",
+            2,
+            true
+          ],
+          [
+            "tg-bot",
+            2,
+            true
+          ]
+        ],
+        "roles": [
+          "reviewer",
+          "orchestrator",
+          "builder",
+          "reviewer"
+        ],
+        "rowsWithoutTag": 0,
+        "tagColours": [
+          "reviewer:rgb(3, 105, 161)",
+          "orchestrator:rgb(67, 56, 202)",
+          "builder:rgb(180, 83, 9)"
+        ],
+        "next": 0,
+        "title_": "(8) Delegatus"
+      },
+      "gone": true
+    },
+    "uk/desktop-dismiss-section": {
+      "count": 6,
+      "sections": [
+        [
+          "delegatus",
+          4,
+          false
+        ],
+        [
+          "tg-bot",
+          2,
+          true
+        ]
+      ]
+    },
+    "uk/desktop-undo": {
+      "count": 8
+    },
+    "uk/report-log": {
+      "open": "2",
+      "ticks": [
+        [
+          "1204",
+          "open"
+        ],
+        [
+          "1203",
+          null
+        ],
+        [
+          "1202",
+          "open"
+        ],
+        [
+          "1201",
+          "resolved"
+        ],
+        [
+          "1200",
+          null
+        ]
+      ],
+      "count": 9
+    },
+    "uk/report-log-ticked": {
+      "open": "1",
+      "ticks": [
+        [
+          "1204",
+          "resolved"
+        ],
+        [
+          "1203",
+          null
+        ],
+        [
+          "1202",
+          "open"
+        ],
+        [
+          "1201",
+          "resolved"
+        ],
+        [
+          "1200",
+          null
+        ]
+      ],
+      "count": 8
+    },
+    "en/report-log": {
+      "open": "2",
+      "ticks": [
+        [
+          "1204",
+          "open"
+        ],
+        [
+          "1203",
+          null
+        ],
+        [
+          "1202",
+          "open"
+        ],
+        [
+          "1201",
+          "resolved"
+        ],
+        [
+          "1200",
+          null
+        ]
+      ],
+      "count": 9
+    }
+  },
+  "failures": []
+}

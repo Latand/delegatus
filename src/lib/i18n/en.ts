@@ -2609,8 +2609,7 @@ export const en = {
   "attention.dismissAll": "Dismiss all",
   "attention.dismissAllTitle": "Stop flagging every item here until something new asks",
   "attention.dismissAllIn": "Dismiss everything waiting in {project}",
-  "attention.undo": "Undo",
-  "attention.undoTitle": "Bring back what was dismissed last ({count})",
+  "attention.undoTitle": "Undo the last dismissal ({count})",
   "attention.dismissFailed": "Could not dismiss: {error}",
   "attention.dock": "Dock beside the board",
   "attention.float": "Float over the board",
@@ -2619,7 +2618,6 @@ export const en = {
   "attention.sectionUnfold": "Unfold {project}",
   "attention.empty": "Nothing is waiting for you.",
   "attention.reportQuestion": "Question",
-  "attention.reportQuestionLine": "Question — “{body}”",
   "attention.filterOn": "Show only those waiting on you (F)",
   "attention.filterOff": "Show all nodes (F)",
   /* The one decision line every attention surface shares (#1167): the toast

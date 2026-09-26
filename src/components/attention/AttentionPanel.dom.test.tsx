@@ -204,10 +204,11 @@ test("every row carries the role of the agent behind it, in the role palette's o
   expect(host.querySelector('[data-role-tag="builder"]')!.getAttribute("style")).toBeNull();
 });
 
-test("each open question in the report log is its own row, with the question as its line, and dismissing it resolves that report", async () => {
+test("each open question in the report log is its own row, the question its title, and dismissing it resolves that report", async () => {
   const host = await mount();
-  const lines = ["ask-limit", "ask-digest"].map((id) => host.querySelector(`[data-needs-you-row="${id}"] [data-attention-decision]`)!.textContent);
-  expect(lines).toEqual(["Question — “Raise the attachment limit to 100 MB or keep 25?”", "Question — “Ship the digest on weekends too?”"]);
+  const rows = ["ask-limit", "ask-digest"].map((id) => host.querySelector(`[data-needs-you-row="${id}"]`)!);
+  expect(rows.map((row) => row.querySelector("[data-needs-you-title-line]")!.textContent)).toEqual(["Raise the attachment limit to 100 MB or keep 25?", "Ship the digest on weekends too?"]);
+  expect(rows.map((row) => row.querySelector("[data-attention-decision]")!.textContent)).toEqual(["Question", "Question"]);
   await click(host.querySelector('[data-needs-you-dismiss="ask-limit"]')!);
   expect(posted).toEqual([{ target: { kind: "subjects", subjects: [{ kind: "report", seq: 11 }] }, undo: false, surface: "desktop" }]);
   expect(rowIds(host)).not.toContain("ask-limit");

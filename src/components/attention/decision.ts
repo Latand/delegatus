@@ -93,16 +93,12 @@ function decisionText(t: TFunction, reason: ConversationReason): string {
 }
 
 /**
- * The line of one needs-you row: the wait in the same fixed words, and for an
- * orchestrator's question the question itself, its first line as the report
- * log shows it. The row names the role with its own mark, so the line leaves
- * it out.
+ * The line of one needs-you row: the wait in the same fixed words, without the
+ * role, which the row names with its own mark. An orchestrator's question in
+ * the report log reads «Question»; its text is the row's title.
  */
 export function reasonLine(t: TFunction, reason: ConversationReason): string {
-  if (reason.kind === "decision" && reason.report) {
-    return reason.report.body ? t("attention.reportQuestionLine", { body: reason.report.body }) : t("attention.reportQuestion");
-  }
-  return decisionText(t, reason);
+  return reason.report ? t("attention.reportQuestion") : decisionText(t, reason);
 }
 
 /**

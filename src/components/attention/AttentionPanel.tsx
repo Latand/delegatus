@@ -146,12 +146,6 @@ export function AttentionPanel({
   const head = (
     <div className={`flex shrink-0 items-center gap-1 border-b border-border pl-3 pr-1.5 ${docked ? "h-12" : "h-10"}`}>
       <h2 className="min-w-0 flex-1 truncate text-ui font-semibold text-secondary" data-needs-you-title="">{title}</h2>
-      {last ? (
-        <button type="button" className={`${QUIET} inline-flex items-center gap-1`} data-needs-you-undo="" title={t("attention.undoTitle", { count: last.subjects.length })} onClick={undo}>
-          <Undo2 className="h-3.5 w-3.5" aria-hidden />
-          {t("attention.undo")}
-        </button>
-      ) : null}
       {queue.length ? (
         <button type="button" className={QUIET} data-needs-you-dismiss-all="" title={t("attention.dismissAllTitle")} onClick={() => run(queue)}>
           {t("attention.dismissAll")}
@@ -177,6 +171,12 @@ export function AttentionPanel({
 
   const body = (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-1.5" data-needs-you-body="">
+      {last ? (
+        <button type="button" className={`${QUIET} mb-1 inline-flex items-center gap-1`} data-needs-you-undo="" onClick={undo}>
+          <Undo2 className="h-3.5 w-3.5" aria-hidden />
+          {t("attention.undoTitle", { count: last.subjects.length })}
+        </button>
+      ) : null}
       {pinned}
       {error ? <p className="px-2.5 py-1.5 text-[11px] text-danger" role="status" data-needs-you-error="">{error}</p> : null}
       {sections.length === 0 ? (
@@ -248,10 +248,11 @@ export function AttentionPanel({
 }
 
 /**
- * One row: the agent's role, the title, the age and «Dismiss» on the first
- * line; the wait on the second, two lines at most, since a list that stays
- * open has room for an ask's whole sentence. A permission prompt answers
- * under it.
+ * One row: the agent's role and how long it has waited on the first line,
+ * with «Dismiss»; the title on the second; the wait on the third, two lines
+ * at most, since a list that stays open has room for an ask's whole sentence.
+ * An orchestrator's question is its own title, the question itself, and the
+ * line under it says it is a question. A permission prompt answers under it.
  */
 function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   entry: MobileAttentionEntry;
@@ -266,7 +267,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   let since: number | null;
   let line: string;
   if (entry.kind === "conversation") {
-    title = cleanTitle(entry.item.file.title, 90);
+    title = entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90);
     since = entry.item.since;
     line = reasonLine(t, entry.item.reason);
   } else {
@@ -293,9 +294,9 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
         >
           <span className="flex w-full min-w-0 items-center gap-1.5">
             <RoleTag role={role} />
-            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{title}</span>
-            {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">{fmtAge(since)}</span> : null}
+            {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">· {fmtAge(since)}</span> : null}
           </span>
+          <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{title}</span>
           <span data-attention-decision className="line-clamp-2 w-full text-[11px] text-muted [overflow-wrap:anywhere]">{line}</span>
         </button>
         <button

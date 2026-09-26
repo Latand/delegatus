@@ -11685,6 +11685,10 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
       const opened = await openFixture(browser, `${server.base}?lang=${lang}${query}`, phone ? PHONE : DESKTOP, "light", lang, "reduce", phone);
       await opened.page.waitForSelector(phone ? "[data-mobile2-bar]" : "[data-attention-count]", { timeout: 20_000 });
       await opened.page.waitForTimeout(700);
+      /* The fixture's first poll raises an arrival toast; it is closed with
+         its own ×, as the operator would, so it covers nothing in a frame. */
+      const toast = opened.page.locator("[data-attention-toast-dismiss]");
+      if (await toast.count()) await toast.first().click();
       return opened;
     };
     try {
@@ -11821,8 +11825,11 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
       }
 
       /* uk: the phone's report screen with its ticks. */
-      opened = await open("#reports", "uk", true);
+      opened = await open("", "uk", true);
       try {
+        /* In-app, as the phone's menu gets there: a pasted `#reports` link
+           is what the unknown-link notice is for. */
+        await opened.page.evaluate(() => { location.hash = "#reports"; });
         await opened.page.waitForSelector('[data-report-log][data-report-log-variant="screen"] [data-report-log-entries]', { timeout: 10_000 });
         await shot(opened.page, "uk", "390x844-report-log");
       } finally { await opened.context.close(); }

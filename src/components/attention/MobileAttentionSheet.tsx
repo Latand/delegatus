@@ -271,9 +271,9 @@ function NoticeRow({ row, now, onOpen, onClear }: { row: MobileNoticeRow; now: n
 
 function ConversationRow({ item, now, current, onOpen, role }: { item: AttentionItem; now: number; current: boolean; onOpen: () => void; role?: FrameRole }) {
   const { t } = useLocale();
-  const title = cleanTitle(item.file.title, 90);
-  /* With the role on its own mark, the line is the wait alone, and an
-     orchestrator's question is the question. */
+  /* An orchestrator's question in the report log is its own title. */
+  const title = (role && item.reason.report?.body) || cleanTitle(item.file.title, 90);
+  /* With the role on its own mark, the line is the wait alone. */
   const decision = role ? reasonLine(t, item.reason) : decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
   const headline = item.reason.kind === "permission" && Boolean(item.file.pendingPermission);
   const row = (
