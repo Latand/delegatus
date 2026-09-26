@@ -10,7 +10,6 @@ import {
   mergeOnReviewSetting,
   effectiveReportTelegram,
   REPORT_NAME_MAX_CHARS,
-  reportHeaderName,
   reportTelegramChoice,
   repositoryReportName,
   setBridgeReports,
@@ -39,17 +38,13 @@ export interface ProjectSettingsResponse {
       (docs/design/orchestrator-reports.md §5.6): a chat, "Log only"
       (`chat: null`), or null when they never chose. */
   reportTelegram: ReportTelegramChoice | null;
-  /** Where reports actually go besides the log: the chosen chat, or for a
-      project that never chose, the bot's one allowed chat. Null for the log
-      only. */
+  /** Where reports actually go besides the log: the chat the operator chose.
+      Null while they chose none or "Log only": nothing is posted to Telegram
+      until a chat is chosen. */
   reportDestination: EffectiveReportTelegram | null;
-  /** How many chats the bot may post in, so the step can ask for a pick when
-      there are several and nothing was chosen. */
+  /** How many chats the bot may post in, so the step can offer a pick while
+      nothing was chosen. */
   postableChats: number;
-  /** The name reports carry in the bot's one allowed chat while the project
-      has not chosen (`reportHeaderName`): the GitHub repository's, else the
-      display name. Null once the operator chose. */
-  reportFallbackName: string | null;
   /** The name the setup step prefills: the GitHub repository's, capitalised. */
   reportNameSuggestion: string | null;
   /** `<owner>/<repo>` of the project's recorded remote, null without one. */
@@ -66,9 +61,8 @@ function answer(project: string): ProjectSettingsResponse {
     mergeOnReview: mergeOnReviewSetting(key),
     bridgeReports: bridgeReportsSetting(key),
     reportTelegram: choice,
-    reportDestination: effectiveReportTelegram(key, postable),
+    reportDestination: effectiveReportTelegram(key),
     postableChats: postable.length,
-    reportFallbackName: choice ? null : reportHeaderName(key),
     reportNameSuggestion: repositoryReportName(key),
     github: githubRepositoryOfRemote(recordedProjectRemote(key)),
   };

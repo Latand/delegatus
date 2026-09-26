@@ -36,8 +36,18 @@ const PROJECT = "repo-project-a";
 const SEAT = "conversation_seat";
 const MANAGER: CallerAttribution = { kind: "manager", conversationId: SEAT, role: "orchestrator" };
 
+/* The bot has exactly one chat agents may post in; every other Viewer control
+   read is refused, so no revision reaches a live Viewer. */
+const CONTROL = {
+  get: async (pathname: string) => {
+    if (pathname !== "/api/telegram/bot/agent?op=chats") throw new Error(`unexpected Viewer control read ${pathname}`);
+    return { chats: [{ chat: "team-reports", postAllowed: true }] };
+  },
+  post: async () => ({ ok: true }),
+};
+
 function bindings(over: Record<string, unknown> = {}) {
-  return viewerMcpBindings(undefined, { post: async () => ({ ok: true }) }, {
+  return viewerMcpBindings(undefined, CONTROL, {
     registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
     attentionAuthority: () => ({ kind: "worker", conversationId: SEAT, role: "orchestrator" }),
     callerAttribution: () => MANAGER,
@@ -56,14 +66,12 @@ test("get_orchestrator carries the interface language and the Telegram destinati
   expect(await bindings().get_orchestrator({ clientRequestId: "o-3", project: PROJECT, full: true })).toMatchObject({ operatorLocale: "uk", reportTelegram: { chat: "team-reports", name: "Delegatus" } });
 });
 
-test("get_orchestrator reports the bot's one allowed chat for a project that never chose, and nothing after Log only", async () => {
-  const withChats = (chats: string[]) => bindings({ reportChats: async () => chats });
-  expect(await withChats(["team-reports"]).get_orchestrator({ clientRequestId: "f-1", project: PROJECT })).toMatchObject({ reportTelegram: { chat: "team-reports", source: "only-allowed-chat" } });
-  expect(await withChats(["team-reports", "design-lounge"]).get_orchestrator({ clientRequestId: "f-2", project: PROJECT })).toMatchObject({ reportTelegram: null });
+test("get_orchestrator shows no Telegram destination until the operator chooses a chat, and none after Log only", async () => {
+  expect(await bindings().get_orchestrator({ clientRequestId: "f-1", project: PROJECT })).toMatchObject({ reportTelegram: null });
   setReportTelegram(PROJECT, null, "operator");
-  expect(await withChats(["team-reports"]).get_orchestrator({ clientRequestId: "f-3", project: PROJECT })).toMatchObject({ reportTelegram: null });
+  expect(await bindings().get_orchestrator({ clientRequestId: "f-3", project: PROJECT })).toMatchObject({ reportTelegram: null });
   setReportTelegram(PROJECT, { chat: "design-lounge", name: "Atlas" }, "operator");
-  expect(await withChats(["team-reports"]).get_orchestrator({ clientRequestId: "f-4", project: PROJECT, full: true })).toMatchObject({ reportTelegram: { chat: "design-lounge", name: "Atlas", source: "chosen" } });
+  expect(await bindings().get_orchestrator({ clientRequestId: "f-4", project: PROJECT, full: true })).toMatchObject({ reportTelegram: { chat: "design-lounge", name: "Atlas", source: "chosen" } });
 });
 
 test("the session instructions name the interface language once a client reported it, and say nothing before", () => {
