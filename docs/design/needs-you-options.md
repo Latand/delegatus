@@ -469,8 +469,10 @@ above:
 - **Phone.** The ⚠ sheet drops «Next ›», gains the role tag, «Dismiss» per
   row with the receipt's Undo, «Dismiss all», and a section per project where
   it lists more than one.
-- **Seam for "Asks you".** Not on main when this was built. Its `ask` reason
-  joins `ConversationReasonKind`; `decisionText` and `conversationNeedText`
-  are exhaustive switches, so adding it is where the compiler asks for the
-  row's words, and the row's role comes from the conversation as for any
-  other reason.
+- **"Asks you".** An agent that asks the operator in prose is an `ask` row.
+  On the panel it carries the conversation's role (`conversationFrameRole`,
+  the same tag as any other row), and its line is «asks you: ‹sentence›»,
+  the agent's own sentence. On the phone that sentence gets a truncated line
+  of its own above the age. «Dismiss» clears the row by its reason id, like
+  any other conversation reason. An ask row offers no Allow/Deny: those
+  answer only a `permission` row.

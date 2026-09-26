@@ -283,3 +283,20 @@ test("an agent that asked the operator in prose is a row with its role, its own 
   click(q(host, `[data-needs-you-dismiss="${askId}"]`));
   expect(calls[0]!.subjects).toEqual([{ kind: "conversation", conversationId: "conversation_explore", path: "/p/explore.jsonl", reasonId: askId, reason: "ask" }]);
 });
+
+test("an ask row never mounts permission buttons, even when its conversation also holds a permission request", () => {
+  const askId = "ask:conversation_explore:claude:msg-8";
+  const file = conversation("/p/explore.jsonl", "Export formats", NOW - 420, {
+    engine: "claude", fmt: "claude", model: "opus", pendingQuestion: null, conversationId: "conversation_explore",
+    operatorAsk: { id: askId, messageAt: (NOW - 420) * 1000, gist: "Fold the presets into one button?" },
+  } as unknown as Partial<FileEntry>);
+  const queue = buildMobileAttentionQueue(buildAttentionQueue([file], NOW, PROJECT), []);
+  /* Today permission outranks ask, so the queue never builds this pair; the
+     row must not lean on that precedence to keep Allow/Deny off an ask. */
+  file.pendingPermission = { id: "request-9", tool: "Bash", command: "ls", reason: "", reasonType: "safetyCheck", since: new Date((NOW - 60) * 1000).toISOString() } as FileEntry["pendingPermission"];
+  const host = mount(<MobileAttentionSheet entries={queue} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
+  const row = q(host, `[data-needs-you-row="${askId}"]`)!;
+  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("asks you: Fold the presets into one button?");
+  expect(q(host, "[data-permission-actions]")).toBeNull();
+  expect(q(host, "[data-permission-allow]")).toBeNull();
+});

@@ -325,8 +325,9 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
       <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
     </button>
   );
-  /* A structured permission request is answered right here (#2215). */
-  if (!headline) return row;
+  /* A structured permission request is answered right here (#2215); an ask
+     shares its headline line and nothing else. */
+  if (item.reason.kind !== "permission" || !item.file.pendingPermission) return row;
   return (
     <div className="min-w-0">
       {row}
