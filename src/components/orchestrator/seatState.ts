@@ -115,7 +115,7 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     previous: Array.isArray(raw?.previous) ? raw.previous.flatMap((entry) => previousSeatOf(entry) ?? []) : [],
     currentTask: seatNotesTaskOf(raw?.currentTask),
     all: seatConversationsOf(raw?.all),
-    deputies: parseSeatDeputyViews(raw?.deputies),
+    ...(Array.isArray(raw?.deputies) ? { deputies: parseSeatDeputyViews(raw.deputies) } : {}),
   };
 }
 
@@ -193,13 +193,34 @@ export function seatRefsOf(status: OrchestratorSeatStatus | null, failed = false
      bands then draw as they did before, seat included. */
   if (failed) return current;
   const previous = status.previous ?? [];
+  /* The seats' deputies (docs/design/ghost-seat.md §5) leave the bands with
+     the seat: every one the record names, not only the newest the answer lists. */
+  const deputies = status.all?.deputies;
   return {
     ...current,
     previous: {
       conversationIds: previous.map((seat) => seat.conversationId),
       paths: previous.flatMap((seat) => (seat.path ? [seat.path] : [])),
     },
+    ...(deputies ? { deputies } : {}),
   };
+}
+
+/**
+ * Every transcript path a seat's deputy ran under, for the surfaces that keep
+ * it out of their rows by path (the phone's board): the record's own path and
+ * whatever path the conversation carries now. A failed read names none.
+ */
+export function seatDeputyPaths(
+  status: Pick<OrchestratorSeatStatus, "all"> | null,
+  files: readonly Pick<FileEntry, "path" | "conversationId">[],
+): string[] {
+  const deputies = status?.all?.deputies;
+  if (!deputies) return [];
+  const ids = new Set(deputies.conversationIds);
+  const paths = new Set(deputies.paths);
+  for (const file of files) if (file.conversationId && ids.has(file.conversationId)) paths.add(file.path);
+  return [...paths];
 }
 
 /**

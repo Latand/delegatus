@@ -48,8 +48,9 @@ interface SeatStatus {
       seat of another project is no more a task than this project's is. Null
       when the record could not be read, which hides nothing. */
   all: SeatConversations | null;
-  /** The active seat's deputies, the live one and the newest ended ones. */
-  deputies: SeatDeputyView[];
+  /** The active seat's deputies, the live one and the newest ended ones;
+      absent when it has none, so an answer without them is unchanged. */
+  deputies?: SeatDeputyView[];
 }
 
 /** The project-less read (`?scope=all`): the Overview names no project, so it
@@ -98,6 +99,9 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
   if (retired.length || active) {
     try { tasks = loadTasks(); } catch { tasks = []; }
   }
+  const seatDeputies = active?.conversationId && deputies
+    ? deputiesForSeatIn(deputies, active.conversationId).map(seatDeputyView)
+    : [];
   const previous: PreviousSeatRow[] = retired.map((seat) => {
     const task = seatTaskOf(tasks, project, seat);
     return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null, hasNotes: task?.hasNotes ?? false };
@@ -122,18 +126,17 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     all: withDeputyRefs(allSeatConversationsIn(record), deputies),
     /* docs/design/ghost-seat.md §5: the seat's feed draws each deputy's block
        from these, and the seat head and card point at the live one. */
-    deputies: active?.conversationId && deputies
-      ? deputiesForSeatIn(deputies, active.conversationId).map(seatDeputyView)
-      : [],
+    ...(seatDeputies.length ? { deputies: seatDeputies } : {}),
   });
 }
 
 /** The seat record's conversations with every deputy's beside them, so the
     task bands and lists leave a seat's parallel self out with the seat. An
-    unreadable deputy file adds nothing. */
+    unreadable deputy file, or one with no deputy, adds nothing. */
 function withDeputyRefs(all: SeatConversations | null, deputies: readonly OrchestratorDeputy[] | null): (SeatConversations & { deputies?: { conversationIds: string[]; paths: string[] } }) | null {
   if (!all) return null;
-  return deputies ? { ...all, deputies: deputyConversationRefsIn(deputies) } : all;
+  const refs = deputies ? deputyConversationRefsIn(deputies) : null;
+  return refs && (refs.conversationIds.length || refs.paths.length) ? { ...all, deputies: refs } : all;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {

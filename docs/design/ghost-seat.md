@@ -659,6 +659,35 @@ Tests, by path, under isolated state:
 Rollback: the deputy branch in attribution is behind the record's existence;
 with no `deputies` entries every path is byte-identical to today.
 
+### As built (slice 1)
+
+The slice follows sections 4 to 7 with these differences, each recorded where
+it lives:
+
+- **The deputy record has a file of its own**, `state/orchestrator-deputies.json`
+  (`src/lib/orchestrator/deputies.ts`). The seats reader refuses a schema it
+  does not know, so bumping the seats file would make an older build read every
+  seat as absent. ADR 0002 records the authority decision.
+- **The record also keeps `forkBytes`**, the size of the copy. The canonical
+  rows of a block come from `GET /api/orchestrator/ghost?askId=`, which reads
+  the deputy's transcript from that byte offset. A second `useLogTail` cannot
+  skip `forkRecordCount`: its window start counts from its own first read, from
+  the end of the file, so it never knows a line's index in the file.
+- **A fork or launch that never started ends as `failed`**, beside the four
+  outcomes of section 5, so the seat is free for the next ask at once.
+- **`ask.images` is a count.** The pictures go to the deputy's host with the
+  ask; the record does not copy them.
+- **The seat's `allowSubagents` is copied as it is.** The disallowed tools are
+  part of the prompt's tool list, so forcing it off on a seat that allows it
+  would miss the seat's cache.
+- **Deputies reach the feed through a client store** the seat poll already
+  fills (`src/components/orchestrator/seatDeputies.ts`), read by `LogFeed` for
+  its own conversation, with an optional `deputies` prop for fixtures. Every
+  surface that mounts the seat's feed draws the blocks without a prop threaded
+  through it.
+- **The sender line** draws when the record carries a sender. The team work
+  (PR #2243) is not merged, so the route records none yet.
+
 ## 8. Cost and failure summary
 
 | | |

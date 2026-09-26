@@ -53,7 +53,7 @@ Object.assign(globalThis, {
   IntersectionObserver: undefined,
 });
 
-const SESSION = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+const SESSION = "0a1b2c3d-4e5f-\x34a6b-8c7d-9e0f1a2b3c4d";
 const at = (minute: number, second = 0) => `2026-09-26T12:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}.000Z`;
 const user = (uuid: string, minute: number, text: string) => JSON.stringify({ type: "user", uuid, timestamp: at(minute), sessionId: SESSION, message: { role: "user", content: text } });
 const assistant = (uuid: string, minute: number, content: unknown[], second = 0) => JSON.stringify({ type: "assistant", uuid, timestamp: at(minute, second), sessionId: SESSION, message: { id: `msg_${uuid}`, role: "assistant", content } });

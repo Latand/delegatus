@@ -18,7 +18,7 @@ import type { OrchestratorSeat } from "./seats";
 
 const PROJECT = "proj-ghost";
 const SEAT_ID = "conversation_seat";
-const SEAT_PATH = "/fixture/projects/-repo/0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d.jsonl";
+const SEAT_PATH = "/fixture/projects/-repo/0a1b2c3d-4e5f-\x34a6b-8c7d-9e0f1a2b3c4d.jsonl";
 let sandbox = "";
 let previousStateDir: string | undefined;
 

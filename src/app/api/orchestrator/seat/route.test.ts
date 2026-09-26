@@ -15,6 +15,7 @@ import {
   failOrchestratorSeatIntent,
   orchestratorSeatFor,
 } from "@/lib/orchestrator/seats";
+import { beginDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import * as taskStore from "@/lib/tasks/store";
 
 import { POST as rotatePost } from "../rotate/route";
@@ -172,6 +173,24 @@ test("the seat read answers the cross-project seat conversations, with a project
   const everywhere = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?scope=all"));
   expect(everywhere.status).toBe(200);
   expect(await everywhere.json()).toEqual({ all: expected });
+});
+
+/* docs/design/ghost-seat.md §5: the seat read carries the seat's deputies for
+   its feed, and every deputy's conversation beside the seats for the lists. */
+test("the seat read carries the active seat's deputies and every deputy's refs", async () => {
+  beginOrchestratorSeatIntent({ project: "proj-a", mandate: "own the board", clientRequestId: "req_proj-a_00001", mode: "spawn" });
+  completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "req_proj-a_00001", conversationId: "conversation_seat", path: "/seats/a.jsonl", engine: "claude" });
+  const seatEpoch = orchestratorSeatFor("proj-a").active!.seatEpoch;
+  const begun = beginDeputy({ project: "proj-a", seatConversationId: "conversation_seat", seatEpoch, seatPath: "/seats/a.jsonl", clientRequestId: "ask-1", ask: { text: "file a task", images: 0, sender: null } });
+  if (begun.kind !== "begun") throw new Error("deputy did not begin");
+  recordDeputyFork(begun.deputy.askId, { deputyConversationId: "conversation_ghost", artifactPath: "/seats/ghost.jsonl", forkRecordCount: 12, forkBytes: 2048 });
+
+  const response = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-a"));
+  const body = await response.json() as { deputies?: { askId: string; deputyConversationId: string; forkBytes: number; ask: { text: string } }[]; all: { deputies?: unknown } };
+  expect(body.deputies).toHaveLength(1);
+  expect(body.deputies![0]).toMatchObject({ askId: begun.deputy.askId, deputyConversationId: "conversation_ghost", forkBytes: 2048, ask: { text: "file a task" } });
+  expect(body.deputies![0]).not.toHaveProperty("clientRequestId");
+  expect(body.all.deputies).toEqual({ conversationIds: ["conversation_ghost"], paths: ["/seats/ghost.jsonl"] });
 });
 
 /*

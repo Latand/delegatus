@@ -1,0 +1,259 @@
+{
+  "readings": {
+    "running-1440-en": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "active",
+          "open": true,
+          "titleWidth": 128.3,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 270.5,
+            "bottom": 352.5,
+            "bodyTop": 270.5,
+            "lastRowBottom": 356.5
+          },
+          "overlapWithSeat": 0,
+          "rows": 3
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "running-1440-uk": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "active",
+          "open": true,
+          "titleWidth": 144.7,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 270.5,
+            "bottom": 352.5,
+            "bodyTop": 270.5,
+            "lastRowBottom": 356.5
+          },
+          "overlapWithSeat": 0,
+          "rows": 3
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "interleaved-1440-en": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": true,
+          "titleWidth": 128.3,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 270.5,
+            "bottom": 384,
+            "bodyTop": 270.5,
+            "lastRowBottom": 388
+          },
+          "overlapWithSeat": 0,
+          "rows": 3
+        },
+        {
+          "askId": "deputy_b",
+          "state": "active",
+          "open": true,
+          "titleWidth": 128.3,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 634.5,
+            "bottom": 678.5,
+            "bodyTop": 634.5,
+            "lastRowBottom": 682.5
+          },
+          "overlapWithSeat": 0,
+          "rows": 2
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "interleaved-1440-uk": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": true,
+          "titleWidth": 144.7,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 270.5,
+            "bottom": 384,
+            "bodyTop": 270.5,
+            "lastRowBottom": 388
+          },
+          "overlapWithSeat": 0,
+          "rows": 3
+        },
+        {
+          "askId": "deputy_b",
+          "state": "active",
+          "open": true,
+          "titleWidth": 144.7,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 634.5,
+            "bottom": 678.5,
+            "bodyTop": 634.5,
+            "lastRowBottom": 682.5
+          },
+          "overlapWithSeat": 0,
+          "rows": 2
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "collapsed-1440-en": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 1054.5,
+          "chips": 2,
+          "targetHeight": 32,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0
+        },
+        {
+          "askId": "deputy_b",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 1164.7,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat"
+      ],
+      "seatLiveLast": false,
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "collapsed-1440-uk": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 1027.5,
+          "chips": 2,
+          "targetHeight": 32,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0
+        },
+        {
+          "askId": "deputy_b",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 1138.4,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat"
+      ],
+      "seatLiveLast": false,
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    }
+  },
+  "failures": []
+}

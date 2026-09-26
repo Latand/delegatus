@@ -13,7 +13,6 @@ import { ChevronDown, ChevronRight } from "../icons";
 import { FeedItem } from "../feed/FeedItem";
 import { GalleryOwnerProvider } from "../feed/Lightbox";
 import { createFeedSession, type FeedSnapshot } from "../feed/parse";
-import { hhmm } from "../utils";
 import { DeputyInkContext, DeputyMark } from "./deputyInk";
 import { LiveMcpLinkChip, LiveTurnRows, useConversationAvailability } from "./LiveTurnRows";
 import { publishCanonicalAssistantClaims, useCanonicalAssistantClaims, visibleRuntimeLiveTurnItems } from "./liveTurnHandoff";
@@ -126,6 +125,13 @@ export function touchedLinks(touched: SeatDeputyView["touched"]): McpCallLink[] 
 
 const EMPTY_FEED: FeedSnapshot = { items: [], hiddenServiceCount: 0 };
 
+/** Local HH:MM of the moment the ask was sent. */
+function clock(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+}
+
 export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyView; engine?: string }) {
   const { t } = useLocale();
   const phone = useIsMobile();
@@ -148,6 +154,10 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
     if (!inside && held) setHeld(false);
   }, [inside, held]);
   const open = manual ?? (live || held);
+  /* The settle motion plays only for a change the reader sees happen: the
+     block ended in view, or the reader toggled it. */
+  const [initialOpen] = useState(open);
+  const settle = open !== initialOpen || manual !== null ? " deputy-settle" : "";
 
   const records = useDeputyRecords(deputy.askId, open, live);
   const session = useMemo(
@@ -170,7 +180,7 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
     [live, runtime?.liveTurn, runtime?.turn, feed.items, claims],
   );
 
-  const started = hhmm(deputy.startedAt);
+  const started = clock(deputy.startedAt);
   const stateWord = live
     ? t(deputy.state === "pending" ? "deputy.starting" : "deputy.working")
     : t(OUTCOME_KEYS[deputy.outcome ?? "done"]);
@@ -223,7 +233,7 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
         <div
           data-deputy-collapsed
           data-feed-key={`${blockKey}:line`}
-          className={`relative flex min-w-0 items-start gap-2 text-label ${phone ? "min-h-11 py-1.5" : "min-h-7 py-1"}`}
+          className={`relative flex min-w-0 items-start gap-2 text-label ${phone ? "min-h-11 py-1.5" : "min-h-7 py-1"}${settle}`}
         >
           {/* The whole line is the target: the button spans it, the chips sit
               above it and stay their own links. */}
@@ -259,7 +269,7 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
       )}
 
       {open ? (
-        <div data-deputy-body className={`relative ${phone ? "pl-3" : ""}`}>
+        <div data-deputy-body className={`relative${phone ? " pl-3" : ""}${settle}`}>
           {/* The dashed edge spans the block's body, from the caption to its
               last row: in the avatar column on the desktop, at the gutter on
               the phone. */}
@@ -302,7 +312,7 @@ function DeputyCaption({ engine, phone, started, stateWord, live, warn, open, to
   return (
     <div data-deputy-caption className={`flex min-w-0 items-center gap-2 text-label text-muted ${phone ? "min-h-11" : "min-h-7"}`}>
       <span className={`flex shrink-0 items-center ${phone ? "" : "w-6.5 justify-center"}`}><DeputyMark engine={engine} /></span>
-      <span data-deputy-title className="min-w-0 grow basis-[10rem] truncate font-semibold text-secondary">{t("deputy.participant")}</span>
+      <span data-deputy-title className="min-w-[7.5rem] shrink truncate font-semibold text-secondary">{t("deputy.participant")}</span>
       {started ? <span className="shrink-0 tabular-nums">{started}</span> : null}
       <span data-deputy-status className={`inline-flex shrink-0 items-center gap-1 font-semibold ${live ? "text-success" : warn ? "text-warning" : "text-secondary"}`}>
         {live ? <span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden /> : null}
@@ -314,7 +324,7 @@ function DeputyCaption({ engine, phone, started, stateWord, live, warn, open, to
         aria-expanded={open}
         aria-label={toggleLabel}
         onClick={onToggle}
-        className={`inline-flex shrink-0 items-center justify-center rounded-control text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${phone ? "h-11 w-11" : "h-7 w-7 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"}`}
+        className={`ml-auto inline-flex shrink-0 items-center justify-center rounded-control text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${phone ? "h-11 w-11" : "h-7 w-7 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"}`}
       >
         <ChevronDown className="h-3.5 w-3.5" aria-hidden />
       </button>

@@ -11189,3 +11189,71 @@ describe("orchestrator reports: the setup guide's optional Reports to Telegram s
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("the orchestrator's parallel self in the seat's feed", () => {
+  /*
+   * Rendered evidence for docs/design/ghost-seat.md §6 at the desktop width:
+   * the production `LogFeed` of a seat over
+   * `src/components/conversation/deputyBlockEvidence.fixture.tsx`, with the
+   * seat's and each deputy's runtime session on the bus, in both languages:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "parallel self"
+   *
+   * Three scenarios: a deputy streaming beside the seat's own live turn, two
+   * blocks interleaved with seat rows between them (the finished one opened
+   * by hand), and finished blocks collapsed to one line, one timed out.
+   * Gated: every block sits among the seat's rows and the seat's live turn
+   * stays the last section; no ink of a block overlaps a seat row; an open
+   * block's caption title keeps its width and its dashed edge spans its rows;
+   * a collapsed line keeps room for its text beside two chips. The phone half
+   * is the phone driver's (`issue1671Evidence.browser.test.tsx`).
+   *
+   * PNGs go to `~/Pictures/delegatus-review/ghost-seat/` (DEPUTY_PNG_DIR
+   * overrides), never into the repository; readings to
+   * `evidence/ghost-seat/desktop.json`.
+   */
+  browserTest("blocks pin at their heads, stream beside the seat, and collapse to one line", async () => {
+    const { MEASURE_DEPUTY_BLOCKS, deputyEvidenceFailures } = await import("@/components/conversation/deputyBlockEvidence.measure");
+    const out = path.resolve(".artifacts/ghost-seat");
+    const evidence = path.resolve("evidence/ghost-seat");
+    const pngDir = process.env.DEPUTY_PNG_DIR ?? path.join(process.env.HOME ?? "/var/tmp", "Pictures/delegatus-review/ghost-seat");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/deputyBlockEvidence.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const scenario of ["running", "interleaved", "collapsed"] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          const label = `${scenario}-1440-${lang}`;
+          const opened = await openFixture(browser, `${server.base}?scenario=${scenario}`, { width: 1440, height: 1500 }, "light", lang);
+          try {
+            await opened.page.locator("[data-deputy-block]").first().waitFor();
+            await opened.page.waitForTimeout(300);
+            if (scenario === "interleaved") {
+              await opened.page.locator('[data-deputy-block="deputy_a"] [data-deputy-toggle]').first().click({ position: { x: 6, y: 6 } });
+              await opened.page.waitForTimeout(300);
+            }
+            const reading = await opened.page.evaluate(MEASURE_DEPUTY_BLOCKS) as import("@/components/conversation/deputyBlockEvidence.measure").DeputyEvidenceReading;
+            readings[label] = reading;
+            failures.push(...deputyEvidenceFailures(reading, label, { scenario, phone: false }));
+            await opened.page.locator("[data-feed-state]").screenshot({ path: path.join(pngDir, `${scenario}-desktop-1440-${lang}.png`) });
+            if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await opened.context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(evidence, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
