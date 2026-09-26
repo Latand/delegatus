@@ -22,14 +22,19 @@ export type TelegramBotState = {
   refresh(fresh?: boolean): Promise<void>;
   connect(token: string): Promise<void>;
   setChat(chatId: string, alias: string, postAllowed: boolean): Promise<void>;
+  /** Adds a chat by its id or @username and allows posting in it; answers
+      the alias it got, or null when it was refused (`failure` says why). */
+  addChat(chat: string, alias?: string): Promise<string | null>;
+  /** The operator's silent test post; true once Telegram accepted it. */
+  testPost(chat: string): Promise<boolean>;
   remove(): Promise<void>;
 };
 
-type Outcome = { payload: TelegramBotStatusPayload } | { payload: null; code: string };
+type Outcome = { payload: TelegramBotStatusPayload; body: Record<string, unknown> } | { payload: null; code: string };
 
 async function readOutcome(response: Response): Promise<Outcome> {
   const json = await response.json().catch(() => null) as { bot?: TelegramBotStatusPayload; code?: unknown } | null;
-  if (response.ok && json?.bot) return { payload: json.bot };
+  if (response.ok && json?.bot) return { payload: json.bot, body: json as Record<string, unknown> };
   const code = typeof json?.code === "string" && /^[a-z_]{1,40}$/.test(json.code) ? json.code : "action_failed";
   return { payload: null, code };
 }
@@ -52,7 +57,7 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
     }
   }, []);
 
-  const act = useCallback(async (body: Record<string, unknown>) => {
+  const act = useCallback(async (body: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
     setBusy(true);
     setFailure(null);
     const sequence = ++sequenceRef.current;
@@ -64,11 +69,13 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
       }));
       if (outcome.payload) {
         if (sequence === sequenceRef.current) setStatus(outcome.payload);
-      } else {
-        setFailure({ code: outcome.code });
+        return outcome.body;
       }
+      setFailure({ code: outcome.code });
+      return null;
     } catch {
       setFailure({ code: "transport" });
+      return null;
     } finally {
       setBusy(false);
     }
@@ -85,9 +92,15 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
     status,
     busy,
     failure,
-    refresh: (fresh = false) => (fresh ? act({ action: "refresh" }) : load()),
-    connect: (token) => act({ action: "connect", token }),
-    setChat: (chatId, alias, postAllowed) => act({ action: "chat", chatId, alias, postAllowed }),
-    remove: () => act({ action: "remove" }),
+    refresh: async (fresh = false) => { if (fresh) await act({ action: "refresh" }); else await load(); },
+    connect: async (token) => { await act({ action: "connect", token }); },
+    setChat: async (chatId, alias, postAllowed) => { await act({ action: "chat", chatId, alias, postAllowed }); },
+    addChat: async (chat, alias) => {
+      const body = await act({ action: "add", chat, ...(alias ? { alias } : {}) });
+      const added = body?.added as { chat?: unknown } | undefined;
+      return typeof added?.chat === "string" ? added.chat : null;
+    },
+    testPost: async (chat) => (await act({ action: "test", chat })) !== null,
+    remove: async () => { await act({ action: "remove" }); },
   };
 }

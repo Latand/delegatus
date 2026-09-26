@@ -1,5 +1,12 @@
+import { projectDisplayName } from "@/lib/displayNames";
 import { activeOrchestratorSeats, canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
-import { effectiveReportTelegram } from "@/lib/projects/settings";
+import { projectAliasSnapshot } from "@/lib/projects/aliases";
+import {
+  effectiveReportTelegram,
+  reportTelegramChoice,
+  repositoryReportName,
+  type ReportTelegramChoice,
+} from "@/lib/projects/settings";
 import type { TelegramBotStatusPayload } from "@/lib/telegram/bot/contracts";
 import { telegramBotService } from "@/lib/telegram/bot/service";
 
@@ -21,6 +28,19 @@ export function viewerPostableReportChats(): string[] {
     return postableReportChats(telegramBotService().listChats().chats);
   } catch {
     return [];
+  }
+}
+
+/** The title Telegram gave the chat a project reports to, so the seat's chip
+    names the group the way the picker and the overview do. Null without a
+    bot, or when the chat is no longer among the bot's. */
+export function viewerReportChatTitle(chat: string | null): string | null {
+  if (!chat) return null;
+  try {
+    const entry = telegramBotService().listChats({ includeInactive: true }).chats.find((candidate) => candidate.chat === chat || candidate.chatId === chat);
+    return entry?.title?.trim() || null;
+  } catch {
+    return null;
   }
 }
 
@@ -63,4 +83,44 @@ export function withReportDestinations(status: TelegramBotStatusPayload, project
       return reports.length ? { ...chat, reports } : chat;
     }),
   };
+}
+
+/** One project's line in the reports overview. */
+export interface ProjectReportLine {
+  /** The canonical project key the settings route writes under. */
+  project: string;
+  /** The project as the operator reads it on this machine; shown in the
+      Viewer only, never posted. */
+  label: string;
+  /** The operator's choice: a chat, "Log only" (`chat: null`), or null when
+      they never chose, which reports to the log only. */
+  reportTelegram: ReportTelegramChoice | null;
+  /** The name to post under when a chat is picked in place: the stored one,
+      else the GitHub repository's. Null asks the operator for one. */
+  reportName: string | null;
+}
+
+/**
+ * The reports overview (docs/design/orchestrator-reports.md §5.6): every
+ * project with an orchestrator seat, and where its reports go besides the
+ * log. Each project's choice is its own entry in project-settings.json, so
+ * two projects read and switch independently.
+ */
+export function projectReportOverview(projects: readonly string[] = seatProjects()): ProjectReportLine[] {
+  let displayNames: Record<string, string> = {};
+  try {
+    displayNames = projectAliasSnapshot().displayNames;
+  } catch {
+    displayNames = {};
+  }
+  return projects.map((project) => {
+    const choice = reportTelegramChoice(project);
+    const stored = choice && choice.chat !== null ? choice.name : null;
+    return {
+      project,
+      label: projectDisplayName(project, displayNames[project]),
+      reportTelegram: choice,
+      reportName: stored || repositoryReportName(project),
+    };
+  }).sort((a, b) => a.label.localeCompare(b.label));
 }

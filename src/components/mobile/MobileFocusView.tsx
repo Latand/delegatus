@@ -444,6 +444,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
      (#1681). It REPLACES the seat sheet rather than stacking over it, and its
      close puts the seat sheet back. */
   const [tickSheetOpen, setTickSheetOpen] = useState(false);
+  const [reportsSheetOpen, setReportsSheetOpen] = useState(false);
   const [seatHandoff, setSeatHandoff] = useState(false);
   const holdsSeat = resolvedKey !== null && seatKey !== null && resolvedKey === seatKey;
   const seatPanel = useSeatPanel({ project, files, seat: seatRead, holdsSeat, open: seatSheetOpen });
@@ -470,6 +471,11 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     /* eslint-disable-next-line react-hooks/set-state-in-effect -- the seat sheet closed under it */
     if (!seatSheetOpen && tickSheetOpen) setTickSheetOpen(false);
   }, [seatSheetOpen, tickSheetOpen]);
+  useEffect(() => {
+    /* Nor can the Reports sheet. */
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- the seat sheet closed under it */
+    if (!seatSheetOpen && reportsSheetOpen) setReportsSheetOpen(false);
+  }, [seatSheetOpen, reportsSheetOpen]);
 
   const [bumpPulse, setBumpPulse] = useState<{ side: "left" | "right"; id: number } | null>(null);
 
@@ -742,7 +748,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           /* The rotate draft is the fullscreen surface and the seat's reading
              is the bottom sheet (§4.5); the flow's own `open` is what says
              which of the two this conversation is showing. */
-          sheet={seatPanel.rotate.open ? "rotate" : tickSheetOpen ? "tick" : "seat"}
+          sheet={seatPanel.rotate.open ? "rotate" : tickSheetOpen ? "tick" : reportsSheetOpen ? "reports" : "seat"}
           now={nowSeconds}
           state={seatPanel.state}
           status={seatPanel.status}
@@ -752,6 +758,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           submitting={false}
           rotate={{ ...seatPanel.rotate, onConfirm: (input) => { setSeatHandoff(true); seatPanel.rotate.onConfirm(input); } }}
           tick={{ onOpen: () => setTickSheetOpen(true), onClose: () => setTickSheetOpen(false) }}
+          reports={{ onOpen: () => setReportsSheetOpen(true), onClose: () => setReportsSheetOpen(false) }}
           /* Create and resume belong to the surface that exists without a seat
              conversation; over a LIVE seat the sheet's primary action is «Open
              conversation», so this confirm has no control that can call it. */

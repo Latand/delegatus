@@ -132,9 +132,14 @@ body {
  * It sweeps the whole band in both locales, at the narrowest face and the
  * widest, against that number rather than sampling three widths around it —
  * the shape of this defect is a BAND, and three points missed it once already.
+ *
+ * The Reports chip beside it gives way the same way and at the same widths:
+ * its value (the chat's title, or «Log») goes, and its name stays, because
+ * the name is what tells the operator where the project's group is set.
  */
 @container incumbent-host (max-width: 539px) {
-  .incumbent-inline [data-seat-tick-face] {
+  .incumbent-inline [data-seat-tick-face],
+  .incumbent-inline [data-seat-reports-value] {
     display: none;
   }
   /* Inline only: in the dock the link is a row of its own under the identity,
@@ -148,7 +153,8 @@ body {
      at its remembered 440 px measures 416 px inside its own `px-3`, and at its
      360 px floor measures 336 px — the width at which its row was wrapping to
      a second line and taking the header from 56 px to 80 px. */
-  [data-seat-tick-face] {
+  [data-seat-tick-face],
+  [data-seat-reports-value] {
     display: none;
   }
 }
