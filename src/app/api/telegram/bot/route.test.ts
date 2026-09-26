@@ -139,3 +139,36 @@ test("with no bot connected the chats read still answers, with a note naming the
   const status = await operatorRoute.GET(request("/api/telegram/bot"));
   expect(await status.json()).toMatchObject({ bot: { connected: false, receiving: "stopped" } });
 });
+
+/* A post-only bot: the operator adds a chat by id and sends a test post; an
+   agent can do neither, and no answer carries the token or the bot id. */
+test("add and test are the operator's: a chat added by id is allowed, a test post goes out, and an agent is refused both", async () => {
+  transport.handlers.getWebhookInfo = () => ok({ url: "https://example.invalid/hook" });
+  transport.script("getMe", ok({ id: BOT_ID, is_bot: true, first_name: "Report Bot", username: "report_test_bot" }));
+  expect((await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "connect", token: TOKEN } }))).status).toBe(200);
+
+  const refusedAdd = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", headers: AGENT, body: { action: "add", chat: "-1000000000404" } }));
+  expect(refusedAdd.status).toBe(403);
+  expect(transport.callsOf("getChat")).toEqual([]);
+
+  transport.script("getChat", ok({ id: -1000000000404, type: "supergroup", title: "Release Notes" }));
+  transport.script("getChatMember", ok({ status: "member" }));
+  const added = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "add", chat: "-1000000000404" } }));
+  const addedBody = await text(added);
+  expect(added.status).toBe(200);
+  expect(leaks(addedBody)).toBe(false);
+  expect(JSON.parse(addedBody)).toMatchObject({ added: { chat: "release-notes", chatId: "-1000000000404" }, bot: { chats: [{ alias: "release-notes", postable: true }] } });
+
+  const bad = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "add", chat: "not a chat" } }));
+  expect(bad.status).toBe(400);
+  expect((await bad.json()).code).toBe("chat_reference_invalid");
+
+  expect((await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", headers: AGENT, body: { action: "test", chat: "release-notes" } }))).status).toBe(403);
+  transport.script("sendMessage", ok({ message_id: 3, date: 3 }));
+  const tested = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "test", chat: "release-notes" } }));
+  expect(tested.status).toBe(200);
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+  expect(transport.callsOf("sendMessage")[0]!.params).toMatchObject({ chat_id: -1000000000404, disable_notification: true });
+  expect(String(transport.callsOf("sendMessage")[0]!.params.text)).toContain("Delegatus");
+  expect(transport.callsOf("getUpdates")).toEqual([]);
+});

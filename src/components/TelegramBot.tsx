@@ -7,6 +7,7 @@ import { type TFunction, useLocale } from "@/lib/i18n";
 import { suggestChatAlias, type TelegramBotChatView, type TelegramBotReceiving, validChatAlias } from "@/lib/telegram/bot/contracts";
 
 import { Trash2 } from "./icons";
+import { ProjectReportsOverview } from "./ProjectReportsOverview";
 import { ActionButton, ConfirmingAction } from "./TelegramControls";
 
 /**
@@ -30,6 +31,12 @@ export const ERROR_KEYS: Record<string, Key> = {
   alias_invalid: "telegram.bot.err.alias_invalid",
   alias_taken: "telegram.bot.err.alias_taken",
   storage_unsafe: "telegram.bot.err.storage_unsafe",
+  chat_reference_invalid: "telegram.bot.err.chat_reference_invalid",
+  chat_unknown: "telegram.bot.err.chat_unknown",
+  bot_not_in_chat: "telegram.bot.err.bot_not_in_chat",
+  chat_not_allowed: "telegram.bot.err.chat_not_allowed",
+  forbidden: "telegram.bot.err.forbidden",
+  rate_limited: "telegram.bot.err.rate_limited",
   transport: "telegram.actionUnreachable",
 };
 
@@ -167,6 +174,77 @@ export function ChatRow({ chat, botSeesAll, busy, onSave }: { chat: TelegramBotC
   );
 }
 
+/**
+ * Adds a chat by its id or @username (`docs/design/telegram-bot-account.md`,
+ * "Chats added by id"). A post-only bot never hears of the groups it joins,
+ * because another program owns its updates; the server checks the chat with
+ * Telegram's `getChat`, allows posting in it, and reads nothing from it. Once
+ * added, the operator may send one silent test post. `onAdded` hands the alias
+ * to a picker that wants the new chat selected.
+ */
+export function AddChatForm({ state, onAdded, compact = false }: { state: TelegramBotState; onAdded?: (alias: string) => void; compact?: boolean }) {
+  const { t } = useLocale();
+  const [value, setValue] = useState("");
+  const [added, setAdded] = useState<string | null>(null);
+  const [tested, setTested] = useState<string | null>(null);
+  const title = (alias: string) => state.status?.chats.find((chat) => chat.alias === alias)?.title ?? alias;
+  const submit = async () => {
+    const reference = value.trim();
+    if (state.busy || reference === "") return;
+    setTested(null);
+    const alias = await state.addChat(reference);
+    if (alias === null) return;
+    setValue("");
+    setAdded(alias);
+    onAdded?.(alias);
+  };
+  return (
+    <div data-telegram-add-chat="" className="flex flex-col gap-1.5">
+      {compact ? null : <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.addHint")}</p>}
+      <form
+        onSubmit={(event) => { event.preventDefault(); void submit(); }}
+        className="flex min-w-0 items-center gap-1.5"
+      >
+        <input
+          type="text"
+          value={value}
+          disabled={state.busy}
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={64}
+          data-telegram-add-chat-input=""
+          aria-label={t("telegram.bot.addLabel")}
+          placeholder={t("telegram.bot.addPlaceholder")}
+          onChange={(event) => setValue(event.target.value)}
+          className={`${inputClass} flex-1 font-mono`}
+        />
+        <button
+          type="submit"
+          data-telegram-add-chat-submit=""
+          disabled={state.busy || value.trim() === ""}
+          className="h-11 shrink-0 rounded-[8px] border border-border bg-canvas px-2.5 text-[11px] font-semibold hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
+        >
+          {t("telegram.bot.add")}
+        </button>
+      </form>
+      {added ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <p role="status" data-telegram-add-chat-added={added} className="min-w-0 flex-1 text-[10.5px] font-semibold leading-snug text-success">
+            {tested === added ? t("telegram.bot.testSent", { title: title(added) }) : t("telegram.bot.added", { title: title(added), alias: added })}
+          </p>
+          {tested === added ? null : (
+            <ActionButton
+              label={t("telegram.bot.test")}
+              disabled={state.busy}
+              onClick={() => void state.testPost(added).then((sent) => { if (sent) setTested(added); })}
+            />
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** The token field. Uncontrolled, and emptied before the request starts. */
 export function TokenForm({ busy, onConnect }: { busy: boolean; onConnect: (token: string) => void }) {
   const { t } = useLocale();
@@ -271,6 +349,14 @@ export function TelegramBotSection({ state }: { state: TelegramBotState }) {
               </ul>
             </details>
           ) : null}
+
+          <div className="flex flex-col gap-1.5 border-t border-border pt-2">
+            <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.addTitle")}</h4>
+            <AddChatForm state={state} />
+          </div>
+          <div className="border-t border-border pt-2">
+            <ProjectReportsOverview bot={state} />
+          </div>
         </>
       )}
 

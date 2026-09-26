@@ -107,3 +107,46 @@ test("the effective destination is the chosen chat only, never a chat the operat
     setTelegramBotServiceForTests(null);
   }
 });
+
+/* A post-only bot (another program owns its updates) never hears of the
+   groups it joins; the operator adds them by id. Such a chat is selectable
+   for a project's reports with no update received, and each project's group
+   is its own: switching one leaves the other where it was. */
+test("a chat added by id is selectable with no update, and each project keeps its own group", async () => {
+  const { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+  const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
+  const { projectReportOverview } = await import("@/lib/projects/reportDestination");
+  const transport = new FakeBotTransport();
+  transport.handlers.getWebhookInfo = () => ok({ url: "https://example.invalid/hook" });
+  const service = new TelegramBotService({ ...productionTelegramBotDependencies(), transportFor: () => transport, sleep: async () => {} });
+  setTelegramBotServiceForTests(service);
+  try {
+    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot" }));
+    await service.connect(fakeBotToken());
+    expect(await put({ project: "repo-alpha", reportTelegram: { chat: "release-notes", name: "Alpha" } })).toHaveProperty("status", 409);
+
+    transport.script("getChat", ok({ id: -1000000000404, type: "supergroup", title: "Release Notes" }), ok({ id: -1000000000505, type: "supergroup", title: "Design Lounge" }));
+    transport.script("getChatMember", ok({ status: "member" }), ok({ status: "administrator" }));
+    await service.addChat("-1000000000404");
+    await service.addChat("-1000000000505");
+
+    expect((await put({ project: "repo-alpha", reportTelegram: { chat: "release-notes", name: "Alpha" } })).status).toBe(200);
+    expect((await put({ project: "repo-beta", reportTelegram: { chat: "design-lounge", name: "Beta" } })).status).toBe(200);
+    expect(await (await get("repo-alpha")).json()).toMatchObject({ reportDestination: { chat: "release-notes", name: "Alpha" }, postableChats: 2 });
+    expect(await (await get("repo-beta")).json()).toMatchObject({ reportDestination: { chat: "design-lounge", name: "Beta" } });
+
+    /* Moving one project leaves the other, and a project never set stays the log only. */
+    await put({ project: "repo-alpha", reportTelegram: null });
+    expect(await (await get("repo-alpha")).json()).toMatchObject({ reportTelegram: { chat: null }, reportDestination: null });
+    expect(await (await get("repo-beta")).json()).toMatchObject({ reportDestination: { chat: "design-lounge", name: "Beta" } });
+    expect(projectReportOverview(["repo-alpha", "repo-beta", "repo-gamma"]).map((line) => [line.project, line.reportTelegram?.chat])).toEqual([
+      ["repo-alpha", null],
+      ["repo-beta", "design-lounge"],
+      ["repo-gamma", undefined],
+    ]);
+    expect(transport.callsOf("getUpdates")).toEqual([]);
+  } finally {
+    await service.remove();
+    setTelegramBotServiceForTests(null);
+  }
+});

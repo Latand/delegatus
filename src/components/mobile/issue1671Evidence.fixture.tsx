@@ -192,6 +192,7 @@ const evidence = {
   runtimeRequests: [] as Array<Record<string, unknown>>,
   /* Every chat save the Telegram bot panel sent. */
   botPosts: [] as Array<Record<string, unknown>>,
+  reportWrites: [] as Array<Record<string, unknown>>,
   /* Every account select, the one path that moves the next message. */
   accountSelects: [] as Array<{ engine: string; body: unknown }>,
   pipelinePatches: [] as Array<{ id: string; action: string; taskId?: string; finishes?: boolean }>,
@@ -774,7 +775,30 @@ const telegramBot = BOT_SCENE === "typed"
     ],
     limits: [],
   }
+  : BOT_SCENE === "postonly"
+  ? {
+    /* `postonly`: another program owns the bot's updates through a webhook,
+       so no update ever names a group; the one chat agents may post in was
+       added by id earlier, and nothing has been read from it. */
+    connected: true,
+    bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
+    receiving: "webhook_elsewhere",
+    lastUpdateAt: null,
+    lastCheckedAt: iso(60),
+    chats: [botChat({ alias: "team-reports", postAllowed: true, postable: true, lastMessageAt: null, storedMessages: 0 })],
+    limits: [],
+  }
   : { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+
+/* Each project's report destination (orchestrator-reports §5.6.1), keyed by
+   project: `atlas` never chose, and two invented projects with seats, one
+   posting to the team group and one never chosen. */
+const reportChoices: Record<string, { chat: string | null; name?: string } | null> = {
+  [PROJECT]: null,
+  "-projects-ledger": BOT_SCENE === "postonly" ? { chat: "team-reports", name: "Ledger" } : null,
+  "-projects-mesh": null,
+};
+const REPORT_LABELS: Record<string, string> = { [PROJECT]: "atlas", "-projects-ledger": "ledger", "-projects-mesh": "mesh" };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -815,18 +839,34 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* #2187 §6: the project's merge setting, as the settings route answers it. */
   if (url.pathname === "/api/projects/settings") {
+    let project = url.searchParams.get("project") ?? PROJECT;
     if (method === "PUT") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown; bridgeReports?: unknown };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { project?: string; mergeOnReview?: unknown; bridgeReports?: unknown; reportTelegram?: { chat: string; name: string } | null };
       if (typeof body.mergeOnReview === "boolean") mergeSetting.enabled = body.mergeOnReview;
       if (typeof body.bridgeReports === "boolean") bridgeSetting.enabled = body.bridgeReports;
+      project = body.project ?? PROJECT;
+      if ("reportTelegram" in body) {
+        evidence.reportWrites.push({ project, reportTelegram: body.reportTelegram });
+        reportChoices[project] = body.reportTelegram ?? { chat: null };
+      }
     }
     return json({
       ok: true,
       project: PROJECT,
       mergeOnReview: { enabled: mergeSetting.enabled, changedAt: iso(86_400), changedBy: "operator" },
       bridgeReports: { enabled: bridgeSetting.enabled, changedAt: iso(86_400), changedBy: "operator" },
+      reportTelegram: reportChoices[project] ?? null,
+      reportNameSuggestion: project === PROJECT ? "Atlas" : null,
       github: "example/atlas",
     });
+  }
+  if (url.pathname === "/api/projects/reports") {
+    return json({ ok: true, projects: Object.keys(reportChoices).map((project) => ({
+      project,
+      label: REPORT_LABELS[project],
+      reportTelegram: reportChoices[project],
+      reportName: reportChoices[project]?.name ?? (project === PROJECT ? "Atlas" : null),
+    })) });
   }
   if (url.pathname === "/api/orchestrator/reports") {
     const known = new Map<string, "task" | "pipeline">([
@@ -1050,6 +1090,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const alias = typeof body.alias === "string" && body.alias !== "" ? body.alias : null;
       Object.assign(row, { alias, postAllowed: alias !== null && body.postAllowed === true, postable: alias !== null && body.postAllowed === true });
     }
+    /* A chat added by id: Telegram's getChat named it, with no update read. */
+    if (body.action === "add") {
+      if (body.chat !== "-1000000000606") return json({ error: "no such chat", code: "chat_unknown" }, 404);
+      (telegramBot.chats as Array<Record<string, unknown>>).push(botChat({ chatId: "-1000000000606", title: "Design review", alias: "design-review", postAllowed: true, postable: true, lastMessageAt: null, storedMessages: 0 }));
+      return json({ bot: telegramBot, added: { chat: "design-review", chatId: "-1000000000606" } });
+    }
+    if (body.action === "test") return json({ bot: telegramBot, tested: { chat: body.chat, sentAt: new Date().toISOString() } });
     return json({ bot: telegramBot });
   }
   if (url.pathname === "/api/telegram/bot") return json({ bot: telegramBot });

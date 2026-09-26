@@ -1099,6 +1099,39 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   no bot, with a bot and chats, and with a chat chosen, at desktop and 390 px,
   en and uk.
 
+### 5.6.1 Each orchestrator sets its own project's reports
+
+Operator request, 2026-09-26 (paraphrased in English): many orchestrators run
+in many projects, and each project's reports should be set where its
+orchestrator is managed, whether they go to Telegram and to which group, with
+different projects going to different groups. The bot stays post-only: another
+program owns its updates through a webhook, and Delegatus must not read chats.
+
+- **The seat's Reports section** (`src/components/orchestrator/SeatReports.tsx`).
+  On the desktop a chip in the seat's own row, before the tick's, shows where
+  reports go (the chat's alias, or "Log") and opens a popover; on the phone a
+  row under the tick's in the seat sheet opens a sheet (`reports` in
+  `mobileNav`), whose × returns to the seat sheet. Both draw one body: a
+  "Also to Telegram" switch, the line saying where reports go, the group
+  picker over the chats the bot may post in, the add-by-id form, "Name in
+  reports", the public-group warning, and Save. It writes the project's
+  `reportTelegram` through `PUT /api/projects/settings`.
+- **The opt-in stays explicit.** A project that never chose reads off.
+  Switching on writes nothing until a group is picked and saved; switching off
+  on a project that posts stores "Log only"; switching off a draft writes
+  nothing, so a never-set project stays never-set.
+- **Chats added by id** (telegram-bot-account.md, "Chats added by id"): the
+  picker's add form verifies a chat with `getChat` and allows posting in it
+  with no update received, and the added chat is picked in place.
+- **The overview** is in the bot panel (`src/components/ProjectReportsOverview.tsx`
+  over `GET /api/projects/reports`, `projectReportOverview` in
+  `src/lib/projects/reportDestination.ts`): every project with a seat, its
+  local label, and a select of "Log only" and the chats agents may post in.
+  A pick writes that project alone; a project with no stored name and no
+  GitHub name asks for one before it writes.
+- Each project's choice is its own entry in `project-settings.json`, so one
+  project's group never moves another's.
+
 ### 5.7 Mandate (v28 → v29)
 
 Replace the Bridge reports section of `ORCHESTRATOR_SYSTEM_PROMPT` and bump

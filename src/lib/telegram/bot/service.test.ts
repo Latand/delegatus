@@ -422,3 +422,92 @@ test("privacy turned off after the bot joined a group asks for a re-add until th
   await later.pollOnce(new AbortController().signal);
   expect(later.status().chats[0]).toMatchObject({ seesAllMessages: true, readdToApply: false });
 });
+
+/* ---- chats added by id (a post-only bot) --------------------------------- */
+
+/* Another program owns this bot's updates through a webhook, so Delegatus
+   posts and never reads: no update ever names the group the bot joined. */
+const RELEASES = { id: -1000000000404, type: "supergroup", title: "Release Notes" };
+
+async function connectPostOnly() {
+  transport.handlers.getWebhookInfo = () => ok({ url: "https://example.invalid/hook" });
+  transport.script("getMe", me());
+  const status = await service.connect(TOKEN);
+  expect(status.receiving).toBe("webhook_elsewhere");
+  expect(service.pollerRunning()).toBe(false);
+  return transport.calls.length;
+}
+
+test("a chat added by id is stored allowed and postable with no update received, and nothing reads it", async () => {
+  const before = await connectPostOnly();
+  transport.script("getChat", ok(RELEASES));
+  transport.script("getChatMember", ok({ status: "administrator" }));
+
+  const added = await service.addChat("-1000000000404");
+  expect(added).toMatchObject({ chat: "release-notes", chatId: "-1000000000404" });
+  expect(added.status.chats).toEqual([expect.objectContaining({ chatId: "-1000000000404", title: "Release Notes", alias: "release-notes", postAllowed: true, postable: true, member: true, storedMessages: 0 })]);
+  /* Selectable where the settings route looks: the agent listing says posting is allowed. */
+  expect(service.listChats().chats).toEqual([expect.objectContaining({ chat: "release-notes", postAllowed: true, postRefusal: null })]);
+
+  /* The bot was asked about the chat and its own membership, nothing else:
+     no getUpdates, no poller, no message stored. */
+  const lookups = transport.calls.slice(before).map((call) => call.method);
+  expect(lookups).toEqual(["getChat", "getChatMember"]);
+  expect(transport.callsOf("getUpdates")).toEqual([]);
+  expect(transport.callsOf("getChat")[0]!.params).toEqual({ chat_id: -1000000000404 });
+  expect(transport.callsOf("getChatMember")[0]!.params).toEqual({ chat_id: -1000000000404, user_id: BOT_ID });
+  expect(service.pollerRunning()).toBe(false);
+  expect(service.status().receiving).toBe("webhook_elsewhere");
+});
+
+test("a chat is added by @username or t.me link, keeps the alias the operator gave, and a taken title alias gets a number", async () => {
+  await connectPostOnly();
+  transport.script("getChat", ok(RELEASES), ok({ id: -1000000000505, type: "channel", title: "Release Notes" }));
+  transport.script("getChatMember", ok({ status: "member" }), ok({ status: "administrator" }));
+  expect((await service.addChat("@release_notes", "Releases")).chat).toBe("releases");
+  expect(transport.callsOf("getChat")[0]!.params).toEqual({ chat_id: "@release_notes" });
+  expect((await service.addChat("https://t.me/release_channel")).chat).toBe("release-notes");
+  expect(transport.callsOf("getChat")[1]!.params).toEqual({ chat_id: "@release_channel" });
+
+  /* Adding the same chat again keeps its alias and stays allowed. */
+  transport.script("getChat", ok(RELEASES));
+  transport.script("getChatMember", ok({ status: "member" }));
+  const again = await service.addChat(String(RELEASES.id));
+  expect(again.chat).toBe("releases");
+  expect(again.status.chats.filter((chat) => chat.postable).map((chat) => chat.alias).sort()).toEqual(["release-notes", "releases"]);
+});
+
+test("adding refuses an unreadable reference before any call, and stores nothing Telegram does not confirm", async () => {
+  const before = await connectPostOnly();
+  for (const reference of ["", "team reports", "12ab", "@abc", null, { id: 1 }]) {
+    await expect(service.addChat(reference)).rejects.toMatchObject({ code: "chat_reference_invalid" });
+  }
+  expect(transport.calls.length).toBe(before);
+
+  transport.script("getChat", refused(400, "Bad Request: chat not found"));
+  await expect(service.addChat("-1000000000999")).rejects.toMatchObject({ code: "chat_unknown" });
+  transport.script("getChat", ok(RELEASES));
+  transport.script("getChatMember", ok({ status: "left" }));
+  await expect(service.addChat(String(RELEASES.id))).rejects.toMatchObject({ code: "bot_not_in_chat" });
+  transport.script("getChat", unreachable("unreachable"));
+  await expect(service.addChat(String(RELEASES.id))).rejects.toMatchObject({ code: "network_failed" });
+  await expect(service.addChat(String(RELEASES.id), "12345")).rejects.toMatchObject({ code: "alias_invalid" });
+  expect(service.status().chats).toEqual([]);
+});
+
+test("the operator's test post goes out silently once, is not recorded as an agent's post, and is refused for a chat agents may not post in", async () => {
+  await connectPostOnly();
+  transport.script("getChat", ok(RELEASES));
+  transport.script("getChatMember", ok({ status: "member" }));
+  await service.addChat(String(RELEASES.id));
+  transport.script("sendMessage", ok({ message_id: 9, date: T0 }));
+  const tested = await service.testPost("release-notes", "Delegatus: test post.");
+  expect(tested.sentAt).toBe(NOW.toISOString());
+  expect(transport.callsOf("sendMessage").map((call) => call.params)).toEqual([{ chat_id: -1000000000404, text: "Delegatus: test post.", disable_notification: true }]);
+  expect(tested.status.chats[0]).toMatchObject({ lastPostAt: null, lastPostBy: null, storedMessages: 0 });
+
+  service.setChat(String(RELEASES.id), "release-notes", false);
+  await expect(service.testPost("release-notes", "again")).rejects.toMatchObject({ code: "chat_not_allowed" });
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+  expect(transport.callsOf("getUpdates")).toEqual([]);
+});
