@@ -39,6 +39,8 @@ import { StreamingMd } from "@/components/feed/markdown";
 import { READING_MEASURE } from "@/components/feed/measure";
 import { summarizeTool } from "@/components/feed/tools";
 
+import { useDeputyInk } from "./deputyInk";
+
 /**
  * How many live rows the overlay may paint at once.
  *
@@ -176,7 +178,7 @@ export function liveTurnTail(
   return { rows, earlier };
 }
 
-function useConversationAvailability(): ConversationAvailabilitySnapshot {
+export function useConversationAvailability(): ConversationAvailabilitySnapshot {
   return useSyncExternalStore(
     subscribeConversationAvailability,
     conversationAvailabilitySnapshot,
@@ -187,7 +189,7 @@ function useConversationAvailability(): ConversationAvailabilitySnapshot {
 /* The canonical card's own entity chip, on the live row. A conversation the
    scanner has not attributed yet is not navigable there and is not here
    either — the chip says so and waits, exactly as the card's does. */
-function LiveMcpLinkChip({
+export function LiveMcpLinkChip({
   link,
   availability,
 }: {
@@ -425,6 +427,7 @@ function LiveCallRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
    `liveTurnTail` of it. */
 export function LiveTurnRows({ items }: { items: readonly RuntimeLiveTurnItem[] }) {
   const { t } = useLocale();
+  const deputyInk = useDeputyInk();
   const { rows, earlier } = useMemo(() => liveTurnTail(items), [items]);
   if (!rows.length && !earlier) return null;
   const last = rows.at(-1);
@@ -450,7 +453,7 @@ export function LiveTurnRows({ items }: { items: readonly RuntimeLiveTurnItem[] 
             key={key}
             data-live-turn
             data-live-turn-item-id={item.itemId ?? undefined}
-            className={`my-2 ml-9 ${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] text-ui text-primary`}
+            className={`my-2 ml-9 ${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] text-ui ${deputyInk ? "text-secondary" : "text-primary"}`}
           >
             {item.omittedChars ? (
               <span data-live-turn-omitted-chars className="text-muted">

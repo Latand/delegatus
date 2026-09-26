@@ -40,6 +40,7 @@ import { nowFragment } from "./mobileBoardModel";
 import { useMobileNav, useMobileNavStore } from "./mobileNav";
 import { readSeatDraftField, seatFlowStorage, writeSeatDraftField } from "./orchestratorDraftStorage";
 import { seatCardView } from "./orchestratorRowState";
+import { deputyAskLabel, DeputyTwin, liveSeatDeputy } from "../orchestrator/SeatDeputyChip";
 
 /**
  * Why the sheet is open. `handoff` arms the landing: the sheet was opened to
@@ -463,7 +464,12 @@ export function MobileSeatCard({
   const badge = seatBadgeReading(t, view, file, clock);
   /* What the seat is doing this minute, in its own words (README §10 P2-3):
      the plan step it published, else the goal it declared. Never a guess. */
-  const nowLine = view.badge === "conversation" && file ? nowFragment(file) : null;
+  /* docs/design/ghost-seat.md §6.5: while the parallel self runs, the now
+     line says so, and the mark gains its outline twin. */
+  const liveDeputy = view.badge === "conversation" ? liveSeatDeputy(status?.deputies) : null;
+  const nowLine = liveDeputy
+    ? t("deputy.nowLine", { ask: deputyAskLabel(liveDeputy) })
+    : view.badge === "conversation" && file ? nowFragment(file) : null;
   /* Every meter on the phone fills with what REMAINS (README §5, P2-4). */
   const contextLeft = view.badge === "conversation" && typeof file?.ctx?.pct === "number"
     ? Math.max(0, 100 - file.ctx.pct)
@@ -539,7 +545,10 @@ export function MobileSeatCard({
         {...(view.tap === "sheet" ? { "aria-haspopup": "dialog" as const } : {})}
         className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-[8px] px-0.5 py-1 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
       >
-        <SeatMark />
+        <span className="relative inline-flex shrink-0">
+          <SeatMark />
+          {liveDeputy ? <DeputyTwin engine={file?.engine ?? "claude"} avatarPx={32} /> : null}
+        </span>
         {view.shape === "invitation" ? (
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="truncate text-body font-semibold leading-tight text-primary">{t("mobile2.seat.none")}</span>

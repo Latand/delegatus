@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { documentHidden } from "@/lib/client/hiddenTraffic";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 
+import { publishSeatDeputies, publishSeatProject } from "./seatDeputies";
 import { parseSeatStatus, seatConversationsOf, type OrchestratorSeatStatus } from "./seatState";
 
 /** How often the panel re-reads the project's seat. The seat only moves when
@@ -106,6 +107,12 @@ function publishSeat(key: string, next: ScopedRead): void {
 
 function settleSeat(project: string, cwd: string | undefined, status: OrchestratorSeatStatus | null, failed: boolean): void {
   const key = readKey(project, cwd);
+  /* docs/design/ghost-seat.md §5: the seat's feed draws its deputies' blocks
+     from this answer, wherever the feed is mounted. */
+  if (status?.seat?.conversationId) {
+    publishSeatDeputies(status.seat.conversationId, status.deputies ?? []);
+    publishSeatProject(status.seat.conversationId, status.seat.project);
+  }
   publishSeat(key, {
     project,
     cwd: cwd ?? "",

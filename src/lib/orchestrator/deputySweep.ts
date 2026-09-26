@@ -172,9 +172,49 @@ export async function sweepDeputies(ports: DeputySweepPorts): Promise<boolean> {
   return live;
 }
 
-/** The deputy's own lines: everything after the records the fork copied. */
-export function readDeputyOwnLines(deputy: Pick<OrchestratorDeputy, "artifactPath" | "forkRecordCount">): string[] | null {
-  if (!deputy.artifactPath || deputy.forkRecordCount === null) return null;
+/** Most of a deputy's own transcript a reader takes at once; a one-ask turn
+    is far smaller, and a runaway one keeps its newest records. */
+export const DEPUTY_OWN_LINES_MAX_BYTES = 2 * 1024 * 1024;
+
+/** The deputy's own lines: everything after the records the fork copied. Read
+    from the fork's byte size when the record has it, so the seat's history is
+    skipped rather than read; from the record count otherwise. Only complete
+    lines. Null when the transcript is gone. */
+export function readDeputyOwnLines(
+  deputy: Pick<OrchestratorDeputy, "artifactPath" | "forkRecordCount"> & { forkBytes?: number | null },
+  maxBytes = DEPUTY_OWN_LINES_MAX_BYTES,
+): string[] | null {
+  if (!deputy.artifactPath) return null;
+  if (typeof deputy.forkBytes === "number") {
+    let descriptor: number;
+    try {
+      descriptor = fs.openSync(deputy.artifactPath, "r");
+    } catch {
+      return null;
+    }
+    try {
+      const size = fs.fstatSync(descriptor).size;
+      if (size <= deputy.forkBytes) return [];
+      const from = Math.max(deputy.forkBytes, size - maxBytes);
+      const buffer = Buffer.alloc(size - from);
+      let read = 0;
+      while (read < buffer.length) {
+        const count = fs.readSync(descriptor, buffer, read, buffer.length - read, from + read);
+        if (count === 0) break;
+        read += count;
+      }
+      const lines = buffer.subarray(0, read).toString("utf8").split("\n");
+      /* The last element is empty after a final newline, or a line still being
+         written; either way it is not a record yet. */
+      lines.pop();
+      /* A window that starts past the fork boundary starts mid-line. */
+      if (from > deputy.forkBytes) lines.shift();
+      return lines.filter((line) => line.length > 0);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  }
+  if (deputy.forkRecordCount === null) return null;
   let text: string;
   try {
     text = fs.readFileSync(deputy.artifactPath, "utf8");
@@ -182,7 +222,7 @@ export function readDeputyOwnLines(deputy: Pick<OrchestratorDeputy, "artifactPat
     return null;
   }
   const lines = text.split("\n");
-  if (lines.at(-1) === "") lines.pop();
+  lines.pop();
   return lines.slice(deputy.forkRecordCount);
 }
 

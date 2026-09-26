@@ -44,7 +44,7 @@ export function productionDeputyCommandPorts(): DeputyCommandPorts {
       for (let attempt = 0; attempt < FORK_ATTEMPTS; attempt += 1) {
         try {
           const result = forkClaudeHistory({ ...input, sourceRoot: root, targetRoot: root, snapshot: true });
-          return { path: result.path, records: result.records };
+          return { path: result.path, records: result.records, size: result.size };
         } catch (error) {
           lastError = error;
           if (!(error instanceof HistorySecurityError) || (error.code !== "history-integrity" && error.code !== "unsafe-source")) break;

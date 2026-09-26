@@ -84,6 +84,9 @@ export interface OrchestratorDeputy {
   /** Transcript records the fork copied from the seat. Everything before this
       count is the seat's own history, already on screen in its feed. */
   forkRecordCount: number | null;
+  /** Bytes the fork copied: where the deputy's own records begin in its
+      transcript, so a reader seeks past the seat's history instead of reading it. */
+  forkBytes: number | null;
   state: "pending" | "active" | "ended";
   startedAt: string;
   expiresAt: string;
@@ -160,6 +163,7 @@ export function normalizeDeputy(value: unknown): OrchestratorDeputy | null {
     forkRecordCount: typeof row.forkRecordCount === "number" && Number.isInteger(row.forkRecordCount) && row.forkRecordCount >= 0
       ? row.forkRecordCount
       : null,
+    forkBytes: typeof row.forkBytes === "number" && Number.isInteger(row.forkBytes) && row.forkBytes >= 0 ? row.forkBytes : null,
     state: row.state,
     startedAt: row.startedAt,
     expiresAt: row.expiresAt,
@@ -276,6 +280,7 @@ export function beginDeputy(input: {
       ask: input.ask,
       artifactPath: null,
       forkRecordCount: null,
+      forkBytes: null,
       state: "pending",
       startedAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + DEPUTY_LIFETIME_MS).toISOString(),
@@ -307,12 +312,12 @@ export function updateDeputy(
   });
 }
 
-export function recordDeputyFork(askId: string, fork: { deputyConversationId: string; artifactPath: string; forkRecordCount: number }): OrchestratorDeputy | null {
+export function recordDeputyFork(askId: string, fork: { deputyConversationId: string; artifactPath: string; forkRecordCount: number; forkBytes?: number | null }): OrchestratorDeputy | null {
   return updateDeputy(askId, (deputy) => {
     /* A replay after the fork was recorded keeps the first answer: the count
        names the seat's history as it stood when the copy was taken. */
     if (deputy.deputyConversationId && deputy.artifactPath && deputy.forkRecordCount !== null) return null;
-    return { ...deputy, ...fork };
+    return { ...deputy, ...fork, forkBytes: fork.forkBytes ?? null };
   });
 }
 

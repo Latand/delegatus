@@ -30,6 +30,11 @@ import {
   visibleRuntimeLiveTurnItems,
 } from "./conversation/liveTurnHandoff";
 import { orderedConversationTail } from "./conversation/tailOrder";
+import { DeputyBlock } from "./conversation/DeputyBlock";
+import { interleaveDeputyBlocks, placeDeputyBlocks } from "./conversation/deputyPlacement";
+import { useSeatDeputies } from "./orchestrator/seatDeputies";
+import { transcriptInstant } from "./feed/transcriptOrder";
+import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import {
   publishTranscriptEchoes,
   retireLaunchOutboxOnAdoption,
@@ -82,7 +87,10 @@ type ConversationRow =
     }
   | { kind: "item"; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; responseDurationMs?: number }
   | { kind: "launch"; key: "launch" }
-  | { kind: "delta"; key: "delta" };
+  | { kind: "delta"; key: "delta" }
+  /* A seat deputy's block (docs/design/ghost-seat.md §6.1): pinned at its
+     head's position among the transcript rows, never part of the tail. */
+  | { kind: "deputy"; key: string; deputy: SeatDeputyView };
 
 /** Items rendered initially and added per «show earlier» step. */
 const RENDER_STEP = 1500;
@@ -260,9 +268,12 @@ interface Props {
   /** Opens a fresh editable draft from a terminal structured launch receipt —
       wired through so the launch chips keep their retry inside the window. */
   onLaunchRetry?: () => void;
+  /** The seat's deputies to draw as blocks. Absent: read from the seat's own
+      poll for this conversation, which is empty for every non-seat feed. */
+  deputies?: readonly SeatDeputyView[];
 }
 
-export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry }: Props) {
+export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp }: Props) {
   /* Mobile v2 §3.4, §6: on the phone the transcript ends at the composer. The
      live-tail pill and the turn status bar below it are both gone — following
      is the feed's default and needs no pill, and elapsed time lives in the
@@ -279,6 +290,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      flush, and retire the moment their real bubble lands. */
   const outbox = useOutbox(memoryKey ?? "");
   const assistantClaims = useCanonicalAssistantClaims(memoryKey ?? "");
+  const polledDeputies = useSeatDeputies(file?.conversationId ?? null);
+  const deputies = deputiesProp ?? polledDeputies;
   /* Launch/delivery facts of the launch that created this conversation, or of
      the launch that is still becoming it (issue #569) — the same chips either
      way, because it is the same window. */
@@ -1242,6 +1255,29 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       }
       return [{ kind: "item", key: rowKey, anchorKey, item, speakText, ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow];
     });
+    /* The seat's deputies: each block pinned after the last row dated at or
+       before its start (docs/design/ghost-seat.md §6.1), then the tail as
+       always, so the seat's own live turn stays the last section. With no
+       deputies the list is exactly what it was. */
+    if (deputies.length) {
+      const instantByKey = new Map<string, number | null>();
+      for (const visible of visibleItems) {
+        const instant = transcriptInstant(visible.item);
+        instantByKey.set(visible.key, instant);
+        if (visible.anchorKey) instantByKey.set(visible.anchorKey, instant);
+      }
+      const instants = rows.map((row) => {
+        if (row.kind !== "item" && row.kind !== "message") return null;
+        return (row.anchorKey ? instantByKey.get(row.anchorKey) : undefined) ?? instantByKey.get(row.key) ?? null;
+      });
+      const byId = new Map(deputies.map((deputy) => [deputy.askId, deputy] as const));
+      const placements = placeDeputyBlocks(instants, deputies.flatMap((deputy) => {
+        const startedAt = Date.parse(deputy.startedAt);
+        return Number.isFinite(startedAt) ? [{ id: deputy.askId, startedAt }] : [];
+      }));
+      const merged = interleaveDeputyBlocks<ConversationRow, ConversationRow>(rows, placements, (id) => ({ kind: "deputy", key: `deputy:${id}`, deputy: byId.get(id)! }));
+      rows.splice(0, rows.length, ...merged);
+    }
     for (const section of orderedConversationTail({
       launch: Boolean(launch),
       outbox: Boolean(memoryKey && pendingOutbox.length),
@@ -1259,7 +1295,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
        functions of the memos already named here. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems, visibleStartIndex, echoBindings, boundSubmissions, outbox, pendingOutbox, launch, memoryKey,
-    visibleLiveTurnItems.length, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords]);
+    visibleLiveTurnItems.length, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords, deputies]);
   /* What this feed is painting, so the composer's receipt stack knows which
      deliveries already have a row explaining them and stops repeating them.
      Read off the ROWS rather than off the queue, and including the rows the
@@ -1518,6 +1554,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             {conversationRows.map((row) => {
               if (row.kind === "launch") return <LaunchChips key="launch" launch={launch!} onRetry={onLaunchRetry} />;
               if (row.kind === "delta") return <LiveTurnRows key="delta" items={visibleLiveTurnItems} />;
+              if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} />;
               if (row.kind === "message") {
                 /* The operator's own message, in the one shape it ever has.
                    `entry` is the local submission while it is unresolved,

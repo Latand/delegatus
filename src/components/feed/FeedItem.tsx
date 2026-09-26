@@ -34,6 +34,7 @@ import { ToolCard, mobileClock } from "./cards/ToolCard";
 import { WakeupCard } from "./cards/WakeupCard";
 import { SpeakButton } from "./SpeakButton";
 import { McpCallCard } from "../runtime/McpCallCard";
+import { DeputyMark, useDeputyInk } from "../conversation/deputyInk";
 
 /**
  * Resolves a row with delivery evidence (#1117). A delivered Claude system row
@@ -120,6 +121,9 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
   const { t } = useLocale();
   const provenance = useMessageProvenance();
   const isMobile = useIsMobile();
+  /* Inside a deputy's block (docs/design/ghost-seat.md §6.2) the prose row is
+     the seat's parallel self: outline mark, secondary ink. */
+  const deputyInk = useDeputyInk();
   const item = resolveDeliveredItem(sourceItem, provenance);
   /* Mobile v2 (#1439, lane 4): no avatar column on the phone, so nothing lines
      up with one — the `ml-9` chrome indent goes with it. */
@@ -156,11 +160,11 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
       return (
         <div className="group/msg pt-2" data-mobile-message="agent" data-tts-message={`${item.engine}:${item.ts}`}>
           <div data-mobile-message-header className="mb-1 flex h-5 w-full items-center gap-1.5 text-label text-muted">
-            <AvatarIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden />
+            {deputyInk ? <DeputyMark engine={item.engine} /> : <AvatarIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden />}
             <span className="font-semibold text-secondary">{ENGINE_LABEL[item.engine]}</span>
             {time ? <span className="tabular-nums">· {time}</span> : null}
           </div>
-          <div className="w-full whitespace-pre-wrap break-words text-title leading-[1.45]">
+          <div className={`w-full whitespace-pre-wrap break-words text-title leading-[1.45]${deputyInk ? " text-secondary" : ""}`}>
             <div className="contents" data-tts-body>{mdBlocks(item.text)}</div>
           </div>
           <div data-mobile-message-actions className="-mx-3 -my-1.5 flex h-11 items-center">
@@ -172,9 +176,11 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
     }
     return (
       <div className="group/msg my-3 flex gap-2.5">
-        <div className={`mt-1 flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-full text-[color:var(--engine-fill-ink)] ${cls}`} style={fillStyle}>
-          <AvatarIcon className="h-3.5 w-3.5" aria-hidden />
-        </div>
+        {deputyInk ? <DeputyMark engine={item.engine} size={26} className="mt-1" /> : (
+          <div className={`mt-1 flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-full text-[color:var(--engine-fill-ink)] ${cls}`} style={fillStyle}>
+            <AvatarIcon className="h-3.5 w-3.5" aria-hidden />
+          </div>
+        )}
         {/* `data-tts-message` / `data-tts-body`: the anchors the read-aloud
             control uses to find the RENDERED text of this answer, so the
             karaoke highlight and click-to-seek of #1022 ride over the markdown
@@ -188,7 +194,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
             row sits inside it, so the time and the controls end where the text
             ends. Tool calls and diffs are items of their own and keep the full
             width. */}
-        <div className={`min-w-0 flex-1 ${READING_MEASURE} whitespace-pre-wrap break-words`} data-tts-message={`${item.engine}:${item.ts}`}>
+        <div className={`min-w-0 flex-1 ${READING_MEASURE} whitespace-pre-wrap break-words${deputyInk ? " text-secondary" : ""}`} data-tts-message={`${item.engine}:${item.ts}`}>
           {/* Issue #698: this cluster used to be `absolute right-0 top-0` over a
               body with no reserved gutter — on a coarse pointer the 44px buttons
               sat permanently at 60% opacity on the first lines of the message,

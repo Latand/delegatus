@@ -66,7 +66,7 @@ export interface DeputyCommandPorts {
   activeSeat(project: string): OrchestratorSeat | null;
   seatBusy(project: string): Promise<boolean>;
   seatGeneration(seatConversationId: string): SeatGeneration | null;
-  fork(input: { sourcePath: string; destination: string; sourceSessionId: string; sessionId: string; operationId: string }): { path: string; records: number | null };
+  fork(input: { sourcePath: string; destination: string; sourceSessionId: string; sessionId: string; operationId: string }): { path: string; records: number | null; size?: number };
   registerConversation(input: { artifactPath: string; accountId: string | null; launchProfile: Partial<LaunchProfile> }): string;
   joinSeatTask(input: { project: string; seatConversationId: string; seatPath: string | null; deputyConversationId: string; artifactPath: string; accountId: string | null }): void;
   workContext(project: string): DeputyWorkContext;
@@ -166,7 +166,7 @@ export async function askOrchestratorInParallel(input: AskInParallelInput, ports
       store.end(deputy.askId, { outcome: "failed", error: "fork: the seat's transcript has no Claude session id", now: ports.now() });
       return refusal("fork_failed", "the seat's transcript cannot be forked", 409, deputy.askId);
     }
-    let forked: { path: string; records: number | null };
+    let forked: { path: string; records: number | null; size?: number };
     try {
       forked = ports.fork({
         sourcePath: generation.path,
@@ -202,7 +202,7 @@ export async function askOrchestratorInParallel(input: AskInParallelInput, ports
       artifactPath: forked.path,
       accountId: generation.accountId,
     });
-    deputy = store.recordFork(deputy.askId, { deputyConversationId, artifactPath: forked.path, forkRecordCount: forked.records }) ?? deputy;
+    deputy = store.recordFork(deputy.askId, { deputyConversationId, artifactPath: forked.path, forkRecordCount: forked.records, forkBytes: forked.size ?? null }) ?? deputy;
   }
 
   /* Steps 4 and 5: one delivery, keyed by the record, resumes the fork. */

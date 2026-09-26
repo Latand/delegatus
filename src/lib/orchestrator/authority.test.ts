@@ -116,6 +116,7 @@ describe("deputyPrincipal", () => {
       ask: { text: "add a task", images: 0, sender: null },
       artifactPath: "/t/ghost.jsonl",
       forkRecordCount: 40,
+      forkBytes: 4096,
       state: "active",
       startedAt: "2026-09-26T12:00:00.000Z",
       expiresAt: "2026-09-26T12:15:00.000Z",

@@ -177,3 +177,18 @@ test("a timed-out deputy is interrupted and its note says what it had done", asy
   expect(readDeputies()[0]).toMatchObject({ outcome: "timeout" });
   expect(notes[0]).toContain("ran out of its 15 minutes on");
 });
+
+test("the own-lines reader seeks past the fork by its byte size and never returns a half-written line", () => {
+  const transcript = path.join(sandbox, "bytes.jsonl");
+  const prefix = `${JSON.stringify({ type: "user", message: { content: "seat history ✅" } })}\n`;
+  fs.writeFileSync(transcript, prefix);
+  const forkBytes = Buffer.byteLength(prefix);
+  const own = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "own" }] } });
+  fs.appendFileSync(transcript, `${own}\n{"type":"assistant","message":`);
+  expect(readDeputyOwnLines({ artifactPath: transcript, forkRecordCount: 1, forkBytes })).toEqual([own]);
+  /* A window smaller than the deputy's own records starts at a line boundary. */
+  fs.appendFileSync(transcript, `{"content":[]}}\n`);
+  const lines = readDeputyOwnLines({ artifactPath: transcript, forkRecordCount: 1, forkBytes }, 40)!;
+  expect(lines.every((line) => line.startsWith("{"))).toBe(true);
+  expect(readDeputyOwnLines({ artifactPath: path.join(sandbox, "gone.jsonl"), forkRecordCount: 1, forkBytes })).toBeNull();
+});

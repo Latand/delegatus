@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { readDeputies } from "@/lib/orchestrator/deputies";
 import { askOrchestratorInParallel } from "@/lib/orchestrator/deputyCommand";
+import { readDeputyOwnLines } from "@/lib/orchestrator/deputySweep";
 import { productionDeputyCommandPorts } from "@/lib/orchestrator/deputyCommandPorts";
 import { admitRuntimeImagePayload } from "@/lib/runtime/runtimeImageAdmission";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -48,4 +50,17 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
     console.error(`orchestrator deputy route failed: ${error}`);
     return NextResponse.json({ error, code: "deputy_failed" }, { status: 500 });
   }
+}
+
+/* The deputy's own transcript records, after the seat history the fork copied
+   (docs/design/ghost-seat.md §6.1): the canonical rows of its block in the
+   seat's feed. `missing` says the transcript is gone, so an expanded block can
+   say so instead of drawing nothing. */
+export async function GET(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
+  const askId = req.nextUrl.searchParams.get("askId")?.trim() ?? "";
+  if (!askId) return NextResponse.json({ error: "askId is required" }, { status: 400 });
+  const deputy = readDeputies().find((candidate) => candidate.askId === askId);
+  if (!deputy) return NextResponse.json({ error: "no such parallel ask" }, { status: 404 });
+  const lines = readDeputyOwnLines(deputy);
+  return NextResponse.json({ askId, lines: lines ?? [], missing: lines === null });
 }

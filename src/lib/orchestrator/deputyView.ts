@@ -20,6 +20,7 @@ export interface SeatDeputyView {
   ask: { text: string; images: number; sender: SeatDeputySender | null };
   artifactPath: string | null;
   forkRecordCount: number | null;
+  forkBytes: number | null;
   state: "pending" | "active" | "ended";
   startedAt: string;
   activatedAt: string | null;
@@ -39,6 +40,7 @@ export function seatDeputyView(deputy: SeatDeputyView): SeatDeputyView {
     ask: { text: deputy.ask.text, images: deputy.ask.images, sender: deputy.ask.sender },
     artifactPath: deputy.artifactPath,
     forkRecordCount: deputy.forkRecordCount,
+    forkBytes: deputy.forkBytes,
     state: deputy.state,
     startedAt: deputy.startedAt,
     activatedAt: deputy.activatedAt,
@@ -84,6 +86,7 @@ export function parseSeatDeputyView(value: unknown): SeatDeputyView | null {
     },
     artifactPath: text(row.artifactPath),
     forkRecordCount: typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : null,
+    forkBytes: typeof row.forkBytes === "number" && Number.isInteger(row.forkBytes) && row.forkBytes >= 0 ? row.forkBytes : null,
     state,
     startedAt,
     activatedAt: text(row.activatedAt),
