@@ -1108,9 +1108,12 @@ different projects going to different groups. The bot stays post-only: another
 program owns its updates through a webhook, and Delegatus must not read chats.
 
 - **The seat's Reports section** (`src/components/orchestrator/SeatReports.tsx`).
-  On the desktop a chip in the seat's own row, before the tick's, shows where
-  reports go (the chat's alias, or "Log") and opens a popover; on the phone a
-  row under the tick's in the seat sheet opens a sheet (`reports` in
+  On the desktop a chip in the seat's own row, before the tick's, reads
+  "Reports · <where>" (the chat's title, which the settings route answers as
+  `reportChatTitle`, or "Log") and opens a popover. Where the row is tight the
+  value gives way and "Reports" stays (`incumbent-host` in `globals.css`). On
+  the phone the seat sheet's "Reports" row, under the tick's
+  (`data-mobile2-open="seat-reports"`), opens a sheet (`reports` in
   `mobileNav`), whose × returns to the seat sheet. Both draw one body: a
   "Also to Telegram" switch, the line saying where reports go, the group
   picker over the chats the bot may post in, the add-by-id form, "Name in
@@ -1126,7 +1129,8 @@ program owns its updates through a webhook, and Delegatus must not read chats.
 - **The overview** is in the bot panel (`src/components/ProjectReportsOverview.tsx`
   over `GET /api/projects/reports`, `projectReportOverview` in
   `src/lib/projects/reportDestination.ts`): every project with a seat, its
-  local label, and a select of "Log only" and the chats agents may post in.
+  local label, and a select of "Log only" and the chats agents may post in,
+  under the same public-group warning the seat section shows.
   A pick writes that project alone; a project with no stored name and no
   GitHub name asks for one before it writes.
 - Each project's choice is its own entry in `project-settings.json`, so one

@@ -31,6 +31,8 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 export type ProjectReportSettings = {
   /** A chat, "Log only" (`chat: null`), or null when never chosen. */
   reportTelegram: { chat: string | null; name?: string } | null;
+  /** The chosen chat's title, which names it on the closed chip. */
+  reportChatTitle: string | null;
   reportNameSuggestion: string | null;
 };
 
@@ -45,7 +47,7 @@ export type ProjectReportsRead = {
 };
 
 function settingsOf(body: Partial<ProjectReportSettings>): ProjectReportSettings {
-  return { reportTelegram: body.reportTelegram ?? null, reportNameSuggestion: body.reportNameSuggestion ?? null };
+  return { reportTelegram: body.reportTelegram ?? null, reportChatTitle: body.reportChatTitle ?? null, reportNameSuggestion: body.reportNameSuggestion ?? null };
 }
 
 export function useProjectReports(project: string): ProjectReportsRead {
@@ -96,11 +98,14 @@ function chosenChat(settings: ProjectReportSettings | null): string | null {
   return settings?.reportTelegram?.chat ?? null;
 }
 
-/** The closed chip's face and its one-line reading. */
+/** The closed chip's value and its one-line reading. A chat is named by its
+    title, as the picker and the overview name it: aliases that share a
+    prefix truncate alike. */
 export function seatReportsReading(settings: ProjectReportSettings | null, t: TFunction): { face: string; line: string; chat: string | null } {
   const chat = chosenChat(settings);
-  return chat
-    ? { face: chat, line: t("seatReports.toChat", { chat }), chat }
+  const title = settings?.reportChatTitle || chat;
+  return chat && title
+    ? { face: title, line: t("seatReports.toChat", { chat: title }), chat }
     : { face: t("seatReports.faceLog"), line: t("seatReports.logOnly"), chat: null };
 }
 
@@ -289,7 +294,10 @@ const POPOVER_WIDTH = 340;
 
 /**
  * The Reports chip in the seat's own row, beside the tick (#1681's pattern):
- * a send glyph and where reports go in one token, the chat's alias or "Log".
+ * a send glyph, the setting's name and where reports go, the chat's title or
+ * "Log", as the phone's seat-sheet row reads it. Without the name a closed
+ * "Log" read as a way to open the report log. Where the row is tight the value
+ * gives way first and the name stays (globals.css, `incumbent-host`).
  * Its popover is portalled for the same reason the tick's is: both hosts of
  * the row clip an in-flow popover.
  */
@@ -313,8 +321,12 @@ export function SeatReportsChip({ project, projectName }: { project: string; pro
         onClick={() => setOpenFor((previous) => (previous === project ? null : project))}
         className="inline-flex h-6 shrink-0 items-center gap-1 rounded-control border border-border bg-card px-2 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
-        <Send className={`h-3 w-3 ${reading.chat ? "text-accent" : ""}`} aria-hidden />
-        <span data-seat-reports-face className="max-w-[72px] truncate">{reading.face}</span>
+        <Send className={`h-3 w-3 shrink-0 ${reading.chat ? "text-accent" : ""}`} aria-hidden />
+        <span data-seat-reports-label>{t("seatReports.label")}</span>
+        <span data-seat-reports-value className="inline-flex min-w-0 items-center gap-1 font-normal">
+          <span aria-hidden className="text-muted">·</span>
+          <span data-seat-reports-face className="max-w-[112px] truncate">{reading.face}</span>
+        </span>
       </button>
       {open ? (
         <SeatReportsPopover anchorRef={anchorRef} project={project} projectName={projectName} reports={reports} onClose={() => setOpenFor(null)} />

@@ -49,7 +49,7 @@ export function MobileSeatReportsRow({ project, onOpen }: { project: string; onO
       label={t("seatReports.label")}
       onSelect={onOpen}
       ariaLabel={t("seatReports.chipAria", { line: reading.line })}
-      attrs={{ "data-mobile2-open": "reports", "data-seat-reports-row": reading.chat ? "chat" : "log" }}
+      attrs={{ "data-mobile2-open": "seat-reports", "data-seat-reports-row": reading.chat ? "chat" : "log" }}
       trailingShrinks
       trailing={
         <>

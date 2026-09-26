@@ -778,14 +778,19 @@ const telegramBot = BOT_SCENE === "typed"
   : BOT_SCENE === "postonly"
   ? {
     /* `postonly`: another program owns the bot's updates through a webhook,
-       so no update ever names a group; the one chat agents may post in was
-       added by id earlier, and nothing has been read from it. */
+       so no update ever names a group; the chats agents may post in were
+       added by id earlier, and nothing has been read from them. The release
+       group's 20-character alias shares its first fifteen with the one the
+       case adds, so a chip that named chats by alias would draw both alike. */
     connected: true,
     bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
     receiving: "webhook_elsewhere",
     lastUpdateAt: null,
     lastCheckedAt: iso(60),
-    chats: [botChat({ alias: "team-reports", postAllowed: true, postable: true, lastMessageAt: null, storedMessages: 0 })],
+    chats: [
+      botChat({ alias: "team-reports", postAllowed: true, postable: true, lastMessageAt: null, storedMessages: 0 }),
+      botChat({ chatId: "-1000000000303", title: "Release notes", alias: "atlas-design-release", postAllowed: true, postable: true, lastMessageAt: null, storedMessages: 0 }),
+    ],
     limits: [],
   }
   : { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
@@ -856,6 +861,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       mergeOnReview: { enabled: mergeSetting.enabled, changedAt: iso(86_400), changedBy: "operator" },
       bridgeReports: { enabled: bridgeSetting.enabled, changedAt: iso(86_400), changedBy: "operator" },
       reportTelegram: reportChoices[project] ?? null,
+      reportChatTitle: (telegramBot.chats as Array<{ alias: string | null; title: string }>).find((chat) => chat.alias !== null && chat.alias === reportChoices[project]?.chat)?.title ?? null,
       reportNameSuggestion: project === PROJECT ? "Atlas" : null,
       github: "example/atlas",
     });
@@ -1093,8 +1099,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     /* A chat added by id: Telegram's getChat named it, with no update read. */
     if (body.action === "add") {
       if (body.chat !== "-1000000000606") return json({ error: "no such chat", code: "chat_unknown" }, 404);
-      (telegramBot.chats as Array<Record<string, unknown>>).push(botChat({ chatId: "-1000000000606", title: "Design review", alias: "design-review", postAllowed: true, postable: true, lastMessageAt: null, storedMessages: 0 }));
-      return json({ bot: telegramBot, added: { chat: "design-review", chatId: "-1000000000606" } });
+      (telegramBot.chats as Array<Record<string, unknown>>).push(botChat({ chatId: "-1000000000606", title: "Design review", alias: "atlas-design-reviews", postAllowed: true, postable: true, lastMessageAt: null, storedMessages: 0 }));
+      return json({ bot: telegramBot, added: { chat: "atlas-design-reviews", chatId: "-1000000000606" } });
     }
     if (body.action === "test") return json({ bot: telegramBot, tested: { chat: body.chat, sentAt: new Date().toISOString() } });
     return json({ bot: telegramBot });

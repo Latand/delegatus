@@ -3,10 +3,11 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
+import { translate } from "@/lib/i18n";
 import { DISCONNECTED_BOT_STATUS, type TelegramBotChatView, type TelegramBotStatusPayload } from "@/lib/telegram/bot/contracts";
 import { installActEnv } from "@/test-helpers/actEnv";
 
-import { SeatReportsBody, useProjectReports } from "./SeatReports";
+import { SeatReportsBody, seatReportsReading, useProjectReports } from "./SeatReports";
 
 /* The orchestrator's Reports section (docs/design/orchestrator-reports.md
    §5.6): the opt-in stays explicit, the picker lists the chats the bot may
@@ -169,4 +170,18 @@ test("a chat added by id in the picker is picked in place and saved for this pro
   await click(q(section, "[data-seat-reports-save]"));
   expect(puts).toEqual([{ project: "repo-beta", reportTelegram: { chat: "release-notes", name: "Beta" } }]);
   expect(stored["repo-alpha"]).toBeNull();
+});
+
+/* The closed chip names a chat by the title the picker shows: two aliases
+   that share their first fifteen characters truncate alike, their titles do
+   not. Without a known title it falls back to the alias. */
+test("the chip's value is the chosen chat's title, the alias only without one, and Log when nothing posts", () => {
+  const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("en", key, params);
+  const reviews = seatReportsReading({ reportTelegram: { chat: "atlas-design-reviews", name: "Atlas" }, reportChatTitle: "Design review", reportNameSuggestion: null }, t);
+  const release = seatReportsReading({ reportTelegram: { chat: "atlas-design-release", name: "Atlas" }, reportChatTitle: "Release notes", reportNameSuggestion: null }, t);
+  expect(reviews).toEqual({ face: "Design review", line: "Reports go to the log and to Design review.", chat: "atlas-design-reviews" });
+  expect(release.face).toBe("Release notes");
+  expect(seatReportsReading({ reportTelegram: { chat: "atlas-design-reviews", name: "Atlas" }, reportChatTitle: null, reportNameSuggestion: null }, t).face).toBe("atlas-design-reviews");
+  expect(seatReportsReading({ reportTelegram: { chat: null }, reportChatTitle: null, reportNameSuggestion: null }, t)).toEqual({ face: "Log", line: "Reports go to the log only.", chat: null });
+  expect(seatReportsReading(null, t).face).toBe("Log");
 });

@@ -31,6 +31,19 @@ export function viewerPostableReportChats(): string[] {
   }
 }
 
+/** The title Telegram gave the chat a project reports to, so the seat's chip
+    names the group the way the picker and the overview do. Null without a
+    bot, or when the chat is no longer among the bot's. */
+export function viewerReportChatTitle(chat: string | null): string | null {
+  if (!chat) return null;
+  try {
+    const entry = telegramBotService().listChats({ includeInactive: true }).chats.find((candidate) => candidate.chat === chat || candidate.chatId === chat);
+    return entry?.title?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 function seatProjects(): string[] {
   try {
     return [...new Set(activeOrchestratorSeats().map((seat) => canonicalOrchestratorProject(seat.project)))];

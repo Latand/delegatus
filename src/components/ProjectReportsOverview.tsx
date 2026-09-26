@@ -48,6 +48,9 @@ export function ProjectReportsOverview({ bot }: { bot: TelegramBotState }) {
     <section data-telegram-project-reports="" aria-label={t("telegram.bot.projectsTitle")} className="flex flex-col gap-1.5">
       <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.projectsTitle")}</h4>
       <p className="text-[10.5px] leading-snug text-muted">{lines.length ? t("telegram.bot.projectsHint") : t("telegram.bot.projectsNone")}</p>
+      {/* One select moves a project into a group that may be public, so the
+          seat section's warning stands over the lines here too. */}
+      {lines.length ? <p data-telegram-project-reports-warning="" className="text-[10.5px] leading-snug text-warning">{t("onboarding.telegram.rule")}</p> : null}
       {lines.length ? (
         <ul className="flex flex-col gap-1">
           {lines.map((line) => <ProjectLine key={line.project} line={line} postable={postable} onSaved={async () => { await load(); await bot.refresh(); }} />)}

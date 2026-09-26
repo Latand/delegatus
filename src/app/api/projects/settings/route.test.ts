@@ -72,16 +72,19 @@ test("the Telegram report destination is refused for a chat the bot may not post
   expect((await put({ project: "repo-with-github", reportTelegram: { chat: "team-reports", name: "" } })).status).toBe(400);
 
   setTelegramBotServiceForTests({
-    listChats: () => ({ chats: [{ chat: "team-reports", alias: "team-reports", postAllowed: true }, { chat: "-100200", alias: null, postAllowed: false }] }),
+    listChats: () => ({ chats: [{ chat: "team-reports", chatId: "-100100", title: "Team Reports", alias: "team-reports", postAllowed: true }, { chat: "-100200", alias: null, postAllowed: false }] }),
   } as never);
   try {
     expect((await put({ project: "repo-with-github", reportTelegram: { chat: "-100200", name: "Widgets" } })).status).toBe(409);
     const set = await put({ project: "repo-with-github", reportTelegram: { chat: "team-reports", name: "Widgets" } });
     expect(set.status).toBe(200);
-    expect((await set.json()).reportTelegram).toMatchObject({ chat: "team-reports", name: "Widgets", changedBy: "operator" });
+    const setBody = await set.json();
+    expect(setBody.reportTelegram).toMatchObject({ chat: "team-reports", name: "Widgets", changedBy: "operator" });
+    /* The seat's chip names the group by the title the picker shows. */
+    expect(setBody.reportChatTitle).toBe("Team Reports");
     expect((await (await get("repo-with-github")).json()).mergeOnReview.enabled).toBe(true);
     const cleared = await put({ project: "repo-with-github", reportTelegram: null });
-    expect((await cleared.json())).toMatchObject({ reportTelegram: { chat: null, changedBy: "operator" }, reportDestination: null });
+    expect((await cleared.json())).toMatchObject({ reportTelegram: { chat: null, changedBy: "operator" }, reportDestination: null, reportChatTitle: null });
   } finally {
     setTelegramBotServiceForTests(null);
   }
