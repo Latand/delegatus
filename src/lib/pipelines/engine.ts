@@ -5948,6 +5948,9 @@ export type PipelineMutationResult = {
 type PipelineCreatorLineage = {
   srcPath: string | null;
   srcConversationId: string | null;
+  /** Set when a live deputy created the lane for its seat: the seat is the
+      creator above, and this names the deputy that acted. */
+  srcDeputyConversationId?: string;
 };
 
 /** #1026: the roots a creator transcript may live under, named in every `src`
@@ -5972,7 +5975,7 @@ export function resolvePipelineCreatorLineage(
     if (!srcConversationId) continue;
     /* A live deputy creates the lane on its seat's behalf: the seat owns it. */
     const seat = ports.deputySeatFor?.(srcConversationId) ?? null;
-    if (seat) return { lineage: { srcPath: seat.path ?? srcPath, srcConversationId: seat.conversationId } };
+    if (seat) return { lineage: { srcPath: seat.path ?? srcPath, srcConversationId: seat.conversationId, srcDeputyConversationId: srcConversationId } };
     return { lineage: { srcPath, srcConversationId } };
   }
   if (!ports.sourcePathAllowed(requested)) {
@@ -6180,6 +6183,7 @@ export async function createPipelineFromRequest(
     stages: normalized.stages,
     srcPath: creator.lineage.srcPath,
     srcConversationId: creator.lineage.srcConversationId,
+    srcDeputyConversationId: creator.lineage.srcDeputyConversationId ?? null,
     now: ports.now(),
     state: req.autoStart === false ? "draft" : "provisioning",
     ...(req.publication === "internal" || req.publication === "remote-branch" ? { publication: req.publication } : {}),
@@ -7346,6 +7350,8 @@ export async function patchPipeline(
       }
       pipeline.srcPath = creator.lineage.srcPath;
       pipeline.srcConversationId = creator.lineage.srcConversationId;
+      if (creator.lineage.srcDeputyConversationId) pipeline.srcDeputyConversationId = creator.lineage.srcDeputyConversationId;
+      else delete pipeline.srcDeputyConversationId;
     } else if (req.action === "link-task") {
       const taskId = typeof req.taskId === "string" ? req.taskId.trim() : "";
       if (!taskId) return { error: "taskId is required", status: 400 };
@@ -8090,7 +8096,7 @@ function applyPipelineDismissal(pipeline: Pipeline, dismiss: boolean, by: Dismis
     route carries: the operator, or the server-attributed agent. */
 function dismissedByActor(actor: PauseResumeActor | null): DismissedBy {
   if (!actor || actor.kind === "operator") return { kind: "operator" };
-  return { kind: "agent", conversationId: actor.conversationId, role: actor.role };
+  return { kind: "agent", conversationId: actor.conversationId, role: actor.role, ...(actor.via ? { via: { deputy: actor.via.deputy } } : {}) };
 }
 
 /** The dismissal service's write (`@/lib/attention/dismissals`): the same

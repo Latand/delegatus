@@ -703,6 +703,7 @@ function isPipeline(value: unknown): value is Pipeline {
     isNullableString(pipeline.stateDetail) &&
     isNullableString(pipeline.srcPath) &&
     isNullableString(pipeline.srcConversationId) &&
+    (pipeline.srcDeputyConversationId === undefined || isNullableString(pipeline.srcDeputyConversationId)) &&
     typeof pipeline.createdAt === "string" &&
     isNullableString(pipeline.closedAt) &&
     (pipeline.hiddenAt === undefined || isNullableString(pipeline.hiddenAt)) &&
@@ -1437,6 +1438,7 @@ export function buildPipeline(input: {
   stages: PipelineStage[];
   srcPath: string | null;
   srcConversationId: string | null;
+  srcDeputyConversationId?: string | null;
   now: string;
   state?: "draft" | "provisioning";
   publication?: PipelinePublication;
@@ -1464,6 +1466,7 @@ export function buildPipeline(input: {
     stateDetail: null,
     srcPath: input.srcPath,
     srcConversationId: input.srcConversationId,
+    ...(input.srcDeputyConversationId ? { srcDeputyConversationId: input.srcDeputyConversationId } : {}),
     createdAt: input.now,
     closedAt: null,
     hiddenAt: null,

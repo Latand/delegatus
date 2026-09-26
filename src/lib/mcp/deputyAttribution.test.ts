@@ -14,7 +14,10 @@ import {
   orchestratorRevocations,
 } from "@/lib/orchestrator/seats";
 
-import { callerAttributionFrom, viewerMcpBindings, type CallerAttribution, type ViewerControlDependencies } from "./bindings";
+import { defaultSeatTickSettings, type SeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
+
+import { callerAttributionFrom, flowDecisionCaller, viewerMcpBindings, type CallerAttribution, type ViewerControlDependencies } from "./bindings";
 import { McpToolRefusal } from "./server";
 
 /*
@@ -63,7 +66,7 @@ function startDeputy(): string {
     seatEpoch: seat.seatEpoch,
     seatPath: null,
     clientRequestId: "ask-1",
-    ask: { text: "file a task for the flaky test", images: 0, sender: null },
+    ask: { text: "file a task for the flaky test", images: 0, sender: null, origin: { kind: "operator" } },
   });
   if (begun.kind !== "begun") throw new Error("deputy did not begin");
   recordDeputyFork(begun.deputy.askId, { deputyConversationId: GHOST, artifactPath: "/fixture/ghost.jsonl", forkRecordCount: 12 });
@@ -128,6 +131,46 @@ test("a deputy's report takes the orchestrator's shape", async () => {
   const row = readBridgeReportLog().reports[0]!;
   expect(row.origin).toMatchObject({ kind: "manager", conversationId: SEAT });
   expect(row.body).not.toContain("not the manager");
+  /* The stored row keeps the deputy that wrote it (§4 rule 2). */
+  expect(row.origin?.via).toEqual({ deputy: GHOST });
+});
+
+test("a deputy's tick-settings write records the seat and the deputy as setBy", async () => {
+  startDeputy();
+  let written: SeatTickSettings | null = null;
+  const as = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => attributionFor(GHOST),
+    callerProject: () => PROJECT,
+    authorizedSeats: seats,
+    readTickSettings: (project: string) => defaultSeatTickSettings(project),
+    writeTickSettings: (_project: string, settings: SeatTickSettings) => { written = settings; },
+  } as never);
+  await as.seat_tick_settings({ clientRequestId: "t-1", monitorPrompt: "watch lane #2244" });
+  expect(written!.setBy).toMatchObject({ kind: "manager", conversationId: SEAT, via: { deputy: GHOST } });
+});
+
+test("a deputy's pause names the seat and the deputy on the actor the lane stores", async () => {
+  startDeputy();
+  const actors: unknown[] = [];
+  const as = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => attributionFor(GHOST),
+    callerProject: () => PROJECT,
+    authorizedSeats: seats,
+    getPipelines: () => ({ pipelines: [] }),
+    patchPipeline: async (_id: string, _request: unknown, _ports: unknown, actor: unknown) => {
+      actors.push(actor);
+      return { error: "stop here", status: 409 };
+    },
+  } as never);
+  await as.pipeline_action({ clientRequestId: "p-1", pipelineId: "pipeline_1", action: "pause" }).catch(() => undefined);
+  expect(actors[0]).toEqual({ kind: "agent", role: "orchestrator", conversationId: SEAT, via: { deputy: GHOST } });
+  expect(pauseResumeDetail("paused", actors[0] as PauseResumeActor)).toBe(`paused by orchestrator ${SEAT} (parallel self ${GHOST})`);
+});
+
+test("a deputy submits a flow decision as itself: it is nobody's implementer, and the seat's turn is not its to settle", () => {
+  startDeputy();
+  expect(flowDecisionCaller(attributionFor(GHOST))).toBe(GHOST);
+  expect(flowDecisionCaller(attributionFor(SEAT))).toBe(SEAT);
 });
 
 test("a deputy may not deploy or rotate the seat", async () => {

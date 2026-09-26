@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
+import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import type { RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 
 import {
@@ -10,6 +11,7 @@ import {
   endDeputy,
   readDeputies,
   recordDeputyFork,
+  type DeputyAskOrigin,
   type DeputyAskSender,
   type OrchestratorDeputy,
 } from "./deputies";
@@ -51,6 +53,8 @@ export interface AskInParallelInput {
   images?: RuntimeImageUpload[];
   clientRequestId: string;
   sender?: DeputyAskSender | null;
+  /** Who wrote the ask, as the route admitted it; absent is the operator. */
+  origin?: DeputyAskOrigin;
 }
 
 /** The seat's newest generation, which the fork copies and whose profile it runs under. */
@@ -70,7 +74,7 @@ export interface DeputyCommandPorts {
   registerConversation(input: { artifactPath: string; accountId: string | null; launchProfile: Partial<LaunchProfile> }): string;
   joinSeatTask(input: { project: string; seatConversationId: string; seatPath: string | null; deputyConversationId: string; artifactPath: string; accountId: string | null }): void;
   workContext(project: string): DeputyWorkContext;
-  deliver(input: { conversationId: string; path: string; clientMessageId: string; text: string; images: RuntimeImageUpload[] }): Promise<{ ok: true } | { ok: false; error: string }>;
+  deliver(input: { conversationId: string; path: string; clientMessageId: string; text: string; images: RuntimeImageUpload[]; origin: DeputyAskOrigin }): Promise<{ ok: true } | { ok: false; error: string }>;
   /** Starts the end sweep in this process (idempotent). */
   watch(): void;
   /** The store; injectable so the command is testable without a state dir. */
@@ -105,6 +109,14 @@ const defaultStore = {
   activate: activateDeputy,
   end: endDeputy,
 };
+
+/** The ask's author as the delivery ledger records it (#1117): the operator's
+    own words, or an agent message carrying the role the route admitted. */
+export function deputyDeliveryOrigin(origin: DeputyAskOrigin): MessageOrigin {
+  if (origin.kind === "operator") return { kind: "operator" };
+  const role = messageOriginRole(origin.role);
+  return { kind: "agent", ...(role ? { role } : {}) };
+}
 
 function refusal(code: AskInParallelRefusal, error: string, status: number, askId?: string): AskInParallelResult {
   return { ok: false, code, error, status, ...(askId ? { askId } : {}) };
@@ -144,7 +156,7 @@ export async function askOrchestratorInParallel(input: AskInParallelInput, ports
       seatEpoch: seat.seatEpoch,
       seatPath: seat.path ?? generation.path,
       clientRequestId,
-      ask: { text, images: images.length, sender: input.sender ?? null },
+      ask: { text, images: images.length, sender: input.sender ?? null, origin: input.origin ?? { kind: "operator" } },
       now: ports.now(),
     });
     if (begun.kind === "limit") {
@@ -213,6 +225,9 @@ export async function askOrchestratorInParallel(input: AskInParallelInput, ports
       clientMessageId: deputyMessageKey(deputy.askId),
       text: deputyMessage({ ask: deputy.ask.text, seatConversationId: deputy.seatConversationId, context: ports.workContext(project) }),
       images,
+      /* The record's origin, so a replay delivers under the author the first
+         request was admitted as. */
+      origin: deputy.ask.origin,
     });
     if (!delivered.ok) {
       store.end(deputy.askId, { outcome: "failed", error: `launch: ${delivered.error}`, now: ports.now() });

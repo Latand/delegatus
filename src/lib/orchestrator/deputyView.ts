@@ -13,11 +13,15 @@ export interface SeatDeputySender {
   initials: string | null;
 }
 
+export type SeatDeputyAskOrigin = { kind: "operator" } | { kind: "agent"; role: string | null };
+
 export interface SeatDeputyView {
   askId: string;
   seatConversationId: string;
   deputyConversationId: string | null;
-  ask: { text: string; images: number; sender: SeatDeputySender | null };
+  /** `origin` says who wrote the ask: the operator, or an agent (the voice
+      gateway) whose words the feed must not draw as the operator's. */
+  ask: { text: string; images: number; sender: SeatDeputySender | null; origin: SeatDeputyAskOrigin };
   artifactPath: string | null;
   forkRecordCount: number | null;
   forkBytes: number | null;
@@ -32,12 +36,19 @@ export interface SeatDeputyView {
 
 /** The view of one record: everything the feed draws, and nothing it does not
     (no request key, no note receipt). */
-export function seatDeputyView(deputy: SeatDeputyView): SeatDeputyView {
+export function seatDeputyView(deputy: Omit<SeatDeputyView, "ask"> & {
+  ask: Omit<SeatDeputyView["ask"], "origin"> & { origin: { kind: "operator" } | { kind: "agent"; role: string | null } };
+}): SeatDeputyView {
   return {
     askId: deputy.askId,
     seatConversationId: deputy.seatConversationId,
     deputyConversationId: deputy.deputyConversationId,
-    ask: { text: deputy.ask.text, images: deputy.ask.images, sender: deputy.ask.sender },
+    ask: {
+      text: deputy.ask.text,
+      images: deputy.ask.images,
+      sender: deputy.ask.sender,
+      origin: deputy.ask.origin.kind === "agent" ? { kind: "agent", role: deputy.ask.origin.role } : { kind: "operator" },
+    },
     artifactPath: deputy.artifactPath,
     forkRecordCount: deputy.forkRecordCount,
     forkBytes: deputy.forkBytes,
@@ -72,6 +83,10 @@ export function parseSeatDeputyView(value: unknown): SeatDeputyView | null {
   const sender = senderRaw && text(senderRaw.memberId) && text(senderRaw.name)
     ? { memberId: text(senderRaw.memberId)!, name: text(senderRaw.name)!, color: text(senderRaw.color), initials: text(senderRaw.initials) }
     : null;
+  const originRaw = (ask.origin && typeof ask.origin === "object" ? ask.origin : null) as Record<string, unknown> | null;
+  /* Anything that is not plainly the operator's is drawn as an agent's: a
+     malformed origin must not turn a relay into the operator's own bubble. */
+  const origin: SeatDeputyAskOrigin = originRaw?.kind === "operator" ? { kind: "operator" } : { kind: "agent", role: text(originRaw?.role) };
   const touched = (row.touched && typeof row.touched === "object" ? row.touched : {}) as Record<string, unknown>;
   const result = row.result && typeof row.result === "object" ? row.result as Record<string, unknown> : null;
   const count = row.forkRecordCount;
@@ -83,6 +98,7 @@ export function parseSeatDeputyView(value: unknown): SeatDeputyView | null {
       text: typeof ask.text === "string" ? ask.text : "",
       images: typeof ask.images === "number" && ask.images > 0 ? Math.floor(ask.images) : 0,
       sender,
+      origin,
     },
     artifactPath: text(row.artifactPath),
     forkRecordCount: typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : null,

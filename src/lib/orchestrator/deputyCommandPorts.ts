@@ -10,7 +10,7 @@ import { commitTaskMembership } from "@/lib/tasks/membership";
 import { loadTasks } from "@/lib/tasks/store";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
-import type { DeputyCommandPorts } from "./deputyCommand";
+import { deputyDeliveryOrigin, type DeputyCommandPorts } from "./deputyCommand";
 import { startDeputySweep } from "./deputySweep";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "./seats";
 
@@ -83,14 +83,14 @@ export function productionDeputyCommandPorts(): DeputyCommandPorts {
         .map((task) => ({ id: task.id, title: task.text.split(/\r?\n/, 1)[0] ?? "", status: task.status }));
       return { openLanes, recentTasks };
     },
-    deliver: async ({ conversationId, path: artifactPath, clientMessageId, text, images }) => {
+    deliver: async ({ conversationId, path: artifactPath, clientMessageId, text, images, origin }) => {
       const result = await enqueueStructuredMessage({
         path: artifactPath,
         conversationId,
         clientMessageId,
         text,
         images,
-        origin: { kind: "operator" },
+        origin: deputyDeliveryOrigin(origin),
       });
       if (!result) return { ok: false, error: "structured delivery is unavailable" };
       return result.ok ? { ok: true } : { ok: false, error: result.error };

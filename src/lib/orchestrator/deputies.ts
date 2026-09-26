@@ -43,12 +43,21 @@ export interface DeputyAskSender {
   initials: string | null;
 }
 
+/** Who wrote the ask, as the ghost route admitted it: the operator's own
+    browser, or the root session (the voice gateway) relaying for them. An
+    agent's words are never recorded as the operator's (#1117), so the
+    gateway's ask is delivered and drawn as the agent message it is. */
+export type DeputyAskOrigin =
+  | { kind: "operator" }
+  | { kind: "agent"; role: string | null; conversationId: string | null };
+
 export interface DeputyAsk {
   text: string;
   /** How many images rode with the ask; the pictures themselves go to the
       deputy's host and are not copied into the record. */
   images: number;
   sender: DeputyAskSender | null;
+  origin: DeputyAskOrigin;
 }
 
 export interface DeputyTouched {
@@ -126,6 +135,14 @@ function normalizeSender(value: unknown): DeputyAskSender | null {
   return { memberId: sender.memberId, name: sender.name, color: stringOrNull(sender.color), initials: stringOrNull(sender.initials) };
 }
 
+function normalizeAskOrigin(value: unknown): DeputyAskOrigin {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "operator" };
+  const origin = value as { kind?: unknown; role?: unknown; conversationId?: unknown };
+  return origin.kind === "agent"
+    ? { kind: "agent", role: stringOrNull(origin.role), conversationId: stringOrNull(origin.conversationId) }
+    : { kind: "operator" };
+}
+
 const OUTCOMES: readonly DeputyOutcome[] = ["done", "timeout", "host-died", "seat-rotated", "failed"];
 
 export function normalizeDeputy(value: unknown): OrchestratorDeputy | null {
@@ -158,6 +175,7 @@ export function normalizeDeputy(value: unknown): OrchestratorDeputy | null {
       text: typeof ask.text === "string" ? ask.text : "",
       images: typeof ask.images === "number" && Number.isInteger(ask.images) && ask.images > 0 ? ask.images : 0,
       sender: normalizeSender(ask.sender),
+      origin: normalizeAskOrigin(ask.origin),
     },
     artifactPath: stringOrNull(row.artifactPath),
     forkRecordCount: typeof row.forkRecordCount === "number" && Number.isInteger(row.forkRecordCount) && row.forkRecordCount >= 0
@@ -258,7 +276,8 @@ export function beginDeputy(input: {
   seatEpoch: number;
   seatPath: string | null;
   clientRequestId: string;
-  ask: DeputyAsk;
+  /** An ask with no origin named is the operator's. */
+  ask: Omit<DeputyAsk, "origin"> & { origin?: DeputyAskOrigin };
   now?: Date;
   askId?: string;
 }): BeginDeputyResult {
@@ -277,7 +296,7 @@ export function beginDeputy(input: {
       seatEpoch: input.seatEpoch,
       seatPath: input.seatPath,
       deputyConversationId: null,
-      ask: input.ask,
+      ask: { ...input.ask, origin: input.ask.origin ?? { kind: "operator" } },
       artifactPath: null,
       forkRecordCount: null,
       forkBytes: null,

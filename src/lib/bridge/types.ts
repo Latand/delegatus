@@ -118,6 +118,9 @@ export interface BridgeReportOrigin {
   kind: "manager" | "agent" | "gateway" | "unidentified";
   conversationId: string | null;
   role: string | null;
+  /** The seat's parallel self that wrote the report under the seat's id
+      (docs/design/ghost-seat.md §4 rule 2), so the log keeps its own id. */
+  via?: { deputy: string };
 }
 
 /** Durable routing identity for one project's designated orchestrator seat.

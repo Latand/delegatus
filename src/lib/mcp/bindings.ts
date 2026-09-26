@@ -898,6 +898,7 @@ function pauseResumeActorOf(dependencies: ViewerMcpDomainDependencies): PauseRes
     kind: "agent",
     role: attribution.role ?? (attribution.kind === "manager" ? "orchestrator" : attribution.kind === "gateway" ? "gateway" : null),
     conversationId: attribution.conversationId,
+    ...(attribution.via ? { via: { deputy: attribution.via.deputy } } : {}),
   };
 }
 
@@ -3425,6 +3426,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       conversationId: attribution.conversationId,
       project: own,
       seatEpoch: own === project ? orchestratorSeatFor(project).active?.seatEpoch ?? null : null,
+      ...(attribution.via ? { via: attribution.via } : {}),
     };
     const applied = applySeatTickSettingsChange(current, change, { at: new Date().toISOString(), actor });
     if (!applied.ok) throw new Error(applied.error);
@@ -3887,7 +3889,9 @@ async function rotateOrchestrator(
 }
 
 /** ask_orchestrator_in_parallel (docs/design/ghost-seat.md §5): one command
-    with the composer's action — the tool posts to the same route. */
+    with the composer's action — the tool posts to the same route, with the
+    caller's capability, so the route admits the voice gateway and refuses
+    every other agent. */
 async function askOrchestratorInParallelTool(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
   const result = await control.post("/api/orchestrator/ghost", {
@@ -4072,6 +4076,15 @@ function mutationReceipt(operationId: string): { operationId: string; receipt: {
   return { operationId, receipt: { operationId, status: "delivered" } };
 }
 
+/** The conversation a flow decision is submitted as. A decision reports the
+    implementer's OWN turn, so a deputy speaks as itself here, never as its
+    seat: it is nobody's implementer, and the seat's turn is not its turn to
+    settle (docs/design/ghost-seat.md §4 rule 2). */
+export function flowDecisionCaller(caller: CallerAttribution): string | null {
+  if (caller.kind === "unidentified") return null;
+  return caller.via?.deputy ?? caller.conversationId;
+}
+
 async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const flowId = required(args, "flowId");
   const action = required(args, "action");
@@ -4079,8 +4092,7 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
     const { submitFlowDecision } = await import("@/lib/flows/decisions");
     const { flowDecisionRequestSchema } = await import("@/lib/flows/decisionSchema");
     const request = flowDecisionRequestSchema.parse(args);
-    const caller = attributionOf(dependencies);
-    const result = await submitFlowDecision(request, caller.kind === "unidentified" ? null : caller.conversationId);
+    const result = await submitFlowDecision(request, flowDecisionCaller(attributionOf(dependencies)));
     return redactPayload({ ...result, outcome: result.decision.disposition === "accepted" ? "accepted" : "settled",
       nextAction: result.decision.disposition === "accepted" ? "original-key-lookup" : "follow-disposition" });
   }
@@ -5370,7 +5382,12 @@ async function dismissThroughService(
     throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: verdict.refusedAs });
   }
   const attribution = attributionOf(dependencies);
-  const by: DismissedBy = { kind: attribution.kind, conversationId: attribution.conversationId, role: attribution.role };
+  const by: DismissedBy = {
+    kind: attribution.kind,
+    conversationId: attribution.conversationId,
+    role: attribution.role,
+    ...(attribution.via ? { via: { deputy: attribution.via.deputy } } : {}),
+  };
   try {
     return await dismissAttentionService(
       /* A conversation named by id resolves to its current transcript, which

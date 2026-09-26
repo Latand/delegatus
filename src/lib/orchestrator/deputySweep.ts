@@ -18,7 +18,8 @@ import type { OrchestratorSeat } from "./seats";
  *
  *  - the seat moved (a rotation, a revocation): `seat-rotated`, host interrupted;
  *  - the record is past its expiry: `timeout`, host interrupted;
- *  - the deputy's turn is idle after it answered: `done`;
+ *  - the deputy's turn is idle after it answered: `done` (also for a record
+ *    still pending whose delivery went through and whose activation was lost);
  *  - its host is gone before it answered: `host-died`.
  *
  * Ending releases the host, writes the touched ids and the collapsed line onto
@@ -57,11 +58,19 @@ export function deputyVerdict(
   }
   const expires = Date.parse(deputy.expiresAt);
   if (!Number.isFinite(expires) || facts.nowMs >= expires) return { kind: "end", outcome: "timeout", interrupt: true };
-  if (deputy.state !== "active") return { kind: "wait" };
   const runtime = facts.runtime;
-  if (runtime?.turn === "idle" && facts.answered && (runtime.host === "hosted" || runtime.host === "unhosted" || runtime.host === "dead")) {
-    return { kind: "end", outcome: "done", interrupt: false };
+  const answeredAndIdle = runtime?.turn === "idle" && facts.answered
+    && (runtime.host === "hosted" || runtime.host === "unhosted" || runtime.host === "dead");
+  if (deputy.state !== "active") {
+    /* A pending record whose fork was delivered and answered: the route died
+       between the delivery and marking it active, and no replay will come
+       (the composer mints a fresh key per click). Its answer is its end, so
+       it gives the seat's authority and its host back now, not at expiry. */
+    return deputy.deputyConversationId && answeredAndIdle
+      ? { kind: "end", outcome: "done", interrupt: false }
+      : { kind: "wait" };
   }
+  if (answeredAndIdle) return { kind: "end", outcome: "done", interrupt: false };
   const gone = runtime?.host === "dead" || runtime?.host === "unhosted";
   const activated = deputy.activatedAt ? Date.parse(deputy.activatedAt) : Number.NaN;
   const pastGrace = Number.isFinite(activated) && facts.nowMs - activated >= DEPUTY_HOST_GRACE_MS;
@@ -152,9 +161,12 @@ export async function sweepDeputies(ports: DeputySweepPorts): Promise<boolean> {
       continue;
     }
     const nowMs = ports.now().getTime();
-    const lines = deputy.state === "active" ? ports.ownLines(deputy) : null;
+    /* A pending record is read too once it has a conversation: its delivery
+       may have gone through with the activation lost. */
+    const started = deputy.state === "active" || deputy.deputyConversationId !== null;
+    const lines = started ? ports.ownLines(deputy) : null;
     let runtime: DeputyRuntimeFacts | null = null;
-    if (deputy.state === "active") {
+    if (started) {
       try { runtime = await ports.runtime(deputy); } catch { runtime = null; }
     }
     const verdict = deputyVerdict(deputy, {

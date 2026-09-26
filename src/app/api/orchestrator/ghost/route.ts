@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { readDeputies } from "@/lib/orchestrator/deputies";
+import { deputyAskerOf } from "@/lib/orchestrator/deputyAsker";
 import { askOrchestratorInParallel } from "@/lib/orchestrator/deputyCommand";
 import { readDeputyOwnLines } from "@/lib/orchestrator/deputySweep";
 import { productionDeputyCommandPorts } from "@/lib/orchestrator/deputyCommandPorts";
@@ -20,6 +21,10 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
+  /* A deputy holds the seat's authority, so only the operator and the voice
+     gateway may start one, and the gateway's ask stays an agent's. */
+  const asker = deputyAskerOf(req);
+  if (!asker.ok) return NextResponse.json({ error: asker.error, code: asker.code }, { status: asker.status });
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -34,6 +39,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
       text: typeof body.text === "string" ? body.text : "",
       images,
       clientRequestId: typeof body.clientRequestId === "string" ? body.clientRequestId : "",
+      origin: asker.origin,
     }, productionDeputyCommandPorts());
     if (!result.ok) {
       return NextResponse.json({ error: result.error, code: result.code, ...(result.askId ? { askId: result.askId } : {}) }, { status: result.status });

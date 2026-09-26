@@ -655,8 +655,9 @@ Tests, by path, under isolated state:
   replays on the same `clientRequestId` without a second fork or host.
 - `src/lib/runtime/structuredDeliveryQueue.test.ts`: the end note carries
   policy `queue` and lands after the running turn.
-- `src/lib/monitor/seatTick.test.ts`: a live deputy is not woken; the ghost's
-  final message reaches the next wake as a child item.
+- `src/lib/monitor/seatTickController.test.ts`: a live deputy is not woken;
+  the wake goes to the seat alone (the note's backstop is the sweep's retry,
+  see "As built").
 - `src/lib/tasks/groupHide.test.ts`: a task whose live assignments are the seat
   and its deputy is still seat-only.
 - Block placement helper tests (pure, beside `tailOrder.test.ts`): a block
@@ -727,6 +728,35 @@ it lives:
   through it.
 - **The sender line** draws when the record carries a sender. The team work
   (PR #2243) is not merged, so the route records none yet.
+- **Only the operator and the voice gateway may ask.** A deputy holds the
+  seat's authority, so the ghost route admits the operator's browser and the
+  root session and refuses every other caller with `asker_refused`
+  (`src/lib/orchestrator/deputyAsker.ts`). A worker able to start one would
+  inherit the manager surface in one move, which is what the seat route
+  already refuses. The record keeps who wrote the ask (`ask.origin`): the
+  gateway's ask is delivered as an agent message with the role `gateway`
+  (#1117) and its head is drawn as the internal agent card, never as the
+  operator's bubble.
+- **The deputy's id is on every durable row it causes**, beside the seat's:
+  `via.deputy` on the bridge report's `origin`, on the tick settings' `setBy`,
+  on the pause and resume actor a lane or a flow stores (and in its board
+  detail), and on a dismissal's `by`; a lane it creates keeps
+  `srcConversationId` = the seat and adds `srcDeputyConversationId`. A flow
+  decision is submitted as the deputy itself: a decision reports the
+  implementer's own turn, and a deputy is nobody's implementer.
+- **Hidden from the conversation lists too.** `GET /api/conversations`, which
+  «All conversations» on both surfaces and `list_conversations` read, drops
+  every transcript and conversation id a deputy record names. They stay
+  readable by id and searchable through `search_transcripts`.
+- **The note's backstop is the sweep, not the child ledger.** The fork is
+  registered with the seat as its parent on its launch profile, but it is not
+  a spawn, so it has no lineage edge and the seat tick never lists it as a
+  child. A note that failed to land is re-sent by the next sweep under the
+  same key. The tick test pins the other half: a live deputy is never woken.
+- **A pending record that answered ends `done`.** If the route process dies
+  between the delivery and marking the record active, the sweep reads a
+  pending record that has a conversation the same way as an active one, so it
+  gives the seat's authority and its host back when it answers.
 
 ## 8. Cost and failure summary
 

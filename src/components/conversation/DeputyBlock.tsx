@@ -24,7 +24,8 @@ import { FeedMessageRow } from "./OutboxBubbles";
  * The orchestrator's parallel self, as a block of the seat's own feed
  * (docs/design/ghost-seat.md §6.2, §6.3).
  *
- * Head: the ask, the ordinary operator bubble, drawn from the deputy record,
+ * Head: the ask, the ordinary operator bubble, drawn from the deputy record
+ * (the internal agent card when the voice gateway wrote it),
  * with «→ parallel self» and the outline mark on its meta line: the person
  * said it, so the bubble keeps its fill, and the line says who it went to.
  * Caption: the seat's engine mark in a dashed ring, «Orchestrator · parallel
@@ -216,7 +217,7 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
           outline. Its meta line says where it went — to the parallel self,
           not to the seat — and a team install stamps the sender the route
           recorded in front of that. */}
-      <div data-feed-key={`${blockKey}:head`} data-feed-kind="user" data-deputy-head>
+      <div data-feed-key={`${blockKey}:head`} data-feed-kind="user" data-deputy-head data-deputy-head-author={deputy.ask.origin.kind}>
         <div data-deputy-addressee className="-mb-2 flex min-h-5 items-center justify-end gap-1.5 text-label text-muted">
           {deputy.ask.sender ? (
             <span data-deputy-sender className="inline-flex items-center gap-1.5">
@@ -228,7 +229,22 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
           <DeputyMark engine={engine} />
           <span className="font-semibold text-secondary">{t("deputy.addressee")}</span>
         </div>
-        <FeedMessageRow entry={null} canonical={{ text: deputy.ask.text }} />
+        {deputy.ask.origin.kind === "operator" ? (
+          <FeedMessageRow entry={null} canonical={{ text: deputy.ask.text }} />
+        ) : (
+          /* An agent wrote this ask (the voice gateway relaying), so it is the
+             feed's internal card naming the sender's role, never the
+             operator's bubble (#1117). */
+          <FeedItem item={{
+            kind: "tmsg",
+            ts: deputy.startedAt,
+            dir: "in",
+            peer: deputy.ask.origin.role ?? t("render.agentPeer"),
+            summary: "",
+            text: deputy.ask.text,
+            internal: true,
+          }} />
+        )}
       </div>
 
       {open ? (

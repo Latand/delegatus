@@ -42,11 +42,17 @@ Four rules travel with it and are not separable from it:
    always mints a newer epoch, so every deputy of the old one loses its
    authority at once.
 2. **Attribution keeps both ids.** The seat's id is what surfaces act on; the
-   deputy's own id rides in `via.deputy`, so nothing it did is unattributable.
+   deputy's own id rides in `via.deputy`, and every durable row keeps it (the
+   report's `origin`, the tick settings' `setBy`, a pause or resume actor, a
+   dismissal's `by`), so nothing it did is unattributable.
 3. **What it creates is the seat's.** A lane created with the deputy's own
    transcript as `src` records the seat as `srcConversationId`, so the seat can
-   answer the lane's decisions after the deputy is gone.
-4. **Two things it may not do.** `deploy_exact_sha` is refused with
+   answer the lane's decisions after the deputy is gone, and the deputy as
+   `srcDeputyConversationId`.
+4. **Only the operator and the voice gateway start one.** Starting a deputy
+   hands out the seat's authority, so the ghost route refuses every other
+   caller, and the gateway's ask stays an agent's message.
+5. **Two things it may not do.** `deploy_exact_sha` is refused with
    `deputy_cannot_deploy`, and `rotate_orchestrator` (and the rotation route
    itself) with `deputy_cannot_rotate`: the one gated operation and the one
    identity change are not for a five-minute self.

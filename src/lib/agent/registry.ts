@@ -6765,8 +6765,6 @@ export class AgentRegistry {
     return this.settleSpawn(launchId, entry, "observed-completed");
   }
 
-  /** Allocates one Viewer-owned identity for every native generation. Paths
-      remain an interoperability detail and can change on every account move. */
   /** A conversation for a transcript the Viewer forked itself (an orchestrator
       seat's deputy, docs/design/ghost-seat.md §5), carrying the launch profile
       its first resume must use: the seat's model, effort and grants, so the
@@ -6785,6 +6783,8 @@ export class AgentRegistry {
     });
   }
 
+  /** Allocates one Viewer-owned identity for every native generation. Paths
+      remain an interoperability detail and can change on every account move. */
   ensureConversation(engine: AgentEngine, artifactPath: string, accountId: string | null): RegistryConversation {
     return this.mutate((file) => {
       const existing = Object.values(file.conversations).find((conversation) => conversation.engine === engine && conversationOwnsPath(conversation, artifactPath));

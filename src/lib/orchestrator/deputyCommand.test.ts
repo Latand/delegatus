@@ -6,7 +6,7 @@ import path from "node:path";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 import { beginDeputy, readDeputies } from "./deputies";
-import { askOrchestratorInParallel, deputyMessageKey, deputySessionId, type DeputyCommandPorts } from "./deputyCommand";
+import { askOrchestratorInParallel, deputyDeliveryOrigin, deputyMessageKey, deputySessionId, type DeputyCommandPorts } from "./deputyCommand";
 import type { OrchestratorSeat } from "./seats";
 
 /*
@@ -51,7 +51,7 @@ interface Calls {
   forks: { destination: string; sessionId: string; operationId: string }[];
   registered: { artifactPath: string; launchProfile: Record<string, unknown> }[];
   joined: string[];
-  delivered: { clientMessageId: string; text: string }[];
+  delivered: { clientMessageId: string; text: string; origin?: unknown }[];
   watched: number;
   order: string[];
 }
@@ -81,7 +81,7 @@ function ports(overrides: Partial<DeputyCommandPorts> = {}, calls: Calls = { for
     workContext: () => ({ openLanes: [{ id: "pipeline_1", title: "Seat's own lane", state: "running", stage: "build" }], recentTasks: [] }),
     deliver: async (input) => {
       calls.order.push("deliver");
-      calls.delivered.push({ clientMessageId: input.clientMessageId, text: input.text });
+      calls.delivered.push({ clientMessageId: input.clientMessageId, text: input.text, origin: input.origin });
       return { ok: true };
     },
     watch: () => { calls.watched += 1; },
@@ -126,7 +126,7 @@ test("the record is written before the fork, and the fork runs under the seat's 
     seatEpoch: 4,
     deputyConversationId: "conversation_ghost",
     forkRecordCount: 40,
-    ask: { text: "Add a task: reviewer for #2244", images: 0, sender: null },
+    ask: { text: "Add a task: reviewer for #2244", images: 0, sender: null, origin: { kind: "operator" } },
     expiresAt: "2026-09-26T12:15:00.000Z",
   });
   expect(calls.forks[0]!.destination).toBe(path.join(path.dirname(SEAT_PATH), `${deputySessionId(record.askId)}.jsonl`));
@@ -171,4 +171,15 @@ test("a fork that fails ends the record, so the seat is free for the next ask", 
   expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "failed" });
   const next = ports();
   expect((await askOrchestratorInParallel({ ...ask, clientRequestId: "ask-2" }, next.ports)).ok).toBe(true);
+});
+
+test("the voice gateway's ask is recorded and delivered as the agent message it is, never as the operator's", async () => {
+  const { ports: busy, calls } = ports();
+  const origin = { kind: "agent" as const, role: "gateway", conversationId: "conversation_root" };
+  expect((await askOrchestratorInParallel({ ...ask, origin }, busy)).ok).toBe(true);
+  expect(readDeputies()[0]!.ask.origin).toEqual(origin);
+  expect(calls.delivered[0]!.origin).toEqual(origin);
+  /* The delivery ledger records it as an agent's with its role (#1117). */
+  expect(deputyDeliveryOrigin(origin)).toEqual({ kind: "agent", role: "gateway" });
+  expect(deputyDeliveryOrigin({ kind: "operator" })).toEqual({ kind: "operator" });
 });

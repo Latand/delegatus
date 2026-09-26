@@ -175,7 +175,7 @@ function deputy(overrides: Partial<SeatDeputyView> = {}): SeatDeputyView {
     askId: "deputy_1",
     seatConversationId: "conversation_seat",
     deputyConversationId: "conversation_ghost",
-    ask: { text: "Add a task: reviewer for #2244", images: 0, sender: null },
+    ask: { text: "Add a task: reviewer for #2244", images: 0, sender: null, origin: { kind: "operator" } },
     artifactPath: "/fixture/projects/-repo/ghost.jsonl",
     forkRecordCount: 3,
     forkBytes: 1024,
@@ -332,6 +332,23 @@ test("the ask is marked as sent to the parallel self, and the seat row after the
   expect(next.textContent).toContain("Seat row written after the ask.");
   expect(next.querySelector('[data-seat-speaker="resumes"]')?.textContent).toBe("Orchestrator· continuing «Review the queue»");
   expect(content.querySelectorAll("[data-seat-speaker]").length).toBe(1);
+});
+
+test("an ask the voice gateway wrote is its internal agent card, never the operator's bubble", async () => {
+  const { host } = mount([deputy({ ask: { text: "Add a task: reviewer for #2244", images: 0, sender: null, origin: { kind: "agent", role: "gateway" } } })]);
+  await settle();
+  const head = host.querySelector<HTMLElement>('[data-deputy-block="deputy_1"] [data-deputy-head]')!;
+  expect(head.dataset.deputyHeadAuthor).toBe("agent");
+  expect(head.querySelector("[data-user-bubble]")).toBeNull();
+  expect(head.textContent).toContain("internal");
+  expect(head.textContent).toContain("gateway");
+  expect(head.textContent).toContain("Add a task: reviewer for #2244");
+  /* The operator's own ask keeps the operator's bubble. */
+  const operator = mount([deputy()]).host;
+  await settle();
+  const own = operator.querySelector<HTMLElement>('[data-deputy-block="deputy_1"] [data-deputy-head]')!;
+  expect(own.dataset.deputyHeadAuthor).toBe("operator");
+  expect(own.querySelector("[data-user-bubble]")).not.toBeNull();
 });
 
 test("while a parallel self streams, the seat's live turn names its participant and the two carets differ", async () => {

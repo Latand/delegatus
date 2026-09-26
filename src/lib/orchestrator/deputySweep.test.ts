@@ -37,6 +37,11 @@ afterEach(() => {
 const seat = { conversationId: "conversation_seat", seatEpoch: 3 } as OrchestratorSeat;
 
 function liveDeputy(): OrchestratorDeputy {
+  return activateDeputy(forkedDeputy().askId, new Date(START + 1_000))!;
+}
+
+/** Forked and registered, never marked active. */
+function forkedDeputy(): OrchestratorDeputy {
   const begun = beginDeputy({ project: "proj", seatConversationId: "conversation_seat", seatEpoch: 3, seatPath: "/t/seat.jsonl", clientRequestId: "ask-1", ask: { text: "file a task", images: 0, sender: null }, now: new Date(START) });
   if (begun.kind !== "begun") throw new Error("not begun");
   const transcript = path.join(sandbox, "ghost.jsonl");
@@ -45,8 +50,7 @@ function liveDeputy(): OrchestratorDeputy {
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "the seat's own answer" }] } }),
   ];
   fs.writeFileSync(transcript, prefix.join("\n") + "\n");
-  recordDeputyFork(begun.deputy.askId, { deputyConversationId: "conversation_ghost", artifactPath: transcript, forkRecordCount: prefix.length });
-  return activateDeputy(begun.deputy.askId, new Date(START + 1_000))!;
+  return recordDeputyFork(begun.deputy.askId, { deputyConversationId: "conversation_ghost", artifactPath: transcript, forkRecordCount: prefix.length })!;
 }
 
 function appendOwn(deputy: OrchestratorDeputy, lines: unknown[]): void {
@@ -191,4 +195,36 @@ test("the own-lines reader seeks past the fork by its byte size and never return
   const lines = readDeputyOwnLines({ artifactPath: transcript, forkRecordCount: 1, forkBytes }, 40)!;
   expect(lines.every((line) => line.startsWith("{"))).toBe(true);
   expect(readDeputyOwnLines({ artifactPath: path.join(sandbox, "gone.jsonl"), forkRecordCount: 1, forkBytes })).toBeNull();
+});
+
+test("a pending deputy whose delivery went through and whose activation was lost ends done once it answered", async () => {
+  /* The route died between the delivery and marking the record active; the
+     deputy answered in a minute and went idle. */
+  const deputy = forkedDeputy();
+  expect(deputy.state).toBe("pending");
+  appendOwn(deputy, [
+    { type: "user", message: { content: "file a task" } },
+    { type: "assistant", message: { content: [{ type: "text", text: "Filed the task." }] } },
+  ]);
+  const calls: string[] = [];
+  const ports: DeputySweepPorts = {
+    now: () => new Date(START + 60_000),
+    deputies: readDeputies,
+    activeSeat: () => seat,
+    runtime: async () => hosted("idle"),
+    ownLines: readDeputyOwnLines,
+    interrupt: async () => { calls.push("interrupt"); },
+    release: async () => { calls.push("release"); },
+    noteSeat: async () => "queued",
+  };
+  expect(await sweepDeputies(ports)).toBe(false);
+  expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "done", result: { line: "Filed the task." } });
+  expect(calls).toEqual(["release"]);
+});
+
+test("a pending deputy that has not answered, or has no conversation yet, keeps waiting", () => {
+  const deputy = forkedDeputy();
+  expect(deputyVerdict(deputy, { nowMs: START + 60_000, seat, runtime: hosted("idle"), answered: false })).toEqual({ kind: "wait" });
+  expect(deputyVerdict(deputy, { nowMs: START + 60_000, seat, runtime: hosted("running"), answered: true })).toEqual({ kind: "wait" });
+  expect(deputyVerdict({ ...deputy, deputyConversationId: null }, { nowMs: START + 60_000, seat, runtime: hosted("idle"), answered: true })).toEqual({ kind: "wait" });
 });

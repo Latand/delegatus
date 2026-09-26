@@ -1161,7 +1161,7 @@ async function mountLive(status: Record<string, unknown> = incumbent(), seat: Re
 test("a running parallel self gives the seat head its outline twin and a chip that scrolls to the block", async () => {
   const deputy = {
     askId: "deputy_1", seatConversationId: "conversation_orch", deputyConversationId: "conversation_ghost",
-    ask: { text: "Add a task: reviewer for the auth branch, and link it to the lane", images: 0, sender: null },
+    ask: { text: "Add a task: reviewer for the auth branch, and link it to the lane", images: 0, sender: null, origin: { kind: "operator" } },
     artifactPath: "/transcripts/ghost.jsonl", forkRecordCount: 40, forkBytes: 4096, state: "active",
     startedAt: "2026-08-13T10:05:00.000Z", activatedAt: "2026-08-13T10:05:02.000Z", endedAt: null, outcome: null,
     touched: { taskIds: [], pipelineIds: [], conversationIds: [] }, result: null,

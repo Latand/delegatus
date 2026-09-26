@@ -113,7 +113,7 @@ describe("deputyPrincipal", () => {
       seatEpoch: 7,
       seatPath: "/t/seat.jsonl",
       deputyConversationId: "conversation_ghost",
-      ask: { text: "add a task", images: 0, sender: null },
+      ask: { text: "add a task", images: 0, sender: null, origin: { kind: "operator" } },
       artifactPath: "/t/ghost.jsonl",
       forkRecordCount: 40,
       forkBytes: 4096,

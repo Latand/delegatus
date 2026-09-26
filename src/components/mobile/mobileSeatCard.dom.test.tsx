@@ -573,7 +573,7 @@ test("a running parallel self puts the outline twin on the mark and names the as
     exists: true,
     deputies: [{
       askId: "deputy_1", seatConversationId: "conv_orchestrator", deputyConversationId: "conv_ghost",
-      ask: { text: "Add a task: reviewer for the auth branch, and link it to the lane", images: 0, sender: null },
+      ask: { text: "Add a task: reviewer for the auth branch, and link it to the lane", images: 0, sender: null, origin: { kind: "operator" } },
       artifactPath: "/ghost.jsonl", forkRecordCount: 40, forkBytes: 4096, state: "active",
       startedAt: "2100-01-02T11:59:00.000Z", activatedAt: "2100-01-02T11:59:02.000Z", endedAt: null, outcome: null,
       touched: { taskIds: [], pipelineIds: [], conversationIds: [] }, result: null,
