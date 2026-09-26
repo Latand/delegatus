@@ -18,16 +18,17 @@ interface AlbumEntryProps {
   files: readonly FileEntry[];
 }
 
-/** The album button in a desktop card's foot: the picture count, and a dot
-    while some are new since the album was last opened. Nothing while the
-    task has no pictures. */
+/** The album button in a desktop card's foot: the picture count, and how
+    many are new since the album was last opened, as the phone's row says it.
+    Nothing while the task has no pictures. */
 export function CardAlbumButton({ taskId, title, pipelines, files }: AlbumEntryProps) {
   const { t } = useLocale();
   const summary = useTaskAlbumSummary(taskId);
   const [open, setOpen] = useState(false);
   if (!summary?.count && !open) return null;
   const count = summary?.count ?? 0;
-  const fresh = (summary?.newCount ?? 0) > 0;
+  const newCount = summary?.newCount ?? 0;
+  const fresh = newCount > 0;
   const label = t(fresh ? "album.buttonAriaNew" : "album.buttonAria", { title, count });
   return (
     <>
@@ -42,7 +43,12 @@ export function CardAlbumButton({ taskId, title, pipelines, files }: AlbumEntryP
       >
         <Images aria-hidden />
         {count}
-        {fresh ? <span className="album-dot" aria-hidden="true" /> : null}
+        {fresh ? (
+          <span className="album-new" data-album-card-new={newCount} aria-hidden="true">
+            <span className="album-dot" />
+            {t("album.newCount", { count: newCount })}
+          </span>
+        ) : null}
       </button>
       {open ? <TaskAlbum taskId={taskId} title={title} pipelines={pipelines} files={files} onClose={() => setOpen(false)} /> : null}
     </>

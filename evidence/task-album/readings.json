@@ -1,11 +1,13 @@
 {
   "readings": {
     "desktop-1440-en-card": {
-      "text": "7",
+      "text": "73 new",
       "fresh": "1",
       "dot": true,
       "insideCard": true,
       "overlapsFoot": false,
+      "newText": "3 new",
+      "footLines": 1,
       "exportFresh": "0",
       "buttonsOnBoard": 2
     },
@@ -24,7 +26,7 @@
       "sideways": 0,
       "groups": [
         {
-          "label": "Verify · 2",
+          "label": "Verify · attempt 2",
           "link": "#c=conversation_search-ver-2",
           "items": [
             "a1",
@@ -33,7 +35,7 @@
           ]
         },
         {
-          "label": "Review · round 2",
+          "label": "Review · attempt 1 · round 2",
           "link": "#c=conversation_search-rev",
           "items": [
             "a4",
@@ -41,7 +43,7 @@
           ]
         },
         {
-          "label": "Implement · 2",
+          "label": "Implement · attempt 2",
           "link": "#c=conversation_search-impl-2",
           "items": [
             "a6",
@@ -54,7 +56,59 @@
         "a2",
         "a3"
       ],
-      "newCount": " · 3 new",
+      "thumbs": [
+        {
+          "id": "a1",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a2",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a3",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a4",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a5",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a6",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a7",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        }
+      ],
+      "accent": "rgb(90, 81, 224)",
+      "newCount": "3 new",
       "tileOverlaps": 0,
       "tileWidths": [
         211,
@@ -72,7 +126,28 @@
     },
     "desktop-1440-en-viewer": {
       "position": "2 / 7",
-      "caption": "after-swap-phone-390.png · Verify · 2 · 3m ago"
+      "caption": "after-swap-phone-390.png",
+      "detail": "· Verify · attempt 2 · 3m ago",
+      "captionClipped": false,
+      "detailClipped": false,
+      "buttons": [
+        [
+          38,
+          26
+        ],
+        [
+          45,
+          27
+        ],
+        [
+          38,
+          26
+        ],
+        [
+          38,
+          26
+        ]
+      ]
     },
     "phone-390-en-row": {
       "text": "Images·73 new",
@@ -96,7 +171,7 @@
       "sideways": 0,
       "groups": [
         {
-          "label": "Verify · 2",
+          "label": "Verify · attempt 2",
           "link": "#c=conversation_search-ver-2",
           "items": [
             "a1",
@@ -105,7 +180,7 @@
           ]
         },
         {
-          "label": "Review · round 2",
+          "label": "Review · attempt 1 · round 2",
           "link": "#c=conversation_search-rev",
           "items": [
             "a4",
@@ -113,7 +188,7 @@
           ]
         },
         {
-          "label": "Implement · 2",
+          "label": "Implement · attempt 2",
           "link": "#c=conversation_search-impl-2",
           "items": [
             "a6",
@@ -126,7 +201,59 @@
         "a2",
         "a3"
       ],
-      "newCount": " · 3 new",
+      "thumbs": [
+        {
+          "id": "a1",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a2",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a3",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a4",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a5",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a6",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a7",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        }
+      ],
+      "accent": "rgb(90, 81, 224)",
+      "newCount": "3 new",
       "tileOverlaps": 0,
       "tileWidths": [
         179,
@@ -142,15 +269,47 @@
         44
       ]
     },
+    "phone-390-en-jump": {
+      "inView": true,
+      "focused": true,
+      "button": [
+        64,
+        44
+      ]
+    },
     "phone-390-en-viewer": {
-      "position": "2 / 7"
+      "position": "2 / 7",
+      "caption": "after-swap-phone-390.png",
+      "detail": "· Verify · attempt 2 · 3m ago",
+      "captionClipped": false,
+      "detailClipped": false,
+      "buttons": [
+        [
+          44,
+          44
+        ],
+        [
+          45,
+          44
+        ],
+        [
+          44,
+          44
+        ],
+        [
+          44,
+          44
+        ]
+      ]
     },
     "desktop-1440-uk-card": {
-      "text": "7",
+      "text": "73 нові",
       "fresh": "1",
       "dot": true,
       "insideCard": true,
       "overlapsFoot": false,
+      "newText": "3 нові",
+      "footLines": 1,
       "exportFresh": "0",
       "buttonsOnBoard": 2
     },
@@ -169,7 +328,7 @@
       "sideways": 0,
       "groups": [
         {
-          "label": "Verify · 2",
+          "label": "Verify · спроба 2",
           "link": "#c=conversation_search-ver-2",
           "items": [
             "a1",
@@ -178,7 +337,7 @@
           ]
         },
         {
-          "label": "Review · раунд 2",
+          "label": "Review · спроба 1 · раунд 2",
           "link": "#c=conversation_search-rev",
           "items": [
             "a4",
@@ -186,7 +345,7 @@
           ]
         },
         {
-          "label": "Implement · 2",
+          "label": "Implement · спроба 2",
           "link": "#c=conversation_search-impl-2",
           "items": [
             "a6",
@@ -199,7 +358,59 @@
         "a2",
         "a3"
       ],
-      "newCount": " · 3 нові",
+      "thumbs": [
+        {
+          "id": "a1",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a2",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a3",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a4",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a5",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a6",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a7",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        }
+      ],
+      "accent": "rgb(90, 81, 224)",
+      "newCount": "3 нові",
       "tileOverlaps": 0,
       "tileWidths": [
         211,
@@ -217,7 +428,28 @@
     },
     "desktop-1440-uk-viewer": {
       "position": "2 / 7",
-      "caption": "after-swap-phone-390.png · Verify · 2 · 3 хв тому"
+      "caption": "after-swap-phone-390.png",
+      "detail": "· Verify · спроба 2 · 3 хв тому",
+      "captionClipped": false,
+      "detailClipped": false,
+      "buttons": [
+        [
+          38,
+          26
+        ],
+        [
+          45,
+          27
+        ],
+        [
+          38,
+          26
+        ],
+        [
+          38,
+          26
+        ]
+      ]
     },
     "phone-390-uk-row": {
       "text": "Зображення·73 нові",
@@ -241,7 +473,7 @@
       "sideways": 0,
       "groups": [
         {
-          "label": "Verify · 2",
+          "label": "Verify · спроба 2",
           "link": "#c=conversation_search-ver-2",
           "items": [
             "a1",
@@ -250,7 +482,7 @@
           ]
         },
         {
-          "label": "Review · раунд 2",
+          "label": "Review · спроба 1 · раунд 2",
           "link": "#c=conversation_search-rev",
           "items": [
             "a4",
@@ -258,7 +490,7 @@
           ]
         },
         {
-          "label": "Implement · 2",
+          "label": "Implement · спроба 2",
           "link": "#c=conversation_search-impl-2",
           "items": [
             "a6",
@@ -271,7 +503,59 @@
         "a2",
         "a3"
       ],
-      "newCount": " · 3 нові",
+      "thumbs": [
+        {
+          "id": "a1",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a2",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a3",
+          "isNew": true,
+          "border": "rgb(90, 81, 224)",
+          "ring": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(90, 81, 224) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+          "mark": true
+        },
+        {
+          "id": "a4",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a5",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a6",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        },
+        {
+          "id": "a7",
+          "isNew": false,
+          "border": "rgb(229, 223, 213)",
+          "ring": "none",
+          "mark": false
+        }
+      ],
+      "accent": "rgb(90, 81, 224)",
+      "newCount": "3 нові",
       "tileOverlaps": 0,
       "tileWidths": [
         179,
@@ -287,8 +571,38 @@
         44
       ]
     },
+    "phone-390-uk-jump": {
+      "inView": true,
+      "focused": true,
+      "button": [
+        65,
+        44
+      ]
+    },
     "phone-390-uk-viewer": {
-      "position": "2 / 7"
+      "position": "2 / 7",
+      "caption": "after-swap-phone-390.png",
+      "detail": "· Verify · спроба 2 · 3 хв тому",
+      "captionClipped": false,
+      "detailClipped": false,
+      "buttons": [
+        [
+          44,
+          44
+        ],
+        [
+          45,
+          44
+        ],
+        [
+          44,
+          44
+        ],
+        [
+          44,
+          44
+        ]
+      ]
     }
   },
   "failures": []

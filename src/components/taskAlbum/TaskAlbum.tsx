@@ -53,7 +53,9 @@ export function albumSourceLabel(t: TFunction, source: AlbumSource, pipelines: r
   if (source.stage) {
     const stage = pipelines.find((pipeline) => pipeline.id === source.stage!.pipelineId)?.stages.find((entry) => entry.id === source.stage!.stageId);
     const name = stage ? stageDisplayName(t, stage) : source.stage.stageId;
-    const attempt = source.stage.attempt > 1 ? t("kanban.stageAttempt", { stage: name, n: source.stage.attempt }) : name;
+    /* Beside a group of pictures a bare «· 2» reads as how many there are, so
+       the attempt is spelled out, and named whenever a round follows it. */
+    const attempt = source.stage.attempt > 1 || source.stage.round ? t("album.stageAttempt", { stage: name, n: source.stage.attempt }) : name;
     return source.stage.round ? t("album.review", { stage: attempt, n: source.stage.round }) : attempt;
   }
   const file = files.find((entry) => (source.conversationId && entry.conversationId === source.conversationId) || entry.path === source.path);
@@ -151,11 +153,21 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
   const gallery = useMemo<GalleryImage[]>(() => groups.flatMap((group) => group.items.map((item) => ({
     src: item.src,
     alt: itemName(t, item),
-    caption: `${itemName(t, item)} · ${labels.get(group.source.key)} · ${fmtAge(item.ts / 1000)}`,
+    caption: itemName(t, item),
+    detail: `${labels.get(group.source.key)} · ${fmtAge(item.ts / 1000)}`,
   }))), [groups, labels, t]);
   const galleryRef = useRef(gallery);
   galleryRef.current = gallery;
   const readGallery = useCallback(() => galleryRef.current, []);
+  const body = useRef<HTMLDivElement>(null);
+  /* The header's «N new» brings the first new picture into view and onto
+     the keyboard's focus, wherever its group sits. */
+  const showFirstNew = useCallback(() => {
+    const tile = body.current?.querySelector<HTMLElement>("[data-album-item-new='1'] > button");
+    if (!tile) return;
+    tile.scrollIntoView({ block: "center", behavior: "smooth" });
+    tile.focus({ preventScroll: true });
+  }, []);
 
   const total = page?.total ?? 0;
   const newCount = page?.newCount ?? 0;
@@ -183,10 +195,22 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
             <h2 className="m-0 truncate text-body font-bold text-primary">{t("album.title")}</h2>
             <p className="m-0 truncate text-label text-muted">
               <span className="tabular-nums">{t("album.count", { count: total })}</span>
-              {newCount ? <span data-album-new-count={newCount} className="font-semibold text-accent tabular-nums"> · {t("album.newCount", { count: newCount })}</span> : null}
               <span> · {title}</span>
             </p>
           </div>
+          {newCount ? (
+            <button
+              type="button"
+              data-album-new-count={newCount}
+              title={t("album.jumpToNew")}
+              aria-label={`${t("album.newCount", { count: newCount })}. ${t("album.jumpToNew")}`}
+              className="inline-flex h-11 shrink-0 items-center gap-1 rounded-full bg-accent-soft px-3 text-label font-semibold tabular-nums text-accent hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
+              onClick={showFirstNew}
+            >
+              <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" />
+              {t("album.newCount", { count: newCount })}
+            </button>
+          ) : null}
           <button
             type="button"
             data-album-close=""
@@ -198,7 +222,7 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
           </button>
         </header>
 
-        <div data-album-body="" className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${phone ? "px-3 pb-[max(16px,env(safe-area-inset-bottom))] pt-3" : "px-4 py-4"}`}>
+        <div ref={body} data-album-body="" className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${phone ? "px-3 pb-[max(16px,env(safe-area-inset-bottom))] pt-3" : "px-4 py-4"}`}>
           {failed && !items.length ? (
             <div role="alert" className="flex flex-col items-start gap-2 rounded-control border border-danger/45 bg-danger-soft px-3 py-2 text-label font-semibold text-danger">
               {t("album.failed")}
@@ -232,7 +256,7 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
                     </div>
                     <ul className={`m-0 grid list-none gap-2 p-0 ${phone ? "grid-cols-2" : "grid-cols-[repeat(auto-fill,minmax(176px,1fr))]"}`}>
                       {group.items.map((item) => (
-                        <AlbumTile key={item.id} item={item} label={label} onOpen={() => setOpen({ src: item.src, alt: itemName(t, item) })} />
+                        <AlbumTile key={item.id} item={item} label={label} onOpen={() => setOpen({ src: item.src, alt: itemName(t, item), caption: itemName(t, item), detail: `${label} · ${fmtAge(item.ts / 1000)}` })} />
                       ))}
                     </ul>
                   </section>
@@ -257,7 +281,7 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
       </div>
       {open ? (
         <ImageGalleryProvider value={readGallery}>
-          <Lightbox src={open.src} alt={open.alt} onClose={() => setOpen(null)} />
+          <Lightbox src={open.src} alt={open.alt} caption={open.caption} detail={open.detail} onClose={() => setOpen(null)} />
         </ImageGalleryProvider>
       ) : null}
     </div>,
@@ -275,9 +299,17 @@ function AlbumTile({ item, label, onOpen }: { item: AlbumItem; label: string; on
       <button
         type="button"
         aria-label={t("album.imageAria", { name, source: label, age })}
-        className="relative block h-[132px] w-full overflow-hidden rounded-control border border-border bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        /* A new picture is marked on the thumbnail itself — an accent frame
+           and a «new» mark in its corner — so it stands out before any
+           caption is read. */
+        className={`relative block h-[132px] w-full overflow-hidden rounded-control border bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${item.isNew ? "border-accent ring-1 ring-accent" : "border-border"}`}
         onClick={onOpen}
       >
+        {item.isNew ? (
+          <span data-album-new-mark="" aria-hidden className="absolute left-1.5 top-1.5 z-[1] inline-flex h-5 items-center rounded-full bg-accent px-1.5 text-[10px] font-bold text-white">
+            {t("album.new")}
+          </span>
+        ) : null}
         {broken ? (
           <span className="flex h-full w-full items-center justify-center text-muted">
             <GlyphIcon name="image" className="h-5 w-5" />

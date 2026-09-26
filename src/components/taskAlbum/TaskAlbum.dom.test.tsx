@@ -42,6 +42,7 @@ const PAGE: AlbumPage = {
   lastOpenedAt: 1_500,
   newCount: 2,
 };
+let albumPage: AlbumPage = PAGE;
 
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
@@ -52,14 +53,16 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     opened = true;
     return Response.json({ ok: true, lastOpenedAt: 4_000 });
   }
-  if (url.startsWith("/api/tasks/task-1/album")) return Response.json(PAGE);
+  if (url.startsWith("/api/tasks/task-1/album")) return Response.json(albumPage);
   return new Response("{}", { status: 404 });
 }) as unknown as typeof fetch;
 
 const { CardAlbumButton } = await import("./AlbumButton");
 const { resetAlbumSummaries } = await import("./albumSummaries");
+const { albumSourceLabel } = await import("./TaskAlbum");
+const { translate } = await import("@/lib/i18n");
 
-const PIPELINE = { id: "pipe-1", stages: [{ id: "implement", role: { roleId: "builder" } }] } as unknown as Pipeline;
+const PIPELINE = { id: "pipe-1", stages: [{ id: "implement", role: { roleId: "builder" } }, { id: "review", role: { roleId: "reviewer" } }] } as unknown as Pipeline;
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -68,6 +71,7 @@ afterEach(() => {
   resetAlbumSummaries();
   calls.length = 0;
   opened = false;
+  albumPage = PAGE;
   summary = { count: 3, newCount: 2, newestAt: 3 };
 });
 afterAll(() => {
@@ -123,6 +127,11 @@ test("opening the album groups newest first, marks the new pictures and clears t
   expect(album.querySelector("[data-album-group='conversation_stage'] h3")!.textContent).toBe("Implement");
   expect(album.querySelector("[data-album-source='conversation_other']")!.getAttribute("href")).toBe("#c=conversation_other");
   expect(album.querySelector("[data-album-new-count]")!.textContent).toContain("2 new");
+  /* A new picture is marked on its thumbnail, not only in its caption. */
+  const marks = [...album.querySelectorAll("[data-album-item] > button [data-album-new-mark]")].map((mark) => mark.closest("[data-album-item]")!.getAttribute("data-album-item"));
+  expect(marks).toEqual(["newest", "middle"]);
+  expect(album.querySelector("[data-album-item='newest'] > button")!.className).toContain("border-accent");
+  expect(album.querySelector("[data-album-item='oldest'] > button")!.className).not.toContain("border-accent");
 
   /* The album told the Viewer it was opened, and the card's dot is gone. */
   expect(calls.some((call) => call.url === "/api/tasks/task-1/album" && call.method === "POST")).toBe(true);
@@ -154,4 +163,38 @@ test("a picture opens in the full-screen viewer, and its arrows follow the album
   expect(document.querySelector("[data-task-album='task-1']")).not.toBeNull();
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
   expect(document.querySelector("[data-task-album='task-1']")).toBeNull();
+});
+
+test("the header's «N new» brings the first new picture into view and focus", async () => {
+  albumPage = { ...PAGE, items: [item("seen", 3_000, false, STAGE), item("fresh", 2_000, true, OTHER)], newCount: 1 };
+  const host = await mountButton();
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-album-button='task-1']")!.click());
+  await settle(60);
+  const tile = document.querySelector<HTMLElement>("[data-album-item='fresh'] > button")!;
+  let scrolled = 0;
+  tile.scrollIntoView = () => { scrolled += 1; };
+  await act(async () => document.querySelector<HTMLButtonElement>("button[data-album-new-count]")!.click());
+  expect(scrolled).toBe(1);
+  expect(document.activeElement).toBe(tile);
+});
+
+test("a stage's attempt is spelled out, never a bare number beside the group", async () => {
+  const stage = (attempt: number, round?: number) => source("s", { pipelineId: "pipe-1", stageId: round ? "review" : "implement", attempt, ...(round ? { round } : {}) });
+  const en = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("en", key, params);
+  const uk = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("uk", key, params);
+  expect(albumSourceLabel(en, stage(1), [PIPELINE], [])).toBe("Implement");
+  expect(albumSourceLabel(en, stage(2), [PIPELINE], [])).toBe("Implement · attempt 2");
+  expect(albumSourceLabel(en, stage(1, 2), [PIPELINE], [])).toMatch(/ · attempt 1 · round 2$/);
+  expect(albumSourceLabel(uk, stage(2), [PIPELINE], [])).toMatch(/ · спроба 2$/);
+
+  /* The heading and the viewer's caption both carry it. */
+  const retried = source("conversation_retry", { pipelineId: "pipe-1", stageId: "implement", attempt: 2 });
+  albumPage = { ...PAGE, items: [item("again", 3_000, false, retried)], total: 1, newCount: 0 };
+  const host = await mountButton();
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-album-button='task-1']")!.click());
+  await settle(60);
+  expect(document.querySelector("[data-album-group='conversation_retry'] h3")!.textContent).toBe("Implement · attempt 2");
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-album-item='again'] > button")!.click());
+  expect(document.querySelector("[data-lightbox-caption]")!.textContent).toContain("again.png");
+  expect(document.querySelector("[data-lightbox-detail]")!.textContent).toContain("Implement · attempt 2 · ");
 });

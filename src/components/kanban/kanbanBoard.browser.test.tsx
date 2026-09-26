@@ -11232,6 +11232,14 @@ describe("a task's album: every picture its agents made, one click from the card
           items: [...group.querySelectorAll<HTMLElement>("[data-album-item]")].map((tile) => tile.dataset.albumItem),
         })),
         fresh: [...album.querySelectorAll<HTMLElement>("[data-album-item-new='1']")].map((tile) => tile.dataset.albumItem),
+        /* How each tile's thumbnail draws: its border colour and whether it
+           carries the corner mark. New tiles must differ without any text. */
+        thumbs: [...album.querySelectorAll<HTMLElement>("[data-album-item]")].map((tile) => {
+          const thumb = tile.querySelector<HTMLElement>(":scope > button")!;
+          const style = getComputedStyle(thumb);
+          return { id: tile.dataset.albumItem, isNew: tile.dataset.albumItemNew === "1", border: style.borderTopColor, ring: style.boxShadow, mark: Boolean(thumb.querySelector("[data-album-new-mark]")) };
+        }),
+        accent: (() => { const probe = document.createElement("span"); probe.style.color = "var(--color-accent)"; document.body.appendChild(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; })(),
         newCount: album.querySelector("[data-album-new-count]")?.textContent ?? null,
         /* Tiles overlapping one another, or wider than the dialog. */
         tileOverlaps: (() => {
@@ -11245,6 +11253,28 @@ describe("a task's album: every picture its agents made, one click from the card
         })(),
         tileWidths: [...album.querySelectorAll<HTMLElement>("[data-album-item] > button")].map((tile) => Math.round(tile.getBoundingClientRect().width)),
         closeSize: (() => { const close = album.querySelector<HTMLElement>("[data-album-close]")!.getBoundingClientRect(); return [Math.round(close.width), Math.round(close.height)]; })(),
+      };
+    });
+    /* Checks both widths share: the new tiles and only they are drawn
+       differently, and no heading carries a bare number after its stage. */
+    const albumMarks = (label: string, album: Awaited<ReturnType<typeof albumReading>>) => {
+      for (const thumb of album.thumbs) {
+        const accented = thumb.border === album.accent;
+        if (thumb.isNew !== accented || thumb.isNew !== thumb.mark || thumb.isNew !== (thumb.ring !== "none")) failures.push(`${label}: tile ${thumb.id} (new=${thumb.isNew}) draws ${JSON.stringify(thumb)} against accent ${album.accent}`);
+      }
+      for (const group of album.groups) if (/^[^·]+ · \d/.test(group.label ?? "")) failures.push(`${label}: the heading «${group.label}» reads as a count`);
+    };
+    const viewerReading = (page: Page) => page.evaluate(() => {
+      const text = (selector: string) => document.querySelector(selector)?.textContent ?? null;
+      const clipped = (selector: string) => { const element = document.querySelector<HTMLElement>(selector); return element ? element.scrollWidth > element.clientWidth + 1 : null; };
+      const toolbar = document.querySelector("[data-lightbox-position]")!.parentElement!;
+      return {
+        position: text("[data-lightbox-position]"),
+        caption: text("[data-lightbox-caption] > span:first-child"),
+        detail: text("[data-lightbox-detail]"),
+        captionClipped: clipped("[data-lightbox-caption] > span:first-child"),
+        detailClipped: clipped("[data-lightbox-detail]"),
+        buttons: [...toolbar.querySelectorAll("button")].map((button) => { const rect = button.getBoundingClientRect(); return [Math.round(rect.width), Math.round(rect.height)]; }),
       };
     });
     try {
@@ -11271,13 +11301,18 @@ describe("a task's album: every picture its agents made, one click from the card
                 dot: Boolean(albumButton.querySelector(".album-dot")),
                 insideCard: own.left >= box(cardElement).left - 0.5 && own.right <= box(cardElement).right + 0.5,
                 overlapsFoot: siblings.some((other) => own.left < other.right - 0.5 && other.left < own.right - 0.5 && own.top < other.bottom - 0.5 && other.top < own.bottom - 0.5),
+                newText: albumButton.querySelector("[data-album-card-new]")?.textContent ?? null,
+                /* The foot keeps one line: every visible child shares the album button's line. */
+                footLines: new Set([...foot.children].filter((child) => child.getBoundingClientRect().width > 0 && !child.classList.contains("spacer")).map((child) => { const rect = child.getBoundingClientRect(); return Math.round((rect.top + rect.bottom) / 2); })).size,
                 exportFresh: document.querySelector<HTMLElement>('[data-album-button="t-export"]')?.dataset.albumFresh ?? null,
                 buttonsOnBoard: document.querySelectorAll("[data-album-button]").length,
               };
             });
             readings[`${label}-card`] = cardReading;
-            if (cardReading.text !== "7" || cardReading.fresh !== "1" || !cardReading.dot) failures.push(`${label}: the card button reads ${JSON.stringify(cardReading)}`);
+            const newWords = lang === "en" ? "3 new" : "3 нові";
+            if (!cardReading.text?.startsWith("7") || cardReading.newText !== newWords || cardReading.fresh !== "1" || !cardReading.dot) failures.push(`${label}: the card button reads ${JSON.stringify(cardReading)}`);
             if (!cardReading.insideCard || cardReading.overlapsFoot) failures.push(`${label}: the card button leaves the card or overlaps the foot: ${JSON.stringify(cardReading)}`);
+            if (cardReading.footLines !== 1) failures.push(`${label}: the card foot wraps onto ${cardReading.footLines} lines`);
             if (cardReading.exportFresh !== "0") failures.push(`${label}: the seen album still reads as new`);
             if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons on the board, expected the two tasks with pictures`);
 
@@ -11294,6 +11329,7 @@ describe("a task's album: every picture its agents made, one click from the card
             if (album.sideways > 0 || album.tileOverlaps) failures.push(`${label}: the grid scrolls sideways (${album.sideways}) or overlaps (${album.tileOverlaps})`);
             if (album.dialog.right > album.viewport.width || album.dialog.bottom > album.viewport.height) failures.push(`${label}: the album leaves the window`);
             if (album.backdrop === "rgba(0, 0, 0, 0)") failures.push(`${label}: the album does not dim the board behind it`);
+            albumMarks(label, album);
             const cardAfter = await page.evaluate(() => document.querySelector<HTMLElement>('[data-album-button="t-search"]')?.dataset.albumFresh ?? null);
             if (cardAfter !== "0") failures.push(`${label}: the card's new dot did not clear after opening`);
 
@@ -11302,8 +11338,10 @@ describe("a task's album: every picture its agents made, one click from the card
             await page.keyboard.press("ArrowRight");
             await page.waitForTimeout(300);
             await page.screenshot({ path: path.join(pngDir, `${label}-viewer.png`) });
-            const position = await page.locator("[data-lightbox-position]").textContent();
-            readings[`${label}-viewer`] = { position, caption: await page.locator("[data-lightbox-position] + span").textContent() };
+            const viewer = await viewerReading(page);
+            readings[`${label}-viewer`] = viewer;
+            const position = viewer.position;
+            if (viewer.caption !== "after-swap-phone-390.png" || !viewer.detail?.includes(lang === "en" ? "attempt 2" : "спроба 2")) failures.push(`${label}: the viewer's caption reads ${JSON.stringify(viewer)}`);
             if (position?.trim() !== "2 / 7") failures.push(`${label}: the viewer's arrow went to ${position}`);
             await page.keyboard.press("Escape");
             if (!await page.locator("[data-task-album]").count()) failures.push(`${label}: Escape in the viewer closed the album too`);
@@ -11345,11 +11383,32 @@ describe("a task's album: every picture its agents made, one click from the card
             if (album.dialog.left !== 0 || album.dialog.top !== 0 || round(album.dialog.right) !== 390) failures.push(`${label}: the album does not take the phone screen: ${JSON.stringify(album.dialog)}`);
             if (album.sideways > 0 || album.tileOverlaps) failures.push(`${label}: the grid scrolls sideways (${album.sideways}) or overlaps (${album.tileOverlaps})`);
             if (album.closeSize.some((size) => size < 44)) failures.push(`${label}: the close button is ${JSON.stringify(album.closeSize)}`);
+            albumMarks(label, album);
+            /* The header's «N new» brings the first new tile back from the bottom. */
+            await page.evaluate(() => { const body = document.querySelector<HTMLElement>("[data-album-body]")!; body.scrollTop = body.scrollHeight; });
+            await page.waitForTimeout(150);
+            await page.locator("button[data-album-new-count]").click();
+            await page.waitForTimeout(700);
+            const jump = await page.evaluate(() => {
+              const body = document.querySelector<HTMLElement>("[data-album-body]")!.getBoundingClientRect();
+              const first = document.querySelector<HTMLElement>("[data-album-item-new='1'] > button")!;
+              const rect = first.getBoundingClientRect();
+              const button = document.querySelector<HTMLElement>("button[data-album-new-count]")!.getBoundingClientRect();
+              return { inView: rect.top >= body.top - 0.5 && rect.bottom <= body.bottom + 0.5, focused: document.activeElement === first, button: [Math.round(button.width), Math.round(button.height)] };
+            });
+            readings[`${label}-jump`] = jump;
+            if (!jump.inView || !jump.focused || jump.button[1]! < 44) failures.push(`${label}: «N new» did not bring the first new tile into view: ${JSON.stringify(jump)}`);
+            await page.evaluate(() => { document.querySelector<HTMLElement>("[data-album-body]")!.scrollTop = 0; });
+            await page.waitForTimeout(150);
             await page.locator("[data-album-item='a2'] > button").click();
             await page.waitForSelector("[data-lightbox-position]", { timeout: 5_000 });
             await page.waitForTimeout(300);
             await page.screenshot({ path: path.join(pngDir, `${label}-viewer.png`) });
-            readings[`${label}-viewer`] = { position: await page.locator("[data-lightbox-position]").textContent() };
+            const viewer = await viewerReading(page);
+            readings[`${label}-viewer`] = viewer;
+            /* On the phone the source takes its own line: the name, the stage and the age all read in full. */
+            if (viewer.caption !== "after-swap-phone-390.png" || !viewer.detail?.includes(lang === "en" ? "attempt 2" : "спроба 2") || !/\d/.test(viewer.detail.split("·").at(-1) ?? "") || viewer.captionClipped || viewer.detailClipped) failures.push(`${label}: the viewer's caption reads ${JSON.stringify(viewer)}`);
+            if (viewer.buttons.some(([width, height]) => width! < 44 || height! < 44)) failures.push(`${label}: a viewer toolbar button is under 44px: ${JSON.stringify(viewer.buttons)}`);
             if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
           } catch (error) {
             failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
