@@ -1014,7 +1014,9 @@ async function laneActivity(project: string, policy: SeatTickPolicy, sources: Se
  * signalled. Targeted by conversation id, the way `get_orchestrator` asks it —
  * the targeted branch resolves one transcript and never sweeps the catalog.
  */
-async function seatInput(project: string, policy: SeatTickPolicy, sources: SeatTickSources): Promise<SeatTickSeatInput | null> {
+/** The seat as the tick reads it: exported for the deputy command, which asks
+    the same "is the seat's turn progressing" question (docs/design/ghost-seat.md §5). */
+export async function seatInput(project: string, policy: SeatTickPolicy, sources: SeatTickSources): Promise<SeatTickSeatInput | null> {
   const seat = sources.seatFor(project).active;
   if (!seat?.conversationId) return null;
   const conversation = sources.registry().seatTickConversation(seat.conversationId);

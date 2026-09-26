@@ -69,7 +69,7 @@ const { resetOrchestratorSeatCacheForTests } = await import("../orchestrator/use
 const { resetOrchestratorIncumbentCacheForTests } = await import("../orchestrator/useOrchestratorIncumbent");
 const { FILES_CHANGED_EVENT } = await import("@/lib/filesEvents");
 
-interface SeatAnswer { seat: unknown; pending: unknown; exists: boolean }
+interface SeatAnswer { seat: unknown; pending: unknown; exists: boolean; deputies?: unknown[] }
 interface Recorded { url: string; method: string; body: Record<string, unknown> }
 
 let seatAnswer: SeatAnswer = { seat: null, pending: null, exists: true };
@@ -562,6 +562,28 @@ test("a seated card carries the state badge, the now line and a meter that fills
   expect(meter(host)!.querySelector("[data-mobile2-meter-fill]")!.getAttribute("style")).toContain("76%");
   /* Account and plan are the sheet's (README §10 P2-3). */
   expect(card(host).textContent).not.toContain("Max plan");
+});
+
+/* docs/design/ghost-seat.md §6.5: while the seat's parallel self runs, the
+   card's mark gains its outline twin and the now line says what it is doing. */
+test("a running parallel self puts the outline twin on the mark and names the ask in the now line", async () => {
+  seatAnswer = {
+    seat: seat(),
+    pending: null,
+    exists: true,
+    deputies: [{
+      askId: "deputy_1", seatConversationId: "conv_orchestrator", deputyConversationId: "conv_ghost",
+      ask: { text: "Add a task: reviewer for the auth branch, and link it to the lane", images: 0, sender: null, origin: { kind: "operator" } },
+      artifactPath: "/ghost.jsonl", forkRecordCount: 40, forkBytes: 4096, state: "active",
+      startedAt: "2100-01-02T11:59:00.000Z", activatedAt: "2100-01-02T11:59:02.000Z", endedAt: null, outcome: null,
+      touched: { taskIds: [], pipelineIds: [], conversationIds: [] }, result: null,
+    }],
+  };
+  const working = { ...orchestrator, plan: { current: "Reading the board first" } } as unknown as FileEntry;
+  const { host } = await mount([conversation({}), working]);
+  expect(card(host).querySelector("[data-deputy-twin]")).not.toBeNull();
+  const now = card(host).querySelector("[data-mobile2-seat-now]");
+  expect(now!.textContent).toBe("working · and in parallel: Add a task: reviewer for the auth branc…");
 });
 
 test("the seat's ⚙ opens the seat as a BOTTOM sheet — account · plan, the context left, the predecessor, the mandate", async () => {

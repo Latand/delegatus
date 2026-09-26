@@ -23,8 +23,10 @@ import {
   subscribeConversationAvailability,
   type ConversationAvailabilitySnapshot,
 } from "@/lib/mcp/availability";
+import { useLocale } from "@/lib/i18n";
 import {
   describeMcpCall,
+  mcpLinkLabel,
   type McpCallIcon,
   type McpCallLink,
 } from "@/lib/mcp/presentation";
@@ -91,6 +93,8 @@ function LinkChip({
   link: McpCallLink;
   conversationAvailability: ConversationAvailabilitySnapshot;
 }) {
+  const { t } = useLocale();
+  const label = mcpLinkLabel(t, link);
   const disabled = link.kind === "conversation"
     && (!conversationAvailability.loaded || !conversationAvailability.ids.has(link.id));
   const shared = "inline-flex min-h-6 shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
@@ -103,7 +107,7 @@ function LinkChip({
         className={`${shared} cursor-wait border-border bg-sunken text-muted opacity-60`}
       >
         <MessageCircle className="h-3 w-3" aria-hidden />
-        {link.label}
+        {label}
       </span>
     );
   }
@@ -115,7 +119,7 @@ function LinkChip({
       className={`${shared} border-accent/35 bg-accent-soft text-accent hover:border-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45`}
     >
       {link.kind === "conversation" ? <MessageCircle className="h-3 w-3" aria-hidden /> : <ExternalLink className="h-3 w-3" aria-hidden />}
-      {link.label}
+      {label}
     </a>
   );
 }

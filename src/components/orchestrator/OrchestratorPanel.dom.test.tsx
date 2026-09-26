@@ -118,6 +118,7 @@ interface SeatFile {
   pending: Record<string, unknown> | null;
   exists: boolean;
   viewerMcpRegistered?: boolean;
+  deputies?: unknown[];
 }
 
 let seatStatus: SeatFile;
@@ -1154,6 +1155,42 @@ async function mountLive(status: Record<string, unknown> = incumbent(), seat: Re
   flushSync(() => undefined);
   return host;
 }
+
+/* docs/design/ghost-seat.md §6.5: the head points at the running parallel
+   self; its home is the feed. */
+test("a running parallel self gives the seat head its outline twin and a chip that scrolls to the block", async () => {
+  const deputy = {
+    askId: "deputy_1", seatConversationId: "conversation_orch", deputyConversationId: "conversation_ghost",
+    ask: { text: "Add a task: reviewer for the auth branch, and link it to the lane", images: 0, sender: null, origin: { kind: "operator" } },
+    artifactPath: "/transcripts/ghost.jsonl", forkRecordCount: 40, forkBytes: 4096, state: "active",
+    startedAt: "2026-08-13T10:05:00.000Z", activatedAt: "2026-08-13T10:05:02.000Z", endedAt: null, outcome: null,
+    touched: { taskIds: [], pipelineIds: [], conversationIds: [] }, result: null,
+  };
+  incumbentStatus = incumbent();
+  seatStatus = { seat: activeSeat(), pending: null, exists: true, deputies: [deputy] } as SeatFile;
+  const host = mount([{ ...orchestratorFile, proc: "running", pid: 4_242 } as FileEntry]);
+  await settle();
+  flushSync(() => undefined);
+  expect(host.querySelector("[data-seat-head] [data-deputy-twin]")).not.toBeNull();
+  const chip = host.querySelector<HTMLButtonElement>('[data-seat-deputy-chip="deputy_1"]')!;
+  expect(chip.textContent).toBe("parallel · Add a task: reviewer for the auth branc…");
+  /* The block the chip points at, wherever the feed drew it. */
+  if (!host.querySelector('[data-deputy-block="deputy_1"]')) {
+    const target = document.createElement("section");
+    target.setAttribute("data-deputy-block", "deputy_1");
+    document.body.append(target);
+  }
+  const scrolled: (string | null)[] = [];
+  const prototype = HTMLElement.prototype as unknown as { scrollIntoView: (this: HTMLElement) => void };
+  const original = prototype.scrollIntoView;
+  prototype.scrollIntoView = function scrollIntoView(this: HTMLElement) { scrolled.push(this.getAttribute("data-deputy-block")); };
+  try {
+    flushSync(() => chip.click());
+  } finally {
+    prototype.scrollIntoView = original;
+  }
+  expect(scrolled).toEqual(["deputy_1"]);
+});
 
 test("the header names the incumbent — engine, model, account and context percent", async () => {
   const host = await mountLive();

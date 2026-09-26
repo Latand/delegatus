@@ -1,6 +1,8 @@
 export type PauseResumeActor =
   | { kind: "operator" }
-  | { kind: "agent"; role: string | null; conversationId: string | null };
+  /** `via.deputy` is the seat's parallel self acting under the seat's id
+      (docs/design/ghost-seat.md §4 rule 2), kept so the act stays its own. */
+  | { kind: "agent"; role: string | null; conversationId: string | null; via?: { deputy: string } };
 
 export const OPERATOR_PAUSE_RESUME_ACTOR: PauseResumeActor = { kind: "operator" };
 
@@ -18,5 +20,6 @@ export function pauseResumeDetail(
   if (actor.kind === "operator") return `${action} by operator`;
   const role = identityPart(actor.role) ?? "agent";
   const conversationId = identityPart(actor.conversationId);
-  return `${action} by ${role}${conversationId ? ` ${conversationId}` : ""}`;
+  const deputy = identityPart(actor.via?.deputy ?? null);
+  return `${action} by ${role}${conversationId ? ` ${conversationId}` : ""}${deputy ? ` (parallel self ${deputy})` : ""}`;
 }

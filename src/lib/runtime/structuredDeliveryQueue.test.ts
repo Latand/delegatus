@@ -10,6 +10,7 @@ import {
   type StructuredDeliveryQueuePort,
 } from "./structuredDeliveryQueue";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContentDigest, type StructuredImageRef } from "./structuredContent";
+import { deputySeatNoteRequest } from "@/lib/orchestrator/deputySweep";
 
 /**
  * The ownership stamp every message `delivering` write now carries (#1131).
@@ -2625,4 +2626,36 @@ test("unsupported active steering refuses before the Claude broker can write or 
   await queue.drain();
   expect(writes).toBe(0); expect(interrupts).toBe(0);
   expect(transitions).toEqual(["failed:unsupported-steering"]);
+});
+
+/* docs/design/ghost-seat.md §4: when the seat's parallel self ends, its note to
+   the seat is sent with the request the sweep builds. That request must wait
+   out the seat's running turn and start the next one: nothing reaches the host
+   while the turn runs, the turn is never interrupted, and the note is sent
+   once the seat is idle. */
+test("a deputy's end note waits behind the seat's running turn and never interrupts it", async () => {
+  const request = deputySeatNoteRequest({ seatPath: "/t/seat.jsonl", seatConversationId: "conversation-seat" }, "deputy_note_x", "Your parallel self handled: «file a task».");
+  let active = true;
+  const sent: string[] = [];
+  let interrupts = 0;
+  const transitions: Array<[string, string]> = [];
+  const engine = host(async (entry) => { sent.push(entry.id); return { outcome: "turn-started", turnId: "turn-note" }; });
+  engine.interrupt = async () => { interrupts += 1; };
+  engine.health = async () => ({ ...idleState(), status: active ? "active" : "idle", activeTurnRef: active ? "turn-seat" : null });
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:note", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: request.clientMessageId, conversationId: request.conversationId, text: request.text, policy: request.policy, origin: request.origin } }],
+    transition: async (operationId, status) => { transitions.push([operationId, status]); },
+  }, () => engine);
+
+  await queue.drain();
+  expect(sent).toEqual([]);
+  expect(interrupts).toBe(0);
+  expect(transitions).toEqual([]);
+
+  active = false;
+  await queue.drain();
+  expect(sent).toEqual(["deputy_note_x"]);
+  expect(interrupts).toBe(0);
+  expect(transitions.at(-1)).toEqual(["deputy_note_x", "delivered"]);
 });

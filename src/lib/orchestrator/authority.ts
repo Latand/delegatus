@@ -1,3 +1,4 @@
+import type { OrchestratorDeputy } from "./deputies";
 import type { OrchestratorRevocation, OrchestratorSeat } from "./seats";
 
 /* Durable manager authority (the fix for the measured null-pid refusal).
@@ -105,4 +106,59 @@ export function authorizedManagerSeats(sources: ManagerAuthoritySources): Author
   }
 
   return authorized;
+}
+
+/** The seat a live deputy stands for (docs/design/ghost-seat.md §4). */
+export interface DeputyPrincipal {
+  project: string;
+  seatConversationId: string;
+  seatPath: string | null;
+  seatEpoch: number;
+  deputyConversationId: string;
+  askId: string;
+}
+
+export interface DeputyPrincipalSources {
+  deputies(): readonly OrchestratorDeputy[];
+  /** The project's active seat now, or null. */
+  activeSeat(project: string): OrchestratorSeat | null;
+  revocations(): readonly OrchestratorRevocation[];
+  now(): number;
+}
+
+/**
+ * The seat a deputy conversation speaks for, when and only when:
+ *  - a deputy record names the conversation, has not ended and has not expired;
+ *  - that record's seat is still the project's active seat AT THE SAME EPOCH, so
+ *    a rotation (which always mints a newer epoch) kills every deputy of the
+ *    old one, the same ABA rule that keeps a paused predecessor dead;
+ *  - no revocation at an epoch >= the seat's names the seat conversation.
+ *
+ * A deputy is never a seat: nothing here writes, and `authorizedManagerSeats`
+ * does not read deputies. The caller folds this answer into attribution.
+ */
+export function deputyPrincipal(conversationId: string, sources: DeputyPrincipalSources): DeputyPrincipal | null {
+  if (!conversationId) return null;
+  const now = sources.now();
+  for (const deputy of sources.deputies()) {
+    if (deputy.deputyConversationId !== conversationId) continue;
+    if (deputy.state === "ended" || deputy.endedAt) continue;
+    const expires = Date.parse(deputy.expiresAt);
+    if (!Number.isFinite(expires) || now >= expires) continue;
+    const seat = sources.activeSeat(deputy.project);
+    if (!seat || seat.state !== "active" || seat.conversationId !== deputy.seatConversationId) continue;
+    if (seat.seatEpoch !== deputy.seatEpoch) continue;
+    const revoked = sources.revocations().some((revocation) =>
+      revocation.conversationId === deputy.seatConversationId && revocation.seatEpoch >= seat.seatEpoch);
+    if (revoked) continue;
+    return {
+      project: deputy.project,
+      seatConversationId: deputy.seatConversationId,
+      seatPath: seat.path,
+      seatEpoch: seat.seatEpoch,
+      deputyConversationId: conversationId,
+      askId: deputy.askId,
+    };
+  }
+  return null;
 }

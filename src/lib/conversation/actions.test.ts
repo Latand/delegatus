@@ -335,3 +335,50 @@ test("an explicit root kill carries the stable operation id through the structur
   }]);
   expect(result).toMatchObject({ status: 202, body: { operationId: "stable-operation-608", receipt: { status: "queued" } } });
 });
+
+/* docs/design/ghost-seat.md §4: resuming or compacting a seat's deputy would
+   start a turn it has no job for, so both are refused and name the seat, while
+   interrupting it — which the sweep does at expiry — still reaches the host. */
+test("a seat deputy is never resumed or compacted, and can still be interrupted", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { beginDeputy, recordDeputyFork } = await import("@/lib/orchestrator/deputies");
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-actions-deputy-"));
+  process.env.LLV_STATE_DIR = stateDir;
+  try {
+    const ghost = conversation("conversation_ghost", ["/sessions/ghost.jsonl"]);
+    const begun = beginDeputy({ project: "proj-ghost", seatConversationId: "conversation_seat", seatEpoch: 1, seatPath: "/sessions/seat.jsonl", clientRequestId: "ask-1", ask: { text: "file a task", images: 0, sender: null } });
+    if (begun.kind !== "begun") throw new Error("deputy did not begin");
+    recordDeputyFork(begun.deputy.askId, { deputyConversationId: ghost.id, artifactPath: "/sessions/ghost.jsonl", forkRecordCount: 1 });
+    const dispatched: string[] = [];
+    const act = (action: string) => applyConversationAction({ conversationId: ghost.id, transcriptPath: "/sessions/ghost.jsonl", action }, {
+      registry: () => ({
+        conversation: () => ghost,
+        conversationForPath: () => ghost,
+        canonicalConversationId: (id: string) => id,
+        readOnlySnapshot: () => ({ lineageEdges: {} }),
+      } as never),
+      structuredEnabled: () => true,
+      dispatchStructuredControl: async (input) => {
+        dispatched.push(input.action);
+        return { status: 202, body: { ok: true, structured: true, target: ghost.id, operationId: "op", receipt: { operationId: "op", status: "queued" } } };
+      },
+      interruptConversation: async () => ({ ok: true, target: "%1" }),
+      killConversation: async () => ({ ok: true, target: "%1" }),
+      resumeConversation: async () => ({ ok: true, target: "%1" }),
+      compactConversation: async () => ({ ok: true, target: "%1" }),
+      answerDialogKey: async () => ({ ok: true, target: "%1" }),
+    });
+
+    expect(await act("resume")).toMatchObject({ status: 409, body: { code: "deputy_conversation_closed", seatConversationId: "conversation_seat" } });
+    expect(await act("compact")).toMatchObject({ status: 409, body: { code: "deputy_conversation_closed" } });
+    expect((await act("interrupt")).status).toBe(202);
+    expect(dispatched).toEqual(["interrupt"]);
+  } finally {
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDir;
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});

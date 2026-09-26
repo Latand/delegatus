@@ -1,0 +1,603 @@
+{
+  "readings": {
+    "running-1440-en": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "active",
+          "open": true,
+          "titleWidth": 128.3,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 290.5,
+            "bottom": 374,
+            "bodyTop": 290.5,
+            "lastRowBottom": 378
+          },
+          "overlapWithSeat": 0,
+          "rows": 3,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Open task",
+            "Open task",
+            "Open pipeline"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": "deputy:rgb(85, 85, 95)",
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [
+              13
+            ],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Orchestrator",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
+      "seatRowSpeakers": [
+        [],
+        [],
+        [],
+        [
+          "Orchestrator"
+        ],
+        [],
+        [],
+        [
+          "Orchestrator"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [
+          13
+        ],
+        "settled": [
+          13,
+          13,
+          13,
+          13
+        ]
+      },
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "running-1440-uk": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "active",
+          "open": true,
+          "titleWidth": 144.7,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 290.5,
+            "bottom": 374,
+            "bodyTop": 290.5,
+            "lastRowBottom": 378
+          },
+          "overlapWithSeat": 0,
+          "rows": 3,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Відкрити задачу",
+            "Відкрити задачу",
+            "Відкрити пайплайн"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": "deputy:rgb(85, 85, 95)",
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [
+              13
+            ],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Оркестратор",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
+      "seatRowSpeakers": [
+        [],
+        [],
+        [],
+        [
+          "Оркестратор"
+        ],
+        [],
+        [],
+        [
+          "Оркестратор"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [
+          13
+        ],
+        "settled": [
+          13,
+          13,
+          13,
+          13
+        ]
+      },
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "interleaved-1440-en": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": true,
+          "titleWidth": 128.3,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 290.5,
+            "bottom": 404,
+            "bodyTop": 290.5,
+            "lastRowBottom": 408
+          },
+          "overlapWithSeat": 0,
+          "rows": 3,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Open task",
+            "Open task",
+            "Open pipeline"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [],
+            "settled": [
+              13
+            ]
+          }
+        },
+        {
+          "askId": "deputy_b",
+          "state": "active",
+          "open": true,
+          "titleWidth": 128.3,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 698.5,
+            "bottom": 744,
+            "bodyTop": 698.5,
+            "lastRowBottom": 748
+          },
+          "overlapWithSeat": 0,
+          "rows": 2,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": "deputy:rgb(85, 85, 95)",
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [
+              13
+            ],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Orchestrator",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
+      "seatRowSpeakers": [
+        [],
+        [],
+        [],
+        [
+          "Orchestrator"
+        ],
+        [],
+        [
+          "Orchestrator"
+        ],
+        [
+          "Orchestrator"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [
+          13
+        ],
+        "settled": [
+          13,
+          13,
+          13,
+          13
+        ]
+      },
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "interleaved-1440-uk": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": true,
+          "titleWidth": 144.7,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 290.5,
+            "bottom": 404,
+            "bodyTop": 290.5,
+            "lastRowBottom": 408
+          },
+          "overlapWithSeat": 0,
+          "rows": 3,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [
+            "Відкрити задачу",
+            "Відкрити задачу",
+            "Відкрити пайплайн"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [],
+            "settled": [
+              13
+            ]
+          }
+        },
+        {
+          "askId": "deputy_b",
+          "state": "active",
+          "open": true,
+          "titleWidth": 144.7,
+          "resultWidth": null,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": {
+            "top": 698.5,
+            "bottom": 744,
+            "bodyTop": 698.5,
+            "lastRowBottom": 748
+          },
+          "overlapWithSeat": 0,
+          "rows": 2,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": null,
+          "chevronOnFirstLine": null,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": "deputy:rgb(85, 85, 95)",
+          "collapsedSpeaker": null,
+          "proseSizes": {
+            "live": [
+              13
+            ],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat",
+        "seat-live"
+      ],
+      "seatLiveLast": true,
+      "seatLive": {
+        "speaker": "Оркестратор",
+        "caret": "seat:rgb(90, 81, 224)"
+      },
+      "seatRowSpeakers": [
+        [],
+        [],
+        [],
+        [
+          "Оркестратор"
+        ],
+        [],
+        [
+          "Оркестратор"
+        ],
+        [
+          "Оркестратор"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [
+          13
+        ],
+        "settled": [
+          13,
+          13,
+          13,
+          13
+        ]
+      },
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "collapsed-1440-en": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 321.5,
+          "chips": 2,
+          "targetHeight": 32,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": 8,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [
+            "Open task",
+            "Open pipeline"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": "Orchestrator · parallel self",
+          "proseSizes": {
+            "live": [],
+            "settled": []
+          }
+        },
+        {
+          "askId": "deputy_b",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 182.2,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0,
+          "addressee": "→parallel self",
+          "after": "resumes",
+          "resumeCaption": "Orchestrator· continuing «Go through the review queue…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": "Orchestrator · parallel self",
+          "proseSizes": {
+            "live": [],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat"
+      ],
+      "seatLiveLast": false,
+      "seatLive": null,
+      "seatRowSpeakers": [
+        [],
+        [],
+        [],
+        [
+          "Orchestrator"
+        ],
+        [],
+        [
+          "Orchestrator"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [],
+        "settled": [
+          13,
+          13,
+          13,
+          13
+        ]
+      },
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    },
+    "collapsed-1440-uk": {
+      "blocks": [
+        {
+          "askId": "deputy_a",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 338.6,
+          "chips": 2,
+          "targetHeight": 32,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": 8,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [
+            "Відкрити задачу",
+            "Відкрити пайплайн"
+          ],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": "Оркестратор · паралельне я",
+          "proseSizes": {
+            "live": [],
+            "settled": []
+          }
+        },
+        {
+          "askId": "deputy_b",
+          "state": "ended",
+          "open": false,
+          "titleWidth": null,
+          "resultWidth": 193.5,
+          "chips": 0,
+          "targetHeight": 28,
+          "edge": null,
+          "overlapWithSeat": 0,
+          "rows": 0,
+          "addressee": "→паралельне я",
+          "after": "resumes",
+          "resumeCaption": "Оркестратор· далі до «Проглянь чергу рев'ю і…»",
+          "resultToChipGap": null,
+          "resultWhole": true,
+          "chevronOnFirstLine": true,
+          "chipTexts": [],
+          "rowSpeakers": [],
+          "chipLineLefts": [],
+          "caret": null,
+          "collapsedSpeaker": "Оркестратор · паралельне я",
+          "proseSizes": {
+            "live": [],
+            "settled": []
+          }
+        }
+      ],
+      "order": [
+        "seat",
+        "seat",
+        "seat",
+        "block:deputy_a",
+        "seat",
+        "seat",
+        "block:deputy_b",
+        "seat"
+      ],
+      "seatLiveLast": false,
+      "seatLive": null,
+      "seatRowSpeakers": [
+        [],
+        [],
+        [],
+        [
+          "Оркестратор"
+        ],
+        [],
+        [
+          "Оркестратор"
+        ]
+      ],
+      "seatProseSizes": {
+        "live": [],
+        "settled": [
+          13,
+          13,
+          13,
+          13
+        ]
+      },
+      "scrollWidth": 1440,
+      "viewportWidth": 1440
+    }
+  },
+  "failures": []
+}

@@ -262,7 +262,8 @@ describe("forkClaudeHistory", () => {
     expect(forked[3]).toContain(sourceId);
     expect(result).toMatchObject({ path: destination, reused: false, rewritten: 3, size: Buffer.byteLength(forked.join("\n")) });
     expect(fs.statSync(destination).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(fs.readFileSync(`${destination}.llv-receipt.json`, "utf8"))).toEqual({ operationId: "fork-operation", hash: result.hash, size: result.size });
+    expect(result.records).toBe(lines.length);
+    expect(JSON.parse(fs.readFileSync(`${destination}.llv-receipt.json`, "utf8"))).toEqual({ operationId: "fork-operation", hash: result.hash, size: result.size, records: lines.length });
   });
 
   test("adopts its own earlier fork, with or without its receipt, and refuses a foreign file", () => {
@@ -281,6 +282,39 @@ describe("forkClaudeHistory", () => {
     fs.rmSync(`${destination}.llv-receipt.json`);
     fs.appendFileSync(destination, JSON.stringify({ type: "user", sessionId: forkId, message: { content: "a turn the fork did not carry" } }) + "\n");
     expect(() => forkClaudeHistory(input)).toThrow(new HistorySecurityError("history-collision"));
+  });
+
+  /* docs/design/ghost-seat.md §5: a seat's deputy is a fork of a transcript the
+     busy seat is still writing, into the seat's own project directory. */
+  test("a snapshot fork lands beside the seat, drops the line still being written, and replays by its receipt", () => {
+    const { sourceRoot, sourcePath, lines } = claudeFixture();
+    fs.appendFileSync(sourcePath, `{"type":"assistant","sessionId":"${sourceId}","message":{"content":[{"type":"text","text":"half`);
+    const destination = path.join(path.dirname(sourcePath), `${forkId}.jsonl`);
+    const input = { sourcePath, sourceRoot, targetRoot: sourceRoot, destination, sourceSessionId: sourceId, sessionId: forkId, operationId: "deputy-fork", snapshot: true };
+
+    const first = forkClaudeHistory(input);
+
+    const forked = fs.readFileSync(destination, "utf8");
+    expect(forked.endsWith("\n")).toBeTrue();
+    expect(forked.split("\n").filter(Boolean)).toHaveLength(lines.length);
+    expect(forked).not.toContain('"half');
+    expect(first).toMatchObject({ reused: false, records: lines.length });
+
+    /* The seat keeps writing and the deputy's host appends its own turn; the
+       replay answers from the receipt with the count the copy was taken at. */
+    fs.appendFileSync(sourcePath, `"}]}}\n`);
+    expect(forkClaudeHistory(input)).toMatchObject({ reused: true, records: lines.length, hash: first.hash });
+
+    /* Without snapshot, the unfinished line is copied as it stood. */
+    const whole = path.join(path.dirname(sourcePath), "8e2d3c4b-5f6a-\x34b7c-9d8e-0f1a2b3c4d5e.jsonl");
+    const copied = forkClaudeHistory({ ...input, destination: whole, sessionId: "8e2d3c4b-5f6a-\x34b7c-9d8e-0f1a2b3c4d5e", operationId: "whole", snapshot: false });
+    expect(copied.records).toBe(lines.length + 1);
+  });
+
+  test("a fork larger than its bound is refused before anything is published", () => {
+    const { input, destination } = claudeFixture();
+    expect(() => forkClaudeHistory({ ...input, maxBytes: 64, snapshot: true })).toThrow(new HistorySecurityError("history-too-large"));
+    expect(fs.existsSync(destination)).toBeFalse();
   });
 
   test("refuses a source that carries no session record and a destination outside the target root", () => {

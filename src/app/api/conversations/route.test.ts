@@ -5,6 +5,8 @@ import path from "node:path";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { viewerMcpBindings } from "@/lib/mcp/bindings";
+import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, readDeputies, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { writeSessionTitle } from "@/lib/session/titleStore";
@@ -387,4 +389,103 @@ test("ordinary cursor pages still hydrate their own transcript titles", async ()
   const second = await (await GET(new Request(`http://localhost/api/conversations?project=cursor-project&limit=1&cursor=${first.nextCursor}`))).json();
   expect(first.items[0].title).toBe("Actual title 1");
   expect(second.items[0].title).toBe("Actual title 2");
+});
+
+test("the orchestrator's parallel selves leave no row in the page or in list_conversations", async () => {
+  const transcript = (name: string) => {
+    const pathname = path.join(sandbox, `${name}.jsonl`);
+    fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: `Words of ${name}` } }) + "\n");
+    return pathname;
+  };
+  const seat = transcript("seat");
+  const byPath = transcript("ghost-by-path");
+  const byId = transcript("ghost-by-id");
+  replaceConversationCatalog([seat, byPath, byId].map((pathname) => {
+    const stat = fs.statSync(pathname);
+    return {
+      path: pathname,
+      root: "claude-projects" as const,
+      name: path.basename(pathname),
+      project: "ghost-project",
+      title: "Orchestrator · parallel self",
+      firstPrompt: "",
+      engine: "claude" as const,
+      kind: "session",
+      fmt: "claude" as const,
+      mtime: stat.mtimeMs / 1000,
+      size: stat.size,
+    };
+  }));
+  /* One record names its transcript by the path the catalog holds; the other
+     by an address the catalog does not, so only its conversation id joins. */
+  const ghost = registry.ensureConversation("claude", byId, null);
+  const record = (clientRequestId: string, deputyConversationId: string, artifactPath: string) => {
+    const begun = beginDeputy({ project: "ghost-project", seatConversationId: "conversation_seat", seatEpoch: 1, seatPath: seat, clientRequestId, ask: { text: "file a task", images: 0, sender: null } });
+    if (begun.kind !== "begun") throw new Error("deputy did not begin");
+    recordDeputyFork(begun.deputy.askId, { deputyConversationId, artifactPath, forkRecordCount: 1 });
+    endDeputy(begun.deputy.askId, { outcome: "done" });
+  };
+  try {
+    record("ask-1", "conversation_ghost_a", byPath);
+    record("ask-2", ghost.id, path.join(sandbox, "elsewhere", "ghost-by-id.jsonl"));
+
+    const page = await (await GET(new Request("http://127.0.0.1/api/conversations?project=ghost-project"))).json() as { items: Array<{ path: string }>; total: number };
+    expect(page.items.map((item) => item.path)).toEqual([seat]);
+    expect(page.total).toBe(1);
+    const search = await (await GET(new Request("http://127.0.0.1/api/conversations?project=ghost-project&q=words"))).json() as { items: Array<{ path: string }> };
+    expect(search.items.map((item) => item.path)).toEqual([seat]);
+
+    const tools = viewerMcpBindings(undefined, {
+      get: async (pathname: string) => await (await GET(new Request(`http://127.0.0.1${pathname}`))).json() as Record<string, unknown>,
+      post: async () => ({}),
+    });
+    const listed = await tools.list_conversations({ project: "ghost-project" }) as { conversations: Array<{ transcriptPath: string; conversationId: string | null }> };
+    expect(listed.conversations.map((row) => row.transcriptPath)).toEqual([seat]);
+    expect(listed.conversations.some((row) => row.conversationId === ghost.id)).toBe(false);
+  } finally {
+    fs.rmSync(path.join(sandbox, "orchestrator-deputies.json"), { force: true });
+  }
+});
+
+test("a parallel self stays out of the page after the history cap trims its record", async () => {
+  const transcript = (name: string) => {
+    const pathname = path.join(sandbox, `${name}.jsonl`);
+    fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: `Words of ${name}` } }) + "\n");
+    return pathname;
+  };
+  const seat = transcript("capped-seat");
+  const oldest = transcript("capped-ghost-0");
+  replaceConversationCatalog([seat, oldest].map((pathname) => {
+    const stat = fs.statSync(pathname);
+    return {
+      path: pathname,
+      root: "claude-projects" as const,
+      name: path.basename(pathname),
+      project: "capped-project",
+      title: "Orchestrator · parallel self",
+      firstPrompt: "",
+      engine: "claude" as const,
+      kind: "session",
+      fmt: "claude" as const,
+      mtime: stat.mtimeMs / 1000,
+      size: stat.size,
+    };
+  }));
+  try {
+    for (let index = 0; index <= DEPUTY_HISTORY_CAP; index += 1) {
+      const begun = beginDeputy({ project: "capped-project", seatConversationId: "conversation_seat", seatEpoch: 1, seatPath: seat, clientRequestId: `capped-${index}`, ask: { text: "file a task", images: 0, sender: null } });
+      if (begun.kind !== "begun") throw new Error("deputy did not begin");
+      recordDeputyFork(begun.deputy.askId, {
+        deputyConversationId: `conversation_capped_${index}`,
+        artifactPath: index === 0 ? oldest : path.join(sandbox, "elsewhere", `capped-${index}.jsonl`),
+        forkRecordCount: 1,
+      });
+      endDeputy(begun.deputy.askId, { outcome: "done" });
+    }
+    expect(readDeputies().some((deputy) => deputy.artifactPath === oldest)).toBe(false);
+    const page = await (await GET(new Request("http://127.0.0.1/api/conversations?project=capped-project"))).json() as { items: Array<{ path: string }> };
+    expect(page.items.map((item) => item.path)).toEqual([seat]);
+  } finally {
+    fs.rmSync(path.join(sandbox, "orchestrator-deputies.json"), { force: true });
+  }
 });

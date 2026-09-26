@@ -4450,3 +4450,60 @@ browserTest("telegram per orchestrator: the seat's Reports section, a chat added
   fs.writeFileSync(path.join(BOT_EVIDENCE, "per-orchestrator.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * The seat deputy's block on the phone (docs/design/ghost-seat.md §6.4): the
+ * production `LogFeed` of a seat over
+ * `src/components/conversation/deputyBlockEvidence.fixture.tsx`, at 390 px on
+ * a touch context, in both languages. The desktop half is the kanban driver's
+ * «the orchestrator's parallel self in the seat's feed».
+ *
+ * Gated as there, plus the phone's own: a collapsed line is a 44 px target
+ * across its whole width, its result shows whole on up to two lines with the
+ * chevron on the first, no row inside a block is captioned with the bare
+ * engine name, and the chip lines of one block share a left edge.
+ */
+browserTest("the orchestrator's parallel self on the phone: pinned, streaming, collapsed to a 44 px line", async () => {
+  const { MEASURE_DEPUTY_BLOCKS, deputyEvidenceFailures } = await import("@/components/conversation/deputyBlockEvidence.measure");
+  const { openFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+  const out = path.resolve(".artifacts/ghost-seat-phone");
+  const evidence = path.resolve("evidence/ghost-seat");
+  const pngDir = process.env.DEPUTY_PNG_DIR ?? path.join(process.env.HOME ?? "/var/tmp", "Pictures/delegatus-review/ghost-seat");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  fs.mkdirSync(pngDir, { recursive: true });
+  const server = await serveEvidenceFixture(out, "src/components/conversation/deputyBlockEvidence.fixture.tsx");
+  const browser = await launchChromium();
+  const readings: Record<string, unknown> = {};
+  const failures: string[] = [];
+  try {
+    for (const scenario of ["running", "interleaved", "collapsed"] as const) {
+      for (const lang of ["en", "uk"] as const) {
+        const label = `${scenario}-390-${lang}`;
+        const opened = await openFixture(browser, `${server.base}?scenario=${scenario}`, { width: 390, height: 2400 }, "light", lang, "no-preference", true);
+        try {
+          await opened.page.locator("[data-deputy-block]").first().waitFor();
+          await opened.page.waitForTimeout(300);
+          if (scenario === "interleaved") {
+            await opened.page.locator('[data-deputy-block="deputy_a"] [data-deputy-toggle]').first().click({ position: { x: 6, y: 6 } });
+            await opened.page.waitForTimeout(300);
+          }
+          const reading = await opened.page.evaluate(MEASURE_DEPUTY_BLOCKS) as import("@/components/conversation/deputyBlockEvidence.measure").DeputyEvidenceReading;
+          readings[label] = reading;
+          failures.push(...deputyEvidenceFailures(reading, label, { scenario, phone: true, lang }));
+          await opened.page.locator("[data-feed-state]").screenshot({ path: path.join(pngDir, `${scenario}-phone-390-${lang}.png`) });
+          if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    server.stop();
+  }
+  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);
