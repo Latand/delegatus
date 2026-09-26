@@ -3,6 +3,7 @@ import http from "node:http";
 import https from "node:https";
 import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
+import { recordProviderMessageHealth } from "./claude-provider-health.mjs";
 
 /** Private loopback relay. The real credential never enters Claude's process. */
 export async function startClaudeProviderRelay(input) {
@@ -59,11 +60,19 @@ export async function startClaudeProviderRelay(input) {
     delete headers["content-length"];
     const transport = target.protocol === "https:" ? https : http;
     const upstream = transport.request(upstreamUrl, { method: request.method, headers }, (upstreamResponse) => {
+      const messages = rawPath === "/v1/messages" && request.method === "POST";
+      const revision = input.credentialRevision;
+      const record = (state) => {
+        if (!messages || !input.healthHome || !revision) return;
+        try { recordProviderMessageHealth(input.healthHome, revision, state); }
+        catch { /* health evidence must not change the provider response */ }
+      };
       if ((upstreamResponse.statusCode ?? 502) >= 300) {
         upstreamResponse.resume();
         const retryAfter = upstreamResponse.headers["retry-after"];
         const errorType = upstreamResponse.statusCode === 401 || upstreamResponse.statusCode === 403
           ? "authentication_error" : upstreamResponse.statusCode === 429 ? "rate_limit_error" : "provider_error";
+        if (errorType === "authentication_error") record("error");
         response.writeHead((upstreamResponse.statusCode ?? 502) >= 400 ? upstreamResponse.statusCode : 502, {
           "content-type": "application/json",
           ...(typeof retryAfter === "string" && /^\d{1,8}$/.test(retryAfter) ? { "retry-after": retryAfter } : {}),
@@ -74,6 +83,8 @@ export async function startClaudeProviderRelay(input) {
         upstreamResponse.resume(); response.writeHead(502).end(); return;
       }
       const contentType = String(upstreamResponse.headers["content-type"] ?? "").toLowerCase();
+      if ((upstreamResponse.statusCode ?? 502) >= 200 && (upstreamResponse.statusCode ?? 502) < 300)
+        response.once("finish", () => record("authenticated"));
       if (contentType.includes("application/json")) {
         const chunks = [];
         let bytes = 0;

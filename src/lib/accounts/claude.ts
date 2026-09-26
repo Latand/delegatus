@@ -17,7 +17,7 @@ const DEFAULT_ID = "default";
 const VERSION = 1;
 const CAPABILITY_DIRS = ["skills", "commands", "agents"] as const;
 const CAPABILITY_FILES = ["settings.json"] as const;
-const PRIVATE_NAMES = new Set([".credentials.json", ".provider-token", ".provider-headers", ".provider-runtime", ".claude.json", "projects", "history.jsonl", "session-env", "shell-snapshots", "file-history", "todos", "cache", "debug", "backups", "paste-cache", "plugins", "mcp.json", "settings.local.json"]);
+const PRIVATE_NAMES = new Set([".credentials.json", ".provider-token", ".provider-headers", ".provider-runtime", ".provider-auth-health", ".claude.json", "projects", "history.jsonl", "session-env", "shell-snapshots", "file-history", "todos", "cache", "debug", "backups", "paste-cache", "plugins", "mcp.json", "settings.local.json"]);
 const MAX_CAPABILITY_FILES = 2_000;
 const MAX_CAPABILITY_BYTES = 16 * 1024 * 1024;
 const REGISTRY_LOCK_WAIT_MS = 5_000;
@@ -814,7 +814,7 @@ export function claudeProviderLauncherPath(home: string): string {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const stat = fs.lstatSync(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o700) throw new UnsafeClaudeHomeError();
-  for (const name of ["claude-provider-relay.mjs", "claude-provider-launch.mjs"]) {
+  for (const name of ["claude-provider-health.mjs", "claude-provider-relay.mjs", "claude-provider-launch.mjs"]) {
     const source = path.join(process.cwd(), "bin", name);
     const target = path.join(directory, name);
     const temporary = `${target}.${crypto.randomUUID()}.tmp`;

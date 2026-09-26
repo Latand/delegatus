@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { startClaudeProviderRelay } from "./claude-provider-relay.mjs";
+import { providerCredentialRevision } from "./claude-provider-health.mjs";
 
 function privateText(filename, maxBytes) {
   const stat = fs.lstatSync(filename);
@@ -47,7 +48,8 @@ async function main() {
     || Object.entries(headers).some(([name, value]) => runtime.headers[name] !== value)) {
     throw new Error("Provider account requires repair");
   }
-  const relay = await startClaudeProviderRelay({ baseUrl: runtime.config.baseUrl, token: runtime.token, headers: runtime.headers, sessionId });
+  const relay = await startClaudeProviderRelay({ baseUrl: runtime.config.baseUrl, token: runtime.token, headers: runtime.headers, sessionId,
+    healthHome: home, credentialRevision: providerCredentialRevision(home) });
   try {
     const env = { ...process.env, CLAUDE_CONFIG_DIR: home, ANTHROPIC_BASE_URL: relay.baseUrl, ANTHROPIC_AUTH_TOKEN: relay.alias };
     for (const name of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"]) delete env[name];

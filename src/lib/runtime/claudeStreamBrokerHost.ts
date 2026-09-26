@@ -16,6 +16,7 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { hardenedRedact } from "@/lib/view/compactText";
 import { claudeProviderForHome, readClaudeProviderRuntime, UnsafeClaudeHomeError } from "@/lib/accounts/claude";
 import { startClaudeProviderRelay } from "./claudeProviderRelay";
+import { providerCredentialRevision } from "@/lib/accounts/claudeProviderHealth";
 
 import type {
   DeliveryReceipt,
@@ -743,6 +744,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         relay = await startClaudeProviderRelay({
           baseUrl: env.ANTHROPIC_BASE_URL!, token: env.ANTHROPIC_AUTH_TOKEN!, sessionId,
           headers,
+          ...(options.claudeConfigDir ? { healthHome: options.claudeConfigDir,
+            credentialRevision: providerCredentialRevision(options.claudeConfigDir) } : {}),
         });
         env.ANTHROPIC_BASE_URL = relay.baseUrl;
         env.ANTHROPIC_AUTH_TOKEN = relay.alias;

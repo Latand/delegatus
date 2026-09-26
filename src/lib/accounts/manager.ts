@@ -1,5 +1,5 @@
 import { accountForSpawn, activeCodexAccountId, codexAccountsMutationLocked, codexHomeOwningSessionPath, CorruptCodexAccountsError, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount, UnknownAccountError, type CodexAccount } from "./codex";
-import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeAccountEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
+import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeAccountEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderRuntime, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "./claudeLogin";
 import { managedCodexRuntime } from "./codexRuntime";
 import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotConfigCheckedAt, copilotHomeOwningSessionPath, copilotLoginCommand, copilotSignedInUser, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
@@ -13,6 +13,7 @@ import { selectProjectAccount } from "./projectSelection";
 import { selectHealthyClaudeAccount } from "./spawnHealth";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
+import { readProviderMessageHealth } from "./claudeProviderHealth";
 
 function contextForSpawn(engine: "claude" | "codex", requested?: string | null) {
   if (engine === "claude") { const item = claudeAccountForSpawn(requested); return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.projectsDir, env: item.kind === "managed" ? claudeAccountEnvironment(item) : withoutWakatimeCredential(process.env), ...(item.provider ? { claudeProvider: item.provider } : {}) }; }
@@ -408,6 +409,15 @@ function summary(engine: AccountEngineName, id: string): AccountSummary {
   if (engine === "copilot") return copilotSummary(id);
   const account = (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).find((item) => item.id === id);
   if (!account) throw new Error(`unknown ${engine} account: ${id}`);
+  if (engine === "claude" && "provider" in account && account.provider) {
+    const messages = readProviderMessageHealth(account.home);
+    let credentialsSafe = account.authPresent;
+    if (credentialsSafe) { try { readClaudeProviderRuntime(account.home, account.provider); } catch { credentialsSafe = false; } }
+    return { id: account.id, label: account.label, kind: account.kind, active: activeClaudeAccountId() === id,
+      auth: { state: !credentialsSafe || messages?.state === "error" ? "error" : messages?.state ?? "unknown",
+        method: "provider", email: null, plan: null, checkedAt: messages ? new Date(messages.checkedAt).toISOString() : null },
+      limits: unavailableLimits(), login: null };
+  }
   return { id: account.id, label: account.label, kind: account.kind, active: (engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId()) === id, auth: { state: account.authPresent ? "authenticated" : "signed_out", method: null, email: null, plan: null, checkedAt: null }, limits: unavailableLimits(), login: null };
 }
 

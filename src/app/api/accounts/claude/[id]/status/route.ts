@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { claudeAccountForSpawn, listClaudeAccounts, listSavedClaudeProviderModels, readClaudeProviderRuntime, UnsafeClaudeHomeError } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
+import { readProviderMessageHealth } from "@/lib/accounts/claudeProviderHealth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,6 +24,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       }
       catch (error) { auth = { ...auth, state: error instanceof UnsafeClaudeHomeError || error instanceof Error && error.message === "Provider authentication failed" ? "error" : "unknown" }; }
       auth.checkedAt = new Date().toISOString();
+    }
+    if (account.authPresent && headersSafe) {
+      const messages = readProviderMessageHealth(account.home);
+      if (messages) auth = { ...auth, state: messages.state, checkedAt: new Date(messages.checkedAt).toISOString() };
     }
   }
   else if (fresh) {

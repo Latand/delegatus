@@ -95,6 +95,23 @@ const codexMain = account({
 
 const codexSpare = account({ id: "cx-spare", label: "Spare", authPresent: false, authHealth: "signed_out" });
 
+test("phone provider credential damage shows repair and never offers sign-in", async () => {
+  const damaged = account({ id: "cl-provider", label: "Provider", authPresent: false, authHealth: "error",
+    provider: { baseUrl: "https://example.invalid/anthropic", model: "large", smallFastModel: null } });
+  const view = await mount([engineState("claude", [damaged], damaged.id)]);
+  const row = view.host.querySelector('[data-mobile2-account="cl-provider"]') as HTMLElement;
+  expect(mobileAccountState(damaged, damaged.id)).toBe("error");
+  expect(row.getAttribute("data-mobile2-account-state")).toBe("error");
+  expect(row.textContent).toContain("Provider credential error");
+  expect(row.textContent).toContain("Edit provider");
+  expect(row.textContent).not.toContain("Needs sign-in");
+  expect(row.textContent).not.toContain("Not logged in");
+  expect(row.querySelector('[data-mobile2-account-signin="cl-provider"]')).toBeNull();
+  const repaired = { ...damaged, authPresent: true, authHealth: "unknown" as const };
+  await view.rerender([engineState("claude", [repaired], repaired.id)]);
+  expect(view.host.querySelector('[data-mobile2-account="cl-provider"]')?.getAttribute("data-mobile2-account-state")).toBe("active");
+});
+
 function engineState(engine: "claude" | "codex", accounts: AccountOption[], active: string, over: Partial<EngineAccountsState> = {}): EngineAccountsState {
   return {
     engine,
@@ -339,9 +356,10 @@ test("the screen is one section per engine — the active card first, the add ro
 
   const claude = sections[0];
   expect([...claude.querySelectorAll("[data-mobile2-account]")].map((card) => card.getAttribute("data-mobile2-account"))).toEqual(["cl-main", "cl-lab", "cl-second"]);
-  const last = claude.lastElementChild!;
-  expect(last.querySelector('[data-mobile2-account-add="claude"]')).toBeTruthy();
-  expect(text(last)).toContain("Add a Claude account");
+  const add = claude.querySelector('[data-mobile2-account-add="claude"]');
+  expect(add).toBeTruthy();
+  expect(text(add)).toContain("Add a Claude account");
+  expect(claude.lastElementChild?.getAttribute("data-claude-provider-editor")).toBe("new");
   expect(text(claude.querySelector('[data-mobile2-account="cl-main"]'))).toContain("Max plan");
   // A quiet row keeps its own reading line: plan and when it was last checked.
   expect(text(claude.querySelector('[data-mobile2-account="cl-lab"]'))).toContain("checked");

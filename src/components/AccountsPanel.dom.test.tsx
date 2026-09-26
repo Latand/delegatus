@@ -108,6 +108,24 @@ test("provider account controls render on the account row without exposing its t
   expect(editor.innerHTML).not.toContain("local-provider-fixture-token");
 });
 
+test("desktop provider credential damage shows repair without OAuth sign-in", async () => {
+  const provider = { baseUrl: "https://example.invalid/anthropic", model: "large", smallFastModel: null };
+  const view = await mount(state(login(), { accounts: [{ id: "provider", label: "Provider", kind: "managed",
+    authPresent: false, authHealth: "error", loginPending: false, loginState: "idle", deviceAuth: null,
+    login: null, provider }], active: "provider" }));
+  mounted.push(view);
+  const row = view.host.querySelector('[data-account-row="provider"]') as HTMLElement;
+  expect(row.textContent).toContain("Provider credential error");
+  expect(row.textContent).toContain("Edit provider");
+  expect(row.textContent).not.toContain("Needs sign-in");
+  expect(row.textContent).not.toContain("Not logged in");
+  expect((row.querySelector("button") as HTMLButtonElement).disabled).toBe(true);
+  await view.rerender(state(login(), { accounts: [{ id: "provider", label: "Provider", kind: "managed",
+    authPresent: true, authHealth: "unknown", loginPending: false, loginState: "authenticated", deviceAuth: null,
+    login: null, provider }], active: "provider" }));
+  expect((row.querySelector("button") as HTMLButtonElement).disabled).toBe(false);
+});
+
 test("keyboard Submit code restores focus to the Claude sign-in row after it enters verifying", async () => {
   let submitted: { operationId: string; code: string } | null = null;
   const initial = state(login(), {

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts } from "@/lib/accounts/codex";
 import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts, readClaudeProviderRuntime } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
+import { providerCredentialChangedAt, readProviderMessageHealth } from "@/lib/accounts/claudeProviderHealth";
 import { engineCliPresence } from "@/lib/accounts/engineConnection";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
@@ -141,11 +142,14 @@ export async function GET() {
     let providerHeadersSafe = true;
     if (account.provider) { try { readClaudeProviderRuntime(account.home, account.provider); } catch { providerHeadersSafe = false; } }
     const providerObservation = claudeObservations[account.id];
-    const providerObservedNow = currentObservation(providerObservation, now);
-    const providerAuthState = !account.authPresent || !providerHeadersSafe
-      || (providerObservedNow && ["provider authentication failed", "provider credentials require repair"].includes(providerObservation?.provenance.reason ?? ""))
-      ? "error"
-      : providerObservedNow && providerObservation?.authenticated ? "authenticated" : "unknown";
+    const credentialChangedAt = account.provider ? providerCredentialChangedAt(account.home) : null;
+    const providerObservedNow = currentObservation(providerObservation, now)
+      && (credentialChangedAt === null || Date.parse(providerObservation!.authCheckedAt) > credentialChangedAt);
+    const messages = account.provider && providerHeadersSafe ? readProviderMessageHealth(account.home) : null;
+    const providerAuthState = !account.authPresent || !providerHeadersSafe ? "error"
+      : messages ? messages.state
+        : providerObservedNow && ["provider authentication failed", "provider credentials require repair", "provider Messages authentication failed"].includes(providerObservation?.provenance.reason ?? "") ? "error"
+          : providerObservedNow && providerObservation?.authenticated ? "authenticated" : "unknown";
     return {
       id: account.id,
       label: account.label,
@@ -160,7 +164,9 @@ export async function GET() {
       // A denied or unavailable store cannot prove that credentials are absent.
       // Keep durable live auth evidence authoritative in either direction.
       ...accountProjection(claudeObservations[account.id], account.authPresent || account.credentialState === "unknown", now),
-      ...(account.provider ? { auth: { state: providerAuthState, method: "provider", email: null, plan: null, checkedAt: providerObservation?.authCheckedAt ?? null }, limits: { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null }, effective: null } : {}),
+      ...(account.provider ? { auth: { state: providerAuthState, method: "provider", email: null, plan: null,
+        checkedAt: messages ? new Date(messages.checkedAt).toISOString() : providerObservedNow ? providerObservation?.authCheckedAt ?? null : null },
+        limits: { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null }, effective: null } : {}),
       login,
     };
   });

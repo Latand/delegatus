@@ -7,6 +7,7 @@ import { fetchClaudeLimits } from "@/lib/limits";
 import { LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits } from "@/lib/types";
 
 import { listClaudeAccounts, listSavedClaudeProviderModels, readClaudeProviderToken, UnknownClaudeAccountError, UnsafeClaudeHomeError, type ClaudeAccount } from "./claude";
+import { readProviderMessageHealth } from "./claudeProviderHealth";
 import { claudeOauthMetadata, refreshClaudeOauth } from "./claudeOauth";
 import { accountProbeIdentity, accountProbeSnapshot, claudeProbeCredentialIdentity, AccountMutationBusyError, withAccountMutationLockAsync } from "./accountMutation";
 
@@ -255,6 +256,9 @@ export async function selectHealthyClaudeAccount(
       }
       catch (error) { if (error instanceof UnsafeClaudeHomeError || error instanceof Error && error.message === "Provider authentication failed") authentication = "failed"; }
     }
+    const messages = readProviderMessageHealth(account.home);
+    if (messages?.state === "error") authentication = "failed";
+    else if (messages?.state === "authenticated") authentication = "authenticated";
     return { account, admission: classifySpawnAccountAdmission({ enabled: true, authentication, limits: "unknown", stale: false, retryAt: null }, now) };
   })) : [];
   const current = [...providerCurrent, ...(await Promise.all(classified

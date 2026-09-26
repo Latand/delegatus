@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,11 @@ const { selectHealthyClaudeAccount } = await import("./spawnHealth");
 const { readClaudeAccountLimits } = await import("@/lib/limits");
 const { reviewerCommand } = await import("@/lib/agent/headless");
 const { claudeQuotaObservation } = await import("@/lib/accounts/migration/quotaController");
+const { GET: providerStatus } = await import("@/app/api/accounts/claude/[id]/status/route");
+const { GET: listAccounts } = await import("@/app/api/accounts/route");
+const { NextRequest } = await import("next/server");
+const { startClaudeProviderRelay } = await import("@/lib/runtime/claudeProviderRelay");
+const { providerCredentialRevision, readProviderMessageHealth } = await import("./claudeProviderHealth");
 
 const token = "local-provider-fixture-token";
 const provider = { baseUrl: "http://127.0.0.1:9876", model: "model-large", smallFastModel: "model-small" };
@@ -159,6 +165,84 @@ test("damaged private credentials report an account error and accept explicit re
   const fixedToken = accounts.updateProviderClaudeAccount(added.id, provider, "replacement-provider-token-8427");
   expect(fixedToken.authPresent).toBe(true);
   expect(accounts.readClaudeProviderToken(added.home)).toBe("replacement-provider-token-8427");
+});
+
+test("missing and unsafe provider tokens remain repair errors in the production reader and status API", async () => {
+  const added = accounts.createManagedClaudeAccount("Repair token", { config: provider, token });
+  const tokenFile = path.join(added.home, ".provider-token");
+  const status = async () => (await providerStatus(new NextRequest(`http://localhost/api/accounts/claude/${added.id}/status`),
+    { params: Promise.resolve({ id: added.id }) })).json() as Promise<{ auth: { state: string } }>;
+  const listed = async () => ((await (await listAccounts()).json()) as { claude: { accounts: Array<{ id: string; auth: { state: string } }> } })
+    .claude.accounts.find((item) => item.id === added.id)?.auth.state;
+  for (const damage of ["missing", "unsafe"] as const) {
+    if (damage === "missing") fs.rmSync(tokenFile);
+    else fs.chmodSync(tokenFile, 0o644);
+    const read = accounts.listClaudeAccounts().find((item) => item.id === added.id)!;
+    expect(read).toMatchObject({ authPresent: false, provider });
+    expect((await status()).auth.state).toBe("error");
+    expect(await listed()).toBe("error");
+    expect((await accountManager.status("claude", added.id, false)).auth.state).toBe("error");
+    expect(() => accounts.claudeAccountForSpawn(added.id)).toThrow();
+    const repaired = accounts.updateProviderClaudeAccount(added.id, provider, "repaired-provider-token-8427");
+    expect(repaired.authPresent).toBe(true);
+    expect(accounts.claudeAccountForSpawn(added.id).id).toBe(added.id);
+  }
+  expect((await status()).auth.state).not.toBe("error");
+  expect(await listed()).not.toBe("error");
+});
+
+test("Messages denial outlives a public catalog only for its account and credential revision", async () => {
+  let deny = true;
+  let catalog = true;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    const route = new URL(request.url).pathname;
+    if (route.endsWith("/v1/models")) return catalog ? Response.json({ data: [{ id: "model-large" }] }) : new Response(null, { status: 404 });
+    if (route.endsWith("/v1/messages")) return deny
+      ? Response.json({ error: { type: "authentication_error", message: "denied" } }, { status: 401 })
+      : Response.json({ id: "msg_ok", type: "message", content: [] });
+    return new Response(null, { status: 404 });
+  } });
+  let relay: Awaited<ReturnType<typeof startClaudeProviderRelay>> | null = null;
+  try {
+    const config = { ...provider, baseUrl: `http://127.0.0.1:${upstream.port}` };
+    const denied = accounts.createManagedClaudeAccount("Denied", { config, token });
+    const other = accounts.createManagedClaudeAccount("Other", { config, token: "other-provider-token-8427" });
+    relay = await startClaudeProviderRelay({ baseUrl: config.baseUrl, token, headers: {}, sessionId: crypto.randomUUID(),
+      healthHome: denied.home, credentialRevision: providerCredentialRevision(denied.home) });
+    const messages = () => fetch(`${relay!.baseUrl}/v1/messages`, { method: "POST", headers: { Authorization: `Bearer ${relay!.alias}` }, body: "{}" });
+    expect((await messages()).status).toBe(401);
+    expect(readProviderMessageHealth(denied.home)?.state).toBe("error");
+    const healthFile = fs.readFileSync(path.join(denied.home, ".provider-auth-health"), "utf8");
+    expect(healthFile).not.toContain(token);
+    expect(fs.statSync(path.join(denied.home, ".provider-auth-health")).mode & 0o777).toBe(0o600);
+    expect(readProviderMessageHealth(other.home)).toBeNull();
+    expect((await claudeQuotaObservation(denied, Date.now()))).toMatchObject({ authenticated: false, limits: null,
+      provenance: { reason: "provider Messages authentication failed" } });
+    expect((await claudeQuotaObservation(other, Date.now()))).toMatchObject({ authenticated: true, limits: null });
+    const status = async (id: string) => (await providerStatus(new NextRequest(`http://localhost/api/accounts/claude/${id}/status?fresh=1`),
+      { params: Promise.resolve({ id }) })).json() as Promise<{ auth: { state: string } }>;
+    expect((await status(denied.id)).auth.state).toBe("error");
+    const list = (await (await listAccounts()).json()) as { claude: { accounts: Array<{ id: string; auth: { state: string } }> } };
+    expect(list.claude.accounts.find((item) => item.id === denied.id)?.auth.state).toBe("error");
+    expect(list.claude.accounts.find((item) => item.id === other.id)?.auth.state).not.toBe("error");
+    expect((await accountManager.status("claude", denied.id, false)).auth.state).toBe("error");
+    expect((await status(other.id)).auth.state).toBe("authenticated");
+    await expect(selectHealthyClaudeAccount([denied], denied.id)).rejects.toThrow("provider");
+    catalog = false;
+    expect((await claudeQuotaObservation(denied, Date.now())).authenticated).toBe(false);
+    expect((await status(denied.id)).auth.state).toBe("error");
+    deny = false;
+    expect((await messages()).status).toBe(200);
+    expect(readProviderMessageHealth(denied.home)?.state).toBe("authenticated");
+    expect((await claudeQuotaObservation(denied, Date.now())).authenticated).toBe(true);
+    expect((await status(denied.id)).auth.state).toBe("authenticated");
+    deny = true;
+    expect((await messages()).status).toBe(401);
+    accounts.updateProviderClaudeAccount(denied.id, config, "rotated-provider-token-8427");
+    expect(readProviderMessageHealth(denied.home)).toBeNull();
+    catalog = true;
+    expect((await status(denied.id)).auth.state).toBe("authenticated");
+  } finally { relay?.close(); upstream.stop(); }
 });
 
 test("provider removal scrubs token and header files from the retained history archive", () => {

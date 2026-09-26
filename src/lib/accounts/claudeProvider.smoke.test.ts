@@ -9,10 +9,11 @@ test.skipIf(process.env.LLV_CLAUDE_PROVIDER_SMOKE !== "1")("production host fenc
   const oldState = process.env.LLV_STATE_DIR, oldHome = process.env.LLV_CLAUDE_HOME;
   process.env.LLV_STATE_DIR = path.join(root, "state");
   process.env.LLV_CLAUDE_HOME = path.join(root, "main");
-  const token = "opaque-provider-fixture-8427", headerValue = "private-header-fixture-8427";
+  const token = "opaque-provider-fixture-8427", otherToken = "other-provider-fixture-8427", headerValue = "private-header-fixture-8427";
   const seen: Array<{ path: string; session: string | null; authorized: boolean; header: boolean; agent: string | null }> = [];
   const wrong: string[] = [];
   let error = false;
+  let catalogAvailable = true;
   let echoedResponses = 0;
   const sse = [
     ["message_start", { type: "message_start", message: { id: "msg_fixture", type: "message", role: "assistant", content: [], model: "fixture-model", stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } }],
@@ -33,7 +34,8 @@ test.skipIf(process.env.LLV_CLAUDE_PROVIDER_SMOKE !== "1")("production host fenc
       agent: request.headers.get("user-agent") });
     if (!request.headers.get("x-opencode-session") || !request.headers.get("x-provider-feature") || !request.headers.get("user-agent"))
       return Response.json({ error: { message: "MissingSessionID" } }, { status: 400 });
-    if (url.pathname.endsWith("/v1/models")) return Response.json({ data: [{ id: "fixture-model" }] });
+    if (url.pathname.endsWith("/v1/models")) return catalogAvailable || request.headers.get("authorization") === `Bearer ${otherToken}`
+      ? Response.json({ data: [{ id: "fixture-model" }] }) : new Response(null, { status: 404 });
     if (error && url.pathname.endsWith("/v1/messages")) {
       echoedResponses += 1;
       return Response.json({ error: { message: `denied ${token} ${headerValue}` } }, { status: 401 });
@@ -52,6 +54,9 @@ test.skipIf(process.env.LLV_CLAUDE_PROVIDER_SMOKE !== "1")("production host fenc
     const { freshSpecFor, resumeSpecForSession } = await import("@/lib/agent/cli");
     const { claudeStructuredHostOptions } = await import("@/lib/runtime/structuredSpawn");
     const { ClaudeStreamBrokerHost } = await import("@/lib/runtime/claudeStreamBrokerHost");
+    const { claudeQuotaObservation } = await import("./migration/quotaController");
+    const { GET: status } = await import("@/app/api/accounts/claude/[id]/status/route");
+    const { NextRequest } = await import("next/server");
     fs.mkdirSync(process.env.LLV_CLAUDE_HOME!, { recursive: true });
     fs.writeFileSync(path.join(process.env.LLV_CLAUDE_HOME!, "settings.json"), JSON.stringify({ env: {
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${b.port}/zen/go`, ANTHROPIC_AUTH_TOKEN: "wrong-token",
@@ -108,6 +113,19 @@ test.skipIf(process.env.LLV_CLAUDE_PROVIDER_SMOKE !== "1")("production host fenc
     await waitForMessages(earlier + 1);
     expect(echoedResponses).toBeGreaterThan(0);
     await Bun.sleep(500);
+    const other = accounts.createManagedClaudeAccount("Other", { config: account.provider!, token: otherToken,
+      headers: { "x-provider-feature": headerValue } });
+    const authState = async (id: string) => (await status(new NextRequest(`http://localhost/api/accounts/claude/${id}/status?fresh=1`),
+      { params: Promise.resolve({ id }) })).json() as Promise<{ auth: { state: string } }>;
+    expect((await claudeQuotaObservation(account, Date.now()))).toMatchObject({ authenticated: false, limits: null,
+      provenance: { reason: "provider Messages authentication failed" } });
+    expect((await authState(account.id)).auth.state).toBe("error");
+    expect((await claudeQuotaObservation(other, Date.now())).authenticated).toBe(true);
+    expect((await authState(other.id)).auth.state).toBe("authenticated");
+    catalogAvailable = false;
+    expect((await claudeQuotaObservation(account, Date.now())).authenticated).toBe(false);
+    expect((await authState(account.id)).auth.state).toBe("error");
+    expect((await authState(other.id)).auth.state).toBe("authenticated");
     const readLogs = (directory: string): string => fs.readdirSync(directory, { withFileTypes: true }).map((entry) => {
       if (entry.isSymbolicLink() || [".provider-token", ".provider-headers"].includes(entry.name)) return "";
       const file = path.join(directory, entry.name);

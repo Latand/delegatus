@@ -273,14 +273,16 @@ function AccountLimitsBlock({ account, engine, quota, now, busy, disabled, wideL
   );
 }
 
-type RowState = "active" | "needsLogin" | "pending" | "idle";
+type RowState = "active" | "needsLogin" | "error" | "pending" | "idle";
 
 function authHealth(account: AccountOption): AccountAuthHealth {
+  if (account.provider && (!account.authPresent || account.authHealth === "signed_out")) return "error";
   return account.authHealth ?? (account.authPresent ? "unknown" : "signed_out");
 }
 
 function rowState(account: AccountOption, activeId: string): RowState {
   if (account.loginPending) return "pending";
+  if (account.provider && authHealth(account) === "error") return "error";
   if (!account.authPresent || authHealth(account) === "signed_out") return "needsLogin";
   if (account.id === activeId) return "active";
   return "idle";
@@ -297,6 +299,7 @@ function StateChip({ state }: { state: RowState }) {
     );
   }
   if (state === "needsLogin") return <span className="shrink-0 text-[10px] font-semibold" style={{ color: NEEDS_LOGIN_COLOR }}>{t("accounts.needsLogin")}</span>;
+  if (state === "error") return <span className="shrink-0 text-[10px] font-semibold text-danger">{t("accounts.provider.credentialError")}</span>;
   if (state === "active") return <span className="shrink-0 text-[10px] font-semibold text-muted">{t("accounts.active")}</span>;
   return null;
 }
@@ -309,7 +312,7 @@ function AuthIdentity({ account }: { account: AccountOption }) {
     <span className="flex min-w-0 items-center gap-1 text-[9.5px] font-medium text-muted">
       <code className="truncate font-mono" title={account.id}>{account.id}</code>
       {account.plan ? <Badge tone="neutral" className="px-1.5 py-0 text-[9px]">{account.plan}</Badge> : null}
-      <Badge tone={tone} className="px-1.5 py-0 text-[9px]">{t(AUTH_HEALTH_KEY[health])}</Badge>
+      <Badge tone={tone} className="px-1.5 py-0 text-[9px]">{t(account.provider && health === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[health])}</Badge>
     </span>
   );
 }
@@ -322,7 +325,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
   const state = rowState(account, activeId);
   const isActive = account.id === activeId;
   const tint = engineTintOf(engine);
-  const usable = account.authPresent && authHealth(account) !== "signed_out" && !account.loginPending;
+  const usable = account.authPresent && authHealth(account) !== "signed_out" && (!account.provider || authHealth(account) !== "error") && !account.loginPending;
   const selectionDisabled = disabled || !usable;
   // Removal moves the home into the shared archive, so the first click arms it
   // and only a second, explicit confirm runs it. Escape or ten quiet seconds
@@ -1057,11 +1060,12 @@ export function AccountsPanel({
  * untouched: this is the phone's layout over the same account store.
  */
 
-export type MobileAccountState = "active" | "ready" | "needsSignIn" | "pending";
+export type MobileAccountState = "active" | "ready" | "needsSignIn" | "error" | "pending";
 
 const MOBILE_STATE_OF: Record<RowState, MobileAccountState> = {
   pending: "pending",
   needsLogin: "needsSignIn",
+  error: "error",
   active: "active",
   idle: "ready",
 };
@@ -1141,10 +1145,11 @@ function planLabel(plan: string | null | undefined, t: TFunction): string | null
   return t("mobile2.accounts.plan", { plan: trimmed.charAt(0).toUpperCase() + trimmed.slice(1) });
 }
 
-const MOBILE_BADGE: Record<"success" | "neutral" | "warning", string> = {
+const MOBILE_BADGE: Record<"success" | "neutral" | "warning" | "danger", string> = {
   success: "bg-success-soft text-success",
   neutral: "bg-sunken text-muted",
   warning: "bg-warning-soft text-warning",
+  danger: "bg-danger-soft text-danger",
 };
 
 function MobileBadge({ tone, children }: { tone: keyof typeof MOBILE_BADGE; children: React.ReactNode }) {
@@ -1204,6 +1209,7 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
           {state === "active" ? <MobileBadge tone="success">{t("accounts.active")}</MobileBadge> : null}
           {state === "ready" ? <MobileBadge tone="neutral">{t("mobile2.accounts.ready")}</MobileBadge> : null}
           {state === "needsSignIn" ? <MobileBadge tone="warning">{t("accounts.needsLogin")}</MobileBadge> : null}
+          {state === "error" ? <MobileBadge tone="danger">{t("accounts.provider.credentialError")}</MobileBadge> : null}
           {state === "pending" ? (
             <MobileBadge tone="neutral">
               <Loader2 className="h-[11px] w-[11px] animate-spin motion-reduce:animate-none" aria-hidden />
@@ -1215,7 +1221,7 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
           {plan ? <span className="min-w-0 truncate">{plan}</span> : null}
           {plan && checked ? <span aria-hidden className="shrink-0 opacity-60">·</span> : null}
           {checked ? <span className="min-w-0 truncate">{t("mobile2.accounts.checked", { time: checked })}</span> : null}
-          {!plan && !checked ? <span className="min-w-0 truncate">{t(AUTH_HEALTH_KEY[authHealth(account)])}</span> : null}
+          {!plan && !checked ? <span className="min-w-0 truncate">{t(account.provider && authHealth(account) === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[authHealth(account)])}</span> : null}
         </span>
       </span>
       {corner ? <MobileCorner corner={corner} t={t} /> : null}

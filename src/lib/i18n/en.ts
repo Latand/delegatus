@@ -353,6 +353,7 @@ export const en = {
   "accounts.provider.loadModels": "Load models",
   "accounts.provider.save": "Save provider",
   "accounts.provider.error": "Provider request failed",
+  "accounts.provider.credentialError": "Provider credential error",
   "accounts.provider.limitsUnknown": "Provider limits unknown",
   "onboarding.engines.providerHelp": "Have a compatible provider? Use Add compatible provider below. OpenCode Go starts with Messages-compatible model IDs; enter your token and any required custom headers. The session header is sent automatically.",
   "accounts.close": "Close",

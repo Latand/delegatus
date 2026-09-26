@@ -5,6 +5,7 @@ import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 
 import { activeClaudeAccountId, listClaudeAccounts, listSavedClaudeProviderModels, readClaudeProviderToken, UnsafeClaudeHomeError, type ClaudeAccount } from "@/lib/accounts/claude";
 import { realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
+import { readProviderMessageHealth } from "@/lib/accounts/claudeProviderHealth";
 import { accountProbeIdentity, claudeProbeCredentialIdentity, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { activeCodexAccountId, listCodexAccounts, type CodexAccount } from "@/lib/accounts/codex";
 import { activeCopilotAccountId, copilotSignedInUser, listCopilotAccounts, type CopilotAccount } from "@/lib/accounts/copilot";
@@ -103,19 +104,24 @@ export async function claudeQuotaObservation(
   if (account.provider) {
     const token = readClaudeProviderToken(account.home);
     let authenticated = false;
+    let indeterminate = false;
     let reason = token ? "provider limits unknown" : "provider credential unavailable";
     if (token) {
       try {
         const models = await listSavedClaudeProviderModels(account);
-        if (models === null) throw new Error("quota-auth-indeterminate");
-        authenticated = true;
+        if (models === null) indeterminate = true;
+        else authenticated = true;
       }
       catch (error) {
         if (error instanceof UnsafeClaudeHomeError) { authenticated = false; reason = "provider credentials require repair"; }
         else if (error instanceof Error && error.message === "Provider authentication failed") { authenticated = false; reason = "provider authentication failed"; }
-        else throw new Error("quota-auth-indeterminate");
+        else indeterminate = true;
       }
     }
+    const messages = readProviderMessageHealth(account.home);
+    if (messages?.state === "error") { authenticated = false; reason = "provider Messages authentication failed"; }
+    else if (messages?.state === "authenticated") { authenticated = true; reason = "provider limits unknown"; }
+    else if (indeterminate) throw new Error("quota-auth-indeterminate");
     return {
       engine: "claude", accountId: account.id, authenticated, authCheckedAt: now, limits: null,
       provenance: { source: "unavailable", reason, staleSince: null }, observedAt: now,

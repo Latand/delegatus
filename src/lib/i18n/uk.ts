@@ -352,6 +352,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "accounts.provider.loadModels": "Завантажити моделі",
   "accounts.provider.save": "Зберегти провайдера",
   "accounts.provider.error": "Помилка запиту до провайдера",
+  "accounts.provider.credentialError": "Помилка облікових даних провайдера",
   "accounts.provider.limitsUnknown": "Ліміти провайдера невідомі",
   "onboarding.engines.providerHelp": "Маєте сумісного провайдера? Виберіть «Додати сумісного провайдера» нижче. Для OpenCode Go вже вибрано моделі з маршрутом Messages; уведіть токен і потрібні заголовки. Заголовок сесії надсилається автоматично.",
   "accounts.close": "Закрити",

@@ -565,7 +565,7 @@ export class AccountRemovalBlockedError extends Error {
 }
 
 const ARCHIVE_CREDENTIALS: Record<ManagedAccountEngine, readonly string[]> = {
-  claude: [".credentials.json", ".provider-token", ".provider-headers", ".provider-runtime"],
+  claude: [".credentials.json", ".provider-token", ".provider-headers", ".provider-runtime", ".provider-auth-health"],
   codex: ["auth.json"],
 };
 /* Links the Viewer placed in the home. `projects` is the shared-store link

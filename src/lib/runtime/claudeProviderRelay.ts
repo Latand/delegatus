@@ -6,4 +6,6 @@ export const startClaudeProviderRelay: (input: {
   token: string;
   headers: Record<string, string>;
   sessionId: string;
+  healthHome?: string;
+  credentialRevision?: string | null;
 }) => Promise<{ baseUrl: string; alias: string; close(): void }> = startRelay;
