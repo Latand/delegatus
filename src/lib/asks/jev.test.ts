@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { askGist, askSkipReason } from "./gist";
-import { ASK_QUESTIONS, classifierText, classifyWithJev, JEV_ENDPOINT, JEV_MODEL, JevError } from "./jev";
+import { ASK_QUESTIONS, classifierText, classifyWithJev, JEV_ENDPOINT, JEV_MODEL, JevError, jevFailureCostUsd } from "./jev";
 
 /* The classifier call as the research made it (docs/research/attention-classifier.md
    §2, §4), against a stubbed endpoint: the request Celestia's Tier-0 sends, the
@@ -43,6 +43,41 @@ describe("classifyWithJev", () => {
       const call = classifyWithJev("Should I merge it now or wait?", { apiKey: "k", fetch: (async () => response) as unknown as typeof fetch });
       await expect(call).rejects.toBeInstanceOf(JevError);
     }
+  });
+
+  test("an unusable 200 carries the cost the provider reported, or none when it did not say", async () => {
+    const out = classifyWithJev("Should I merge it now or wait?", { apiKey: "k", fetch: (async () => answer({ asks: 1.2, cost: 0.00003 })) as unknown as typeof fetch });
+    await expect(out).rejects.toMatchObject({ code: "shape", billedUsd: 0.00003 });
+    const missing = classifyWithJev("Should I merge it now or wait?", { apiKey: "k", fetch: (async () => answer({ cost: "free" })) as unknown as typeof fetch });
+    await expect(missing).rejects.toMatchObject({ code: "shape", billedUsd: null });
+  });
+
+  test("what a failure counts against the cap: nothing for an error status, else the bill or the ceiling", () => {
+    expect(jevFailureCostUsd(new JevError("http", "402", 402), 0.001)).toBe(0);
+    expect(jevFailureCostUsd(new JevError("shape", "bad", 200, 0.00003), 0.001)).toBe(0.00003);
+    expect(jevFailureCostUsd(new JevError("shape", "bad", 200), 0.001)).toBe(0.001);
+    expect(jevFailureCostUsd(new JevError("timeout", "slow"), 0.001)).toBe(0.001);
+    expect(jevFailureCostUsd(new JevError("network", "reset"), 0.001)).toBe(0.001);
+    expect(jevFailureCostUsd(new Error("socket hang up"), 0.001)).toBe(0.001);
+  });
+
+  test("a body that stops arriving is a timeout, and a dropped connection is a network failure", async () => {
+    const stalled = classifyWithJev("Should I merge it now or wait?", {
+      apiKey: "k",
+      timeoutMs: 20,
+      fetch: (async (_url: string, init: RequestInit) => new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{\"answers\":"));
+          init.signal?.addEventListener("abort", () => controller.error(init.signal!.reason));
+        },
+      }))) as unknown as typeof fetch,
+    });
+    await expect(stalled).rejects.toMatchObject({ code: "timeout" });
+    const dropped = classifyWithJev("Should I merge it now or wait?", {
+      apiKey: "k",
+      fetch: (async () => { throw new TypeError("socket connection was closed unexpectedly"); }) as unknown as typeof fetch,
+    });
+    await expect(dropped).rejects.toMatchObject({ code: "network" });
   });
 
   test("gives up after its timeout", async () => {

@@ -11,7 +11,7 @@ import { translate, type TFunction } from "@/lib/i18n";
 import { finalAssistantMessageFromRecords, type FinalAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
 import type { FileEntry } from "@/lib/types";
 
-import { classifierText, JEV_INPUT_PRICE_USD, JevError, jevCostCeilingUsd, type JevVerdict } from "./jev";
+import { classifierText, classifyWithJev, JEV_INPUT_PRICE_USD, JevError, jevCostCeilingUsd, type JevVerdict } from "./jev";
 import { overlayOperatorAsks } from "./overlay";
 import { readAsksYouSettings, writeAsksYouSettings } from "./settings";
 import { mutateOperatorAsks, operatorAsksSignature, projectReportLogAsks, readOperatorAsks } from "./store";
@@ -323,8 +323,14 @@ describe("the monthly cap", () => {
 });
 
 describe("a classifier failure", () => {
-  test("leaves everything unchanged: no reason, no line, nothing billed, nothing retried", async () => {
-    for (const error of [new JevError("http", "answered 500", 500), new JevError("shape", "no cost"), new Error("socket hang up")]) {
+  test("leaves everything unchanged: no reason, no line, nothing retried", async () => {
+    const ceiling = jevCostCeilingUsd(ASKING);
+    for (const [error, billed] of [
+      [new JevError("http", "answered 500", 500), 0],
+      [new JevError("shape", "a probability out of range", 200, 0.00002), 0.00002],
+      [new JevError("shape", "no cost", 200), ceiling],
+      [new Error("socket hang up"), ceiling],
+    ] as const) {
       fs.rmSync(path.join(stateDir, "operator-asks.json"), { force: true });
       const sweep = ports({ classify: async () => { throw error; } });
       const result = await runAskSweep(sweep);
@@ -334,7 +340,8 @@ describe("a classifier failure", () => {
       expect(file.operatorAsk).toBeUndefined();
       expect(attentionReason(file, NOW / 1000)).toBeNull();
       expect(reportLog().asks).toEqual([]);
-      expect(readOperatorAsks().spend.usd).toBe(0);
+      /* Only an error status is known to bill nothing. */
+      expect(readOperatorAsks().spend.usd).toBeCloseTo(billed, 12);
       const retry = ports();
       await runAskSweep(retry);
       expect(retry.calls).toHaveLength(0);
@@ -346,6 +353,92 @@ describe("a classifier failure", () => {
     await runAskSweep(sweep);
     expect(readOperatorAsks().spend.usd).toBeCloseTo(jevCostCeilingUsd(ASKING), 12);
     expect(attentionReason(projected(), NOW / 1000)).toBeNull();
+  });
+
+  test("a billed answer the classifier cannot use still counts, so the cap still stops calls", async () => {
+    /* The provider answers 200 and bills, with a probability outside 0..1:
+       the answer is unusable and the bill is real. */
+    const many = Array.from({ length: 50 }, (_, index) => `conv-${index}`);
+    const text = (subject: string) => `${ASKING} (${subject})`;
+    const ceiling = jevCostCeilingUsd(text("conv-10"));
+    for (const cost of [ceiling * 0.9, undefined]) {
+      fs.rmSync(path.join(stateDir, "operator-asks.json"), { force: true });
+      writeAsksYouSettings({ capUsd: ceiling * 1.5 }, new Date(NOW));
+      let posted = 0;
+      const provider = (async () => {
+        posted += 1;
+        return new Response(JSON.stringify({
+          answers: { asks: { type: "noul", noul: 1.2 }, waiting: { type: "noul", noul: 0.1 }, decision: { type: "noul", noul: 0.1 } },
+          usage: { input_tokens: 600, output_tokens: 51, ...(cost === undefined ? {} : { cost }) },
+        }));
+      }) as unknown as typeof fetch;
+      const sweep = ports({
+        candidates: many.map((subject) => candidate({ subject, conversationId: subject, path: `/transcripts/${subject}.jsonl` })),
+        finalMessage: (target) => message(text(target.subject), { id: `claude:${target.subject}` }),
+        classify: (body, apiKey) => classifyWithJev(body, { apiKey, fetch: provider }),
+      });
+      const result = await runAskSweep(sweep);
+      expect(posted).toBe(1);
+      expect(result).toMatchObject({ failed: 1, capped: 49, asks: [] });
+      const spend = readOperatorAsks().spend;
+      expect(spend.usd).toBeGreaterThan(0);
+      expect(spend.usd).toBeCloseTo(cost ?? jevCostCeilingUsd(text("conv-0")), 12);
+      expect(spend.usd).toBeLessThanOrEqual(ceiling * 1.5);
+    }
+  });
+});
+
+describe("the same words asked again", () => {
+  const LATER = NOW - 10_000;
+
+  test("after the operator answered, raise a new ask and a new line without a second call", async () => {
+    await runAskSweep(ports());
+    const again = ports({
+      candidates: [candidate({ lastTurnStartedAt: LATER - 20_000 })],
+      finalMessage: () => message(ASKING, { id: "claude:msg-2", ts: LATER }),
+    });
+    const result = await runAskSweep(again);
+    expect(again.calls).toHaveLength(0);
+    expect(result.asks).toHaveLength(1);
+
+    const file = projected(entry({ lastTurn: { startedAt: LATER - 20_000, endedAt: LATER }, lastAssistantMessageAt: LATER }));
+    const reason = attentionReason(file, NOW / 1000)!;
+    expect(reason.kind).toBe("ask");
+    expect(file.operatorAsk?.messageAt).toBe(LATER);
+    expect(reportLog().asks).toHaveLength(2);
+    expect(reportLog().asks![0]!.id).toBe(reason.id);
+  });
+
+  test("by a second agent, flag both conversations on one call", async () => {
+    const two = [candidate(), candidate({ subject: "conv-2", conversationId: "conv-2", path: "/transcripts/two.jsonl" })];
+    const sweep = ports({ candidates: two, finalMessage: (target) => message(ASKING, { id: `claude:${target.subject}` }) });
+    const result = await runAskSweep(sweep);
+    expect(sweep.calls).toHaveLength(1);
+    expect(result.asks.map((ask) => ask.subject)).toEqual([CONVERSATION, "conv-2"]);
+    expect(projected(entry({ path: "/transcripts/two.jsonl", conversationId: "conv-2" })).operatorAsk?.id).toBe(result.asks[1]!.id);
+  });
+
+  test("that did not ask the first time still ask nothing, without a call", async () => {
+    await runAskSweep(ports({ text: ROUTINE, classify: async () => verdict(0.12) }));
+    const again = ports({
+      candidates: [candidate({ lastTurnStartedAt: LATER - 20_000 })],
+      finalMessage: () => message(ROUTINE, { id: "claude:msg-2", ts: LATER }),
+    });
+    const result = await runAskSweep(again);
+    expect(again.calls).toHaveLength(0);
+    expect(result.asks).toEqual([]);
+    expect(reportLog().asks).toEqual([]);
+  });
+
+  test("after a failed call are sent again, since nothing was scored", async () => {
+    await runAskSweep(ports({ classify: async () => { throw new JevError("http", "answered 503", 503); } }));
+    const again = ports({
+      candidates: [candidate({ lastTurnStartedAt: LATER - 20_000 })],
+      finalMessage: () => message(ASKING, { id: "claude:msg-2", ts: LATER }),
+    });
+    await runAskSweep(again);
+    expect(again.calls).toHaveLength(1);
+    expect(readOperatorAsks().asks).toHaveLength(1);
   });
 });
 

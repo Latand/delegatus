@@ -13,6 +13,9 @@ import type { ReportLogAsk } from "./types";
  *    conversation is that conversation's open ask; each one is a line in its
  *    project's report log.
  *  - `seen`: the messages already sent (or skipped), so none is sent twice.
+ *  - `scores`: each classified text's score by its hash, so the same words,
+ *    repeated by the same agent or written by another, are judged again
+ *    without a second call.
  *  - `spend`: this month's calls and their billed cost, against the cap.
  *
  * Anything unreadable reads as empty: a lost file costs a flag that does not
@@ -56,6 +59,8 @@ export interface OperatorAsksFileV1 {
   revision: number;
   spend: AsksSpend;
   seen: string[];
+  /** Text hash → score, oldest first. Absent from files written before it. */
+  scores: Record<string, number>;
   asks: OperatorAskRecord[];
 }
 
@@ -68,7 +73,7 @@ export function spendMonth(now: Date): string {
 }
 
 function emptyFile(now: Date): OperatorAsksFileV1 {
-  return { schemaVersion: OPERATOR_ASKS_SCHEMA_VERSION, revision: 0, spend: { month: spendMonth(now), usd: 0, calls: 0, capped: 0 }, seen: [], asks: [] };
+  return { schemaVersion: OPERATOR_ASKS_SCHEMA_VERSION, revision: 0, spend: { month: spendMonth(now), usd: 0, calls: 0, capped: 0 }, seen: [], scores: {}, asks: [] };
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -96,6 +101,15 @@ function parseAsk(value: unknown): OperatorAskRecord | null {
   };
 }
 
+function parseScores(value: unknown): Record<string, number> {
+  const scores: Record<string, number> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return scores;
+  for (const [key, score] of Object.entries(value)) {
+    if (finite(score) && score >= 0 && score <= 1) scores[key] = score;
+  }
+  return scores;
+}
+
 export function readOperatorAsks(file = operatorAsksFile(), now = new Date()): OperatorAsksFileV1 {
   let raw: unknown;
   try {
@@ -116,6 +130,7 @@ export function readOperatorAsks(file = operatorAsksFile(), now = new Date()): O
       capped: finite(spend.capped) ? spend.capped : 0,
     },
     seen: Array.isArray(parsed.seen) ? parsed.seen.filter((key): key is string => typeof key === "string") : [],
+    scores: parseScores(parsed.scores),
     asks: Array.isArray(parsed.asks) ? parsed.asks.map(parseAsk).filter((ask): ask is OperatorAskRecord => ask !== null) : [],
   };
 }
@@ -140,6 +155,7 @@ export function mutateOperatorAsks(
     ...current,
     revision: current.revision + 1,
     seen: current.seen.slice(-SEEN_CAPACITY),
+    scores: Object.fromEntries(Object.entries(current.scores).slice(-SEEN_CAPACITY)),
     asks: current.asks.filter((ask) => ask.messageAt >= floor).slice(-ASK_CAPACITY),
   };
   writeJsonDurably(file, next, { space: 0 });

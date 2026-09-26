@@ -6,6 +6,9 @@
  *
  * One request per message, a two-second timeout and no retry. Whatever goes
  * wrong is an error for the caller, which leaves the message unclassified.
+ * The error says what the call may have cost, because only an error status
+ * is known to bill nothing: a request that reached the provider can be billed
+ * even when its answer never arrives or cannot be read.
  */
 
 export const JEV_MODEL = "typesafe/jev-1.13";
@@ -44,10 +47,28 @@ export interface JevVerdict {
 }
 
 export class JevError extends Error {
-  constructor(readonly code: "timeout" | "http" | "shape" | "network", message: string, readonly status: number | null = null) {
+  constructor(
+    readonly code: "timeout" | "http" | "shape" | "network",
+    message: string,
+    readonly status: number | null = null,
+    /** What the provider reported billing for a call whose answer could not
+        be used; null when it may have billed and did not say. */
+    readonly billedUsd: number | null = null,
+  ) {
     super(message);
     this.name = "JevError";
   }
+}
+
+/** What a failed call counts against the cap. An error status bills nothing;
+    any other failure counts what the provider reported, or else the most the
+    call could have billed. */
+export function jevFailureCostUsd(error: unknown, ceilingUsd: number): number {
+  if (error instanceof JevError) {
+    if (error.code === "http") return 0;
+    return error.billedUsd ?? ceilingUsd;
+  }
+  return ceilingUsd;
 }
 
 /** The redaction the evaluation applied before any text left the machine:
@@ -86,25 +107,29 @@ export async function classifyWithJev(
   options: { apiKey: string; fetch?: typeof fetch; timeoutMs?: number },
 ): Promise<JevVerdict> {
   const request = options.fetch ?? fetch;
+  const signal = AbortSignal.timeout(options.timeoutMs ?? JEV_TIMEOUT_MS);
+  const timedOut = (error: unknown) => signal.aborted || (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError"));
   let response: Response;
   try {
     response = await request(JEV_ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: JEV_MODEL, state: { agent_message: classifierText(text) }, questions: ASK_QUESTIONS }),
-      signal: AbortSignal.timeout(options.timeoutMs ?? JEV_TIMEOUT_MS),
+      signal,
     });
   } catch (error) {
-    const name = error instanceof Error ? error.name : "";
-    if (name === "TimeoutError" || name === "AbortError") throw new JevError("timeout", "the classifier did not answer in time");
+    if (timedOut(error)) throw new JevError("timeout", "the classifier did not answer in time");
     throw new JevError("network", "the classifier could not be reached");
   }
   if (!response.ok) throw new JevError("http", `the classifier answered ${response.status}`, response.status);
   let body: unknown;
   try {
     body = await response.json();
-  } catch {
-    throw new JevError("shape", "the classifier's answer is not JSON");
+  } catch (error) {
+    /* The timeout covers the body too: one that stops arriving is a timeout,
+       and a body cut off by a dropped connection is a call that was sent. */
+    if (timedOut(error)) throw new JevError("timeout", "the classifier did not finish its answer in time", response.status);
+    throw new JevError("shape", "the classifier's answer is not JSON", response.status);
   }
   const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
   const answers = record.answers && typeof record.answers === "object" ? record.answers as Record<string, unknown> : {};
@@ -118,7 +143,7 @@ export async function classifyWithJev(
   const decision = read("decision");
   const cost = typeof usage.cost === "number" && Number.isFinite(usage.cost) && usage.cost >= 0 ? usage.cost : null;
   if (asks === null || waiting === null || decision === null || cost === null) {
-    throw new JevError("shape", "the classifier's answer is missing a probability or its cost");
+    throw new JevError("shape", "the classifier's answer is missing a probability or its cost", response.status, cost);
   }
   const inputTokens = typeof usage.input_tokens === "number" && Number.isFinite(usage.input_tokens) ? usage.input_tokens : 0;
   return { score: Math.max(asks, waiting, decision), answers: { asks, waiting, decision }, costUsd: cost, inputTokens };

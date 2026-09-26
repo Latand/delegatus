@@ -3,16 +3,17 @@ import crypto from "node:crypto";
 import type { FinalAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
 
 import { askGist, askSkipReason } from "./gist";
-import { ASK_THRESHOLD, JevError, jevCostCeilingUsd, type JevVerdict } from "./jev";
+import { ASK_THRESHOLD, jevCostCeilingUsd, jevFailureCostUsd, type JevVerdict } from "./jev";
 import { currentSpend, type OperatorAskRecord, type OperatorAsksFileV1 } from "./store";
 
 /*
  * One pass of the "Asks you" classifier (docs/research/attention-classifier.md
  * §7.1). For each conversation whose turn has ended, the last text the agent
- * wrote is sent once, unless a filter or the monthly cap says not to; an
- * answer at or over the threshold records an ask. A timeout, an error or a
- * missing key records nothing and is not retried: the message simply stays
- * unclassified, and nothing else waits on it.
+ * wrote is sent once, unless a filter or the monthly cap says not to, or the
+ * same words were already scored; an answer at or over the threshold records
+ * an ask. A timeout, an error or a missing key records no ask and is not
+ * retried: the message simply stays unclassified, and nothing else waits on
+ * it. What a failed call may have cost still counts against the cap.
  */
 
 /** A message older than this when the sweep first sees it is history. */
@@ -72,7 +73,7 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
   const result: AskSweepResult = { classified: 0, asks: [], skipped: 0, capped: 0, failed: 0 };
   if (!ports.apiKey || !ports.settings().enabled) return result;
   const credential = ports.apiKey;
-  let seen = new Set(ports.read().seen);
+  const seen = new Set(ports.read().seen);
   for (const candidate of ports.candidates) {
     if (candidate.working || candidate.structuredAsk) continue;
     const message = ports.finalMessage(candidate);
@@ -85,8 +86,7 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
     if (ports.enabledSince !== null && message.ts < ports.enabledSince) continue;
     const seenKey = `${candidate.subject}:${message.id}`;
     if (seen.has(seenKey) || inflight.has(seenKey)) continue;
-    const duplicate = bodyKey(message.text);
-    const skip = message.engineError ? "engine-error" : askSkipReason(message.text) ?? (seen.has(duplicate) ? "duplicate" : null);
+    const skip = message.engineError ? "engine-error" : askSkipReason(message.text);
     if (skip) {
       ports.write((file) => { file.seen.push(seenKey); });
       seen.add(seenKey);
@@ -95,27 +95,8 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
     }
     const settings = ports.settings();
     if (!settings.enabled) break;
-    const ceiling = jevCostCeilingUsd(message.text);
-    const spend = currentSpend(ports.read(), now);
-    if (spend.usd + ceiling > settings.capUsd) {
-      ports.write((file) => { file.seen.push(seenKey); file.spend.capped += 1; });
-      seen.add(seenKey);
-      result.capped += 1;
-      continue;
-    }
-    inflight.add(seenKey);
-    let verdict: JevVerdict | null = null;
-    let timedOut = false;
-    try {
-      verdict = await ports.classify(message.text, credential);
-    } catch (error) {
-      verdict = null;
-      timedOut = error instanceof JevError && error.code === "timeout";
-    } finally {
-      inflight.delete(seenKey);
-    }
-    const recordedAt = ports.now();
-    const ask: OperatorAskRecord | null = verdict && verdict.score >= ASK_THRESHOLD ? {
+    const textKey = bodyKey(message.text);
+    const askFor = (score: number): OperatorAskRecord | null => score >= ASK_THRESHOLD ? {
       id: askId(candidate.subject, message.id),
       subject: candidate.subject,
       conversationId: candidate.conversationId,
@@ -126,28 +107,69 @@ export async function runAskSweep(ports: AskSweepPorts, inflight: Set<string> = 
       messageId: message.id,
       messageAt: message.ts,
       gist: askGist(message.text),
-      score: verdict.score,
-      recordedAt: recordedAt.toISOString(),
+      score,
+      recordedAt: ports.now().toISOString(),
     } : null;
+    const record = (ask: OperatorAskRecord | null) => {
+      if (!ask) return;
+      result.asks.push(ask);
+      ports.onAsk?.(ask);
+    };
+    /* Words already judged, by this agent before or by another, are judged
+       the same again without a call: a question repeated after the operator
+       answered is a new ask. */
+    const known = ports.read().scores[textKey];
+    if (known !== undefined) {
+      const ask = askFor(known);
+      ports.write((file) => {
+        file.seen.push(seenKey);
+        if (ask && !file.asks.some((held) => held.id === ask.id)) file.asks.push(ask);
+      });
+      seen.add(seenKey);
+      result.skipped += 1;
+      record(ask);
+      continue;
+    }
+    const ceiling = jevCostCeilingUsd(message.text);
+    const spend = currentSpend(ports.read(), now);
+    if (spend.usd + ceiling > settings.capUsd) {
+      ports.write((file) => { file.seen.push(seenKey); file.spend.capped += 1; });
+      seen.add(seenKey);
+      result.capped += 1;
+      continue;
+    }
+    inflight.add(seenKey);
+    let verdict: JevVerdict | null = null;
+    let failureCost = 0;
+    try {
+      verdict = await ports.classify(message.text, credential);
+    } catch (error) {
+      verdict = null;
+      failureCost = jevFailureCostUsd(error, ceiling);
+    } finally {
+      inflight.delete(seenKey);
+    }
+    const ask = verdict ? askFor(verdict.score) : null;
     ports.write((file) => {
-      file.seen.push(seenKey, duplicate);
+      file.seen.push(seenKey);
       file.spend.calls += 1;
-      /* A call that timed out may still have been billed: count the
-         ceiling, so the cap errs on the side of spending less. A refused
-         or failed request bills nothing. */
-      file.spend.usd += verdict ? verdict.costUsd : timedOut ? ceiling : 0;
+      /* Every call that may have been billed counts: what the provider
+         reported, or else the ceiling, so the cap errs on the side of
+         spending less. Only an error status is known to bill nothing. */
+      file.spend.usd += verdict ? verdict.costUsd : failureCost;
+      if (verdict) {
+        delete file.scores[textKey];
+        file.scores[textKey] = verdict.score;
+      }
       if (ask && !file.asks.some((held) => held.id === ask.id)) file.asks.push(ask);
     });
-    seen = new Set([...seen, seenKey, duplicate]);
+    seen.add(seenKey);
     if (!verdict) {
       result.failed += 1;
       continue;
     }
     result.classified += 1;
-    if (ask) {
-      result.asks.push(ask);
-      ports.onAsk?.(ask);
-    }
+    record(ask);
   }
   return result;
 }
