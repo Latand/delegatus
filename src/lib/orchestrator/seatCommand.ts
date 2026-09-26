@@ -34,7 +34,8 @@ import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sess
 
 function operatorTelegramConnected(): boolean {
   try {
-    return readTelegramConnection().status === "connected" && readTelegramSession() !== null;
+    const connection = readTelegramConnection();
+    return connection.status === "connected" && connection.credentialRef === readTelegramSession()?.credentialRef;
   } catch {
     return false;
   }

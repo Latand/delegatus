@@ -565,7 +565,10 @@ export async function executeSpawnRequest(
     }
     if (requestedTelegram) {
       let connected = false;
-      try { connected = readTelegramConnection().status === "connected" && readTelegramSession() !== null; }
+      try {
+        const connection = readTelegramConnection();
+        connected = connection.status === "connected" && connection.credentialRef === readTelegramSession()?.credentialRef;
+      }
       catch { /* an unreadable connector cannot supply a grant */ }
       if (!connected) return refuse("telegram MCP connector is not connected");
       if (!seatLaunch && !seatParent && sessionOriginFor({

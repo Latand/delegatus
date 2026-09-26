@@ -1406,15 +1406,21 @@ export class CodexAppServerHost implements EngineHost {
       "realtime_conversation",
     ];
     const granted = grantedPlugins(options.plugins);
-    const childEnv = withTelegramConnectorGrant(
-      subscriptionEnv(
-        options.env ?? process.env,
-        options.codexHome,
-        granted.length > 0,
-        options.forwardGitHubConfig === true,
-      ),
-      options.mcpServers,
-    );
+    let childEnv: NodeJS.ProcessEnv;
+    try {
+      childEnv = withTelegramConnectorGrant(
+        subscriptionEnv(
+          options.env ?? process.env,
+          options.codexHome,
+          granted.length > 0,
+          options.forwardGitHubConfig === true,
+        ),
+        options.mcpServers,
+      );
+    } catch (error) {
+      options.releaseCleanup?.();
+      throw error;
+    }
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawnProcess(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", args, {

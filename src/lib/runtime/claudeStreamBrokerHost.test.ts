@@ -13,7 +13,7 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
-import { saveTelegramSession, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import {
   claudeCliAuthStatus,
@@ -194,6 +194,8 @@ describe("ClaudeStreamBrokerHost", () => {
     process.env.LLV_STATE_DIR = path.join(directory, "state");
     try {
       const stored = saveTelegramSession("1ApWapzMBu4placeholder-not-a-real-session");
+      writeTelegramConnection({ version: 1, status: "connected", credentialRef: stored.credentialRef,
+        identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
       const rootChild = new FakeClaude(new RecordingDeliveryLedger());
       const rootCapture: { options?: SpawnOptionsWithoutStdio } = {};
       const root = await ClaudeStreamBrokerHost.start({

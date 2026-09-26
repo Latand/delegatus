@@ -28,8 +28,8 @@ import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/li
 import { admitRecoveredLaunch } from "@/lib/tasks/launchMembership";
 import { hardenedRedact } from "@/lib/view/compactText";
 
-import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
-import { CodexAppServerHost } from "./codexAppServerHost";
+import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
+import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { supervisedRuntimeHostUnavailableReason } from "./flags";
 import { StructuredHostAdoptionCleanupError, StructuredSessionMaterializationError, type EngineHost, type HostState, type SessionMaterializationEvidence } from "./engineHost";
@@ -1582,7 +1582,15 @@ export async function startCopilotStructuredHost(
     : await CopilotAcpHost.start(options);
 }
 
-async function defaultStartHost(input: StructuredSpawnInput, capability: string): Promise<SpawnedStructuredHost> {
+/** Narrow external-engine seam for launch-path tests; production passes none. */
+export async function defaultStartHost(
+  input: StructuredSpawnInput,
+  capability: string,
+  engineProcess: {
+    claude?: Partial<Pick<ClaudeStreamBrokerHostOptions, "spawnProcess" | "readAuthStatus">>;
+    codex?: Partial<Pick<CodexAppServerHostOptions, "spawnProcess">>;
+  } = {},
+): Promise<SpawnedStructuredHost> {
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability);
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   const resumeSessionId = structuredResumeSessionId(input);
@@ -1612,6 +1620,7 @@ async function defaultStartHost(input: StructuredSpawnInput, capability: string)
       approvalPolicy: profile.permissionMode ?? undefined,
       initialEventCursor,
       env,
+      ...engineProcess.codex,
     };
     return resumeSessionId
       ? await CodexAppServerHost.adopt(resumeSessionId, options)
@@ -1632,6 +1641,7 @@ async function defaultStartHost(input: StructuredSpawnInput, capability: string)
     initialEventCursor,
     env,
     ...access.host,
+    ...engineProcess.claude,
   };
   return form.kind === "resume"
     ? await ClaudeStreamBrokerHost.adopt(form.sessionId, options)

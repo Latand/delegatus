@@ -11,6 +11,7 @@ import { appDirIn } from "../../../bin/appDir.mjs";
 
 import type { AgentEngine } from "./cli";
 import { grantedMcpServers } from "./mcpAllowlist";
+import { operatorTelegramClaudeEntry } from "@/lib/runtime/telegramConnectorEnv";
 
 type JsonObject = Record<string, unknown>;
 
@@ -319,6 +320,7 @@ function claudeMcpServers(
   const names = grantedMcpServers(allowlist);
   const http = viewerTransport === "http";
   return Object.fromEntries(names.flatMap((name) => {
+    if (name === "telegram") return [[name, operatorTelegramClaudeEntry()]];
     /* Over HTTP the Viewer owns the whole definition: a registered stdio
        launcher is replaced, never merged into. */
     if (name === "viewer" && http) return [[name, viewerMcpHttpClaudeEntry()]];
