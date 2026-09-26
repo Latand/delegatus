@@ -1108,7 +1108,9 @@ async function reconcileOutstandingWake(context: {
   if (!settlement && !retired) return state;
 
   const next: SeatTickProjectState = settlement?.row === "commit"
-    ? seatTickWakeCommit(state, wake.commit, context.now)
+    /* The wake reached the seat when its delivery record settled, which can
+       be well before this check credits it (§5.1). */
+    ? seatTickWakeCommit(state, wake.commit, context.now, observation.evidence?.record?.settledAt ?? null)
     : settlement?.row === "clear"
       /* Released, and remembered as such: the key stays bound in the layers
          that refused it, so the wake raised in its place must not be it. */
@@ -1280,6 +1282,17 @@ async function check(
      from `settled` here would drop the seal and read the whole journal as
      unread again at the next check. */
   const input = { ...gathered, state: seatTickStateForEpoch(gathered.state, gathered.seat?.seatEpoch ?? null) };
+  /* Every settled deploy gets its board snapshot before anything is decided
+     or sent (docs/design/orchestrator-reports.md §3.8), so a deploy first seen
+     by the check that announces it already has one when the seat reports. It
+     reads the runtime's ledger, not the seat's record, so the operator's
+     deploys and one started before a rotation get one too. A failure costs
+     the task list of one report, never the check. */
+  try {
+    sources.recordDeploySnapshots?.(input.project);
+  } catch (error) {
+    console.error("[seat tick] deploy snapshot failed", error instanceof Error ? error.name : "unknown");
+  }
   const decision = seatTickDecision(input);
 
   /* An expiry that passed is already reflected in everything above — the
@@ -1365,6 +1378,7 @@ async function check(
         monitorPrompt: input.settings.monitorPrompt,
         monitorPromptUnchanged,
         mandateCarriesContract: input.seat.mandateCarriesTickContract === true,
+        reportLines: verdict.reportLines,
       })
       : seatTickProposalMessage({
         project: input.project,
@@ -1414,6 +1428,7 @@ async function check(
       eventsThrough: input.events.at(-1)?.seq ?? state.eventsThrough ?? 0,
       terminalChildren,
       noteShown,
+      bridgeReports: input.reports?.bridgeReports === true,
     });
     /* The refusal circuit: attempts released one after another on the same
        permanent refusal. A seat that cannot take a wake is not sent another

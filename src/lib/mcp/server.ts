@@ -13,6 +13,7 @@ import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/liveness";
+import { operatorLocale } from "@/lib/operator/settings";
 import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "@/lib/pipelines/listProjection";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
@@ -2962,6 +2963,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Create a durable board task.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
+    "Write `text` in the operator's interface language (operatorLocale in get_orchestrator); `details` stays in whatever language serves the agent. A `text` in another language is stored with a warning.",
     "Pass `icon` (a lucide icon name) and `color` on every task you create, both picked by the rule below, so the card reads at a glance.",
     renderTaskColorRule(),
     renderTaskPriorityRule(),
@@ -2970,7 +2972,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Update a durable board task.",
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
-    "`refine` writes only the human part, as it always has.",
+    "`refine` writes only the human part, as it always has. `text` and `refine.text` are written in the operator's interface language; another language is stored with a warning.",
     "To change one line of `details`, send `replaceLine`, `removeLine` or `appendLine` instead of the whole field; the answer carries detailsLength and the revision, never the field.",
     "`icon` and `color` set the card's lucide icon and colour; give both to a task you touch that lacks them, picked by the colour and icon rule in create_task's description.",
     renderTaskPriorityRule(),
@@ -3042,7 +3044,12 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Authority is the same as request_attention's: the operator's own root/gateway session or the target project's designated orchestrator seat. A worker or unidentified caller is refused (DISMISS_NOT_PERMITTED) with nothing recorded, so a stage agent cannot clear its own question off the operator's board.",
     "Targets: { kind: \"conversation\", conversationId | path }, { kind: \"pipeline\", pipelineId }, or { kind: \"task\", taskId } for its conversations and the lanes filed under it. undo: true brings back what was cleared. The answer lists what was dismissed and what was alreadyClear (a lane that asks nothing, one already cleared, an undo of nothing), neither of which is an error. Attributed to the calling session on the server; idempotent by clientRequestId. pipeline_action dismiss/undismiss is the same write.",
   ].join(" "),
-  bridge_report: "Append one bounded report to the durable bridge log for the voice gateway to relay. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
+  bridge_report: [
+    "Append one report to the durable bridge log: the report log beside the orchestrator chat, the voice relay, and, for the designated orchestrator of a project that set one, the project's Telegram chat, posted by Delegatus from the same report. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
+    "Pass `summary` (one line, at most 120 characters: what is now true, or the ask on blocked and question) and `sections` of short items: prod (on production), merged (merged, goes out with the next deploy), inProgress, queued (what comes next), decision (what the operator must answer or do). Each item is one or two plain sentences, at most 200 characters; name work by its title and #PR, a deploy by its 8-character sha, and no URLs. Delegatus renders the header, the local time, the emoji and, on a deploy report, the task changes since the previous deploy, and cuts whole items when the report is too long. `body` is the older free-text form.",
+    "Write it in the operator's interface language (operatorLocale in get_orchestrator; each wake names it). A report may be read in a public group: never local paths, hosts, ports, domains, URLs, IPs, emails, account names or ids, usage limits or plans, people's names, other projects, quotes, secrets, or card, conversation and deployment ids. An item carrying one is dropped with a warning, and a report with nothing left is refused (report_empty_after_scrub) and stays owed.",
+    "Use the key the seat tick's wake gives. `covers` lists further keys this report speaks for; `coversOwed: true` settles every outcome the tick owed whose wake reached you before this report. The answer carries `warnings` (language, private information, shape) and `destinations`; the same key again is a replay that stores nothing and re-sends only a Telegram copy whose send failed.",
+  ].join(" "),
   bridge_directive: "Relay the user's intent to the designated manager. The recipient and the delivery id are derived server-side, so a retry of the same root turn is one instruction, never two.",
   get_orchestrator: "Read a project's designated orchestrator: designation, health and activity, model and prompt version, transcript size, message/tool/compaction counts, context usage against its model's configured window (clearly labelled when estimated), predecessor lineage, and a bounded rotation recommendation — STRONGLY_RECOMMEND_ROTATION once usage reaches the configured threshold. Compact by default: the seat record without its mandate and role table, and counts for intentHistory and lineage; full:true returns them whole. Words only: it never rotates, creates, or interrupts anything itself.",
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
@@ -3704,7 +3711,17 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     key: z.string().min(1).describe("Stable identity of this report. The same key always yields one log entry, so a retry after a host death is a no-op."),
     class: z.enum(["status", "completed", "failed", "blocked", "review_verdict", "question"]),
-    body: z.string().min(1).describe("Short prose for the gateway to relay. Bounded to 2 KB and secret-redacted at write. Never transcript payloads or raw tool output."),
+    summary: z.string().optional().describe("One line, at most 120 characters: what is now true, or the ask on blocked and question. In the operator's interface language."),
+    sections: z.object({
+      prod: z.array(z.string()).optional().describe("What reached production."),
+      merged: z.array(z.string()).optional().describe("Merged, goes out with the next deploy."),
+      inProgress: z.array(z.string()).optional().describe("What is running, a failure being retried included."),
+      queued: z.array(z.string()).optional().describe("What starts next."),
+      decision: z.array(z.string()).optional().describe("What the operator has to answer or do; at most 3."),
+    }).partial().optional().describe("Short items, each one or two plain sentences of at most 200 characters."),
+    covers: z.array(z.string().min(1)).optional().describe("Keys of further outcomes this report speaks for."),
+    coversOwed: z.boolean().optional().describe("true settles every outcome the seat tick owed whose wake reached you before this report."),
+    body: z.string().optional().describe("Older free-text form, filed as one in-progress item per line. Prefer summary and sections."),
     correlatesDirective: z.string().optional().describe("clientRequestId of the directive this answers."),
   }).passthrough(),
   bridge_directive: z.object({
@@ -3817,9 +3834,35 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
 };
 
+/**
+ * The sentence the session instructions carry about the operator's interface
+ * language (docs/design/orchestrator-reports.md §4.2), composed when the
+ * session starts, so every spawned agent reads it before its first `refine`.
+ * Empty while no client has reported a language.
+ */
+export function operatorLanguageInstruction(locale: "en" | "uk" | null = readOperatorLocale()): string {
+  if (!locale) return "";
+  const language = locale === "uk" ? "Ukrainian" : "English";
+  return ` The operator's interface language is ${language}: write board task text (create_task and update_task text, refine) and bridge reports in ${language}. Chat replies follow the language the operator writes to you in; task details, prompts and GitHub stay as they are.`;
+}
+
+function readOperatorLocale(): "en" | "uk" | null {
+  try {
+    return operatorLocale();
+  } catch {
+    return null;
+  }
+}
+
+export function viewerMcpInstructions(locale?: "en" | "uk" | null): string {
+  return `${VIEWER_MCP_BASE_INSTRUCTIONS}${operatorLanguageInstruction(locale === undefined ? readOperatorLocale() : locale)}`;
+}
+
+const VIEWER_MCP_BASE_INSTRUCTIONS = "This server is Delegatus, registered under the MCP key `viewer`, so its tools are named mcp__viewer__*. List tasks newest-first with status sets, openOnly, ids or query and follow nextCursor. Lists are compact by default; full:true or get_task/get_pipeline/get_flow retrieves complete records. Writes acknowledge changedFields and revision. Use seat_tick_settings verbose:true to read the complete monitor note. Use clientRequestId on every call. Reuse it only when replaying the same logical operation. Your conversation is already linked to a board task. If that task still carries its placeholder title, make your first Delegatus action update_task with refine: { text } — a short human title (3–10 words) on the first line and at most two concise sentences, describing the work you were given. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.";
+
 export function createViewerMcpServer(service: McpToolService): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
-    instructions: "This server is Delegatus, registered under the MCP key `viewer`, so its tools are named mcp__viewer__*. List tasks newest-first with status sets, openOnly, ids or query and follow nextCursor. Lists are compact by default; full:true or get_task/get_pipeline/get_flow retrieves complete records. Writes acknowledge changedFields and revision. Use seat_tick_settings verbose:true to read the complete monitor note. Use clientRequestId on every call. Reuse it only when replaying the same logical operation. Your conversation is already linked to a board task. If that task still carries its placeholder title, make your first Delegatus action update_task with refine: { text } — a short human title (3–10 words) on the first line and at most two concise sentences, describing the work you were given. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.",
+    instructions: viewerMcpInstructions(),
   });
   for (const toolName of MCP_TOOL_NAMES) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";

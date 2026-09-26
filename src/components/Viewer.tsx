@@ -22,7 +22,7 @@ import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceB
 import { projectDisplayName, projectTitle } from "@/lib/displayNames";
 import { cachedProjectName, rememberProjectNames } from "@/lib/client/projectNameCache";
 import { canonicalClientProject } from "@/lib/projects/clientAliases";
-import { useLocale } from "@/lib/i18n";
+import { syncOperatorLocale, useLocale } from "@/lib/i18n";
 import type { AttentionNotice } from "@/lib/attention/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -168,6 +168,10 @@ function ViewerApp() {
      that the board/scheme/mobile components report into and ships an ephemeral
      per-tab snapshot to the server. Renders nothing. */
   useViewPresence();
+  /* The interface language is the operator's, and agents write reports and
+     board task text in it, so the server learns it from here once per load
+     (docs/design/orchestrator-reports.md §4.2). */
+  useEffect(() => { void syncOperatorLocale(); }, []);
   /* This tree only ever renders in the browser (the server draws the boot
      shell), so the first frame already stands on the hash or the stored
      project: no Overview frame before the project, no restore effect. */

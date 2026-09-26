@@ -179,6 +179,32 @@ export interface BridgeReportV1 {
   /** Set on the gap notice the drain synthesizes when the log outran a cursor
       (§7.12). Synthetic rows are never stored — they exist for one batch. */
   synthetic?: true;
+  /** Project-scoped ids of further outcomes this report speaks for
+      (docs/design/orchestrator-reports.md §3.3). Each counts as reported. */
+  covers?: string[];
+  /** Set when the report was filed with `coversOwed: true`: every outcome the
+      seat tick owed whose wake reached the seat at or before this instant
+      counts as reported. Equal to `at`. */
+  coversOwedAt?: string;
+  /** The Telegram copy of a manager report, rendered once beside the body
+      from the same cut report, and what became of posting it (§5.5). */
+  telegram?: BridgeReportTelegram;
+}
+
+export type BridgeReportTelegramState = "pending" | "sent" | "failed" | "uncertain";
+
+export interface BridgeReportTelegram {
+  /** The bot chat's alias the project chose. */
+  chat: string;
+  /** Telegram HTML, at most 4 096 characters, re-sent byte for byte on a retry. */
+  html: string;
+  state: BridgeReportTelegramState;
+  messageIds?: number[];
+  /** The bot service's error code for a failed or uncertain send. */
+  code?: string;
+  /** Sends attempted, the first included. */
+  attempts: number;
+  at: string;
 }
 
 export interface BridgeReportInput {
@@ -195,6 +221,13 @@ export interface BridgeReportInput {
   correlatesDirective?: string | null;
   /** Raw candidate text; bounded and redacted before it is stored. */
   body?: string | null;
+  /** Keys of further outcomes this report speaks for, scoped by `project`
+      before they are stored. */
+  covers?: readonly string[] | null;
+  /** `coversOwed: true`: store `coversOwedAt` equal to `at`. */
+  coversOwed?: boolean;
+  /** The Telegram copy to keep beside the row, when the project has a chat. */
+  telegram?: { chat: string; html: string } | null;
 }
 
 export interface BridgeReportLogV1 {

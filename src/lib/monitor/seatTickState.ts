@@ -311,6 +311,11 @@ function readFile(filePath: string): SeatTickStateFile {
  *   records which finished children the PROJECT was already told about, and
  *   re-announcing every one of them to a successor would bury the child that
  *   finished after it sat down.
+ * - The report ledger (docs/design/orchestrator-reports.md §5.1): the outcomes
+ *   and asks the report log is still owed, and the digest's memory of the last
+ *   report. What a predecessor left unreported is the successor's to report;
+ *   a rotation that cleared it would lose exactly the outcomes the operator
+ *   reads the log for.
  */
 export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: number | null): SeatTickProjectState {
   if (row.seatEpoch === seatEpoch) return row;
@@ -326,6 +331,12 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     pullRequestGap: row.pullRequestGap,
     childrenGap: row.childrenGap,
     harvestedChildren: row.harvestedChildren,
+    ...(row.reportsOwed ? { reportsOwed: row.reportsOwed } : {}),
+    ...(row.reportsOwedDropped ? { reportsOwedDropped: row.reportsOwedDropped } : {}),
+    ...(row.reportSeenAt !== undefined ? { reportSeenAt: row.reportSeenAt } : {}),
+    ...(row.reportFingerprint !== undefined ? { reportFingerprint: row.reportFingerprint } : {}),
+    ...(row.checkFingerprint !== undefined ? { checkFingerprint: row.checkFingerprint } : {}),
+    ...(row.asksOwed ? { asksOwed: row.asksOwed } : {}),
     accounting: row.accounting,
   };
 }

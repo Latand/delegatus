@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { after, NextRequest, NextResponse } from "next/server";
 
+import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
 import { claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
@@ -74,7 +75,13 @@ const PIN_FALLBACK_TITLE_UK = typeof PIN_FALLBACK_TITLE_UK_MESSAGE === "string"
   ? PIN_FALLBACK_TITLE_UK_MESSAGE
   : PIN_FALLBACK_TITLE_EN;
 
+/** Viewer-authored task titles follow the operator's interface language
+    (docs/design/orchestrator-reports.md §3.5, §4.2). The request's
+    Accept-Language, which is the browser's language and ignores the toggle,
+    decides only while no client has reported the interface language. */
 function prefersUkrainian(req: Pick<NextRequest, "headers">): boolean {
+  const chosen = operatorLocale();
+  if (chosen) return chosen === "uk";
   const language = req.headers.get("accept-language")?.trim().toLowerCase() ?? "";
   return language === "uk" || language.startsWith("uk-");
 }

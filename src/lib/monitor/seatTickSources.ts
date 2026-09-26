@@ -18,6 +18,16 @@ import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/a
 import { statePath } from "@/lib/configDir";
 import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
+import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
+import { readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
+import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
+import type { BridgeReportV1 } from "@/lib/bridge/types";
+import { operatorLocale } from "@/lib/operator/settings";
+import { bridgeReportsEnabled } from "@/lib/projects/settings";
+import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
+import { readReplySuggestionsFile } from "@/lib/suggestions/store";
+import type { ReplySuggestionsFileV1 } from "@/lib/suggestions/types";
+import viewerPackageManifest from "../../../package.json";
 import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
 import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor } from "@/lib/orchestrator/seats";
@@ -28,7 +38,7 @@ import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
-import { latestLedgerDeployment, ledgerDeployment } from "@/lib/runtime/deploymentLedger";
+import { latestLedgerDeployment, ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
 import { seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import {
   journalVerdict,
@@ -73,6 +83,7 @@ import {
   type SeatTickOutstandingWake,
   type SeatTickOwnLaneInput,
   type SeatTickPipelineInput,
+  type SeatTickReportsInput,
   type SeatTickPolicy,
   type SeatTickProjectState,
   type SeatTickPullRequestGap,
@@ -464,6 +475,22 @@ export interface SeatTickSources {
       that has been replaced. The reason is stored where the payload is. */
   withdrawWake: (wake: SeatTickOutstandingWake, reason: string) => Promise<SeatTickWithdrawal>;
   now: () => number;
+  /** Runs the lifecycle projection over the pipelines before the journal is
+      paged, so stage events reach `lane-event` (docs/design/orchestrator-reports.md
+      §1.9). Absent: the journal is read as it stands. */
+  refreshLifecycle?: (pipelines: readonly Pipeline[]) => void;
+  /** The report log, the project's Bridge reports setting, the operator's
+      language and the reply-suggestion store (§5.1). Absent: the check keeps
+      no report ledger, as with bridge reports off. */
+  reports?: {
+    log: () => readonly BridgeReportV1[];
+    enabled: (project: string) => boolean;
+    operatorLocale: () => "en" | "uk" | null;
+    suggestions: () => Pick<ReplySuggestionsFileV1, "sets" | "admissions">;
+  };
+  /** Snapshots of the board's task statuses at each settled deploy, taken in
+      the controller pass before the decision (§3.8). Absent: none taken. */
+  recordDeploySnapshots?: (project: string) => void;
 }
 
 /**
@@ -568,7 +595,88 @@ export function defaultSeatTickSources(): SeatTickSources {
       return "withdrawn";
     },
     now: () => Date.now(),
+    refreshLifecycle: (pipelines) => {
+      refreshLifecycleJournal({ pipelines: [...pipelines] });
+    },
+    reports: {
+      log: () => readBridgeReportLog().reports,
+      enabled: (project) => bridgeReportsEnabled(project),
+      operatorLocale: () => operatorLocale(),
+      suggestions: () => readReplySuggestionsFile(),
+    },
+    recordDeploySnapshots: (project) => {
+      if (!viewerOwnProjectKeys().includes(project)) return;
+      const read = ledgerDeployments(DEPLOY_SNAPSHOT_WINDOW);
+      if (read.state !== "ok") return;
+      recordDeploySnapshots(project, read.value.map((deployment) => ({
+        deploymentId: deployment.deploymentId,
+        revision: deployment.revision,
+        phase: deployment.phase,
+        terminal: deployment.terminal,
+        updatedAt: deployment.updatedAt,
+      })), loadTasks());
+    },
   };
+}
+
+/** Terminal deployments each pass looks at for a missing snapshot (§3.8). */
+const DEPLOY_SNAPSHOT_WINDOW = 20;
+
+/** The projects the Viewer's own deployments build: its repository under
+    every name it is known by, folded through the operator's aliases. */
+function viewerOwnProjectKeys(): string[] {
+  const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
+  const remote = configured || viewerPackageManifest.repository.url.trim();
+  return [...new Set(viewerRepositoryProjects(remote, process.cwd()).map(canonicalOrchestratorProject))];
+}
+
+/**
+ * The report log and the asks as one check reads them (§5.1): the project's
+ * manager reports, the ids they discharge, and the current suggestion set and
+ * operator messages of the seat's conversation and of every conversation an
+ * owed ask names, so an ask a predecessor left is still read after a rotation.
+ */
+function reportsInput(
+  project: string,
+  seat: SeatTickSeatInput | null,
+  state: SeatTickProjectState,
+  sources: SeatTickSources,
+): SeatTickReportsInput | undefined {
+  const port = sources.reports;
+  if (!port) return undefined;
+  try {
+    const manager = port.log().filter((report) => report.project === project && report.origin?.kind === "manager");
+    const reportedIds = new Set<string>();
+    let lastReportAt: string | null = null;
+    let latestCoversOwedAt: string | null = null;
+    for (const report of manager) {
+      reportedIds.add(report.id);
+      for (const id of report.covers ?? []) reportedIds.add(id);
+      if (!lastReportAt || Date.parse(report.at) > Date.parse(lastReportAt)) lastReportAt = report.at;
+      if (report.coversOwedAt && (!latestCoversOwedAt || Date.parse(report.coversOwedAt) > Date.parse(latestCoversOwedAt))) latestCoversOwedAt = report.coversOwedAt;
+    }
+    const conversations = [...new Set([...(seat ? [seat.conversationId] : []), ...(state.asksOwed ?? []).map((ask) => ask.conversationId)])];
+    const suggestions = port.suggestions();
+    const read = new Set(conversations);
+    const admissions = suggestions.admissions;
+    const oldest = admissions.reduce<string | null>((min, admission) => (!min || Date.parse(admission.at) < Date.parse(min) ? admission.at : min), null);
+    return {
+      bridgeReports: port.enabled(project),
+      operatorLocale: port.operatorLocale(),
+      lastReportAt,
+      reportedIds: [...reportedIds],
+      reportIdFor: (key) => scopedReportId(project, key),
+      latestCoversOwedAt,
+      suggestionSets: suggestions.sets.filter((set) => read.has(set.conversationId)).map((set) => ({ conversationId: set.conversationId, setId: set.setId, at: set.at })),
+      suggestionConversations: conversations,
+      operatorAdmissions: admissions.filter((admission) => read.has(admission.conversationId)).map((admission) => ({ conversationId: admission.conversationId, at: admission.at })),
+      oldestAdmissionAt: oldest,
+    };
+  } catch {
+    /* An unreadable log or store keeps no ledger this check: nothing is
+       discharged or recorded from evidence that could not be read. */
+    return undefined;
+  }
 }
 
 /**
@@ -1960,6 +2068,13 @@ export async function gatherSeatTickInput(
      terminal because it is not in this project's slice would be the same claim
      made about the wrong pipeline. */
   const openPipelineIds = new Set(hotLanes.filter(isOpen).map((pipeline) => pipeline.id));
+  /* The projection writes stage, verdict and deploy events into the journal;
+     nothing else runs it on a schedule, so the tick runs it before it reads. */
+  try {
+    sources.refreshLifecycle?.(hotLanes);
+  } catch (error) {
+    console.error("[seat tick] lifecycle projection failed", error instanceof Error ? error.name : "unknown");
+  }
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, sources);
   const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
   /* The children source's run of failures (#1465), kept exactly as the
@@ -2011,5 +2126,9 @@ export async function gatherSeatTickInput(
     state: { ...state, announcedLanes, eventsThrough: cursor, pullRequestGap, childrenGap, harvestedChildren, accounting: state.accounting ? new SeatTickAccounting(state.accounting.filename, canonical).readState().accounting : undefined },
     policy,
     settings,
+    ...(() => {
+      const reports = reportsInput(canonical, seat, state, sources);
+      return reports ? { reports } : {};
+    })(),
   };
 }

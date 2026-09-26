@@ -43,7 +43,8 @@ export function getLocale(): Locale {
   return current;
 }
 
-export function setLocale(next: Locale) {
+/** Show `next` in this browser and keep it as the boot cache. Tells nobody. */
+function applyLocale(next: Locale) {
   hydrated = true;
   if (next === current) return;
   current = next;
@@ -54,6 +55,76 @@ export function setLocale(next: Locale) {
   }
   if (typeof document !== "undefined") document.documentElement.lang = next;
   for (const listener of listeners) listener();
+}
+
+/**
+ * The operator's choice from the language toggle. Besides this browser it is
+ * written to the server (docs/design/orchestrator-reports.md §4.2), because
+ * agents write reports and board task text in the interface language and the
+ * server is the only place they can read it from.
+ */
+export function setLocale(next: Locale) {
+  applyLocale(next);
+  void writeOperatorSettings({ locale: next, source: "chosen", ...clientTimeZone() });
+}
+
+const OPERATOR_SETTINGS_URL = "/api/operator/settings";
+
+function clientTimeZone(): { timeZone?: string } {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return zone ? { timeZone: zone } : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeOperatorSettings(body: Record<string, unknown>): Promise<void> {
+  if (typeof fetch !== "function") return;
+  try {
+    await fetch(OPERATOR_SETTINGS_URL, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    /* The next toggle, or the next page load, writes it again. */
+  }
+}
+
+let operatorLocaleSynced = false;
+
+/**
+ * Once per page load, after the app has mounted: adopt the server's language
+ * when it differs from what this browser shows (another device chose it), or,
+ * when the server has none yet, report what this browser shows as `detected`.
+ * The time zone is reported either way. Storage stays the boot cache, so the
+ * first paint never waits on this.
+ */
+export async function syncOperatorLocale(): Promise<void> {
+  if (operatorLocaleSynced || typeof window === "undefined" || typeof fetch !== "function") return;
+  operatorLocaleSynced = true;
+  const shown = getLocale();
+  let server: Locale | null = null;
+  let serverTimeZone: string | null = null;
+  try {
+    const response = await fetch(OPERATOR_SETTINGS_URL, { cache: "no-store" });
+    if (!response.ok) return;
+    const body = await response.json() as { locale?: { value?: unknown } | null; timeZone?: { value?: unknown } | null };
+    const value = body.locale?.value;
+    server = value === "en" || value === "uk" ? value : null;
+    serverTimeZone = typeof body.timeZone?.value === "string" ? body.timeZone.value : null;
+  } catch {
+    return;
+  }
+  const zone = clientTimeZone();
+  const zoneChanged = zone.timeZone !== undefined && zone.timeZone !== serverTimeZone;
+  if (server && server !== shown) applyLocale(server);
+  if (!server) {
+    await writeOperatorSettings({ locale: shown, source: "detected", ...zone });
+  } else if (zoneChanged) {
+    await writeOperatorSettings(zone);
+  }
 }
 
 function subscribe(listener: () => void): () => void {

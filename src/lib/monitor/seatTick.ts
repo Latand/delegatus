@@ -5,9 +5,13 @@ import { evidenceStallReason } from "./classify";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
+  SEAT_TICK_ASKS_OWED_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
+  SEAT_TICK_REPORTS_OWED_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickActivity,
+  type SeatTickAskOwed,
+  type SeatTickReportOwed,
   type SeatTickCard,
   type SeatTickCheckInput,
   type SeatTickChildInput,
@@ -1086,11 +1090,15 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      is not a record of anything having been sent: it says this check looked at
      the history in front of the cursor and found nothing owed in it, which is
      a conclusion a quiet check is as entitled to as a wake. */
-  const base: SeatTickProjectState = {
+  /* The report ledger (docs/design/orchestrator-reports.md §5.1) is kept on
+     every check that reaches here, the tick switched off included: owed
+     outcomes discharge when their report lands, asks are recorded and
+     retired, and the digest remembers the board it last saw reported. */
+  const base: SeatTickProjectState = reportLedger(input, {
     ...unchanged,
     seatEpoch: input.seat.seatEpoch,
     eventsThrough: dischargedThrough(input.events, unchanged.eventsThrough),
-  };
+  });
   const stalled = stalledLanes(input);
   const stalledKids = stalledChildren(input);
   /* The stall MEMORY records every stall this check saw, eligible or not: it
@@ -1363,15 +1371,18 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      passed both, and a gap adds none. */
   if (reasons.length > 0) {
     const all = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, runningChildren, laneEvents, unstarted });
+    const items = all.slice(0, input.policy.itemsPerWake);
+    const lines = seatTickReportLines(input, state, items, reasons);
     return {
       verdict: {
         kind: "wake",
         reasons,
-        items: all.slice(0, input.policy.itemsPerWake),
+        items,
         deferred: Math.max(0, all.length - input.policy.itemsPerWake),
         skippedChildren,
         unreadableChildren: unreadable.named,
         gaps,
+        ...(lines.length > 0 ? { reportLines: lines } : {}),
       },
       state,
       cards,
@@ -1430,6 +1441,184 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   }
 
   return { verdict: { kind: "quiet", detail: `nothing owed${unplaced}` }, state: { ...quiet(state, at), idleSince: null }, cards: [] };
+}
+
+/* ── The report ledger (docs/design/orchestrator-reports.md §5.1) ─────────── */
+
+const ASK_OWED_AFTER_MS = 10 * MINUTE_MS;
+
+/** The board half of a change fingerprint: what the digest compares. */
+function boardFingerprint(fingerprint: string): string {
+  return fingerprint.split(".")[0] ?? fingerprint;
+}
+
+function instant(value: string | null | undefined): number {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+/**
+ * One check's bookkeeping of what the report log owes. Pure: it reads the
+ * report log and the suggestion store as the gather saw them.
+ *
+ * - An owed outcome is discharged by a report under its own key or naming it
+ *   in `covers`, and by a `coversOwed` report filed at or after the moment
+ *   its wake reached the seat. Nothing else clears it.
+ * - An ask is the seat's current suggestion set, owed once it is ten minutes
+ *   old with no operator message since. It is discharged by a report under
+ *   `ask:<setId>`, by its set being retired (the operator answered), or by an
+ *   operator message in that conversation at or after the ask. A set replaced
+ *   by a newer one with no message between stays owed.
+ * - The digest remembers the fingerprint of the check BEFORE the newest report
+ *   was seen, so a board change between that check and the report still
+ *   counts as unreported.
+ */
+function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): SeatTickProjectState {
+  const reports = input.reports;
+  if (!reports) return state;
+  const reported = new Set(reports.reportedIds);
+  const coveredThrough = instant(reports.latestCoversOwedAt);
+  const owed = (state.reportsOwed ?? []).filter((entry) => !reported.has(reports.reportIdFor(entry.key))
+    && !(Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
+
+  const sets = new Map(reports.suggestionSets.map((set) => [set.conversationId, set] as const));
+  const read = new Set(reports.suggestionConversations);
+  const answeredSince = (conversationId: string, since: string) => reports.operatorAdmissions
+    .some((admission) => admission.conversationId === conversationId && instant(admission.at) >= instant(since));
+  const asks: SeatTickAskOwed[] = (state.asksOwed ?? []).filter((entry) => {
+    if (reported.has(reports.reportIdFor(entry.key))) return false;
+    if (read.has(entry.conversationId) && !sets.has(entry.conversationId)) return false;
+    return !answeredSince(entry.conversationId, entry.at);
+  });
+  const current = input.seat ? sets.get(input.seat.conversationId) : undefined;
+  if (current && reports.bridgeReports && !asks.some((entry) => entry.setId === current.setId)) {
+    const key = `ask:${current.setId}`;
+    const old = input.now - instant(current.at) >= ASK_OWED_AFTER_MS;
+    if (old && !reported.has(reports.reportIdFor(key)) && !answeredSince(current.conversationId, current.at)) {
+      asks.push({ key, setId: current.setId, conversationId: current.conversationId, at: current.at });
+    }
+  }
+
+  let reportSeenAt = state.reportSeenAt ?? null;
+  let reportFingerprint = state.reportFingerprint ?? null;
+  if (reports.lastReportAt && (!reportSeenAt || instant(reports.lastReportAt) > instant(reportSeenAt))) {
+    reportSeenAt = reports.lastReportAt;
+    reportFingerprint = state.checkFingerprint ?? null;
+  }
+  return {
+    ...state,
+    reportsOwed: owed,
+    asksOwed: asks.slice(-SEAT_TICK_ASKS_OWED_LIMIT),
+    reportSeenAt,
+    reportFingerprint,
+    checkFingerprint: boardFingerprint(input.changeFingerprint),
+  };
+}
+
+const OWED_LANE_STATES: Partial<Record<SeatTickOwnLaneInput["settled"], string>> = {
+  completed: "completed",
+  failed: "failed",
+  needs_decision: "parked",
+  needs_review: "parked",
+  "provisioning-failed": "provisioning-failed",
+};
+
+/**
+ * The settled outcomes a wake's items announce, each under the key its report
+ * must carry (§3.3): a deploy by its commit (a failure by its attempt too), a
+ * lane of the seat's by its id and settled state. Lane events — a stage's
+ * completion, failure or verdict — are never owed: they wake the seat and feed
+ * its digests.
+ */
+export function seatTickOwedOutcomes(items: readonly SeatTickItem[]): { key: string; label: string }[] {
+  const outcomes: { key: string; label: string }[] = [];
+  const seen = new Set<string>();
+  const add = (key: string, label: string) => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    outcomes.push({ key, label });
+  };
+  for (const item of items) {
+    if (item.kind === "deploy" && item.deploy) {
+      const sha8 = item.deploy.sha.slice(0, 8);
+      if (item.deploy.phase === "succeeded") add(`deploy:${sha8}:succeeded`, `deploy ${sha8} succeeded`);
+      else add(`deploy:${sha8}:failed:${item.deploy.deploymentId.replace(/[^0-9a-z]/gi, "").slice(0, 8)}`, `deploy ${sha8} ${item.deploy.phase}`);
+      continue;
+    }
+    if (!item.laneAnnouncement) continue;
+    const split = item.laneAnnouncement.lastIndexOf(":");
+    const laneId = item.laneAnnouncement.slice(0, split);
+    const state = OWED_LANE_STATES[item.laneAnnouncement.slice(split + 1) as SeatTickOwnLaneInput["settled"]];
+    if (!laneId || !state) continue;
+    add(`lane:${laneId}:${state}`, `lane ${laneId.slice(0, 8)} ${state}`);
+  }
+  return outcomes;
+}
+
+const LANGUAGE_NAME = { en: "English", uk: "Ukrainian" } as const;
+/** Outcomes one owed line names before counting the rest. */
+const OWED_NAMED_LIMIT = 8;
+
+function clock(instant: string): string {
+  return `${instant.slice(11, 16)} UTC`;
+}
+
+/**
+ * The lines a wake carries about the report log (§5.1), in its reserved tail:
+ * the reports owed (this wake's outcomes and every earlier one still owed),
+ * "nothing is running" when the last lane settled, each ask owed, and the
+ * digest when an interval wake finds the board moved with no report for a
+ * whole interval. None while bridge reports are off.
+ */
+export function seatTickReportLines(
+  input: SeatTickCheckInput,
+  state: SeatTickProjectState,
+  items: readonly SeatTickItem[],
+  reasons: readonly SeatTickWakeReason[],
+): string[] {
+  const reports = input.reports;
+  if (!reports?.bridgeReports) return [];
+  const language = reports.operatorLocale ? `, in ${LANGUAGE_NAME[reports.operatorLocale]}` : "";
+  const lines: string[] = [];
+  const owed: { key: string; label: string }[] = [...(state.reportsOwed ?? [])];
+  for (const outcome of seatTickOwedOutcomes(items)) {
+    if (!owed.some((entry) => entry.key === outcome.key)) owed.push(outcome);
+  }
+  if (owed.length > 0) {
+    const named = owed.slice(0, OWED_NAMED_LIMIT).map((entry) => entry.label).join(", ");
+    const more = owed.length > OWED_NAMED_LIMIT ? `, and ${owed.length - OWED_NAMED_LIMIT} more` : "";
+    const dropped = state.reportsOwedDropped ? ` (${state.reportsOwedDropped} older owed outcome(s) no longer listed)` : "";
+    lines.push(`Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
+    if (!input.pipelines.some(isOpenLane) && owed.some((entry) => entry.key.startsWith("lane:"))) {
+      lines.push("Nothing is running now: the report says so.");
+    }
+  }
+  for (const ask of state.asksOwed ?? []) {
+    lines.push(`Ask owed: you asked the operator at ${clock(ask.at)} and filed no question report. File one with key ${ask.key} and the ask in the decision section.`);
+  }
+  const lastReport = instant(reports.lastReportAt);
+  const quietForInterval = !Number.isFinite(lastReport) || input.now - lastReport >= input.settings.wakeIntervalMs;
+  if (reasons.some((reason) => reason.kind === "interval") && quietForInterval
+    && boardFingerprint(input.changeFingerprint) !== (state.reportFingerprint ?? null)) {
+    const since = reports.lastReportAt ? `no report since ${clock(reports.lastReportAt)}` : "no report yet";
+    lines.push(`Digest due${language}: ${since} and the board moved. File one status report (key digest:${new Date(input.now).toISOString().slice(0, 16)}) with the whole state: in progress, next, needs a decision.`);
+  }
+  return lines;
+}
+
+/** Append a landed wake's outcomes to the ledger, bounded (§5.1). */
+function recordOwed(
+  before: readonly SeatTickReportOwed[],
+  dropped: number,
+  outcomes: readonly { key: string; label: string }[],
+  receivedAt: string,
+): { reportsOwed: SeatTickReportOwed[]; reportsOwedDropped: number } {
+  const merged = [...before];
+  for (const outcome of outcomes) {
+    if (!merged.some((entry) => entry.key === outcome.key)) merged.push({ ...outcome, receivedAt });
+  }
+  const over = Math.max(0, merged.length - SEAT_TICK_REPORTS_OWED_LIMIT);
+  return { reportsOwed: merged.slice(over), reportsOwedDropped: dropped + over };
 }
 
 function quiet(state: SeatTickProjectState, at: string): SeatTickProjectState {
@@ -1643,6 +1832,9 @@ export function seatTickWakeCommitPlan(
     terminalChildren?: readonly string[];
     /** The revision of the monitor note the wake carries (#2030). */
     noteShown?: string | null;
+    /** The project's Bridge reports setting: off, the landing records no
+        owed outcome (docs/design/orchestrator-reports.md §5.1). */
+    bridgeReports?: boolean;
   },
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
@@ -1674,7 +1866,12 @@ export function seatTickWakeCommitPlan(
   /* The same rule for a settled deploy (#2063): the landing of the wake that
      carried it is what announces it, once. */
   const announcedDeploys = verdict.items.filter((item) => item.kind === "deploy").map((item) => item.id);
-  return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, shownChildren, ...note };
+  /* The outcomes the report log is owed once this wake lands (§5.1). */
+  const reportsOwed = context.bridgeReports ? seatTickOwedOutcomes(verdict.items) : [];
+  return {
+    proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, shownChildren, ...note,
+    ...(reportsOwed.length > 0 ? { reportsOwed } : {}),
+  };
 }
 
 /**
@@ -1697,8 +1894,16 @@ export function seatTickWakeCommit(
   state: SeatTickProjectState,
   commit: SeatTickWakeCommit,
   now: number,
+  /** When the wake reached the seat, when the delivery record says so and it
+      is earlier than this commit (§5.1). Absent: the commit's own instant,
+      later than the truth, which can cost one extra ask and never a missed one. */
+  reachedAt?: string | null,
 ): SeatTickProjectState {
   const at = new Date(now).toISOString();
+  const received = reachedAt && Number.isFinite(Date.parse(reachedAt)) && Date.parse(reachedAt) <= now ? reachedAt : at;
+  const owed = commit.reportsOwed?.length
+    ? recordOwed(state.reportsOwed ?? [], state.reportsOwedDropped ?? 0, commit.reportsOwed, received)
+    : null;
   const eventsThrough = Math.max(state.eventsThrough ?? 0, commit.eventsThrough);
   /* What the seat now holds of its own note (#2030); a plan that predates the
      field leaves the record as it was. */
@@ -1747,6 +1952,7 @@ export function seatTickWakeCommit(
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
     announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
+    ...(owed ?? {}),
   };
 }
 

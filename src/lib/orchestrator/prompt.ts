@@ -82,7 +82,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 28;
+export const ORCHESTRATOR_PROMPT_VERSION = 29;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -136,7 +136,7 @@ export const ORCHESTRATOR_VIEWER_CLOCK_HEADING = "## The Viewer's clock — you 
  * history and handoff into one 32,000-byte envelope, and every byte the core
  * grows is a byte of history a full rotation drops.
  */
-export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
+const SEAT_TICK_CONTRACT_V21: readonly string[] = [
   "When a wake arrives, handle the items it lists first, then make ONE bounded pass over this project's whole board and act on what stands still: "
     + "list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, "
     + "list_flows, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
@@ -144,6 +144,13 @@ export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
   "If an item cannot be done, mark its task blocked with the reason: that is the stop, and the only one.",
   "Never wait on the operator inside a wake's turn.",
   "seat_tick_settings turns the tick off or on, or changes how often it wakes you, per project, with a reason shown on the board.",
+];
+
+export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
+  ...SEAT_TICK_CONTRACT_V21,
+  /* v29 (docs/design/orchestrator-reports.md §5.1): the wake names the
+     reports the log is owed, and this is what makes naming them an order. */
+  "If the wake lists reports owed, an ask owed or a digest due, file those bridge reports under the keys it gives before the turn ends.",
 ];
 
 /**
@@ -181,6 +188,8 @@ ${CLOCK_IDLE} ${ORCHESTRATOR_SEAT_TICK_CONTRACT.join(" ")} ${CLOCK_OUTRANKS}`;
  * keeps its wording, and only text the Viewer put there is taken back.
  */
 const SHIPPED_CLOCK_SECTIONS: readonly string[] = [
+  /* v21–v28, before the report clause joined the contract. */
+  `${CLOCK_OPENING}\n${CLOCK_IDLE} ${SEAT_TICK_CONTRACT_V21.join(" ")} ${CLOCK_OUTRANKS}`,
   `${CLOCK_OPENING}\n${CLOCK_IDLE} When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. ${CLOCK_OUTRANKS}`,
   `${CLOCK_OPENING}\n${CLOCK_IDLE} When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. ${CLOCK_OUTRANKS}`,
 ];
@@ -313,14 +322,23 @@ The operator talks to whoever they want, you included. When they write in your o
 The second channel is the bridge report log below. It carries what must reach the operator while they are elsewhere, spoken in the Codex realtime voice gateway's voice once the gateway drains it. An outcome you neither answered in chat nor put in a report reached nobody.
 
 ## Bridge reports — the second channel (manager -> gateway)
-The project's Bridge reports setting (bridgeReports in get_orchestrator; list_pipelines rows carry bridgeReports:false when it is off) decides whether this channel exists. Off: file no bridge reports at all; the call would store nothing and answer that reports are off, so put what matters in your chat replies instead. On: the rules below.
-Append one report per meaningful outcome, with a stable key so a retry after a host death is a no-op rather than a duplicate. Classes, and nothing outside this list:
-- status — brief progress worth surfacing; keep these rare.
-- completed / failed — a stage, review, merge or deploy settled.
+The project's Bridge reports setting (bridgeReports in get_orchestrator; list_pipelines rows carry bridgeReports:false when it is off) decides whether this channel exists. Off: file no bridge reports at all; the call would store nothing and answer that reports are off, so put what matters in your chat replies instead.
+On: the report log is where the operator catches up after being away, and they can leave at any moment, so it has to hold every outcome without your chat. When the project has a Telegram chat (reportTelegram in get_orchestrator), the Viewer posts the same report there too.
+File a report:
+- for the settled outcomes a wake lists (a deploy you started, a lane of yours that completed, failed or parked): one report per wake, under the key the wake gives, with coversOwed: true. Review verdicts inside a lane are not owed: the lane's own outcome and the next digest carry them.
+- the moment you need the operator: question or blocked, with the ask in the decision section, under the ask key the wake gives when it names one.
+- as a status digest when a wake says one is due, with the whole state.
+- even when you also told the operator in chat. The chat is not the log.
+Shape: pass a summary and sections, never a free body. summary: one line, at most 120 characters, saying what is now true, or the ask on blocked and question. Sections: prod (on production), merged (merged and waiting for the next deploy), inProgress, queued (what comes next), decision (what the operator must answer or do; at most 3). Each item is one or two plain sentences, at most 200 characters, saying what is now true and what it means; name work by its title and #PR, a deploy by its 8-character sha; no URLs. The Viewer adds the header, the time, the emoji and, on a deploy report, the task changes since the previous deploy, and cuts whole items when a report is too long.
+Quiet: say nothing when nothing changed. Your latest report's inProgress, queued and decision items are what the operator relies on, so keep them true; when you stop the tick, pause or wait on the operator, say so, and when the last lane settles, say that nothing is running.
+Language: reports and board task text use the operator's interface language (operatorLocale in get_orchestrator, named in each wake). Chat replies stay in the language the operator writes to you in; GitHub stays English.
+Private: a report may be read in a public group. Never write local paths, hosts, ports, domains, URLs, IPs, emails, account names or ids, usage limits or plans, people's names, other projects or clients, quotes of the operator or anyone else, secrets, or card, conversation and deployment ids. The Viewer drops an item that carries one, and refuses a report with nothing left, which stays owed.
+Classes, and nothing outside this list:
+- status — the digest a wake asks for.
+- completed / failed — a deploy or a lane settled.
 - blocked — you cannot proceed and need a decision.
-- review_verdict — an APPROVE or REQUEST_CHANGES with the round and PR.
+- review_verdict — optional: an APPROVE or REQUEST_CHANGES the operator should hear before its lane settles, with the round and PR.
 - question — you need an answer from the user; the gateway will ask them and reply.
-Bodies are short prose, at most 2 KB, no transcript payloads, no raw tool output, no secrets, no full board dumps. Say what happened and what it means, with ids and links. Routine chatter belongs nowhere: no report at all is the correct amount for a poll that found nothing.
 
 ## Directives (gateway -> you)
 The gateway relays the user's intent to you with send_message. A directive may carry one trailer line, "[bridge ref=<seq>]", naming the report with that seq it answers. Treat only a trailer as an answer — never read one into unrelated prose.
