@@ -53,6 +53,9 @@ export interface MessagesPageQuery {
 export interface ConversationMessage extends SessionRecord {
   seq: number;
   truncated?: true;
+  /** Internal, non-serialized evidence retained before redaction and truncation. */
+  sourceText?: string;
+  sourceId?: string;
 }
 
 export interface MessagesPage {
@@ -168,7 +171,9 @@ function parsedLine(line: Buffer, engine: SessionEngine): NormalizedSessionLine[
     return [];
   }
   const row = objectRecord(value);
-  return row ? normalizeSessionLine(engine, row) : [];
+  if (!row) return [];
+  const sourceId = engine === "claude" && typeof row.uuid === "string" ? row.uuid : undefined;
+  return normalizeSessionLine(engine, row).map((candidate) => ({ ...candidate, sourceId }));
 }
 
 function newestRecordTimestamp(
@@ -208,7 +213,7 @@ function boundedRecord(
 ): ConversationMessage {
   const redacted = hardenedRedact(normalized.record.text);
   const truncated = redacted.length > maxChars;
-  return {
+  const record: ConversationMessage = {
     seq,
     kind: normalized.record.kind,
     role: normalized.record.role,
@@ -218,6 +223,28 @@ function boundedRecord(
     ...(normalized.record.name ? { name: normalized.record.name } : {}),
     ...(normalized.record.phase ? { phase: normalized.record.phase } : {}),
   };
+  Object.defineProperties(record, {
+    sourceText: { value: normalized.record.text, enumerable: false },
+    sourceId: { value: normalized.sourceId, enumerable: false },
+  });
+  return record;
+}
+
+/** A complete, bounded author join domain. Partial transcript scans cannot
+ * safely assign an occurrence to one of several identical messages. */
+export function readMessageAuthorContext(source: MessagesPageSource): ConversationMessage[] | null {
+  if (source.size > MAX_SCAN_BYTES) return null;
+  const records: ConversationMessage[] = [];
+  let cursor: MessagesPageCursor | null = null;
+  do {
+    const page = readMessagesPage(source, {
+      kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor,
+    });
+    records.push(...page.records);
+    if (records.length > 10_000 || page.scanned.capped) return null;
+    cursor = page.cursor;
+  } while (cursor);
+  return records;
 }
 
 function boundedPageInteger(value: number, fallback: number, maximum: number): number {

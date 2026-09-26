@@ -4,12 +4,53 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 
+import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 import { enqueueProductionOperatorHeartbeat } from "@/lib/wakatime/sync";
 
 import { POST } from "./route";
+
+test("task dispatch attributes an admitted agent caller and keeps human dispatch as operator", async () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-task-author-"));
+  const registry = new AgentRegistry(path.join(state, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const sender = registry.ensureConversation("codex", path.join(state, "sender.jsonl"), "default");
+  setCallerConversationResolverForTests(() => sender.id);
+  const task = {
+    id: "task-agent-dispatch", project: "project-fixture", status: "inbox", text: "Review the handoff",
+    placement: "unplaced", assignments: [], createdAt: "2026-09-26T00:00:00.000Z", updatedAt: "2026-09-26T00:00:00.000Z",
+  } as BoardTask;
+  const origins: unknown[] = [];
+  const dependencies = {
+    loadTasks: () => [task], listFiles: async () => [entry(path.join(state, "recipient.jsonl"), "codex")],
+    deliverConversationMessage: async (message: { origin?: unknown }) => {
+      origins.push(message.origin);
+      return { ok: true as const, outcome: "delivered-to-live" as const, target: "pane" };
+    },
+    mutateTasks: <R,>(mutator: (tasks: BoardTask[]) => { tasks?: BoardTask[]; result: R }) => mutator([task]).result,
+    recordOperatorActivity: () => ({ key: "a".repeat(64), engine: "codex" as const, project: task.project, atMs: 1 }),
+  };
+  const send = (agent: boolean) => POST.withDependencies(new NextRequest("http://127.0.0.1/api/tasks/task-agent-dispatch/send", {
+    method: "POST",
+    headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json",
+      ...(agent ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : {}) },
+    body: JSON.stringify({ paths: [path.join(state, "recipient.jsonl")] }),
+  }), { params: Promise.resolve({ id: task.id }) }, dependencies);
+  try {
+    expect((await send(true)).status).toBe(200);
+    expect((await send(false)).status).toBe(200);
+    expect(origins[0]).toMatchObject({ kind: "agent", conversationId: sender.id });
+    expect(origins[1]).toEqual({ kind: "operator" });
+  } finally {
+    setCallerConversationResolverForTests(null);
+    setAgentRegistryForTests(null);
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});
 
 function entry(path: string, engine: "claude" | "codex"): FileEntry {
   return {

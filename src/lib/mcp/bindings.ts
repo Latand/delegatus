@@ -158,6 +158,7 @@ import {
   InvalidMessagesCursorError,
   messagesCursorScope,
   readMessagesPage,
+  readMessageAuthorContext,
   StaleMessagesCursorError,
 } from "@/lib/session/messagesPage";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
@@ -2601,7 +2602,9 @@ async function conversationMessages(
       engine,
       lastRecordAt: page.lastRecordAt,
       /* sign-in-and-team §7.1: a human message names its member. */
-      records: withRecordAuthors(conversationId, transcriptPath, page.records),
+      records: withRecordAuthors(conversationId, transcriptPath, page.records, {
+        descriptor: pinned.descriptor, size: pinned.stat.size, engine,
+      }),
       hasMore: page.hasMore,
       cursor: page.cursor ? encodeMessagesCursor(page.cursor, scope) : null,
       scanned: page.scanned,
@@ -2612,9 +2615,32 @@ async function conversationMessages(
   }
 }
 
-function withRecordAuthors<T extends { role: string; ts: string | null; text: string }>(conversationId: string | null, transcriptPath: string, records: T[]): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
-  const authors = new Map<number, RecordAuthor | AgentRecordAuthor>(recordAuthors(conversationId, records));
-  for (const [index, author] of agentRecordAuthors(transcriptPath, records)) authors.set(index, author);
+function withRecordAuthors<T extends { seq: number; role: string; ts: string | null; text: string; sourceText?: string; sourceId?: string }>(
+  conversationId: string | null,
+  transcriptPath: string,
+  records: T[],
+  source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot" },
+): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
+  if (!records.some((record) => record.role === "user")) return records;
+  const context = readMessageAuthorContext(source);
+  const authorRecords = context ?? records;
+  const directAgents = agentRecordAuthors(transcriptPath, authorRecords);
+  const humanBySeq = new Map<number, RecordAuthor>();
+  for (const [index, author] of recordAuthors(conversationId, authorRecords.map((record, index) => ({
+    role: directAgents.has(index) ? "system" : record.role,
+    ts: record.ts,
+    text: record.sourceText ?? record.text,
+  })))) humanBySeq.set(authorRecords[index]!.seq, author);
+  const agentAuthors = context ? agentRecordAuthors(transcriptPath, authorRecords, context) : directAgents;
+  const agentBySeq = new Map<number, AgentRecordAuthor>();
+  for (const [index, author] of agentAuthors) agentBySeq.set(authorRecords[index]!.seq, author);
+  const authors = new Map<number, RecordAuthor | AgentRecordAuthor>();
+  records.forEach((record, index) => {
+    const human = humanBySeq.get(record.seq);
+    const agent = agentBySeq.get(record.seq);
+    if (human) authors.set(index, human);
+    else if (agent) authors.set(index, agent);
+  });
   return authors.size ? records.map((record, index) => (authors.has(index) ? { ...record, author: authors.get(index)! } : record)) : records;
 }
 

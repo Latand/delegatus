@@ -1,5 +1,6 @@
 import { assignDeliveredOccurrences } from "@/components/feed/deliveredOccurrences";
 import type { Item } from "@/components/feed/parse";
+import { claudeMessageProvenance } from "./claudeMessageProvenance";
 import { decodeCodexStructuredUserText } from "./codexStructuredUserText.server";
 import { deliveredMessageOccurrences } from "./deliveredMessageOccurrences";
 import type { DeliveredMessageProvenance, MessageOrigin } from "./messageOrigin";
@@ -9,6 +10,15 @@ export interface AgentRecordAuthor {
   role: string;
   project?: string;
   conversationId?: string;
+}
+
+export interface AuthorEvidenceRecord {
+  seq: number;
+  role: string;
+  ts: string | null;
+  text: string;
+  sourceText?: string;
+  sourceId?: string;
 }
 
 function authorFromOrigin(origin: MessageOrigin): AgentRecordAuthor {
@@ -23,37 +33,60 @@ function authorFromProvenance(provenance: DeliveredMessageProvenance): AgentReco
     ...(provenance.senderConversationId ? { conversationId: provenance.senderConversationId } : {}) };
 }
 
-/** MCP's normalized page uses the same delivery evidence as the feed. Each
- * occurrence claims one record, and compact Codex metadata names its own row
- * directly. An old row without evidence remains unnamed. */
+function recordEvidence(record: AuthorEvidenceRecord, ledger: Record<string, DeliveredMessageProvenance>): {
+  text: string; origin: MessageOrigin | null; provenance: DeliveredMessageProvenance | null;
+} {
+  let text = record.sourceText ?? record.text;
+  let origin: MessageOrigin | null = null;
+  try {
+    const decoded = decodeCodexStructuredUserText(text);
+    if (decoded.structured) {
+      text = decoded.text;
+      origin = decoded.origin ?? null;
+    }
+  } catch { /* A missing marker record leaves the row unproven. */ }
+  return { text, origin, provenance: record.sourceId ? ledger[record.sourceId] ?? null : null };
+}
+
+/** Exact Codex markers and Claude ledger UUIDs survive page size, filters,
+ * redaction and truncation. Legacy occurrence evidence is assigned over a
+ * complete bounded transcript context, never over the requested page alone. */
 export function agentRecordAuthors(
   transcriptPath: string,
-  records: ReadonlyArray<{ role: string; ts: string | null; text: string }>,
+  records: ReadonlyArray<AuthorEvidenceRecord>,
+  context: ReadonlyArray<AuthorEvidenceRecord> | null = null,
 ): Map<number, AgentRecordAuthor> {
   const authors = new Map<number, AgentRecordAuthor>();
-  const items: Item[] = [];
-  const indices = new Map<Item, number>();
-  records.forEach((record, index) => {
-    if (record.role !== "user" || !record.ts) return;
-    let text = record.text;
-    try {
-      const decoded = decodeCodexStructuredUserText(record.text);
-      if (decoded.structured) {
-        text = decoded.text;
-        if (decoded.origin?.kind === "agent") authors.set(index, authorFromOrigin(decoded.origin));
-        if (decoded.origin?.kind === "operator") return;
-      }
-    } catch { /* A missing metadata record leaves the delivery unproven. */ }
-    if (authors.has(index)) return;
-    const item: Item = { kind: "user", ts: record.ts, text };
-    items.push(item);
-    indices.set(item, index);
-  });
-  if (!items.length) return authors;
-  const occurrences = deliveredMessageOccurrences(transcriptPath).filter((entry) => entry.origin === "agent");
-  for (const [item, provenance] of assignDeliveredOccurrences(items, occurrences)) {
-    const index = indices.get(item);
-    if (index !== undefined) authors.set(index, authorFromProvenance(provenance));
+  const ledger = claudeMessageProvenance(transcriptPath);
+  const fallback = new Map<number, DeliveredMessageProvenance>();
+  if (context?.length) {
+    const items: Item[] = [];
+    const seqs = new Map<Item, number>();
+    for (const record of context) {
+      if (record.role !== "user" || !record.ts) continue;
+      const item: Item = { kind: "user", ts: record.ts, text: recordEvidence(record, ledger).text };
+      items.push(item);
+      seqs.set(item, record.seq);
+    }
+    for (const [item, provenance] of assignDeliveredOccurrences(items, deliveredMessageOccurrences(transcriptPath))) {
+      const seq = seqs.get(item);
+      if (seq !== undefined) fallback.set(seq, provenance);
+    }
   }
+  records.forEach((record, index) => {
+    if (record.role !== "user") return;
+    const { origin, provenance } = recordEvidence(record, ledger);
+    if (origin?.kind === "operator" || provenance?.origin === "operator") return;
+    if (origin?.kind === "agent") {
+      authors.set(index, authorFromOrigin(origin));
+      return;
+    }
+    if (provenance?.origin === "agent") {
+      authors.set(index, authorFromProvenance(provenance));
+      return;
+    }
+    const occurrence = fallback.get(record.seq);
+    if (occurrence?.origin === "agent") authors.set(index, authorFromProvenance(occurrence));
+  });
   return authors;
 }

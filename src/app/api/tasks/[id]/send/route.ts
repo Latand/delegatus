@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
+import { agentRegistry } from "@/lib/agent/registry";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { agentMessageOrigin, delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
+import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
@@ -129,18 +132,25 @@ async function postTaskSend(
      old post-send base64 hop that silently dropped image-only tasks is gone. */
   const attachmentPaths = (task.attachments ?? []).map((att) => attachmentPath(att));
   const text = [taskDeliveryText(task.id, task.text), ...attachmentPaths].join("\n");
+  let origin: MessageOrigin = { kind: "operator" };
+  if (actor.kind === "agent") {
+    try {
+      origin = agentMessageOrigin(agentRegistry().readOnlySnapshot(), actor.conversationId);
+    } catch {
+      origin = { kind: "agent", role: "agent", conversationId: actor.conversationId };
+    }
+  } else if (actor.kind === "service") {
+    origin = delegatusMessageOrigin("delegatus", task.project);
+  }
   const outcomes: DeliveryOutcome[] = [];
   for (const targetPath of paths) {
     const entry = byPath.get(targetPath);
-    /* #1117: a task send is the operator's own dispatch, and this route is
-       reachable only from operator surfaces — stamped server-side, like
-       /api/runtime/send, so the delivered card renders as the operator's. */
     outcomes.push(await dependencies.deliverConversationMessage({
       pid: entry?.pid ?? null,
       path: targetPath,
       text,
       images: [],
-      origin: { kind: "operator" },
+      origin,
     }));
   }
 

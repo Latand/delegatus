@@ -270,13 +270,7 @@ const TOOL_RUN = [
   record(7, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_run", content: "src/board/projection.test.ts:\n✓ replays a band from the snapshot [11.20ms]\n✓ keeps the band order after a reload [3.90ms]\n✓ answers a stale revision with the current board [2.40ms]\n\n 3 pass\n 0 fail\nRan 3 tests across 1 file. [141.00ms]" }]),
   record(8, "assistant", [{ type: "text", text: "The projection replays every band from the snapshot, and the three board tests pass." }]),
 ].join("\n");
-const AGENT_FEED = [
-  JSON.stringify({ type: "user", uuid: "evidence-operator-turn", timestamp: iso(120), sessionId: "conversation_running",
-    message: { role: "user", content: "Please check the last review result." } }),
-  JSON.stringify({ type: "user", uuid: "evidence-agent-delivery", timestamp: iso(60), sessionId: "conversation_running",
-    promptSource: "sdk", message: { role: "user", content: [{ type: "text", text: "The review found one issue. I am sending the handoff to this seat." }] } }),
-].join("\n") + "\n";
-const FEED = AGENT_LABEL ? AGENT_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
+const FEED = TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
 const tasks = TOOLCARD ? [{
   id: "task-projection", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
   text: "Rebuild the board status projection\nReplay every band from the snapshot.",
@@ -845,6 +839,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
+let agentEvidence: Promise<{ feed: string; provenance: unknown }> | null = null;
+const deliveredAgentEvidence = () => agentEvidence ??= serverFetch("/evidence/agent-message-label")
+  .then((response) => response.json() as Promise<{ feed: string; provenance: unknown }>);
 const mergeSetting = { enabled: true };
 /* #2146: the project's Bridge reports switch, off with `?bridge=off`. */
 const bridgeSetting = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
@@ -852,11 +849,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
-  if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json({
-    messages: { "evidence-agent-delivery": { origin: "agent", senderRole: "orchestrator",
-      senderProject: "wardrobe-agent", senderConversationId: "conversation_sender" } },
-    occurrences: [], submissions: {}, senders: {},
-  });
+  if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (body.action === "permission") {
@@ -953,13 +946,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/files" && KANBAN) {
     return json({
-      files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length }], flows: [], pipelines: kanbanPipelines,
+      files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
       workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" } },
     });
   }
   if (url.pathname === "/api/files") {
     return json({
-      files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows, pipelines,
+      files, projectCatalog: [{ project: PROJECT, conversations: files.length, smt: now - 20 }], flows, pipelines,
       workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } },
     });
   }
@@ -1072,10 +1065,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* The feed's poll transport (the fixture has no log stream). */
   if (url.pathname === "/api/logs" && method === "POST") {
+    const evidenceFeed = AGENT_LABEL ? (await deliveredAgentEvidence()).feed : FEED;
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = request.path === RUNNING_PATH ? FEED : "";
+      const body = request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });

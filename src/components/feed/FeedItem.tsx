@@ -317,7 +317,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
           {item.internal ? (
             <span className="min-w-0 text-[11px] font-semibold text-accent" data-agent-author data-agent-role={item.peer}>
               {t("render.agentLabel")}{item.peer === "agent" || item.peer === t("render.agentPeer") ? null : ` · ${agentRoleLabel(item.peer, t)}`}
-              {item.senderProject ? ` · ${item.senderProject}` : null}
+              {item.senderProject ? <span className="inline-block max-w-full truncate whitespace-nowrap align-bottom" data-agent-project title={item.senderProject}>{` · ${item.senderProject}`}</span> : null}
               {item.senderConversationId ? <a className="ml-1 underline underline-offset-2" href={`#c=${encodeURIComponent(item.senderConversationId)}`} aria-label={tr("render.openSenderConversation")}>↗</a> : null}
             </span>
           ) : <><span className="text-[11px] font-semibold text-muted">{item.dir === "out" ? tr("render.toDir") : tr("render.fromDir")}</span>

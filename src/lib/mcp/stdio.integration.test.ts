@@ -622,15 +622,27 @@ test("send: acceptance, lost response, original-key recovery — one recipient d
     const settledSnapshot = fixture.registryFile();
     const occurrence = heldDeliveryOccurrences(fixture.recipient.transcriptPath, settledSnapshot);
     expect(occurrence).toMatchObject([{ origin: "agent", senderConversationId: fixture.caller.conversationId }]);
-    const line = JSON.stringify({ type: "response_item", timestamp: occurrence[0]!.deliveredAt,
-      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hold the cutover until I say go" }] } });
-    const feed = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" }).feed([line], 0, false).items;
+    const recipientEffect = fixture.effects().find((effect) => effect.kind === "recipient")!;
+    expect(recipientEffect.text).toBe(sendArguments(fixture, "send-lost-1").text);
+    const operatorLine = JSON.stringify({ type: "response_item", timestamp: new Date(Date.parse(occurrence[0]!.deliveredAt) - 30_000).toISOString(),
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Please check the last review result." }] } });
+    const deliveredLine = JSON.stringify({ type: "response_item", timestamp: occurrence[0]!.deliveredAt,
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: recipientEffect.text }] } });
+    fs.appendFileSync(fixture.recipient.transcriptPath, `${operatorLine}\n${deliveredLine}\n`);
+    const feed = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" })
+      .feed(fs.readFileSync(fixture.recipient.transcriptPath, "utf8").split("\n").filter(Boolean), 0, false).items;
     const lookup = provenanceLookupFor({ occurrences: occurrence }, feed.map((entry) => entry.item));
     const html = renderToStaticMarkup(React.createElement(MessageProvenanceProvider, { value: lookup },
-      React.createElement(FeedItem, { item: feed[0]!.item })));
+      React.createElement(FeedItem, { item: feed.at(-1)!.item })));
     expect(html).toContain("data-agent-author");
     expect(html).toContain(`#c=${fixture.caller.conversationId}`);
     expect(html).not.toContain("data-user-bubble");
+    const operatorItem = feed.find((entry) => entry.item.kind === "user" && entry.item.text === "Please check the last review result.")?.item;
+    expect(operatorItem).toBeDefined();
+    const operatorHtml = renderToStaticMarkup(React.createElement(MessageProvenanceProvider, { value: lookup },
+      React.createElement(FeedItem, { item: operatorItem! })));
+    expect(operatorHtml).toContain("data-user-bubble");
+    expect(operatorHtml).not.toContain("data-agent-author");
 
     /* Recovery under the original key and unchanged payload, host restarted. */
     fixture.control({ mode: "respond" });

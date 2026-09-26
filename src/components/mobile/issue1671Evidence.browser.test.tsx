@@ -4,6 +4,13 @@ import path from "node:path";
 import os from "node:os";
 import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright-core";
 
+import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { deliverConversationMessage } from "@/lib/delivery";
+import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
+import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
+import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
+import type { FileEntry } from "@/lib/types";
 import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
@@ -82,16 +89,74 @@ async function tap(page: Page, cdp: CDPSession, selector: string): Promise<void>
     The shared harness builds it the way the Viewer's client bundle sees it,
     with server actions stubbed (#2009); a plain browser build pulls their
     Node-only bodies in and fails before any case runs. */
-async function serveFixture(): Promise<{ base: string; stop: () => void }> {
+async function serveFixture(responses: Record<string, unknown> = {}): Promise<{ base: string; stop: () => void }> {
   fs.mkdirSync(OUT, { recursive: true });
-  const { base, stop } = await serveEvidenceFixture(OUT, "src/components/mobile/issue1671Evidence.fixture.tsx");
+  const { base, stop } = await serveEvidenceFixture(OUT, "src/components/mobile/issue1671Evidence.fixture.tsx", responses);
   return { base: base.replace(/\/$/, ""), stop };
+}
+
+/** Admit the sender's message through the production delivery boundary. The
+ * engine stub writes its Claude transcript row; the real registry projection
+ * supplies the browser's provenance endpoint. */
+async function admittedAgentEvidence(): Promise<{ feed: string; provenance: unknown; senderConversationId: string }> {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-agent-label-evidence-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = sandbox;
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    const senderPath = path.join(sandbox, "wardrobe-agent", "sender.jsonl");
+    registry.reconcileConversations([{
+      engine: "codex", path: senderPath, accountId: "default",
+      launchProfile: emptyLaunchProfile({ cwd: path.dirname(senderPath), project: "wardrobe-agent" }),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date().toISOString(),
+    }]);
+    const sender = registry.conversationForPath(senderPath)!;
+    const recipient = registry.ensureConversation("claude", RUNNING_PATH, "default");
+    const origin = agentMessageOrigin(registry.readOnlySnapshot(), sender.id, "orchestrator");
+    const text = "The review found one issue. I am sending the handoff to this seat.";
+    let engineInput = "";
+    const outcome = await deliverConversationMessage({
+      pid: 1, path: RUNNING_PATH, conversationId: recipient.id, text, images: [],
+      clientMessageId: "agent-label-evidence-delivery", origin,
+    }, {
+      recover: async () => null,
+      pathAllowed: () => true,
+      listFiles: async () => [{ root: "claude-projects", path: RUNNING_PATH, project: "wardrobe-agent", mtime: 0, size: 0 } as FileEntry],
+      resumeSpecFor: (() => ({ command: "resume", transcript: RUNNING_PATH, launchProfile: emptyLaunchProfile() })) as never,
+      deliver: async ({ payload }: { payload: string }) => {
+        engineInput = payload;
+        return { ok: true as const, outcome: "resumed" as const, target: "%7" };
+      },
+    });
+    if (!outcome.ok || engineInput !== text) throw new Error("agent evidence delivery did not settle");
+    const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries).find((row) => row.clientMessageId === "agent-label-evidence-delivery");
+    if (!delivery?.deliveredAt) throw new Error("agent evidence has no durable settlement");
+    const feed = [
+      { type: "user", uuid: "evidence-operator-turn", timestamp: new Date(Date.parse(delivery.deliveredAt) - 120_000).toISOString(),
+        sessionId: "conversation_running", message: { role: "user", content: "Please check the last review result." } },
+      { type: "user", uuid: "evidence-agent-delivery", timestamp: delivery.deliveredAt, sessionId: "conversation_running",
+        promptSource: "sdk", message: { role: "user", content: [{ type: "text", text: engineInput }] } },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n";
+    const provenance = { messages: claudeMessageProvenance(RUNNING_PATH), occurrences: deliveredMessageOccurrences(RUNNING_PATH),
+      submissions: {}, senders: {} };
+    if (!provenance.occurrences.some((row) => row.origin === "agent" && row.senderConversationId === sender.id)) {
+      throw new Error("agent evidence lost its server-attributed sender");
+    }
+    return { feed, provenance, senderConversationId: sender.id };
+  } finally {
+    setAgentRegistryForTests(null);
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
 }
 
 const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
 
 browserTest("agent-delivered seat message keeps its author at desktop and phone widths in both languages", async () => {
-  const { base, stop } = await serveFixture();
+  const evidence = await admittedAgentEvidence();
+  const { base, stop } = await serveFixture({ "/evidence/agent-message-label": evidence });
   const browser = await launchChromium();
   const out = path.join(os.homedir(), "Pictures/delegatus-review/agent-message-label");
   fs.mkdirSync(out, { recursive: true });
@@ -107,12 +172,16 @@ browserTest("agent-delivered seat message keeps its author at desktop and phone 
           await page.waitForSelector("[data-agent-author]", { timeout: 15_000 });
           await page.waitForSelector("[data-user-bubble]", { timeout: 15_000 });
           const label = await page.locator("[data-agent-author]").first().innerText();
-          const expected = `${locale === "uk" ? "Агент · Оркестратор" : "Agent · Orchestrator"} · wardrobe-agent`;
-          if (!label.includes(expected)) throw new Error(`agent label missing: ${label}`);
+          const roleLabel = locale === "uk" ? "Агент · Оркестратор" : "Agent · Orchestrator";
+          if (!label.includes(roleLabel) || !label.includes("wardrobe-agent")) throw new Error(`agent label missing: ${label}`);
+          const projectName = page.locator("[data-agent-project]").first();
+          if (await projectName.textContent() !== " · wardrobe-agent") throw new Error("sender project name changed");
+          if (await projectName.evaluate((element) => getComputedStyle(element).whiteSpace) !== "nowrap") throw new Error("sender project name can split across lines");
           const link = await page.locator("[data-agent-author] a").first().getAttribute("href");
-          if (link !== "#c=conversation_sender") throw new Error(`sender link missing: ${link}`);
+          if (link !== `#c=${evidence.senderConversationId}`) throw new Error(`sender link missing: ${link}`);
           const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
           if (overflow) throw new Error(`horizontal overflow at ${width}px`);
+          if ((await page.locator("body").innerText()).includes("NaN")) throw new Error("invalid relative age rendered");
           await page.screenshot({ path: path.join(out, `${width}-${locale}.png`), fullPage: true });
           if (width === 1440) {
             await page.keyboard.press("Escape");

@@ -6,8 +6,11 @@ import path from "node:path";
 
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { deliverConversationMessage } from "@/lib/delivery";
 import { SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
+import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
+import { messageTextDigest } from "@/lib/team/events";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor, mutateBoard, patchBoard } from "@/lib/board/store";
@@ -21,6 +24,8 @@ import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projec
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { claimInstall } from "@/lib/team/members";
+import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 
 import type { CompletedGenerationRead } from "@/lib/lifecycle/inventorySelection";
 import { queryLifecycleEvents } from "@/lib/lifecycle/journal";
@@ -46,6 +51,7 @@ const originalSpawnCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
 
 afterEach(() => {
   setAgentRegistryForTests(null);
+  resetTeamStoreForTests();
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;
   if (originalSpawnCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];
@@ -764,6 +770,140 @@ test("conversation_messages resolves id, path, and selectedContext through one p
     selectedContext: { state: "selected", conversationId: "conversation_fixture", project: "fixture" },
   });
 });
+
+test("conversation_messages keeps delivery authors across cursors, filters, truncation and redaction", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-authors-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const shared = `Review result ${"x".repeat(5_700)} ${["api", "key"].join("_")}=fixture-value`;
+  const sender = { kind: "agent" as const, role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" };
+  const claudePath = path.join(sandbox, "claude-author.jsonl");
+  fs.writeFileSync(claudePath, [
+    { type: "user", uuid: "operator-row", timestamp: "2026-09-26T10:00:00.000Z", message: { role: "user", content: shared } },
+    { type: "user", uuid: "agent-row", timestamp: "2026-09-26T10:00:30.000Z", promptSource: "sdk", message: { role: "user", content: [{ type: "text", text: shared }] } },
+  ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const ledger = new FileClaudeDeliveryLedger();
+  ledger.recordQueued("claude-author", { id: "delivered-agent", text: shared, origin: sender }, "turn-started");
+  ledger.confirmDelivered("claude-author", "delivered-agent", "agent-row");
+  const codexPath = path.join(sandbox, "codex-author.jsonl");
+  const wire = encodeCodexStructuredUserText(shared, undefined, null, sender, "b".repeat(64));
+  fs.writeFileSync(codexPath, [
+    { type: "response_item", timestamp: "2026-09-26T10:00:00.000Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: shared }] } },
+    { type: "response_item", timestamp: "2026-09-26T10:00:30.000Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: wire }] } },
+  ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const pinnedTranscript = (candidate: string) => {
+    if (candidate !== claudePath && candidate !== codexPath) return undefined;
+    const descriptor = fs.openSync(candidate, "r");
+    return { descriptor, stat: fs.fstatSync(descriptor), rootName: candidate === claudePath ? "claude-projects" : "codex-sessions",
+      root: sandbox, sameIdentity: () => true };
+  };
+  const bindings = viewerMcpBindings(undefined, undefined, { pinnedTranscript } as never);
+  for (const transcriptPath of [claudePath, codexPath]) {
+    for (const maxChars of [1, 4_000, 16_000]) {
+      const first = await bindings.conversation_messages({ clientRequestId: `author-${path.basename(transcriptPath)}-${maxChars}-first`, transcriptPath,
+        roles: ["user"], limit: 1, maxChars });
+      const second = await bindings.conversation_messages({ clientRequestId: `author-${path.basename(transcriptPath)}-${maxChars}-second`, transcriptPath,
+        roles: ["user"], limit: 1, maxChars, cursor: first.cursor });
+      expect(first.records[0].author).toEqual(sender);
+      expect(second.records[0].author).toBeUndefined();
+      expect(JSON.stringify(first.records[0])).not.toContain("sourceText");
+      expect(JSON.stringify(first.records[0])).not.toContain("sourceId");
+      if (maxChars === 16_000) expect(first.records[0].text).toContain("[redacted]");
+      const filtered = await bindings.conversation_messages({ clientRequestId: `author-${path.basename(transcriptPath)}-${maxChars}-filter`, transcriptPath,
+        kinds: ["message"], roles: ["user"], limit: 2, maxChars });
+      expect(filtered.records.map((record: { author?: unknown }) => record.author ?? null)).toEqual([sender, null]);
+    }
+  }
+}, 30_000);
+
+test("real admitted deliveries keep the same MCP author when identical operator text crosses a page", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-delivered-author-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const text = `A repeated review result ${"x".repeat(5_700)}`;
+  for (const engine of ["claude", "codex"] as const) {
+    const registry = new AgentRegistry(path.join(sandbox, `${engine}-registry.json`));
+    setAgentRegistryForTests(registry);
+    const transcriptPath = path.join(sandbox, `${engine}-delivered.jsonl`);
+    fs.writeFileSync(transcriptPath, "");
+    const conversation = registry.ensureConversation(engine, transcriptPath, "default");
+    const outcome = await deliverConversationMessage({
+      pid: 1, path: transcriptPath, conversationId: conversation.id, text, images: [],
+      clientMessageId: `${engine}-delivered-author`,
+      origin: { kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" },
+    }, {
+      recover: async () => null,
+      pathAllowed: () => true,
+      listFiles: async () => [{ root: `${engine}-sessions`, path: transcriptPath, project: "fixture", mtime: 0, size: 0 } as FileEntry],
+      resumeSpecFor: (() => ({ command: "resume", transcript: transcriptPath, launchProfile: emptyLaunchProfile() })) as never,
+      deliver: async () => ({ ok: true as const, outcome: "resumed" as const, target: "%7" }),
+    });
+    expect(outcome.ok).toBe(true);
+    const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries).find((row) => row.clientMessageId === `${engine}-delivered-author`)!;
+    const agentAt = delivery.deliveredAt!;
+    const operatorAt = new Date(Date.parse(agentAt) - 30_000).toISOString();
+    const line = (at: string, id: string) => engine === "claude"
+      ? { type: "user", uuid: id, timestamp: at, message: { role: "user", content: text } }
+      : { type: "response_item", timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } };
+    fs.writeFileSync(transcriptPath, [line(operatorAt, "operator"), line(agentAt, "agent")].map((row) => JSON.stringify(row)).join("\n") + "\n");
+    const pinnedTranscript = (candidate: string) => {
+      if (candidate !== transcriptPath) return undefined;
+      const descriptor = fs.openSync(candidate, "r");
+      return { descriptor, stat: fs.fstatSync(descriptor), rootName: engine === "claude" ? "claude-projects" : "codex-sessions",
+        root: sandbox, sameIdentity: () => true };
+    };
+    const bindings = viewerMcpBindings(undefined, undefined, { pinnedTranscript } as never);
+    for (const maxChars of [1, 4_000]) {
+      const first = await bindings.conversation_messages({ clientRequestId: `${engine}-admitted-${maxChars}-first`, transcriptPath, limit: 1, maxChars });
+      const second = await bindings.conversation_messages({ clientRequestId: `${engine}-admitted-${maxChars}-second`, transcriptPath,
+        limit: 1, maxChars, cursor: first.cursor });
+      expect(first.records[0].author).toEqual({ kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" });
+      expect(second.records[0].author).toBeUndefined();
+    }
+  }
+}, 30_000);
+
+test("a member's identical earlier turn keeps its name beside a ledger-attributed agent turn", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-member-agent-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  resetTeamStoreForTests();
+  const store = teamStore();
+  const member = claimInstall(store, "Mira", { surface: "desktop", browser: "chrome" }).member;
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const transcriptPath = path.join(sandbox, "member-agent.jsonl");
+  const conversation = registry.ensureConversation("claude", transcriptPath, "default");
+  const text = "Review the same seam";
+  const memberAt = "2026-09-26T11:00:00.000Z";
+  const agentAt = "2026-09-26T11:00:30.000Z";
+  store.recordMessageAuthor({ clientMessageId: "member-seam", conversationId: conversation.id, memberId: member.id,
+    at: memberAt, textDigest: messageTextDigest(text) });
+  fs.writeFileSync(transcriptPath, [
+    { type: "user", uuid: "member-turn", timestamp: memberAt, message: { role: "user", content: text } },
+    { type: "user", uuid: "agent-turn", timestamp: agentAt, promptSource: "sdk", message: { role: "user", content: [{ type: "text", text }] } },
+  ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const ledger = new FileClaudeDeliveryLedger();
+  ledger.recordQueued("member-agent", { id: "agent-seam", text, origin: { kind: "agent", role: "reviewer" } }, "turn-started");
+  ledger.confirmDelivered("member-agent", "agent-seam", "agent-turn");
+  const pinnedTranscript = (candidate: string) => {
+    if (candidate !== transcriptPath) return undefined;
+    const descriptor = fs.openSync(candidate, "r");
+    return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root: sandbox, sameIdentity: () => true };
+  };
+  const selectedContext = {
+    selectedConversation: () => ({ resolve: (id: string) => id === conversation.id
+      ? { conversationId: id, engine: "claude" as const, path: transcriptPath, project: "fixture" } : null }),
+    pathAllowed: (candidate: string) => candidate === transcriptPath,
+  };
+  const bindings = viewerMcpBindings(undefined, undefined, { pinnedTranscript, selectedContext } as never);
+  const first = await bindings.conversation_messages({ clientRequestId: "member-agent-first", conversationId: conversation.id, limit: 1 });
+  const second = await bindings.conversation_messages({ clientRequestId: "member-agent-second", conversationId: conversation.id, limit: 1, cursor: first.cursor });
+  expect(first.records[0].author).toEqual({ kind: "agent", role: "reviewer" });
+  expect(second.records[0].author).toMatchObject({ kind: "member", name: "Mira" });
+  const both = await bindings.conversation_messages({ clientRequestId: "member-agent-both", conversationId: conversation.id, limit: 2, roles: ["user"] });
+  expect(both.records.map((record: { author?: { kind: string } }) => record.author?.kind)).toEqual(["agent", "member"]);
+}, 30_000);
 
 test("conversation_messages refuses unsupported roots and stale cursors with typed codes", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-conversation-message-refusals-"));
