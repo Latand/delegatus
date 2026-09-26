@@ -156,6 +156,18 @@ export interface SubjectAuthorshipView {
   changedAt: string | null;
 }
 
+/** What the delivery record knows about a submission id before the send. */
+export type PriorSubmission = "admitted" | "unknown" | "not-executed";
+
+/** A member's claim to a message they are about to send (§7.1). */
+export interface MessageAuthorClaim {
+  actor: Extract<TeamActor, { kind: "member" }>;
+  clientMessageId: string;
+  conversationId: string;
+  text: string;
+  path: string | null;
+}
+
 /** Everything the rest of the product asks of the team module (§11.1). */
 export interface TeamModule {
   teamMode(): TeamMode;
@@ -170,7 +182,18 @@ export interface TeamModule {
     detail?: TeamEventDetail | null;
   }): void;
   recordMessageAuthor(input: { actor: TeamActor; clientMessageId: string; conversationId: string | null; text: string }): void;
-  messageSenders(clientMessageIds: readonly string[]): Record<string, MessageSender>;
+  /** Taken before a send, for a submission id nothing knows yet; null when it may not be claimed. */
+  claimMessageAuthor(input: {
+    actor: TeamActor;
+    clientMessageId: string;
+    conversationId: string | null;
+    text: string;
+    path?: string | null;
+    priorSubmission: () => PriorSubmission;
+  }): MessageAuthorClaim | null;
+  /** Records a claim once the host admitted the submission. */
+  settleMessageAuthor(claim: MessageAuthorClaim | null): void;
+  messageSenders(clientMessageIds: readonly string[], inConversation?: (conversationId: string) => boolean): Record<string, MessageSender>;
   subjectAuthorship(subjectIds: readonly string[]): Record<string, SubjectAuthorshipView>;
   teamTelegramHook(input: { from: { id: number; first_name?: string; username?: string; is_bot?: boolean } | undefined; chatType: string; text: string | undefined }): string | null;
 }
@@ -182,6 +205,8 @@ export const nullTeam: TeamModule = {
   refuseAnonymous: () => null,
   recordTeamEvent: () => {},
   recordMessageAuthor: () => {},
+  claimMessageAuthor: () => null,
+  settleMessageAuthor: () => {},
   messageSenders: () => ({}),
   subjectAuthorship: () => ({}),
   teamTelegramHook: () => null,

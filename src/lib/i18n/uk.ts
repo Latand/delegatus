@@ -4789,6 +4789,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "team.member.revoke": "Відкликати доступ",
   "team.member.restore": "Повернути доступ",
   "team.member.revokeConfirm": "{name} вийде на всіх пристроях і більше не зможе увійти. Минулі повідомлення збережуть ім’я.",
+  "team.member.revokeKey": "Якщо інсталяція працює з ключем доступу, він у них лишається, і скрипт може ним читати. Щоб забрати й ключ, перезапустіть Delegatus на хості з --new-token і надішліть решті команди нове посилання.",
   "team.member.since": "Приєднався(лась) {age}",
   "team.member.revokedAt": "доступ закрито {age}",
   "team.telegram.link": "Прив’язати Telegram",

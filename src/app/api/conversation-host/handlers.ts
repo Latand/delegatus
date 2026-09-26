@@ -33,7 +33,7 @@ import { pathAllowed } from "@/lib/scanner/roots";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
 import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
-import { recordConversationEvent, recordMessageAuthor, refuseAnonymous, teamActor } from "@/lib/team";
+import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type MessageAuthorClaim } from "@/lib/team";
 import { materializeStructuredTerminal } from "@/lib/runtime/structuredTerminal";
 import { attachmentsAreOrphaned, structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileAdmissionResult } from "@/lib/inboxFiles";
@@ -404,8 +404,9 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   const clientMessageId = typeof body.clientMessageId === "string" ? body.clientMessageId.trim().slice(0, 128) : "";
   /* Who is sending (sign-in-and-team §7.1). In team mode a person's message
      needs a member session; the refusal comes before anything is recorded or
-     delivered, and the member is stamped against the client message id the
-     feed already joins every delivered record to. */
+     delivered. The member is stamped against the client message id the feed
+     already joins every delivered record to, and only once the delivery
+     below admitted this submission (`claimMessageAuthor`). */
   const sender = teamActor(req);
   const anonymousSend = refuseAnonymous(sender);
   if (anonymousSend) return anonymousSend;
@@ -439,9 +440,18 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
        time it was accepted, so the record clears against that moment and
        leaves whatever has been offered since alone. */
     retireReplySuggestionsOnOperatorMessage(operatorAction.conversationId, acceptedAt, clientMessageId);
-    recordMessageAuthor({ actor: sender, clientMessageId, conversationId: operatorAction.conversationId || null, text });
-    recordConversationEvent({ actor: sender, action: "message.sent", conversationId: operatorAction.conversationId || conversationId, path: filePath });
   }
+  const authoredConversation = operatorAction.conversationId || conversationId || null;
+  const authorClaim: MessageAuthorClaim | null = operatorAction.byOperator
+    ? claimMessageAuthor({
+      actor: sender,
+      clientMessageId,
+      conversationId: authoredConversation,
+      text,
+      path: filePath,
+      priorSubmission: () => dependencies.priorSubmission(authoredConversation ?? "", clientMessageId),
+    })
+    : null;
 
   /* The attachments hit disk HERE, after every early refusal above — a rejected
      request never orphans bytes — and the paths ride the delivered text the way
@@ -485,6 +495,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     });
     if (structured) {
       await releaseAttachments(structuredAttachmentOutcome(structured));
+      if (structured.ok) settleMessageAuthor(authorClaim);
       const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
       return NextResponse.json({ ...response, ...attachmentField() }, { status });
     }
@@ -510,5 +521,6 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     ? "accepted"
     : outcome.actuation === "started" ? "uncertain" : "refused");
   if (!outcome.ok) return respond(outcome);
+  settleMessageAuthor(authorClaim);
   return NextResponse.json({ ...outcome, ...attachmentField() });
 }

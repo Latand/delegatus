@@ -120,18 +120,21 @@ scope of §0; three entries narrow it and say where the rest went (A8, A9, A10).
 | A17 | **Audit ids carry a per-process sequence** (`<ms>-<seq><random>`), so events of one millisecond sort in the order they happened. | §3.7 | A claim and the session it opens land in the same millisecond. With a random suffix alone, the audit read "signed in" before "set up the team". |
 | A18 | **The proxy sets `X-Frame-Options: DENY`, `frame-ancestors 'none'` and `Referrer-Policy: no-referrer`** on `/sign-in` and `/join/*`. | §9 last row | A layout cannot set response headers in this Next version, and the proxy is already the one place that sees these paths. `no-referrer` keeps a join code out of any outgoing Referer. |
 | A19 | **Activity rows link** a conversation to `/#c=<id>` and a task to its project board, `/#p=<project>`. Projects are named the way the Activity dashboard names them (`catalogProjectNames`). | §6.8 | The board has no desktop deep link to one task. |
+| A20 | **The gate verifies an agent's capability and a service's tag before it lets either through.** A capability passes when it is the operator's own spawn capability or one the registry issued; a tag passes when its HMAC checks against the operator spawn capability on disk. A claim that fails is ignored and the request is judged as a person. The registry lookup reaches the proxy through a resolver the serving Viewer installs at startup (`installSpawnCapabilityResolver` in `src/lib/agent/callerClaims.ts`), so the proxy bundle still does not import the registry. | §4.2 rule 2, the residual this table used to end with | Checking the shape only let anyone past the perimeter write 43 characters into a header and reach every route that never asks who is acting (pipelines, deployments, files, transcript reads) as the unnamed operator, so revoking a member did not stop them. |
+| A21 | **First-party callers name themselves.** The runtime host's pipeline tick sends the `controller` tag. The candidate readiness probes and the self-update restart probe send the `probe` tag, minted from the key in the state directory (`bin/internalService.mjs`, shared by the launcher and the TypeScript side). A `probe` tag opens GET and HEAD only. | §4.2 rules 2 and 3, §4.5, §8.1 | The tick is a bearer-only POST, which the gate refuses in team mode whatever the key. Without `LLV_TOKEN`, the default local install, no bearer exists at all, so the probes that need `GET /` to answer 200 were refused too and a checkout's self-update restart stopped the install. |
+| A22 | **A message's author is recorded after the host admitted it, and only for a submission id nothing knew before.** `claimMessageAuthor` runs before the send and declines an id the delivery record already holds or an author row already names; `settleMessageAuthor` records the author and `message.sent` once the host admitted the send. The row is bound to its conversation, and `/api/log/provenance` names a sender only for the conversation the path belongs to. | §7.1, A3 | The submission id is chosen by the browser, and every browser can read delivered messages' ids from the provenance answer. Stamping before the send let a member claim a message sent before the team existed, a task send or an agent relay, even though the host refused the reuse. |
 
-**The one residual, stated plainly (§9).** The proxy checks an agent's
-capability header by shape only, because the registry lookup would pull the
-server graph into the proxy bundle (A11). So someone already past the
-perimeter can forge a capability-shaped header and reach routes without being
-a member. Every route that attributes a human action re-resolves the capability
-through the registry (`teamActor`) and refuses a forged one: messages, answers,
-spawns, task create/change/send, claim. The identity layer is attribution among
-people who already hold the perimeter; D1 has always said the perimeter is the
-security boundary. The practical consequence: **revoking a member ends their
-sessions, but not their perimeter access.** To shut a person out entirely,
-also rotate the key (`delegatus --new-token`) or remove their Caddy password.
+**The one residual, stated plainly (§9).** Rule 3 of §4.2 lets a request that
+authenticated with the perimeter key as `Authorization: Bearer` read without
+being a member: operator scripts, the MCP server of a session the Viewer did
+not start, and a browser on the runtime host's trusted local entry all read
+that way. Every teammate holds that key, because invite and hand-off links
+carry it (A13), and **a revoked member keeps it**. Revoking ends their sessions
+and every write, and a browser visit sends them to sign in; a script of theirs
+can still make bearer GETs until the key changes. To shut a person out
+entirely, rotate the key (`delegatus --new-token`, or a new `LLV_TOKEN` in a
+Docker install) and send the rest of the team a fresh link, or remove their
+Caddy password. The Revoke dialog says so.
 
 **What the build verified** is listed in the pull request: the model, flows,
 gate matrix, Telegram through the real poller, passkeys through a software
@@ -562,16 +565,20 @@ After the token check passes (or when no token is configured), in team mode:
    `/api/team/session/*` (the sign-in endpoints), `/api/artifact/frame/*`
    (already exempt), `/_next/static`, `/favicon.ico`, `/brand/*`, `/icon.svg`,
    `/apple-icon`.
-2. A request that names an agent (`x-llv-spawn-capability`, checked by shape
-   only in the proxy; the registry lookup happens in the route) or carries the
-   internal service tag passes: agents and services are not members.
+2. A request that names an agent (`x-llv-spawn-capability`) or a Viewer
+   process (`x-llv-internal-service`) passes once the claim is verified:
+   the capability must be the operator's own or one the registry issued, and
+   the tag's HMAC must check against the operator spawn capability on disk
+   (A20). The `probe` tag, carried by the candidate readiness probes and the
+   self-update restart probe, opens `GET` and `HEAD` only (A21). A claim that
+   fails verification is ignored, and the request goes on to rule 3.
 3. A request that authenticated at the perimeter with `Authorization: Bearer`
-   and is `GET` or `HEAD` passes: candidate readiness probes
-   (`src/runtime-host/deploymentHealth.ts` sends the key and expects `200` at
-   `/`), operator scripts that read, and browsers on the runtime host's trusted
-   local entry (which injects the bearer). Such a browser loads the page and
-   is sent to `/sign-in` by its first write (rule 5 at the stamp site), never
-   by the page load.
+   and is `GET` or `HEAD` passes: operator scripts that read, and browsers on
+   the runtime host's trusted local entry (which injects the bearer). Such a
+   browser loads the page and is sent to `/sign-in` by its first write (rule
+   5 at the stamp site), never by the page load. Anyone holding the key reads
+   this way, a revoked member included (the residual under the As-built
+   table).
 4. A live `llv_member` cookie passes. The lookup is an in-process
    `Map<hash, {memberId, expiresAt, lastSeenAt}>` rebuilt when the
    `team_sessions` collection revision changes, so revocation is immediate
@@ -621,7 +628,9 @@ posts to the routes with that capability and the perimeter bearer; the
 runtime host's entries still inject or require the release key. None of them
 carries a member cookie and none needs one. `send_message` from an agent is
 still stamped `origin: agent(role)`. The rotation, deploy and seat authorities
-are untouched.
+are untouched. The two callers that carried neither a capability nor a
+member now name themselves with a service tag: the runtime host's pipeline
+tick (`controller`) and the readiness probes (`probe`), A21.
 
 ## 5. Sign-in methods
 
@@ -1157,8 +1166,9 @@ that ships this; the Activity tab's first day is that day.
 | Laptop, `--tailscale`: phone opens `https://<host>.ts.net/?k=…`, cookie set, done | Unchanged in solo mode. In team mode the QR carries `/join/<handoff>?k=…`: the phone is signed in as the scanning member in one scan. |
 | Shared box: Caddy password → `?k=` → the app | Perimeter unchanged. In team mode, after the `?k=` redirect the browser lands on `/sign-in`; a member signs in once per device and stays signed in. |
 | Runtime host trusted local entry (#1549): bearer injected for loopback-host requests | Unchanged. Reads pass the identity gate; the first write asks for sign-in. |
-| MCP server → routes with `Bearer` + spawn capability | Unchanged; agents are not members. |
-| Candidate readiness probe `GET /` with the key, expects 200 | Unchanged (§4.2 rule 3). |
+| MCP server → routes with `Bearer` + spawn capability | Unchanged; agents are not members. The gate checks the capability against the registry (A20). |
+| Runtime host → `POST /api/pipelines/tick` | Carries the `controller` tag (A21); passes with or without a key. |
+| Candidate readiness probe `GET /` and `capabilities/v1`, and the self-update restart probe, expect 200 | Carry the `probe` tag (A21), so they pass in team mode with or without a key. |
 | `delegatus --new-token` | Unchanged; rotates the perimeter key. Member sessions survive a key rotation, since they are a different layer. |
 | The `llv_auth` cookie | Unchanged, 30 days, perimeter only. |
 | `LLV_TS_HOST` in `sameOrigin.ts` | Unchanged; it is what admits the stage host name, and the sign-in POSTs pass through the same gate. |
@@ -1204,7 +1214,9 @@ proxy knows.
 | Session theft from a backup or a state read | Only hashes are stored; the cookie value exists in the browser and in flight. |
 | Session fixation / replay | New value on every sign-in; unknown values never adopted; single-use challenges consumed inside the collection mutation. |
 | CSRF on sign-in and on every mutation | `rejectCrossOrigin` unchanged; `SameSite=Lax`; a cross-site POST cannot carry the cookie. |
-| A header as evidence (#1496) | The gate reads a cookie the browser keeps and nothing the caller writes; no proxy-set trust header. |
+| A header as evidence (#1496) | The gate reads a cookie the browser keeps; a capability or service header passes only once verified against the registry or its HMAC (A20); no proxy-set trust header. |
+| A revoked member | Every session ends at once and every write is refused. The member still holds the perimeter key from their invite link and can make bearer GETs until the key is rotated (`delegatus --new-token`, or a new `LLV_TOKEN`); the Revoke dialog says so. |
+| Claiming someone else's message | A sender is recorded only after the host admitted a submission whose id no delivery record and no author row knew, and is read back only on that conversation (A22). |
 | Guessing | Link codes are 128-bit; the approval code is 30 bits and voided after 5 wrong entries; passkeys are not guessable. No persistent throttle store: a Viewer restart resets the small in-memory counters, which is acceptable for 10-minute codes. |
 | A stolen phone | Sessions tab → Sign out everywhere, or the owner revokes the member; both are immediate through the revision-keyed cache. |
 | Lost passkey and lost phone | Invite from the owner; for the owner, the host CLI. |

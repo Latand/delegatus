@@ -31,20 +31,33 @@ function request(body: unknown, headers: Record<string, string> = {}): NextReque
   });
 }
 
-function dependencies(enqueued: unknown[]): RuntimeHttpDependencies {
+type HostAnswer = "admit" | "refuse";
+
+/* `known` are the submission ids the delivery record already holds, as
+   `deliveryAdmissionForKey` answers for them; everything else is fresh. */
+function dependencies(enqueued: unknown[], host: HostAnswer = "admit", known: readonly string[] = []): RuntimeHttpDependencies {
   return {
     enabled: () => true,
     structuredEnabled: () => true,
     client: () => null,
+    registry: () => ({
+      deliveryAdmissionForKey: (_conversationId: string, key: string) => (known.includes(key)
+        ? { outcome: "admitted", operationId: "op_earlier", deliveryId: "delivery_earlier", state: "delivered" }
+        : { outcome: "not-executed" }),
+    }) as never,
     recordOperatorActivity: () => null,
     recordOperatorRequest: () => null,
     enqueue: async (input) => {
       enqueued.push(input);
-      return { ok: false, status: 409, error: "fixture host refused" } as never;
+      return (host === "admit"
+        ? { ok: true, structured: true, target: null, outcome: "held", operationId: `op_${enqueued.length}` }
+        : { ok: false, structured: true, outcome: "failed", status: 409, error: "fixture host refused" }) as never;
     },
     retireReplySuggestions: () => ({ cleared: false, pending: false }),
   };
 }
+
+const sentEvents = () => existingTeamStore()!.events({ limit: 10, actions: ["message.sent"] });
 
 beforeEach(() => {
   process.env.LLV_STATE_DIR = path.join(sandbox, `state-${Math.random().toString(36).slice(2)}`);
@@ -110,4 +123,63 @@ test("an agent's relay in a team is neither refused nor stamped with a person", 
   ), "send", dependencies(enqueued));
   expect(enqueued).toHaveLength(1);
   expect(messageSenders(["agent-send-1"])).toEqual({});
+});
+
+test("a send the host refuses leaves no author and no event", async () => {
+  const store = teamStore();
+  const mira = claimInstall(store, "Mira", DESKTOP);
+  const oleh = redeemJoin(store, createInvite(store, mira.member, null).code, "Oleh", DESKTOP);
+  const response = await handleRuntimeCommand(
+    request({ conversationId: "conversation_direct", text: "mine now", idempotencyKey: "delivered-earlier-by-someone-else" }, { cookie: `${MEMBER_COOKIE}=${oleh.cookie}` }),
+    "send",
+    dependencies([], "refuse"),
+  );
+  expect(response.status).toBe(409);
+  expect(messageSenders(["delivered-earlier-by-someone-else"])).toEqual({});
+  expect(sentEvents()).toEqual([]);
+});
+
+test("naming another message's submission id cannot make a member its sender", async () => {
+  const store = teamStore();
+  const mira = claimInstall(store, "Mira", DESKTOP);
+  const oleh = redeemJoin(store, createInvite(store, mira.member, null).code, "Oleh", DESKTOP);
+  /* A task send the delivery record holds, with no author: the host would
+     answer the reuse as a replay of that delivery. */
+  const replayed = await handleRuntimeCommand(
+    request({ conversationId: "conversation_direct", text: "task text", idempotencyKey: "task-send-1" }, { cookie: `${MEMBER_COOKIE}=${oleh.cookie}` }),
+    "send",
+    dependencies([], "admit", ["task-send-1"]),
+  );
+  expect(replayed.status).toBe(202);
+  expect(messageSenders(["task-send-1"])).toEqual({});
+  expect(sentEvents()).toEqual([]);
+
+  /* Mira's own message: its sender does not change when Oleh names it. */
+  await handleRuntimeCommand(
+    request({ conversationId: "conversation_direct", text: "review the seam", idempotencyKey: "mira-send-2" }, { cookie: `${MEMBER_COOKIE}=${mira.cookie}` }),
+    "send",
+    dependencies([]),
+  );
+  await handleRuntimeCommand(
+    request({ conversationId: "conversation_direct", text: "review the seam", idempotencyKey: "mira-send-2" }, { cookie: `${MEMBER_COOKIE}=${oleh.cookie}` }),
+    "send",
+    dependencies([], "admit"),
+  );
+  expect(messageSenders(["mira-send-2"])["mira-send-2"]?.memberId).toBe(mira.member.id);
+  expect(sentEvents().map((event) => event.actor)).toEqual([{ kind: "member", memberId: mira.member.id }]);
+});
+
+test("an author is read back only on the conversation the message was sent into", async () => {
+  const store = teamStore();
+  const mira = claimInstall(store, "Mira", DESKTOP);
+  const oleh = redeemJoin(store, createInvite(store, mira.member, null).code, "Oleh", DESKTOP);
+  /* Oleh sends into his own conversation under an id another conversation's
+     message carries; that conversation's feed must not show him. */
+  await handleRuntimeCommand(
+    request({ conversationId: "conversation_oleh", text: "hello", idempotencyKey: "shared-id" }, { cookie: `${MEMBER_COOKIE}=${oleh.cookie}` }),
+    "send",
+    dependencies([]),
+  );
+  expect(messageSenders(["shared-id"], (id) => id === "conversation_oleh")["shared-id"]?.name).toBe("Oleh");
+  expect(messageSenders(["shared-id"], (id) => id === "conversation_direct")).toEqual({});
 });

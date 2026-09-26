@@ -59,6 +59,11 @@ function readOperatorSpawnCapability(): string | null {
   }
 }
 
+/** The capability on disk, or null when none has been made yet. Never writes one. */
+export function currentOperatorSpawnCapability(): string | null {
+  return readOperatorSpawnCapability();
+}
+
 export function rotateOperatorSpawnCapability(): string {
   const capability = crypto.randomBytes(32).toString("base64url");
   writeOperatorSpawnCapability(capability);

@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { agentCapabilityClaim, internalServiceClaim } from "@/lib/agent/callerClaims";
+
 import { MEMBER_REQUIRED_CODE } from "./contract";
 import { MEMBER_COOKIE, verifySessionValue } from "./sessions";
 import { existingTeamStore } from "./store";
@@ -28,13 +30,6 @@ const EXEMPT_PREFIXES = [
   "/brand/",
 ] as const;
 const EXEMPT_EXACT = new Set(["/favicon.ico", "/icon.svg", "/apple-icon", "/manifest.webmanifest", "/robots.txt"]);
-
-/* An agent names itself with its spawn capability and a Viewer service with
-   its tag. The proxy checks their SHAPE only: the registry lookup belongs to
-   the routes, and every route that attributes an action re-resolves the
-   capability there (`teamActor`), refusing a forged one. */
-const AGENT_CAPABILITY = /^[A-Za-z0-9_-]{43}$/;
-const SERVICE_TAG = /^[a-z]{2,24}\.[a-f0-9]{64}$/;
 
 /** The pages a signed-out person is shown (the proxy forbids framing them). */
 export function isTeamAuthPage(pathname: string): boolean {
@@ -77,15 +72,27 @@ export function teamGate(request: NextRequest, context: TeamGateContext, nowMs =
       });
   }
 
-  const capability = request.headers.get("x-llv-spawn-capability")?.trim() ?? "";
-  if (capability && AGENT_CAPABILITY.test(capability)) return null;
-  const service = request.headers.get("x-llv-internal-service")?.trim() ?? "";
-  if (service && SERVICE_TAG.test(service)) return null;
+  /* An agent names itself with its spawn capability and a Viewer process with
+     its service tag. Both are VERIFIED here, never taken by shape: the
+     capability against the operator's key and the registry, the tag against
+     its HMAC. Most routes never ask who is acting, so a claim passed on its
+     looks alone would reach them as the unnamed operator, and a revoked
+     member could walk back in by writing 43 characters into a header. A
+     claim that fails verification is ignored and the request is judged as a
+     person below. */
+  const reads = request.method === "GET" || request.method === "HEAD";
+  if (agentCapabilityClaim(request) === "valid") return null;
+  const service = internalServiceClaim(request, { readOnly: true });
+  /* A readiness probe (candidate health, the self-update restart) reads the
+     page it proves; its tag opens nothing else. */
+  if (service.claim === "valid" && (service.service !== "probe" || reads)) return null;
 
-  /* Readiness probes and operator scripts read with the perimeter key; a
-     browser on the runtime host's trusted local entry has it injected. None
-     of them writes as a person, so reads pass and the first write asks. */
-  if (context.bearerAuthenticated && (request.method === "GET" || request.method === "HEAD")) return null;
+  /* Operator scripts read with the perimeter key, and a browser on the
+     runtime host's trusted local entry has it injected. None of them writes
+     as a person, so reads pass and the first write asks. Whoever holds the
+     key can read this way, a revoked member included; rotating the key
+     (`--new-token`) is what takes that back (§9). */
+  if (context.bearerAuthenticated && reads) return null;
 
   try {
     if (verifySessionValue(store, request.cookies.get(MEMBER_COOKIE)?.value, nowMs)) return null;

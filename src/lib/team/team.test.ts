@@ -5,6 +5,8 @@ import path from "node:path";
 
 import { NextRequest } from "next/server";
 
+import { installSpawnCapabilityResolver, internalServiceHeaders, spawnCapabilityDigest } from "@/lib/agent/callerClaims";
+
 import { teamGate } from "./gate";
 import {
   claimInstall,
@@ -216,6 +218,17 @@ describe("sessions and revocation", () => {
     expect(messageSenders(["msg-1", "unknown"])).toEqual({ "msg-1": { memberId: mira.id, name: "Mira K.", color: mira.color, initials: "MK" } });
   });
 
+  test("a sender is named only on the conversation the member sent into", () => {
+    const store = teamStore();
+    const mira = claimInstall(store, "Mira", DESKTOP).member;
+    store.recordMessageAuthor({ clientMessageId: "msg-a", conversationId: "conversation_a", memberId: mira.id, at: new Date().toISOString(), textDigest: null });
+    store.recordMessageAuthor({ clientMessageId: "msg-none", conversationId: null, memberId: mira.id, at: new Date().toISOString(), textDigest: null });
+    const inA = (id: string) => id === "conversation_a";
+    const inB = (id: string) => id === "conversation_b";
+    expect(Object.keys(messageSenders(["msg-a", "msg-none"], inA))).toEqual(["msg-a"]);
+    expect(messageSenders(["msg-a", "msg-none"], inB)).toEqual({});
+  });
+
   test("a request's cookie resolves to its member", () => {
     const store = teamStore();
     const { cookie, member } = claimInstall(store, "Mira", DESKTOP);
@@ -225,19 +238,31 @@ describe("sessions and revocation", () => {
 });
 
 describe("the identity gate in team mode", () => {
+  /* A capability the registry issued, as the stubbed lookup knows it. */
+  const REAL_CAPABILITY = "R".repeat(43);
   let cookie = "";
   beforeEach(() => {
     cookie = claimInstall(teamStore(), "Mira", DESKTOP).cookie;
+    installSpawnCapabilityResolver((digest) => (digest === spawnCapabilityDigest(REAL_CAPABILITY) ? "conversation_agent" : null));
   });
+  afterEach(() => installSpawnCapabilityResolver(null));
 
-  const cases: Array<[string, { path: string; method?: string; cookie?: boolean; headers?: Record<string, string>; bearer?: boolean }, number | null]> = [
+  const monitorTag = () => internalServiceHeaders("monitor");
+  const probeTag = () => internalServiceHeaders("probe");
+  const cases: Array<[string, { path: string; method?: string; cookie?: boolean; headers?: Record<string, string> | (() => Record<string, string>); bearer?: boolean }, number | null]> = [
     ["the sign-in page", { path: "/sign-in" }, null],
     ["a join link", { path: "/join/abc" }, null],
     ["the public team answer", { path: "/api/team/public" }, null],
     ["a sign-in endpoint", { path: "/api/team/session/approval", method: "POST" }, null],
     ["a static asset", { path: "/_next/static/chunk.js" }, null],
-    ["an agent's capability", { path: "/api/tasks", method: "POST", headers: { "x-llv-spawn-capability": "A".repeat(43) } }, null],
-    ["a Viewer service tag", { path: "/api/tasks", method: "POST", headers: { "x-llv-internal-service": `monitor.${"a".repeat(64)}` } }, null],
+    ["an agent's capability the registry issued", { path: "/api/tasks", method: "POST", headers: { "x-llv-spawn-capability": REAL_CAPABILITY } }, null],
+    ["a forged capability on a write", { path: "/api/tasks", method: "POST", headers: { "x-llv-spawn-capability": "A".repeat(43) } }, 401],
+    ["a forged capability on a navigation", { path: "/", headers: { "x-llv-spawn-capability": "A".repeat(43), "sec-fetch-mode": "navigate" } }, 307],
+    ["a Viewer service tag", { path: "/api/tasks", method: "POST", headers: monitorTag }, null],
+    ["a forged service tag on a write", { path: "/api/tasks", method: "POST", headers: { "x-llv-internal-service": `monitor.${"a".repeat(64)}` } }, 401],
+    ["a forged service tag on a navigation", { path: "/", headers: { "x-llv-internal-service": `zz.${"0".repeat(64)}`, "sec-fetch-mode": "navigate" } }, 307],
+    ["a probe's tag on a read", { path: "/", headers: probeTag }, null],
+    ["a probe's tag on a write", { path: "/api/tasks", method: "POST", headers: probeTag }, 401],
     ["a bearer read", { path: "/", bearer: true }, null],
     ["a bearer write", { path: "/api/tasks", method: "POST", bearer: true }, 401],
     ["a live cookie", { path: "/api/tasks", method: "POST", cookie: true }, null],
@@ -247,7 +272,8 @@ describe("the identity gate in team mode", () => {
   ];
   for (const [name, input, status] of cases) {
     test(name, () => {
-      const answer = teamGate(request(input.path, { method: input.method, cookie: input.cookie ? cookie : undefined, headers: input.headers }), { bearerAuthenticated: Boolean(input.bearer) });
+      const headers = typeof input.headers === "function" ? input.headers() : input.headers;
+      const answer = teamGate(request(input.path, { method: input.method, cookie: input.cookie ? cookie : undefined, headers }), { bearerAuthenticated: Boolean(input.bearer) });
       expect(answer?.status ?? null).toBe(status);
     });
   }

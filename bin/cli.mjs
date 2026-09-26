@@ -44,6 +44,7 @@ import {
   selfUpdatePaths,
   watchRestartRequests,
 } from "./self-update-supervisor.mjs";
+import { probeHeadersFrom } from "./internalService.mjs";
 import { findLegacySystemdUnits, legacySystemdNotice } from "./legacySystemd.mjs";
 import { linkSkills } from "./skillLinks.mjs";
 
@@ -1187,7 +1188,7 @@ async function main() {
         const handle = launchWeb(release, true);
         try {
           await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
-          const page = await probePageAndChunk(options.port);
+          const page = await probePageAndChunk(options.port, undefined, probeHeadersFrom(runtimeHostConfig.stateDirectory));
           if (page) throw new Error(page);
           handle.state.restarting = false;
           if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");

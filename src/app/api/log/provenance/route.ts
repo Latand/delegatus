@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { claudeMessageProvenance, type DeliveredMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { DeliveredMessageOccurrence } from "@/lib/runtime/messageOrigin";
@@ -58,7 +60,22 @@ export function GET(req: NextRequest): NextResponse<MessageProvenanceResponse | 
     ...Object.values(submissions),
   ];
   return NextResponse.json(
-    { messages, occurrences, submissions, senders: messageSenders(ids) },
+    { messages, occurrences, submissions, senders: messageSenders(ids, conversationScope(path)) },
     { headers: { "Cache-Control": "no-store" } },
   );
+}
+
+/** Whether an author row's conversation is the one `path` belongs to. A sender
+    is named only on the conversation the member sent into (sign-in-and-team
+    §7.1); a path the registry cannot place names nobody. */
+function conversationScope(path: string): (conversationId: string) => boolean {
+  try {
+    const lookup = readOnlyConversationLookupFromSnapshot(agentRegistry().readOnlySnapshot());
+    const conversation = lookup.conversationForPath(path);
+    if (!conversation) return () => false;
+    return (conversationId) => conversationId.startsWith("conversation_")
+      && lookup.canonicalConversationId(conversationId as ViewerConversationId) === conversation.id;
+  } catch {
+    return () => false;
+  }
 }

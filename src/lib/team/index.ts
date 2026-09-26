@@ -14,18 +14,26 @@
 import type { MessageSender, TeamActor, TeamModule } from "./contract";
 import { isHumanActor, refuseAnonymous, teamActor } from "./actor";
 import { memberInitials } from "./contract";
+import { claimMessageAuthor, settleMessageAuthor } from "./authorship";
 import { messageTextDigest, recordMessageAuthor, recordTeamEvent } from "./events";
 import { teamMode } from "./sessions";
 import { existingTeamStore } from "./store";
 import { recordConversationEvent } from "./subjects";
 import { teamTelegramHook } from "./telegramSignIn";
 
-export { isHumanActor, recordConversationEvent, recordMessageAuthor, recordTeamEvent, refuseAnonymous, teamActor, teamMode, teamTelegramHook };
+export { claimMessageAuthor, isHumanActor, recordConversationEvent, recordMessageAuthor, recordTeamEvent, refuseAnonymous, settleMessageAuthor, teamActor, teamMode, teamTelegramHook };
+export type { MessageAuthorClaim, PriorSubmission } from "./contract";
 
 /** `client message id → sender`, for the ids a feed asks about. Members are
     resolved at read time, so a rename shows everywhere and a revoked member
-    keeps their name on what they sent. Unknown ids resolve to nothing. */
-export function messageSenders(clientMessageIds: readonly string[]): Record<string, MessageSender> {
+    keeps their name on what they sent. Unknown ids resolve to nothing.
+    `inConversation` binds the answer to the conversation being read: a row
+    recorded for another conversation, or for none, names nobody here, so an
+    id reused somewhere else cannot put a name on this conversation's message. */
+export function messageSenders(
+  clientMessageIds: readonly string[],
+  inConversation?: (conversationId: string) => boolean,
+): Record<string, MessageSender> {
   if (!clientMessageIds.length) return {};
   try {
     const store = existingTeamStore();
@@ -34,7 +42,8 @@ export function messageSenders(clientMessageIds: readonly string[]): Record<stri
     if (!authors.size) return {};
     const members = new Map(store.members().map((member) => [member.id, member]));
     const senders: Record<string, MessageSender> = {};
-    for (const [id, memberId] of authors) {
+    for (const [id, { memberId, conversationId }] of authors) {
+      if (inConversation && (!conversationId || !inConversation(conversationId))) continue;
       const member = members.get(memberId);
       if (member) senders[id] = { memberId, name: member.name, color: member.color, initials: memberInitials(member.name) };
     }
@@ -101,6 +110,8 @@ export const team: TeamModule = {
   refuseAnonymous,
   recordTeamEvent,
   recordMessageAuthor,
+  claimMessageAuthor,
+  settleMessageAuthor,
   messageSenders,
   subjectAuthorship,
   teamTelegramHook,

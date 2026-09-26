@@ -848,8 +848,21 @@ export async function gatePhoneAccessBeforeServing(
   }
 }
 
+/** The identity gate in the proxy verifies an agent's capability against the
+    registry (sign-in-and-team §4.2), through a lookup installed here because
+    the proxy's own bundle must not import the registry. Installed before the
+    Viewer serves anything; the registry itself opens on the first lookup. */
+export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
+  const [{ installSpawnCapabilityResolver }, { agentRegistry }] = await Promise.all([
+    import("@/lib/agent/callerClaims"),
+    import("@/lib/agent/registry"),
+  ]);
+  installSpawnCapabilityResolver((digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest));
+}
+
 export async function registerViewerRuntime(): Promise<void> {
   discardWakatimeEnvironmentCredential();
+  await installSpawnCapabilityResolverAtStartup();
   await gatePhoneAccessBeforeServing();
   const isCurrent = () => viewerReleaseOwnsTraffic();
   const hotStateDirectory = path.dirname(statePath("state.sqlite"));

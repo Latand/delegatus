@@ -4899,6 +4899,7 @@ export const en = {
   "team.member.revoke": "Revoke access",
   "team.member.restore": "Restore access",
   "team.member.revokeConfirm": "{name} will be signed out everywhere and cannot sign in again. Their past messages keep their name.",
+  "team.member.revokeKey": "If this install uses an access key, they still hold it, and a script can read with it. To take it back, restart Delegatus on the host with --new-token and send everyone else a fresh link.",
   "team.member.since": "Joined {age}",
   "team.member.revokedAt": "access ended {age}",
   "team.telegram.link": "Link Telegram",

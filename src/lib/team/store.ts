@@ -555,15 +555,15 @@ export class TeamStore {
       VALUES (?, ?, ?, ?, ?)`).run(row.clientMessageId, row.conversationId, row.memberId, row.at, row.textDigest);
   }
 
-  messageAuthors(clientMessageIds: readonly string[]): Map<string, string> {
-    const result = new Map<string, string>();
+  messageAuthors(clientMessageIds: readonly string[]): Map<string, { memberId: string; conversationId: string | null }> {
+    const result = new Map<string, { memberId: string; conversationId: string | null }>();
     for (let offset = 0; offset < clientMessageIds.length; offset += 400) {
       const batch = clientMessageIds.slice(offset, offset + 400);
       if (!batch.length) continue;
-      const rows = this.db.query<{ client_message_id: string; member_id: string }, string[]>(
-        `SELECT client_message_id, member_id FROM message_authors WHERE client_message_id IN (${batch.map(() => "?").join(", ")})`,
+      const rows = this.db.query<{ client_message_id: string; member_id: string; conversation_id: string | null }, string[]>(
+        `SELECT client_message_id, member_id, conversation_id FROM message_authors WHERE client_message_id IN (${batch.map(() => "?").join(", ")})`,
       ).all(...batch);
-      for (const row of rows) result.set(row.client_message_id, row.member_id);
+      for (const row of rows) result.set(row.client_message_id, { memberId: row.member_id, conversationId: str(row.conversation_id) });
     }
     return result;
   }

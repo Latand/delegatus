@@ -1,3 +1,4 @@
+import { internalServiceHeaders } from "@/lib/agent/callerClaims";
 import { viewerControlOrigin, viewerControlToken } from "@/lib/mcp/controlEndpoint";
 
 type PipelineTick = () => Promise<void>;
@@ -17,19 +18,34 @@ const signalHost = globalThis as typeof globalThis & {
     and credential the way every other Viewer control request does (#1685):
     agents are launched without LLV_VIEWER_CONTROL_URL, so reading only that
     sent a staging agent's tick to the production port, and a Viewer with a
-    token refused the bare request unless a trusted local entry vouched for it. */
+    token refused the bare request unless a trusted local entry vouched for it.
+    It names itself with the `controller` service tag: on a team install the
+    identity gate refuses a write that names no member, and the tick is the
+    Viewer's own process talking to itself, never a person (sign-in-and-team
+    §4.5). */
 export async function requestRemotePipelineTick(
   fetcher: Fetcher = fetch,
   env: Record<string, string | undefined> = process.env,
+  serviceHeaders: () => Record<string, string> = () => internalServiceHeaders("controller"),
 ): Promise<void> {
   const baseUrl = viewerControlOrigin(env);
   const credential = viewerControlToken(env, baseUrl);
+  let service: Record<string, string> = {};
+  try {
+    service = serviceHeaders();
+  } catch (error) {
+    /* A state directory this process cannot read leaves the tick as it was
+       before: a solo Viewer still takes it, and a team Viewer's refusal is
+       logged by the caller. */
+    console.error("[pipeline controller] service tag unavailable", error instanceof Error ? error.message : error);
+  }
   const response = await fetcher(new URL("/api/pipelines/tick", baseUrl), {
     method: "POST",
     headers: {
       "content-type": "application/json",
       origin: baseUrl,
       "sec-fetch-site": "same-origin",
+      ...service,
       ...(credential ? { authorization: `Bearer ${credential}` } : {}),
     },
     body: "{}",

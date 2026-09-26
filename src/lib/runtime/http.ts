@@ -11,7 +11,7 @@ import type { InboxFileUpload, StagedInboxFiles } from "@/lib/inboxFiles";
 import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { recordConversationEvent, recordMessageAuthor, refuseAnonymous, teamActor } from "@/lib/team";
+import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type PriorSubmission } from "@/lib/team";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 import { RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -288,14 +288,20 @@ async function dispatchRuntimeCommand(
     }
     /* A member's words are stamped with the member (sign-in-and-team §7.1),
        against the key the feed joins the delivered record to, so the chat can
-       name the sender on every device. The member session is the evidence
-       here, whichever client carried it. */
-    if ((command.kind === "send" || command.kind === "steer" || command.kind === "inject" || command.kind === "answer") && person.kind === "member") {
-      if (command.kind !== "answer") {
-        recordMessageAuthor({ actor: person, clientMessageId: command.idempotencyKey, conversationId: command.conversationId, text: "text" in command && typeof command.text === "string" ? command.text : "" });
-      }
-      recordConversationEvent({ actor: person, action: command.kind === "answer" ? "question.answered" : "message.sent", conversationId: command.conversationId });
-    }
+       name the sender on every device. The claim is taken here, before the
+       send, only for a key no delivery record knows, and it is settled below
+       only once the host admitted THIS submission: a key another message
+       already holds, or a send the host refused, leaves no author and no
+       event. */
+    const authorClaim = command.kind === "send" || command.kind === "steer" || command.kind === "inject"
+      ? claimMessageAuthor({
+        actor: person,
+        clientMessageId: command.idempotencyKey,
+        conversationId: command.conversationId,
+        text: command.text,
+        priorSubmission: () => priorSubmission(dependencies, command.conversationId, command.idempotencyKey),
+      })
+      : null;
     /* #1202: the operator's own message retires the reply drafts offered under
        the question it answers. Done in the path that accepts the message, so a
        closed dock or a second device changes nothing, and compared against the
@@ -348,6 +354,7 @@ async function dispatchRuntimeCommand(
             ...(admitted.receipt ? { receipt: admitted.receipt } : {}),
           }, { status: admitted.status });
         }
+        settleMessageAuthor(authorClaim);
         /* #1131: a hold is an ACCEPTED send with a durable reservation behind
            it, so it answers with that reservation's operation id like every
            other acceptance. Without it this was the one admission a caller
@@ -380,6 +387,8 @@ async function dispatchRuntimeCommand(
     /* The host answered, so the command was handed over: the receipt's own
        status is the composer's business, not the inbox's. Bytes stay. */
     attachments.outcome = "accepted";
+    settleMessageAuthor(authorClaim);
+    if (command.kind === "answer") recordConversationEvent({ actor: person, action: "question.answered", conversationId: command.conversationId });
     if (result.receipt.status === "pending" || result.receipt.status === "queued") {
       dependencies.kick?.();
     }
@@ -394,6 +403,16 @@ async function dispatchRuntimeCommand(
       error: error instanceof Error ? error.message : "runtime command failed",
       delivery: "uncertain" satisfies AttachmentDeliveryOutcome,
     }, { status });
+  }
+}
+
+/** What the delivery record knows about a submission id before this send. A
+    registry that cannot answer is read as `admitted`, which claims nothing. */
+function priorSubmission(dependencies: RuntimeHttpDependencies, conversationId: string, clientMessageId: string): PriorSubmission {
+  try {
+    return (dependencies.registry ?? agentRegistry)().deliveryAdmissionForKey(conversationId, clientMessageId).outcome;
+  } catch {
+    return "admitted";
   }
 }
 

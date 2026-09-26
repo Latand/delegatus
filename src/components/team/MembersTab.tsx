@@ -475,6 +475,7 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
             ) : confirmRevoke ? (
               <>
                 <p className="text-ui leading-relaxed text-secondary">{t("team.member.revokeConfirm", { name: member.name })}</p>
+                <p className="text-label leading-relaxed text-muted">{t("team.member.revokeKey")}</p>
                 <div className="flex gap-2">
                   <button type="button" disabled={busy} className={BUTTON.danger} onClick={() => void patch({ status: "revoked" }).then((ok) => { if (ok) onClose(); })} data-team-revoke-confirm="">{t("team.member.revoke")}</button>
                   <button type="button" className={BUTTON.text} onClick={() => setConfirmRevoke(false)}>{t("common.cancel")}</button>
