@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { Database } from "bun:sqlite";
 import { afterAll, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
@@ -12,10 +13,11 @@ import { beginLegacySpawnFixture } from "./registryTestFixtures";
 import { executeSpawnRequest, type SpawnCommandDependencies } from "./spawnCommand";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
-import { defaultStartHost, spawnStructuredConversation } from "@/lib/runtime/structuredSpawn";
+import { defaultStartHost, spawnStructuredConversation, type StructuredSpawnInput } from "@/lib/runtime/structuredSpawn";
 import { telegramMcpUrl } from "@/lib/telegram/packaging";
 import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { defaultModelFor } from "@/lib/agent/models";
+import { reboundAssembledMcpGrants } from "./mcpAllowlist";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-telegram-spawn-"));
 const previous = { state: process.env.LLV_STATE_DIR, config: process.env.XDG_CONFIG_HOME,
@@ -47,13 +49,38 @@ afterAll(() => {
 
 const cwd = path.join(sandbox, "repo");
 fs.mkdirSync(cwd, { recursive: true });
-const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+let registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+
+async function withRegistryMode(mode: "off" | "sqlite", run: (sqlitePath: string) => Promise<void>): Promise<void> {
+  const previousRegistry = registry;
+  const sqlitePath = path.join(sandbox, `registry-${mode}-${crypto.randomUUID()}.sqlite`);
+  registry = new AgentRegistry(path.join(sandbox, `registry-${mode}-${crypto.randomUUID()}.json`),
+    undefined, undefined, { sqliteMode: mode, sqliteFilename: sqlitePath });
+  try { await run(sqlitePath); }
+  finally { registry.close(); registry = previousRegistry; }
+}
 
 function connected(): string {
   const session = saveTelegramSession("placeholder-session-for-telegram-spawn-test");
   writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
     identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
   return session.connectorToken;
+}
+
+function rewriteSqliteRow(sqlitePath: string, collection: "receipts" | "conversations", key: string,
+  rewrite: (row: Record<string, unknown>) => void): void {
+  const db = new Database(sqlitePath, { strict: true });
+  try {
+    const stored = db.query<{ value_json: string }, [string, string]>(
+      "SELECT value_json FROM registry_rows WHERE collection = ? AND row_key = ?",
+    ).get(collection, key);
+    if (!stored) throw new Error(`missing ${collection} row`);
+    const row = JSON.parse(stored.value_json) as Record<string, unknown>;
+    rewrite(row);
+    db.query<unknown, [string, string, string]>(
+      "UPDATE registry_rows SET value_json = ? WHERE collection = ? AND row_key = ?",
+    ).run(JSON.stringify(row), collection, key);
+  } finally { db.close(); }
 }
 
 function seedSeat(granted = true): string {
@@ -72,9 +99,7 @@ function seedSeat(granted = true): string {
 }
 
 function dependencies(engine: "claude" | "codex", overrides: Partial<SpawnCommandDependencies> = {}): SpawnCommandDependencies {
-  const account = { engine, accountId: `${engine}-test`, kind: "managed" as const,
-    home: path.join(sandbox, engine), transcriptRoot: path.join(sandbox, engine, "sessions"),
-    env: { NODE_ENV: "test" as const, [TELEGRAM_CONNECTOR_TOKEN_ENV]: "untrusted-inherited-token" } };
+  const account = launchAccount(engine);
   return {
     registry: () => registry,
     assertStructuredRuntime: () => {},
@@ -89,12 +114,18 @@ function dependencies(engine: "claude" | "codex", overrides: Partial<SpawnComman
   };
 }
 
-async function launch(engine: "claude" | "codex", seatId: string, mcpServers?: string[], overrides: Partial<SpawnCommandDependencies> = {}) {
+function launchAccount(engine: "claude" | "codex") {
+  return { engine, accountId: `${engine}-test`, kind: "managed" as const,
+    home: path.join(sandbox, engine), transcriptRoot: path.join(sandbox, engine, "sessions"),
+    env: { NODE_ENV: "test" as const, [TELEGRAM_CONNECTOR_TOKEN_ENV]: "untrusted-inherited-token" } };
+}
+
+async function launch(engine: "claude" | "codex", seatId: string | null, mcpServers?: string[], overrides: Partial<SpawnCommandDependencies> = {}) {
   const clientAttemptId = `telegram_${crypto.randomUUID()}`;
   const request = new NextRequest("http://127.0.0.1/api/spawn", { method: "POST",
     headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
     body: JSON.stringify({ clientAttemptId, title: "Seat child Telegram grant", engine, cwd, prompt: "inspect",
-      parentConversationId: seatId, ...(mcpServers ? { mcpServers } : {}) }) });
+      ...(seatId ? { parentConversationId: seatId } : {}), ...(mcpServers ? { mcpServers } : {}) }) });
   const response = await executeSpawnRequest(request, dependencies(engine, overrides));
   return { response, receipt: registry.spawnReceiptForClientAttempt(clientAttemptId) };
 }
@@ -110,11 +141,7 @@ function deferredLaunch(engine: "claude" | "codex", token: string | null, codexS
     command: async () => ({}),
     transitionOperation: async () => ({}),
   } as unknown as RuntimeHostClient;
-  const overrides: Partial<SpawnCommandDependencies> = {
-    defer: (task) => { work.push(task); },
-    runtimeHostClient: () => client,
-    spawnStructuredConversation: (input) => spawnStructuredConversation(input, {
-      startHost: (hostInput, capability) => defaultStartHost(hostInput, capability, {
+  const startHost = (hostInput: StructuredSpawnInput, capability: string) => defaultStartHost(hostInput, capability, {
         claude: {
           readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
           spawnProcess: (_binary, args, options) => {
@@ -136,10 +163,13 @@ function deferredLaunch(engine: "claude" | "codex", token: string | null, codexS
             return new CodexProtocolCapture((definition) => { evidence.telegramDefinition = definition; }, codexServers) as never;
           },
         },
-      }),
-    }),
+      });
+  const overrides: Partial<SpawnCommandDependencies> = {
+    defer: (task) => { work.push(task); },
+    runtimeHostClient: () => client,
+    spawnStructuredConversation: (input) => spawnStructuredConversation(input, { startHost }),
   };
-  return { work, evidence, overrides };
+  return { work, evidence, overrides, startHost, client };
 }
 
 class CodexProtocolCapture extends EventEmitter {
@@ -160,7 +190,7 @@ class CodexProtocolCapture extends EventEmitter {
         const message = JSON.parse(this.pending.slice(0, newline)) as { id?: number; method?: string; params?: Record<string, unknown> };
         this.pending = this.pending.slice(newline + 1);
         if (typeof message.id !== "number") continue;
-        if (message.method === "thread/start") {
+        if (message.method === "thread/start" || message.method === "thread/resume") {
           this.capture((message.params?.config as { mcp_servers?: Record<string, unknown> })?.mcp_servers?.telegram);
           this.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "synthetic Codex protocol stopped after launch capture" } }) + "\n");
           continue;
@@ -181,7 +211,7 @@ class CodexProtocolCapture extends EventEmitter {
   }
 }
 
-test("the production structured launch builder keeps explicit seat-child Telegram grants for Claude and Codex", async () => {
+for (const mode of ["off", "sqlite"] as const) test(`the ${mode} production launch builder keeps seat-child Telegram grants`, async () => withRegistryMode(mode, async () => {
   connected();
   const seatId = seedSeat();
   for (const engine of ["claude", "codex"] as const) {
@@ -198,15 +228,132 @@ test("the production structured launch builder keeps explicit seat-child Telegra
     expect(settled.kind).toBe("settled");
     expect(registry.conversation(receipt!.conversationId)?.generations.at(-1)?.launchProfile.mcpServers)
       .toEqual(["viewer", "telegram"]);
+    const storedProfile = registry.conversation(receipt!.conversationId)?.generations.at(-1)?.launchProfile;
+    const resumed = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured",
+      accountId: `${engine}-test`, conversationId: receipt!.conversationId,
+      purpose: "resume-successor",
+      origin: { kind: "successor" }, expectedArtifactPath: artifactPath, launchProfile: storedProfile });
+    expect(resumed.kind).toBe("created");
+    if (resumed.kind !== "created") throw new Error("resume reservation was unavailable");
+    expect(resumed.receipt.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+    expect(resumed.receipt.telegramSeatGrant).toBe(true);
+    expect(resumed.receipt.parentConversationId).toBe(seatId as `conversation_${string}`);
+    const probe = deferredLaunch(engine, connected());
+    await expect(probe.startHost({ engine,
+      receipt: resumed.receipt,
+      spec: { command: engine, cwd, windowName: "resume", engine, transcript: artifactPath,
+        launchProfile: resumed.receipt.launchProfile },
+      account: launchAccount(engine), prompt: "", registry, client: probe.client,
+    }, "test-capability")).rejects.toThrow();
+    expect(probe.evidence.reachedEngine).toBe(true);
+    expect(probe.evidence.tokenMatches).toBe(true);
+    expect(probe.evidence.telegramDefinition, `resumed ${engine} missing Telegram definition`).toBeTruthy();
   }
-});
+}));
 
-test("the production builder keeps an ungranted seat child on Viewer alone", async () => {
+for (const mode of ["off", "sqlite"] as const) test(`the ${mode} production builder keeps an ungranted child on Viewer alone`, async () => withRegistryMode(mode, async () => {
   const seatId = seedSeat();
   const { response, receipt } = await launch("claude", seatId);
   expect(response.status).toBe(202);
   expect(receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
-});
+}));
+
+for (const mode of ["off", "sqlite"] as const) test(`the ${mode} disconnected operator root launches without Telegram`,
+  async () => withRegistryMode(mode, async () => {
+    clearTelegramConnection();
+    for (const engine of ["claude", "codex"] as const) {
+      const probe = deferredLaunch(engine, null);
+      const { response, receipt } = await launch(engine, null, undefined, probe.overrides);
+      expect(response.status).toBe(202);
+      expect(receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+      await Promise.all(probe.work.map(work => work()));
+      expect(probe.evidence.reachedEngine).toBe(true);
+      expect(probe.evidence.tokenPresent).toBe(false);
+      expect(probe.evidence.telegramDefinition).toBeFalsy();
+    }
+  }));
+
+test("SQLite refuses a child that forges both receipt and conversation Telegram claims", async () => withRegistryMode("sqlite", async (sqlitePath) => {
+  connected();
+  const seatId = seedSeat();
+  const { response, receipt } = await launch("claude", seatId);
+  expect(response.status).toBe(202);
+  const sid = crypto.randomUUID();
+  const artifactPath = path.join(sandbox, `${sid}.jsonl`);
+  fs.writeFileSync(artifactPath, "{}\n");
+  expect(registry.settleSpawn(receipt!.launchId, { key: { engine: "claude", sessionId: sid },
+    artifactPath, cwd, accountId: "claude-test", status: "idle", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null }).kind).toBe("settled");
+  rewriteSqliteRow(sqlitePath, "receipts", receipt!.launchId, row => {
+    (row.launchProfile as { mcpServers: string[] }).mcpServers = ["viewer", "telegram"];
+    row.telegramSeatGrant = true;
+  });
+  rewriteSqliteRow(sqlitePath, "conversations", receipt!.conversationId, row => {
+    (row.generations as { launchProfile: { mcpServers: string[] } }[]).at(-1)!.launchProfile.mcpServers = ["viewer", "telegram"];
+  });
+  expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)?.launchProfile.mcpServers).toEqual(["viewer"]);
+  expect(registry.conversation(receipt!.conversationId)?.generations.at(-1)?.launchProfile.mcpServers).toEqual(["viewer"]);
+}));
+
+for (const revoked of ["parent seat", "parent lineage", "admitting receipt"] as const) test(`SQLite invalidates a warm child grant when its ${revoked} changes`,
+  async () => withRegistryMode("sqlite", async (sqlitePath) => {
+    connected();
+    const seatId = seedSeat();
+    const { response, receipt } = await launch("claude", seatId, ["telegram"]);
+    expect(response.status).toBe(202);
+    const sid = crypto.randomUUID();
+    const artifactPath = path.join(sandbox, `${sid}.jsonl`);
+    fs.writeFileSync(artifactPath, "{}\n");
+    expect(registry.settleSpawn(receipt!.launchId, { key: { engine: "claude", sessionId: sid },
+      artifactPath, cwd, accountId: "claude-test", status: "idle", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null }).kind).toBe("settled");
+    expect(registry.conversation(receipt!.conversationId)?.generations.at(-1)?.launchProfile.mcpServers)
+      .toEqual(["viewer", "telegram"]);
+    expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)?.launchProfile.mcpServers)
+      .toEqual(["viewer", "telegram"]);
+    if (revoked === "parent seat") {
+      rewriteSqliteRow(sqlitePath, "conversations", seatId, row => {
+        (row.generations as { launchProfile: { mcpServers: string[] } }[]).at(-1)!.launchProfile.mcpServers = ["viewer"];
+      });
+    } else if (revoked === "parent lineage") {
+      const edge = { ...registry.readOnlySnapshot().lineageEdges[receipt!.conversationId]!,
+        childConversationId: seatId as `conversation_${string}`, parentConversationId: receipt!.conversationId,
+        evidence: { launchId: null, clientAttemptId: null } };
+      const db = new Database(sqlitePath, { strict: true });
+      try {
+        db.query<unknown, [string, string, string, string]>(
+          "INSERT INTO registry_rows(collection,row_key,value_json,row_order) SELECT ?,?,?,COALESCE(MAX(row_order)+1,0) FROM registry_rows WHERE collection=?",
+        ).run("lineageEdges", seatId, JSON.stringify(edge), "lineageEdges");
+      } finally { db.close(); }
+    } else {
+      rewriteSqliteRow(sqlitePath, "receipts", receipt!.launchId, row => { row.telegramSeatGrant = false; });
+    }
+    expect(registry.conversation(receipt!.conversationId)?.generations.at(-1)?.launchProfile.mcpServers)
+      .toEqual(["viewer"]);
+    expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)?.launchProfile.mcpServers)
+      .toEqual(["viewer"]);
+  }));
+
+test("a child read before a contradictory seat cannot retain its Telegram grant", async () => withRegistryMode("sqlite", async () => {
+  connected();
+  const seatId = seedSeat();
+  const { response, receipt } = await launch("claude", seatId, ["telegram"]);
+  expect(response.status).toBe(202);
+  const sid = crypto.randomUUID();
+  const artifactPath = path.join(sandbox, `${sid}.jsonl`);
+  fs.writeFileSync(artifactPath, "{}\n");
+  expect(registry.settleSpawn(receipt!.launchId, { key: { engine: "claude", sessionId: sid },
+    artifactPath, cwd, accountId: "claude-test", status: "idle", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null }).kind).toBe("settled");
+  const file = structuredClone(registry.readOnlySnapshot());
+  const childId = receipt!.conversationId;
+  file.conversations = { [childId]: file.conversations[childId]!, [seatId]: file.conversations[seatId]! };
+  file.lineageEdges[seatId] = { ...file.lineageEdges[childId]!,
+    childConversationId: seatId as `conversation_${string}`, parentConversationId: childId };
+  reboundAssembledMcpGrants(file);
+  expect(file.conversations[seatId]?.generations.at(-1)?.launchProfile.mcpServers).toEqual(["viewer"]);
+  expect(file.conversations[childId]?.generations.at(-1)?.launchProfile.mcpServers).toEqual(["viewer"]);
+}));
 
 test("an explicit seat-child Telegram request refuses a disconnected connector before reservation", async () => {
   const seatId = seedSeat();
@@ -226,7 +373,7 @@ test("an ungranted seat cannot grant Telegram to a child", async () => {
   expect(receipt).toBeNull();
 });
 
-test("deferred seat children reach each production host with the operator connector and token", async () => {
+for (const mode of ["off", "sqlite"] as const) test(`the ${mode} deferred seat children reach both production hosts with Telegram`, async () => withRegistryMode(mode, async () => {
   const token = connected();
   const seatId = seedSeat();
   for (const engine of ["claude", "codex"] as const) {
@@ -241,9 +388,9 @@ test("deferred seat children reach each production host with the operator connec
       ? { type: "http", url: telegramMcpUrl(), headers: { Authorization: `Bearer \${${TELEGRAM_CONNECTOR_TOKEN_ENV}}` } }
       : { url: telegramMcpUrl(), bearer_token_env_var: TELEGRAM_CONNECTOR_TOKEN_ENV, enabled: true });
   }
-});
+}));
 
-test("the seat builder reaches each deferred production host with the operator grant", async () => {
+for (const mode of ["off", "sqlite"] as const) test(`the ${mode} seat builder reaches both production hosts with Telegram`, async () => withRegistryMode(mode, async () => {
   const token = connected();
   for (const engine of ["claude", "codex"] as const) {
     const probe = deferredLaunch(engine, token);
@@ -280,9 +427,9 @@ test("the seat builder reaches each deferred production host with the operator g
       ? { url: telegramMcpUrl() }
       : { url: telegramMcpUrl(), bearer_token_env_var: TELEGRAM_CONNECTOR_TOKEN_ENV, enabled: true });
   }
-});
+}));
 
-test("deferred ungranted children reach both hosts without an inherited Telegram token", async () => {
+for (const mode of ["off", "sqlite"] as const) test(`the ${mode} ungranted children reach both hosts without a Telegram token`, async () => withRegistryMode(mode, async () => {
   const token = connected();
   const seatId = seedSeat();
   for (const engine of ["claude", "codex"] as const) {
@@ -294,7 +441,7 @@ test("deferred ungranted children reach both hosts without an inherited Telegram
     expect(probe.evidence.tokenPresent).toBe(false);
     expect(probe.evidence.telegramDefinition).toBeFalsy();
   }
-});
+}));
 
 test("disconnect between admission and deferred host start terminalizes a granted child", async () => {
   const token = connected();

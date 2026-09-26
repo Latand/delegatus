@@ -560,17 +560,27 @@ export async function executeSpawnRequest(
       && parentProfile?.mcpServers.includes("telegram") === true;
     const seatLaunch = role.value?.role === "orchestrator" && !parentConversationId
       && authenticatedCaller?.kind !== "agent";
+    const sessionOrigin = sessionOriginFor({
+      origin: { kind: authenticatedCaller?.kind === "agent" ? "agent" : "operator" },
+      parentConversationId,
+      agentRole: role.value?.role ?? null,
+    });
+    const implicitRootTelegram = requestedMcpServers === null && sessionOrigin === "operator-root";
     if (requestedTelegram && engine === "copilot") {
       return refuse("telegram MCP is unsupported by the Copilot engine");
     }
-    if (requestedTelegram) {
-      let connected = false;
+    let telegramConnected = false;
+    if (requestedTelegram || implicitRootTelegram) {
       try {
         const connection = readTelegramConnection();
-        connected = connection.status === "connected" && connection.credentialRef === readTelegramSession()?.credentialRef;
+        const session = readTelegramSession();
+        telegramConnected = connection.status === "connected" && connection.credentialRef === session?.credentialRef
+          && Boolean(session.connectorToken);
       }
       catch { /* an unreadable connector cannot supply a grant */ }
-      if (!connected) return refuse("telegram MCP connector is not connected");
+      if (requestedTelegram && !telegramConnected) return refuse("telegram MCP connector is not connected");
+    }
+    if (requestedTelegram) {
       if (!seatLaunch && !seatParent && sessionOriginFor({
         origin: { kind: authenticatedCaller?.kind === "agent" ? "agent" : "operator" },
         parentConversationId, agentRole: role.value?.role ?? null,
@@ -582,11 +592,6 @@ export async function executeSpawnRequest(
        parent and no role preset. Plugins (#687) and MCP servers (#739) read the
        same classification, so a session cannot be a root for one and delegated
        for the other. */
-    const sessionOrigin = sessionOriginFor({
-      origin: { kind: authenticatedCaller?.kind === "agent" ? "agent" : "operator" },
-      parentConversationId,
-      agentRole: role.value?.role ?? null,
-    });
     /* A Viewer-internal session class (#1086) REPLACES the origin defaults
        rather than adding to them: a report run whose grant has been revoked
        gets the baseline even though its launch would otherwise classify as an
@@ -610,7 +615,9 @@ export async function executeSpawnRequest(
     /* A seat carries the operator's connected connector, and an explicit
        child request may receive that same grant from the seat. All other
        delegated launches keep the Viewer baseline. */
-    const grantedServers = reportClassGrant
+    const grantedServers = implicitRootTelegram && (!telegramConnected || engine === "copilot")
+      ? ["viewer"]
+      : reportClassGrant
       ? grantedMcpServers(reportClassGrant.mcpServers)
       : (seatLaunch || telegramSeatGrant) && requestedTelegram
         ? grantedMcpServers(requestedMcpServers)

@@ -264,6 +264,7 @@ type StoredEntry = {
   launchProfile?: { mcpServers: string[] } | null;
 };
 type StoredReceipt = {
+  launchId?: string;
   conversationId?: string | null;
   agentRole?: string | null;
   delegationDepth?: number | null;
@@ -273,10 +274,12 @@ type StoredReceipt = {
   telegramSeatGrant?: boolean;
 };
 type StoredLineageEdge = {
+  childConversationId?: string;
   parentConversationId?: string | null;
+  source?: string;
   /** Which launch the edge was written for. Admission (#393) records it, and it
       lives on the EDGE, so a receipt cannot choose which edge names it. */
-  evidence?: { launchId?: string | null } | null;
+  evidence?: { launchId?: string | null; telegramSeatGrant?: boolean } | null;
 };
 export interface StoredGrantFile {
   conversations: Record<string, StoredConversation>;
@@ -368,20 +371,26 @@ interface StoredGrantOwnership {
 /** The separate lineage edge and the operator-owned seat attest an explicit
  * child grant. A profile alone cannot turn an ordinary delegated child into a
  * Telegram user on a later read. */
-function telegramSeatGrantFor(file: StoredGrantFile, childId: string): boolean {
+export function storedTelegramSeatGrantFor(
+  file: StoredGrantFile,
+  childId: string,
+  policy: McpGrantPolicy = MCP_GRANT_POLICY,
+): boolean {
   const edge = file.lineageEdges?.[childId];
   const launchId = edge?.evidence?.launchId;
   const parentId = edge?.parentConversationId;
-  if (!launchId || !parentId || parentId === childId) return false;
+  if (!launchId || !parentId || parentId === childId || edge?.source !== "viewer-spawn"
+    || edge.childConversationId !== childId || edge.evidence?.telegramSeatGrant !== true) return false;
   const receipt = file.receipts?.[launchId];
   const parent = file.conversations[parentId];
-  if (!receipt?.telegramSeatGrant || receipt.conversationId !== childId
+  if (!receipt?.telegramSeatGrant || receipt.launchId !== launchId || receipt.conversationId !== childId
     || receipt.parentConversationId !== parentId || !parent
     || parent.agentRole !== "orchestrator" || parent.delegationDepth !== 0) return false;
-  const parentProfile = parent.generations.at(-1)?.launchProfile;
-  return parentProfile?.mcpServers.includes("telegram") === true
-    && storedSessionOriginFor({ agentRole: parent.agentRole, delegationDepth: parent.delegationDepth,
-      parentConversationId: parentProfile.parentConversationId }) === "operator-root";
+  const parentGeneration = parent.generations.at(-1);
+  if (!parentGeneration || parentGeneration.launchProfile.parentConversationId) return false;
+  const parentEdge = file.lineageEdges?.[parentId];
+  return decideStoredGrant(parent, parentGeneration, policy,
+    Boolean(parentEdge?.parentConversationId && parentEdge.parentConversationId !== parentId), false).includes("telegram");
 }
 
 function storedGrantOwnership(
@@ -404,7 +413,7 @@ function storedGrantOwnership(
     for (const generation of conversation.generations) {
       const rowKey = generationEntryRowKey(conversation.engine, generation);
       const granted = decideStoredGrant(conversation, generation, policy, lineageDelegated,
-        telegramSeatGrantFor(file, conversationId));
+        storedTelegramSeatGrantFor(file, conversationId, policy));
       if (decideGenerations && !sameGrant(generation.launchProfile.mcpServers, granted)) {
         generation.launchProfile.mcpServers = granted;
       }
@@ -586,7 +595,7 @@ function receiptGrant(
   if (attested && (attested.size > 1 || !attested.has(described))) return null;
   return mcpServersForStoredSession({ agentRole: receipt.agentRole, delegationDepth: receipt.delegationDepth,
     parentConversationId: receipt.parentConversationId, requested: receipt.launchProfile!.mcpServers,
-    telegramSeatGrant: receipt.conversationId ? telegramSeatGrantFor(file, receipt.conversationId) : false }, policy);
+    telegramSeatGrant: receipt.conversationId ? storedTelegramSeatGrantFor(file, receipt.conversationId, policy) : false }, policy);
 }
 
 function reboundGrants<T extends StoredGrantFile>(file: T, policy: McpGrantPolicy, assembled: boolean): T {

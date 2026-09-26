@@ -57,7 +57,7 @@ import {
   type IdentityWaveMigrationResult,
   type IdentityWaveSeat,
 } from "./identityWaveMigration";
-import { mcpServersForStoredSession, reboundAssembledMcpGrants, reboundEntryMcpGrant, reboundStoredMcpGrants, type McpGrantPolicy } from "./mcpAllowlist";
+import { mcpServersForStoredSession, reboundAssembledMcpGrants, reboundEntryMcpGrant, reboundStoredMcpGrants, storedTelegramSeatGrantFor, type McpGrantPolicy } from "./mcpAllowlist";
 import { accountHasLiveSessions, liveAccountConversationIds, type AccountLivenessOptions } from "./accountLiveness";
 import { loadSpawnNestingPolicy } from "./nestingPolicy";
 import {
@@ -325,6 +325,8 @@ export interface SpawnLineageEdge {
   evidence: {
     launchId: string | null;
     clientAttemptId: string | null;
+    /** Independent lineage witness for an explicitly granted seat child. */
+    telegramSeatGrant?: boolean;
     /** Parent attribution mirrored from the launch receipt (#341). */
     parentSource?: "explicit" | "inferred-caller" | null;
   };
@@ -3735,12 +3737,20 @@ function upgradeV1(parsed: Omit<Partial<RegistryFile>, "version">, policy?: McpG
   };
 }
 
-export function normalizeRegistry(value: unknown, policy?: McpGrantPolicy): RegistryFile {
+export function normalizeRegistry(
+  value: unknown,
+  policyOrMode?: McpGrantPolicy | { deferStoredGrantDecision: true },
+  options?: { deferStoredGrantDecision?: boolean },
+): RegistryFile {
+  const rowMode = policyOrMode && "deferStoredGrantDecision" in policyOrMode;
+  const policy = rowMode ? undefined : policyOrMode as McpGrantPolicy | undefined;
+  const deferStoredGrantDecision = rowMode || options?.deferStoredGrantDecision;
   const parsed = value as Omit<Partial<RegistryFile>, "version"> & { version?: unknown };
   if (parsed.version === 1 && parsed.entries && parsed.receipts && typeof parsed.entries === "object" && typeof parsed.receipts === "object") {
     /* The v1 upgrade carries entries across verbatim, so it needs the same
        grant decision every other read gets (#739). */
-    return reboundStoredMcpGrants(upgradeV1(parsed, policy), policy);
+    const normalized = upgradeV1(parsed, policy);
+    return deferStoredGrantDecision ? normalized : reboundStoredMcpGrants(normalized, policy);
   }
   if (parsed.version !== 2 || !parsed.entries || !parsed.receipts || typeof parsed.entries !== "object" || typeof parsed.receipts !== "object") {
     throw new RegistryReadError("agent registry schema is unsupported");
@@ -3749,7 +3759,7 @@ export function normalizeRegistry(value: unknown, policy?: McpGrantPolicy): Regi
   const heldDeliveries = parsed.heldDeliveries && typeof parsed.heldDeliveries === "object"
     ? Object.fromEntries(Object.entries(parsed.heldDeliveries).map(([id, delivery]) => [id, normalizeHeldDelivery(delivery)]))
     : {};
-  return reboundStoredMcpGrants(backfillMaterializedSpawnArtifacts({
+  const normalized = backfillMaterializedSpawnArtifacts({
       version: 2,
       entries: Object.fromEntries(Object.entries(parsed.entries).map(([id, entry]) => [id, normalizeEntry(entry, policy)])),
       receipts: Object.fromEntries(Object.entries(parsed.receipts).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
@@ -3790,7 +3800,8 @@ export function normalizeRegistry(value: unknown, policy?: McpGrantPolicy): Regi
         ? parsed.pendingSuccessorCleanups
         : {},
       pendingSupersedence: normalizePendingSupersedence(parsed.pendingSupersedence),
-  }), policy);
+  });
+  return deferStoredGrantDecision ? normalized : reboundStoredMcpGrants(normalized, policy);
 }
 
 /* A registry persisted before an engine existed (Copilot, #2045) carries no
@@ -4185,7 +4196,7 @@ export class AgentRegistry {
       /* Lazy: an initialised store never reads the JSON (#1870). */
       initialSnapshot: () => readFile(filename, storage.mcpGrantPolicy),
       verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
-      normalize: (value) => normalizeRegistry(value, storage.mcpGrantPolicy),
+      normalize: (value, mode) => normalizeRegistry(value, storage.mcpGrantPolicy, mode),
       mcpGrantPolicy: storage.mcpGrantPolicy,
       onWriterWait: (duration) => {
         this.recordMetric(this.writerWaits, duration);
@@ -5236,7 +5247,7 @@ export class AgentRegistry {
   ): SpawnBeginResult | { kind: "rejected"; receipt: SpawnReceipt } {
     {
       const conversationId = input.conversationId ? resolveConversationAlias(file, input.conversationId) : null;
-      const parentConversationId = input.parentConversationId ? resolveConversationAlias(file, input.parentConversationId) : null;
+      let parentConversationId = input.parentConversationId ? resolveConversationAlias(file, input.parentConversationId) : null;
       const reviewsConversationId = input.reviewsConversationId ? resolveConversationAlias(file, input.reviewsConversationId) : null;
       const role = typeof input.role === "string" && input.role.trim() ? input.role.trim() : null;
       /* Container-origin reviewer stages review their stage diff; membership
@@ -5253,6 +5264,16 @@ export class AgentRegistry {
         if (conversationId === supersedes) throw new Error("a conversation cannot supersede itself");
       }
       const existingConversation = conversationId ? file.conversations[conversationId] : null;
+      if (input.purpose && input.purpose !== "launch" && existingConversation) {
+        const edge = file.lineageEdges[existingConversation.id];
+        if (edge?.source === "viewer-spawn" && edge.parentConversationId) {
+          const recordedParentId = resolveConversationAlias(file, edge.parentConversationId);
+          if (parentConversationId && parentConversationId !== recordedParentId) {
+            throw new Error("successor parent contradicts the recorded lineage");
+          }
+          parentConversationId = recordedParentId;
+        }
+      }
       const requestedTitle = input.launchProfile?.title;
       const requestedProfile = emptyLaunchProfile({
         cwd: input.cwd,
@@ -5349,7 +5370,10 @@ export class AgentRegistry {
         : undefined;
       const seatParent = parentConversationId ? file.conversations[parentConversationId] : null;
       const seatParentProfile = seatParent?.generations.at(-1)?.launchProfile;
-      const telegramSeatGrant = input.telegramSeatGrant === true
+      const inheritedTelegramSeatGrant = successorIdentity && existingConversation
+        ? storedTelegramSeatGrantFor(file, existingConversation.id, this.mcpGrantPolicy)
+        : false;
+      const telegramSeatGrant = (input.telegramSeatGrant === true || inheritedTelegramSeatGrant)
         && seatParent?.agentRole === "orchestrator"
         && seatParent.delegationDepth === 0
         && seatParentProfile?.parentConversationId == null
@@ -5484,7 +5508,8 @@ export class AgentRegistry {
             role,
             reviewsConversationId,
             source: "viewer-spawn",
-            evidence: { launchId: receipt.launchId, clientAttemptId: receipt.clientAttemptId, parentSource: receipt.parentSource },
+            evidence: { launchId: receipt.launchId, clientAttemptId: receipt.clientAttemptId,
+              parentSource: receipt.parentSource, telegramSeatGrant: receipt.telegramSeatGrant === true },
             createdAt: receipt.createdAt,
           };
         }
