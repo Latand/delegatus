@@ -36,7 +36,9 @@ type StoredSwitch = { enabled: boolean; changedAt: string; changedBy: string };
  * Where the project's manager reports go besides the bridge log
  * (docs/design/orchestrator-reports.md §3.6, §5.6): one allowlisted bot chat,
  * chosen by the operator in the setup guide, and the name report headers
- * carry. Absent means bridge-only.
+ * carry. An explicit "Log only" is stored as `chat: null`, so it stays apart
+ * from a project that never chose: only the latter falls back to the bot's one
+ * allowed chat ({@link effectiveReportTelegram}).
  */
 export interface ReportTelegramSetting {
   /** The bot chat's alias. */
@@ -47,12 +49,32 @@ export interface ReportTelegramSetting {
   changedBy: string;
 }
 
+/** The operator chose "Log only, no Telegram" for the project. */
+export interface ReportLogOnlySetting {
+  chat: null;
+  changedAt: string;
+  changedBy: string;
+}
+
+export type ReportTelegramChoice = ReportTelegramSetting | ReportLogOnlySetting;
+
+/**
+ * Where a project's reports actually go besides the bridge: the chat the
+ * operator chose, or, for a project that never chose, the one chat the bot
+ * may post in (`only-allowed-chat`).
+ */
+export interface EffectiveReportTelegram {
+  chat: string;
+  name: string;
+  source: "chosen" | "only-allowed-chat";
+}
+
 interface ProjectSettingsEntry {
   mergeOnReview?: StoredSwitch;
   /** #2146: whether the project's orchestrator files bridge reports and the
       voice relay delivers them. Absent reads as on. */
   bridgeReports?: StoredSwitch;
-  reportTelegram?: ReportTelegramSetting;
+  reportTelegram?: ReportTelegramChoice;
 }
 
 type ProjectSwitchName = "mergeOnReview" | "bridgeReports";
@@ -81,9 +103,13 @@ function switchOf(value: unknown): StoredSwitch | null {
   return { enabled: record.enabled, changedAt: record.changedAt, changedBy: record.changedBy };
 }
 
-function reportTelegramOf(value: unknown): ReportTelegramSetting | null {
+function reportTelegramOf(value: unknown): ReportTelegramChoice | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
+  if (record.chat === null) {
+    if (typeof record.changedAt !== "string" || typeof record.changedBy !== "string") return null;
+    return { chat: null, changedAt: record.changedAt, changedBy: record.changedBy };
+  }
   if (typeof record.chat !== "string" || !record.chat.trim() || typeof record.name !== "string" || !record.name.trim()) return null;
   if (typeof record.changedAt !== "string" || typeof record.changedBy !== "string") return null;
   return { chat: record.chat, name: record.name, changedAt: record.changedAt, changedBy: record.changedBy };
@@ -198,25 +224,46 @@ export function setBridgeReports(project: string, enabled: boolean, changedBy: s
   return setSwitch("bridgeReports", project, enabled, changedBy, now);
 }
 
-/** The project's Telegram report destination, or null for bridge-only. */
-export function reportTelegram(project: string): ReportTelegramSetting | null {
+/** What the operator chose for the project's reports: a chat, "Log only"
+    (`chat: null`), or null when they never chose. */
+export function reportTelegramChoice(project: string): ReportTelegramChoice | null {
   const projects = readProjects();
   const key = project.trim();
   const stored = projects[canonicalProject(key)]?.reportTelegram ?? projects[key]?.reportTelegram;
   return stored ? { ...stored } : null;
 }
 
+/** The chat the operator chose for the project's reports, null for none. */
+export function reportTelegram(project: string): ReportTelegramSetting | null {
+  const choice = reportTelegramChoice(project);
+  return choice && choice.chat !== null ? choice : null;
+}
+
 /**
- * Set or clear the project's Telegram report destination. The caller has
- * already checked the operator's authority and the chat against the bot's
- * allowlist; this only stores. Null on a failed write.
+ * Where the project's reports go besides the bridge, given the chats the
+ * connected bot may post in (their aliases). A chosen chat or "Log only"
+ * always wins. A project that never chose uses the bot's allowed chat when
+ * there is exactly one, since the operator already picked it in the bot
+ * panel; with none or several nothing is posted until the operator picks.
+ */
+export function effectiveReportTelegram(project: string, postableChats: readonly string[]): EffectiveReportTelegram | null {
+  const choice = reportTelegramChoice(project);
+  if (choice) return choice.chat === null ? null : { chat: choice.chat, name: choice.name, source: "chosen" };
+  const chats = [...new Set(postableChats.map((chat) => chat.trim()).filter(Boolean))];
+  return chats.length === 1 ? { chat: chats[0]!, name: reportHeaderName(project), source: "only-allowed-chat" } : null;
+}
+
+/**
+ * Set the project's Telegram report destination; null stores "Log only". The
+ * caller has already checked the operator's authority and the chat against
+ * the bot's allowlist; this only stores. False on a failed write.
  */
 export function setReportTelegram(
   project: string,
   value: { chat: string; name: string } | null,
   changedBy: string,
   now: string = new Date().toISOString(),
-): ReportTelegramSetting | null | false {
+): ReportTelegramChoice | false {
   const key = canonicalProject(project.trim());
   if (!key) return false;
   const projects = { ...readProjects() };
@@ -224,11 +271,11 @@ export function setReportTelegram(
   if (value) {
     entry.reportTelegram = { chat: value.chat.trim(), name: value.name.trim().slice(0, REPORT_NAME_MAX_CHARS), changedAt: now, changedBy };
   } else {
-    delete entry.reportTelegram;
+    entry.reportTelegram = { chat: null, changedAt: now, changedBy };
   }
   projects[key] = entry;
   if (!writeProjects(projects)) return false;
-  return entry.reportTelegram ? { ...entry.reportTelegram } : null;
+  return { ...entry.reportTelegram };
 }
 
 /** The GitHub repository's name, capitalised, when the project has a GitHub
@@ -243,8 +290,9 @@ export function repositoryReportName(project: string): string | null {
  * The name a report header carries (docs/design/orchestrator-reports.md §5.6):
  * the name the operator set with the Telegram destination; else the GitHub
  * repository's name capitalised; else the project's display name. The last can
- * be a local folder name, which is acceptable only because a project without a
- * Telegram destination posts nowhere but the bridge.
+ * be a local folder name; the setup step asks for a name whenever a chat is
+ * chosen there, and a project posting to the bot's only allowed chat without
+ * having chosen uses this same fallback.
  */
 export function reportHeaderName(project: string): string {
   const key = canonicalProject(project.trim());

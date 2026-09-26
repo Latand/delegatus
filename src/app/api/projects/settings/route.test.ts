@@ -81,7 +81,33 @@ test("the Telegram report destination is refused for a chat the bot may not post
     expect((await set.json()).reportTelegram).toMatchObject({ chat: "team-reports", name: "Widgets", changedBy: "operator" });
     expect((await (await get("repo-with-github")).json()).mergeOnReview.enabled).toBe(true);
     const cleared = await put({ project: "repo-with-github", reportTelegram: null });
-    expect((await cleared.json()).reportTelegram).toBeNull();
+    expect((await cleared.json())).toMatchObject({ reportTelegram: { chat: null, changedBy: "operator" }, reportDestination: null });
+  } finally {
+    setTelegramBotServiceForTests(null);
+  }
+});
+
+/* The operator already allowed a chat in the bot panel: a project that never
+   chose reports there, and the step shows it; several allowed chats wait for
+   a pick, and a stored Log only stays the log only. */
+test("the effective destination is the one allowed chat for a project that never chose, and nothing after Log only", async () => {
+  const { setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+  const allow = (aliases: string[]) => setTelegramBotServiceForTests({
+    listChats: () => ({ chats: aliases.map((alias) => ({ chat: alias, alias, postAllowed: true })) }),
+  } as never);
+  try {
+    allow(["team-reports"]);
+    const one = await (await get("repo-fresh")).json();
+    expect(one).toMatchObject({ reportTelegram: null, reportDestination: { chat: "team-reports", source: "only-allowed-chat" }, postableChats: 1 });
+    /* The name the fallback posts under is answered with or without a single
+       allowed chat, so the step can show it the moment one is allowed. */
+    expect(typeof one.reportFallbackName).toBe("string");
+    expect(one.reportFallbackName).toBe(one.reportDestination.name);
+    allow(["team-reports", "design-lounge"]);
+    expect(await (await get("repo-fresh")).json()).toMatchObject({ reportTelegram: null, reportDestination: null, reportFallbackName: one.reportFallbackName, postableChats: 2 });
+    allow(["team-reports"]);
+    await put({ project: "repo-fresh", reportTelegram: null });
+    expect(await (await get("repo-fresh")).json()).toMatchObject({ reportTelegram: { chat: null }, reportDestination: null, reportFallbackName: null, postableChats: 1 });
   } finally {
     setTelegramBotServiceForTests(null);
   }

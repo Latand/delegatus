@@ -7,7 +7,9 @@
         "height": 844
       },
       "scheme": "light",
+      "lang": "en",
       "scene": "none",
+      "reportsLine": [],
       "top": {
         "panel": {
           "left": 0,
@@ -46,19 +48,23 @@
         "height": 844
       },
       "scheme": "light",
+      "lang": "en",
       "scene": "chats",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 0,
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 743
+          "scrollHeight": 761
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 522.375,
+        "botSectionHeight": 540.125,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -68,12 +74,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 943
+          "scrollHeight": 960
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 722.3125,
+        "botSectionHeight": 740.0625,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -85,19 +91,23 @@
         "height": 844
       },
       "scheme": "light",
+      "lang": "en",
       "scene": "webhook",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 0,
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 765
+          "scrollHeight": 783
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 544.8125,
+        "botSectionHeight": 562.5625,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -107,12 +117,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 965
+          "scrollHeight": 983
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 744.75,
+        "botSectionHeight": 762.5,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -124,7 +134,9 @@
         "height": 844
       },
       "scheme": "dark",
+      "lang": "en",
       "scene": "none",
+      "reportsLine": [],
       "top": {
         "panel": {
           "left": 0,
@@ -163,19 +175,23 @@
         "height": 844
       },
       "scheme": "dark",
+      "lang": "en",
       "scene": "chats",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 0,
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 743
+          "scrollHeight": 761
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 522.375,
+        "botSectionHeight": 540.125,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -185,12 +201,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 943
+          "scrollHeight": 960
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 722.3125,
+        "botSectionHeight": 740.0625,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -202,19 +218,23 @@
         "height": 844
       },
       "scheme": "dark",
+      "lang": "en",
       "scene": "webhook",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 0,
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 765
+          "scrollHeight": 783
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 544.8125,
+        "botSectionHeight": 562.5625,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -224,12 +244,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 965
+          "scrollHeight": 983
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 744.75,
+        "botSectionHeight": 762.5,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -241,7 +261,9 @@
         "height": 932
       },
       "scheme": "light",
+      "lang": "en",
       "scene": "none",
+      "reportsLine": [],
       "top": {
         "panel": {
           "left": 0,
@@ -280,19 +302,23 @@
         "height": 932
       },
       "scheme": "light",
+      "lang": "en",
       "scene": "chats",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 0,
-          "top": 201.3125,
+          "top": 183.5625,
           "width": 430,
-          "height": 730.6875,
-          "scrollHeight": 730
+          "height": 748.4375,
+          "scrollHeight": 747
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 509.3125,
+        "botSectionHeight": 527.0625,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -302,12 +328,12 @@
           "top": 111.84375,
           "width": 430,
           "height": 820.15625,
-          "scrollHeight": 915
+          "scrollHeight": 933
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 694.8125,
+        "botSectionHeight": 712.5625,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -319,19 +345,23 @@
         "height": 932
       },
       "scheme": "light",
+      "lang": "en",
       "scene": "webhook",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 0,
-          "top": 178.875,
+          "top": 161.125,
           "width": 430,
-          "height": 753.125,
-          "scrollHeight": 752
+          "height": 770.875,
+          "scrollHeight": 770
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 531.75,
+        "botSectionHeight": 549.5,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -341,12 +371,12 @@
           "top": 111.84375,
           "width": 430,
           "height": 820.15625,
-          "scrollHeight": 938
+          "scrollHeight": 955
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 717.25,
+        "botSectionHeight": 735,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -358,7 +388,9 @@
         "height": 932
       },
       "scheme": "dark",
+      "lang": "en",
       "scene": "none",
+      "reportsLine": [],
       "top": {
         "panel": {
           "left": 0,
@@ -397,19 +429,23 @@
         "height": 932
       },
       "scheme": "dark",
+      "lang": "en",
       "scene": "chats",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 0,
-          "top": 201.3125,
+          "top": 183.5625,
           "width": 430,
-          "height": 730.6875,
-          "scrollHeight": 730
+          "height": 748.4375,
+          "scrollHeight": 747
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 509.3125,
+        "botSectionHeight": 527.0625,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -419,12 +455,12 @@
           "top": 111.84375,
           "width": 430,
           "height": 820.15625,
-          "scrollHeight": 915
+          "scrollHeight": 933
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 694.8125,
+        "botSectionHeight": 712.5625,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -436,19 +472,23 @@
         "height": 932
       },
       "scheme": "dark",
+      "lang": "en",
       "scene": "webhook",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 0,
-          "top": 178.875,
+          "top": 161.125,
           "width": 430,
-          "height": 753.125,
-          "scrollHeight": 752
+          "height": 770.875,
+          "scrollHeight": 770
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 531.75,
+        "botSectionHeight": 549.5,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -458,12 +498,12 @@
           "top": 111.84375,
           "width": 430,
           "height": 820.15625,
-          "scrollHeight": 938
+          "scrollHeight": 955
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 717.25,
+        "botSectionHeight": 735,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -475,7 +515,9 @@
         "height": 900
       },
       "scheme": "light",
+      "lang": "en",
       "scene": "none",
+      "reportsLine": [],
       "top": {
         "panel": {
           "left": 255,
@@ -514,19 +556,23 @@
         "height": 900
       },
       "scheme": "light",
+      "lang": "en",
       "scene": "chats",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 255,
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 597
+          "scrollHeight": 628
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 414.375,
+        "botSectionHeight": 445.875,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -536,12 +582,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 824
+          "scrollHeight": 856
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 641.625,
+        "botSectionHeight": 673.125,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -553,19 +599,23 @@
         "height": 900
       },
       "scheme": "light",
+      "lang": "en",
       "scene": "webhook",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 255,
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 634
+          "scrollHeight": 665
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 451.25,
+        "botSectionHeight": 482.75,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -575,12 +625,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 861
+          "scrollHeight": 892
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 678.5,
+        "botSectionHeight": 710,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -592,7 +642,9 @@
         "height": 900
       },
       "scheme": "dark",
+      "lang": "en",
       "scene": "none",
+      "reportsLine": [],
       "top": {
         "panel": {
           "left": 255,
@@ -631,19 +683,23 @@
         "height": 900
       },
       "scheme": "dark",
+      "lang": "en",
       "scene": "chats",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 255,
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 597
+          "scrollHeight": 628
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 414.375,
+        "botSectionHeight": 445.875,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -653,12 +709,12 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 824
+          "scrollHeight": 856
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 641.625,
+        "botSectionHeight": 673.125,
         "controls": 10,
-        "textLeaves": 31,
+        "textLeaves": 32,
         "overlaps": 0,
         "failures": []
       }
@@ -670,19 +726,23 @@
         "height": 900
       },
       "scheme": "dark",
+      "lang": "en",
       "scene": "webhook",
+      "reportsLine": [
+        "Orchestrator reports: Atlas, since this is the only chat agents may post in"
+      ],
       "top": {
         "panel": {
           "left": 255,
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 634
+          "scrollHeight": 665
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 451.25,
+        "botSectionHeight": 482.75,
         "controls": 10,
-        "textLeaves": 25,
+        "textLeaves": 26,
         "overlaps": 0,
         "failures": []
       },
@@ -692,11 +752,183 @@
           "top": 336,
           "width": 320,
           "height": 560,
-          "scrollHeight": 861
+          "scrollHeight": 892
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 678.5,
+        "botSectionHeight": 710,
         "controls": 10,
+        "textLeaves": 32,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-chats-uk",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "chats",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas, бо це єдиний чат, куди агентам можна писати"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 761
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 540.125,
+        "controls": 10,
+        "textLeaves": 26,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 975
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 754.5,
+        "controls": 10,
+        "textLeaves": 32,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-refused-uk",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "refused",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 116.75,
+          "width": 390,
+          "height": 727.25,
+          "scrollHeight": 726
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 505.875,
+        "controls": 9,
+        "textLeaves": 25,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 941
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 720.25,
+        "controls": 9,
+        "textLeaves": 31,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-light-chats-uk",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "chats",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas, бо це єдиний чат, куди агентам можна писати"
+      ],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 236,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 628
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 445.875,
+        "controls": 10,
+        "textLeaves": 26,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 236,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 870
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 687.5625,
+        "controls": 10,
+        "textLeaves": 32,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-light-refused-uk",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "refused",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат"
+      ],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 236,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 606
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 423.625,
+        "controls": 9,
+        "textLeaves": 25,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 236,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 848
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 665.3125,
+        "controls": 9,
         "textLeaves": 31,
         "overlaps": 0,
         "failures": []

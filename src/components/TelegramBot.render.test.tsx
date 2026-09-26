@@ -161,3 +161,17 @@ test("the panel renders the Bot section below the personal account, whose read-o
   expect(noteAt).toBeGreaterThan(personalAt);
   expect(botAt).toBeGreaterThan(html.indexOf("Connect Telegram"));
 });
+
+test("each chat names the projects whose reports go there, and a chosen chat that refuses posts says so", () => {
+  const html = render(connected({
+    chats: [
+      chat({ alias: "team-reports", postAllowed: true, postable: true, reports: [{ name: "Widgets", onlyAllowedChat: true }] }),
+      chat({ chatId: "-1000000000202", title: "Design Lounge", alias: "design-lounge", reports: [{ name: "Atlas", onlyAllowedChat: false, refused: true }] }),
+    ],
+  }));
+  expect(html).toContain('data-telegram-chat-reports="only-allowed-chat"');
+  expect(html).toContain("Orchestrator reports: Widgets, since this is the only chat agents may post in");
+  expect(html).toContain('data-telegram-chat-reports="refused"');
+  expect(html).toContain("Orchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat");
+  expect(html).not.toContain('data-telegram-chat-reports="chosen"');
+});

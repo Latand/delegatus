@@ -33,6 +33,7 @@ const PROJECT = "repo-project-a";
 const OTHER = "repo-project-b";
 /* Invented chat; no such group exists. */
 const TEAM = { id: -1000000000101, type: "supergroup", title: "Team Reports" };
+const LOUNGE = { id: -1000000000202, type: "supergroup", title: "Design Lounge" };
 const NOW = new Date("2026-09-25T18:45:00Z");
 /* A deployment id, assembled at run time: a UUID written out is what the
    publication gate refuses in a committed file. */
@@ -64,6 +65,15 @@ async function connectTeamChat() {
   bot.setChat(String(TEAM.id), "team-reports", true);
 }
 
+/** A second chat agents may post in, after `connectTeamChat`. */
+async function allowLoungeChat() {
+  transport.script("getUpdates", ok([
+    { update_id: 2, my_chat_member: { chat: LOUNGE as never, date: 2, new_chat_member: { status: "administrator" } } },
+  ]));
+  await bot.pollOnce(new AbortController().signal);
+  bot.setChat(String(LOUNGE.id), "design-lounge", true);
+}
+
 /** What the Viewer's bot agent route does with the binding's post. */
 async function sendThroughBot(input: ReportTelegramSend) {
   try {
@@ -84,6 +94,8 @@ function serviceAs(attribution: CallerAttribution, project = PROJECT, seatProjec
     operatorTimeZone: () => "Europe/Kyiv",
     publicDenyList: () => ({ accounts: ["account-b"], people: ["Person Bee"], local: [], projects: [{ repository: "someone/other-repo", names: ["other-repo"] }] }),
     sendReportTelegram: sendThroughBot,
+    /* What the Viewer's bot agent route lists: the chats agents may post in. */
+    reportChats: async () => bot.listChats().chats.filter((chat) => chat.postAllowed).map((chat) => chat.chat),
     listTaskRecords: () => tasks,
     loadTasks: () => tasks,
   } as never);
@@ -327,9 +339,10 @@ test("a send that may already be posted is never re-sent", async () => {
   expect(transport.callsOf("sendMessage")).toHaveLength(1);
 });
 
-test("an agent's report, a project with no chat and a project with reports off post nothing", async () => {
+test("an agent's report, a project that chose the log only and a project with reports off post nothing", async () => {
   await connectTeamChat();
   setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  setReportTelegram(OTHER, null, "operator");
   const agent = await file({ key: "agent-1", summary: "stage settled" }, WORKER);
   expect(agent.recorded).toBe(true);
   expect(readBridgeReportLog().reports[0]!.body).toBe("[builder conversation_builder — not the manager] stage settled");
@@ -342,4 +355,72 @@ test("an agent's report, a project with no chat and a project with reports off p
   const off = await file({ key: "off-1", summary: "One lane running." });
   expect(off.recorded).toBe(false);
   expect(transport.callsOf("sendMessage")).toHaveLength(0);
+});
+
+/* The operator allowed one chat in the bot panel and never opened the setup
+   step: that chat is their choice, so the project's reports go there. */
+test("a project that never chose posts to the bot's one allowed chat, under its repository name", async () => {
+  await connectTeamChat();
+  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { [PROJECT]: "github.com/acme/widgets" } }));
+  transport.script("sendMessage", ok({ message_id: 81, date: 110 }));
+  const answer = await file({ key: "fallback-1", summary: "One lane running.", sections: { inProgress: ["the release lane"] } });
+  expect(answer.recorded).toBe(true);
+  expect(answer.destinations!.telegram).toEqual({ chat: "team-reports", state: "sent", messageIds: [81] });
+  const sends = transport.callsOf("sendMessage");
+  expect(sends).toHaveLength(1);
+  expect(sends[0]!.params).toMatchObject({ chat_id: TEAM.id, parse_mode: "HTML", disable_notification: true });
+  expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ chat: "team-reports", state: "sent" });
+  expect(String(sends[0]!.params.text)).toStartWith("🕒 <b>Widgets · status</b> · ");
+});
+
+test("a project that chose the log only posts nothing, even with one allowed chat", async () => {
+  await connectTeamChat();
+  transport.script("sendMessage", ok({ message_id: 83, date: 112 }));
+  const before = await file({ key: "log-only-0", summary: "One lane running." });
+  expect(before.destinations!.telegram).toMatchObject({ chat: "team-reports", state: "sent" });
+
+  setReportTelegram(PROJECT, null, "operator");
+  const answer = await file({ key: "log-only-1", summary: "Two lanes running." });
+  expect(answer.recorded).toBe(true);
+  expect(answer.destinations).toEqual({ bridge: { seq: answer.seq! } });
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+  expect(readBridgeReportLog().reports[1]!.telegram).toBeUndefined();
+});
+
+test("a project that never chose posts nothing while agents may post in several chats", async () => {
+  await connectTeamChat();
+  transport.script("sendMessage", ok({ message_id: 84, date: 113 }));
+  const one = await file({ key: "several-0", summary: "One lane running." });
+  expect(one.destinations!.telegram).toMatchObject({ chat: "team-reports", state: "sent" });
+
+  await allowLoungeChat();
+  const answer = await file({ key: "several-1", summary: "Two lanes running." });
+  expect(answer.recorded).toBe(true);
+  expect(answer.destinations).toEqual({ bridge: { seq: answer.seq! } });
+  expect(transport.callsOf("sendMessage")).toHaveLength(1);
+});
+
+test("a chat the operator chose wins over the one allowed chat, even once agents may no longer post there", async () => {
+  await connectTeamChat();
+  await allowLoungeChat();
+  setReportTelegram(PROJECT, { chat: "design-lounge", name: "Atlas" }, "operator");
+  transport.script("sendMessage", ok({ message_id: 82, date: 111 }));
+  const answer = await file({ key: "chosen-1", summary: "One lane running." });
+  expect(answer.destinations!.telegram).toEqual({ chat: "design-lounge", state: "sent", messageIds: [82] });
+  const sends = transport.callsOf("sendMessage");
+  expect(sends).toHaveLength(1);
+  expect(sends[0]!.params.chat_id).toBe(LOUNGE.id);
+  expect(String(sends[0]!.params.text)).toStartWith("🕒 <b>Atlas · status</b> · ");
+
+  /* The lounge is switched off, so the team chat is the only one agents may
+     post in: the project that never chose goes there, the one that chose the
+     lounge does not. */
+  bot.setChat(String(LOUNGE.id), "design-lounge", false);
+  transport.script("sendMessage", ok({ message_id: 85, date: 114 }));
+  const other = await file({ key: "chosen-other", summary: "Project B has one lane running." }, MANAGER, OTHER);
+  expect(other.destinations!.telegram).toMatchObject({ chat: "team-reports", state: "sent" });
+  const refused = await file({ key: "chosen-2", summary: "Two lanes running." });
+  expect(refused.destinations!.telegram).toMatchObject({ chat: "design-lounge", state: "failed", code: "chat_not_allowed" });
+  expect(transport.callsOf("sendMessage")).toHaveLength(2);
 });
