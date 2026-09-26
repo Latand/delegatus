@@ -16,8 +16,7 @@ import type { FrameRole } from "@/lib/roleFrames";
 
 import type { AttentionItem } from "../attention";
 import { RoleTag } from "../RoleFrameMark";
-import { humanizeDuration } from "../turnDuration";
-import { cleanTitle, fileModelLabel } from "../utils";
+import { cleanTitle, fileModelLabel, fmtAgeSeconds } from "../utils";
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine, reasonLine } from "./decision";
 import { sendDismissal } from "./dismissalOverlay";
@@ -241,7 +240,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
 function NoticeRow({ row, now, onOpen, onClear }: { row: MobileNoticeRow; now: number; onOpen?: () => void; onClear?: () => void }) {
   const { t } = useLocale();
   const asked = Date.parse(row.notice.createdAt);
-  const age = Number.isFinite(asked) ? humanizeDuration(Math.max(0, now - asked / 1000)) : null;
+  const age = Number.isFinite(asked) ? fmtAgeSeconds(Math.max(0, now - asked / 1000)) : null;
   const Tag = onOpen ? "button" : "div";
   return (
     <div className="flex min-w-0 items-center" data-mobile2-notice-row={row.notice.id}>
@@ -312,7 +311,7 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
               {SEP}
             </>
           )}
-          <span data-attention-age className="shrink-0">{humanizeDuration(Math.max(0, now - item.since))}</span>
+          <span data-attention-age className="shrink-0">{fmtAgeSeconds(Math.max(0, now - item.since))}</span>
           {item.file.model ? (
             <>
               {SEP}
@@ -356,7 +355,7 @@ function PipelineRow({ row, age, current, onOpen, role }: { row: MobileBoardPipe
           {age === null ? null : (
             <>
               {SEP}
-              <span data-attention-age className="shrink-0">{humanizeDuration(age)}</span>
+              <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
             </>
           )}
         </span>

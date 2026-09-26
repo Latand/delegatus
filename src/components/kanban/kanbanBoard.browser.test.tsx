@@ -11666,11 +11666,18 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
       title_: document.title,
     };
   });
-  /* The header bar's project name, whole or cut, and the rail's project order. */
+  /* The header bar's project name, whole or cut, and the rail's project order.
+     Whole is the name's ink against its box, unrounded: Chrome draws the
+     ellipsis for a fraction of a pixel that `scrollWidth` and `clientWidth`
+     both round away. */
   const barReading = (page: Page) => page.evaluate(() => {
     const name = document.querySelector('[data-bar="project"] [data-bar-group="where"] h1') as HTMLElement | null;
     const flip = [...document.querySelectorAll("[data-flip-key]")].map((row) => row.getAttribute("data-flip-key") ?? "");
-    return { name: name?.textContent ?? null, whole: name ? name.scrollWidth <= name.clientWidth : null, nameWidth: name?.clientWidth ?? null, rail: flip.filter((key) => !key.startsWith("__")) };
+    const range = document.createRange();
+    if (name) range.selectNodeContents(name);
+    const ink = name ? range.getBoundingClientRect().width : null;
+    const box = name ? name.getBoundingClientRect().width : null;
+    return { name: name?.textContent ?? null, whole: ink !== null && box !== null ? ink <= box : null, ink, box, rail: flip.filter((key) => !key.startsWith("__")) };
   });
   /* The phone sheet's geometry: every row's age inside its line and its row,
      a cut wait ending in an ellipsis, and every section header's name, count
@@ -11734,6 +11741,7 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
     const readings: Record<string, unknown> = {};
     const failures: string[] = [];
     const check = (frame: string, ok: boolean, what: string) => { if (!ok) failures.push(`${frame}: ${what}`); };
+    const desktopAges = new Map<string, string>();
     const open = async (query: string, lang: "uk" | "en", phone = false) => {
       const opened = await openFixture(browser, `${server.base}?lang=${lang}${query}`, phone ? PHONE : DESKTOP, "light", lang, "reduce", phone);
       await opened.page.waitForSelector(phone ? "[data-mobile2-bar]" : "[data-attention-count]", { timeout: 20_000 });
@@ -11791,10 +11799,11 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
           /* Oldest wait first in every section, lanes among the conversations. */
           const since = await opened.page.evaluate(() => [...document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]")].map((section) => ({
             project: section.getAttribute("data-needs-you-section"),
-            ages: [...section.querySelectorAll("[data-attention-age]")].map((age) => age.textContent ?? ""),
+            ages: [...section.querySelectorAll("[data-needs-you-row]")].map((row) => [row.getAttribute("data-needs-you-row"), (row.querySelector("[data-attention-age]")?.textContent ?? "").replace(/^·\s*/, "")]),
             since: [...section.querySelectorAll("[data-needs-you-row]")].map((row) => Number(row.getAttribute("data-needs-you-since"))),
           })));
           readings[`${lang}/desktop-open-all-sections`] = { ...all, ages: since };
+          for (const [id, age] of since.flatMap((section) => section.ages)) desktopAges.set(`${lang}/${id}`, age!);
           for (const section of since) {
             check(`${lang}/desktop-open-all-sections`, section.since.every((value, index) => index === 0 || value >= section.since[index - 1]!), `${section.project} not oldest first: ${JSON.stringify(section)}`);
           }
@@ -11849,6 +11858,9 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
             check(`${lang}/phone-sheet-overview`, section.dismiss !== geometry.head, `${section.project}: «${section.dismiss}» reads like the head's «${geometry.head}»`);
           }
           for (const row of geometry.rows) {
+            /* One item reads the same wait on the phone as on the desktop panel. */
+            const desktop = desktopAges.get(`${lang}/${row.id}`);
+            check(`${lang}/phone-sheet-overview`, desktop === undefined || desktop === row.age, `${row.id}: the phone reads «${row.age}», the desktop panel «${desktop}»`);
             check(`${lang}/phone-sheet-overview`, row.ageInside, `${row.id}: the age «${row.age}» leaves its row`);
             check(`${lang}/phone-sheet-overview`, row.ellipsis, `${row.id}: a cut wait without an ellipsis`);
           }

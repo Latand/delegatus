@@ -93,9 +93,13 @@
 .kb .bar[data-bar="project"] .bar-trail { gap: 16px; }
 .kb .bar[data-bar="project"] .summary { white-space: nowrap; flex-shrink: 0; }
 .kb .bar[data-bar="project"] .grow { flex: 1 1 0; min-width: 0; }
-/* The search shrinks far faster than the lead and down to 112 px, so a board narrowed by a seat or
-   the docked needs-you panel keeps a 9-letter project name whole before the name gives anything up. */
-.kb .bar[data-bar="project"] .search { flex: 1 100 240px; max-width: 420px; min-width: 112px; }
+/* The search gives way first, down to 112 px, and the project name only after it: a board narrowed
+   by a seat or the docked needs-you panel keeps its name whole while the search has room to give.
+   Flex shrinks every item in proportion to factor × basis, so a factor of 100 still took a quarter
+   pixel from the lead, and Chrome draws the ellipsis for it. At 100 000 the lead's share of the at
+   most 128 px the search gives stays under half a layout unit (1/128 px) and rounds to nothing;
+   once the search sits at its floor the rest falls to the lead as before. */
+.kb .bar[data-bar="project"] .search { flex: 1 100000 240px; max-width: 420px; min-width: 112px; }
 .kb .bar[data-bar="project"] .search input { width: 100%; }
 /* A bar under 768 px (a narrow desktop window) cannot hold the groups beside the island's
    reserve in one row; there, and only there, they wrap. The bar's own width decides, since it

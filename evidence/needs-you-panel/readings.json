@@ -15,32 +15,47 @@
           false
         ],
         [
-          "shop-web",
+          "tg-bot",
           2,
           true
         ],
         [
-          "tg-bot",
+          "shop-web",
           2,
           true
         ]
       ],
       "roles": [
+        "reviewer",
         "orchestrator",
         "reviewer",
         "orchestrator",
-        "builder",
-        "reviewer"
+        "builder"
       ],
       "rowsWithoutTag": 0,
       "tagColours": [
-        "orchestrator:rgb(67, 56, 202)",
         "reviewer:rgb(3, 105, 161)",
+        "orchestrator:rgb(67, 56, 202)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus"
+      "title_": "(9) Delegatus",
+      "bar": {
+        "name": "delegatus",
+        "whole": true,
+        "ink": 61.796875,
+        "box": 61.796875,
+        "rail": [
+          "delegatus",
+          "tg-bot",
+          "shop-web"
+        ]
+      }
     },
+    "uk/desktop-dismiss-labels": [
+      "Зняти всі 9",
+      "Зняти 5"
+    ],
     "uk/desktop-open-all-sections": {
       "placement": "docked",
       "title": "Чекають на вас · 9",
@@ -51,37 +66,105 @@
           false
         ],
         [
-          "shop-web",
+          "tg-bot",
           2,
           false
         ],
         [
-          "tg-bot",
+          "shop-web",
           2,
           false
         ]
       ],
       "roles": [
+        "reviewer",
         "orchestrator",
         "reviewer",
         "orchestrator",
         "builder",
-        "reviewer",
-        "orchestrator",
-        "architect",
+        "builder",
         "verifier",
-        "builder"
+        "orchestrator",
+        "architect"
       ],
       "rowsWithoutTag": 0,
       "tagColours": [
-        "orchestrator:rgb(67, 56, 202)",
         "reviewer:rgb(3, 105, 161)",
+        "orchestrator:rgb(67, 56, 202)",
         "builder:rgb(180, 83, 9)",
-        "architect:rgb(15, 118, 110)",
-        "verifier:rgb(21, 128, 61)"
+        "verifier:rgb(21, 128, 61)",
+        "architect:rgb(15, 118, 110)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus"
+      "title_": "(9) Delegatus",
+      "ages": [
+        {
+          "project": "delegatus",
+          "ages": [
+            [
+              "lane-limit",
+              "32 хв тому"
+            ],
+            [
+              "report-weekend-digest",
+              "26 хв тому"
+            ],
+            [
+              "/repo/delegatus-3.jsonl:permission:request-audit-1",
+              "11 хв тому"
+            ],
+            [
+              "report-merge-order",
+              "9 хв тому"
+            ],
+            [
+              "toolu-ask-1",
+              "4 хв тому"
+            ]
+          ],
+          "since": [
+            1790422508,
+            1790422868,
+            1790423768,
+            1790423888,
+            1790424188
+          ]
+        },
+        {
+          "project": "tg-bot",
+          "ages": [
+            [
+              "lane-digest",
+              "2 год тому"
+            ],
+            [
+              "/repo/tg-bot-15.jsonl:delivery:1790421968",
+              "41 хв тому"
+            ]
+          ],
+          "since": [
+            1790417288,
+            1790421968
+          ]
+        },
+        {
+          "project": "shop-web",
+          "ages": [
+            [
+              "report-shop-limit",
+              "60 хв тому"
+            ],
+            [
+              "toolu-plan-1",
+              "18 хв тому"
+            ]
+          ],
+          "since": [
+            1790420828,
+            1790423348
+          ]
+        }
+      ]
     },
     "uk/desktop-open-overlay": {
       "placement": "overlay",
@@ -93,27 +176,27 @@
           false
         ],
         [
-          "shop-web",
+          "tg-bot",
           2,
           true
         ],
         [
-          "tg-bot",
+          "shop-web",
           2,
           true
         ]
       ],
       "roles": [
+        "reviewer",
         "orchestrator",
         "reviewer",
         "orchestrator",
-        "builder",
-        "reviewer"
+        "builder"
       ],
       "rowsWithoutTag": 0,
       "tagColours": [
-        "orchestrator:rgb(67, 56, 202)",
         "reviewer:rgb(3, 105, 161)",
+        "orchestrator:rgb(67, 56, 202)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
@@ -121,14 +204,152 @@
     },
     "uk/phone-sheet": {
       "rows": [
+        "reviewer",
         "orchestrator",
         "reviewer",
         "orchestrator",
-        "builder",
-        "reviewer"
+        "builder"
       ],
       "dismiss": 5,
       "next": 0
+    },
+    "uk/phone-sheet-geometry": {
+      "title": "Чекають на вас · 5",
+      "head": "Зняти всі 5",
+      "rows": [
+        {
+          "id": "lane-limit",
+          "age": "32 хв тому",
+          "ageInside": true,
+          "decision": "потрібне рішення · review",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "report-weekend-digest",
+          "age": "26 хв тому",
+          "ageInside": true,
+          "decision": "Питання",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "age": "11 хв тому",
+          "ageInside": true,
+          "decision": "дозвіл: Bash: rm -rf .next",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "report-merge-order",
+          "age": "9 хв тому",
+          "ageInside": true,
+          "decision": "Питання",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "toolu-ask-1",
+          "age": "4 хв тому",
+          "ageInside": true,
+          "decision": "Злиття #2246",
+          "cut": false,
+          "ellipsis": true
+        }
+      ],
+      "sections": []
+    },
+    "uk/phone-sheet-overview": {
+      "title": "Чекають на вас · 9",
+      "head": "Зняти всі 9",
+      "rows": [
+        {
+          "id": "lane-limit",
+          "age": "32 хв тому",
+          "ageInside": true,
+          "decision": "потрібне рішення · review",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "report-weekend-digest",
+          "age": "26 хв тому",
+          "ageInside": true,
+          "decision": "Питання",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "age": "11 хв тому",
+          "ageInside": true,
+          "decision": "дозвіл: Bash: rm -rf .next",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "report-merge-order",
+          "age": "9 хв тому",
+          "ageInside": true,
+          "decision": "Питання",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "toolu-ask-1",
+          "age": "4 хв тому",
+          "ageInside": true,
+          "decision": "Злиття #2246",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "lane-digest",
+          "age": "2 год тому",
+          "ageInside": true,
+          "decision": "бюджет ревʼю вичерпано · implement",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "/repo/tg-bot-15.jsonl:delivery:1790421974",
+          "age": "41 хв тому",
+          "ageInside": true,
+          "decision": "доставка повідомлення",
+          "cut": false,
+          "ellipsis": true
+        }
+      ],
+      "sections": [
+        {
+          "project": "delegatus",
+          "folded": false,
+          "count": 5,
+          "dismiss": "Зняти 5",
+          "onScreen": true,
+          "apart": true,
+          "nameWhole": true
+        },
+        {
+          "project": "tg-bot",
+          "folded": false,
+          "count": 2,
+          "dismiss": "Зняти 2",
+          "onScreen": true,
+          "apart": true,
+          "nameWhole": true
+        },
+        {
+          "project": "shop-web",
+          "folded": true,
+          "count": 2,
+          "dismiss": "Зняти 2",
+          "onScreen": true,
+          "apart": true,
+          "nameWhole": true
+        }
+      ]
     },
     "en/desktop-closed": {
       "count": 9,
@@ -145,32 +366,47 @@
           false
         ],
         [
-          "shop-web",
+          "tg-bot",
           2,
           true
         ],
         [
-          "tg-bot",
+          "shop-web",
           2,
           true
         ]
       ],
       "roles": [
+        "reviewer",
         "orchestrator",
         "reviewer",
         "orchestrator",
-        "builder",
-        "reviewer"
+        "builder"
       ],
       "rowsWithoutTag": 0,
       "tagColours": [
-        "orchestrator:rgb(67, 56, 202)",
         "reviewer:rgb(3, 105, 161)",
+        "orchestrator:rgb(67, 56, 202)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus"
+      "title_": "(9) Delegatus",
+      "bar": {
+        "name": "delegatus",
+        "whole": true,
+        "ink": 61.796875,
+        "box": 61.796875,
+        "rail": [
+          "delegatus",
+          "tg-bot",
+          "shop-web"
+        ]
+      }
     },
+    "en/desktop-dismiss-labels": [
+      "Dismiss all 9",
+      "Dismiss 5"
+    ],
     "en/desktop-open-all-sections": {
       "placement": "docked",
       "title": "Waiting for you · 9",
@@ -181,37 +417,105 @@
           false
         ],
         [
-          "shop-web",
+          "tg-bot",
           2,
           false
         ],
         [
-          "tg-bot",
+          "shop-web",
           2,
           false
         ]
       ],
       "roles": [
+        "reviewer",
         "orchestrator",
         "reviewer",
         "orchestrator",
         "builder",
-        "reviewer",
-        "orchestrator",
-        "architect",
+        "builder",
         "verifier",
-        "builder"
+        "orchestrator",
+        "architect"
       ],
       "rowsWithoutTag": 0,
       "tagColours": [
-        "orchestrator:rgb(67, 56, 202)",
         "reviewer:rgb(3, 105, 161)",
+        "orchestrator:rgb(67, 56, 202)",
         "builder:rgb(180, 83, 9)",
-        "architect:rgb(15, 118, 110)",
-        "verifier:rgb(21, 128, 61)"
+        "verifier:rgb(21, 128, 61)",
+        "architect:rgb(15, 118, 110)"
       ],
       "next": 0,
-      "title_": "(9) Delegatus"
+      "title_": "(9) Delegatus",
+      "ages": [
+        {
+          "project": "delegatus",
+          "ages": [
+            [
+              "lane-limit",
+              "32m ago"
+            ],
+            [
+              "report-weekend-digest",
+              "26m ago"
+            ],
+            [
+              "/repo/delegatus-3.jsonl:permission:request-audit-1",
+              "11m ago"
+            ],
+            [
+              "report-merge-order",
+              "9m ago"
+            ],
+            [
+              "toolu-ask-1",
+              "4m ago"
+            ]
+          ],
+          "since": [
+            1790422517,
+            1790422877,
+            1790423777,
+            1790423897,
+            1790424197
+          ]
+        },
+        {
+          "project": "tg-bot",
+          "ages": [
+            [
+              "lane-digest",
+              "2h ago"
+            ],
+            [
+              "/repo/tg-bot-15.jsonl:delivery:1790421977",
+              "41m ago"
+            ]
+          ],
+          "since": [
+            1790417297,
+            1790421977
+          ]
+        },
+        {
+          "project": "shop-web",
+          "ages": [
+            [
+              "report-shop-limit",
+              "60m ago"
+            ],
+            [
+              "toolu-plan-1",
+              "18m ago"
+            ]
+          ],
+          "since": [
+            1790420837,
+            1790423357
+          ]
+        }
+      ]
     },
     "en/desktop-open-overlay": {
       "placement": "overlay",
@@ -223,27 +527,27 @@
           false
         ],
         [
-          "shop-web",
+          "tg-bot",
           2,
           true
         ],
         [
-          "tg-bot",
+          "shop-web",
           2,
           true
         ]
       ],
       "roles": [
+        "reviewer",
         "orchestrator",
         "reviewer",
         "orchestrator",
-        "builder",
-        "reviewer"
+        "builder"
       ],
       "rowsWithoutTag": 0,
       "tagColours": [
-        "orchestrator:rgb(67, 56, 202)",
         "reviewer:rgb(3, 105, 161)",
+        "orchestrator:rgb(67, 56, 202)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
@@ -251,14 +555,152 @@
     },
     "en/phone-sheet": {
       "rows": [
+        "reviewer",
         "orchestrator",
         "reviewer",
         "orchestrator",
-        "builder",
-        "reviewer"
+        "builder"
       ],
       "dismiss": 5,
       "next": 0
+    },
+    "en/phone-sheet-geometry": {
+      "title": "Waiting for you · 5",
+      "head": "Dismiss all 5",
+      "rows": [
+        {
+          "id": "lane-limit",
+          "age": "32m ago",
+          "ageInside": true,
+          "decision": "needs a decision · review",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "report-weekend-digest",
+          "age": "26m ago",
+          "ageInside": true,
+          "decision": "Question",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "age": "11m ago",
+          "ageInside": true,
+          "decision": "permission: Bash: rm -rf .next",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "report-merge-order",
+          "age": "9m ago",
+          "ageInside": true,
+          "decision": "Question",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "toolu-ask-1",
+          "age": "4m ago",
+          "ageInside": true,
+          "decision": "Злиття #2246",
+          "cut": false,
+          "ellipsis": true
+        }
+      ],
+      "sections": []
+    },
+    "en/phone-sheet-overview": {
+      "title": "Waiting for you · 9",
+      "head": "Dismiss all 9",
+      "rows": [
+        {
+          "id": "lane-limit",
+          "age": "32m ago",
+          "ageInside": true,
+          "decision": "needs a decision · review",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "report-weekend-digest",
+          "age": "26m ago",
+          "ageInside": true,
+          "decision": "Question",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "/repo/delegatus-3.jsonl:permission:request-audit-1",
+          "age": "11m ago",
+          "ageInside": true,
+          "decision": "permission: Bash: rm -rf .next",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "report-merge-order",
+          "age": "9m ago",
+          "ageInside": true,
+          "decision": "Question",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "toolu-ask-1",
+          "age": "4m ago",
+          "ageInside": true,
+          "decision": "Злиття #2246",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "lane-digest",
+          "age": "2h ago",
+          "ageInside": true,
+          "decision": "review budget spent · implement",
+          "cut": false,
+          "ellipsis": true
+        },
+        {
+          "id": "/repo/tg-bot-15.jsonl:delivery:1790421983",
+          "age": "41m ago",
+          "ageInside": true,
+          "decision": "message delivery",
+          "cut": false,
+          "ellipsis": true
+        }
+      ],
+      "sections": [
+        {
+          "project": "delegatus",
+          "folded": false,
+          "count": 5,
+          "dismiss": "Dismiss 5",
+          "onScreen": true,
+          "apart": true,
+          "nameWhole": true
+        },
+        {
+          "project": "tg-bot",
+          "folded": false,
+          "count": 2,
+          "dismiss": "Dismiss 2",
+          "onScreen": true,
+          "apart": true,
+          "nameWhole": true
+        },
+        {
+          "project": "shop-web",
+          "folded": true,
+          "count": 2,
+          "dismiss": "Dismiss 2",
+          "onScreen": true,
+          "apart": true,
+          "nameWhole": true
+        }
+      ]
     },
     "uk/desktop-seat-beside": {
       "placement": "overlay",
@@ -270,27 +712,27 @@
           false
         ],
         [
-          "shop-web",
+          "tg-bot",
           2,
           true
         ],
         [
-          "tg-bot",
+          "shop-web",
           2,
           true
         ]
       ],
       "roles": [
+        "reviewer",
         "orchestrator",
         "reviewer",
         "orchestrator",
-        "builder",
-        "reviewer"
+        "builder"
       ],
       "rowsWithoutTag": 0,
       "tagColours": [
-        "orchestrator:rgb(67, 56, 202)",
         "reviewer:rgb(3, 105, 161)",
+        "orchestrator:rgb(67, 56, 202)",
         "builder:rgb(180, 83, 9)"
       ],
       "next": 0,
@@ -308,26 +750,26 @@
             false
           ],
           [
-            "shop-web",
+            "tg-bot",
             2,
             true
           ],
           [
-            "tg-bot",
+            "shop-web",
             2,
             true
           ]
         ],
         "roles": [
+          "orchestrator",
           "reviewer",
           "orchestrator",
-          "builder",
-          "reviewer"
+          "builder"
         ],
         "rowsWithoutTag": 0,
         "tagColours": [
-          "reviewer:rgb(3, 105, 161)",
           "orchestrator:rgb(67, 56, 202)",
+          "reviewer:rgb(3, 105, 161)",
           "builder:rgb(180, 83, 9)"
         ],
         "next": 0,

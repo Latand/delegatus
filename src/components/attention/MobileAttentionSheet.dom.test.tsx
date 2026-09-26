@@ -123,7 +123,8 @@ test("the sheet lists conversations and needs_decision pipelines as one list und
   expect(laneLine.className).toContain("truncate");
   expect(laneLine.className).not.toContain("shrink-0");
   const laneAge = rows[0]!.querySelector("[data-attention-age]")!;
-  expect(laneAge.textContent).toBe("1h");
+  /* The desktop panel's words for the same wait (`fmtAge`), minutes up to 90. */
+  expect(laneAge.textContent).toBe("60m ago");
   expect(laneAge.className).toContain("shrink-0");
   /* Every row is a 44 px target. */
   for (const row of rows) expect(row.className).toContain("min-h-11");
@@ -248,7 +249,7 @@ test("a permission row puts its long headline on a truncated line of its own and
   expect(decision.className).toContain("min-w-0");
   expect(decision.className).not.toContain("shrink-0");
   const age = row.querySelector("[data-attention-age]")!;
-  expect(age.textContent).toBe("3m");
+  expect(age.textContent).toBe("3m ago");
   expect(age.parentElement!.contains(decision)).toBe(false);
   expect(age.parentElement!.textContent).toContain("opus");
   expect(q(host, "[data-permission-allow]")).not.toBeNull();
