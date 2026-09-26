@@ -36,19 +36,20 @@ These steps take you from nothing to an orchestrator working on your project.
 
 1. Install [Bun](https://bun.com) 1.4 or newer:
    `curl -fsSL https://bun.com/install | bash`
-2. Install at least one agent CLI:
+2. Install Claude Code or Codex. The orchestrator runs on one of them.
    - Claude Code: `curl -fsSL https://claude.ai/install.sh | bash`
    - Codex: `bun add -g @openai/codex`
-   - GitHub Copilot: `bun add -g @github/copilot`
+
+   You can add GitHub Copilot as well: `bun add -g @github/copilot`
 3. Start Delegatus: `bunx delegatus-cli`
 4. Open `http://127.0.0.1:8898/` if your browser did not open it for you.
 5. Follow the setup guide. It signs you in to your agent CLIs, asks for a
    project folder and creates the project's orchestrator.
 6. Tell the orchestrator what you want done.
 
-The orchestrator needs Claude Code or Codex. Copilot alone is enough to run
-single agents. To keep a `delegatus` command installed, to change the port,
-or to see what the command starts, read [Configuration](#configuration).
+Copilot runs single agents; it cannot run the orchestrator. To keep a
+`delegatus` command installed, to change the port, or to see what the command
+starts, read [Configuration](#configuration).
 
 ### From a clone
 
@@ -69,8 +70,8 @@ yourself.
 This section follows one piece of work from your request to a merged pull
 request.
 
-Each project gets an orchestrator, an agent that holds the project's seat.
-You ask it for something in its chat. It opens a task on the project's board
+Each project gets one orchestrator: the agent you talk to about that
+project. You ask it for something in its chat. It opens a task on the project's board
 and starts a pipeline for it: one agent builds the change, another reviews
 it, and the builder fixes what the review found. The orchestrator watches the
 agents it started and files a short report each time a piece lands. When it
@@ -84,6 +85,9 @@ it did not start.
 ![A pipeline opened from its task: Build, Review and Verify stages with the fail edge from Review back to Build, and the builder's and the reviewer's conversations side by side](docs/media/readme/pipeline.svg)
 
 ## How it works
+
+This section covers each part you work with: the orchestrator, the board,
+pipelines, agents and accounts, and the phone layout.
 
 ### The orchestrator
 
@@ -114,8 +118,8 @@ The **Reports** log beside its chat lists what it reported, newest first: a
 stage that passed or failed, a review verdict, a blocked pipeline, a
 question. Each entry shows its time and kind, and the issue numbers, pull
 requests and cards in it are links. New reports arrive live. A toggle in the
-seat's header hides the log; on a phone the log opens from the seat
-conversation's bar. Reports can also go to a Telegram chat, which you pick
+orchestrator bar's header hides the log; on a phone the log opens from the
+orchestrator chat's bar. Reports can also go to a Telegram chat, which you pick
 per project in the setup guide's Telegram step. The **Bridge reports**
 switch in the board's ⋯ menu turns reports off for a project.
 
