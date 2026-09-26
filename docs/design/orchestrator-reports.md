@@ -745,7 +745,14 @@ operator, which is what "the language I selected" means.
     (`readReplySuggestions`, `src/lib/suggestions/store.ts:347`), so an ask
     left by a predecessor is still read after a rotation. The operator's next
     message in that conversation retires its set
-    (`retireReplySuggestionsOnOperatorMessage`, same file).
+    (`retireReplySuggestionsOnOperatorMessage`, same file);
+  - `operatorAdmissions`, the store's record of operator messages
+    (`{ conversationId, key, at }`) for the same conversations, from
+    `readReplySuggestionsFile` (same file). The retirement writes one entry
+    for every keyed operator message, and the store keeps the newest 128
+    across all conversations (`REPLY_SUGGESTION_ADMISSION_CAPACITY`,
+    `src/lib/suggestions/types.ts:38`). The store's code is unchanged; the
+    tick only reads it.
 - **Deploy snapshots** (§3.8): in the controller pass
   (`src/lib/monitor/seatTickController.ts`), after the sources are read and
   before `seatTickDecision` runs or any wake is committed, the controller reads
@@ -785,14 +792,30 @@ operator, which is what "the language I selected" means.
   A report refused because nothing was left after scrubbing stored no row
   (§5.2), so it clears nothing.
 - **Asks**: every check reads the seat conversation's current suggestion set.
-  A set not yet in `asksOwed`, older than 10 minutes, and with bridge reports
-  on is appended with key `ask:<setId>`. An entry is removed when a report
-  under its key lands, or when its conversation's current set is gone, meaning
-  the operator answered and the set was retired. A set replaced by a newer
-  one in the same conversation stays owed: the seat asked again, and the first
-  ask was never reported. Carried through `seatTickStateForEpoch`, so a
-  successor inherits its predecessor's unanswered ask and the check keeps
-  reading that conversation's set.
+  A set not yet in `asksOwed`, older than 10 minutes, with no operator
+  admission in its conversation since its `at`, and with bridge reports on, is
+  appended with key `ask:<setId>`. An entry is removed when any of these holds:
+  - a report under its key lands;
+  - its conversation's current set is gone: the operator answered and the set
+    was retired;
+  - `operatorAdmissions` holds an entry for its conversation with
+    `at ≥ entry.at`. The operator wrote to that conversation after the ask,
+    which answers it even when the seat has already offered a newer set. That
+    is the normal interactive flow: the mandate has the seat call
+    `suggest_replies` after every message that asks or proposes something, so
+    a new set usually replaces an answered one well inside the 5-minute check
+    interval, and the tick would rarely see the retired state between them.
+  A set replaced by a newer one **with no operator message in between** stays
+  owed: the seat asked again, and the first ask was never reported. When the
+  record cannot tell, because the conversation has no admission since the
+  entry but the store's oldest retained admission is newer than the entry (so
+  an older one may have aged out of the 128), the entry stays owed, the same
+  way as every other unknown in this design. An operator message sent without a
+  key leaves no admission; its retirement still clears the entry through the
+  "set is gone" rule unless a new set arrived before the check. Carried
+  through `seatTickStateForEpoch`, so a successor inherits its predecessor's
+  unanswered ask, and the check keeps reading that conversation's set and
+  admissions.
 - **Digest memory**, on every check, whatever `reportsOwed` holds: when
   `lastReportAt > reportSeenAt`, set `reportSeenAt = lastReportAt` and
   `reportFingerprint = checkFingerprint`, the fingerprint of the check *before*
@@ -1070,7 +1093,7 @@ mandates.
 | Rule | Mandate | Seat tick | Tool answers | Viewer rendering |
 |---|---|---|---|---|
 | R1 every settled outcome, once | ✓ | owed per key until that key or a `covers` entry is in the log; one report per wake via `coversOwed`; verdicts not owed; survives rotation and tick-off | | |
-| R2 asks | ✓ | ask owed per reply-suggestion set under its own key until a report under that key lands; kept in project state across a rotation | `suggest_replies` reminder; `seat_tick_settings` lists owed reports and the open ask | attention queue (existing) |
+| R2 asks | ✓ | ask owed per reply-suggestion set under its own key until a report under that key lands, the set is retired, or an operator admission in that conversation is at or after the ask; a set replaced with no operator message in between stays owed; kept in project state across a rotation | `suggest_replies` reminder; `seat_tick_settings` lists owed reports and the open ask | attention queue (existing) |
 | R3 digest | ✓ | asked on an interval wake when the board moved and nothing was reported for an interval | | |
 | R4 nothing running | ✓ | owed line says so when the last lane settled | | |
 | R6 task changes on deploy reports | ✓ | snapshot per settled deploy in the controller pass; deploy key given in the wake | | `tasks` section from the deploy snapshots |
@@ -1319,15 +1342,15 @@ and asks):
 | Seat lanes settled | 35 lanes closed as completed or failed | Keys for each, carried by the wakes below |
 | Outcome wakes (a deploy or own lane settled) | 21: 2 on `eca14a7c`, 3 on `9b27bcc0`, 15 on `577257f2`, 1 on `c5616fc7` | **21**, one per wake covering all its keys (`coversOwed`) |
 | Interval wakes | 6 | **at most 6** digests, fewer where a report landed within the interval |
-| Asks (`suggest_replies` calls) | at least 4 on `577257f2` between 13:06Z and 19:33Z, one of them already filed as `blocked`; earlier hours not paged | **at least 3** |
+| Asks (`suggest_replies` calls) | 4 on `577257f2` between 13:06Z and 19:33Z (Kyiv 16:06–22:33); earlier hours not paged | **1**: the 19:56 set (16:56Z), re-offered at 21:11 (18:11Z) with no operator message in between and answered by the operator at 21:35 (18:35Z). The other three were answered within minutes (15:46Z at 15:48Z, 18:11Z at 18:35Z, 19:27Z at 19:31Z), before any wake could carry them |
 | Review and critique attempts | 77 across 37 lanes | **0**: not owed (§3.1). Owed one each, as the round-2 draft had it, they would add 77 |
-| **Total** | | **about 30**, against the 11 filed that day |
+| **Total** | | **about 28**, against the 11 filed that day |
 
 For 09-23 and 09-24 the copy gives 6 and 7 deployed commits, 6 and 15 settled
 lanes, and 31 and 38 review attempts. Their wakes were not paged, so their
 owed reports are bounded only by the outcome keys (at most 12 and 22).
 
-About 30 reports on the busiest day means about 30 group posts. Each shows two
+About 28 reports on the busiest day means about 28 group posts. Each shows two
 lines while its quote is collapsed, arrives silently and carries no link
 preview, which answers what the operator named as spam on 26.09: length and
 previews. Per-verdict reports would have tripled it, which is why they are not
@@ -1419,7 +1442,16 @@ ignoring every ask.
      after "suggest, report, suggest", the first report clears only the
      first, and the second stays owed until a report under its own key
      lands**; an answered ask (set retired by the operator's message) is
-     cleared; a set replaced by a newer one stays owed;
+     cleared;
+   - **answered, then re-offered: set A offered at 13:00 and appended at the
+     13:15 check; the operator answers at 13:40 (an admission at 13:40
+     retires A); the seat records set B at 13:42; the 13:45 check clears
+     `ask:A`**;
+   - **re-offered without an answer: set A, then set B with no operator
+     message in between; `ask:A` stays owed**, and B is owed once it is 10
+     minutes old;
+   - an ask whose conversation has no admission since it while the store's
+     oldest admission is newer stays owed;
    - **an ask left by seat A stays owed after the seat rotates to B (read from
      A's conversation, carried through `seatTickStateForEpoch`) and clears
      when a report under its key lands**;
@@ -1447,7 +1479,8 @@ ignoring every ask.
 13. **Before/after replay** in `seatTick.test.ts`: a fixture day shaped after
     the full Kyiv day of 09-25 (§6.7), with invented titles: 21 outcome wakes
     carrying 16 deploy and 35 lane outcomes, 77 review verdict events, 6
-    interval wakes, 4 reply-suggestion sets, the 11 real report times, and a
+    interval wakes, the day's 4 reply-suggestion sets and 4 operator messages
+    at their real times, the 11 real report times, and a
     30-minute interval. Before: 5 of the 15 outcome wakes on `577257f2` and 0
     of its 5 interval wakes were followed by a report. The test asserts:
     - 21 report asks, one per outcome wake, each settled by a single report
@@ -1455,7 +1488,15 @@ ignoring every ask.
       answers `queued` and credits one check later;
     - no verdict key ever owed;
     - at most 6 digest lines;
-    - 3 ask lines, each under its own set's key;
+    - exactly one owed ask, the 16:56Z set, carried as an `Ask owed` line in
+      the 17:35Z and 18:10Z wakes and cleared by the operator's 18:35Z
+      message. The 18:11Z set replaced it with no operator message in between,
+      so it stayed owed until then. The 18:11Z set itself was answered at
+      18:35Z before any wake; the 15:46Z and 19:27Z sets were answered within
+      minutes (15:48Z and 19:31Z). So the day's answered-then-re-offered pair
+      (18:11Z, answered at 18:35Z, then 19:27Z) and its re-offered-without-
+      answer pair (16:56Z, then 18:11Z) are both in the fixture, and exactly
+      two ask lines are expected;
     - and, when no report is filed, every owed key still asked for in each
       later wake, with the list never passing 64.
     It counts asks; whether seats comply shows in the log afterwards.
@@ -1469,7 +1510,7 @@ isolated `LLV_STATE_DIR`; the privacy gate from the merge base.
 |---|---|
 | More often | R1 makes every settled outcome a report, asked per key until it lands; R3 adds a digest per interval while the board moves. |
 | Clear rules: when, what, what shape | §3.1 triggers, §3.2 summary and sections, §3.3 keys, §3.4 quiet periods. |
-| Not spammy (26.09) | About 30 posts on the busiest measured day, each two visible lines, silent, with no previews; one report per wake; review verdicts not owed (§3.1, §6.7). |
+| Not spammy (26.09) | About 28 posts on the busiest measured day, each two visible lines, silent, with no previews; one report per wake; review verdicts not owed (§3.1, §6.7). |
 | Short but substantive | A summary line of at most 120 characters; items of at most 200 characters saying what is now true and what it means; per-section limits and a byte budget. |
 | Regular, catch up after AFK at any moment | Every outcome asked for until reported; digest within one interval when anything moved; silence means nothing changed; asks and a stopped tick produce a report (§5.1, §5.4). Survives rotations. |
 | Maybe tie to seat ticks | The tick is the main enforcement point (§5.1). |
@@ -1504,7 +1545,7 @@ isolated `LLV_STATE_DIR`; the privacy gate from the merge base.
 - **An explicit `link_preview_options` in the bot service.** The Telegram copy
   carries no link or URL, so Telegram has nothing to preview.
 - **A posting cadence for the group**, for example one post per 15 minutes
-  merging the reports in between. It is worth adding if about 30 silent
+  merging the reports in between. It is worth adding if about 28 silent
   two-line posts on a busy day still read as too many.
 - **Raising `BRIDGE_REPORT_BODY_MAX_BYTES`.** The 1 900-byte budget holds a
   full report; a larger cap would only allow longer reports than the operator
