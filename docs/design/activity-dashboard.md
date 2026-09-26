@@ -421,15 +421,19 @@ counted exactly.
 3. **Days and hours.** Each minute falls in the day and clock hour of the zone
    where it lies. A session that runs past midnight puts each message on its
    own day. Day length follows the zone (a 25-hour day on 2026-10-25 in Kyiv).
-4. **Report hours.**
+4. **Report hours.** A project's are counted from its own episodes alone,
+   so projects never compete for an hour and one hour can count for several
+   of them; the day's total is counted from every project's time together,
+   so the projects' hours usually add up to more than the total
+   (`docs/design/worktime-matches-zvit.md`).
    - `clock-hour`: every window in a clock hour combines; the hour's covered
-     minutes weigh under 10 = 0, 10-39 = 0.5 h, 40+ = 1 h; the hour goes to the
-     project with the most of its minutes (a tie to the more recent input).
-   - `half-hour`: each project's raw time per day rounds to the nearest 0.5 h
-     (a tie rounds up), and any non-zero time is at least 0.5 h.
-5. **Billable.** The billable figure repeats steps 1-4 on the billable
-   projects' inputs alone, as a paid report would, so a request to another
-   project never takes a billable minute.
+     minutes weigh under 10 = 0, 10-39 = 0.5 h, 40+ = 1 h.
+   - `half-hour`: the raw time per day rounds to the nearest 0.5 h (a tie
+     rounds up), and any non-zero time is at least 0.5 h.
+5. **Billable.** The billable figure repeats steps 1-3 on the billable
+   projects' inputs alone and gives each clock hour to the billable project
+   with the most of its minutes, so a request to another project never takes
+   a billable minute.
 
 Raw minutes stay the primary figure; report hours are secondary and name
 their mode.

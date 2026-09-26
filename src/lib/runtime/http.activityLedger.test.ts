@@ -23,10 +23,12 @@ const PHONE = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTM
 let ledgerDir: string;
 let reports: string[];
 
-function request(body: unknown, headers: Record<string, string> = {}): NextRequest {
+/** A Viewer page's request, which a browser stamps with `sec-fetch-site`;
+    `browser: false` is a script's, which carries none. */
+function request(body: unknown, headers: Record<string, string> = {}, browser = true): NextRequest {
   return new NextRequest("http://127.0.0.1/api/runtime/send", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json", "user-agent": PHONE, ...headers },
+    headers: { host: "127.0.0.1", "content-type": "application/json", "user-agent": PHONE, ...(browser ? { "sec-fetch-site": "same-origin" } : {}), ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -94,6 +96,29 @@ test("an agent naming itself and a Viewer service write no row", async () => {
   /* Both sends still went through; neither is the operator's time. */
   expect(enqueued).toHaveLength(2);
   expect(rows()).toEqual([]);
+});
+
+test("a script holding the operator's token is admitted as an API client: no operator origin, no row", async () => {
+  /* An agent posting relays over ssh to another host's Viewer: no capability
+     of its own, and no fetch metadata, which only a browser sends. */
+  const enqueued: Array<{ origin?: unknown }> = [];
+  await handleRuntimeCommand(request(
+    { conversationId: "conversation_direct", text: "relay from another host", idempotencyKey: "script-send-1" },
+    {},
+    false,
+  ), "send", dependencies(enqueued as unknown[]));
+  expect(enqueued).toHaveLength(1);
+  expect(enqueued[0]!.origin).toEqual({ kind: "agent", role: "api-client" });
+  expect(rows()).toEqual([]);
+});
+
+test("a Viewer page's send keeps the operator origin and writes its row", async () => {
+  const enqueued: Array<{ origin?: unknown }> = [];
+  await handleRuntimeCommand(request(
+    { conversationId: "conversation_direct", text: "go on", idempotencyKey: "page-send-1" },
+  ), "send", dependencies(enqueued as unknown[]));
+  expect(enqueued[0]!.origin).toEqual({ kind: "operator" });
+  expect(rows()).toHaveLength(1);
 });
 
 test("a ledger that cannot be written still admits the send", async () => {
