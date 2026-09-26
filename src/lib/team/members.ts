@@ -17,6 +17,7 @@ import {
   type TeamActor,
   type TeamView,
 } from "./contract";
+import { CONFUSABLE_ENTRIES } from "./confusables";
 import { appendTeamEvent } from "./events";
 import { mintSession, randomToken, sha256Hex } from "./sessions";
 import type { Challenge, ChallengeKind, ChallengeRequester, TeamStore } from "./store";
@@ -34,11 +35,14 @@ export const APPROVAL_TTL_MS = 10 * 60_000;
 export const HANDOFF_TTL_MS = 10 * 60_000;
 export const RECOVERY_TTL_MS = 15 * 60_000;
 /* How many requests nobody signed in opened (device approvals, Telegram and
-   passkey sign-ins) may be open at once, per kind. Anyone who reaches the
-   address can open one, so without a bound a script fills the store within a
-   code's lifetime. Past it a new request is refused and the open ones keep
-   working, so a flood cannot push a real person's code out. */
-export const OPEN_SIGN_IN_REQUEST_LIMIT = 64;
+   passkey sign-ins) may wait unanswered at once, per kind. Anyone who reaches
+   the address can open one, so without a bound a script fills the store
+   within a code's lifetime. Past it the oldest waiting request is dropped and
+   the new one opens: refusing the new one instead let a flood of a few
+   requests a second lock every signed-out member out, while this bound makes
+   a flood keep up thousands of requests per code lifetime to push a real
+   person's code out. A request a member already answered is never dropped. */
+export const OPEN_SIGN_IN_REQUEST_LIMIT = 4096;
 const APPROVAL_GUESS_LIMIT = 5;
 const APPROVAL_GUESS_WINDOW_MS = 10 * 60_000;
 
@@ -95,39 +99,80 @@ function requireName(value: unknown): string {
 
 /* A name is who the chat, the Activity tab and the MCP author line say sent
    something, so no two people may hold the same one: compared without case,
-   spaces, invisible characters or compatibility forms, and with the Cyrillic
-   and Greek letters that draw like Latin ones folded onto them (a subset of
-   the Unicode TR39 skeleton), against every member, revoked ones too (their
-   past messages still carry the name). Each letter is folded from its
-   lowercase, so a capital's look-alike maps to the letter its capital draws:
-   "В" to b, "Н" to h, "Ν" to n. */
-const LOOKALIKES: Record<string, string> = {
-  // Cyrillic
-  "а": "a", "в": "b", "е": "e", "ё": "e", "һ": "h", "н": "h", "і": "i", "ї": "i", "ј": "j", "к": "k", "ӏ": "l",
-  "м": "m", "о": "o", "р": "p", "ԛ": "q", "ѕ": "s", "т": "t", "у": "y", "ү": "y", "х": "x", "с": "c", "ԁ": "d", "ԝ": "w",
-  // Greek
-  "α": "a", "β": "b", "ε": "e", "ζ": "z", "η": "h", "ι": "i", "κ": "k", "μ": "m", "ν": "n", "ο": "o", "ρ": "p",
-  "τ": "t", "υ": "y", "χ": "x",
-  // Latin and digits
-  "ı": "i", "0": "o",
-};
-const LOOKALIKE_PATTERN = new RegExp(`[${Object.keys(LOOKALIKES).join("")}]`, "gu");
+   spaces or invisible characters, by the Unicode confusable skeleton (UTS #39,
+   the generated table in ./confusables), against every member, revoked ones
+   too (their past messages still carry the name). The skeleton is case
+   sensitive and case is not, so a name has two keys: the skeleton of its
+   lowercase ("Iνan" and "ivan"), and the lowercase of its skeleton, skeleton
+   again ("Νina" and "nina", "Ivan" and "lvan"). Two names collide when any key
+   of one is a key of the other. */
+let confusables: Map<string, string> | null = null;
 
-function nameKey(name: string): string {
-  return name
-    .normalize("NFKC")
-    .toLocaleLowerCase()
-    .replace(/[\s\p{Cf}\p{Default_Ignorable_Code_Point}]+/gu, "")
-    .replace(LOOKALIKE_PATTERN, (letter) => LOOKALIKES[letter]);
+function confusableMap(): Map<string, string> {
+  if (confusables) return confusables;
+  const fromHex = (hex: string) => hex.split(".").map((point) => String.fromCodePoint(parseInt(point, 16))).join("");
+  confusables = new Map(CONFUSABLE_ENTRIES.trim().split(/\s+/).map((entry) => {
+    const [source, target] = entry.split("=");
+    return [fromHex(source), fromHex(target)];
+  }));
+  return confusables;
+}
+
+function skeleton(text: string): string {
+  const map = confusableMap();
+  return [...text.normalize("NFD")].map((character) => map.get(character) ?? character).join("").normalize("NFD");
+}
+
+function nameKeys(name: string): string[] {
+  const bare = name.normalize("NFKC").replace(/[\s\p{Cf}\p{Default_Ignorable_Code_Point}]+/gu, "");
+  return [skeleton(bare.toLowerCase()), skeleton(skeleton(bare).toLowerCase())];
 }
 
 function nameTaken(store: TeamStore, name: string, exceptId: string | null): boolean {
-  const key = nameKey(name);
-  return store.members().some((member) => member.id !== exceptId && nameKey(member.name) === key);
+  const keys = new Set(nameKeys(name));
+  return store.members().some((member) => member.id !== exceptId && nameKeys(member.name).some((key) => keys.has(key)));
+}
+
+/* A name typed with letters from two scripts ("Owпer": Latin and Cyrillic)
+   imitates someone even when no member holds the name yet, so it is refused.
+   A letter of a script outside this list shares a script with none of the
+   listed ones; the scripts Japanese, Korean and Chinese write together count
+   as one (UTS #39's augmented script sets). */
+const NAME_SCRIPTS = [
+  "Arabic", "Armenian", "Bengali", "Bopomofo", "Cyrillic", "Devanagari", "Ethiopic", "Georgian", "Greek", "Gujarati",
+  "Gurmukhi", "Han", "Hangul", "Hebrew", "Hiragana", "Kannada", "Katakana", "Khmer", "Lao", "Latin", "Malayalam",
+  "Myanmar", "Oriya", "Sinhala", "Tamil", "Telugu", "Thaana", "Thai", "Tibetan",
+].map((script) => [script, new RegExp(`\\p{Script_Extensions=${script}}`, "u")] as const);
+const AUGMENTED: Record<string, readonly string[]> = {
+  Han: ["Jpan", "Kore", "Hanb"],
+  Hiragana: ["Jpan"],
+  Katakana: ["Jpan"],
+  Hangul: ["Kore"],
+  Bopomofo: ["Hanb"],
+};
+const SHARED_SCRIPT = /[\p{Script_Extensions=Common}\p{Script_Extensions=Inherited}]/u;
+
+function letterScripts(letter: string): Set<string> {
+  const scripts = new Set<string>();
+  for (const [script, pattern] of NAME_SCRIPTS) {
+    if (!pattern.test(letter)) continue;
+    scripts.add(script);
+    for (const augmented of AUGMENTED[script] ?? []) scripts.add(augmented);
+  }
+  if (scripts.size === 0) scripts.add("other");
+  return scripts;
+}
+
+function mixesScripts(name: string): boolean {
+  const letters = (name.normalize("NFKC").match(/\p{L}/gu) ?? []).filter((letter) => !SHARED_SCRIPT.test(letter));
+  if (letters.length === 0) return false;
+  const sets = letters.map(letterScripts);
+  return ![...sets[0]].some((script) => sets.every((scripts) => scripts.has(script)));
 }
 
 export function requireFreeName(store: TeamStore, name: string, exceptId: string | null = null): string {
   if (nameTaken(store, name, exceptId)) throw new TeamError("name_taken", "another member already has that name", 409);
+  if (mixesScripts(name)) throw new TeamError("name_mixed_scripts", "write the name in one script", 400);
   return name;
 }
 
@@ -184,9 +229,7 @@ export function issueChallenge(store: TeamStore, input: {
   };
   store.pruneChallenges(nowMs);
   const keyless = input.kind !== "recovery" && !challenge.memberId && !challenge.createdBy;
-  if (keyless && store.countOpenKeylessChallenges(input.kind, challenge.createdAt) >= OPEN_SIGN_IN_REQUEST_LIMIT) {
-    throw new TeamError("too_many_requests", "too many sign-in requests are open; try again in a few minutes", 429);
-  }
+  if (keyless) store.dropOldestKeylessChallenges(input.kind, challenge.createdAt, OPEN_SIGN_IN_REQUEST_LIMIT - 1);
   store.insertChallenge(challenge);
   return { challenge, code };
 }

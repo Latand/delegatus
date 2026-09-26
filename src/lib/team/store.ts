@@ -35,6 +35,9 @@ import {
  */
 
 const SCHEMA_VERSION = 1;
+/* A request nobody signed in opened and nobody has answered; the partial
+   index `challenges_keyless_waiting` covers exactly these rows. */
+const KEYLESS_WAITING = "member_id IS NULL AND created_by IS NULL AND result_json IS NULL AND consumed_at IS NULL";
 export const SESSION_IDLE_MS = 30 * 24 * 3_600_000;
 export const SESSION_ABSOLUTE_MS = 180 * 24 * 3_600_000;
 export const EVENT_RETENTION_MS = 90 * 24 * 3_600_000;
@@ -272,6 +275,8 @@ export class TeamStore {
         );
         CREATE INDEX IF NOT EXISTS challenges_user_code ON challenges(user_code);
         CREATE INDEX IF NOT EXISTS challenges_kind_expiry ON challenges(kind, expires_at);
+        CREATE INDEX IF NOT EXISTS challenges_keyless_waiting ON challenges(kind, created_at)
+          WHERE member_id IS NULL AND created_by IS NULL AND result_json IS NULL AND consumed_at IS NULL;
         CREATE TABLE IF NOT EXISTS passkeys (
           id TEXT PRIMARY KEY,
           member_id TEXT NOT NULL,
@@ -462,12 +467,20 @@ export class TeamStore {
     ).all(kind, nowIso).map(challengeFrom);
   }
 
-  /** Open requests of one kind that name no member and no issuer: the ones
-      a caller with no session opened. */
+  /** Open requests of one kind that name no member and no issuer and that
+      nobody has answered yet: the ones a caller with no session opened and
+      is still waiting on. */
   countOpenKeylessChallenges(kind: ChallengeKind, nowIso: string): number {
     return this.db.query<{ n: number }, [string, string]>(
-      "SELECT COUNT(*) AS n FROM challenges WHERE kind = ? AND consumed_at IS NULL AND expires_at > ? AND member_id IS NULL AND created_by IS NULL",
+      `SELECT COUNT(*) AS n FROM challenges WHERE kind = ? AND ${KEYLESS_WAITING} AND expires_at > ?`,
     ).get(kind, nowIso)?.n ?? 0;
+  }
+
+  /** Deletes all but the newest `keep` of those requests, and says how many
+      went. */
+  dropOldestKeylessChallenges(kind: ChallengeKind, nowIso: string, keep: number): number {
+    return this.db.query(`DELETE FROM challenges WHERE id IN (SELECT id FROM challenges WHERE kind = ? AND ${KEYLESS_WAITING}
+      AND expires_at > ? ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)`).run(kind, nowIso, keep).changes;
   }
 
   updateChallenge(challenge: Challenge): void {

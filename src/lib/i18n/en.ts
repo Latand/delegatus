@@ -5011,6 +5011,7 @@ export const en = {
   "team.error.tooMany": "Too many wrong codes. Wait ten minutes and try again.",
   "team.error.nameRequired": "Enter a name.",
   "team.error.nameTaken": "Someone in the team already has that name. Choose another.",
+  "team.error.nameMixedScripts": "Write the name in one alphabet: this one mixes letters from two.",
   "team.error.passkeyUnknown": "This passkey is not registered on this Delegatus.",
   "team.error.passkeyFailed": "The passkey could not be checked. Try again.",
   "team.error.telegramTaken": "That Telegram account is already linked to another member.",

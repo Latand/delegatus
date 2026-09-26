@@ -101,6 +101,45 @@ describe("team install", () => {
     expect(proxy(get("/api/team/session/approval", action, "POST")).status).toBe(401);
   });
 
+  /* Security review of #2243, round 3, P3: the endpoint exemptions were
+     prefixes, so a path under them that no route serves fell through to the
+     not-found page, where Next ran a header-less multipart form action. */
+  test("the endpoint exemptions are the sign-in routes themselves, not every path under them", () => {
+    const form = new FormData();
+    form.set("$ACTION_ID_" + "7f".repeat(21), "");
+    form.set("1_0", "[]");
+    const post = (pathname: string) => proxy(new NextRequest(`https://dev.example.net${pathname}`, {
+      method: "POST",
+      headers: { host: "dev.example.net", origin: "https://dev.example.net" },
+      body: form,
+    }));
+    for (const pathname of ["/api/team/session/nope", "/api/team/join/abc/x", "/api/team/publicx", "/api/team/public/x", "/api/team/session/approval/c_1/x", "/api/team/session/"]) {
+      expect([pathname, post(pathname).status]).toEqual([pathname, 401]);
+    }
+    for (const pathname of [
+      "/api/team/public",
+      "/api/team/session/approval",
+      "/api/team/session/approval/c_1",
+      "/api/team/session/approve",
+      "/api/team/session/handoff",
+      "/api/team/session/passkey",
+      "/api/team/session/sign-out",
+      "/api/team/session/telegram",
+      "/api/team/session/telegram/c_1",
+      "/api/team/join/abcdefghijklmnop",
+    ]) {
+      expect([pathname, proxy(get(pathname, {}, "POST")).headers.get("x-middleware-next")]).toEqual([pathname, "1"]);
+    }
+    /* Every sign-in route on disk is one of them, so a new one cannot be
+       left behind the gate unnoticed. */
+    const routes = [...new Bun.Glob("**/route.ts").scanSync(path.join(import.meta.dir, "app/api/team"))].filter((route) => /^(public|session|join)\//.test(route));
+    expect(routes.length).toBeGreaterThanOrEqual(10);
+    for (const route of routes) {
+      const pathname = `/api/team/${path.dirname(route).replace(/\[(\w+)\]/g, "$1")}`;
+      expect([pathname, proxy(get(pathname, {}, "POST")).headers.get("x-middleware-next")]).toEqual([pathname, "1"]);
+    }
+  });
+
   test("the key and a member together pass", () => {
     const response = proxy(get("/api/files", { cookie: `llv_auth=${TOKEN}; ${MEMBER_COOKIE}=${cookie}` }));
     expect(response.headers.get("x-middleware-next")).toBe("1");

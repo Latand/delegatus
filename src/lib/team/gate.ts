@@ -22,13 +22,15 @@ import { existingTeamStore } from "./store";
    they load, are only ever read: Next runs a server action on whatever page
    path a `Next-Action` POST arrives at, so a page exemption that admitted a
    write would open every "use server" function to anyone who can reach the
-   address. */
-const EXEMPT_ENDPOINT_PREFIXES = [
-  "/api/team/public",
-  "/api/team/session/",
-  "/api/team/join/",
-  "/api/artifact/frame/",
-] as const;
+   address.
+
+   The endpoints are matched as the routes they are, never as a prefix: a
+   path under a prefix that no route serves falls through to the not-found
+   page, and Next runs a form action posted there with no header at all, from
+   the `$ACTION_ID_…` field of a multipart body. The frame path is one
+   catch-all route, so every path under it is that route. */
+const SIGN_IN_ENDPOINTS = /^\/api\/team\/(?:public|session\/(?:approve|passkey|handoff|sign-out|(?:approval|telegram)(?:\/[^/]+)?)|join\/[^/]+)$/;
+const FRAME_ENDPOINT_PREFIX = "/api/artifact/frame/";
 const EXEMPT_PAGE_PREFIXES = ["/sign-in", "/join/", "/_next/", "/brand/"] as const;
 const EXEMPT_EXACT = new Set(["/favicon.ico", "/icon.svg", "/apple-icon", "/manifest.webmanifest", "/robots.txt"]);
 
@@ -51,7 +53,7 @@ function isPageRead(request: ExemptRequest): boolean {
 export function isGateExempt(request: ExemptRequest): boolean {
   const pathname = request.nextUrl.pathname;
   if (carriesServerAction(request)) return false;
-  if (EXEMPT_ENDPOINT_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return true;
+  if (SIGN_IN_ENDPOINTS.test(pathname) || pathname.startsWith(FRAME_ENDPOINT_PREFIX)) return true;
   return isPageRead(request) && (EXEMPT_EXACT.has(pathname) || EXEMPT_PAGE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix)));
 }
 
@@ -60,13 +62,12 @@ export function isGateExempt(request: ExemptRequest): boolean {
    pages draw. Narrower than the gate's list on purpose: `/_next/` (the image
    optimizer, HMR) stays behind the key, and the build's static files never
    reach the proxy at all (its matcher skips `/_next/static`). */
-const PERIMETER_ENDPOINT_PREFIXES = ["/api/team/public", "/api/team/session/", "/api/team/join/"] as const;
 const PERIMETER_PAGE_PREFIXES = ["/sign-in/", "/join/", "/brand/"] as const;
 
 function isPerimeterExempt(request: ExemptRequest): boolean {
   const pathname = request.nextUrl.pathname;
   if (carriesServerAction(request)) return false;
-  if (PERIMETER_ENDPOINT_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return true;
+  if (SIGN_IN_ENDPOINTS.test(pathname)) return true;
   return isPageRead(request) && (pathname === "/sign-in" || EXEMPT_EXACT.has(pathname) || PERIMETER_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix)));
 }
 

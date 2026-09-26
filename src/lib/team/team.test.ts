@@ -168,33 +168,43 @@ describe("approving a device", () => {
 
   /* Security review of #2243, round 2, P3: anyone who reached the address,
      with no key and no session, could open requests without end, and each
-     one cost more than the last. */
-  test("keyless sign-in requests stop at a cap, and the ones already open still resolve", () => {
+     one cost more than the last. Round 3, P2: refusing past the bound let a
+     flood lock every signed-out member out, so past it the oldest unanswered
+     request goes instead of the new one. */
+  test("with the bound on keyless requests reached, a new request still gets a working code", () => {
     const store = teamStore();
     const mira = claimInstall(store, "Mira", DESKTOP).member;
     const now = Date.now();
-    const opened = Array.from({ length: OPEN_SIGN_IN_REQUEST_LIMIT }, () => startApproval(store, PHONE, now).challenge);
-    expect(opened.length).toBeGreaterThan(0);
-    const refused = (open: () => unknown) => {
-      try {
-        open();
-      } catch (error) {
-        return error instanceof TeamError ? [error.code, error.status] : error;
+    const first = startApproval(store, PHONE, now).challenge;
+    const answered = startApproval(store, PHONE, now).challenge;
+    confirmApproval(store, mira, answered.id, true, now);
+    const flood = (kind: "approval" | "telegram", count: number) => store.transaction(() => {
+      for (let n = 0; n < count; n += 1) {
+        store.insertChallenge({
+          id: `c_flood_${kind}_${n}`, kind, secretHash: `flood-${kind}-${n}`, userCode: null, memberId: null, createdBy: null,
+          createdAt: new Date(now + 1).toISOString(), expiresAt: new Date(now + APPROVAL_TTL_MS).toISOString(), consumedAt: null,
+          attempts: 0, invitedName: null, result: null, requester: null, payload: null,
+        });
       }
-      return null;
-    };
-    expect(refused(() => startApproval(store, PHONE, now))).toEqual(["too_many_requests", 429]);
-    for (const challenge of [opened[0], opened[opened.length - 1]]) {
-      expect(lookupApproval(store, mira, challenge.userCode, now).id).toBe(challenge.id);
-    }
+    });
+    flood("approval", OPEN_SIGN_IN_REQUEST_LIMIT);
 
-    for (let n = 0; n < OPEN_SIGN_IN_REQUEST_LIMIT; n += 1) startTelegram(store, "sign-in", null, PHONE, null, now);
-    expect(refused(() => startTelegram(store, "sign-in", null, PHONE, null, now))).toEqual(["too_many_requests", 429]);
-    /* A signed-in member's own request is not keyless, and is not capped. */
-    expect(startTelegram(store, "link", mira.id, PHONE, null, now).challenge.memberId).toBe(mira.id);
+    const fresh = startApproval(store, PHONE, now + 2);
+    expect(lookupApproval(store, mira, fresh.challenge.userCode, now + 2).id).toBe(fresh.challenge.id);
+    confirmApproval(store, mira, fresh.challenge.id, true, now + 2);
+    expect(completeApproval(store, challengeForRequester(store, fresh.challenge.id, fresh.proof, "approval")!, PHONE, now + 2).member.id).toBe(mira.id);
+    /* The oldest unanswered request made room; one a member already answered
+       was never a candidate. */
+    expect(store.challenge(first.id)).toBeNull();
+    expect(completeApproval(store, store.challenge(answered.id)!, PHONE, now + 2).member.id).toBe(mira.id);
 
-    /* Expired requests stop counting. */
-    expect(startApproval(store, PHONE, now + APPROVAL_TTL_MS + 1).challenge.userCode).toMatch(/^[A-Z2-9]{6}$/);
+    flood("telegram", OPEN_SIGN_IN_REQUEST_LIMIT);
+    expect(startTelegram(store, "sign-in", null, PHONE, null, now + 2).challenge.kind).toBe("telegram");
+    /* A signed-in member's own request is not keyless, and never makes room. */
+    expect(startTelegram(store, "link", mira.id, PHONE, null, now + 2).challenge.memberId).toBe(mira.id);
+    expect(store.countOpenKeylessChallenges("telegram", new Date(now + 2).toISOString())).toBe(OPEN_SIGN_IN_REQUEST_LIMIT);
+    /* Thousands, so a flood has to keep up a real rate to push anyone out. */
+    expect(OPEN_SIGN_IN_REQUEST_LIMIT).toBeGreaterThanOrEqual(1000);
   });
 });
 
@@ -306,7 +316,7 @@ describe("sessions and revocation", () => {
     const store = teamStore();
     const owner = claimInstall(store, "Owner", DESKTOP).member;
     const oleh = redeemJoin(store, createInvite(store, owner, null).code, "Oleh", PHONE).member;
-    for (const taken of ["\u041ewner", "\u039fwner", "\u043ewn\u0435r", "0wner", "Own\u034fer"]) {
+    for (const taken of ["\u041ewner", "\u039fwner", "\u043ewn\u0435r", "0wner", "Own\u034fer", "Ow\u0578er", "Owne\u0433", "OWNER", "0WNER"]) {
       let refusal: unknown = null;
       try {
         renameMember(store, oleh, oleh, taken);
@@ -319,6 +329,40 @@ describe("sessions and revocation", () => {
     /* A name written in another script that does not look like a held one is
        still anyone's to take. */
     expect(redeemJoin(store, createInvite(store, owner, null).code, "\u041e\u043b\u0435\u0433", PHONE).member.name).toBe("\u041e\u043b\u0435\u0433");
+  });
+
+  /* Security review of #2243, round 3, P3: the hand-picked fold missed
+     Armenian and some Cyrillic letters, folded Greek lowercase by what its
+     capital draws, and left capital I and lowercase l apart. */
+  test("names are compared by their Unicode confusable skeleton, and a name mixing scripts is refused", () => {
+    const store = teamStore();
+    const owner = claimInstall(store, "Owner", DESKTOP).member;
+    const invite = () => createInvite(store, owner, null).code;
+    const ivan = redeemJoin(store, invite(), "Ivan", PHONE).member;
+    redeemJoin(store, invite(), "Paul", PHONE);
+    const refusal = (name: string, as = ivan) => {
+      try {
+        renameMember(store, as, as, name);
+      } catch (error) {
+        return [name, error instanceof TeamError ? error.code : String(error)];
+      }
+      return [name, null];
+    };
+    const oleh = redeemJoin(store, invite(), "Oleh", PHONE).member;
+    for (const taken of ["Ow\u0578er", "I\u03bdan", "Pa\u03c5l", "lvan", "1van", "ivan", "\u0406van"]) {
+      expect(refusal(taken, oleh)).toEqual([taken, "name_taken"]);
+    }
+    /* A name that collides with nobody but mixes Latin with another script
+       is refused on its own. */
+    for (const mixed of ["Ow\u043fer", "Ol\u0435na", "Mi\u0433a"]) {
+      expect(refusal(mixed, oleh)).toEqual([mixed, "name_mixed_scripts"]);
+    }
+    /* One script, whichever, and the scripts one language writes together,
+       are still anyone's to take. */
+    for (const fine of ["\u041e\u043b\u0435\u0433 \u041a.", "\u5c71\u7530 \u306f\u306a", "\uae40\ubbfc\uc900", "Zo\u00eb O'Neil-2"]) {
+      expect(renameMember(store, oleh, oleh, fine).name).toBe(fine);
+    }
+    expect(store.member(ivan.id)!.name).toBe("Ivan");
   });
 
   test("an invite cannot be redeemed under a name someone holds, a revoked member's included", () => {

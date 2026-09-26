@@ -4901,6 +4901,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "team.error.tooMany": "Забагато неправильних кодів. Зачекайте десять хвилин.",
   "team.error.nameRequired": "Введіть ім’я.",
   "team.error.nameTaken": "Таке ім’я вже має хтось у команді. Виберіть інше.",
+  "team.error.nameMixedScripts": "Напишіть ім’я однією абеткою: у цьому змішано літери двох.",
   "team.error.passkeyUnknown": "Цей ключ доступу не зареєстровано в цьому Delegatus.",
   "team.error.passkeyFailed": "Не вдалося перевірити ключ доступу. Спробуйте ще раз.",
   "team.error.telegramTaken": "Цей Telegram уже прив’язано до іншого учасника.",
