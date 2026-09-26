@@ -40,6 +40,8 @@ export type ProjectReportsRead = {
   failed: boolean;
   /** Writes the choice; null stores "Log only". True once stored. */
   save(outcome: { chat: string; name: string } | null): Promise<boolean>;
+  /** Reads the stored choice again: the overview may have moved it. */
+  reload(): void;
 };
 
 function settingsOf(body: Partial<ProjectReportSettings>): ProjectReportSettings {
@@ -51,6 +53,7 @@ export function useProjectReports(project: string): ProjectReportsRead {
   const [read, setRead] = useState<{ project: string; settings: ProjectReportSettings } | null>(null);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [generation, setGeneration] = useState(0);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -64,7 +67,8 @@ export function useProjectReports(project: string): ProjectReportsRead {
       }
     })();
     return () => { cancelled = true; };
-  }, [project]);
+  }, [project, generation]);
+  const reload = useCallback(() => setGeneration((value) => value + 1), []);
   const save = useCallback(async (outcome: { chat: string; name: string } | null) => {
     setSaving(true);
     setFailed(false);
@@ -84,7 +88,7 @@ export function useProjectReports(project: string): ProjectReportsRead {
       setSaving(false);
     }
   }, [project]);
-  return { settings: read?.project === project ? read.settings : null, saving, failed, save };
+  return { settings: read?.project === project ? read.settings : null, saving, failed, save, reload };
 }
 
 /** The chat the project posts to, or null for the log only. */
@@ -330,6 +334,12 @@ function SeatReportsPopover({ anchorRef, project, projectName, reports, onClose 
   const rootRef = useRef<HTMLDivElement>(null);
   const { style, onScreen } = useAnchoredBox(anchorRef, rootRef, POPOVER_WIDTH);
   useModalLayer({ containerRef: rootRef, onClose, lockScroll: false });
+  /* A fresh read on open, as the tick's popover does. */
+  useEffect(() => {
+    reports.reload();
+    // Once, on open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     const away = (event: Event) => {
       const target = event.target as Node | null;
