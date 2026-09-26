@@ -1,7 +1,8 @@
 # Activity "у звіті" matches the daily #звіт
 
-Status: diagnosis and fix plan (design stage, read-only). The build stage
-implements the plan.
+Status: diagnosis, and the fix as built. The fix follows the operator's
+correction of 2026-09-26 (below), which replaced the first plan's paid-only
+count.
 
 ## Originating requirement
 
@@ -31,24 +32,40 @@ the stage host.
 > mismatches if the diagnosis shows they touch these figures. NOT in scope:
 > dashboard redesign, agent-hours, the phone layout beyond what #2171 needs.
 
+### Operator correction, 2026-09-26
+
+Paraphrased: there is no paid / not-paid distinction to build. The operator
+works on several projects in parallel all the time, usually three at once,
+and that is normal. So:
+
+1. **Per project**, each project's hours are counted independently, from that
+   project's own operator messages only, with the same 10-minute window and
+   hour rounding (10-39 min = 0.5 h, 40+ = 1 h). Projects never compete for a
+   clock hour, and one hour can count for several projects.
+2. **Total** ("all activity"): the union of every project's message windows,
+   clumped together, with the same rounding. The sum of the per-project
+   figures is therefore normally larger than the total, which is expected.
+
+The billable `settings.json` path is dropped from this change. The send-route
+defect (G2, F2) stays.
+
 ## Answer first
 
 Most of the gap has one cause. Activity lets every project compete for a
-clock hour, and the #звіт lets only the paid projects compete. Activity already
-computes the paid-only count, which the earlier design names the billable pass
-(`docs/design/activity-dashboard.md:430-432`, `src/lib/activity/method.ts:853-859`).
-Two things keep it from reaching the screen. Production has no billable tags
-(`activity/settings.json` is absent). And the "у звіті" figure of a project
-never reads that pass. Switched to paid-only, Activity's own inputs give
-**21.09 6.5 h and 23.09 8.5 h, with the same credited clock hours the audit
-lists** (`audit.md:22`, `audit.md:24`).
+clock hour: the hour goes to the project with the most of its minutes, and a
+project's figure is the hours it won. The #звіт counted the paid project from
+its own messages. Counted from its own messages alone, as the operator's
+correction asks for every project, paid project A reads **21.09 6.5 h and
+23.09 8.5 h, with the same credited clock hours the audit lists**
+(`audit.md:22`, `audit.md:24`). The day's total (the union of every project's
+windows) does not move.
 
 The rest are input differences, and most of them are the recount's. The
 #звіт recount excluded some genuine operator messages by text prefix and by
 reading their content, contrary to its own written method, and it missed one
 message. On the other side, Activity counts one real defect: agent relays that
 a script posted through the stage host's Viewer HTTP send route. That route
-records every caller as the operator. That defect costs 0.5 h on 22.09 and is
+recorded every caller as the operator. That defect costs 0.5 h on 22.09 and is
 fixed at the send boundary, going forward only.
 
 #2136 and #2171 do not touch these figures.
@@ -89,7 +106,7 @@ Paid project A, in hours. Paid project B has no input in any source on these
 days (#звіт 0, Activity 0, replay 0), and its 17.09 and 18.09 figures (0.5 h
 each) agree between `reports.md` and Activity.
 
-| Date | #звіт sent | Activity today | Replay, paid-only (F1) | F1 with relays removed (F1+F2) | F1 − #звіт |
+| Date | #звіт sent | Activity today | Replay, own count (F1) | F1 with relays removed (F1+F2) | F1 − #звіт |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 19.09 | 2.5 | 3 | 3 | 3 | +0.5 |
 | 20.09 | 3.5 | 2.5 | 4.5 | 4.5 | +1 |
@@ -100,7 +117,14 @@ each) agree between `reports.md` and Activity.
 | 25.09 | not sent | 8 | 11 | 11 | — |
 
 F2 applies only to deliveries after it ships (see F2), so history keeps the F1
-column. The F1+F2 column shows what the relays weigh.
+column. The F1+F2 column shows what the relays weigh. Paid project B had no
+input on these days, so project A's own count here equals the paid-only
+count the first plan proposed.
+
+The day's total over every project is 10 / 9.5 / 9 / 14 / 11.5 / 13 / 13 for
+19-25.09, before and after F1: the union of every window, weighed per clock
+hour, is what the winning projects' weights already added up to. The
+projects' own counts add up to 13.5 / 11.5 / 12.5 / 23.5 / 23 / 27.5 / 19.5.
 
 The 22.09 match in "Activity today" is a coincidence. G1 moves that day by
 +1 h net: +2 h of hours lost to other projects, −1 h of weights raised by
@@ -125,7 +149,7 @@ two cancel.
 
 ## Causes, with evidence
 
-### G1. Every project competes for the hour (Activity) against paid projects only (#звіт)
+### G1. Every project competes for the hour (Activity) against the project's own messages (#звіт)
 
 `dayReportHours` gives each clock hour to the project with the most of its
 minutes, over every project's segments (`method.ts:497-518`, `method.ts:526-540`).
@@ -133,11 +157,10 @@ A paid project's "у звіті" figure is its share of that (`method.ts:976-981
 the row, `method.ts:1178` for the scoped view). The #звіт drops every non-paid
 input before counting. The operator said on 2026-09-24 that the #звіт covers
 only the two paid projects (rollout line 585). The recount's final script then
-kept only paid inputs (rollout line 637). The billable pass that would match
-already exists (`method.ts:853-859`, `method.ts:999-1000`, `method.ts:1179`).
-But `settings.json` is absent in prod, so `billable` is empty
-(`settings.ts:20-35`, `report.ts:202`, `report.ts:240`), and nothing shown as
-"у звіті" reads that pass anyway.
+kept only paid inputs (rollout line 637), so project A was counted from its
+own inputs, with no other project in the hour. Activity never counted a
+project that way: even its billable pass (`method.ts:853-859`) lets the
+billable projects compete, and prod has no billable tags.
 
 G1 makes two opposite errors:
 
@@ -153,8 +176,9 @@ G1 makes two opposite errors:
   recount counted 16.6 minutes and 0.5 h (rollout line 1282). The same happens
   on 23.09 at 00:00 and 10:00, and on 22.09 at 00:00 and 23:00.
 
-Paid-only fixes both. It moves 21.09 from 6 to 6.5 and 23.09 from 5.5 to 8.5,
-and on both days the credited hours are exactly the ones the audit lists.
+Counting each project from its own messages fixes both. It moves 21.09 from
+6 to 6.5 and 23.09 from 5.5 to 8.5, and on both days the credited hours are
+exactly the ones the audit lists.
 
 ### G2. Agent relays posted through the stage host's HTTP send route count as operator input (Activity defect)
 
@@ -212,8 +236,8 @@ written method in each case.
   ("viewer-task", rollout line 1158). The operator's standing rule is to
   attribute projects from the conversation's context, never from words in the
   text. Without these two messages, the hour holds 37.0 minutes, which is the
-  recount's figure (rollout line 1160). With them, the paid-only count gives
-  40.4 minutes even after F2, so 1 h.
+  recount's figure (rollout line 1160). With them, project A's own count
+  gives 40.4 minutes even after F2, so 1 h.
 - **An operator message missing from the recount** (22.09, the 01:00 hour).
   The recount credits 39.3 minutes (rollout line 1160). That is exactly
   Activity's 49.3 minutes minus one input: an operator composer message on the
@@ -250,35 +274,29 @@ with F2 (22:00), giving +0.5 h.
 
 ## Fix plan
 
-### F1. A billable project's "у звіті" figure is the billable pass
+### F1. Each project counts its own hours; the total counts the union
 
 This fixes G1 and carries nearly all of the gap.
 
-- `src/lib/activity/method.ts`, in `activityReport`: for a project key in
-  `billable`, its row's `humanHours` and its `days[].projects[].humanHours`
-  entry take `dayReportHours(billableSegments, day, …)` instead of the
-  all-project count (`method.ts:976-981`, `method.ts:1020-1022`). Non-billable
-  rows, the unscoped day total and the unscoped totals keep today's count.
-  They answer "my hours", which the #звіт does not report.
-- `projectView`, for a billable project: `humanHours` reads the billable pass
-  (`method.ts:1178`, which becomes the value already computed at
-  `method.ts:1179`). The hourly cells take their weight and winner from
-  `clockHourShares(billableSegments, …)` (`method.ts:1193-1201`), so the day's
-  cells still add up to its figure. `humanMs`, agents and coverage are
-  unchanged.
-- The rule that explains the figure gets one clause for paid projects
-  ("among paid projects only"): `activity.counted.clockHour` and
-  `activity.drawer.m2` in `src/lib/i18n/uk.ts` and `en.ts`. This changes no
-  layout.
-- Deploy step, not code. On the workstation, `activity/settings.json` gets
-  `{ "v": 1, "billable": [<key of paid project A>, <key of paid project B>] }`,
-  with the keys read from `/api/activity` at deploy time. Without it F1 is
-  inert. The PR body must say so, and the keys never enter the repository.
-
-This follows the method exactly: with the two paid projects tagged, the
-billable pass is "each accepted paid message opens 10 minutes, windows merged
-per clock hour, weights 0.5/1, the hour to the paid project with most of its
-minutes". That is the #звіт.
+- `src/lib/activity/method.ts`: `intervalReportHours(intervals, day,
+  rounding)` weighs one union of time over a day (clock-hour weights per clock
+  hour, or the half-hour rounding of the day). In `activityReport`, each
+  project's row and its `days[].projects[]` entry take it over the project's
+  own episodes, and the day's `humanHours` takes it over every project's time
+  together. In `projectView`, the project's `humanHours` and its hour cells'
+  weights come from its own episodes, so the cells still add up to the day's
+  figure.
+- Minutes are unchanged: the by-the-minute figures still count one minute
+  once, so a project's minutes and its hours are counted differently, as the
+  hours were before. The unscoped hour cells keep their colour (the project
+  with the most of the hour's minutes); the billable figure keeps its own
+  count.
+- The note explaining the figure says each project counts on its own and the
+  total counts the windows together, and one line says the projects' hours
+  usually add up to more than the total: `activity.counted.clockHour`,
+  `activity.counted.halfHour`, the new `activity.counted.parallel`, and
+  `activity.drawer.m2` / `m2Half`, in `src/lib/i18n/uk.ts` and `en.ts`.
+- No settings file and no deploy step: the rule applies to every project.
 
 ### F2. The HTTP send route attributes by evidence, not by assumption
 
@@ -292,10 +310,14 @@ This fixes G2, going forward only.
   `{ kind: "agent", role: "api-client" }`, and writes no request-ledger row
   (`http.ts:275-281`). Nothing is refused; the delivery is only attributed
   honestly. The first-party callers are browser components
-  (`src/hooks/useRuntime.ts`, `src/components/TmuxComposer.tsx`). The build
-  must check that the task send route (`src/app/api/tasks/[id]/send/route.ts`)
-  and any server-internal forwarding that sets that header
-  (`src/lib/pipelines/controllerSignal.ts:32`) keep their current attribution.
+  (`src/hooks/useRuntime.ts`, `src/components/TmuxComposer.tsx`,
+  `src/hooks/useNativeQueue.ts`). The check is `operatorBrowserRequest` in
+  `src/lib/agent/operatorAuthority.ts`; the operator's WakaTime activity and
+  the retirement of reply drafts, which read the same flag, follow it. The
+  task send route (`src/app/api/tasks/[id]/send/route.ts`) stamps its own
+  operator origin and is unchanged, and no server-side caller posts to either
+  route (the forwarders that set the header, such as
+  `src/lib/pipelines/controllerSignal.ts:32`, target other routes).
 - The ingest needs no new rule. An agent-origin delivery is already excluded
   as `agent-message` (`humanInput.ts:274`).
 - **Why forward only.** The stored history has no reliable way to tell a
@@ -313,45 +335,43 @@ This fixes G2, going forward only.
 ### Tests
 
 Each test runs by path under Bun 1.4.0 with an isolated config root, and each
-must fail on main.
+fails on main.
 
-1. **Replay of a sanitized fixture day** (`src/lib/activity/method.test.ts`).
-   The day is built from the 23.09 inputs:
-   - Copy `records.sqlite` read-only and replay `readHumanInputs` over the copy
-     with `LLV_STATE_DIR`, as this diagnosis did.
-   - Keep for each input only its minute offset within the day, moved to a
-     synthetic date, its kind and its surface.
-   - Map project keys to `paid-a`, `paid-b` and `other-1…n`, and hosts to
-     `host-a` and `host-b`.
-   - Keep no ids, hashes or text.
-
-   With `billable: ["paid-a", "paid-b"]`, the scoped figure and the row read
-   8.5 h, with 01:00 and 02:00 at 1 h. On main they read 5.5 h. The unscoped
-   day total is unchanged.
-2. **Scoped response** (`src/lib/activity/report.test.ts`). With `settings()`
-   naming a billable project, the scoped response's `totals.humanHours` and
-   each `days[].humanHours` equal the billable figure.
-3. **Send attribution** (the existing `src/lib/runtime/http` test file).
-   - A send without fetch metadata (a script's headers) is admitted with an
-     agent origin and writes no ledger row.
-   - A same-origin browser send keeps the operator origin and writes its row.
-   - On main, the first case stamps the operator.
+1. **Replay of a sanitized fixture day** (`src/lib/activity/method.test.ts`
+   over `src/lib/activity/replayDay.fixture.ts`). The 23.09 inputs, replayed
+   through `readHumanInputs` over a copy of `records.sqlite`, keep only each
+   input's offset in seconds from local midnight, its kind and surface, the
+   project renamed `paid-a` / `other-N` and the host `host-a` / `host-b`. No
+   id, hash or text. Project A's row, day entry and view read 8.5 h, with
+   01:00 and 02:00 at 1 h (main: 5.5 h); the day's total reads 11.5 h and the
+   projects add up to more.
+2. **Parallel projects** (`method.test.ts`): three interleaved projects each
+   take the hour; the total takes it once; another project's minutes neither
+   take a project's hour nor raise its weight.
+3. **Scoped response** (`src/lib/activity/report.test.ts`): two projects
+   sharing an hour each read 1 h on their row and their own page; the page's
+   total reads 1 h.
+4. **Send attribution** (`src/lib/runtime/http.activityLedger.test.ts`,
+   `src/lib/runtime/nativeQueueRuntime.test.ts`): a request without fetch
+   metadata is admitted with the `api-client` agent origin and writes no ledger
+   row; a same-origin page request keeps the operator origin and its row.
 
 ### PR body table
 
-History, recomputed with F1: 19-25.09 = 3 / 4.5 / 6.5 / 12.5 / 8.5 / 7.5 / 11.
-The table sits next to the #звіт (2.5 / 3.5 / 6.5 / 11.5 / 8.5 / not sent /
-not sent) with the G3 line for each residual day.
+History, recomputed with F1, project A: 19-25.09 = 3 / 4.5 / 6.5 / 12.5 /
+8.5 / 7.5 / 11, next to the #звіт (2.5 / 3.5 / 6.5 / 11.5 / 8.5 / not sent /
+not sent) with the G3 line for each residual day, and the total.
 
 ## Options considered for F1
 
-- **Chosen: billable projects read the billable pass.** This is the smallest
-  change. It reuses a computation that already exists and that the earlier
-  design already named the paid report's count
-  (`docs/design/activity-dashboard.md:430-432`).
-- **Count every project from its own inputs alone.** This would match the #звіт
-  for paid projects, but one clock hour would then count for several projects
-  and the day's hours would exceed the day. Rejected.
+- **Chosen: each project from its own messages, the total from the union.**
+  The operator's rule of 2026-09-26. It needs no configuration, and it matches
+  the #звіт for project A wherever the recount followed its method.
+- **Paid projects only compete for an hour** (the first plan: tag the paid
+  projects in `settings.json` and read the billable pass). It gives the same
+  project A figures here only because project B had no input, it needs a
+  settings file, and it still makes parallel projects compete. Withdrawn by
+  the operator.
 - **Reproduce the recount's content judgments.** A prefix list and a person's
   reading of the text cannot be automated faithfully, and doing it contradicts
   the context-attribution rule. Rejected. The residuals are documented
@@ -368,23 +388,19 @@ not sent) with the G3 line for each residual day.
   unnamed project for its home directory (1.7 h over 30 days, mostly 19.09 and
   22.09). Context attributes these sessions to the home directory, and the
   recount did not count them either.
-- **Project B first on shared minutes**, as the recount did. It has no effect
-  while project B has no overlapping input.
 - **The midnight-spill difference.** No effect in the observed days, and
   Activity's handling is what the written method says.
 - **#2136 and #2171.** Neither touches these figures. They stay their own
   issues.
-- **A settings UI for billable tags.** Already deferred in
-  `docs/design/activity-dashboard.md:779`; one file edit covers it.
 
 ## Validation against the requirement
 
-After F1 and the deploy step, the "у звіті" figure of each paid project is
-computed by the #звіт's written method, from both hosts, over the same inputs.
-It matches the sent #звіт wherever the recount applied that method (21.09,
-23.09). Where it differs (19.09, 20.09 and 22.09, by 0.5-1 h), each hour of
-difference is traced to a named recount departure, or to the relays that F2
-stops going forward. Agreement on those days would need Activity to repeat
-the recount's manual judgments, which the requirement's own method excludes.
-The operator should know that the sent #звіт for those three days is off by
-those amounts.
+After F1, the "у звіті" figure of each project is its own messages' windows,
+weighed per clock hour, from both hosts, and the total is every project's
+windows together. For project A it matches the sent #звіт wherever the
+recount applied its method (21.09, 23.09). Where it differs (19.09, 20.09 and
+22.09, by 0.5-1 h), each hour of difference is traced to a named recount
+departure, or to the relays that F2 stops going forward. Agreement on those
+days would need Activity to repeat the recount's manual judgments, which the
+requirement's own method excludes. The operator should know that the sent
+#звіт for those three days is off by those amounts.
