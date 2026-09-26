@@ -408,6 +408,14 @@ async function showView(view: string) {
       conversation: `#c=${encodeURIComponent(`conversation_${step >= 2 ? "refunds-builder" : "webhook-retries"}`)}`,
     };
     location.hash = screens[view] ?? `#p=${PROJECT}`;
+    if (view === "overview") {
+      await press(() => byLabel(label("mobile2.bar.switchProject")));
+      await press(() => document.querySelector<HTMLElement>("[data-mobile2-project]"));
+    }
+    if (view === "search") {
+      await press(() => document.querySelector<HTMLElement>('[data-mobile2-open="search"]'));
+      await typeSearch();
+    }
     return;
   }
   /* The rail's visibility is kept in storage every frame on the page shares,
@@ -459,19 +467,20 @@ async function showView(view: string) {
   if (view === "search") {
     await pause(150);
     document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
-    const field = await new Promise<HTMLInputElement | null>((resolve) => {
-      const find = (left: number) => {
-        const input = document.querySelector<HTMLInputElement>('[role="dialog"] input[type="search"], [role="dialog"] input');
-        if (input || left <= 0) resolve(input);
-        else setTimeout(() => find(left - 1), 100);
-      };
-      find(30);
-    });
-    if (!field) return;
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    setter?.call(field, L("webhook", "вебхук"));
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+    await typeSearch();
   }
+}
+
+/** Types the search the demo shows into the search field that just opened. */
+async function typeSearch() {
+  const field = await waitFor(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement) return active;
+    return document.querySelector<HTMLInputElement>('[role="dialog"] input, input[type="search"]');
+  }, 30);
+  if (!field) return;
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, L("webhook", "вебхук"));
+  field.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 window.addEventListener("message", (event) => {

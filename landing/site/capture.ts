@@ -106,6 +106,7 @@ for (const lang of ["en", "uk"] as Locale[]) {
     }
     await hero.locator(`[aria-label="${send}"]`).first().click();
     await page.mouse.move(2, 2);
+    await hero.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await settle(page, 900);
     await shoot(page, demo, `${key}-demo-1-sent.png`);
     await settle(page, 2600);
