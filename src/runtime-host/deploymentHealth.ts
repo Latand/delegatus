@@ -3,6 +3,7 @@ import type {
   ViewerHealthProbeObservation,
   ViewerHealthReadiness,
 } from "@/lib/runtime/contracts";
+import { MEMBER_REQUIRED_CODE } from "@/lib/team/contract";
 
 export type ViewerCandidateContainerState = "running" | "exited" | "missing";
 
@@ -54,6 +55,21 @@ export function viewerHealthRequestPlan(
     },
   };
 }
+
+/** A keyless request is refused: 403 at the perimeter, or 401 member_required
+    from the identity gate once a team is claimed (team mode answers keyless
+    requests itself, docs/design/sign-in-and-team.md §4.2). */
+export function viewerRefusesUnauthorized(status: number, body: string): boolean {
+  if (status === 403) return true;
+  if (status !== 401) return false;
+  try {
+    return (JSON.parse(body) as { code?: unknown })?.code === MEMBER_REQUIRED_CODE;
+  } catch {
+    return false;
+  }
+}
+
+export const VIEWER_UNAUTHORIZED_EXPECTATION = `403, or 401 ${MEMBER_REQUIRED_CODE} in team mode`;
 
 export function hasViewerDeploymentCapability(status: number, body: string): boolean {
   if (status !== 200) return false;

@@ -11,6 +11,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "codex-legacy");
 
 const { accountTerminalCommand, resolveAccountTerminalCommand, TerminalAccountUnavailableError } = await import("./terminalLaunch");
+const { createManagedClaudeAccount } = await import("./claude");
 
 afterAll(() => {
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
@@ -58,4 +59,17 @@ test("resolution returns the account-bound command for an authenticated account"
   expect(resolveAccountTerminalCommand("codex", "default")).toEqual({
     command: `env -u LLV_TOKEN CODEX_HOME='${path.resolve(process.env.LLV_CODEX_HOME!)}' codex`,
   });
+});
+
+test("provider terminal command starts a bound interactive session through its private launcher", () => {
+  const token = "opaque-terminal-fixture-8427";
+  const account = createManagedClaudeAccount("Terminal Provider", { config: {
+    baseUrl: "http://127.0.0.1:9876", model: "fixture-model", smallFastModel: null,
+  }, token });
+  const command = resolveAccountTerminalCommand("claude", account.id).command;
+  expect(command).toContain("claude-provider-launch.mjs");
+  expect(command).toMatch(/--session-id '[0-9a-f-]{36}'/);
+  expect(command).toContain("--model 'fixture-model'");
+  expect(command).toContain("--settings");
+  expect(command).not.toContain(token);
 });

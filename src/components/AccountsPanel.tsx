@@ -758,12 +758,20 @@ function ClaudeProviderEditor({ state, account, phone = false }: { state: Engine
   const [label, setLabel] = useState(account?.label ?? "");
   const [baseUrl, setBaseUrl] = useState(account?.provider?.baseUrl ?? "https://opencode.ai/zen/go");
   const [token, setToken] = useState("");
-  const [model, setModel] = useState(account?.provider?.model ?? "");
-  const [smallFastModel, setSmallFastModel] = useState(account?.provider?.smallFastModel ?? "");
+  const [model, setModel] = useState(account?.provider?.model ?? "qwen3.8-max");
+  const [smallFastModel, setSmallFastModel] = useState(account ? account.provider?.smallFastModel ?? "" : "qwen3.8-flash");
+  const [headerLines, setHeaderLines] = useState("");
+  const [clearHeaders, setClearHeaders] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const provider = { baseUrl, model: model || "model-for-list", smallFastModel, ...(token ? { token } : {}) };
+  const headers = Object.fromEntries(headerLines.split("\n").filter((line) => line.trim()).map((line) => {
+    const colon = line.indexOf(":");
+    if (colon < 1) return ["", ""];
+    return [line.slice(0, colon).trim(), line.slice(colon + 1).trim()];
+  }));
+  const provider = { baseUrl, model: model || "model-for-list", smallFastModel, ...(token ? { token } : {}),
+    ...(!account || headerLines.trim() || clearHeaders ? { headers } : {}) };
   const request = async (action: "provider-models" | "save") => {
     setBusy(true); setError("");
     try {
@@ -778,7 +786,7 @@ function ClaudeProviderEditor({ state, account, phone = false }: { state: Engine
       if (!response.ok) { setError(body.error ?? t("accounts.provider.error")); return; }
       if (action === "provider-models") { setModels(body.models ?? []); return; }
       const selectNew = !account && !state.accounts.some((candidate) => candidate.id === state.active && candidate.authPresent);
-      setToken(""); setOpen(false); await state.refresh();
+      setToken(""); setHeaderLines(""); setClearHeaders(false); setOpen(false); await state.refresh();
       if (selectNew && body.account?.id) await state.select(body.account.id);
     } catch { setError(t("accounts.provider.error")); }
     finally { setBusy(false); }
@@ -794,6 +802,10 @@ function ClaudeProviderEditor({ state, account, phone = false }: { state: Engine
         <input aria-label={t("accounts.provider.token")} type={"password"} autoComplete="off" placeholder={account ? t("accounts.provider.keepToken") : t("accounts.provider.token")} value={token} onChange={(event) => setToken(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
         <input aria-label={t("accounts.provider.model")} list={`claude-provider-models-${account?.id ?? "new"}`} placeholder={t("accounts.provider.model")} value={model} onChange={(event) => setModel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
         <input aria-label={t("accounts.provider.smallModel")} list={`claude-provider-models-${account?.id ?? "new"}`} placeholder={t("accounts.provider.smallModel")} value={smallFastModel} onChange={(event) => setSmallFastModel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
+        <textarea aria-label={t("accounts.provider.headers")} placeholder={t("accounts.provider.headersHint")} value={headerLines} onChange={(event) => setHeaderLines(event.target.value)} className="min-h-16 w-full rounded border border-border bg-canvas px-2 py-1 text-xs" />
+        {account?.provider?.customHeaderNames?.length ? <div className="text-[11px] text-muted">{t("accounts.provider.savedHeaders")}: {account.provider.customHeaderNames.join(", ")}</div> : null}
+        {account?.provider?.customHeaderNames?.length ? <label className="flex items-center gap-2 text-[11px] text-muted"><input type="checkbox" checked={clearHeaders} onChange={(event) => setClearHeaders(event.target.checked)} />{t("accounts.provider.clearHeaders")}</label> : null}
+        {baseUrl.replace(/\/$/, "") === "https://opencode.ai/zen/go" ? <div className="text-[11px] text-muted">{t("accounts.provider.goModels")}</div> : null}
         <datalist id={`claude-provider-models-${account?.id ?? "new"}`}>{models.map((id) => <option key={id} value={id} />)}</datalist>
         <div className="flex gap-2">
           <button type="button" disabled={busy || !baseUrl || (!account && !token)} onClick={() => void request("provider-models")} className="min-h-11 rounded border border-border px-2 py-1 text-xs disabled:opacity-50 sm:min-h-8">{t("accounts.provider.loadModels")}</button>

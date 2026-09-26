@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { accountForSpawn, codexHomeOwningSessionPath, isManagedCodexHome } from "@/lib/accounts/codex";
-import { claudeProviderForHome, claudeSettingsPath, claudeTranscriptOwnership, isManagedClaudeHome, legacyClaudeHome } from "@/lib/accounts/claude";
+import { claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, claudeTranscriptOwnership, isManagedClaudeHome, legacyClaudeHome } from "@/lib/accounts/claude";
 import { homeDirectory } from "@/lib/platformHome";
 import { isUnderClaudeSubagentsDir } from "@/lib/scanner/claudeNative";
 import { telegramSessionReaderPath } from "@/lib/telegram/packaging";
@@ -216,10 +216,10 @@ export function claudeEnvPrefix(home: string, mcpServers: readonly string[] = []
   const unsets = [
     ...CLAUDE_SHADOWED_ENV,
     ...(mcpServers.includes("telegram") ? [] : [TELEGRAM_CONNECTOR_TOKEN_ENV]),
-    ...(provider ? ["ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"] : []),
+    ...(provider ? ["ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_CUSTOM_HEADERS"] : []),
   ];
   const providerEnv = provider
-    ? ` ANTHROPIC_BASE_URL=${shellQuote(provider.baseUrl)} ANTHROPIC_MODEL=${shellQuote(provider.model)}${provider.smallFastModel ? ` ANTHROPIC_SMALL_FAST_MODEL=${shellQuote(provider.smallFastModel)}` : ""} sh -c ${shellQuote('ANTHROPIC_AUTH_TOKEN=$(cat -- "$1") || exit 1; [ -n "$ANTHROPIC_AUTH_TOKEN" ] || exit 1; export ANTHROPIC_AUTH_TOKEN; shift; exec "$@"')} sh ${shellQuote(path.join(home, ".provider-token"))}`
+    ? ` bun ${shellQuote(claudeProviderLauncherPath(home))} --home ${shellQuote(home)} --base-url ${shellQuote(provider.baseUrl)} --default-model ${shellQuote(provider.model)} --small-model ${shellQuote(provider.smallFastModel ?? "")} --header-names ${shellQuote(JSON.stringify(provider.customHeaderNames ?? []))} --`
     : "";
   return `env ${unsets.map((key) => `-u ${key}`).join(" ")} CLAUDE_CONFIG_DIR=${shellQuote(home)}${providerEnv}`;
 }
@@ -354,6 +354,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       ? options.deferClaudeSpawnPolicy
         ? claudeSpawnPolicyPaths(options.claudeConfigDir, sid)
         : applyClaudeSpawnPolicy(options.claudeConfigDir, {
+          providerAccount: Boolean(claudeProviderForHome(options.claudeConfigDir)),
           allowSubagents: options.allowSubagents,
           cwd,
           mcpServers,
@@ -536,6 +537,7 @@ export function resumeSpecForSession(
   if (engine === "claude") {
     const managed = isManagedClaudeHome(home);
     const policy = applyClaudeSpawnPolicy(home, {
+      providerAccount: Boolean(claudeProviderForHome(home)),
       allowSubagents: options.allowSubagents,
       baseSettingsPath: managed ? claudeSettingsPath() : null,
       profileId: `resume-${sessionId}`,

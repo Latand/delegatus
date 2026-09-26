@@ -163,7 +163,7 @@ function fakeSpawn(
   };
 }
 
-test("provider host forwards only its explicitly selected endpoint and token, including adoption", async () => {
+test("provider host gives Claude a private relay alias for fresh and adopted sessions", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-host-"));
   const secret = ["local", "provider", "host", "fixture"].join("-");
   const source = { ...process.env, ANTHROPIC_BASE_URL: "http://127.0.0.1:9876", ANTHROPIC_AUTH_TOKEN: secret, ANTHROPIC_MODEL: "model-large" };
@@ -179,10 +179,13 @@ test("provider host forwards only its explicitly selected endpoint and token, in
       const host = resume
         ? await ClaudeStreamBrokerHost.adopt("12345678-1234-1234-1234-123456789abc", common)
         : await ClaudeStreamBrokerHost.start({ ...common, sessionId: "12345678-1234-1234-1234-123456789abc" });
-      expect(captured.options?.env?.ANTHROPIC_AUTH_TOKEN).toBe(secret);
-      expect(captured.options?.env?.ANTHROPIC_BASE_URL).toBe(source.ANTHROPIC_BASE_URL);
+      expect(captured.options?.env?.ANTHROPIC_AUTH_TOKEN).toMatch(/^[0-9a-f]{64}$/);
+      expect(captured.options?.env?.ANTHROPIC_AUTH_TOKEN).not.toBe(secret);
+      expect(captured.options?.env?.ANTHROPIC_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(captured.options?.env?.ANTHROPIC_BASE_URL).not.toBe(source.ANTHROPIC_BASE_URL);
       expect(captured.args).toContain(resume ? "--resume" : "--session-id");
       expect(JSON.stringify(captured.args)).not.toContain(secret);
+      expect(JSON.stringify(captured.options?.env)).not.toContain(secret);
       await host.release();
     }
     const oauthChild = new FakeClaude(new RecordingDeliveryLedger());

@@ -6,7 +6,7 @@ import { gatingWindows } from "@/lib/accounts/migration/quotaPolicy";
 import { fetchClaudeLimits } from "@/lib/limits";
 import { LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits } from "@/lib/types";
 
-import { listClaudeAccounts, listClaudeProviderModels, readClaudeProviderToken, UnknownClaudeAccountError, type ClaudeAccount } from "./claude";
+import { listClaudeAccounts, listSavedClaudeProviderModels, readClaudeProviderToken, UnknownClaudeAccountError, UnsafeClaudeHomeError, type ClaudeAccount } from "./claude";
 import { claudeOauthMetadata, refreshClaudeOauth } from "./claudeOauth";
 import { accountProbeIdentity, accountProbeSnapshot, claudeProbeCredentialIdentity, AccountMutationBusyError, withAccountMutationLockAsync } from "./accountMutation";
 
@@ -82,7 +82,7 @@ export class NoHealthyClaudeAccountError extends Error {
     const labels = ids.map((id) => byId.get(id)!);
     const target = labels.length === 1 ? labels[0] : labels.length > 1 ? `${labels.slice(0, -1).join(", ")} or ${labels.at(-1)}` : "a Claude account";
     super(accounts.length > 0 && accounts.every((account) => typeof account !== "string" && account.provider)
-      ? `No healthy Claude provider account is available. Check the provider token for ${target} in Accounts and retry.`
+      ? `No healthy Claude provider account is available. Check the provider credentials and headers for ${target} in Accounts and retry.`
       : `No healthy Claude account is available. Re-login ${target} in Accounts and retry.`);
     this.name = "NoHealthyClaudeAccountError";
     this.accountIds = ids;
@@ -247,10 +247,13 @@ export async function selectHealthyClaudeAccount(
   const providers = classified.filter((candidate) => candidate.provider);
   const providerCurrent: Evaluated[] = providers.length ? await Promise.all(providers.map(async ({ account }) => {
     const token = readClaudeProviderToken(account.home);
-    let authentication: "authenticated" | "failed" = token ? "authenticated" : "failed";
+    let authentication: "authenticated" | "failed" | "unknown" = token ? "unknown" : "failed";
     if (token && account.provider) {
-      try { await listClaudeProviderModels(account.provider, token); }
-      catch (error) { if (error instanceof Error && error.message === "Provider authentication failed") authentication = "failed"; }
+      try {
+        const models = await listSavedClaudeProviderModels(account);
+        if (models !== null) authentication = "authenticated";
+      }
+      catch (error) { if (error instanceof UnsafeClaudeHomeError || error instanceof Error && error.message === "Provider authentication failed") authentication = "failed"; }
     }
     return { account, admission: classifySpawnAccountAdmission({ enabled: true, authentication, limits: "unknown", stale: false, retryAt: null }, now) };
   })) : [];

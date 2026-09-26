@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts } from "@/lib/accounts/codex";
-import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts } from "@/lib/accounts/claude";
+import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts, readClaudeProviderRuntime } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
 import { engineCliPresence } from "@/lib/accounts/engineConnection";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
@@ -138,6 +138,14 @@ export async function GET() {
   const claudeLogins = claudeLoginSupervisor.forAccounts(claudeAccountList.map((account) => account.id));
   const claudeAccounts = claudeAccountList.map((account) => {
     const login = claudeLogins.get(account.id) ?? null;
+    let providerHeadersSafe = true;
+    if (account.provider) { try { readClaudeProviderRuntime(account.home, account.provider); } catch { providerHeadersSafe = false; } }
+    const providerObservation = claudeObservations[account.id];
+    const providerObservedNow = currentObservation(providerObservation, now);
+    const providerAuthState = !account.authPresent || !providerHeadersSafe
+      || (providerObservedNow && ["provider authentication failed", "provider credentials require repair"].includes(providerObservation?.provenance.reason ?? ""))
+      ? "error"
+      : providerObservedNow && providerObservation?.authenticated ? "authenticated" : "unknown";
     return {
       id: account.id,
       label: account.label,
@@ -152,7 +160,7 @@ export async function GET() {
       // A denied or unavailable store cannot prove that credentials are absent.
       // Keep durable live auth evidence authoritative in either direction.
       ...accountProjection(claudeObservations[account.id], account.authPresent || account.credentialState === "unknown", now),
-      ...(account.provider ? { auth: { state: !account.authPresent || (currentObservation(claudeObservations[account.id], now) && claudeObservations[account.id]?.provenance.reason === "provider authentication failed") ? "error" : "authenticated", method: "provider", email: null, plan: null, checkedAt: claudeObservations[account.id]?.authCheckedAt ?? null }, limits: { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null }, effective: null } : {}),
+      ...(account.provider ? { auth: { state: providerAuthState, method: "provider", email: null, plan: null, checkedAt: providerObservation?.authCheckedAt ?? null }, limits: { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null }, effective: null } : {}),
       login,
     };
   });

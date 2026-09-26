@@ -102,6 +102,8 @@ import {
   viewerDeploymentStructuredHostStartup,
   viewerHealthFailureDetail,
   viewerHealthRequestPlan,
+  viewerRefusesUnauthorized,
+  VIEWER_UNAUTHORIZED_EXPECTATION,
   waitForViewerReadiness,
   type ViewerCandidateContainerState,
 } from "../src/runtime-host/deploymentHealth";
@@ -522,7 +524,7 @@ async function probeRoutes(
       ? [observation("authenticated", requests.authenticated.url, authenticated, "200", authenticated.status === 200)]
       : []),
     ...(unauthorized && requests.unauthorized
-      ? [observation("unauthorized", requests.unauthorized.url, unauthorized, "403", unauthorized.status === 403)]
+      ? [observation("unauthorized", requests.unauthorized.url, unauthorized, VIEWER_UNAUTHORIZED_EXPECTATION, viewerRefusesUnauthorized(unauthorized.status, unauthorized.text))]
       : []),
     observation(
       "capability",
@@ -534,7 +536,7 @@ async function probeRoutes(
   ];
   const ok = root.status === 200
     && (authenticated === null || authenticated.status === 200)
-    && (unauthorized === null || unauthorized.status === 403)
+    && (unauthorized === null || viewerRefusesUnauthorized(unauthorized.status, unauthorized.text))
     && assets.length > 0
     && assets.every((asset) => asset.status === 200)
     && deploymentCapable

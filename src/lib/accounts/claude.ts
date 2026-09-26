@@ -8,6 +8,7 @@ import { CLAUDE_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from ".
 import { claudeCredentialFileState, readClaudeCredentials, type ClaudeCredentialRead } from "./claudeCredentials";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { withAccountMutationLock } from "./accountMutation";
+import { providerSecretsAtHome, retainProviderRedactionSecrets } from "./providerSecretRedaction";
 import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite } from "@/lib/agent/registry";
 
@@ -16,7 +17,7 @@ const DEFAULT_ID = "default";
 const VERSION = 1;
 const CAPABILITY_DIRS = ["skills", "commands", "agents"] as const;
 const CAPABILITY_FILES = ["settings.json"] as const;
-const PRIVATE_NAMES = new Set([".credentials.json", ".provider-token", ".claude.json", "projects", "history.jsonl", "session-env", "shell-snapshots", "file-history", "todos", "cache", "debug", "backups", "paste-cache", "plugins", "mcp.json", "settings.local.json"]);
+const PRIVATE_NAMES = new Set([".credentials.json", ".provider-token", ".provider-headers", ".provider-runtime", ".claude.json", "projects", "history.jsonl", "session-env", "shell-snapshots", "file-history", "todos", "cache", "debug", "backups", "paste-cache", "plugins", "mcp.json", "settings.local.json"]);
 const MAX_CAPABILITY_FILES = 2_000;
 const MAX_CAPABILITY_BYTES = 16 * 1024 * 1024;
 const REGISTRY_LOCK_WAIT_MS = 5_000;
@@ -35,7 +36,7 @@ export type ClaudeAccount = {
   createdAt: number;
 };
 
-export type ClaudeProviderConfig = { baseUrl: string; model: string; smallFastModel: string | null };
+export type ClaudeProviderConfig = { baseUrl: string; model: string; smallFastModel: string | null; customHeaderNames?: string[] };
 type StoredAccount = { id: string; label: string; kind: "managed"; createdAt: number; provider?: ClaudeProviderConfig };
 /** A removed account. `archived` leftovers live in the shared archive
     (issue #1857); older records kept their transcript tree in the home (#643). */
@@ -112,22 +113,104 @@ export function validateProviderConfig(config: ClaudeProviderConfig): ClaudeProv
     || url.username || url.password || url.search || url.hash || !url.pathname) throw new Error("Invalid provider base URL");
   const modelId = (value: string) => value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value) && value.trim() === value;
   if (!modelId(config.model) || (config.smallFastModel !== null && !modelId(config.smallFastModel))) throw new Error("Invalid provider model id");
-  return { baseUrl: url.href.replace(/\/$/, ""), model: config.model, smallFastModel: config.smallFastModel };
+  const names = config.customHeaderNames ?? [];
+  if (!Array.isArray(names) || names.length > 16 || names.some((name) => typeof name !== "string" || !/^[a-z][a-z0-9-]{0,63}$/i.test(name)
+    || ["authorization", "proxy-authorization", "x-api-key", "host", "x-opencode-session", "user-agent", "connection", "transfer-encoding", "content-length", "content-encoding", "accept-encoding"].includes(name.toLowerCase()))
+    || new Set(names.map((name) => name.toLowerCase())).size !== names.length) throw new Error("Invalid provider header names");
+  return { baseUrl: url.href.replace(/\/$/, ""), model: config.model, smallFastModel: config.smallFastModel,
+    ...(names.length ? { customHeaderNames: names.map((name) => name.toLowerCase()) } : {}) };
+}
+
+// OpenCode Go documents these IDs on its Anthropic Messages endpoint.
+const GO_MESSAGES_MODELS = new Set(["minimax-m3", "minimax-m2.7", "minimax-m2.5", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus"]);
+export function isOpenCodeGo(config: ClaudeProviderConfig): boolean {
+  return config.baseUrl === "https://opencode.ai/zen/go";
+}
+export function claudeProviderModelChoices(config: ClaudeProviderConfig, models: string[]): string[] {
+  return isOpenCodeGo(config) ? models.filter((model) => GO_MESSAGES_MODELS.has(model)) : models;
+}
+export function validateClaudeProviderModelRoute(config: ClaudeProviderConfig): void {
+  if (isOpenCodeGo(config) && (!GO_MESSAGES_MODELS.has(config.model)
+    || (config.smallFastModel !== null && !GO_MESSAGES_MODELS.has(config.smallFastModel)))) {
+    throw new Error("OpenCode Go model must support Anthropic Messages");
+  }
+}
+
+export function validateClaudeProviderHeaders(value: Record<string, string>): Record<string, string> {
+  const names = Object.keys(value);
+  validateProviderConfig({ baseUrl: "http://127.0.0.1", model: "validation", smallFastModel: null, customHeaderNames: names });
+  if (names.some((name) => typeof value[name] !== "string" || value[name]!.length < 8 || value[name]!.length > 4096 || /[\r\n\u0000-\u001f\u007f]/.test(value[name]!))) throw new Error("Provider header values must be at least eight characters");
+  return Object.fromEntries(names.map((name) => [name.toLowerCase(), value[name]!]));
 }
 
 const PROVIDER_TOKEN_FILE = ".provider-token";
+const PROVIDER_HEADERS_FILE = ".provider-headers";
+const PROVIDER_RUNTIME_FILE = ".provider-runtime";
 function providerTokenPath(home: string): string { return path.join(home, PROVIDER_TOKEN_FILE); }
+
+export type ClaudeProviderRuntime = { config: ClaudeProviderConfig; token: string; headers: Record<string, string> };
+function providerRuntimePath(home: string): string { return path.join(home, PROVIDER_RUNTIME_FILE); }
+function writeProviderRuntime(home: string, runtime: ClaudeProviderRuntime): void {
+  const config = validateProviderConfig(runtime.config);
+  validateClaudeProviderModelRoute(config);
+  const headers = validateClaudeProviderHeaders(runtime.headers);
+  if (runtime.token.length < 8 || runtime.token.length > 4096 || /[\r\n\u0000]/.test(runtime.token)) throw new Error("Invalid provider token");
+  const target = providerRuntimePath(home);
+  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+  try { fs.writeFileSync(temporary, JSON.stringify({ config, token: runtime.token, headers }), { mode: 0o600, flag: "wx" }); fs.renameSync(temporary, target); }
+  finally { fs.rmSync(temporary, { force: true }); }
+}
+
+/** The endpoint and credential are one atomic read; sidecars must agree. */
+export function readClaudeProviderRuntime(home: string, expected?: ClaudeProviderConfig): ClaudeProviderRuntime {
+  try {
+    const file = providerRuntimePath(home);
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600 || stat.size > 100_000) throw new UnsafeClaudeHomeError();
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as ClaudeProviderRuntime;
+    const config = validateProviderConfig(raw.config);
+    validateClaudeProviderModelRoute(config);
+    const headers = validateClaudeProviderHeaders(raw.headers);
+    if (expected && JSON.stringify(config) !== JSON.stringify(validateProviderConfig(expected))) throw new UnsafeClaudeHomeError();
+    if (readClaudeProviderToken(home) !== raw.token) throw new UnsafeClaudeHomeError();
+    const sidecarHeaders = readClaudeProviderHeaders(home, config.customHeaderNames);
+    if (Object.keys(sidecarHeaders).length !== Object.keys(headers).length
+      || Object.entries(headers).some(([name, value]) => sidecarHeaders[name] !== value)) throw new UnsafeClaudeHomeError();
+    return { config, token: raw.token, headers };
+  } catch { throw new UnsafeClaudeHomeError(); }
+}
+export function readClaudeProviderHeaders(home: string, expectedNames: readonly string[] = []): Record<string, string> {
+  const file = path.join(home, PROVIDER_HEADERS_FILE);
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o600 || stat.nlink !== 1 || stat.size > 70_000) throw new UnsafeClaudeHomeError();
+    const headers = validateClaudeProviderHeaders(JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, string>);
+    if (expectedNames.length && (Object.keys(headers).length !== expectedNames.length
+      || expectedNames.some((name) => headers[name.toLowerCase()] === undefined))) throw new UnsafeClaudeHomeError();
+    return headers;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT" && expectedNames.length === 0) return {};
+    throw new UnsafeClaudeHomeError();
+  }
+}
+function writeProviderHeaders(home: string, headers: Record<string, string>): void {
+  const checked = validateClaudeProviderHeaders(headers);
+  const target = path.join(home, PROVIDER_HEADERS_FILE);
+  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+  try { fs.writeFileSync(temporary, JSON.stringify(checked), { mode: 0o600, flag: "wx" }); fs.renameSync(temporary, target); }
+  finally { fs.rmSync(temporary, { force: true }); }
+}
 export function readClaudeProviderToken(home: string): string | null {
   try {
     const file = providerTokenPath(home);
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o600 || stat.nlink !== 1) return null;
     const token = fs.readFileSync(file, "utf8");
-    return token && token.length <= 4096 && !/[\r\n\u0000]/.test(token) ? token : null;
+    return token.length >= 8 && token.length <= 4096 && !/[\r\n\u0000]/.test(token) ? token : null;
   } catch { return null; }
 }
 function writeProviderToken(home: string, token: string): void {
-  if (!token || token.length > 4096 || /[\r\n\u0000]/.test(token)) throw new Error("Invalid provider token");
+  if (token.length < 8 || token.length > 4096 || /[\r\n\u0000]/.test(token)) throw new Error("Invalid provider token");
   const target = providerTokenPath(home);
   const temporary = `${target}.${crypto.randomUUID()}.tmp`;
   try { fs.writeFileSync(temporary, token, { mode: 0o600, flag: "wx" }); fs.renameSync(temporary, target); }
@@ -378,9 +461,10 @@ export function syncClaudeCapabilitySnapshot(): string {
 
 export function claudeSettingsPath(): string | null { const file = path.join(claudeCapabilitiesRoot(), "settings.json"); return fs.existsSync(file) ? file : null; }
 
-export function createManagedClaudeAccount(label: string, provider?: { config: ClaudeProviderConfig; token: string }): ClaudeAccount {
+export function createManagedClaudeAccount(label: string, provider?: { config: ClaudeProviderConfig; token: string; headers?: Record<string, string> }): ClaudeAccount {
   const clean = label.trim(); if (!clean || clean.length > 80 || /[\u0000-\u001f\u007f]/.test(clean)) throw new InvalidClaudeAccountLabelError();
-  const config = provider ? validateProviderConfig(provider.config) : undefined;
+  const config = provider ? validateProviderConfig({ ...provider.config, customHeaderNames: Object.keys(validateClaudeProviderHeaders(provider.headers ?? {})) }) : undefined;
+  if (config) validateClaudeProviderModelRoute(config);
   return withRegistryLock(() => {
     const registry = mutable(); const id = nextId(clean, new Set([...listClaudeAccounts().map((item) => item.id), ...registry.retired.map((item) => item.id)])); const home = managedHome(id); let made = false;
     // A removed directory does not prove its platform credential is gone.
@@ -391,7 +475,12 @@ export function createManagedClaudeAccount(label: string, provider?: { config: C
       const shared = syncClaudeCapabilitySnapshot();
       for (const name of CAPABILITY_DIRS) { const source = path.join(shared, name); if (fs.existsSync(source)) fs.symlinkSync(source, path.join(home, name)); }
       fs.mkdirSync(path.join(home, "projects"), { mode: 0o700 });
-      if (provider) writeProviderToken(home, provider.token);
+      if (provider) {
+        writeProviderToken(home, provider.token);
+        writeProviderHeaders(home, provider.headers ?? {});
+        writeProviderRuntime(home, { config: config!, token: provider.token, headers: provider.headers ?? {} });
+        retainProviderRedactionSecrets([provider.token, ...Object.values(provider.headers ?? {})]);
+      }
       const stored: StoredAccount = { id, label: clean, kind: "managed", createdAt: Date.now(), ...(config ? { provider: config } : {}) }; write({ ...registry, accounts: [...registry.accounts, stored] }); return account(stored);
     } catch (error) {
       if (made) {
@@ -407,26 +496,52 @@ export function createManagedClaudeAccount(label: string, provider?: { config: C
   });
 }
 
-export function updateProviderClaudeAccount(id: string, config: ClaudeProviderConfig, token?: string, label?: string): ClaudeAccount {
+export function updateProviderClaudeAccount(id: string, config: ClaudeProviderConfig, token?: string, label?: string, headers?: Record<string, string>): ClaudeAccount {
   const checked = validateProviderConfig(config);
+  validateClaudeProviderModelRoute(checked);
   const clean = label?.trim();
   if (label !== undefined && (!clean || clean.length > 80 || /[\u0000-\u001f\u007f]/.test(clean))) throw new InvalidClaudeAccountLabelError();
   return withRegistryLock(() => {
     const registry = mutable();
     const index = registry.accounts.findIndex((item) => item.id === id && item.provider);
     if (index < 0) throw new UnknownClaudeAccountError(id);
+    const previousConfig = registry.accounts[index]!.provider!;
+    const changedBase = previousConfig.baseUrl !== checked.baseUrl;
+    if (changedBase && token === undefined)
+      throw new Error("Provider token is required when changing the base URL");
     const home = managedHome(id);
     if (!managedClaudeHomeIsSafe(id, true)) throw new UnsafeClaudeHomeError();
     const previousToken = readClaudeProviderToken(home);
-    if (!previousToken) throw new UnsafeClaudeHomeError();
-    const stored = { ...registry.accounts[index]!, ...(clean ? { label: clean } : {}), provider: checked };
+    if (!previousToken && token === undefined) throw new UnsafeClaudeHomeError();
+    let previousHeaders: Record<string, string> | null;
+    try { previousHeaders = readClaudeProviderHeaders(home, previousConfig.customHeaderNames); }
+    catch (error) { if (headers === undefined) throw error; previousHeaders = null; }
+    const effectiveHeaders = headers === undefined ? changedBase ? {} : previousHeaders : validateClaudeProviderHeaders(headers);
+    const stored = { ...registry.accounts[index]!, ...(clean ? { label: clean } : {}), provider: validateProviderConfig({ ...checked, customHeaderNames: Object.keys(effectiveHeaders!) }) };
+    const previousRuntime = previousToken && previousHeaders ? { config: previousConfig, token: previousToken, headers: previousHeaders } : null;
+    const nextRuntime = { config: stored.provider, token: token ?? previousToken!, headers: effectiveHeaders! };
+    let runtimeChanged = false;
+    let tokenChanged = false;
+    let headersChanged = false;
     try {
-      if (token !== undefined) writeProviderToken(home, token);
+      if (token !== undefined || headers !== undefined || changedBase)
+        retainProviderRedactionSecrets([...providerSecretsAtHome(home), nextRuntime.token, ...Object.values(nextRuntime.headers)]);
+      writeProviderRuntime(home, nextRuntime); runtimeChanged = true;
+      if (token !== undefined) { writeProviderToken(home, token); tokenChanged = true; }
+      if (headers !== undefined || changedBase) { writeProviderHeaders(home, effectiveHeaders!); headersChanged = true; }
       write({ ...registry, accounts: registry.accounts.map((item, n) => n === index ? stored : item) });
     } catch (error) {
-      if (token !== undefined) {
-        try { writeProviderToken(home, previousToken); }
+      if (tokenChanged) {
+        try { if (previousToken) writeProviderToken(home, previousToken); else fs.rmSync(providerTokenPath(home), { force: true }); }
         catch (rollbackError) { throw new AggregateError([error, rollbackError], "Provider account token rollback failed"); }
+      }
+      if (headersChanged) {
+        try { if (previousHeaders) writeProviderHeaders(home, previousHeaders); else fs.rmSync(path.join(home, PROVIDER_HEADERS_FILE), { force: true }); }
+        catch (rollbackError) { throw new AggregateError([error, rollbackError], "Provider account header rollback failed"); }
+      }
+      if (runtimeChanged) {
+        try { if (previousRuntime) writeProviderRuntime(home, previousRuntime); else fs.rmSync(providerRuntimePath(home), { force: true }); }
+        catch (rollbackError) { throw new AggregateError([error, rollbackError], "Provider account runtime rollback failed"); }
       }
       throw error;
     }
@@ -434,10 +549,12 @@ export function updateProviderClaudeAccount(id: string, config: ClaudeProviderCo
   });
 }
 
-export async function listClaudeProviderModels(config: ClaudeProviderConfig, token: string): Promise<string[] | null> {
+export async function listClaudeProviderModels(config: ClaudeProviderConfig, token: string, headers: Record<string, string> = {}): Promise<string[] | null> {
   const checked = validateProviderConfig(config);
+  if (token.length < 8 || token.length > 4096 || /[\r\n\u0000]/.test(token)) throw new Error("Invalid provider token");
+  const customHeaders = validateClaudeProviderHeaders(headers);
   const response = await fetch(`${checked.baseUrl}/v1/models`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { ...customHeaders, Authorization: `Bearer ${token}`, "x-opencode-session": crypto.randomUUID(), "user-agent": "Delegatus/1.0 provider-catalog" },
     redirect: "error",
     signal: AbortSignal.timeout(5_000),
   });
@@ -446,7 +563,19 @@ export async function listClaudeProviderModels(config: ClaudeProviderConfig, tok
   const payload = await response.json() as { data?: unknown; models?: unknown };
   const models = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : null;
   if (!models) return null;
-  return models.flatMap((item) => typeof item === "object" && item !== null && typeof item.id === "string" && item.id.length <= 128 ? [item.id] : []).slice(0, 500);
+  const secrets = [...new Set([token, ...Object.values(customHeaders)].flatMap((secret) => {
+    const escaped = JSON.stringify(secret).slice(1, -1);
+    return [secret, escaped, secret.replaceAll("/", "\\/"), escaped.replaceAll("/", "\\/")];
+  }))];
+  return claudeProviderModelChoices(checked, models.flatMap((item) => typeof item === "object" && item !== null
+    && typeof item.id === "string" && item.id.length <= 128 && !item.id.includes("\\")
+    && !secrets.some((secret) => item.id.includes(secret)) ? [item.id] : []).slice(0, 500));
+}
+
+export function listSavedClaudeProviderModels(account: Pick<ClaudeAccount, "home" | "provider">): Promise<string[] | null> {
+  if (!account.provider) throw new UnsafeClaudeHomeError();
+  const runtime = readClaudeProviderRuntime(account.home, account.provider);
+  return listClaudeProviderModels(runtime.config, runtime.token, runtime.headers);
 }
 
 function historyFitsRetainedProjects(report: AccountHistoryInventoryReport): boolean {
@@ -543,6 +672,7 @@ export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalRep
   return withRegistryLock(() => {
     recoverRemovalsLocked();
     const registry = mutable(); const existing = registry.accounts.find((item) => item.id === id); if (!existing) throw new UnknownClaudeAccountError(id);
+    if (existing.provider) retainProviderRedactionSecrets(providerSecretsAtHome(managedHome(id)));
     const before: Registry = { ...registry, removals: withAccountRemovalJournal(registry.removals, id, null) };
     const report = removeManagedAccountIntoArchive({
       engine: "claude",
@@ -660,14 +790,14 @@ export function claudeManagedEnvironment(home: string, base: NodeJS.ProcessEnv =
 export function claudeAccountEnvironment(account: Pick<ClaudeAccount, "home" | "provider">, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = claudeManagedEnvironment(account.home, base);
   if (account.provider) {
-    const token = readClaudeProviderToken(account.home);
-    if (!token) throw new UnsafeClaudeHomeError();
+    const runtime = readClaudeProviderRuntime(account.home, account.provider);
     delete env.ANTHROPIC_MODEL;
     delete env.ANTHROPIC_SMALL_FAST_MODEL;
-    env.ANTHROPIC_BASE_URL = account.provider.baseUrl;
-    env.ANTHROPIC_AUTH_TOKEN = token;
-    env.ANTHROPIC_MODEL = account.provider.model;
-    if (account.provider.smallFastModel) env.ANTHROPIC_SMALL_FAST_MODEL = account.provider.smallFastModel;
+    delete env.ANTHROPIC_CUSTOM_HEADERS;
+    env.ANTHROPIC_BASE_URL = runtime.config.baseUrl;
+    env.ANTHROPIC_AUTH_TOKEN = runtime.token;
+    env.ANTHROPIC_MODEL = runtime.config.model;
+    if (runtime.config.smallFastModel) env.ANTHROPIC_SMALL_FAST_MODEL = runtime.config.smallFastModel;
   }
   return env;
 }
@@ -675,5 +805,24 @@ export function claudeProviderForHome(home: string): ClaudeProviderConfig | null
   const account = listClaudeAccounts().find((item) => item.home === home);
   if (account?.provider && !account.authPresent) throw new UnsafeClaudeHomeError();
   return account?.provider ?? null;
+}
+/** Publish the secret-free launcher into the account home shared by host and Viewer. */
+export function claudeProviderLauncherPath(home: string): string {
+  const owner = listClaudeAccounts().find((item) => item.home === home && item.provider);
+  if (!owner || !managedClaudeHomeIsSafe(owner.id, true)) throw new UnsafeClaudeHomeError();
+  const directory = path.join(home, ".llv");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o700) throw new UnsafeClaudeHomeError();
+  for (const name of ["claude-provider-relay.mjs", "claude-provider-launch.mjs"]) {
+    const source = path.join(process.cwd(), "bin", name);
+    const target = path.join(directory, name);
+    const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(temporary, fs.readFileSync(source), { mode: 0o600, flag: "wx" });
+      fs.renameSync(temporary, target);
+    } finally { fs.rmSync(temporary, { force: true }); }
+  }
+  return path.join(directory, "claude-provider-launch.mjs");
 }
 export function isManagedClaudeHome(home: string): boolean { return listClaudeAccounts().some((item) => item.kind === "managed" && item.home === home && managedClaudeHomeIsSafe(item.id, true)); }

@@ -14,6 +14,8 @@ import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { claudeProviderForHome, readClaudeProviderRuntime, UnsafeClaudeHomeError } from "@/lib/accounts/claude";
+import { startClaudeProviderRelay } from "./claudeProviderRelay";
 
 import type {
   DeliveryReceipt,
@@ -723,6 +725,29 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       options.releaseCleanup?.();
       throw new Error("Claude stream hosting requires a claude.ai subscription login");
     }
+    let relay: Awaited<ReturnType<typeof startClaudeProviderRelay>> | null = null;
+    if (options.providerAccount) {
+      try {
+        let headers: Record<string, string> = {};
+        if (options.claudeConfigDir) {
+          try {
+            const runtime = readClaudeProviderRuntime(options.claudeConfigDir,
+              claudeProviderForHome(options.claudeConfigDir) ?? undefined);
+            if (runtime.config.baseUrl !== env.ANTHROPIC_BASE_URL || runtime.token !== env.ANTHROPIC_AUTH_TOKEN
+              || runtime.config.model !== env.ANTHROPIC_MODEL
+              || (runtime.config.smallFastModel ?? undefined) !== env.ANTHROPIC_SMALL_FAST_MODEL)
+              throw new UnsafeClaudeHomeError();
+            headers = runtime.headers;
+          } catch (error) { if (!options.spawnProcess) throw error; }
+        }
+        relay = await startClaudeProviderRelay({
+          baseUrl: env.ANTHROPIC_BASE_URL!, token: env.ANTHROPIC_AUTH_TOKEN!, sessionId,
+          headers,
+        });
+        env.ANTHROPIC_BASE_URL = relay.baseUrl;
+        env.ANTHROPIC_AUTH_TOKEN = relay.alias;
+      } catch (error) { options.releaseCleanup?.(); throw error; }
+    }
     const args = [
       "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
       "--include-partial-messages", "--replay-user-messages",
@@ -737,20 +762,25 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (disallowedTools.length > 0) args.push("--disallowedTools", disallowedTools.join(","));
     if (options.claudeConfigDir) {
       const profileId = `structured-${crypto.createHash("sha256").update(sessionId).digest("hex").slice(0, 24)}`;
-      const settings = applyClaudeSpawnPolicy(options.claudeConfigDir, {
-        allowSubagents: options.allowSubagents,
-        baseSettingsPath: options.spawnPolicyBaseSettingsPath,
-        profileId,
-        cwd: options.cwd,
-        mcpServers: options.mcpServers,
-        mcpStatePath: options.mcpStatePath,
-        viewerTransport: viewerMcpTransportForLaunch(env),
-      });
+      let settings: ReturnType<typeof applyClaudeSpawnPolicy>;
+      try {
+        settings = applyClaudeSpawnPolicy(options.claudeConfigDir, {
+          allowSubagents: options.allowSubagents,
+          baseSettingsPath: options.spawnPolicyBaseSettingsPath,
+          providerAccount: options.providerAccount,
+          profileId,
+          cwd: options.cwd,
+          mcpServers: options.mcpServers,
+          mcpStatePath: options.mcpStatePath,
+          viewerTransport: viewerMcpTransportForLaunch(env),
+        });
+      } catch (error) { relay?.close(); options.releaseCleanup?.(); throw error; }
       args.push(
         "--settings", settings.settingsPath,
         "--strict-mcp-config", "--mcp-config", settings.mcpConfigPath,
       );
     } else args.push("--strict-mcp-config");
+    if (options.providerAccount) args.push("--setting-sources", "");
     if (resume) args.push("--resume", sessionId);
     else args.push("--session-id", sessionId);
     if (options.model) args.push("--model", options.model);
@@ -767,10 +797,14 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         detached: true,
       });
     } catch (error) {
+      relay?.close();
       options.releaseCleanup?.();
       throw error;
     }
-    const host = new ClaudeStreamBrokerHost(child, { sessionId }, auth, options);
+    child.once("close", () => relay?.close());
+    const host = new ClaudeStreamBrokerHost(child, { sessionId }, auth, {
+      ...options, releaseCleanup: () => { relay?.close(); options.releaseCleanup?.(); },
+    });
     try {
       host.restore();
       host.reconcileTranscript(options.readTranscript

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import { redactSecrets } from "@/lib/review";
+import { redactKnownProviderSecrets } from "@/lib/accounts/providerSecretRedaction";
 import { openclawMessage } from "@/lib/scanner/openclawNative";
 import type { FileEntry } from "@/lib/types";
 
@@ -33,7 +34,19 @@ const TOKEN_FAMILY_PATTERN = new RegExp(String.raw`\b(?:` + [
 ].join("|") + String.raw`)\b`, "g");
 
 export function hardenedRedact(text: string): string {
-  return redactSecrets(text)
+  // Claude can retain old provider error prose after a token is rotated or
+  // its account is removed. Diagnostic records are never conversation content.
+  const withoutClaudeDiagnostics = text.includes('"api_error"') || text.includes('"api_retry"')
+    ? text.split("\n").map((line) => {
+      try {
+        const record = JSON.parse(line) as { type?: unknown; subtype?: unknown };
+        if (record.type === "system" && (record.subtype === "api_error" || record.subtype === "api_retry"))
+          return JSON.stringify({ type: "system", subtype: record.subtype, diagnostic: "[redacted]" });
+      } catch { /* ordinary text or a partial line */ }
+      return line;
+    }).join("\n")
+    : text;
+  return redactKnownProviderSecrets(redactSecrets(withoutClaudeDiagnostics))
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[redacted]")
     .replace(/(^|\n)(\s*(?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, "$1$2[redacted]")
     .replace(/(^|\n)(\s*(?:set-)?cookie\s*:\s*)[^\r\n]*/gi, "$1$2[redacted]")

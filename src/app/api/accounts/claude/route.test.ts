@@ -13,7 +13,7 @@ process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 process.env.LLV_CLAUDE_HOME = path.join(sandbox, "legacy");
 
 const { ClaudeLoginSupervisor, setClaudeLoginSupervisorForTests } = await import("@/lib/accounts/claudeLogin");
-const { claudeProjectRoots, claudeRegistryPath, createManagedClaudeAccount, listClaudeAccounts } = await import("@/lib/accounts/claude");
+const { claudeProjectRoots, claudeRegistryPath, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderHeaders } = await import("@/lib/accounts/claude");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
 const { seedAccountRegistry } = await import("@/lib/accounts/accountsStoreFixture");
@@ -27,6 +27,7 @@ function deleteRequest(body: unknown) {
   });
 }
 const { DELETE: remove, PATCH, POST } = await import("./route");
+const { GET: providerStatus } = await import("./[id]/status/route");
 const { DELETE } = await import("./login/[operationId]/route");
 const { POST: submitInput } = await import("./login/[operationId]/input/route");
 
@@ -84,33 +85,45 @@ test("POST starts Claude login in a clean environment with the shared operation 
 
 test("provider create and edit read a model catalogue and never return the token", async () => {
   const secret = ["local", "route", "fixture", "token"].join("-");
+  const headerSecret = ["opaque", "header", "fixture", "8427"].join("-");
   let sawToken = false;
+  let sawHeader = false;
+  let sawSession = false;
+  let sawAgent = false;
   let modelPath = "";
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     sawToken = request.headers.get("authorization") === `Bearer ${secret}`;
+    sawHeader = request.headers.get("x-provider-feature") === headerSecret;
+    sawSession = Boolean(request.headers.get("x-opencode-session"));
+    sawAgent = request.headers.get("user-agent")?.startsWith("Delegatus/") ?? false;
     modelPath = new URL(request.url).pathname;
-    return Response.json({ data: [{ id: "provider-large" }, { id: "provider-small" }] });
+    return Response.json({ data: [{ id: "provider-large" }, { id: secret }, { id: headerSecret }, { id: "provider-small" }] });
   } });
   const request = (method: "POST" | "PATCH", body: unknown) => new NextRequest("http://127.0.0.1/api/accounts/claude", {
     method, headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify(body),
   });
   try {
-    const config = { baseUrl: `http://127.0.0.1:${server.port}/zen/go`, model: "provider-large", smallFastModel: "provider-small", token: secret };
+    const config = { baseUrl: `http://127.0.0.1:${server.port}/zen/go`, model: "provider-large", smallFastModel: "provider-small", token: secret, headers: { "x-provider-feature": headerSecret } };
     const created = await POST(request("POST", { label: "Provider", provider: config }));
     expect(created.status).toBe(201);
     const body = await created.text();
     expect(body).not.toContain(secret);
+    expect(body).not.toContain(headerSecret);
     expect(JSON.parse(body).models).toEqual(["provider-large", "provider-small"]);
     expect(sawToken).toBe(true);
+    expect(sawHeader && sawSession && sawAgent).toBe(true);
     expect(modelPath).toBe("/zen/go/v1/models");
     const id = JSON.parse(body).account.id as string;
     const edited = await PATCH(request("PATCH", { id, label: "Updated", provider: { ...config, token: undefined, smallFastModel: null } }));
     expect(edited.status).toBe(200);
-    expect(await edited.text()).not.toContain(secret);
+    const editedBody = await edited.text();
+    expect(editedBody).not.toContain(secret);
+    expect(editedBody).not.toContain(headerSecret);
     expect(listClaudeAccounts().find((account) => account.id === id)?.label).toBe("Updated");
-    const models = await POST(request("POST", { action: "provider-models", id, provider: { ...config, token: undefined } }));
+    const models = await POST(request("POST", { action: "provider-models", id, provider: { ...config, token: undefined, headers: undefined } }));
     expect(models.status).toBe(200);
     expect(sawToken).toBe(true);
+    expect(sawHeader && sawSession && sawAgent).toBe(true);
   } finally { server.stop(); }
 });
 
@@ -125,6 +138,72 @@ test("provider authentication failure stays on the account form", async () => {
     expect((await response.json()).code).toBe("provider_auth_failed");
     expect(listClaudeAccounts().some((account) => account.label === "Rejected")).toBe(false);
   } finally { server.stop(); }
+});
+
+test("Claude account mutations reject JSON null with a client error", async () => {
+  const request = (method: "POST" | "PATCH" | "DELETE") => new NextRequest("http://127.0.0.1/api/accounts/claude", {
+    method, headers: { host: "127.0.0.1", "content-type": "application/json" }, body: "null",
+  });
+  expect((await POST(request("POST"))).status).toBe(400);
+  expect((await PATCH(request("PATCH"))).status).toBe(400);
+  expect((await remove(request("DELETE"))).status).toBe(400);
+});
+
+test("provider Accounts status shows damaged headers and PATCH repairs private credentials", async () => {
+  const account = createManagedClaudeAccount("Repair", { config: {
+    baseUrl: "http://127.0.0.1:9876", model: "fixture-model", smallFastModel: null,
+  }, token: "original-provider-token-8427", headers: { "x-feature": "original-feature-8427" } });
+  fs.chmodSync(path.join(account.home, ".provider-headers"), 0o644);
+  fs.rmSync(path.join(account.home, ".provider-token"));
+  const before = await providerStatus(new NextRequest("http://127.0.0.1/api/accounts/claude/repair"), { params: Promise.resolve({ id: account.id }) });
+  expect((await before.json()).auth.state).toBe("error");
+  const edited = await PATCH(new NextRequest("http://127.0.0.1/api/accounts/claude", {
+    method: "PATCH", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ id: account.id, provider: { baseUrl: account.provider!.baseUrl, model: account.provider!.model,
+      smallFastModel: null, token: "replacement-provider-token-8427", headers: { "x-feature": "replacement-feature-8427" } } }),
+  }));
+  expect(edited.status).toBe(200);
+  const answer = await edited.text();
+  expect(answer).not.toContain("replacement-provider-token-8427");
+  expect(answer).not.toContain("replacement-feature-8427");
+  const after = await providerStatus(new NextRequest("http://127.0.0.1/api/accounts/claude/repair"), { params: Promise.resolve({ id: account.id }) });
+  expect((await after.json()).auth.state).toBe("unknown");
+});
+
+test("saved provider credentials never follow an unsaved endpoint change", async () => {
+  const oldToken = ["old", "provider", "fixture", "8427"].join("-");
+  const newToken = ["new", "provider", "fixture", "8427"].join("-");
+  let reachedB = 0;
+  let bSawNew = false;
+  let bSawOldHeader = false;
+  const a = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { return Response.json({ data: [{ id: "model-a" }] }); } });
+  const b = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    reachedB += 1;
+    bSawNew = request.headers.get("authorization") === `Bearer ${newToken}`;
+    bSawOldHeader = request.headers.has("x-private-feature");
+    return Response.json({ data: [{ id: "model-b" }] });
+  } });
+  const request = (method: "POST" | "PATCH", body: unknown) => new NextRequest("http://127.0.0.1/api/accounts/claude", {
+    method, headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  try {
+    const account = createManagedClaudeAccount("Bound", { config: { baseUrl: `http://127.0.0.1:${a.port}`, model: "model-a", smallFastModel: null },
+      token: oldToken, headers: { "x-private-feature": "old-feature-value-8427" } });
+    const changed = { baseUrl: `http://127.0.0.1:${b.port}`, model: "model-b", smallFastModel: null };
+    const preview = await POST(request("POST", { action: "provider-models", id: account.id, provider: changed }));
+    expect(preview.status).toBe(400);
+    expect((await preview.json()).code).toBe("provider_token_required");
+    const edit = await PATCH(request("PATCH", { id: account.id, provider: changed }));
+    expect(edit.status).toBe(400);
+    expect(reachedB).toBe(0);
+    const authorized = await PATCH(request("PATCH", { id: account.id, provider: { ...changed, token: newToken } }));
+    expect(authorized.status).toBe(200);
+    expect(readClaudeProviderHeaders(account.home)).toEqual({});
+    const after = await POST(request("POST", { action: "provider-models", id: account.id, provider: changed }));
+    expect(after.status).toBe(200);
+    expect(bSawNew).toBe(true);
+    expect(bSawOldHeader).toBe(false);
+  } finally { a.stop(); b.stop(); }
 });
 
 test("one login is admitted at a time, then cancel and retry create a fresh operation", async () => {
