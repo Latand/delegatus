@@ -30,7 +30,7 @@ export function TeamSessionGuard() {
     <div className={`fixed inset-0 ${Z.overlay} flex items-center justify-center bg-canvas/80 p-4 backdrop-blur-[2px]`} data-team-sign-in-required="">
       <div role="alertdialog" aria-modal="true" aria-labelledby="team-sign-in-required" className="w-full max-w-[360px] rounded-surface border border-border bg-card px-6 py-6 text-center shadow-2">
         <h2 id="team-sign-in-required" className="text-title font-bold text-primary">{t("team.signIn.required")}</h2>
-        <p className="mt-1.5 text-ui leading-relaxed text-secondary">{t("team.signIn.requiredBody")}</p>
+        <p className="mt-1.5 text-balance text-ui leading-relaxed text-secondary">{t("team.signIn.requiredBody")}</p>
         <a href={`/sign-in?next=${encodeURIComponent(next)}`} className={`${BUTTON.primary} mt-5 w-full`} data-team-sign-in-again="">
           <LogIn className="h-4 w-4" aria-hidden />{t("team.signIn.again")}
         </a>

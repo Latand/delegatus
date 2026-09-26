@@ -97,8 +97,8 @@ export function JoinCard({ code }: { code: string }) {
     body = (
       <div data-join-screen="passkey">
         <AuthTitle title={t("team.signIn.signedInAs", { name: screen.name })} />
-        <p className="text-center text-body font-semibold text-primary">{t("team.join.passkeyOffer")}</p>
-        <p className="mt-1 text-center text-ui text-secondary">{t("team.join.passkeyWhy")}</p>
+        <p className="text-balance text-center text-body font-semibold text-primary">{t("team.join.passkeyOffer")}</p>
+        <p className="mt-1 text-balance text-center text-ui text-secondary">{t("team.join.passkeyWhy")}</p>
         <div className="mt-5 flex flex-col gap-2">
           <button type="button" disabled={busy} className={BUTTON.primary} onClick={() => void addPasskey()} data-join-add-passkey="">
             <KeyRound className="h-4 w-4" aria-hidden />{t("team.join.addPasskey")}
@@ -111,7 +111,8 @@ export function JoinCard({ code }: { code: string }) {
     body = (
       <div data-join-screen="invalid">
         <AuthTitle title={t("team.join.invalidTitle")} />
-        <p className="text-center text-ui leading-relaxed text-secondary">{t("team.join.invalid")}</p>
+        <p className="text-balance text-center text-ui leading-relaxed text-secondary">{t("team.join.invalid")}</p>
+        <a href="/sign-in" className={`${BUTTON.secondary} mt-5 w-full`} data-join-sign-in="">{t("team.join.signIn")}</a>
       </div>
     );
   } else {

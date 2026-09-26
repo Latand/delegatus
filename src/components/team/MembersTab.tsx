@@ -10,7 +10,7 @@ import { MEMBER_COLOR_HEX, MEMBER_COLORS, type MemberColor, type TeamView } from
 import { MemberAvatar } from "./MemberAvatar";
 import { errorText } from "./SignInCard";
 import { refreshTeamView } from "./teamClient";
-import { BUTTON, Field, INPUT, relativeTime, TeamDialog, teamRequest } from "./ui";
+import { BUTTON, Field, INPUT, loopbackLink, relativeTime, TeamDialog, teamRequest } from "./ui";
 
 type TeamMember = TeamView["members"][number];
 
@@ -19,6 +19,11 @@ interface JoinRequest { id: string; firstName: string | null; username: string |
 
 export function surfaceName(t: TFunction, surface: string | null): string {
   return t(`team.surface.${surface === "desktop" || surface === "phone" || surface === "tablet" ? surface : "other"}`);
+}
+
+/** "on a phone" / "на телефоні": the place a sign-in happened, with its preposition, so no sentence quotes a generic noun. */
+export function surfaceOn(t: TFunction, surface: string | null): string {
+  return t(`team.surfaceOn.${surface === "desktop" || surface === "phone" || surface === "tablet" ? surface : "other"}`);
 }
 
 function presence(t: TFunction, member: TeamMember, locale: "en" | "uk"): string {
@@ -211,6 +216,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
             <AccessQrImage url={link.url} size={196} />
           </div>
           <AccessQrLink url={link.url} copyLabel={t("common.copy")} />
+          {loopbackLink(link.url) ? <p className="rounded-control bg-warning-soft px-3 py-2 text-label leading-snug text-warning" data-team-invite-loopback="">{t("team.invite.loopback")}</p> : null}
           <p className="text-label leading-snug text-muted">{t("team.invite.note", { time: relativeTime(link.expiresAt, locale, Date.now(), "long") })}</p>
           <button type="button" className={BUTTON.secondary} onClick={onClose}>{t("team.done")}</button>
         </div>
@@ -264,10 +270,10 @@ function ApproveDeviceDialog({ onClose }: { onClose: () => void }) {
         </div>
       ) : request ? (
         <div className="flex flex-col gap-4">
-          <p className="text-body text-primary" data-team-approve-question="">{t("team.approve.confirm", { surface: surfaceName(t, request.surface), browser: browserName })}</p>
+          <p className="text-body text-primary" data-team-approve-question="">{t("team.approve.confirm", { surfaceOn: surfaceOn(t, request.surface), browser: browserName })}</p>
           <div className="flex gap-2 max-sm:flex-col">
-            <button type="button" disabled={busy} className={`${BUTTON.primary} flex-1`} onClick={() => void confirm(true)} data-team-approve-yes="">{t("team.approve.yes")}</button>
-            <button type="button" disabled={busy} className={`${BUTTON.secondary} flex-1`} onClick={() => void confirm(false)}>{t("team.approve.no")}</button>
+            <button type="button" disabled={busy} className={`${BUTTON.primary} sm:flex-1`} onClick={() => void confirm(true)} data-team-approve-yes="">{t("team.approve.yes")}</button>
+            <button type="button" disabled={busy} className={`${BUTTON.secondary} sm:flex-1`} onClick={() => void confirm(false)}>{t("team.approve.no")}</button>
           </div>
           {error ? <p role="alert" className="text-ui text-danger">{error}</p> : null}
         </div>

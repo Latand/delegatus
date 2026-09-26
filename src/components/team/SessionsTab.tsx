@@ -93,10 +93,10 @@ export function SessionsTab({ view }: { view: TeamView }) {
                     {t(`team.browser.${["chrome", "safari", "firefox", "edge"].includes(session.browser) ? session.browser : "other"}` as MessageKey)} · {surfaceName(t, session.surface)}
                     {session.current ? <span className="ml-2 rounded-full bg-accent-soft px-1.5 py-px text-caption font-semibold text-accent">{t("team.sessions.thisDevice")}</span> : null}
                   </p>
-                  <p className="truncate text-label text-muted">
-                    {t("team.sessions.via", { method: t(`team.method.${session.method}` as MessageKey) })}
-                    {" · "}
+                  <p className="text-label text-muted">
                     {session.online ? <span className="text-success">{t("team.sessions.active")}</span> : t("team.sessions.lastSeen", { age: relativeTime(session.lastSeenAt, locale) })}
+                    {" · "}
+                    {t(`team.via.${session.method}` as MessageKey)}
                   </p>
                 </div>
                 <button type="button" className={BUTTON.text} onClick={() => void signOut(session)} data-team-session-end="">

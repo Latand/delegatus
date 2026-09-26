@@ -93,6 +93,18 @@ export function dayHeading(iso: string, locale: Locale, today: string, yesterday
   return new Intl.DateTimeFormat(intlLocale(locale), { weekday: "long", day: "numeric", month: "long" }).format(date);
 }
 
+/** True when a link names this computer (localhost, 127.x, ::1), so nobody
+    else can open it. The server hands one out when the owner is on loopback
+    and no shared address is configured (`shareableLink`). */
+export function loopbackLink(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "localhost" || host.endsWith(".localhost") || /^127\.\d+\.\d+\.\d+$/.test(host) || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
 /** A dialog over the Team page: centred on the desktop, a bottom sheet on
     the phone. Escape, the scrim and × close it; Tab stays inside. */
 export function TeamDialog({ title, onClose, children, closeLabel, testId }: {

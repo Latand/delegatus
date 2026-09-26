@@ -8,7 +8,7 @@ import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { MemberSummary, TeamEvent, TeamView } from "@/lib/team/contract";
 
 import { MemberAvatar } from "./MemberAvatar";
-import { surfaceName } from "./MembersTab";
+import { surfaceOn } from "./MembersTab";
 import { clockTime, dayHeading, teamRequest } from "./ui";
 
 /*
@@ -47,11 +47,11 @@ function phrase(t: TFunction, event: TeamEvent, members: Map<string, MemberSumma
       return t(`team.action.${event.action}` as MessageKey, { name });
     }
     case "session.signed_in":
-      return t("team.action.signedIn", { method: t(`team.method.${typeof detail.method === "string" ? detail.method : "invite"}` as MessageKey), surface: surfaceName(t, typeof detail.surface === "string" ? detail.surface : null) });
+      return t("team.action.signedIn", { via: t(`team.via.${typeof detail.method === "string" ? detail.method : "invite"}` as MessageKey), surfaceOn: surfaceOn(t, typeof detail.surface === "string" ? detail.surface : null) });
     case "session.revoked":
     case "session.signed_out":
     case "device.approved":
-      return t(`team.action.${event.action}` as MessageKey, { surface: surfaceName(t, typeof detail.surface === "string" ? detail.surface : null) });
+      return t(`team.action.${event.action}` as MessageKey, { surfaceOn: surfaceOn(t, typeof detail.surface === "string" ? detail.surface : null) });
     case "join.requested":
       return t("team.action.join.requested", { name: event.subject?.title ?? "Telegram" });
     default:

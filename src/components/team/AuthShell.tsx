@@ -64,8 +64,8 @@ function LocaleSwitch() {
 export function AuthTitle({ title, subtitle }: { title: string; subtitle?: ReactNode }) {
   return (
     <div className="mb-5 text-center">
-      <h1 className="text-title font-bold text-primary">{title}</h1>
-      {subtitle ? <p className="mt-1 text-label text-muted">{subtitle}</p> : null}
+      <h1 className="text-balance text-title font-bold text-primary">{title}</h1>
+      {subtitle ? <p className="mt-1 text-balance text-label text-muted">{subtitle}</p> : null}
     </div>
   );
 }

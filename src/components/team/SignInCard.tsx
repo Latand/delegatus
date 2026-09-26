@@ -237,7 +237,7 @@ export function SignInCard({ next }: { next: string }) {
           <p className="select-all text-center font-mono text-[28px] font-bold tracking-[0.18em] tabular-nums text-primary" data-approval-code="">
             {screen.code}
           </p>
-          <p className="mt-4 text-center text-ui leading-relaxed text-secondary">{t("team.signIn.approvalHint")}</p>
+          <p className="mt-4 text-balance text-center text-ui leading-relaxed text-secondary">{t("team.signIn.approvalHint")}</p>
           <div className="mt-5 flex items-center justify-between">
             <span className="text-label tabular-nums text-muted" aria-live="polite">{t("team.signIn.expiresIn", { time: countdown })}</span>
             <button type="button" className={BUTTON.text} onClick={back}><ChevronLeft className="h-3.5 w-3.5" aria-hidden />{t("team.signIn.back")}</button>
@@ -252,7 +252,7 @@ export function SignInCard({ next }: { next: string }) {
               <button type="button" className={`${BUTTON.text} mt-3`} onClick={() => void notMe()} data-sign-in-not-me="">{t("team.signIn.notMe")}</button>
             </div>
           ) : screen.state.state === "needs_approval" ? (
-            <p className="text-center text-ui leading-relaxed text-secondary" aria-live="polite">
+            <p className="text-balance text-center text-ui leading-relaxed text-secondary" aria-live="polite">
               {t("team.signIn.needsApproval", { owner: screen.state.ownerName ?? t("team.role.owner") })}
             </p>
           ) : screen.state.state === "waiting" ? (
@@ -262,7 +262,7 @@ export function SignInCard({ next }: { next: string }) {
                   the desktop offers the QR (captioned) or the app here. */}
               {isMobile ? (
                 <div className="flex flex-col items-stretch gap-3">
-                  <p className="text-center text-ui leading-relaxed text-secondary">{t("team.signIn.telegramPhone")}</p>
+                  <p className="text-balance text-center text-ui leading-relaxed text-secondary">{t("team.signIn.telegramPhone")}</p>
                   <a href={screen.url} target="_blank" rel="noreferrer" className={BUTTON.primary} data-sign-in-open-telegram="">
                     <Send className="h-4 w-4" aria-hidden />{t("team.signIn.openTelegram")}
                   </a>
@@ -276,7 +276,7 @@ export function SignInCard({ next }: { next: string }) {
                     <figcaption className="text-label text-muted">{t("team.signIn.telegramScan")}</figcaption>
                   </figure>
                   <div className="flex min-w-0 flex-col gap-3">
-                    <p className="text-ui leading-relaxed text-secondary">{t("team.signIn.telegramDesktop")}</p>
+                    <p className="text-pretty text-ui leading-relaxed text-secondary">{t("team.signIn.telegramDesktop")}</p>
                     <a href={screen.url} target="_blank" rel="noreferrer" className={BUTTON.secondary} data-sign-in-open-telegram="">
                       <Send className="h-4 w-4" aria-hidden />{t("team.signIn.openTelegram")}
                     </a>
@@ -289,7 +289,7 @@ export function SignInCard({ next }: { next: string }) {
               </p>
             </>
           ) : (
-            <p className="text-center text-ui text-secondary">{t(screen.state.state === "denied" ? "team.signIn.denied" : "team.signIn.expired")}</p>
+            <p className="text-balance text-center text-ui text-secondary">{t(screen.state.state === "denied" ? "team.signIn.denied" : "team.signIn.expired")}</p>
           )}
           <div className="mt-5 flex justify-end">
             <button type="button" className={BUTTON.text} onClick={back}><ChevronLeft className="h-3.5 w-3.5" aria-hidden />{t("team.signIn.back")}</button>
@@ -318,7 +318,7 @@ export function SignInCard({ next }: { next: string }) {
               <Smartphone className="h-4 w-4" aria-hidden />{t("team.signIn.approval")}
             </button>
           </div>
-          <p className="mt-5 text-center text-label leading-snug text-muted">{t("team.signIn.inviteHint")}</p>
+          <p className="mt-5 text-balance text-center text-label leading-snug text-muted">{t("team.signIn.inviteHint")}</p>
         </div>
       )}
       <AuthError text={error} />
