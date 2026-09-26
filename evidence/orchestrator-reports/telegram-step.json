@@ -27,6 +27,7 @@
       "allowSwitches": [],
       "tokenField": true,
       "name": null,
+      "nameInUse": null,
       "buttonHeights": [
         32
       ],
@@ -59,6 +60,7 @@
       "allowSwitches": [],
       "tokenField": true,
       "name": null,
+      "nameInUse": null,
       "buttonHeights": [
         32
       ],
@@ -91,6 +93,7 @@
       "allowSwitches": [],
       "tokenField": true,
       "name": null,
+      "nameInUse": null,
       "buttonHeights": [
         44
       ],
@@ -123,6 +126,7 @@
       "allowSwitches": [],
       "tokenField": true,
       "name": null,
+      "nameInUse": null,
       "buttonHeights": [
         44
       ],
@@ -168,13 +172,14 @@
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": "Reports in this chat carry “Atlas” now. Change it here to use another name.",
       "buttonHeights": [
         71.8,
         41.5,
         32,
         32
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now: the only chat agents may post in\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now: the only chat agents may post in\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nReports in this chat carry “Atlas” now. Change it here to use another name.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "fallback-1280-uk": {
       "viewport": {
@@ -216,13 +221,14 @@
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": "Звіти в цьому чаті зараз мають назву «Atlas». Змініть її тут, щоб узяти іншу.",
       "buttonHeights": [
         71.8,
         41.5,
         32,
         32
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз: єдиний чат, куди агентам можна писати\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз: єдиний чат, куди агентам можна писати\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nЗвіти в цьому чаті зараз мають назву «Atlas». Змініть її тут, щоб узяти іншу.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "fallback-390-en": {
       "viewport": {
@@ -264,13 +270,14 @@
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": "Reports in this chat carry “Atlas” now. Change it here to use another name.",
       "buttonHeights": [
         75.8,
         45.5,
         44,
         44
       ],
-      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now: the only chat agents may post in\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nRequired with a chat: a folder name stays on this computer.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
+      "text": "Bot: Report Bot\nWHERE REPORTS GO\nTeam Reports\nteam-reports\nIn use now: the only chat agents may post in\nLog only, no Telegram\nCHATS THE BOT IS IN BUT MAY NOT POST TO YET\nDesign Lounge\ngroup\nNAME IN REPORTS\nReports in this chat carry “Atlas” now. Change it here to use another name.\n\nThe group may be public, so reports carry no private information, and they are posted silently, with no links.\n\nUse this\nSkip"
     },
     "fallback-390-uk": {
       "viewport": {
@@ -312,13 +319,14 @@
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": "Звіти в цьому чаті зараз мають назву «Atlas». Змініть її тут, щоб узяти іншу.",
       "buttonHeights": [
         89.5,
         45.5,
         44,
         44
       ],
-      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз: єдиний чат, куди агентам можна писати\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nПотрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
+      "text": "Бот: Report Bot\nКУДИ ЙДУТЬ ЗВІТИ\nTeam Reports\nteam-reports\nВикористовується зараз: єдиний чат, куди агентам можна писати\nЛише журнал, без Telegram\nЧАТИ, ДЕ БОТ Є, АЛЕ ЩЕ НЕ МОЖЕ ПИСАТИ\nDesign Lounge\nгрупа\nНАЗВА У ЗВІТАХ\nЗвіти в цьому чаті зараз мають назву «Atlas». Змініть її тут, щоб узяти іншу.\n\nГрупа може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.\n\nЗастосувати\nПропустити"
     },
     "several-1280-en": {
       "viewport": {
@@ -363,6 +371,7 @@
       "allowSwitches": [],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
       "buttonHeights": [
         58,
         58,
@@ -415,6 +424,7 @@
       "allowSwitches": [],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
       "buttonHeights": [
         58,
         58,
@@ -467,6 +477,7 @@
       "allowSwitches": [],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
       "buttonHeights": [
         62,
         62,
@@ -519,6 +530,7 @@
       "allowSwitches": [],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
       "buttonHeights": [
         62,
         62,
@@ -568,6 +580,7 @@
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
       "buttonHeights": [
         71.8,
         41.5,
@@ -616,6 +629,7 @@
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
       "buttonHeights": [
         71.8,
         41.5,
@@ -664,6 +678,7 @@
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
       "buttonHeights": [
         75.8,
         45.5,
@@ -712,6 +727,7 @@
       ],
       "tokenField": false,
       "name": "Atlas",
+      "nameInUse": null,
       "buttonHeights": [
         75.8,
         45.5,

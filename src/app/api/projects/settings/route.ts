@@ -10,6 +10,7 @@ import {
   mergeOnReviewSetting,
   effectiveReportTelegram,
   REPORT_NAME_MAX_CHARS,
+  reportHeaderName,
   reportTelegramChoice,
   repositoryReportName,
   setBridgeReports,
@@ -45,6 +46,10 @@ export interface ProjectSettingsResponse {
   /** How many chats the bot may post in, so the step can ask for a pick when
       there are several and nothing was chosen. */
   postableChats: number;
+  /** The name reports carry in the bot's one allowed chat while the project
+      has not chosen (`reportHeaderName`): the GitHub repository's, else the
+      display name. Null once the operator chose. */
+  reportFallbackName: string | null;
   /** The name the setup step prefills: the GitHub repository's, capitalised. */
   reportNameSuggestion: string | null;
   /** `<owner>/<repo>` of the project's recorded remote, null without one. */
@@ -54,14 +59,16 @@ export interface ProjectSettingsResponse {
 function answer(project: string): ProjectSettingsResponse {
   const key = canonicalProject(project);
   const postable = viewerPostableReportChats();
+  const choice = reportTelegramChoice(key);
   return {
     ok: true,
     project: key,
     mergeOnReview: mergeOnReviewSetting(key),
     bridgeReports: bridgeReportsSetting(key),
-    reportTelegram: reportTelegramChoice(key),
+    reportTelegram: choice,
     reportDestination: effectiveReportTelegram(key, postable),
     postableChats: postable.length,
+    reportFallbackName: choice ? null : reportHeaderName(key),
     reportNameSuggestion: repositoryReportName(key),
     github: githubRepositoryOfRemote(recordedProjectRemote(key)),
   };

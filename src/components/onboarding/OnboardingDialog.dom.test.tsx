@@ -417,13 +417,16 @@ test("a connected bot lists the chats that accept posts, allows another in place
   await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")) && (host.querySelector<HTMLInputElement>("[data-onboarding-report-name]")?.value ?? "") === "Widgets");
   expect(host.textContent).toContain("Bot: Report Bot");
   expect(host.querySelector("[data-onboarding-report-chat=log-only]")).not.toBeNull();
-  /* The chat the bot may not post to yet has the panel's own switch. */
+  /* The chat the bot may not post to yet has the panel's own switch; the bot
+     route answers the switch with both chats accepting posts. */
+  botStatus = connectedBot([chatView({}), chatView({ chatId: "-100202", title: "Lounge", alias: "lounge" })]);
   const allow = host.querySelector("[role=switch]") as HTMLButtonElement;
   expect(allow.getAttribute("aria-label")).toContain("Lounge");
   flushSync(() => allow.click());
-  await until(() => requests.some((request) => request.url.endsWith("/api/telegram/bot") && request.method === "POST"));
+  await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=lounge]")));
   expect(requests.find((request) => request.method === "POST")!.body).toEqual({ action: "chat", chatId: "-100202", alias: "lounge", postAllowed: true });
 
+  /* Two chats now accept posts and none was chosen: nothing to use yet. */
   const save = host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement;
   expect(save.disabled).toBe(true);
   flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
@@ -469,6 +472,73 @@ test("with several allowed chats and no choice, nothing is preselected and the s
   }
 });
 
+/* The operator allows a second chat inside the step: the one allowed chat is
+   no longer where reports go, since the Viewer now posts nowhere until a pick. */
+test("allowing a second chat in the step moves the in-use marker to Log only and asks for a pick", async () => {
+  botStatus = connectedBot([chatView({}), chatView({ chatId: "-100202", title: "Design Lounge", alias: null, postAllowed: false, postable: false })]);
+  reportSettings = { reportTelegram: null, reportDestination: { chat: "team-reports", name: "Widgets", source: "only-allowed-chat" }, reportFallbackName: "Widgets", postableChats: 1 };
+  try {
+    const { host, done } = renderTelegramStep();
+    await until(() => host.querySelector("[data-onboarding-report-chat=team-reports] [data-onboarding-report-in-use]") !== null);
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("true");
+    /* The bot route answers the switch with two chats that accept posts. */
+    botStatus = connectedBot([chatView({}), chatView({ chatId: "-100202", title: "Design Lounge", alias: "design-lounge" })]);
+    flushSync(() => (host.querySelector("[role=switch]") as HTMLElement).click());
+    await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=design-lounge]")));
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports] [data-onboarding-report-in-use]")).toBeNull();
+    expect(host.querySelector("[data-onboarding-report-chat=log-only] [data-onboarding-report-in-use]")).not.toBeNull();
+    expect(host.querySelector("[data-onboarding-report-asking]")).not.toBeNull();
+    expect([...host.querySelectorAll("[data-onboarding-report-chat]")].map((node) => node.getAttribute("aria-checked"))).toEqual(["false", "false", "false"]);
+    expect((host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement).disabled).toBe(true);
+    done();
+  } finally {
+    reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 0 };
+  }
+});
+
+/* The reverse: the bot is in one chat it may not post to yet, and allowing it
+   in the step makes it where reports go now, under the fallback name. */
+test("allowing the only chat in the step makes it the chat in use, with the name reports carry", async () => {
+  botStatus = connectedBot([chatView({ alias: null, postAllowed: false, postable: false })]);
+  reportSettings = { reportTelegram: null, reportDestination: null, reportFallbackName: "Widgets", postableChats: 0 };
+  try {
+    const { host, done } = renderTelegramStep();
+    await until(() => host.querySelector("[data-onboarding-report-chat=log-only] [data-onboarding-report-in-use]") !== null);
+    expect(host.querySelector("[data-onboarding-report-chat=log-only]")!.getAttribute("aria-checked")).toBe("true");
+    botStatus = connectedBot([chatView({})]);
+    flushSync(() => (host.querySelector("[role=switch]") as HTMLElement).click());
+    await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")));
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports] [data-onboarding-report-in-use]")?.getAttribute("data-onboarding-report-in-use")).toBe("only-allowed-chat");
+    expect(host.querySelector("[data-onboarding-report-chat=log-only] [data-onboarding-report-in-use]")).toBeNull();
+    expect(host.querySelector<HTMLInputElement>("[data-onboarding-report-name]")!.value).toBe("Widgets");
+    done();
+  } finally {
+    reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 0 };
+  }
+});
+
+/* No GitHub remote: the Viewer posts in the one allowed chat under the
+   project's display name, and the step shows that name as in use. */
+test("with no GitHub name, the one allowed chat shows the display name reports carry, and nothing claims it stays local", async () => {
+  nameSuggestion = null;
+  botStatus = connectedBot([chatView({})]);
+  reportSettings = { reportTelegram: null, reportDestination: { chat: "team-reports", name: "widgets", source: "only-allowed-chat" }, reportFallbackName: "widgets", postableChats: 1 };
+  try {
+    const { host, done } = renderTelegramStep();
+    await until(() => (host.querySelector<HTMLInputElement>("[data-onboarding-report-name]")?.value ?? "") === "widgets");
+    expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector("[data-onboarding-report-name]")!.getAttribute("aria-invalid")).toBe("false");
+    expect(host.querySelector("[data-onboarding-report-name-in-use]")?.textContent).toBe("Reports in this chat carry “widgets” now: the project has no GitHub repository, so this is its name on this computer. Change it here to use another name.");
+    expect(host.textContent).not.toContain("stays on this computer");
+    expect((host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement).disabled).toBe(false);
+    done();
+  } finally {
+    nameSuggestion = "Widgets";
+    reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 0 };
+  }
+});
+
 test("a stored Log only starts on Log only, in use, even with one allowed chat", async () => {
   botStatus = connectedBot([chatView({})]);
   reportSettings = { reportTelegram: { chat: null, changedAt: "2026-09-26T10:00:00.000Z", changedBy: "operator" }, reportDestination: null, postableChats: 1 };
@@ -486,7 +556,7 @@ test("a stored Log only starts on Log only, in use, even with one allowed chat",
 
 test("with no GitHub name to suggest, a chosen chat needs a name before it can be used", async () => {
   nameSuggestion = null;
-  botStatus = connectedBot([chatView({})]);
+  botStatus = connectedBot([chatView({}), chatView({ chatId: "-100202", title: "Lounge", alias: "lounge" })]);
   try {
     const { host, done } = renderTelegramStep();
     await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")));

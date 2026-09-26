@@ -1734,6 +1734,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       reportTelegram: REPORT_TELEGRAM,
       reportDestination: REPORT_DESTINATION,
       postableChats: TELEGRAM_BOT === "none" ? 0 : TELEGRAM_BOT === "several" ? 2 : 1,
+      reportFallbackName: REPORT_TELEGRAM ? null : "Atlas",
       reportNameSuggestion: "Atlas",
       github: "acme/atlas",
     });

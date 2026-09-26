@@ -4074,6 +4074,8 @@ export const en = {
   "onboarding.telegram.noChats": "The bot is in no chat yet. Add it to the group, then come back.",
   "onboarding.telegram.name": "Name in reports",
   "onboarding.telegram.nameHint": "Required with a chat: a folder name stays on this computer.",
+  "onboarding.telegram.nameInUse": "Reports in this chat carry “{name}” now. Change it here to use another name.",
+  "onboarding.telegram.nameInUseLocal": "Reports in this chat carry “{name}” now: the project has no GitHub repository, so this is its name on this computer. Change it here to use another name.",
   "onboarding.telegram.rule": "The group may be public, so reports carry no private information, and they are posted silently, with no links.",
   "onboarding.telegram.save": "Use this",
   "onboarding.telegram.skip": "Skip",

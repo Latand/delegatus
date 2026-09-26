@@ -1034,8 +1034,15 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   `TelegramBotService` does not list with `postAllowed`. There is no MCP write,
   so no agent chooses where a public post goes. `get_orchestrator` carries
   `reportTelegram` (alias, name and source, or null), the destination in
-  effect. The route's answer adds `reportDestination`, the same, and
-  `postableChats`, the count; the bot panel names on each chat the projects
+  effect. The route's answer adds `reportDestination`, the same,
+  `postableChats`, the count, and `reportFallbackName`, the header name the
+  one allowed chat would carry while the project has not chosen. The setup
+  step works out what is in use on every render from the stored choice and
+  the bot status it already holds, by the same rule over the same chats (the
+  bot is a member and may post), so allowing a chat inside the step moves the
+  in-use marker and the prompt to pick at once; while the fallback is in use
+  the name field holds `reportFallbackName` and its hint says reports carry
+  that name now. The bot panel names on each chat the projects
   with a seat whose reports go there, and says when that is only because it
   is the one allowed chat.
 - **Header name**, used by both copies and resolved by
@@ -1072,7 +1079,10 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   - "Name in reports", prefilled with the project's GitHub repository name
     capitalised ("Delegatus") when it has a GitHub remote, else empty and
     required once a chat is chosen, since the folder name is local; it becomes
-    `reportTelegram.name`;
+    `reportTelegram.name`. While reports go to the one allowed chat, the field
+    holds the name they carry there (the header name fallback below, which can
+    be the display name) and its hint says so, saying also that it is the
+    project's name on this computer when there is no GitHub repository;
   - the rule in one sentence: the group may be public, so reports carry no
     private information, and they are posted silently, with no links;
   - Skip, as prominent as Continue. Skip writes nothing and leaves the step

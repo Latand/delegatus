@@ -3965,6 +3965,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "onboarding.telegram.noChats": "Бота ще немає в жодному чаті. Додайте його в групу й поверніться сюди.",
   "onboarding.telegram.name": "Назва у звітах",
   "onboarding.telegram.nameHint": "Потрібна, якщо обрано чат: назва теки лишається на цьому компʼютері.",
+  "onboarding.telegram.nameInUse": "Звіти в цьому чаті зараз мають назву «{name}». Змініть її тут, щоб узяти іншу.",
+  "onboarding.telegram.nameInUseLocal": "Звіти в цьому чаті зараз мають назву «{name}»: у проєкту немає репозиторію GitHub, тож це його назва на цьому компʼютері. Змініть її тут, щоб узяти іншу.",
   "onboarding.telegram.rule": "Група може бути публічною, тож у звітах немає приватної інформації, і вони надходять без звуку й без посилань.",
   "onboarding.telegram.save": "Застосувати",
   "onboarding.telegram.skip": "Пропустити",

@@ -11137,6 +11137,7 @@ describe("orchestrator reports: the setup guide's optional Reports to Telegram s
                 allowSwitches: [...step.querySelectorAll("[role=switch]")].map((node) => node.getAttribute("aria-label")),
                 tokenField: Boolean(step.querySelector("input[type=password]")),
                 name: step.querySelector<HTMLInputElement>("[data-onboarding-report-name]")?.value ?? null,
+                nameInUse: step.querySelector("[data-onboarding-report-name-in-use]")?.textContent ?? null,
                 buttonHeights: buttons.map((node) => round(node.getBoundingClientRect().height)),
                 text: step.innerText,
               };
@@ -11164,6 +11165,7 @@ describe("orchestrator reports: the setup guide's optional Reports to Telegram s
               if (state === "fallback" && (checked !== "team-reports" || JSON.stringify(inUse) !== JSON.stringify(["team-reports:only-allowed-chat"]))) failures.push(`${label}: the one allowed chat is not preselected and marked in use (${checked}, ${JSON.stringify(inUse)})`);
               if (state === "several" && (checked !== null || !reading.asking || JSON.stringify(inUse) !== JSON.stringify(["log-only:chosen"]))) failures.push(`${label}: with several chats the step does not ask (${checked}, asking ${reading.asking}, ${JSON.stringify(inUse)})`);
               if (state !== "several" && reading.asking) failures.push(`${label}: the step asks with one allowed chat`);
+              if ((state === "fallback") !== (reading.nameInUse !== null)) failures.push(`${label}: the hint naming what reports carry now reads ${JSON.stringify(reading.nameInUse)}`);
             }
             if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
           } catch (error) {
