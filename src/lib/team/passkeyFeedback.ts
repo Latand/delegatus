@@ -3,8 +3,8 @@ import type { MessageKey, TFunction } from "@/lib/i18n";
 export type PasskeyFlow = "sign-in" | "registration";
 export type PasskeyFeedback = { key: MessageKey; tone: "error" | "note" };
 
-export function passkeyFeedbackText(t: TFunction, feedback: PasskeyFeedback, address?: string | null): string {
-  if (feedback.key === "team.passkey.wrongAddress" && address) return t("team.passkey.wrongAddressAt", { address });
+export function passkeyFeedbackText(t: TFunction, feedback: PasskeyFeedback, address?: string | null, currentOrigin?: string): string {
+  if (feedback.key === "team.passkey.wrongAddress" && address && address !== currentOrigin) return t("team.passkey.wrongAddressAt", { address });
   return t(feedback.key);
 }
 

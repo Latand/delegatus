@@ -196,7 +196,7 @@ export function SignInCard({ next }: { next: string }) {
           timeoutMs: (options.body.options as { timeout?: number }).timeout,
         });
         if (feedback.tone === "note") setPasskeyNote(passkeyFeedbackText(t, feedback));
-        else setError(passkeyFeedbackText(t, feedback, info?.methods.passkey.address));
+        else setError(passkeyFeedbackText(t, feedback, info?.methods.passkey.address, window.location.origin));
         return;
       }
       const verified = await teamRequest<{ me: { name: string } }>("/api/team/session/passkey", { body: { step: "verify", id: options.body.id, response } });

@@ -5045,7 +5045,7 @@ export const en = {
   "team.passkey.cancelled": "Passkey request cancelled.",
   "team.passkey.timeout": "The passkey request timed out. Try again.",
   "team.passkey.alreadyRegistered": "This passkey is already registered. Use it to sign in, or remove it from your profile before adding it again.",
-  "team.passkey.wrongAddress": "This address does not match the passkey site. Open Delegatus by its HTTPS name and try again.",
+  "team.passkey.wrongAddress": "This address does not match the passkey site. Check the HTTPS address where you added the passkey and try again.",
   "team.passkey.wrongAddressAt": "This address does not match the passkey site. Open {address} and try again.",
   "team.passkey.browserUnsupportedSignIn": "This browser cannot use passkeys. Sign in by approval from another device, then use a browser that supports them.",
   "team.passkey.browserUnsupportedRegistration": "This browser cannot create passkeys. Try a browser or device that supports them.",

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import { translate } from "@/lib/i18n";
 
-import { passkeyFeedback } from "./passkeyFeedback";
+import { passkeyFeedback, passkeyFeedbackText } from "./passkeyFeedback";
 
 test("WebAuthn feedback uses structured names and codes on both ceremonies", () => {
   const cases = [
@@ -20,6 +20,10 @@ test("WebAuthn feedback uses structured names and codes on both ceremonies", () 
   expect(passkeyFeedback({ name: "NotAllowedError" }, "sign-in", { elapsedMs: 100, timeoutMs: 60_000 }).key).toBe("team.passkey.noCredential");
   expect(passkeyFeedback({ name: "NotAllowedError" }, "sign-in", { elapsedMs: 60_000, timeoutMs: 60_000 }).key).toBe("team.passkey.timeout");
   expect(passkeyFeedback({ name: "AbortError" }, "registration").tone).toBe("note");
+  const wrongAddress = passkeyFeedback({ name: "SecurityError" }, "registration");
+  const en = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("en", key, params);
+  expect(passkeyFeedbackText(en, wrongAddress, "https://team.example.test", "https://team.example.test")).toBe(translate("en", "team.passkey.wrongAddress"));
+  expect(passkeyFeedbackText(en, wrongAddress, "https://team.example.test", "http://127.0.0.1:8899")).toContain("https://team.example.test");
   for (const locale of ["en", "uk"] as const) {
     for (const [, flow] of cases) {
       const text = translate(locale, passkeyFeedback({ name: "SecurityError" }, flow).key);

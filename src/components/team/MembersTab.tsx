@@ -395,7 +395,7 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
           timeoutMs: (options.body.options as { timeout?: number }).timeout,
         });
         if (feedback.tone === "note") setPasskeyNote(passkeyFeedbackText(t, feedback));
-        else setError(passkeyFeedbackText(t, feedback, passkeys?.address));
+        else setError(passkeyFeedbackText(t, feedback, passkeys?.address, window.location.origin));
         return;
       }
       const saved = await teamRequest("/api/team/passkeys", { body: { step: "verify", id: options.body.id, response } });
