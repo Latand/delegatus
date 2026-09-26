@@ -43,8 +43,10 @@ export function getLocale(): Locale {
   return current;
 }
 
-/** Show `next` in this browser and keep it as the boot cache. Tells nobody. */
-function applyLocale(next: Locale) {
+/** Show `next` in this browser and keep it as the boot cache. Tells nobody:
+    fixtures and tests call it to render a language, and only the operator's
+    own choice, {@link chooseLocale}, reaches the server. */
+export function setLocale(next: Locale) {
   hydrated = true;
   if (next === current) return;
   current = next;
@@ -63,8 +65,8 @@ function applyLocale(next: Locale) {
  * agents write reports and board task text in the interface language and the
  * server is the only place they can read it from.
  */
-export function setLocale(next: Locale) {
-  applyLocale(next);
+export function chooseLocale(next: Locale) {
+  setLocale(next);
   void writeOperatorSettings({ locale: next, source: "chosen", ...clientTimeZone() });
 }
 
@@ -126,7 +128,7 @@ export async function syncOperatorLocale(): Promise<void> {
   }
   const zone = clientTimeZone();
   const zoneChanged = zone.timeZone !== undefined && zone.timeZone !== serverTimeZone;
-  if (server && server !== shown) applyLocale(server);
+  if (server && server !== shown) setLocale(server);
   if (!server) {
     await writeOperatorSettings({ locale: shown, source: "detected", ...zone });
   } else if (zoneChanged) {
@@ -167,10 +169,10 @@ export function translate(
 export type TFunction = (key: MessageKey, params?: Record<string, string | number>) => string;
 
 /** Reactive locale + translator. Components re-render when the locale flips. */
-export function useLocale(): { locale: Locale; t: TFunction; setLocale: (l: Locale) => void } {
+export function useLocale(): { locale: Locale; t: TFunction; setLocale: (l: Locale) => void; chooseLocale: (l: Locale) => void } {
   const locale = useSyncExternalStore(subscribe, getLocale, () => "en" as Locale);
   /* One function per locale: a component that lists `t` among a memo's inputs rebuilds only when the language
      changes, never on every render. */
   const t = useCallback<TFunction>((key, params) => translate(locale, key, params), [locale]);
-  return { locale, t, setLocale };
+  return { locale, t, setLocale, chooseLocale };
 }

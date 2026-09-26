@@ -9,7 +9,7 @@ import { Window } from "happy-dom";
 const dom = new Window({ url: "http://127.0.0.1:8899/" });
 Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, localStorage: dom.localStorage });
 
-const { getLocale, resetLocaleForTests, setLocale, syncOperatorLocale } = await import("./index");
+const { chooseLocale, getLocale, resetLocaleForTests, setLocale, syncOperatorLocale } = await import("./index");
 
 type Call = { url: string; method: string; body: Record<string, unknown> | null };
 let calls: Call[] = [];
@@ -27,8 +27,11 @@ beforeEach(() => {
 
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-test("the toggle writes the choice to the server as chosen, with the time zone", async () => {
-  setLocale("uk");
+test("the toggle writes the choice to the server as chosen, with the time zone; rendering a language writes nothing", async () => {
+  setLocale("en");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(calls).toEqual([]);
+  chooseLocale("uk");
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(dom.localStorage.getItem("llv_lang")).toBe("uk");
   expect(calls).toEqual([{ url: "/api/operator/settings", method: "PUT", body: { locale: "uk", source: "chosen", timeZone: zone } }]);

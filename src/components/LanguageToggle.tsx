@@ -3,9 +3,10 @@
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale } from "@/lib/i18n";
 
-/** Compact EN/UK switch in the rail header; persists to localStorage. */
+/** Compact EN/UK switch in the rail header; persists to localStorage and to
+    the operator's server-side setting, which agents read. */
 export function LanguageToggle() {
-  const { locale, t, setLocale } = useLocale();
+  const { locale, t, chooseLocale } = useLocale();
   const isMobile = useIsMobile();
   const next = locale === "en" ? "uk" : "en";
   return (
@@ -15,7 +16,7 @@ export function LanguageToggle() {
       }`}
       title={t("lang.aria")}
       aria-label={t("lang.aria")}
-      onClick={() => setLocale(next)}
+      onClick={() => chooseLocale(next)}
     >
       {locale.toUpperCase()}
     </button>
