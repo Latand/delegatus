@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 import { structuredUserReferenceKey } from "@/lib/runtime/codexStructuredUserText";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
 
@@ -339,6 +341,12 @@ function selectedConversationTargetFromResolver(
     );
   }
   if (!dependencies.pathAllowed(record.path)) {
+    if (!fs.existsSync(record.path)) {
+      throw new McpToolRefusal(
+        "that conversation's transcript file is absent. It may still be materializing; retry conversation_messages with this conversationId after the spawn settles, then inspect the spawn receipt if it remains absent.",
+        { code: "selected_conversation_transcript_absent", conversationId: record.conversationId },
+      );
+    }
     throw new McpToolRefusal(
       "that conversation's transcript is outside the Viewer's scanner roots.",
       { code: "selected_conversation_outside_roots", conversationId: record.conversationId },

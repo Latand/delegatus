@@ -1341,6 +1341,20 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   validateExplicitMcpLaunchModel(args);
+  if (Array.isArray(args.mcpServers) && args.mcpServers.includes("telegram")) {
+    const caller = dependencies ? attributionOf(dependencies) : null;
+    if (caller?.kind === "manager") {
+      if (!caller.conversationId || text(args.parentConversationId) !== caller.conversationId) {
+        throw new McpToolRefusal("a seat granting Telegram must name its own conversationId as parentConversationId", {
+          code: "telegram_spawn_parent_mismatch", status: 403,
+        });
+      }
+    } else if (caller?.kind !== "gateway") {
+      throw new McpToolRefusal("Telegram MCP may be granted only by the operator or their orchestrator seat", {
+        code: "telegram_spawn_caller_unauthorized", status: 403,
+      });
+    }
+  }
   /* Judged on every dispatch, with or without a persisted binding: the service
      calls a recoverable spawn with one on each first dispatch, and a replay is
      answered from the receipt without reaching this function. */

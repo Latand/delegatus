@@ -61,6 +61,7 @@ import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import type { ApiError } from "@/lib/types";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
+import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
 
 import { sourceCwdStatus } from "@/app/api/spawn/sourceCwd";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
@@ -548,6 +549,31 @@ export async function executeSpawnRequest(
       : null;
     const parentSessionKey = parent?.sessionKey ?? null;
     const parentArtifactPath = parent?.artifactPath ?? null;
+    const requestedTelegram = requestedMcpServers?.includes("telegram") === true;
+    const parentRecord = parentConversationId
+      ? (registryForCaller ?? dependencies.registry()).conversation(parentConversationId as `conversation_${string}`)
+      : null;
+    const parentProfile = parentRecord?.generations.at(-1)?.launchProfile;
+    const seatParent = parentRecord?.agentRole === "orchestrator"
+      && parentRecord.delegationDepth === 0
+      && parentProfile?.parentConversationId == null
+      && parentProfile?.mcpServers.includes("telegram") === true;
+    const seatLaunch = role.value?.role === "orchestrator" && !parentConversationId
+      && authenticatedCaller?.kind !== "agent";
+    if (requestedTelegram && engine === "copilot") {
+      return refuse("telegram MCP is unsupported by the Copilot engine");
+    }
+    if (requestedTelegram) {
+      let connected = false;
+      try { connected = readTelegramConnection().status === "connected" && readTelegramSession() !== null; }
+      catch { /* an unreadable connector cannot supply a grant */ }
+      if (!connected) return refuse("telegram MCP connector is not connected");
+      if (!seatLaunch && !seatParent && sessionOriginFor({
+        origin: { kind: authenticatedCaller?.kind === "agent" ? "agent" : "operator" },
+        parentConversationId, agentRole: role.value?.role ?? null,
+      }) === "delegated") return refuse("telegram MCP requires an operator-owned orchestrator seat parent");
+    }
+    const telegramSeatGrant = requestedTelegram && seatParent;
     /* Session origin, and with it every grant this launch receives: an
        operator-launched root session is one with no agent caller, no lineage
        parent and no role preset. Plugins (#687) and MCP servers (#739) read the
@@ -578,10 +604,13 @@ export async function executeSpawnRequest(
         origin: sessionOrigin,
         requested: requestedPlugins.value,
       });
-    /* Same shape for MCP: a delegated launch holds the Viewer baseline whatever
-       it asked for, so a granted connector cannot travel down a spawn chain. */
+    /* A seat carries the operator's connected connector, and an explicit
+       child request may receive that same grant from the seat. All other
+       delegated launches keep the Viewer baseline. */
     const grantedServers = reportClassGrant
       ? grantedMcpServers(reportClassGrant.mcpServers)
+      : (seatLaunch || telegramSeatGrant) && requestedTelegram
+        ? grantedMcpServers(requestedMcpServers)
       : mcpServersForSession({ origin: sessionOrigin, requested: requestedMcpServers });
     const requestDigestForAccount = (accountId: string, preserveOperationalTitleReplay = false) => {
       const digests = spawnRequestDigests({
@@ -649,6 +678,7 @@ export async function executeSpawnRequest(
       accountPin,
       parentConversationId,
       parentSource,
+      telegramSeatGrant,
       parentSessionKey,
       parentArtifactPath,
       role: role.value?.role ?? null,

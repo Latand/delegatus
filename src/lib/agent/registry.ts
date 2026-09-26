@@ -255,6 +255,8 @@ export interface SpawnReceipt {
       request body, or inference from the authenticated caller conversation.
       Null for roots and for receipts persisted before attribution existed. */
   parentSource: "explicit" | "inferred-caller" | null;
+  /** Admission-attested explicit Telegram grant from an operator seat. */
+  telegramSeatGrant?: boolean;
   createdAt: string;
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
   artifactPath: string | null;
@@ -392,6 +394,8 @@ export interface SpawnRequest {
   /** Attribution of the resolved parent (#341): explicit request selector or
       inference from the authenticated caller conversation. */
   parentSource?: "explicit" | "inferred-caller" | null;
+  /** Requested by the launch route only after it checks the parent seat. */
+  telegramSeatGrant?: boolean;
   parentSessionKey?: SessionKey | null;
   parentArtifactPath?: string | null;
   role?: string | null;
@@ -3577,6 +3581,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
       ? value.parentConversationId as ViewerConversationId
       : null,
     parentSource: value.parentSource === "explicit" || value.parentSource === "inferred-caller" ? value.parentSource : null,
+    telegramSeatGrant: value.telegramSeatGrant === true,
     state,
     artifactLifecycle: value.artifactLifecycle === "materialized" ? "materialized" : "pending",
     key: value.key && typeof value.key === "object" && (value.key.engine === "claude" || value.key.engine === "codex" || value.key.engine === "copilot") && typeof value.key.sessionId === "string" ? value.key : null,
@@ -5342,12 +5347,20 @@ export class AgentRegistry {
       const launchOrigin = purpose === "launch" && input.origin && input.origin.kind !== "successor"
         ? { kind: input.origin.kind }
         : undefined;
+      const seatParent = parentConversationId ? file.conversations[parentConversationId] : null;
+      const seatParentProfile = seatParent?.generations.at(-1)?.launchProfile;
+      const telegramSeatGrant = input.telegramSeatGrant === true
+        && seatParent?.agentRole === "orchestrator"
+        && seatParent.delegationDepth === 0
+        && seatParentProfile?.parentConversationId == null
+        && seatParentProfile?.mcpServers.includes("telegram") === true;
       profile.mcpServers = mcpServersForStoredSession({
         origin: launchOrigin,
         parentConversationId: parentConversationId ?? profile.parentConversationId,
         agentRole: childRole,
         delegationDepth: childDepth,
         requested: profile.mcpServers,
+        telegramSeatGrant,
       }, this.mcpGrantPolicy);
       let rejection: SpawnRejection | null = null;
       if (resolvedOrigin) {
@@ -5417,6 +5430,7 @@ export class AgentRegistry {
           && (input.parentSource === "explicit" || input.parentSource === "inferred-caller")
           ? input.parentSource
           : null,
+        telegramSeatGrant,
         createdAt,
         state: rejection ? "failed" : "starting",
         artifactPath: rejection ? null : input.expectedArtifactPath ?? null,

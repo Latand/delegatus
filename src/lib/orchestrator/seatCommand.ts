@@ -30,6 +30,15 @@ import { mappingRowRefusal, type LaunchRuntime } from "@/lib/roles/sizing";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
+import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
+
+function operatorTelegramConnected(): boolean {
+  try {
+    return readTelegramConnection().status === "connected" && readTelegramSession() !== null;
+  } catch {
+    return false;
+  }
+}
 
 import { loadTasks } from "@/lib/tasks/store";
 import {
@@ -1052,6 +1061,7 @@ async function runOrchestratorSeatRequest(
     ...Object.fromEntries(spawnFields.flatMap((field) => (rawBody[field] === undefined ? [] : [[field, rawBody[field]]]))),
     ...spawnRuntime,
     role: "orchestrator",
+    ...(operatorTelegramConnected() ? { mcpServers: ["telegram"] } : {}),
     roleParams: rawBody.roleParams ?? { mode: "standard" },
     project,
     cwd,

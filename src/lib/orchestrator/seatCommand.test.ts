@@ -10,6 +10,7 @@ import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { saveRoleOverrides } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
 import {
   HANDOFF_HEADING,
@@ -192,6 +193,21 @@ test("spawn mode designates and injects together: mandate rides the spawn prompt
   expect(active?.conversationId).toBe(NEW_ID);
   expect(active?.mandate).toBe("own the board");
   expect(pending).toBeNull();
+});
+
+test("the production seat launch builder grants a connected operator Telegram account", async () => {
+  const { deps, recorded } = dependencies();
+  const session = saveTelegramSession("placeholder-session-for-seat-launch-test");
+  writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
+    identity: null, lastHealthCheckAt: AT, errorCode: null, identityIdUpgradedAt: null });
+  expect((await executeOrchestratorSeatRequest(spawnRequest(), deps)).status).toBe(200);
+  expect(recorded.spawns[0]?.mcpServers).toEqual(["telegram"]);
+});
+
+test("the production seat launch builder withholds Telegram while disconnected", async () => {
+  const { deps, recorded } = dependencies();
+  expect((await executeOrchestratorSeatRequest(spawnRequest(), deps)).status).toBe(200);
+  expect(recorded.spawns[0]).not.toHaveProperty("mcpServers");
 });
 
 test("spawn mode freezes omitted runtime fields to the resolved orchestrator defaults", async () => {
