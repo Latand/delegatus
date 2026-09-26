@@ -356,6 +356,8 @@
 .kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); margin-block: calc((16px - var(--target, 32px)) / 2); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 .kb .card .add .plus { color: var(--color-accent); font-size: 14px; line-height: 1; }
 .kb .card .add:hover { background: var(--surface-well); color: var(--color-primary); }
+.kb .card .album svg { width: 14px; height: 14px; color: var(--color-muted); }
+.kb .card .album .album-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
 .kb .card .undo { display: inline-flex; align-items: center; height: var(--target, 32px); padding: 0 6px; margin-left: -6px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-accent); }
 .kb .card .undo:hover { background: var(--surface-well); }
 /* A card no task holds: the chip is a line of its own between the conversation

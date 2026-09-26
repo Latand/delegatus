@@ -19,6 +19,7 @@ import { laneMergeUnsettled, type PipelineAnswer } from "@/components/pipelines/
 import { clearedLine, needLabel } from "@/components/attention/decision";
 import type { NeedReason } from "@/components/attention/needReason";
 
+import { CardAlbumButton } from "@/components/taskAlbum/AlbumButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
@@ -819,6 +820,13 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
           {footMeta}
           <span className="spacer" />
+          {/* The task's album: every picture its agents made or looked at. */}
+          <CardAlbumButton
+            taskId={card.task.id}
+            title={title}
+            pipelines={card.pipelines.map((summary) => summary.pipeline)}
+            files={card.members.map((member) => member.file)}
+          />
           {props.onAddAgent ? (
             <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
               <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}

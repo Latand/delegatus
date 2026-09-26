@@ -1563,6 +1563,72 @@ Object.assign(window, { EventSource: QuietEventSource });
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+/* The task album (`&album=1`): the search task's pictures across its stages
+   and a conversation, as `GET /api/tasks/:id/album` answers them, and the
+   export task's, all seen. The pictures are drawn on a canvas in the shapes an
+   agent's renders have — a desktop board, a phone screen, a wide strip, a
+   small crop — so the grid meets the aspect ratios it will meet. */
+const ALBUM = params.get("album") === "1";
+function mockRender(width: number, height: number, hue: number, label: string, phone = false): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const g = canvas.getContext("2d")!;
+  g.fillStyle = `hsl(${hue} 30% 96%)`;
+  g.fillRect(0, 0, width, height);
+  g.fillStyle = `hsl(${hue} 35% 28%)`;
+  g.fillRect(0, 0, width, Math.max(18, height * 0.07));
+  const pad = Math.max(8, Math.round(width * 0.03));
+  const columns = phone ? 1 : Math.max(1, Math.round(width / 360));
+  const colWidth = (width - pad * (columns + 1)) / columns;
+  for (let column = 0; column < columns; column += 1) {
+    for (let row = 0; row < 4; row += 1) {
+      const top = height * 0.12 + row * (height * 0.2);
+      if (top + height * 0.16 > height) break;
+      g.fillStyle = row === 1 && column === 0 ? `hsl(${hue} 70% 55%)` : "#fff";
+      g.fillRect(pad + column * (colWidth + pad), top, colWidth, height * 0.16);
+      g.fillStyle = `hsl(${hue} 15% 70%)`;
+      g.fillRect(pad * 2 + column * (colWidth + pad), top + pad, colWidth * 0.6, Math.max(4, height * 0.018));
+    }
+  }
+  g.fillStyle = "#fff";
+  g.font = `600 ${Math.max(10, Math.round(height * 0.04))}px sans-serif`;
+  g.fillText(label, pad, Math.max(14, height * 0.05));
+  return canvas.toDataURL("image/png");
+}
+type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
+const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
+const albumSource = (file: FileEntry, stage?: { pipelineId: string; stageId: string; attempt: number; round?: number }) => ({ key: file.conversationId ?? file.path, conversationId: file.conversationId ?? null, path: file.path, ...(stage ? { stage } : {}) });
+let albumCache: Record<string, Omit<FixtureAlbumItem, "isNew">[]> | null = null;
+function albumItems(): Record<string, Omit<FixtureAlbumItem, "isNew">[]> {
+  if (albumCache) return albumCache;
+  const verify = albumSource(searchVer2, { pipelineId: "p-search", stageId: "verify", attempt: 2 });
+  const review = albumSource(searchRev, { pipelineId: "p-search", stageId: "review", attempt: 1, round: 2 });
+  const implement = albumSource(searchImpl2, { pipelineId: "p-search", stageId: "implement", attempt: 2 });
+  const minutes = (n: number) => Date.now() - n * 60_000;
+  albumCache = {
+    "t-search": [
+      { id: "a1", src: mockRender(1440, 900, 212, "search · after swap · 1440"), name: "after-swap-1440.png", ts: minutes(2), via: "named", source: verify },
+      { id: "a2", src: mockRender(390, 844, 212, "phone · 390", true), name: "after-swap-phone-390.png", ts: minutes(3), via: "named", source: verify },
+      { id: "a3", src: mockRender(1280, 260, 28, "empty results banner, very wide strip"), name: "results-empty-banner-wide-strip-with-a-long-file-name.png", ts: minutes(9), via: "read", source: verify },
+      { id: "a4", src: mockRender(1440, 900, 150, "review · warm-up gate"), name: "warmup-gate-before.png", ts: minutes(41), via: "read", source: review },
+      { id: "a5", src: mockRender(1440, 900, 150, "review · after"), name: "warmup-gate-after.png", ts: minutes(43), via: "read", source: review },
+      { id: "a6", src: mockRender(96, 96, 340, "x"), name: null, ts: minutes(70), via: "pasted", source: implement },
+      { id: "a7", src: mockRender(1024, 768, 260, "implement · index"), name: "index-live-1024.png", ts: minutes(75), via: "named", source: implement },
+    ],
+    "t-export": [
+      { id: "e1", src: mockRender(1440, 900, 40, "export presets"), name: "presets.png", ts: minutes(20), via: "named", source: albumSource(exportImpl) },
+    ],
+  };
+  return albumCache;
+}
+function albumPage(taskId: string) {
+  const items = [...(albumItems()[taskId] ?? [])].sort((a, b) => b.ts - a.ts);
+  const lastOpenedAt = albumOpened.get(taskId) ?? Date.now() - 30 * 60_000;
+  const marked = items.map((item) => ({ ...item, isNew: item.ts > lastOpenedAt }));
+  return { items: marked, total: marked.length, nextCursor: null, indexing: false, lastOpenedAt, newCount: marked.filter((item) => item.isNew).length };
+}
+
 /* The engine's stage digest (`stageDigest`) is a SHA-256 the server computes;
    this page has no server, so its route answers an opaque stand-in over the
    same canonical fields. The board only ever hands a digest back. */
@@ -1642,6 +1708,21 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  if (ALBUM && url.pathname === "/api/task-album") {
+    const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => albumItems()[id]);
+    return json({ tasks: Object.fromEntries(ids.map((id) => {
+      const page = albumPage(id);
+      return [id, { count: page.total, newCount: page.newCount, newestAt: page.items[0]?.ts ?? null }];
+    })) });
+  }
+  if (ALBUM && /^\/api\/tasks\/[^/]+\/album$/.test(url.pathname)) {
+    const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
+    if (method === "POST") {
+      albumOpened.set(taskId, Date.now());
+      return json({ ok: true, lastOpenedAt: Date.now() });
+    }
+    return json(albumPage(taskId));
+  }
   if (url.pathname === "/api/files") {
     /* #1820's first run: an installation with nothing in it at all. */
     /* Nothing is working in the quiet installation: every conversation has

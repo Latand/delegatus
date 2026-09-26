@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
+import { allowedUnder, lexicalAllowedRoots, realAllowedRoots, resolveLocal } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -22,16 +22,11 @@ const MIME: Record<string, string> = {
   ".bmp": "image/bmp",
 };
 
-function resolveLocal(raw: string): string {
-  let p = raw.replace(/^file:\/\//, "");
-  if (p === "~" || p.startsWith("~/")) p = path.join(os.homedir(), p.slice(1));
-  return path.resolve(p);
-}
-
 /**
  * Serves the bytes of a local image a transcript references by path, so the
  * markdown renderer can embed it inline (Markdown `![alt](/abs/path.png)`).
- * Confined to files under the user's home with an image extension — a
+ * Confined to files with an image extension under the roots the artifact
+ * route reads (the home directory and the evidence roots, #2084) — a
  * localhost-only tool, but there is no reason to hand out arbitrary files.
  */
 export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | NextResponse> {
@@ -44,9 +39,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | Ne
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
   const abs = resolveLocal(raw);
 
-  const home = path.resolve(os.homedir());
-  const underHome = (p: string): boolean => p === home || p.startsWith(home + path.sep);
-  if (!underHome(abs)) {
+  if (!allowedUnder(abs, lexicalAllowedRoots())) {
     return NextResponse.json({ error: "path not allowed" }, { status: 403 });
   }
   const mime = MIME[path.extname(abs).toLowerCase()];
@@ -54,10 +47,10 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | Ne
 
   let data: Buffer;
   try {
-    // Resolve symlinks and re-check containment: a symlink under home with an
-    // image extension must not read a file outside home (e.g. ~/x.png → /etc/shadow).
+    // Resolve symlinks and re-check containment: a symlink under a root with an
+    // image extension must not read a file outside it (e.g. ~/x.png → /etc/shadow).
     const real = await fs.realpath(abs);
-    if (!underHome(real)) {
+    if (!allowedUnder(real, await realAllowedRoots())) {
       return NextResponse.json({ error: "path not allowed" }, { status: 403 });
     }
     const stat = await fs.stat(real);

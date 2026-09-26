@@ -19,6 +19,8 @@ beforeEach(() => {
 afterEach(() => {
   process.env.HOME = savedHome;
   delete process.env.LLV_ARTIFACT_MAX_BYTES;
+  delete process.env.LLV_EVIDENCE_ROOTS;
+  delete process.env.LLV_TS_HOST;
 });
 afterAll(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -217,4 +219,61 @@ test("~ and file:// spellings resolve inside the allowed root", async () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("hello\n");
   }
+});
+
+/* A 1×1 PNG: the evidence roots serve rasters, and the sniff must agree. */
+const PNG_BYTES = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+
+test("an evidence image under /var/tmp opens by default (#2084)", async () => {
+  delete process.env.LLV_EVIDENCE_ROOTS;
+  const lane = fs.mkdtempSync(path.join("/var/tmp", "llv-artifact-evidence-"));
+  try {
+    const render = path.join(lane, "after.png");
+    fs.writeFileSync(render, PNG_BYTES);
+    const res = await GET(request({ path: render }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await res.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
+  } finally {
+    fs.rmSync(lane, { recursive: true, force: true });
+  }
+});
+
+test("an evidence root serves images only, and nothing outside the roots opens", async () => {
+  const evidence = fs.mkdtempSync(path.join(sandbox, "evidence-"));
+  const elsewhere = fs.mkdtempSync(path.join(sandbox, "elsewhere-"));
+  process.env.LLV_EVIDENCE_ROOTS = evidence;
+  const render = path.join(evidence, "lane", "shot.png");
+  fs.mkdirSync(path.dirname(render), { recursive: true });
+  fs.writeFileSync(render, PNG_BYTES);
+  expect((await GET(request({ path: render }))).status).toBe(200);
+
+  const notes = path.join(evidence, "notes.txt");
+  fs.writeFileSync(notes, "text");
+  const svg = path.join(evidence, "drawing.svg");
+  fs.writeFileSync(svg, "<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+  const outside = path.join(elsewhere, "secret.png");
+  fs.writeFileSync(outside, PNG_BYTES);
+  const link = path.join(evidence, "link.png");
+  fs.symlinkSync(outside, link);
+  for (const p of [notes, svg, outside, link, path.join(evidence, "..", path.basename(elsewhere), "secret.png")]) {
+    const res = await GET(request({ path: p }));
+    expect(res.status).toBe(403);
+    expect(await errorCode(res)).toBe("access-denied");
+  }
+});
+
+test("an evidence image opens from the tailnet origin the phone uses", async () => {
+  const evidence = fs.mkdtempSync(path.join(sandbox, "evidence-"));
+  process.env.LLV_EVIDENCE_ROOTS = evidence;
+  process.env.LLV_TS_HOST = "viewer.tailnet-example.ts.net";
+  const render = path.join(evidence, "phone.png");
+  fs.writeFileSync(render, PNG_BYTES);
+  const phone = await GET(request({ path: render }, {
+    host: "viewer.tailnet-example.ts.net",
+    origin: "https://viewer.tailnet-example.ts.net",
+    "sec-fetch-site": "same-origin",
+  }));
+  expect(phone.status).toBe(200);
+  expect(phone.headers.get("content-type")).toBe("image/png");
 });

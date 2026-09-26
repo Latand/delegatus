@@ -11189,3 +11189,180 @@ describe("orchestrator reports: the setup guide's optional Reports to Telegram s
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
 });
+
+describe("a task's album: every picture its agents made, one click from the card", () => {
+  /*
+   * The album button sits in a task card's foot with the picture count and a
+   * dot while some are new; it opens the album, newest first and grouped by
+   * stage or conversation, each group naming its source with a link to it and
+   * each new picture marked; a picture opens in the feed's full-screen viewer
+   * and its arrows step through the album. The phone's task screen carries
+   * the same entry as a row, and the album takes the whole phone screen.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t album
+   *
+   * Frames go to TASK_ALBUM_PNG_DIR (default `.artifacts/task-album/`);
+   * readings to `evidence/task-album/readings.json`.
+   */
+  browserTest("the card's album button, the album at 1440 and 390, and the viewer opened from it — en and uk", async () => {
+    const out = path.resolve(".artifacts/task-album");
+    const pngDir = process.env.TASK_ALBUM_PNG_DIR ?? out;
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/task-album", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const url = `${server.base}?album=1`;
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const albumReading = (page: Page) => page.evaluate(() => {
+      const album = document.querySelector<HTMLElement>("[data-task-album]")!;
+      const dialog = album.querySelector<HTMLElement>("[role=dialog]")!;
+      const body = album.querySelector<HTMLElement>("[data-album-body]")!;
+      const rect = dialog.getBoundingClientRect();
+      return {
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        dialog: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+        backdrop: getComputedStyle(album).backgroundColor,
+        sideways: body.scrollWidth - body.clientWidth,
+        groups: [...album.querySelectorAll<HTMLElement>("[data-album-group]")].map((group) => ({
+          label: group.querySelector("h3")?.textContent ?? null,
+          link: group.querySelector("[data-album-source]")?.getAttribute("href") ?? null,
+          items: [...group.querySelectorAll<HTMLElement>("[data-album-item]")].map((tile) => tile.dataset.albumItem),
+        })),
+        fresh: [...album.querySelectorAll<HTMLElement>("[data-album-item-new='1']")].map((tile) => tile.dataset.albumItem),
+        newCount: album.querySelector("[data-album-new-count]")?.textContent ?? null,
+        /* Tiles overlapping one another, or wider than the dialog. */
+        tileOverlaps: (() => {
+          const tiles = [...album.querySelectorAll<HTMLElement>("[data-album-item] > button")].map((tile) => tile.getBoundingClientRect());
+          let overlaps = 0;
+          for (let i = 0; i < tiles.length; i += 1) for (let j = i + 1; j < tiles.length; j += 1) {
+            const a = tiles[i]!, b = tiles[j]!;
+            if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps += 1;
+          }
+          return overlaps;
+        })(),
+        tileWidths: [...album.querySelectorAll<HTMLElement>("[data-album-item] > button")].map((tile) => Math.round(tile.getBoundingClientRect().width)),
+        closeSize: (() => { const close = album.querySelector<HTMLElement>("[data-album-close]")!.getBoundingClientRect(); return [Math.round(close.width), Math.round(close.height)]; })(),
+      };
+    });
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        /* Desktop. */
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, "light", lang);
+          try {
+            const button = page.locator(`${card("t-search")} [data-album-button="t-search"]`);
+            await button.waitFor({ timeout: 30_000 });
+            await page.locator(card("t-search")).scrollIntoViewIfNeeded();
+            await page.locator(card("t-search")).screenshot({ path: path.join(pngDir, `${label}-card.png`) });
+            const cardReading = await page.evaluate(() => {
+              const cardElement = document.querySelector<HTMLElement>('[data-kanban-board] .card[data-id="task:t-search"]')!;
+              const albumButton = cardElement.querySelector<HTMLElement>("[data-album-button]")!;
+              const foot = cardElement.querySelector<HTMLElement>(".foot")!;
+              const box = (element: Element) => { const rect = element.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }; };
+              const siblings = [...foot.children].filter((child) => child !== albumButton && child.getBoundingClientRect().width > 0 && !child.classList.contains("spacer")).map(box);
+              const own = box(albumButton);
+              return {
+                text: albumButton.textContent,
+                fresh: albumButton.dataset.albumFresh,
+                dot: Boolean(albumButton.querySelector(".album-dot")),
+                insideCard: own.left >= box(cardElement).left - 0.5 && own.right <= box(cardElement).right + 0.5,
+                overlapsFoot: siblings.some((other) => own.left < other.right - 0.5 && other.left < own.right - 0.5 && own.top < other.bottom - 0.5 && other.top < own.bottom - 0.5),
+                exportFresh: document.querySelector<HTMLElement>('[data-album-button="t-export"]')?.dataset.albumFresh ?? null,
+                buttonsOnBoard: document.querySelectorAll("[data-album-button]").length,
+              };
+            });
+            readings[`${label}-card`] = cardReading;
+            if (cardReading.text !== "7" || cardReading.fresh !== "1" || !cardReading.dot) failures.push(`${label}: the card button reads ${JSON.stringify(cardReading)}`);
+            if (!cardReading.insideCard || cardReading.overlapsFoot) failures.push(`${label}: the card button leaves the card or overlaps the foot: ${JSON.stringify(cardReading)}`);
+            if (cardReading.exportFresh !== "0") failures.push(`${label}: the seen album still reads as new`);
+            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons on the board, expected the two tasks with pictures`);
+
+            await button.click();
+            await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
+            await page.waitForTimeout(400);
+            await page.screenshot({ path: path.join(pngDir, `${label}-album.png`) });
+            const album = await albumReading(page);
+            readings[`${label}-album`] = album;
+            const order = album.groups.flatMap((group) => group.items);
+            if (JSON.stringify(order) !== JSON.stringify(["a1", "a2", "a3", "a4", "a5", "a6", "a7"])) failures.push(`${label}: the album order is ${JSON.stringify(order)}`);
+            if (JSON.stringify(album.fresh) !== JSON.stringify(["a1", "a2", "a3"])) failures.push(`${label}: the new pictures are ${JSON.stringify(album.fresh)}`);
+            if (album.groups.some((group) => !group.link?.startsWith("#c="))) failures.push(`${label}: a group has no link to its conversation`);
+            if (album.sideways > 0 || album.tileOverlaps) failures.push(`${label}: the grid scrolls sideways (${album.sideways}) or overlaps (${album.tileOverlaps})`);
+            if (album.dialog.right > album.viewport.width || album.dialog.bottom > album.viewport.height) failures.push(`${label}: the album leaves the window`);
+            if (album.backdrop === "rgba(0, 0, 0, 0)") failures.push(`${label}: the album does not dim the board behind it`);
+            const cardAfter = await page.evaluate(() => document.querySelector<HTMLElement>('[data-album-button="t-search"]')?.dataset.albumFresh ?? null);
+            if (cardAfter !== "0") failures.push(`${label}: the card's new dot did not clear after opening`);
+
+            await page.locator("[data-album-item='a1'] > button").click();
+            await page.waitForSelector("[data-lightbox-position]", { timeout: 5_000 });
+            await page.keyboard.press("ArrowRight");
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}-viewer.png`) });
+            const position = await page.locator("[data-lightbox-position]").textContent();
+            readings[`${label}-viewer`] = { position, caption: await page.locator("[data-lightbox-position] + span").textContent() };
+            if (position?.trim() !== "2 / 7") failures.push(`${label}: the viewer's arrow went to ${position}`);
+            await page.keyboard.press("Escape");
+            if (!await page.locator("[data-task-album]").count()) failures.push(`${label}: Escape in the viewer closed the album too`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+        /* Phone. */
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(500);
+            const phoneCard = page.locator('[data-phone-card="task:t-search"]').first();
+            await phoneCard.scrollIntoViewIfNeeded();
+            await phoneCard.click();
+            const row = page.locator('[data-phone-task-album="t-search"]');
+            await row.waitFor({ timeout: 10_000 });
+            await row.scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(pngDir, `${label}-task-screen.png`) });
+            const rowReading = await row.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return { text: element.textContent, fresh: element.getAttribute("data-album-fresh"), height: Math.round(rect.height), right: rect.right, width: window.innerWidth };
+            });
+            readings[`${label}-row`] = rowReading;
+            if (rowReading.fresh !== "1" || rowReading.height < 44 || rowReading.right > rowReading.width) failures.push(`${label}: the task screen's album row reads ${JSON.stringify(rowReading)}`);
+            await row.click();
+            await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
+            await page.waitForTimeout(400);
+            await page.screenshot({ path: path.join(pngDir, `${label}-album.png`) });
+            const album = await albumReading(page);
+            readings[`${label}-album`] = album;
+            if (album.dialog.left !== 0 || album.dialog.top !== 0 || round(album.dialog.right) !== 390) failures.push(`${label}: the album does not take the phone screen: ${JSON.stringify(album.dialog)}`);
+            if (album.sideways > 0 || album.tileOverlaps) failures.push(`${label}: the grid scrolls sideways (${album.sideways}) or overlaps (${album.tileOverlaps})`);
+            if (album.closeSize.some((size) => size < 44)) failures.push(`${label}: the close button is ${JSON.stringify(album.closeSize)}`);
+            await page.locator("[data-album-item='a2'] > button").click();
+            await page.waitForSelector("[data-lightbox-position]", { timeout: 5_000 });
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}-viewer.png`) });
+            readings[`${label}-viewer`] = { position: await page.locator("[data-lightbox-position]").textContent() };
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync("evidence/task-album/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
