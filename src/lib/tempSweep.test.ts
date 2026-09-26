@@ -13,6 +13,7 @@ import {
   sweepRoots,
   sweepStaleTempDirs,
   tempSweepMaxAgeMs,
+  writableRoots,
   type ProcessScan,
 } from "./tempSweep";
 
@@ -171,6 +172,40 @@ test("the host temp roots are read through an agent process in another mount nam
     { path: "/tmp", via: "/proc/20/root", anchor: { pid: 20, namespace: "mnt:[2]" } },
     { path: "/var/tmp", via: "/proc/20/root", anchor: { pid: 20, namespace: "mnt:[2]" } },
   ]);
+});
+
+test("a temp root mounted read-only is left out, while the host's is still read through an agent", async () => {
+  const writable = tempRoot();
+  const readOnly = tempRoot();
+  const stale = path.join(readOnly, "llv-test-run-ro");
+  fs.mkdirSync(stale);
+  const old = (Date.now() - 2 * DAY) / 1000;
+  fs.utimesSync(stale, old, old);
+  const erofs = (root: string) => {
+    if (root === readOnly) throw Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" });
+  };
+  const own = writableRoots([writable, readOnly], erofs);
+  expect(own).toEqual([writable]);
+  const scan: ProcessScan = { ownNamespace: "mnt:[1]", processes: [{ pid: 20, namespace: "mnt:[2]", stamped: true, paths: [] }] };
+  expect(sweepRoots(scan, own, "/proc")).toEqual([
+    { path: writable, via: "" },
+    { path: "/tmp", via: "/proc/20/root", anchor: { pid: 20, namespace: "mnt:[2]" } },
+    { path: "/var/tmp", via: "/proc/20/root", anchor: { pid: 20, namespace: "mnt:[2]" } },
+  ]);
+  /* The sweep over the roots kept never visits the read-only one. */
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: writable, via: "" }], scan: { ownNamespace: null, processes: [] }, worktrees: [] });
+  expect(report.errors).toEqual([]);
+  expect(fs.existsSync(stale)).toBeTrue();
+
+  /* The default check reads the real permission bits (root ignores them). */
+  if (process.getuid?.() !== 0) {
+    fs.chmodSync(readOnly, 0o555);
+    try {
+      expect(writableRoots([writable, readOnly])).toEqual([writable]);
+    } finally {
+      fs.chmodSync(readOnly, 0o755);
+    }
+  }
 });
 
 test("the process scan sees this process's namespace, working directory and TMPDIR", async () => {
