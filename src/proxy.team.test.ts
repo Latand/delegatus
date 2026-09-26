@@ -87,6 +87,20 @@ describe("team install", () => {
     }
   });
 
+  test("a server action posted to a sign-in page is not part of the sign-in surface", () => {
+    const action = { "next-action": "7f".repeat(21), accept: "text/x-component", origin: "https://dev.example.net" };
+    for (const pathname of ["/sign-in", "/join/x"]) {
+      expect([pathname, proxy(get(pathname, action, "POST")).status]).toEqual([pathname, 401]);
+      expect([pathname, proxy(get(pathname, {}, "POST")).status]).toEqual([pathname, 401]);
+      expect([pathname, proxy(get(pathname, { cookie: `llv_auth=${TOKEN}`, ...action }, "POST")).status]).toEqual([pathname, 401]);
+      expect([pathname, proxy(get(pathname)).headers.get("x-middleware-next")]).toEqual([pathname, "1"]);
+      expect([pathname, proxy(get(pathname, {}, "HEAD")).headers.get("x-middleware-next")]).toEqual([pathname, "1"]);
+    }
+    expect(proxy(get("/sign-in", action, "POST")).headers.get("content-type")).toContain("application/json");
+    expect(proxy(get("/api/team/session/approval", {}, "POST")).headers.get("x-middleware-next")).toBe("1");
+    expect(proxy(get("/api/team/session/approval", action, "POST")).status).toBe(401);
+  });
+
   test("the key and a member together pass", () => {
     const response = proxy(get("/api/files", { cookie: `llv_auth=${TOKEN}; ${MEMBER_COOKIE}=${cookie}` }));
     expect(response.headers.get("x-middleware-next")).toBe("1");

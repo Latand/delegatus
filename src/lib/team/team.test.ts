@@ -9,6 +9,7 @@ import { installSpawnCapabilityResolver, internalServiceHeaders, spawnCapability
 
 import { teamGate } from "./gate";
 import {
+  APPROVAL_TTL_MS,
   claimInstall,
   completeApproval,
   confirmApproval,
@@ -24,6 +25,7 @@ import {
   revokeMember,
   startApproval,
   challengeForRequester,
+  OPEN_SIGN_IN_REQUEST_LIMIT,
   approvalState,
   TeamError,
   withdrawInvite,
@@ -33,6 +35,7 @@ import { appendTeamEvent, messageTextDigest, recordTeamEvent } from "./events";
 import { messageSenders, recordAuthors, subjectAuthorship } from "./index";
 import { MEMBER_COOKIE, requestSession, sessionIsLive, teamMode, verifySessionValue } from "./sessions";
 import { existingTeamStore, resetTeamStoreForTests, SESSION_IDLE_MS, teamStore, teamStoreFile } from "./store";
+import { startTelegram } from "./telegramSignIn";
 
 /*
  * The team module against a real SQLite file in a throw-away state directory:
@@ -162,6 +165,37 @@ describe("approving a device", () => {
     }
     expect(() => lookupApproval(store, mira, challenge.userCode)).toThrow("too many wrong codes");
   });
+
+  /* Security review of #2243, round 2, P3: anyone who reached the address,
+     with no key and no session, could open requests without end, and each
+     one cost more than the last. */
+  test("keyless sign-in requests stop at a cap, and the ones already open still resolve", () => {
+    const store = teamStore();
+    const mira = claimInstall(store, "Mira", DESKTOP).member;
+    const now = Date.now();
+    const opened = Array.from({ length: OPEN_SIGN_IN_REQUEST_LIMIT }, () => startApproval(store, PHONE, now).challenge);
+    expect(opened.length).toBeGreaterThan(0);
+    const refused = (open: () => unknown) => {
+      try {
+        open();
+      } catch (error) {
+        return error instanceof TeamError ? [error.code, error.status] : error;
+      }
+      return null;
+    };
+    expect(refused(() => startApproval(store, PHONE, now))).toEqual(["too_many_requests", 429]);
+    for (const challenge of [opened[0], opened[opened.length - 1]]) {
+      expect(lookupApproval(store, mira, challenge.userCode, now).id).toBe(challenge.id);
+    }
+
+    for (let n = 0; n < OPEN_SIGN_IN_REQUEST_LIMIT; n += 1) startTelegram(store, "sign-in", null, PHONE, null, now);
+    expect(refused(() => startTelegram(store, "sign-in", null, PHONE, null, now))).toEqual(["too_many_requests", 429]);
+    /* A signed-in member's own request is not keyless, and is not capped. */
+    expect(startTelegram(store, "link", mira.id, PHONE, null, now).challenge.memberId).toBe(mira.id);
+
+    /* Expired requests stop counting. */
+    expect(startApproval(store, PHONE, now + APPROVAL_TTL_MS + 1).challenge.userCode).toMatch(/^[A-Z2-9]{6}$/);
+  });
 });
 
 describe("the phone hand-off and host recovery", () => {
@@ -264,6 +298,27 @@ describe("sessions and revocation", () => {
     expect(recolorMember(store, oleh, oleh, mira.color).color).toBe(mira.color);
     /* One's own name in another case is still one's own. */
     expect(renameMember(store, oleh, oleh, "OLEH").name).toBe("OLEH");
+  });
+
+  /* Security review of #2243, round 2, P3: a Cyrillic "О" passed for a
+     Latin "O", so a member could still take the owner's name on screen. */
+  test("a name spelt with look-alike letters from another script is refused", () => {
+    const store = teamStore();
+    const owner = claimInstall(store, "Owner", DESKTOP).member;
+    const oleh = redeemJoin(store, createInvite(store, owner, null).code, "Oleh", PHONE).member;
+    for (const taken of ["\u041ewner", "\u039fwner", "\u043ewn\u0435r", "0wner", "Own\u034fer"]) {
+      let refusal: unknown = null;
+      try {
+        renameMember(store, oleh, oleh, taken);
+      } catch (error) {
+        refusal = error;
+      }
+      expect([taken, refusal instanceof TeamError ? refusal.code : null]).toEqual([taken, "name_taken"]);
+    }
+    expect(store.member(oleh.id)!.name).toBe("Oleh");
+    /* A name written in another script that does not look like a held one is
+       still anyone's to take. */
+    expect(redeemJoin(store, createInvite(store, owner, null).code, "\u041e\u043b\u0435\u0433", PHONE).member.name).toBe("\u041e\u043b\u0435\u0433");
   });
 
   test("an invite cannot be redeemed under a name someone holds, a revoked member's included", () => {

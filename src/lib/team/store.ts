@@ -271,6 +271,7 @@ export class TeamStore {
           payload_json TEXT
         );
         CREATE INDEX IF NOT EXISTS challenges_user_code ON challenges(user_code);
+        CREATE INDEX IF NOT EXISTS challenges_kind_expiry ON challenges(kind, expires_at);
         CREATE TABLE IF NOT EXISTS passkeys (
           id TEXT PRIMARY KEY,
           member_id TEXT NOT NULL,
@@ -461,6 +462,14 @@ export class TeamStore {
     ).all(kind, nowIso).map(challengeFrom);
   }
 
+  /** Open requests of one kind that name no member and no issuer: the ones
+      a caller with no session opened. */
+  countOpenKeylessChallenges(kind: ChallengeKind, nowIso: string): number {
+    return this.db.query<{ n: number }, [string, string]>(
+      "SELECT COUNT(*) AS n FROM challenges WHERE kind = ? AND consumed_at IS NULL AND expires_at > ? AND member_id IS NULL AND created_by IS NULL",
+    ).get(kind, nowIso)?.n ?? 0;
+  }
+
   updateChallenge(challenge: Challenge): void {
     this.db.query(`UPDATE challenges SET member_id = ?, expires_at = ?, consumed_at = ?, attempts = ?, result_json = ?,
       requester_json = ?, payload_json = ? WHERE id = ?`).run(
@@ -482,7 +491,11 @@ export class TeamStore {
       member: the hand-offs and Telegram links issued to them, and the device
       approvals and Telegram sign-ins that already name them. */
   consumeChallengesOf(memberId: string, at: string): number {
-    const open = this.db.query<Row, []>("SELECT * FROM challenges WHERE consumed_at IS NULL").all().map(challengeFrom);
+    /* Only rows that name someone can name this member, so a flood of
+       unanswered keyless requests is never read here. */
+    const open = this.db.query<Row, [string]>(
+      "SELECT * FROM challenges WHERE consumed_at IS NULL AND (member_id = ? OR result_json IS NOT NULL)",
+    ).all(memberId).map(challengeFrom);
     let consumed = 0;
     for (const challenge of open) {
       const result = challenge.result;

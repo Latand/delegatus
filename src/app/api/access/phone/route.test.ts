@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { PhoneGateRefusal, restorePhoneAccessGate, type AccessResponse, type PhoneActionFailure } from "@/lib/access/phoneAccess";
+import { internalServiceHeaders, spawnCapabilityDigest } from "@/lib/agent/callerClaims";
+import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { statePath } from "@/lib/configDir";
 import { claimInstall, createInvite, redeemJoin } from "@/lib/team/members";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
@@ -714,6 +716,20 @@ describe("on a team install the access key is the owner's", () => {
     expect(memberRead.tailnetUrl).toBe(`https://${STUB_DNS_NAME}/`);
     const ownerRead = await (await GET(as(owner))).json() as AccessResponse;
     expect(ownerRead.tailnetUrl).toBe(`https://${STUB_DNS_NAME}/?k=${KEY}`);
+  });
+
+  test("an agent reads the address without the key, and a Viewer service still reads the link", async () => {
+    const agentCapability = "a".repeat(43);
+    setCallerConversationResolverForTests((digest) => (digest === spawnCapabilityDigest(agentCapability) ? "conversation_agent" : null));
+    try {
+      const read = (headers: Record<string, string>) => GET(new NextRequest(`http://127.0.0.1:${PORT}/api/access`, { headers: { host: `127.0.0.1:${PORT}`, ...headers } }));
+      const agentRead = await (await read({ "x-llv-spawn-capability": agentCapability })).json() as AccessResponse;
+      expect(agentRead.tailnetUrl).toBe(`https://${STUB_DNS_NAME}/`);
+      const serviceRead = await (await read(internalServiceHeaders("mcp"))).json() as AccessResponse;
+      expect(serviceRead.tailnetUrl).toBe(`https://${STUB_DNS_NAME}/?k=${KEY}`);
+    } finally {
+      setCallerConversationResolverForTests(null);
+    }
   });
 
   test("a member cannot turn phone access on or off, and is handed no key", async () => {

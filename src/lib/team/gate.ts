@@ -16,19 +16,20 @@ import { existingTeamStore } from "./store";
  * member reads the same cookie again (`teamActor`).
  */
 
-/* Pages and endpoints a signed-out person needs: the sign-in and join pages,
-   the sign-in endpoints (each checks what it needs itself), the frame path the
-   perimeter already exempts, and the static assets those pages load. */
-const EXEMPT_PREFIXES = [
-  "/sign-in",
-  "/join/",
+/* What a signed-out person needs, in two kinds. The sign-in endpoints each
+   check what they need themselves, so any method reaches them, and so does the
+   frame path the perimeter already exempts. The pages, and the static assets
+   they load, are only ever read: Next runs a server action on whatever page
+   path a `Next-Action` POST arrives at, so a page exemption that admitted a
+   write would open every "use server" function to anyone who can reach the
+   address. */
+const EXEMPT_ENDPOINT_PREFIXES = [
   "/api/team/public",
   "/api/team/session/",
   "/api/team/join/",
   "/api/artifact/frame/",
-  "/_next/",
-  "/brand/",
 ] as const;
+const EXEMPT_PAGE_PREFIXES = ["/sign-in", "/join/", "/_next/", "/brand/"] as const;
 const EXEMPT_EXACT = new Set(["/favicon.ico", "/icon.svg", "/apple-icon", "/manifest.webmanifest", "/robots.txt"]);
 
 /** The pages a signed-out person is shown (the proxy forbids framing them). */
@@ -36,8 +37,22 @@ export function isTeamAuthPage(pathname: string): boolean {
   return pathname === "/sign-in" || pathname.startsWith("/join/");
 }
 
-export function isGateExempt(pathname: string): boolean {
-  return EXEMPT_EXACT.has(pathname) || EXEMPT_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix));
+type ExemptRequest = Pick<NextRequest, "method" | "headers" | "nextUrl">;
+
+/* A server action names itself with this header; no exemption covers one. */
+function carriesServerAction(request: ExemptRequest): boolean {
+  return request.headers.has("next-action");
+}
+
+function isPageRead(request: ExemptRequest): boolean {
+  return (request.method === "GET" || request.method === "HEAD") && !carriesServerAction(request);
+}
+
+export function isGateExempt(request: ExemptRequest): boolean {
+  const pathname = request.nextUrl.pathname;
+  if (carriesServerAction(request)) return false;
+  if (EXEMPT_ENDPOINT_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return true;
+  return isPageRead(request) && (EXEMPT_EXACT.has(pathname) || EXEMPT_PAGE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix)));
 }
 
 /* What a signed-out person needs to reach without the access key, on a team
@@ -45,17 +60,14 @@ export function isGateExempt(pathname: string): boolean {
    pages draw. Narrower than the gate's list on purpose: `/_next/` (the image
    optimizer, HMR) stays behind the key, and the build's static files never
    reach the proxy at all (its matcher skips `/_next/static`). */
-const PERIMETER_EXEMPT_PREFIXES = [
-  "/sign-in/",
-  "/join/",
-  "/api/team/public",
-  "/api/team/session/",
-  "/api/team/join/",
-  "/brand/",
-] as const;
+const PERIMETER_ENDPOINT_PREFIXES = ["/api/team/public", "/api/team/session/", "/api/team/join/"] as const;
+const PERIMETER_PAGE_PREFIXES = ["/sign-in/", "/join/", "/brand/"] as const;
 
-function isPerimeterExempt(pathname: string): boolean {
-  return pathname === "/sign-in" || EXEMPT_EXACT.has(pathname) || PERIMETER_EXEMPT_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+function isPerimeterExempt(request: ExemptRequest): boolean {
+  const pathname = request.nextUrl.pathname;
+  if (carriesServerAction(request)) return false;
+  if (PERIMETER_ENDPOINT_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return true;
+  return isPageRead(request) && (pathname === "/sign-in" || EXEMPT_EXACT.has(pathname) || PERIMETER_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix)));
 }
 
 function isNavigation(request: NextRequest): boolean {
@@ -80,10 +92,11 @@ export interface TeamGateContext {
  *
  * This is what keeps the key away from teammates (§9). A member reaches the
  * Viewer by their session, so no invite or hand-off link has to carry `?k=`,
- * and nothing a teammate was ever given outlives their membership: revoking
- * the member ends the session, and the session was their only way in. The key
+ * and no link or reply a teammate is given outlives their membership. The key
  * stays with the operator — scripts, the trusted local entry, the owner's own
- * phone — where a bearer read is a read of the operator's own install.
+ * phone — where a bearer read is a read of the operator's own install. An
+ * agent a member directed runs as the operator's user and could read the key
+ * file, which is why removing someone untrusted also rotates the key.
  */
 export function teamPerimeter(request: NextRequest, nowMs = Date.now()): "admit" | NextResponse | null {
   let store;
@@ -93,7 +106,7 @@ export function teamPerimeter(request: NextRequest, nowMs = Date.now()): "admit"
   } catch {
     return null;
   }
-  if (isPerimeterExempt(request.nextUrl.pathname)) return "admit";
+  if (isPerimeterExempt(request)) return "admit";
   try {
     if (verifySessionValue(store, request.cookies.get(MEMBER_COOKIE)?.value, nowMs)) return "admit";
   } catch {
@@ -117,7 +130,7 @@ function signedOut(request: NextRequest): NextResponse {
 /** null = pass; otherwise the response to send instead. */
 export function teamGate(request: NextRequest, context: TeamGateContext, nowMs = Date.now()): NextResponse | null {
   const pathname = request.nextUrl.pathname;
-  if (isGateExempt(pathname)) return null;
+  if (isGateExempt(request)) return null;
   let store;
   try {
     store = existingTeamStore();

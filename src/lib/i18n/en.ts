@@ -4941,7 +4941,7 @@ export const en = {
   "team.member.revoke": "Revoke access",
   "team.member.restore": "Restore access",
   "team.member.revokeConfirm": "{name} will be signed out everywhere and cannot sign in again. Their past messages keep their name.",
-  "team.member.revokeKey": "This ends every way in that Delegatus gave them, since invite and phone links carry no access key. If they hold the key some other way (you shared it, or they joined through an older link that carried it), restart Delegatus on the host with --new-token.",
+  "team.member.revokeKey": "This ends their sessions, and no invite or phone link carried the access key. Their agents ran as your user on the host, though, and could read anything that user can, the key included. If you do not fully trust them, or they hold the key some other way (you shared it, or an older link carried it), also restart Delegatus on the host with --new-token.",
   "team.member.since": "Joined {age}",
   "team.member.revokedAt": "access ended {age}",
   "team.telegram.link": "Link Telegram",

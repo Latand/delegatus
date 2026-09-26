@@ -61,15 +61,19 @@ function operatorSpawnCapabilityPresented(req: ActorRequest): boolean {
 
 /**
  * Whether the access key must be kept from this caller (§9). On a team
- * install the key is the operator's: the owner, the Viewer's own processes and
- * the agents it runs may see it, and nobody else — a member would keep it
- * after being revoked. An unreadable team store withholds it.
+ * install the key is the operator's: the owner and the Viewer's own processes
+ * may see it, and nobody else — a member would keep it after being revoked.
+ * An agent is withheld it too, because every member directs agents and one
+ * could relay the link; no agent needs it, since the MCP server resolves its
+ * own credential through the control endpoint. An unreadable team store
+ * withholds it.
  */
 export function accessKeyWithheld(req: ActorRequest): boolean {
   try {
     if (teamMode() !== "team") return false;
     const actor = teamActor(req);
-    if (actor.kind === "agent" || actor.kind === "service") return false;
+    if (actor.kind === "service") return false;
+    if (actor.kind === "agent") return true;
     return actor.kind !== "member" || existingTeamStore()?.member(actor.memberId)?.role !== "owner";
   } catch {
     return true;

@@ -33,6 +33,12 @@ export const INVITE_TTL_MS = 7 * 24 * 3_600_000;
 export const APPROVAL_TTL_MS = 10 * 60_000;
 export const HANDOFF_TTL_MS = 10 * 60_000;
 export const RECOVERY_TTL_MS = 15 * 60_000;
+/* How many requests nobody signed in opened (device approvals, Telegram and
+   passkey sign-ins) may be open at once, per kind. Anyone who reaches the
+   address can open one, so without a bound a script fills the store within a
+   code's lifetime. Past it a new request is refused and the open ones keep
+   working, so a flood cannot push a real person's code out. */
+export const OPEN_SIGN_IN_REQUEST_LIMIT = 64;
 const APPROVAL_GUESS_LIMIT = 5;
 const APPROVAL_GUESS_WINDOW_MS = 10 * 60_000;
 
@@ -89,10 +95,30 @@ function requireName(value: unknown): string {
 
 /* A name is who the chat, the Activity tab and the MCP author line say sent
    something, so no two people may hold the same one: compared without case,
-   spaces or compatibility forms, against every member, revoked ones too (their
-   past messages still carry the name). */
+   spaces, invisible characters or compatibility forms, and with the Cyrillic
+   and Greek letters that draw like Latin ones folded onto them (a subset of
+   the Unicode TR39 skeleton), against every member, revoked ones too (their
+   past messages still carry the name). Each letter is folded from its
+   lowercase, so a capital's look-alike maps to the letter its capital draws:
+   "В" to b, "Н" to h, "Ν" to n. */
+const LOOKALIKES: Record<string, string> = {
+  // Cyrillic
+  "а": "a", "в": "b", "е": "e", "ё": "e", "һ": "h", "н": "h", "і": "i", "ї": "i", "ј": "j", "к": "k", "ӏ": "l",
+  "м": "m", "о": "o", "р": "p", "ԛ": "q", "ѕ": "s", "т": "t", "у": "y", "ү": "y", "х": "x", "с": "c", "ԁ": "d", "ԝ": "w",
+  // Greek
+  "α": "a", "β": "b", "ε": "e", "ζ": "z", "η": "h", "ι": "i", "κ": "k", "μ": "m", "ν": "n", "ο": "o", "ρ": "p",
+  "τ": "t", "υ": "y", "χ": "x",
+  // Latin and digits
+  "ı": "i", "0": "o",
+};
+const LOOKALIKE_PATTERN = new RegExp(`[${Object.keys(LOOKALIKES).join("")}]`, "gu");
+
 function nameKey(name: string): string {
-  return name.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{Cf}]+/gu, "");
+  return name
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\s\p{Cf}\p{Default_Ignorable_Code_Point}]+/gu, "")
+    .replace(LOOKALIKE_PATTERN, (letter) => LOOKALIKES[letter]);
 }
 
 function nameTaken(store: TeamStore, name: string, exceptId: string | null): boolean {
@@ -157,6 +183,10 @@ export function issueChallenge(store: TeamStore, input: {
     payload: input.payload ?? null,
   };
   store.pruneChallenges(nowMs);
+  const keyless = input.kind !== "recovery" && !challenge.memberId && !challenge.createdBy;
+  if (keyless && store.countOpenKeylessChallenges(input.kind, challenge.createdAt) >= OPEN_SIGN_IN_REQUEST_LIMIT) {
+    throw new TeamError("too_many_requests", "too many sign-in requests are open; try again in a few minutes", 429);
+  }
   store.insertChallenge(challenge);
   return { challenge, code };
 }
@@ -344,9 +374,8 @@ function newUserCode(): string {
 
 export function startApproval(store: TeamStore, requester: ChallengeRequester, nowMs = Date.now()): { challenge: Challenge; proof: string } {
   return store.transaction(() => {
-    const open = new Set(store.openChallenges("approval", iso(nowMs)).map((challenge) => challenge.userCode));
     let userCode = newUserCode();
-    for (let attempt = 0; open.has(userCode) && attempt < 16; attempt += 1) userCode = newUserCode();
+    for (let attempt = 0; store.challengeByUserCode(userCode) && attempt < 16; attempt += 1) userCode = newUserCode();
     const { challenge, code } = issueChallenge(store, { kind: "approval", ttlMs: APPROVAL_TTL_MS, userCode, requester }, nowMs);
     return { challenge, proof: code };
   });
