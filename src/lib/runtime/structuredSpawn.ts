@@ -1582,6 +1582,35 @@ export async function startCopilotStructuredHost(
     : await CopilotAcpHost.start(options);
 }
 
+/** Production option builder shared by fresh and resumed Claude hosts. */
+export function claudeStructuredHostOptions(
+  input: Pick<StructuredSpawnInput, "spec" | "account">,
+  access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
+  initialEventCursor?: number,
+) {
+  const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  return {
+    cwd: input.spec.cwd,
+    claudeProjectsDir: input.account.transcriptRoot,
+    ...claudeHostLaunchPaths(input.account),
+    providerAccount: Boolean(input.account.claudeProvider),
+    allowSubagents: profile.allowSubagents,
+    mcpServers: profile.mcpServers,
+    readOnly: launchProfileEngineReadOnly(profile),
+    restricted: profile.sandbox === "restricted",
+    model: input.account.claudeProvider
+      ? profile.model === "haiku" && input.account.claudeProvider.smallFastModel
+        ? input.account.claudeProvider.smallFastModel
+        : input.account.claudeProvider.model
+      : profile.model ?? undefined,
+    effort: profile.effort ?? undefined,
+    permissionMode: effectiveClaudePermissionMode(profile),
+    initialEventCursor,
+    env: access.env,
+    ...access.host,
+  };
+}
+
 async function defaultStartHost(input: StructuredSpawnInput, capability: string): Promise<SpawnedStructuredHost> {
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability);
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
@@ -1618,21 +1647,7 @@ async function defaultStartHost(input: StructuredSpawnInput, capability: string)
       : await CodexAppServerHost.start(options);
   }
   const form = structuredClaudeLaunchForm(input);
-  const options = {
-    cwd: input.spec.cwd,
-    claudeProjectsDir: input.account.transcriptRoot,
-    ...claudeHostLaunchPaths(input.account),
-    allowSubagents: profile.allowSubagents,
-    mcpServers: profile.mcpServers,
-    readOnly: launchProfileEngineReadOnly(profile),
-    restricted: profile.sandbox === "restricted",
-    model: profile.model ?? undefined,
-    effort: profile.effort ?? undefined,
-    permissionMode: effectiveClaudePermissionMode(profile),
-    initialEventCursor,
-    env,
-    ...access.host,
-  };
+  const options = claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor);
   return form.kind === "resume"
     ? await ClaudeStreamBrokerHost.adopt(form.sessionId, options)
     : await ClaudeStreamBrokerHost.start({ ...options, ...(form.sessionId ? { sessionId: form.sessionId } : {}) });
